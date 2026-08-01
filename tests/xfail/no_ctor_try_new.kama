@@ -1,0 +1,7 @@
+// The fallible-allocation form — `try new` routes through the same ban, before the Optional boxing.
+import std::memory::{Owned};
+type value Empty { public int32 v; }
+fn int32 main() {
+    Optional<Owned<Empty>> h = try new Empty();   // ERROR: no ctor to call
+    return 0;
+}

@@ -1,0 +1,7 @@
+// The heap form of the same rule — `new Empty()` used to emit a bare `malloc` with no initialization.
+import std::memory::{Owned};
+type value Empty { public int32 v; }
+fn int32 main() {
+    Owned<Empty> h = new Empty();      // ERROR: no ctor to call
+    return h.v;
+}

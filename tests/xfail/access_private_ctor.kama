@@ -1,3 +1,3 @@
-// An explicit constructor defaults to private — external `new` is then forbidden.
-type value Singleton { int32 v; Singleton(){ this.v = 0; } }   // ctor private (no `public`)
-fn int main() { Singleton s = Singleton(); return 0; }
+// A constructor declared without `public` is private — external construction is then forbidden.
+type value Singleton { int32 v; ctor make() { slot Singleton r; r.v = 0; return give r; } }
+fn int32 main() { Singleton s = Singleton.make(); return 0; }   // ERROR: `make` is private

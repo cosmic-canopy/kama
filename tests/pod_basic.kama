@@ -1,8 +1,9 @@
 // M26h — a `type value` with `public` fields is plain public data (the old `pod`): fields are read
 // AND written directly from outside. Field visibility is per field now — `public` makes it exposed.
+@generate(zero)
 type value Vec2 { public int32 x; public int32 y; }
 fn int32 main() {
-    Vec2 v = Vec2();
+    Vec2 v = Vec2.zero();   // a data bag blesses its zero state; there is no nameless form
     v.x = 30;            // public field — external write OK
     v.y = 12;
     return v.x + v.y;    // 42

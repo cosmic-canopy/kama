@@ -1,0 +1,8 @@
+// Nothing is constructible by default: a type with no `ctor` and no `of`/`zero` opt-in cannot be built.
+// The nameless form used to slip through when the type had no ctor AND the call had no args, emitting a
+// bare `Empty b;` that reads uninitialized stack — an escape hatch around `slot`.
+type value Empty { public int32 v; }
+fn int32 main() {
+    Empty b = Empty();      // ERROR: no ctor — `@generate(zero)` then `Empty.zero()`
+    return b.v;
+}

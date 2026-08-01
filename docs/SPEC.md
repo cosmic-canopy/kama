@@ -1364,8 +1364,12 @@ Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an own
 
 - **Dot-on-type is construction, and only that.** `Type.name(…)` constructs; `Type::staticFn()` and
   `Enum::Variant(…)` keep `::`. So `.make(` greps for construction and catches nothing else. There is **no
-  nameless `Type(…)` call form** — it silently dropped its arguments, and it is now a hard error. A generic
-  ctor puts the turbofish on the **type**: `T::<Args>.make(…)`.
+  nameless `Type(…)` call form** for a kama type — it silently dropped its arguments, and it is a hard
+  error in every position (`Type(…)`, `new Type(…)`, `try new Type(…)`, `new(allocator: a) Type(…)`, and a
+  reassignment `x = Type(…)`). Two things keep that spelling because it is the *only* spelling they have:
+  a `type extern value`, where `div_t(quot: 3, rem: 2)` is by-name **aggregate init** of a C struct that has
+  no constructor to name, and the intrinsic `new BindableFunctionPtr<Sig>(obj:, method:)`. A generic ctor
+  puts the turbofish on the **type**: `T::<Args>.make(…)`.
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built,
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.

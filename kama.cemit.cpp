@@ -2421,16 +2421,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     *_out << nm << ".obj = malloc(sizeof(" << octy << "));\n";
                                 }
                                 indent(depth); *_out << "if (!" << nm << ".obj) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (oc->ctorName) {
+                                if (oc->ctorName)
                                     emitNewFactoryMove(octy, "(" + octy + "*)" + nm + ".obj", oc, n->line, depth);
-                                } else if (_classes[octy].hasCtor) {
-                                    line(n->line);
-                                    bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                                    std::string cc = emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + nm + ".obj",
-                                                              _classes[octy].ctorParams, oc->args, n->line);
-                                    _hoistOK = ph; flushHoisted(depth);
-                                    indent(depth); *_out << cc << ";\n";
-                                }
                                 indent(depth); *_out << nm << ".vtbl = &" << octy << "__as_" << T << ";\n";
                                 if (useAlloc) {
                                     indent(depth); *_out << nm << ".alloc = " << ap << ";\n";
@@ -2455,20 +2447,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             line(n->line); indent(depth);
                             *_out << nm << ".ptr = (" << T << "*)malloc(sizeof(" << T << "));\n";
                             indent(depth); *_out << "if (!" << nm << ".ptr) kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                            if (oc->ctorName) {
+                            if (oc->ctorName)
                                 emitNewFactoryMove(T, nm + ".ptr", oc, n->line, depth);
-                            } else if (isClass(T) && _classes[T].hasCtor) {
-                                line(n->line);
-                                bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                                std::string cc = emitReorderedCall(T + "__ctor", nm + ".ptr",
-                                                          _classes[T].ctorParams, oc->args, n->line);
-                                _hoistOK = ph; flushHoisted(depth);
-                                indent(depth); *_out << cc << ";\n";
-                            }
                             if (smartKind(ty) == CollKind::Shared) {
                                 indent(depth); *_out << nm << ".ctrl = kama_ctrl_new();\n";
                             }
-                            // T with no ctor: malloc leaves it default (callers init fields).
                         }
                     } else if (!heapOwnerTarget(ty).empty()) {
                         // a LIBRARY heap owner (`Box<T> implements HeapOwner<T>`): `new T(args)`
@@ -2528,15 +2511,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 else
                                     *_out << C << "* " << hp << " = (" << C << "*)malloc(sizeof(" << C << "));\n";
                                 indent(depth); *_out << "if (!" << hp << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-                                if (oc->ctorName) {
+                                if (oc->ctorName)
                                     emitNewFactoryMove(C, hp, oc, n->line, depth);
-                                } else if (isClass(C) && _classes[C].hasCtor) {
-                                    line(n->line);
-                                    bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                                    std::string cc = emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, n->line);
-                                    _hoistOK = ph; flushHoisted(depth);
-                                    indent(depth); *_out << cc << ";\n";
-                                }
                                 // adopt the T* — the base subobject when widening (offset-0), else the ptr itself.
                                 std::string adoptArg = hp;
                                 if (upcastNew) {
@@ -2549,13 +2525,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             }
                         }
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl) {
-                        // Array/List/String — a value type that manages its own heap buffer;
-                        // `new` constructs it in place (the generic `Array<T>(...)` call form
-                        // doesn't parse, so collections keep `new`).
-                        if (_classes[ty].hasCtor) {
-                            line(n->line); indent(depth);
-                            *_out << emitCtorCall(nm, _classes[ty], oc->args, n->line) << ";\n";
-                        }
+                        // An intrinsic collection (`string`, `BindableFunctionPtr<Sig>`) declares its own
+                        // storage — `new` is accepted and the declaration above already emitted it. Nothing
+                        // further to construct; the branch exists so this does NOT fall to the `else` gate.
                     } else {
                         unsupported(("`new` allocates on the heap — wrap it in `Owned<" + octy
                                      + ">`/`Shared<" + octy + ">`, or drop `new` for a stack value "
@@ -2565,31 +2537,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // STACK value, constructed in place (`Box b = Box(id: 5)`).
                     if (_classes[ty].isAbstractClass)
                         unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
-                    if (_classes[ty].hasCtor) {
-                        line(n->line);
-                        bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs
-                        std::string cc = emitCtorCall(nm, _classes[ty], stackCtor->args, n->line);
-                        _hoistOK = ph;
-                        flushHoisted(depth);
-                        indent(depth);
-                        *_out << cc << ";\n";
-                    } else if (_classes[ty].isExternStruct) {
+                    if (_classes[ty].isExternStruct) {
                         // extern (C-POD) struct: no kama ctor — aggregate-init the named fields onto
                         // the `= {0}` declared above (`WGPUColor c = WGPUColor(r: 1.0, g: 0.5)`).
                         std::string s = externAggregateInit(nm, _classes[ty], stackCtor->args, n->line);
                         if (!s.empty()) { line(n->line); indent(depth); *_out << s << "\n"; }
-                    } else if (!_classes[ty].ctors.empty()
-                               || (stackCtor->args && !stackCtor->args->empty())) {
-                        // M8 Phase E: a bare `Type(args)` on a named-ctor type has no legacy ctor to call —
-                        // it would SILENTLY drop the args and leave the value default (a wrong-value hole).
-                        // Reject and point at the named form. (A ctor-less no-arg struct still default-inits.)
+                    } else {
+                        // A bare `Type(args)` has no ctor to call — it would SILENTLY drop the args and leave
+                        // the value uninitialized. Reject and point at the named form. This fires for a type
+                        // with NO ctor too: that case used to fall through to a bare `T v;` reading
+                        // uninitialized stack, which is exactly what `slot` exists to make impossible.
                         std::string disp = (stackCtor->identifier && stackCtor->identifier->value)
                                          ? *stackCtor->identifier->value : ty;
-                        unsupported(("nameless construction `" + disp + "(...)` is no longer allowed — use a "
-                                     "named constructor (`" + disp + ".make(...)` / `" + disp
-                                     + ".of(...)`)").c_str(), n->line);
+                        rejectNamelessConstruction(_classes[ty], disp, /*viaNew=*/false, n->line);
                     }
-                    // class with no ctor + no args: left default-initialized
                 } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
                            && isSmartPtrLValue(init) && exprClass(init) != ty) {
                     // Shared->Weak conversion (different C structs, same layout):
@@ -3042,7 +3003,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             std::string lty = exprClass(as->unaryExpression);
             if (auto* iv = dynamic_cast<InvocationNode*>(as->expression.get()))
                 if (iv->identifier && iv->identifier->value && isClass(lty)
-                    && (_classes[lty].hasCtor || _classes[lty].isExternStruct)
                     && !isSmartPtrClass(lty)) {
                     std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
                     auto g = _genericTypeInstOf.find(lty);
@@ -3057,19 +3017,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             *_out << b << " = (" << lty << "){0}; " << s << "\n";
                             return;
                         }
-                        std::string lname = lvalueMoveKey(as->unaryExpression);   // bare local OR `local.field` slot
-                        bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
-                        std::string b = emitExpression(as->unaryExpression);
-                        line(n->line);
-                        if (!bMoved && _classes[lty].destructible)                 // release the old value first (skip a not-yet-live slot)
-                            { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
-                        if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target is live again
-                        bool ph = _hoistOK; _hoistOK = true;                       // hoist any arg hand-offs
-                        std::string cc = emitCtorCall(b, _classes[lty], iv->args, n->line);
-                        _hoistOK = ph;
-                        flushHoisted(depth);
-                        indent(depth); *_out << cc << ";\n";
-                        return;
+                        // Nameless reassignment (`b = Box(id: 5)`) — no ctor to bind. Reject with the
+                        // context-aware advice; an exempt type (intrinsic collection) falls through to the
+                        // ordinary assignment path below rather than being silently dropped.
+                        if (rejectNamelessConstruction(_classes[lty], *iv->identifier->value,
+                                                       /*viaNew=*/false, n->line))
+                            return;
                     }
                 }
         }
@@ -4288,15 +4241,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
                                      + ".make(...)`)").c_str(), cc->line);
                     }
-                    if (ci.hasCtor)
-                        unsupported("multiple constructors (no overloading yet)", cc->line);
-                    ci.hasCtor   = true;
-                    ci.ctorNode  = cc;
-                    ci.ctorVisibility = visibilityOf(cc->modifiers, Visibility::Private, cc->line);
-                    if (cc->declarator) ci.ctorParams = paramSigsOf(cc->declarator->params);
-                    // Construction-model: also record it in the named-ctor map, keyed by the class name
-                    // (today's class-named ctor). Legacy fields above stay the source for existing readers.
-                    ci.ctors[ci.name] = CtorInfo{ cc, ci.ctorParams, ci.ctorVisibility };
+                    // Nothing is recorded: the form is rejected above, so no later pass may act on it.
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
                     // a resource; that disagreement is the lesson in the message. A `view` borrows and
@@ -4861,9 +4806,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // Smart pointers (Owned/Shared/Weak) are library generic types now; they never reach here — only
     // their polymorphic `<Contract>` instances become smart-ptr collections, registered directly via
     // registerSmartPtr from registerGenericTypeInst's interface-owner divert.
-    bool isStr    = collType->builtInVal == IDENTIFIER_STRING_VAL;
-    CollKind kind = isStr ? CollKind::String
-                  : (*collType->value == "List") ? CollKind::List : CollKind::Array;
+    bool isStr = collType->builtInVal == IDENTIFIER_STRING_VAL;
     // A string's element is a raw byte (`s[i]` -> uint8), so byte iteration/indexing routes through the
     // collection machinery; codepoints come from `.chars()` (a separate iterator).
     SharedIdentifier elem = isStr ? primTypeNode(IDENTIFIER_UINT8_VAL) : collType->genericArg;
@@ -4899,13 +4842,14 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
-    std::string cName = isStr ? "kama_string"
-                      : (kind == CollKind::List ? "List_" : "Array_") + elemMangle;
+    // Everything else diverted above (`InlineArray` -> registerFixed, `BindableFunctionPtr` ->
+    // registerBindable), so `string` is the only intrinsic collection this registers.
+    std::string cName = "kama_string";
 
     if (_collections.count(cName)) return;    // dedup
 
     CollectionInfo info;
-    info.kind = kind; info.cName = cName;
+    info.kind = CollKind::String; info.cName = cName;
     info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
     info.elemDestructible = !elemClass.empty() && _classes.count(elemClass) && _classes[elemClass].destructible;
     _collections[cName] = info;
@@ -4915,7 +4859,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ClassInfo ci;
     ci.name = cName;
     ci.isIntrinsicColl = true;
-    ci.collKind = kind;
+    ci.collKind = CollKind::String;
     ci.collElemClass = elemClass;
     ci.destructible = true;                    // owns heap -> RAII frees
     ci.copyable = isStr;                        // `string` is deep-copyable (kama_string__copy) -> satisfies
@@ -4925,23 +4869,18 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         ci.interfaces.push_back("Equatable");   // NOMINALLY so `when T: Equatable` gating (satisfiesBound, which
         ci.retroInterfaces.push_back("Equatable"); // reads `interfaces`) keeps `List<string>.contains` etc.;
     }                                           // retroInterfaces => static dispatch only, no fat-pointer vtable.
-    ci.hasCtor = !isStr;                        // strings come from literals/concat
-    ci.ctorParams = (kind == CollKind::Array)
-                        ? std::vector<ParamSig>{ ParamSig{"size", false, ""} }
-                        : std::vector<ParamSig>{};
-
-    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
+    auto addMethod =[&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
         MethodInfo mi;
         mi.cName = cName + "__" + mname;
         mi.params = std::move(params);
         mi.returnType = ret;
         mi.isIntrinsic = true;
-        mi.visibility = Visibility::Public;   // an intrinsic (string/List/Array op) IS that type's public API —
+        mi.visibility = Visibility::Public;   // an intrinsic (a string op) IS that type's public API —
                                               // string's `equals` is real, so its nominal Equatable (recorded
                                               // in `interfaces`) resolves to it for a `<K: Equatable>` bound
         ci.methods[mname] = mi;
     };
-    if (kind == CollKind::String) {
+    {   // `string`'s intrinsic method set — the only one left (everything else diverted above)
         addMethod("length", {}, SharedIdentifier());
         addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
         addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
@@ -4981,14 +4920,6 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // special-case in emitMethodCall). No collections import: pieces come out one at a time.
         addMethod("split", { ParamSig{"separator", false, ""} },
                   std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
-    } else {
-        if (kind == CollKind::List)
-            addMethod("add", { ParamSig{"item", false, elemClass} }, SharedIdentifier());
-        addMethod("get",    { ParamSig{"index", false, ""} }, elem);
-        addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
-        addMethod("length", {}, SharedIdentifier());
-        addMethod("dataPtr", {}, SharedIdentifier());   // FFI bridge: Ptr<T> to the buffer
-        addMethod("byteLen", {}, SharedIdentifier());   // len * sizeof(T)
     }
 
     _classes[cName] = ci;
@@ -5052,7 +4983,6 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     ci.collKind = CollKind::Fixed;
     ci.collElemClass = elemClass;
     ci.destructible = false;                   // a value — owns no heap
-    ci.hasCtor = false;                        // built from an array literal, not a ctor call
     auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
         MethodInfo mi; mi.cName = cName + "__" + mname;
         mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true;
@@ -5098,7 +5028,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
 
     ClassInfo ci;
     ci.name = cName; ci.isIntrinsicColl = true; ci.collKind = kind;
-    ci.collElemClass = elemClass; ci.destructible = true; ci.hasCtor = false;
+    ci.collElemClass = elemClass; ci.destructible = true;
     auto addM = [&](const std::string& m, std::vector<ParamSig> p) {
         MethodInfo mi; mi.cName = cName + "__" + m; mi.params = std::move(p);
         mi.isIntrinsic = true; ci.methods[m] = mi;
@@ -5175,7 +5105,6 @@ void CEmitter::registerBindable(SharedIdentifier elem)
     ci.name = cName; ci.isIntrinsicColl = true; ci.collKind = CollKind::Bindable;
     ci.collElemClass = sigCName;       // reused at invoke: the bound signature's cName
     ci.destructible = true;            // owns heap (when bound) -> RAII drop
-    ci.hasCtor = false;                // constructed via the dedicated bind path, not a ctor
     _classes[cName] = ci;
 }
 
@@ -5485,8 +5414,6 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
-    if (ci.ctorNode && ci.ctorNode->declarator)
-        ci.ctorParams = paramSigsOf(ci.ctorNode->declarator->params);
     for (auto& kv : ci.methods) {
         if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
         else if (kv.second.isOperator && kv.second.opDecl)   // an operator has no `node`
@@ -5528,8 +5455,6 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         scanTypeForCollections(kv.second.returnType);
         if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
     }
-    if (ci.ctorNode && ci.ctorNode->declarator)
-        for (auto& p : *ci.ctorNode->declarator->params) if (p) scanTypeForCollections(p->type);
     // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
     // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
@@ -6469,14 +6394,6 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
         std::string elemDtor = info.elemDestructible ? (info.elemClass + "__dtor") : "KAMA_ELEM_NODTOR";
         std::string tail = typesOnly ? ")\n"                          // _TYPE(T, NAME)
                                      : (", " + elemDtor + ")\n");     // _FUNCS(T, NAME, ELEM_DTOR)
-        // Array/List `__copy` deep-copies each element — a `Copyable` resource via its own
-        // `Elem__copy`, else a memberwise (bitwise) copy. (Only these two kinds have `__copy`.)
-        std::string elemCopy = info.elemCopyable ? (info.elemClass + "__copy") : "KAMA_ELEM_MEMBERWISE";
-        std::string collTail = typesOnly ? ")\n" : (", " + elemDtor + ", " + elemCopy + ")\n");
-        if (info.kind == CollKind::Array)
-            *_out << "KAMA_ARRAY_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
-        else if (info.kind == CollKind::List)
-            *_out << "KAMA_LIST_" << suf << "(" << info.elemCType << ", " << info.cName << collTail;
         // A stateful allocator on the intrinsic INTERFACE box selects the `_ALLOC_` macro variant (fat handle
         // carries `A alloc`+`objsize`, frees through `A`); a default/absent GlobalAllocator keeps the plain
         // macros (byte-identical). `A` is spelled after the vtbl (TYPE) / alone (FUNCS).
@@ -8465,6 +8382,12 @@ void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
     *_out << "}\n\n";
 }
 
+// The SOURCE spelling of an inline `Type(...)` call, for a diagnostic — falls back to the mangled name.
+static std::string ctorDisp(const InvocationNode* iv, const std::string& fallback)
+{
+    return (iv && iv->identifier && iv->identifier->value) ? *iv->identifier->value : fallback;
+}
+
 std::string CEmitter::emitReorderedCall(const std::string& cName, const std::string& leadArg,
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine)
@@ -8594,10 +8517,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 _hoisted.push_back(ctorCls + " " + t + " = {0}; " + fi);
                 val = t;
             } else {
-                std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
-                _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
-                // A `ref` borrow keeps the temp alive through the call; if it owns anything, drop it at scope end.
-                if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
+                // A nameless `Type(args)` inline in argument position — no ctor to bind. Reject with the
+                // context-aware advice; the degenerate temp keeps the throwaway C well-formed and
+                // suppresses the caller's generic follow-on gate.
+                rejectNamelessConstruction(_classes[ctorCls], ctorDisp(ctorIv, ctorCls), /*viaNew=*/false, srcLine);
+                _hoisted.push_back(ctorCls + " " + t + " = {0};");
                 val = t;
             }
             valHoisted = true;
@@ -8610,13 +8534,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             // path below wraps `val` as the fat pointer. (`new` into a contract borrow stays a rule — it
             // would leak; `ref`/`out` needs a real interface lvalue to reseat — both handled elsewhere.)
             std::string t = "__ctorarg" + std::to_string(_tempCounter++);
-            if (ctorIsFactory)   // a named `ctor` factory returns by value — MOVE it into the temp
+            if (ctorIsFactory) {   // a named `ctor` factory returns by value — MOVE it into the temp
                 _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
-            else {
-                std::string ctor = emitCtorCall(t, _classes[ctorCls], ctorIv->args, srcLine);
-                _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+                if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
+            } else {   // nameless — no ctor to bind (see the sibling branch above)
+                rejectNamelessConstruction(_classes[ctorCls], ctorDisp(ctorIv, ctorCls), /*viaNew=*/false, srcLine);
+                _hoisted.push_back(ctorCls + " " + t + " = {0};");
             }
-            if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             val = t;
             valHoisted = true;
         } else if (dynamic_cast<ObjectCreationNode*>(argExpr.get())) {
@@ -10551,10 +10475,16 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
     else { auto g = _genericTypeInstOf.find(targetCType);   // ctor names template `Box`; target is `Box_int32`
            if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = targetCType; }
-    if (ctorCls.empty() || ctorCls != targetCType || _classes[ctorCls].isIntrinsicColl) return "";
+    // An extern (C-POD) struct has no ctor to call — `return div_t(quot: 1);` would emit an undefined
+    // `div_t__ctor`. Hand it back to the caller to diagnose rather than fabricating a call (the arg-position
+    // recognizer aggregate-inits it instead; a value-position extern ctor has no user today).
+    if (ctorCls.empty() || ctorCls != targetCType
+        || _classes[ctorCls].isIntrinsicColl || _classes[ctorCls].isExternStruct) return "";
+    // Nameless — no ctor to bind. Reject with the context-aware advice and hand back a degenerate temp,
+    // which suppresses the caller's generic "call to unknown function" follow-on.
+    rejectNamelessConstruction(_classes[ctorCls], *iv->identifier->value, /*viaNew=*/false, srcLine);
     std::string t = "__ctorarg" + std::to_string(_tempCounter++);
-    std::string ctor = emitCtorCall(t, _classes[ctorCls], iv->args, srcLine);
-    _hoisted.push_back(ctorCls + " " + t + "; " + ctor + ";");
+    _hoisted.push_back(ctorCls + " " + t + " = {0};");
     return t;
 }
 
@@ -10642,8 +10572,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         if (oc->ctorName) {
             std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
             if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
-        } else if (isClass(C) && _classes[C].hasCtor)
-            box += " " + emitReorderedCall(C + "__ctor", hp, _classes[C].ctorParams, oc->args, srcLine) + ";";
+        }
         std::string adoptArg = hp;                             // adopt the base subobject when widening (offset-0)
         if (upcastNew) {
             std::string bp = basePathTo(&_classes[C], &_classes[T]);
@@ -10688,9 +10617,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         if (oc->ctorName) {
             std::string cc = newFactoryCall(octy, oc, srcLine);
             if (!cc.empty()) box += " *((" + octy + "*)" + t + ".obj) = " + cc + ";";
-        } else if (_classes[octy].hasCtor)
-            box += " " + emitReorderedCall(octy + "__ctor", "(" + octy + "*)" + t + ".obj",
-                                           _classes[octy].ctorParams, oc->args, srcLine) + ";";
+        }
         box += " " + t + ".vtbl = &" + octy + "__as_" + T + ";";
         if (useAlloc)
             box += " " + t + ".alloc = " + ap + "; " + t + ".objsize = sizeof(" + octy + ");";
@@ -10711,8 +10638,7 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
     if (oc->ctorName) {
         std::string cc = newFactoryCall(T, oc, srcLine);
         if (!cc.empty()) box += " *(" + t + ".ptr) = " + cc + ";";
-    } else if (isClass(T) && _classes[T].hasCtor)
-        box += " " + emitReorderedCall(T + "__ctor", t + ".ptr", _classes[T].ctorParams, oc->args, srcLine) + ";";
+    }
     if (smartKind(targetCType) == CollKind::Shared) box += " " + t + ".ctrl = kama_ctrl_new();";
     _hoisted.push_back(box);
     return t;
@@ -11823,9 +11749,6 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     if (ci.isIntrinsicColl || ci.isExternStruct) return;   // macro / header provides these
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method prototypes
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
-    if (ci.hasCtor && ci.ctorNode && ci.ctorNode->declarator)
-        *_out << stat << "void " << ci.name << "__ctor("
-             << paramListC(ci.ctorNode->declarator->params, ci.name.c_str(), ci.name.c_str()) << ");\n";
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     if (ci.hasVtable)   // polymorphic drop dispatcher (defined with the vtable instance)
@@ -13857,8 +13780,6 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
         if (fc.empty()) return "";                            // diagnostic already emitted
         ctorStmt = "*(" + hp + ") = " + fc + "; ";
-    } else if (_classes.count(cls) && _classes[cls].hasCtor) {
-        ctorStmt = emitReorderedCall(cls + "__ctor", hp, _classes[cls].ctorParams, oc->args, srcLine) + "; ";
     }
     std::string s;
     s  = cls + "* " + hp + " = (" + cls + "*)malloc(sizeof(" + cls + ")); ";
@@ -14078,7 +13999,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // the former is the template key the declaration is registered under. Recorded here rather than in
     // isTypeReceiver, which is a predicate that also runs on non-types.
     recordRef(typeName, dynamic_cast<IdentifierNode*>(recv->expression.get()));
-    if (stci->isAbstractClass) {   // instantiating one leaves a NULL vtable slot (the nameless `emitCtorCall` path checked this too)
+    if (stci->isAbstractClass) {   // instantiating one leaves a NULL vtable slot
         unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
         return "0";
     }
@@ -14103,6 +14024,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 return "0";
             }
         }
+        // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the
+        // context-aware advice (which offers `of`/`zero` only for a transparent value).
+        if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))
+            return "0";
         unsupported(("type `" + disp + "` has no constructor `" + method + "` — define one "
                      "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
         return "0";
@@ -14466,40 +14391,56 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     return (pmi && pmi->isPlaceReturn) ? ("(*" + callStr + ")") : callStr;
 }
 
-// Construction-model M8 Phase E: reject a NAMELESS `new Type(...)` for a type that has named constructors
-// (or that was passed constructor arguments). Under the named model the nameless form has no ctor to call,
-// so `new Type(args)` would SILENTLY leave the object un-constructed and drop the args (a wrong-value hole).
-// A truly ctor-less raw struct built no-arg (`new Raw()`, caller fills fields) still works. Exempt serde
-// types that keep a legacy ctor (hasCtor) until M8e, and intrinsic collections.
+// Nothing is constructible by default (SPEC § Construction). A nameless `Type(...)` / `new Type(...)` names
+// no constructor, so it has nothing to call: it would SILENTLY drop any arguments and leave the object
+// uninitialized — and for a type with NO ctor at all it used to slip through entirely, emitting a bare
+// `T v;` that reads uninitialized stack (an escape hatch around `slot`, invisible to -Wuninitialized
+// because the local is struct-typed). So it is rejected for every user type, at every construction form.
+//
+// The advice is CONTEXT-AWARE, as SPEC promises: `of`/`zero` are offered only for a TRANSPARENT value (all
+// fields public — a data bag can bless its own memberwise/zero state), never for a `resource` or a value
+// with private fields, which must state a real `ctor`.
+//
+// Two exemptions, both because the nameless spelling is the ONLY spelling there:
+//   - an intrinsic collection — `new BindableFunctionPtr<Sig>(obj: …, method: …)`;
+//   - a `type extern value` (C-POD) — `div_t(quot: 3, rem: 2)` IS aggregate init; there is no ctor to name.
+// Returns true when it rejected, so a caller can suppress its own follow-on diagnostic.
+bool CEmitter::rejectNamelessConstruction(const ClassInfo& ci, const std::string& disp, bool viaNew, int srcLine)
+{
+    if (ci.isIntrinsicColl || ci.isExternStruct) return false;
+
+    if (!ci.ctors.empty()) {
+        // Named ctors exist — point at them by their real names rather than a guessed `make`.
+        std::string names;
+        for (auto& c : ci.ctors) {
+            if (!names.empty()) names += "` / `";
+            names += disp + "." + c.first + "(...)";
+        }
+        unsupported((viaNew
+                     ? "nameless `new " + disp + "(...)` is no longer allowed — construct through a named "
+                       "constructor (`new " + names + "`)"
+                     : "nameless construction `" + disp + "(...)` is no longer allowed — use a named "
+                       "constructor (`" + names + "`)").c_str(), srcLine);
+        return true;
+    }
+
+    std::string how = isTransparentValue(ci)
+        ? "add one (`ctor make(...)`), or opt in to a bag constructor with `@generate(of)` / `@generate(zero)` "
+          "and call `" + disp + ".of(...)` / `" + disp + ".zero()`"
+        : "add one (`ctor make(...)` returning `give`)";
+    unsupported(("`" + disp + "` cannot be constructed — it has no `ctor`; " + how).c_str(), srcLine);
+    return true;
+}
+
+// The `new` entry point into the rule above — covers every `new` form, because both call sites (the
+// local-declaration arm and the value-position hoist) run this BEFORE dispatching to the plain / `try` /
+// fallible / placement boxing.
 void CEmitter::checkNamelessNewBanned(ObjectCreationNode* oc, int line)
 {
     if (!oc || oc->ctorName || !oc->type || !oc->type->value) return;
     std::string cls = resolveUserName(*oc->type->value, oc->type->qualifier);
     if (!isClass(cls)) return;
-    ClassInfo& ci = _classes[cls];
-    if (ci.isIntrinsicColl || ci.hasCtor) return;
-    bool hasNamed = !ci.ctors.empty();
-    bool hasArgs  = oc->args && !oc->args->empty();
-    if (hasNamed || hasArgs)
-        unsupported(("nameless `new " + *oc->type->value + "(...)` is no longer allowed — construct through a "
-                     "named constructor (`new " + *oc->type->value + ".make(...)`)").c_str(), line);
-}
-
-std::string CEmitter::emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine)
-{
-    if (ci.isAbstractClass)   // instantiating one crashes on a NULL vtable slot
-        unsupported(("cannot instantiate abstract class '" + ci.name
-                     + "' (it has an unimplemented method)").c_str(), srcLine);
-    // Construction-model M8 Phase E: a bare `Type(...)` call reaches here with no legacy ctor to bind — the
-    // named model routes all construction through `Type.make(...)`/`Type.of(...)` (dot-on-type). Reject it
-    // rather than emit an undefined `Type__ctor`. (The bare-local default-init caller only reaches here for a
-    // legacy/serde `hasCtor` type, so this fires only for a genuine nameless user call.)
-    if (!ci.hasCtor && !ci.isIntrinsicColl && !ci.ctors.empty())
-        unsupported(("nameless construction `" + ci.name + "(...)` is no longer allowed — use a named "
-                     "constructor (`" + ci.name + ".make(...)` / `" + ci.name + ".of(...)`)").c_str(), srcLine);
-    if (ci.hasCtor && !ci.isIntrinsicColl)   // private ctor blocks external `new` (intrinsics exempt)
-        canAccess(&ci, ci.ctorVisibility, "constructor", srcLine);
-    return emitReorderedCall(ci.name + "__ctor", "&" + cVar, ci.ctorParams, args, srcLine);
+    rejectNamelessConstruction(_classes[cls], *oc->type->value, /*viaNew=*/true, line);
 }
 
 // ---------------------------------------------------------------------------

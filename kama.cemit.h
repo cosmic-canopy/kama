@@ -127,9 +127,10 @@ struct MethodInfo {
     bool                         isPlaceReturn = false;  // `ref T operator[]` — returns a PLACE (T*), deref'd at the caller
 };
 
-// A built-in generic collection / smart-pointer kind. Backed by a C
-// runtime template. Owned<T> is a unique heap-owning pointer kind.
-enum class CollKind { Array, List, String, Owned, Shared, Weak, Bindable, Fixed };
+// A built-in generic collection / smart-pointer kind. Backed by a C runtime template. Owned<T> is a
+// unique heap-owning pointer kind. (The growable/fixed heap arrays are the pure-kama library types
+// `DynamicArray`/`FixedArray`, not kinds here; `Fixed` is `InlineArray<T,N>`, the const-generic value array.)
+enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed };
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "_F<idx>"). Bare names
@@ -201,19 +202,14 @@ struct ClassInfo {
     bool                              genEquatable = false;
     bool                              genHashable = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
-    bool                              hasCtor = false;
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
                                                               // method bodies must be emitted static-inline in
                                                               // the header (the prelude is otherwise collect-only)
-    std::vector<ParamSig>             ctorParams;
-    ClassConstructorDeclarationNode*  ctorNode = nullptr;
-    // Named-ctor map (construction-model campaign). Today it holds the single class-named ctor (keyed by
-    // `name`); M2+ adds named ctors. Populated alongside the legacy fields above; read via the accessors.
+    // Named ctors, keyed by their own name (`make`, `of`, `zero`, …) — the ONLY way a type is constructed.
+    // Empty => the type cannot be built at all (see rejectNamelessConstruction).
     std::map<std::string, CtorInfo>   ctors;
     CtorInfo*       ctorByName(const std::string& n)       { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
     const CtorInfo* ctorByName(const std::string& n) const { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
-    CtorInfo*       primaryCtor()       { return ctorByName(name); }   // the class-named ctor (today's only ctor)
-    const CtorInfo* primaryCtor() const { return ctorByName(name); }
     ClassDeclarationNode*             node    = nullptr;
 
     // RAII
@@ -280,7 +276,6 @@ struct ClassInfo {
     // `virtual`/`abstract`/`final` are extensibility qualifiers on a `resource`.
     bool                              isVirtualClass = false; // `virtual resource` — extensible base
     bool                              isFinalClass = false;   // `final class` — sealed leaf
-    Visibility                        ctorVisibility = Visibility::Public;   // synth/default ctor is public; an EXPLICIT ctor defaults private
     std::vector<RawFriendGrant>       friendGrantsRaw;        // captured at collection
     std::vector<FriendGrant>          friendGrants;           // resolved (resolveFriends)
     bool                              hasVtable = false;     // this or an ancestor has a virtual
@@ -297,7 +292,7 @@ struct ClassInfo {
     // Collections: a monomorphized Coll<T> is a synthetic ClassInfo whose
     // method bodies come from a C-template macro (not kama AST).
     bool                              isIntrinsicColl = false;
-    CollKind                          collKind = CollKind::Array;
+    CollKind                          collKind = CollKind::String;   // arbitrary: only read when isIntrinsicColl
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)
     // A synthetic ClassInfo for a PRIMITIVE target of a retroactive `implements C for int32` — it carries
@@ -1417,9 +1412,10 @@ private:
     std::string emitDispatch(const std::string& clsName, const std::string& recvPtr,
                              const std::string& method, SharedArgumentList args, int srcLine,
                              const IdentifierNode* site = nullptr);
-    // `new T(args)` reordered against the ctor signature -> "T__ctor(&dst, a0, ...)"
-    std::string emitCtorCall(const std::string& cVar, ClassInfo& ci, SharedArgumentList args, int srcLine);
-    void checkNamelessNewBanned(ObjectCreationNode* oc, int line);   // M8 Phase E: ban nameless `new Type(...)`
+    // Nothing is constructible by default: reject a nameless `Type(...)`/`new Type(...)`, with advice that
+    // offers `of`/`zero` only for a transparent value. True if it rejected. Exempts intrinsic/extern.
+    bool rejectNamelessConstruction(const ClassInfo& ci, const std::string& disp, bool viaNew, int srcLine);
+    void checkNamelessNewBanned(ObjectCreationNode* oc, int line);   // the `new` entry point into the above
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);

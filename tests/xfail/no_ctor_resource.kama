@@ -1,0 +1,8 @@
+// The diagnostic is CONTEXT-AWARE (SPEC § Construction): `of`/`zero` are offered only for a TRANSPARENT
+// value (all fields public — a data bag may bless its own zero state), never for a `resource`. This
+// fixture pins the resource wording; tests/xfail/no_ctor_value asserts the of/zero wording.
+type resource Handle { int32 fd; }
+fn int32 main() {
+    Handle h = Handle();    // ERROR: no ctor — and NO `of`/`zero` offer for a resource
+    return 0;
+}
