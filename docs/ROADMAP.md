@@ -54,6 +54,56 @@ Those guards stay by design. The genuinely static cases (`~TcpStream`/`~TcpListe
 handles nothing re-arms) are still guarded and *could* now drop the check — a small, separate cleanup that
 wants a deliberate audit of every path reaching those destructors, not a blanket removal.
 
+**Retire the nameless-constructor emission path — and close the hole it is still leaving.** The legacy
+*instance* ctor is gone (its `isCtor` flag could not be true for a compiling program and was deleted), but
+the **nameless `Type(...)` / `new Type(...)`** surface it fed is still wired into the emitter. Two facts
+measured, not assumed:
+
+- **`__ctor(` appears in 0 of 140 transpiled fixtures.** Eight sites still emit `T__ctor(...)` calls
+  (`kama.cemit.cpp` ~2429, ~2463, ~2536, ~10646, ~10692, ~10715, ~13861, and `emitCtorCall` ~14487), and
+  none of them fires for a valid program.
+- **The two bans have escape hatches, and one of them is a live soundness hole.**
+  `checkNamelessNewBanned` (~14474) returns early when `ci.isIntrinsicColl || ci.hasCtor`, and only rejects
+  when the type has named ctors *or* the call has arguments. So a type with **no constructor at all** slips
+  through: `Empty b = Empty();` and `new Empty()` are both **accepted today**, emitting a bare
+  `_F4__Empty b;` — no ctor call, no `= {0}`, no drop tracking. The program reads uninitialized stack.
+  This contradicts SPEC § *Construction* ("nothing is constructible by default — a type with no `ctor` and
+  no `of`/`zero` opt-in cannot be built"), and it is an **escape hatch around the `slot` rule**: kama sees
+  an initializer, so no `slot` is required and no zero-init is emitted. `-Werror=uninitialized` does not
+  catch it (the local is struct-typed). Fix this first; it is the only user-visible part.
+
+The knot to untangle is **`ClassInfo::hasCtor`, which is overloaded**: it means both "has a legacy
+class-named ctor" (only reachable after that construct's `unsupported()` fires) *and* "is an intrinsic
+collection with a synthesized ctor" (`~4930`). That second meaning is why the bans need their
+`isIntrinsicColl || hasCtor` early-out, and why `hasCtor` cannot simply be deleted — its ~15 readers must
+be split by which sense they want. `ci.ctors` is the live named-ctor map; `ctorParams` is set from the
+legacy declarator (`~4298`), from intrinsics (`~4931`), and at `~5491`.
+
+**The sanctioned replacements all exist and work** (verified end to end), so rejecting the nameless form
+strands nothing:
+
+| Spelling | What it is |
+|---|---|
+| `Type.make(…)` | an ordinary named `ctor` — the general case |
+| `Type.of(x:, y:)` | `@generate(of)` synthesizes a **real named ctor** with one param per field; all-public transparent `value` only |
+| `Type.zero()` | `@generate(zero)` synthesizes a **real named ctor**, no params, blessing the zero state |
+| `default ctor <anyName>()` | `default` is a **marker**, not a name — it marks which zero-arg named ctor the compiler may call when filling a field of that type (stdlib names it `empty` 8×, also `minHeap`, `make`) |
+
+**Doc-vs-code gap found while checking this.** SPEC § *Construction* says the not-constructible diagnostic
+"is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields public), never for a
+`resource`." **No such diagnostic exists** — the only one is the generic `type X has no constructor Y —
+define one` at `~14106`. Either build it (it is the natural place to route the new nameless-form rejection,
+and `ci.genOf`/`ci.genZero` plus the all-public field test are already computed at `~4486`) or correct SPEC.
+
+Shape of the work: make nameless construction a hard error for *every* type (no arg-count or `hasCtor`
+exemption, with an xfail per form — `Type()`, `new Type()`, `try new Type()`, `new(allocator:) Type()`),
+routed through a context-aware "cannot be built" diagnostic that names `of`/`zero` only for a transparent
+`value`; then split `hasCtor` into an intrinsic-synthesized sense and delete the legacy sense along with the
+`T__ctor` emission sites and `emitCtorCall`. Reproducer:
+`tests/pending/nameless_ctor_uninitialized.kama` (deliberately outside the runner — it must start
+FAILING to compile, at which point it becomes two `tests/xfail/` fixtures). Verify the same way the
+`isCtor` removal was: transpile the corpus and assert `__ctor(` stays at zero.
+
 Everything else here is library or toolchain work that does **not** gate the tag:
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
