@@ -1,0 +1,65 @@
+// Every "do it this way" example from docs/coming-from-other-languages.md, compiled.
+// That page is written for readers (and LLMs) arriving from C#/Rust/Python, whose instincts kama
+// deliberately rejects. If an example there stops being true, this fixture fails and says so.
+import std::serialization::json::{encode};
+
+type contract Shown for value { fn int32 show(); }
+
+// (1) A `resource`'s fields are ALWAYS private — expose behavior, not state.
+type resource Counter {
+    int32 n;                                  // no `public` — a resource guards its invariant
+    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public fn int32 value() { return this.n; }
+}
+
+// (2) `@generate(Serialize)` requires EVERY field to be marked `@field` or `@skip`.
+@generate(Serialize)
+type value Point {
+    @field int32 x;
+    @skip  int32 cachedHash;
+    public ctor make(int32 x) { slot Point r; r.x = x; r.cachedHash = 0; return give r; }
+}
+
+// (3) A free function's bounds go in the TYPE-PARAMETER LIST — `when [...]` is for a generic
+//     type's methods (conditional conformance), and a free fn has no "sometimes".
+fn int32 showIt<W: Shown>(W x) { return x.show(); }
+
+type value Leaf implements Shown {
+    public int32 n;
+    public ctor make(int32 n) { slot Leaf r; r.n = n; return give r; }
+    public fn int32 show() { return this.n; }
+}
+
+// (4) `out` fills an uninitialized `slot`; `ref` borrows something already live.
+fn void split(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
+
+enum Code { Ok, Bad }
+fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
+
+fn int main()
+{
+    // (5) A `match` SUBJECT must be a bound local — not a call result. (ROADMAP §2: real gap.)
+    Code c = classify(x: 1);
+    int32 a = match (c) { case Ok: 10; case Bad: 0; };
+
+    slot int32 q; slot int32 r;
+    split(a: 17, b: 5, q: out q, r: out r);          // 3, 2
+
+    Counter k = Counter.make(n: 20);
+    int32 v = k.value();                              // behavior, not a public field
+
+    // (6) An interpolation hole is an identifier plus `.field`/`[i]` — bind a call first.
+    int32 len = v + q;
+    string msg = "v=${v} len=${len}";
+
+    // (7) Named arguments everywhere; generic free fns infer their type args FROM A BOUND LOCAL —
+    //     an inline ctor argument is not enough ("argument is not a literal or a locally-typed value").
+    Leaf lf = Leaf.make(n: 7);
+    int32 s = showIt(x: lf);
+
+    Point p = Point.make(x: 1);
+    Result<string, Owned<Error>> j = encode(v: p);
+    int32 ok = match (give j) { case Ok(value: t): 2; case Err(error: e): 0; };
+
+    return a + q + r + v + s + ok - msg.length();    // 44 - len("v=20 len=23") = 44 - 11 = 33
+}

@@ -43,10 +43,23 @@ than leaving a reader to wonder.
 
 ## Session split
 
-**Prerequisite, before M2a: the generic-static spelling** (`Type::<args>::name()`) and the three dot-on-type
-diagnostic defects — decided, and written up in [ROADMAP.md](../ROADMAP.md) §2. It is a LANGUAGE change, so
-it lands before M2's fixtures are written against a surface that is about to shift. Nothing in the parity
-gap depends on it; the ordering is only to avoid churning fixtures.
+**Prerequisite, before M2a — a small LANGUAGE batch**, decided with the user and written up in
+[ROADMAP.md](../ROADMAP.md) §2. These land first so M2's fixtures are not written against a surface that is
+about to shift; nothing in the parity gap depends on them, the ordering is only to avoid churn.
+
+1. **A `match` SUBJECT may be a call result**, not only a bound local — `match (classify(x: 1))`. The
+   first thing anyone from Rust/Swift/ML tries. **Fix the message first, independently**: it currently
+   says "`match` requires an enum subject" about an expression that plainly *is* one, which sends the
+   reader after the wrong thing. Correct the SPEC § *Known limitations* text either way — it lists only
+   nested matches and variant-producing ternaries, so it understates the real rule.
+2. **The generic-static spelling** `Type::<args>::name()` — one grammar production, sibling of the
+   existing on-type ctor rule — plus static-call resolution under `_typeSubst`.
+3. **The three dot-on-type diagnostic defects** that came with it: an instance method reported as "a
+   static function", the unusable advice that follows, and a mangled name (`_F4__Plain::inst`) leaking
+   into user-facing output.
+
+Items 1 and 3 are the same class of bug — **a diagnostic naming a plausible cause instead of the actual
+one** — and are worth fixing together, with a fixture per message arm.
 
 Each of the three below is one session ending at a commit. Order otherwise matters only in that M2a's
 `Comparable`-generic work informs M3's naming reconcile.
@@ -187,46 +200,13 @@ mid-codepoint would start trapping, though it is already producing invalid UTF-8
 
 ## Where kama differs from what an LLM will reach for
 
-Each of these cost a build cycle while writing M1's fixtures — but read the classification before treating
-them as defects. **Almost all are kama being deliberately STRICTER than C#/Rust/Python, and the strictness
-is the point.** Exactly one is a genuine gap, and it is marked. This section exists to save the next
-session those cycles, not to suggest the language is trappy.
+**Moved to [../coming-from-other-languages.md](../coming-from-other-languages.md)**, and linked from
+`llms.txt`. It was drafted here, but this file is deleted when M2 ships — LLM-facing guidance cannot live
+in a doc with an expiry date. Its snippets are now compiled by `tests/idioms_kama_way.kama`, so they cannot
+rot silently.
 
-**Genuine gap:**
-
-- ⚠️ **A `match` SUBJECT must be a named local — a call result is rejected.** `match (pick(x: 1))`, where
-  `pick` returns a plain enum, fails with "`match` requires an enum subject (a tagged union, or a plain
-  enum)" — which is misleading, since it plainly *is* one. Bind first:
-  `Code c = pick(x: 1); match (c) { … }`. Broader than SPEC § Known limitations describes (that lists only
-  a nested value-producing `match` or a variant-producing ternary). Tracked in ROADMAP §2.
-
-**Deliberate design — learn it, don't work around it:**
-
-- **`public` field on a `type resource` is rejected** — a resource owns something, and a public field
-  bypasses the invariant it exists to hold (GOALS 3c). Expose behavior through methods.
-- **`@generate` requires EVERY field marked `@field` or `@skip`** — explicit over implicit, so adding a
-  field can never silently start serializing a secret. (Rust's serde defaults the other way.)
-- **Named arguments everywhere**, including where they read like noise: `println(s: "…")`,
-  `FixedArray.make(size: …)`. This is the headline language feature, not friction.
-- **String-interpolation holes are an identifier plus `.field`/`[i]` only** — `"${a.length()}"` is an
-  error; bind the call's result first. Same boundary Rust's `format!` draws, and what keeps interpolation
-  statically checked rather than a mini-language.
-- **Generic free functions infer their type args** (`max(a: 3, b: 4)`); the turbofish is only for shapes
-  like `decode::<T>` where inference has nothing to go on.
-
-**Correct rejection, unhelpful message (worth fixing, cheap):**
-
-- **`slot x;` then passing `ref x`** — rejected, correctly: `ref` borrows a value that is already live and
-  a `slot` has none. `out` is the tool. The diagnostic is clear here; the trap is only that an LLM reaches
-  for `ref` reflexively.
-- **A free function cannot carry `when [T: Copyable]`** — bounds belong in the type-parameter list
-  (`fn f<T: Copyable>(…)`); `when` gates conditional conformance on a generic TYPE's method, and a free
-  function has no "sometimes". Correct, but the bare `syntax error, unexpected when` should say that.
-
-**Not a language matter:**
-
-- A `.d/` fixture is a DIRECTORY of files built together; a bare `namespace` in a single-file fixture will
-  not resolve a sibling. Test-harness convention.
+Read it before writing M2 fixtures; the one-line summary is that **kama's inference works from bound
+locals**, so a match subject, an interpolation hole and a generic argument each want an intermediate name.
 
 ## Verification
 
