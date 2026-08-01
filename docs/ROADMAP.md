@@ -173,15 +173,37 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   for the language server (it resolves the whole program from the manifest) and for any file reached through
   an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
   stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
-- **Generic free-fn / static-method can't instantiate a generic type from its own type param (limitation,
-  workaround).** A generic free function `fn f<W: C>(…) { Foo<W> x = Foo.make(…); … }` fails with "unknown type
-  in constructor call `Foo`": the dot-on-type ctor resolver only rewrites the type name when it is itself a
-  type *param*, not a generic *template* name — even though the free-fn body IS monomorphized. A **static**
-  method on a generic type is likewise uncallable with explicit/inferred args. **What works:** constructing from
-  the enclosing type's own param inside a type method (how `Map` does `MapKeyIter::<K>.make`), and instance
-  methods on an instance built at a concrete site. **Workaround (streams M2):** expose the op as an instance
-  method. Fix = teach the ctor resolver to substitute template type-args under `_typeSubst`, plus a
-  static-generic call spelling. Post-1.0, additive; not a blocker.
+- **A `static fn` on a GENERIC type has no spelling that reaches it (small; circular diagnostics).**
+  Statics work on a non-generic type (`Plain::tag()`), but `::` (the static operator) and `.` (the ctor
+  operator) neither accept a type-argument list, so there is nowhere to put the `<int32>` that tells
+  `Box<T>::tag` which monomorph to call. All four candidates fail, and **two of them contradict each
+  other** — a user following the diagnostic goes in a circle:
+
+  | Spelling | Result |
+  | --- | --- |
+  | `Box::<int32>::tag()` | parse error: `unexpected ::, expecting ( or .` |
+  | `Box::tag()` | `scope-qualified call resolves to no known function` |
+  | `Box::<int32>.tag()` | `dot-on-type calls a constructor; `tag` is a static — call it with `Box::tag(...)`` |
+  | `Box.tag()` | `unknown type in constructor call `Box`` |
+
+  Narrow: instance methods, ctors (`Box.make(v:)`) and generic free functions are all fine, and a
+  self-returning static is required to be a `ctor` anyway under the one-construction-spelling rule — so
+  the only thing lost is a *non*-self-returning static on a generic type (`Box<T>::defaultCapacity()`).
+  Workaround: an instance method or a free function. Fix = a type-arg list on the `::` call form, plus
+  making the two diagnostics agree. Post-1.0, additive; not a blocker — but the circular message is worth
+  fixing on its own.
+  *(**Corrected 2026-08-01.** This entry used to also claim a generic FREE FUNCTION could not instantiate a
+  generic type from its own type param — `fn f<W: C>(…) { Foo<W> x = Foo.make(…); }`. That is no longer true
+  and was verified in all three shapes: an intrinsic collection (`DynamicArray<T>` inside `fn f<T>`), a user
+  generic type, and a contract-bounded param. It presumably fixed itself under the construction-model work.
+  The stale claim mattered: it was being cited as the reason a stable merge sort could not be written, which
+  would have forced an unstable-only `sort` on a false premise.)*
+  *(**Corrected 2026-08-01.** This entry used to also claim a generic FREE FUNCTION could not instantiate a
+  generic type from its own type param — `fn f<W: C>(…) { Foo<W> x = Foo.make(…); }`. That is no longer true
+  and was verified in all three shapes: an intrinsic collection (`DynamicArray<T>` inside `fn f<T>`), a user
+  generic type, and a contract-bounded param. It presumably fixed itself under the construction-model work.
+  The stale claim mattered: it was being cited as the reason a stable merge sort could not be written, which
+  would have forced an unstable-only `sort` on a false premise.)*
 - **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.

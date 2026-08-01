@@ -52,41 +52,119 @@ M3's naming reconcile.
   `std::time` sleep + wall clock · DNS.
 - **M2c — the two new modules.** `std::random` · `std::encoding`.
 
-## Decisions
+## Open questions — THREE SPIKES + ONE BUG FIX, before any M2a code
 
-**1-3 are DECIDED (user, 2026-08-01) — build to them, do not re-open.** 4-7 carry a lean; confirm or
-overrule at session start rather than discovering it halfway through. The standing constraint is **no
-compromises on design**: at 1.0 these names and shapes freeze.
+None of these is a default to proceed on. Each is a real design decision that freezes at 1.0, and the user
+has asked for the *professional-grade* answer, not the expedient one. **Run the spikes first; they are
+research + a written recommendation, not implementation.**
 
-1. ✅ **DECIDED — `sort` lives in `std::collections` as free functions over `View<T>`.** Beside `View`,
-   not in a new `std::algorithm`. A `sort` taking a `View<T>` gets `DynamicArray` and `FixedArray` for
-   free through their existing `view()`, and `View` is already the "contiguous run of T" abstraction. A
-   separate module would be a second place to look for one function.
-2. ✅ **DECIDED — `sort` is ALLOCATION-FREE.** Heapsort, or introsort with a fixed-size stack. Not a
-   preference: a merge sort's auxiliary `DynamicArray<T>` inside a generic free function hits the tracked
-   generic-instantiation limitation (ROADMAP §2), *and* an allocating sort is unusable under
-   `@noheap` / `--no-heap` and on MCU — where sorting a fixed buffer is precisely the use case.
-   `PriorityQueue`'s `siftDown` is the in-place prior art. Ship `binarySearch` alongside.
-3. ✅ **DECIDED — parsing returns `Optional<T>`.** `parseInt` / `parseUint` / `parseFloat`, matching
-   `string.find`'s shape. The failure is "this isn't a number", which carries no detail worth a payload;
-   `Result<T, ParseError>` invites an error enum nobody reads. Lift the scanner out of `JsonReader`
-   (`numToken`/`readInt`/`readUint`, `lib/std/serialization/json/json.kama:291-320` — currently PRIVATE
-   methods) so there is one implementation and JSON calls it.
+### Spike A — the `sort` API (blocks M2a)
+
+Two entangled questions: **where it lives**, and **what it can sort**.
+
+*Survey properly, don't guess.* At minimum: Rust (`slice::sort` / `sort_unstable` / `sort_by_key`, reached
+through deref so `v.sort()` works), Go (`sort.Slice` / `slices.Sort` — note the generics rewrite in 1.21),
+C++ (`std::sort` / `ranges::sort` over iterators), Zig (`std.mem.sort` — closest peer, takes a slice + a
+comparator fn), Swift (`Array.sorted()` / `sort()` on `MutableCollection`), C#/Java. The question to answer
+is not "what is popular" but **what shape fits a language with `View<T>` as a first-class stack-only borrow
+and `Comparable` as a contract**.
+
+Specific things the spike must resolve:
+
+- **Free function over `View<T>`, method on the containers, or both?** A free `sort(items: View<T>)` gets
+  `DynamicArray`, `FixedArray` and sub-ranges (`slice`) from ONE implementation; `xs.sort()` reads better
+  but is per-container and cannot sort a sub-range or a `View` obtained from elsewhere. "Both" is what Rust
+  effectively has, at the cost of two spellings (GOALS #4).
+- **⚠️ `View<T>` cannot swap elements today.** `DynamicArray.swap` needs a private `takeAt` plus raw
+  `Ptr<T>` aliasing, because the move tracker rejects `this.data[i] = …`
+  ([dynamic_array.kama:213-222](../../lib/std/collections/dynamic_array.kama#L213)). `View` has a
+  place-returning `operator[]` but no `swap`. So a View-based sort either restricts to a copyable element
+  or needs a new `View.swap` with the same unsafe internals. **Decide this deliberately — it is the part
+  most likely to be hacked around.**
+- **How is the ordering supplied?** `T: Comparable` (kama's contract, prelude retro-impls on every
+  primitive) is the obvious default. Do we also want a `sortBy(items:, less:)` taking an `fnptr`, given
+  kama has no capturing closures (WEB_FRAMEWORK_READINESS Tier-1)? Without it, sorting by a computed key
+  means a wrapper type.
+- **Stability.** See below — it is a free choice, not a forced one.
+
+### Spike B — stability, and what `sort` guarantees
+
+**Correction, and it changes this question.** This brief previously said a stable merge sort was
+*unimplementable* because a generic free function could not allocate a `DynamicArray<T>` scratch buffer of
+its own type param. **That is false, and was verified false:**
+
+```kama
+fn int32 mergeScratch<T>(View<T> items) {
+    DynamicArray<T> scratch = DynamicArray.withCapacity(capacity: items.length());   // builds and runs
+    return scratch.length();
+}
+```
+
+The ROADMAP §2 entry claiming otherwise was stale and has been corrected. (What IS still broken is narrower
+and unrelated: a `static fn` on a GENERIC type has no spelling that reaches it — see ROADMAP §2. It affects
+nothing in M2.) So stability is a genuine trade-off with both options available, not a capability limit:
+
+| | allocation-free (heapsort / introsort) | stable (merge / timsort) |
+|---|---|---|
+| works under `@noheap` / `--no-heap`, MCU | ✅ | ✗ |
+| multi-key sorting is correct | ✗ | ✅ |
+| peers | Rust `sort_unstable`, Go `sort.Slice`, C++ `std::sort` | Rust `sort`, Go `SliceStable`, C++ `stable_sort` |
+
+Every peer ships **both**. The spike should say whether kama does too, and if only one, which — bearing in
+mind that "sorting a fixed buffer with no heap" is exactly the MCU/audio use case kama courts, and that a
+silently-unstable sort produces wrong multi-key results without any error.
+
+### Spike C — what `parseInt`/`parseFloat` return
+
+*Survey what peers do AND argue what kama should do.* Rust: `Result<T, ParseIntError>` with
+Empty/InvalidDigit/PosOverflow/NegOverflow. Go: `strconv.Atoi` → `(int, error)` with `ErrSyntax`/`ErrRange`.
+C#: both `Parse` (throws) and `TryParse` (bool + out). Python: raises `ValueError`. JS: `parseInt` returns
+`NaN` (widely considered a mistake). Zig: `std.fmt.parseInt` → `!i32` with `error.Overflow` /
+`error.InvalidCharacter`.
+
+**Note that the two languages closest to kama in philosophy — Rust and Zig — both distinguish OVERFLOW from
+MALFORMED.** And kama's own doctrine (GOALS #3d) says `Optional<T>` is *absence* and `Result<T, E>` is
+*failure*; a parse failure is a failure. The counter-argument is that `Optional` matches `string.find`, is
+one obvious spelling, and most callers print a generic message anyway. Resolve it on the merits, not on
+which is less typing.
+
+### Bug fix — `substring` can produce invalid UTF-8
+
+Not a design question; a defect with a decision attached. **Verified:**
+
+```kama
+string s = "A\u{E9}Z";                       // 4 bytes: 'A', 'é' (C3 A9), 'Z'
+string cut = s.substring(start: 0, end: 2);   // len=2, second byte = 195 (0xC3)
+```
+
+That result is **not valid UTF-8** — a lone lead byte — produced from valid input, in the safe surface, with
+no `unsafe` and no error. It is the ONLY such hole: `split`, `replace` and `find` all operate on whole
+needles, so a valid needle in a valid haystack always lands on codepoint boundaries.
+
+`substring` bounds-checks against `len` only
+([kama_runtime.h:483](../../kama_runtime.h#L483)). Recommended fix, consistent with the language's existing
+discipline (indexing **traps** rather than invoking UB; `Optional` is for absence, not for programmer
+error) and with Rust, where `&s[0..2]` panics on a non-char-boundary: **trap on a non-boundary offset**.
+The check is O(1) — a boundary byte must not be a UTF-8 continuation byte, `(b & 0xC0) != 0x80`. Ship with
+a `tests/trap/` fixture. Confirm the breaking-change appetite first: code that currently slices
+mid-codepoint would start trapping, though it is already producing invalid UTF-8 today.
+
+### Still open, unchanged (leans only)
+
 4. **Path helpers: free functions on `string`, or a `Path` type?** *Lean: free functions*
-   (`join`/`dirname`/`basename`/`extension`), because a `Path` type means two string-ish types and GOALS #4
-   says one way to do a thing. Rust's `Path` earns its keep through OsString encoding concerns kama does not
-   have — it is UTF-8 everywhere.
+   (`join`/`dirname`/`basename`/`extension`) — a `Path` type means two string-ish types, against GOALS #4.
+   Rust's `Path` earns its keep through `OsString` encoding concerns kama does not have (UTF-8 everywhere).
 5. **Does `std::io` gaining `stdout()` conflict with the floor's `print`/`println`?** They coexist
-   deliberately: the floor's print family is *always available and unbuffered*, for diagnostics that must
-   work under `--no-std`; `std::io`'s handles are `Reader`/`Writer` values that *compose* with `pump`,
-   `BufWriter` and serde. Say that in FLOOR.md so it does not read as duplication.
-6. **`std::random` seeding.** Needs an entropy source, which is a platform seam (`getrandom`/`BCryptGenRandom`/
-   `crypto.getRandomValues`). *Lean: a `kama_random.h` seam with an explicit `seed:` ctor as the primary
-   API* — a deterministic PRNG you can seed is the useful thing for games and tests; OS entropy is the
+   deliberately: the floor's print family is always-available and unbuffered, for diagnostics that must work
+   under `--no-std`; `std::io`'s handles are `Reader`/`Writer` values that COMPOSE with `pump`, `BufWriter`
+   and serde. Say so in FLOOR.md so it does not read as duplication.
+6. **`std::random` seeding.** Entropy is a platform seam (`getrandom` / `BCryptGenRandom` /
+   `crypto.getRandomValues`). *Lean: a `kama_random.h` seam, with an explicit `seed:` ctor as the PRIMARY
+   API* — a deterministic, seedable PRNG is what games and tests actually want; OS entropy is the
    convenience. **Document loudly that it is not cryptographic.**
-7. **Does `min`/`max`/`clamp` become generic here or in M3?** It is a *breaking* change (it replaces the ten
-   `minI32`… in `lib/std/num/ops.kama:6` and the five `minf`… in `lib/std/math/scalar.kama:5`), so it
-   belongs to M3's reconcile — but M2a should not add MORE suffixed spellings in the meantime.
+7. **Does `min`/`max`/`clamp` become generic here or in M3?** Breaking (it replaces the ten `minI32`… in
+   `lib/std/num/ops.kama:6` and five `minf`… in `lib/std/math/scalar.kama:5`), so it belongs to M3's
+   reconcile — but M2a must not add MORE suffixed spellings meanwhile.
 
 ## Mechanics you will want to know
 
