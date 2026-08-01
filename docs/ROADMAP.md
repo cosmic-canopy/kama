@@ -176,6 +176,31 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   methods on an instance built at a concrete site. **Workaround (streams M2):** expose the op as an instance
   method. Fix = teach the ctor resolver to substitute template type-args under `_typeSubst`, plus a
   static-generic call spelling. Post-1.0, additive; not a blocker.
+- **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
+  deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
+  Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
+  Both are ordinary socket-option work on the shipped seam.
+- **`char` has no `Format` / `Serialize` / `Deserialize` conformance (small, structural).** `char` and
+  `uint32` share a C type, and the retro-conformance registry is keyed by cType, so it cannot hold both —
+  `prelude/global.kama` records the `uint32` ones. String interpolation still renders a `char` AS A
+  CHARACTER through a compiler fast path, but a `char` reaching those contracts through a GENERIC bound
+  renders (and serializes) as its numeric scalar. Fix = key the registry by kama type rather than cType, or
+  give `char` a distinct C typedef. The JSON backend now reads and writes `char` correctly either way.
+- **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
+  the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
+  yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
+- **A legacy self-returning `static fn` factory is TRUSTED by the ctor-completeness check.**
+  `checkNamedCtorComplete` cannot see through one, so a type constructed that way can skip the
+  "every field is assigned" guarantee. Closing it means making a self-returning `static fn` an error now
+  that `ctor` is the one construction spelling — a small breaking change, so it belongs with the 1.0
+  naming/API reconcile rather than after it.
+- **Windows long-path support is deferred** (`kama_os.h`): the temp-path builder assumes `MAX_PATH`-class
+  lengths. Surfaces only on a deep working directory.
+- **UBSan's `function` check is disabled suite-wide** (`run_tests.sh`). Vtable / contract /
+  `BindableFunctionPtr` dispatch stores each slot as `Ret (*)(void* self, …)` and calls a concrete
+  `Ret C__m(C* self, …)` through it — ABI-identical, and how essentially all C OO dispatch works, but the
+  check enforces exact function-pointer identity. Either emit a matching-signature trampoline or document
+  the exemption as permanent; silently off is the wrong end state for 1.0.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way to do
   a thing," and **named parameters** already cover the disambiguation overloading is usually reached for.
   **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by operand
