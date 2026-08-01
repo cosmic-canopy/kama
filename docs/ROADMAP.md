@@ -177,8 +177,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   2026-08-01). Statics work on a non-generic type (`Plain::tag()`), and a ctor on a generic type has BOTH
   an inferred and an explicit spelling (`Box.make(v:)` / `Box::<int32>.make(v:)`). Statics got neither: `::`
   never learned a type-argument list, so there is nowhere to put the `<int32>` that says which monomorph.
-  All four candidates fail, and **two contradict each other** — `Box::<int32>.tag()` says "call it with
-  `Box::tag(...)`", which then reports no such function:
+  All four candidates fail. Note that `Box::<int32>.tag()`'s message is the RIGHT DIAGNOSIS with the WRONG
+  ADVICE: `.` means ctor and `tag` is not one, so rejecting is correct — but the advice text hardcodes
+  `Type::name(...)`, valid only for a NON-generic owner, so it points at the one spelling that does not
+  exist and the reader goes in a circle. (The ctor dot form itself is fine: `Box::<int32>.make(v: 35)`
+  builds and runs.) Make the advice owner-aware as part of the fix — suggest the turbofish form when the
+  type is generic:
 
   | Spelling | Result |
   | --- | --- |
@@ -202,6 +206,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   Box::<int32>.make(v: 5)     // ctor   — dot
   Box::<int32>::tag()         // static — colon-colon   (the addition)
   ```
+
+  This also keeps the language's spelling rule intact and makes it UNIFORM: `.` after a type is
+  construction, `::` is scope resolution, and neither is ever confused for the other. Today generics are
+  the one place that symmetry breaks, which is the actual defect.
 
   **The turbofish is MANDATORY here**, unlike for a ctor: a static has no receiver and its arguments need
   not mention `T`, so there is nothing to infer from. And `Box<int32>::tag()` cannot be the spelling —
