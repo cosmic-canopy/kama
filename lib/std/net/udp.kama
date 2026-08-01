@@ -154,5 +154,5 @@ type resource UdpSocket implements DatagramSocket {
     // The raw socket handle — the intended bridge for handing this socket to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // see net.kama ~TcpStream
+    ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see net.kama ~TcpStream
 }

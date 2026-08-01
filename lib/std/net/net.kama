@@ -128,8 +128,13 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    // fd > 0: 0 is the moved-from sentinel (and stdin) — never a real socket; guarding it keeps a dropped
-    // {0} from closing an unrelated fd (the raw-handle-zero trap; see std::fs::File / the drop-only-if-live work).
+    // The test is `>= 0`, not `> 0` — the explicit `isize fd = -1` states the empty niche, so fd 0 is an
+    // ownable descriptor rather than a second sentinel (same reconcile as std::fs::File's `~File`).
+    // Unlike `File`, nothing re-arms this handle: every ctor path rejects `fd < 0` before constructing, so
+    // a live socket always has `fd >= 0`, and `slot` + drop-only-if-live keep an unconstructed one from
+    // reaching here at all. The guard is therefore REDUNDANT, and it stays deliberately — one predictable
+    // compare in front of a syscall, standing between a future drop-tracking bug and a silent `close(0)`
+    // on stdin. Cheap insurance against a catastrophic, near-undebuggable failure. Same for the two below.
     ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
@@ -177,5 +182,5 @@ type resource TcpListener {
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // see ~TcpStream
+    ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
 }

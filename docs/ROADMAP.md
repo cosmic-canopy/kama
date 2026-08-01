@@ -46,14 +46,6 @@ docs/naming reconcile — 1.0 is the API-stability point, so naming and case con
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
 
-**Residual from that work — the runtime liveness guards did NOT all retire.** The campaign expected `slot`
-to remove them outright; it removed the *static* reason only. `~File`'s `fd >= 0` and `~Process`'s
-`handle != 0 && !reaped` discharge a **runtime** question no analysis can answer: `File.close()` re-arms the
-fd to -1 and `Process.wait` zeroes its handle, so an explicitly-closed value still takes its ordinary drop.
-Those guards stay by design. The genuinely static cases (`~TcpStream`/`~TcpListener`/`~UdpSocket`, whose
-handles nothing re-arms) are still guarded and *could* now drop the check — a small, separate cleanup that
-wants a deliberate audit of every path reaching those destructors, not a blanket removal.
-
 Everything else here is library or toolchain work that does **not** gate the tag:
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
