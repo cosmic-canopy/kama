@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."   # repo root (/work)
 
 mkdir -p bench/build/{kama,c,cpp,rust,go,wasm,csharp,java}
-WORKLOADS="fib pi collatz dispatch alloc fnptr map math"
+WORKLOADS="fib pi collatz dispatch alloc fnptr map map_kernel math"
 
 # Compile-time metric: accumulate per-language wall-clock (ms) + artifact count while building,
 # emitted to bench/build/compile.tsv for report.py. Single-build snapshot (not hyperfine-averaged) —
@@ -19,28 +19,45 @@ make clean >/dev/null 2>&1
 make kama >/dev/null 2>&1 && echo "  ok kama compiler" || echo "  FAIL kama compiler"
 # NB: building the kama compiler itself is toolchain setup, NOT counted as user compile time.
 
+# A language that does not play a given workload simply has no source file for it — report that as a
+# clean "n/a", not a FAIL. (C has no stdlib hashmap, so it has no `map` source; its hand-rolled map is
+# the shared `map_kernel` instead, where every language runs the same algorithm.)
+have() { [ -f "$1" ]; }
+
 for w in $WORKLOADS; do
   echo "== $w =="
+  if have bench/src/kama/$w.kama; then
   t=$(now_ms); ./kama build bench/src/kama/$w.kama -o bench/build/kama/$w --release >/dev/null 2>&1; rc=$?
   add_ct kama $t; [ $rc -eq 0 ] && echo "  ok kama" || echo "  FAIL kama"
+  else echo "  n/a kama"; rm -f bench/build/kama/$w; fi
   # kama→wasm at -O3 (speed) for a fair compute comparison vs JS — note `kama
   # build --release --target wasm` uses -Oz (size); here we transpile + emcc -O3.
   # Strict IEEE FP (NO -ffast-math): the JS/C/Rust baselines are all strict, so the wasm
   # build must be too for an apples-to-apples compare. The `pi` float loop legitimately
   # trails V8 here — see docs/ROADMAP.md (V8 tiers short-lived wasm via Liftoff, not the
   # optimizing TurboFan a long-running app would get).
+  if have bench/src/kama/$w.kama; then
   t=$(now_ms)
   ( ./kama transpile bench/src/kama/$w.kama -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
     && emcc -std=c11 -O3 -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ); rc=$?
   add_ct kama-wasm $t; [ $rc -eq 0 ] && echo "  ok kama-wasm" || echo "  FAIL kama-wasm"
+  else echo "  n/a kama-wasm"; rm -f bench/build/wasm/$w.js bench/build/wasm/$w.wasm; fi
+  if have bench/src/c/$w.c; then
   t=$(now_ms); clang   -O3 -DNDEBUG -s bench/src/c/$w.c   -o bench/build/c/$w     2>/dev/null; rc=$?
   add_ct c $t;   [ $rc -eq 0 ] && echo "  ok c"   || echo "  FAIL c"
+  else echo "  n/a c"; rm -f bench/build/c/$w; fi
+  if have bench/src/cpp/$w.cpp; then
   t=$(now_ms); clang++ -O3 -DNDEBUG -s bench/src/cpp/$w.cpp -o bench/build/cpp/$w 2>/dev/null; rc=$?
   add_ct cpp $t; [ $rc -eq 0 ] && echo "  ok cpp" || echo "  FAIL cpp"
+  else echo "  n/a cpp"; rm -f bench/build/cpp/$w; fi
+  if have bench/src/rust/$w.rs; then
   t=$(now_ms); rustc -C opt-level=3 -C strip=symbols bench/src/rust/$w.rs -o bench/build/rust/$w 2>/dev/null; rc=$?
   add_ct rust $t; [ $rc -eq 0 ] && echo "  ok rust" || echo "  FAIL rust"
+  else echo "  n/a rust"; rm -f bench/build/rust/$w; fi
+  if have bench/src/go/$w.go; then
   t=$(now_ms); ( cd bench/src/go && go build -o /work/bench/build/go/$w $w.go ) 2>/dev/null; rc=$?
   add_ct go $t; [ $rc -eq 0 ] && echo "  ok go" || echo "  FAIL go"
+  else echo "  n/a go"; rm -f bench/build/go/$w; fi
 done
 
 echo "== csharp (Release, JIT) =="

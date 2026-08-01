@@ -15,7 +15,7 @@ export const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quo
 
 const BASE = template('base.html');
 
-export function shell({ url, title, description, bodyClass = '', content, scripts = '' }) {
+export function shell({ url, title, description, bodyClass = '', content, scripts = '', jsonld = '' }) {
   return fill(BASE, {
     title: escAttr(title),
     description: escAttr(description),
@@ -25,14 +25,22 @@ export function shell({ url, title, description, bodyClass = '', content, script
     content,
     footer: footer(),
     scripts,
+    jsonld: jsonld ? `\n<script type="application/ld+json">${JSON.stringify(jsonld)}</script>` : '',
   });
 }
+
+// The brand mark: served at 68px (2x the largest on-page size), WebP with a PNG fallback. The
+// 256px logo.png is NOT used on the page — it exists for og:image, where scrapers want a large PNG.
+const mark = size => `<picture>
+      <source srcset="/assets/logo-68.webp" type="image/webp">
+      <img src="/assets/logo-68.png" alt="" width="${size}" height="${size}">
+    </picture>`;
 
 function topNav(url) {
   const on = p => (url.startsWith('/docs/') && p === '/docs/' ? ' aria-current="page"' : '');
   return `<nav class="topnav">
   <a class="brand" href="/">
-    <img src="/assets/logo.png" alt="" width="34" height="34">
+    ${mark(34)}
     <span>kama</span>
   </a>
   <div class="topnav-links">
@@ -50,7 +58,7 @@ export const setVersion = v => { VERSION = v; };
 function footer() {
   return `<footer class="footer">
   <div class="footer-brand">
-    <img src="/assets/logo.png" alt="" width="28" height="28">
+    ${mark(28)}
     <span>kama · v${VERSION} on the road to 1.0 · MIT licensed</span>
   </div>
   <div class="footer-links">

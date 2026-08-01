@@ -4,6 +4,19 @@ class P {
   abstract class Shape { public abstract long Area(); }
   class Circle : Shape { long r; public Circle(long r){this.r=r;} public override long Area()=>r*r; }
   class Square : Shape { long s; public Square(long s){this.s=s;} public override long Area()=>s*s; }
+  // Equal-workload kernel (see bench/src/c/map_kernel.c): open-addressing linear-probe int->long map,
+  // one shared hash, fixed prealloc. Primitive arrays — no Dictionary (that is the `map` row).
+  class IntMap {
+    int[] keys; long[] vals; byte[] used; int cap;
+    public IntMap(int cap){ this.keys=new int[cap]; this.vals=new long[cap]; this.used=new byte[cap]; this.cap=cap; }
+    int SlotFor(int k){ ulong x=(ulong)(uint)k*2654435761UL; return (int)(x%(ulong)cap); }
+    public void Put(int k, long v){ int i=SlotFor(k);
+      while(used[i]!=0){ if(keys[i]==k){ vals[i]=v; return; } i++; if(i>=cap) i=0; }
+      keys[i]=k; vals[i]=v; used[i]=1; }
+    public long Get(int k){ int i=SlotFor(k);
+      while(used[i]!=0){ if(keys[i]==k) return vals[i]; i++; if(i>=cap) i=0; }
+      return 0; }
+  }
   static long Measure(Shape sh)=>sh.Area();
   static long Add1(long x)=>x+1;
   static long Mul3(long x)=>x*3;
@@ -35,6 +48,7 @@ class P {
     else if(w=="alloc"){ for(int iter=0;iter<2000;iter++){ var xs=new System.Collections.Generic.List<int>(); for(int j=1;j<=1000;j++) xs.Add(j); ulong s=0; foreach(var v in xs) s+=(ulong)v; sum+=s; } }
     else if(w=="fnptr"){ System.Func<long,long> a=Add1, b=Mul3; for(ulong i=0;i<8000000;i++){ if(i%2==0) sum+=(ulong)Apply(a,(long)i); else sum+=(ulong)Apply(b,(long)i); } }
     else if(w=="map"){ const long N=100000, PASSES=10; var m=new System.Collections.Generic.Dictionary<int,long>(); for(long i=0;i<N;i++) m[(int)i]=i*2; for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=(ulong)m[k]; } }
+    else if(w=="map_kernel"){ const long N=100000, PASSES=10; var m=new IntMap(262144); for(long i=0;i<N;i++) m.Put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=(ulong)m.Get(k); } }
     else if(w=="math"){ M4 mat=new M4(new V4(1,1,0,0),new V4(0,1,1,0),new V4(0,0,1,1),new V4(1,0,0,1)); double ms=0.0; for(ulong i=0;i<2000000;i++){ float s=(float)(i%8); V4 a=new V4(s,s+1,s+2,s+3), b=new V4(s+2,s+3,s+4,s+5); V4 c=V4add(a,b); V4 e=V4scale(c,3.0f); V4 f=V4sub(e,b); float dp=V4dot(a,b); V4 mv=M4transform(mat,a); M4 mm=M4mul(mat,mat); V4 q1=new V4(s,s+1,s+2,s+3), q2=new V4(s+1,s,s+3,s+2); V4 qq=QuatMul(q1,q2); float qdot=qq.x*qq.x+qq.y*qq.y+qq.z*qq.z+qq.w*qq.w; float acc=(f.x+f.y+f.z+f.w)+dp+(mv.x+mv.y+mv.z+mv.w)+(mm.c0.x+mm.c1.y+mm.c2.z+mm.c3.w)+qdot; ms+=acc; } sum=(ulong)ms; }
     return (int)(sum%256);
   }

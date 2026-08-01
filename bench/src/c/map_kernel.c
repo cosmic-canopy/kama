@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-// Minimal open-addressing (linear-probe) int32 -> int64 map: the idiomatic C answer (no stdlib hashmap).
+// Equal-workload kernel: open-addressing (linear-probe) int32 -> int64 map, one shared hash, fixed
+// prealloc. Ported verbatim to every other language — this is the pure-codegen row. C has no stdlib
+// hashmap, so it does NOT appear in the `map` (idiomatic-map) row at all.
 typedef struct { int32_t *keys; int64_t *vals; uint8_t *used; int32_t cap; } Map;
 static void mput(Map *m, int32_t k, int64_t v) {
     uint64_t x = (uint64_t)(uint32_t)k * 2654435761u;                 // hash

@@ -245,6 +245,53 @@ body:not(.home) .topnav { border-bottom: 1px solid var(--line-2); }
 }
 .copy:hover { color: var(--ember-hi); border-color: var(--ember-hi); }
 
+/* ------------------------------------------------------------------ benchmark panels
+   Small multiples: one panel per workload, each bar scaled to that panel's own slowest run (the
+   workloads span ~50x, so a shared axis would squash the fast ones and a second axis is never the
+   answer). Every bar carries its language and its number as text, so identity is never colour-alone
+   and there is no value hidden behind a hover. kama wears the ember accent because it is the subject
+   of the page; the ordering is by measured time either way. */
+.bench-grid {
+  display: grid; gap: .9rem; margin: 1.6rem 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.bench-panel {
+  margin: 0; padding: .85rem .9rem .7rem; background: var(--panel-2);
+  border: 1px solid var(--line-2); border-radius: 3px;
+}
+.bench-panel figcaption {
+  display: flex; align-items: baseline; justify-content: space-between; gap: .6rem;
+  margin-bottom: .6rem; padding-bottom: .5rem; border-bottom: 1px solid var(--line-2);
+}
+.bench-panel figcaption b {
+  font: 600 .82rem/1 var(--font-mono); color: var(--fg); letter-spacing: .02em;
+}
+.bench-panel figcaption span {
+  font-size: .68rem; color: var(--fg-dim); text-align: right; text-wrap: balance;
+}
+.bench-row {
+  display: grid; grid-template-columns: 2.9rem 1fr 2.6rem; align-items: center;
+  gap: .5rem; padding: 2px 0;                       /* 2px surface gap between adjacent bars */
+}
+.bench-lang { font: 500 .72rem/1 var(--font-mono); color: var(--fg-dim); }
+.bench-track { display: block; height: 9px; background: rgba(255, 255, 255, .045); border-radius: 2px; }
+.bench-fill {
+  display: block; height: 100%; min-width: 3px; background: #6c6559;
+  border-radius: 0 3px 3px 0;                       /* rounded data-end, anchored to the baseline */
+}
+.bench-row.is-kama .bench-lang { color: var(--amber); font-weight: 600; }
+.bench-row.is-kama .bench-fill { background: linear-gradient(90deg, var(--red), var(--ember)); }
+.bench-val {
+  font: 500 .72rem/1 var(--font-mono); color: var(--fg-soft); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bench-row.is-kama .bench-val { color: var(--fg); }
+.bench-stats { margin-top: 1.4rem; }
+.bench-stats h3 { font-family: var(--font-mono); font-size: .98rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .bench-fill { transition: width .4s ease; }
+}
+
 /* ------------------------------------------------------------------ docs */
 .doc-wrap {
   max-width: 1320px; margin: 0 auto; padding: 2rem clamp(1.25rem, 4vw, 3rem) 1rem;

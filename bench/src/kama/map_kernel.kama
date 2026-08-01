@@ -1,0 +1,69 @@
+// Equal-workload hash-map kernel: the SAME hand-rolled open-addressing (linear-probe) int32 -> int64
+// map in every language — one shared hash (a single 32-bit Fibonacci multiply), fixed prealloc, no
+// stdlib map anywhere. Unlike `map`, which compares each language's idiomatic map DESIGN (hash
+// strength, growth policy, layout), this is a pure CODEGEN number: the AOT cluster should converge.
+import std::collections::{FixedArray};
+
+type resource IntMap {
+    FixedArray<int32> keys;
+    FixedArray<int64> vals;
+    FixedArray<uint8> used;
+    int32 cap;
+
+    public ctor make(int32 cap) {
+        slot IntMap m;
+        m.keys = FixedArray.make(size: cap);      // zero-initialized, like C's calloc'd `used`
+        m.vals = FixedArray.make(size: cap);
+        m.used = FixedArray.make(size: cap);
+        m.cap = cap;
+        return give m;
+    }
+
+    private fn int32 slotFor(int32 k) {
+        uint64 x = cast<uint64>(cast<uint32>(k)) * 2654435761ui64;   // hash
+        return cast<int32>(x % cast<uint64>(this.cap));
+    }
+
+    public fn void put(int32 k, int64 v) {
+        int32 i = this.slotFor(k: k);
+        while (this.used[i] != 0ui8) {
+            if (this.keys[i] == k) { this.vals[i] = v; return; }
+            i = i + 1; if (i >= this.cap) { i = 0; }
+        }
+        this.keys[i] = k; this.vals[i] = v; this.used[i] = 1ui8;
+    }
+
+    public fn int64 get(int32 k) {
+        int32 i = this.slotFor(k: k);
+        while (this.used[i] != 0ui8) {
+            if (this.keys[i] == k) { return this.vals[i]; }
+            i = i + 1; if (i >= this.cap) { i = 0; }
+        }
+        return 0i64;
+    }
+}
+
+fn int main()
+{
+    int32 N = 100000;
+    int32 PASSES = 10;
+    IntMap m = IntMap.make(cap: 262144);                     // > N / 0.75, power of 2
+
+    int32 i = 0;
+    while (i < N) { m.put(k: i, v: cast<int64>(i) * 2i64); i = i + 1; }
+
+    uint64 sum = 0ui64;
+    int32 p = 0;
+    while (p < PASSES)
+    {
+        i = 0;
+        while (i < N)
+        {
+            int32 k = cast<int32>((cast<int64>(i) * 2654435761i64) % cast<int64>(N));   // bijection over 0..N-1
+            sum = sum + cast<uint64>(m.get(k: k));
+            i = i + 1;
+        }
+        p = p + 1;
+    }
+    return cast<int>(sum % 256ui64);
+}

@@ -12,7 +12,7 @@ TSV = os.path.join(ROOT, "bench/build/results.tsv")
 OUT_MD = os.path.join(ROOT, "docs/benchmarks/RESULTS.md")
 OUT_JSON = os.path.join(ROOT, "docs/benchmarks/results.json")
 
-WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map", "math"]
+WORKLOADS = ["fib", "pi", "collatz", "dispatch", "alloc", "fnptr", "map", "map_kernel", "math"]
 NATIVE = ["kama", "c", "cpp", "rust", "go", "csharp", "java", "lua", "python"]
 WASM = ["kama-wasm", "js", "ts"]
 LABEL = {"kama": "kama", "c": "C", "cpp": "C++", "rust": "Rust", "go": "Go",
@@ -162,8 +162,15 @@ own) and a fair compare vs V8's auto-JIT'd JS. Strict IEEE throughout (no `-ffas
 The compute workloads (fib/pi/collatz) are tuned so the slow interpreters finish quickly; the fast
 compiled languages run in a few ms, so small absolute differences between them are noise — **except
 `dispatch`**, which measures *true* dynamic dispatch (see Workloads): the AOT cluster
-(kama/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×. The
-**`alloc`** workload (added once `List<T>` landed in M9) is the one to watch for the no-GC story: it
+(kama/C/C++/Rust) converges there, while **Go**'s interface dispatch trails ~2×.
+
+**Two of these rows measure different things and are named accordingly.** `map_kernel` pins the
+algorithm, hash, and capacity across every language — a pure **codegen** number, where the AOT cluster
+should converge. `map` lets each language use its **idiomatic** map — a **library-design** number, where
+they legitimately should not. Read the first for "is kama as fast as C?", the second for "how good is the
+shipped container?". C appears only in `map_kernel`: it has no stdlib hashmap to enter in `map`.
+
+The **`alloc`** workload is the one to watch for the no-GC story: it
 churns ~2M growable-list appends and 2000 collection lifetimes, so it contrasts kama's deterministic
 **RAII** free against the **garbage collectors** (Go, C#, Java, Lua, Python, JS) and against the RAII
 peers (C++ `vector`, Rust `Vec`). Watch its **peak RSS** in particular — GC runtimes keep dead
@@ -193,19 +200,30 @@ diverged:
   Each language uses its idiomatic callable — kama `fnptr` (a bare C function pointer, zero-cost), C/C++
   function pointers, Rust `fn` pointers, Go func values, **C# `Func<>` delegates**, **Java
   `LongUnaryOperator` method refs**, Lua/Python/JS functions.
-- **map** — a hash-map throughput test: insert 100 000 int keys, then look every key up 10× in a
-  scrambled (bijective LCG) order (hash + probe cost). Each language uses its idiomatic map — kama
-  `Map<int32, int64>`, C **hand-rolled open-addressing** (no stdlib hashmap), C++ `unordered_map`, Rust
-  `HashMap`, Go `map`, C# `Dictionary`, Java `HashMap` (boxed), Lua table, Python `dict`, JS `Map`.
-  **⚠️ Unlike the compute kernels (identical algorithms), `map` compares each language's _idiomatic map
-  design_ — hash strength, structure, and preallocation all differ — so it is NOT a pure codegen number
-  and the languages do not cluster.** kama's `Map` is at codegen parity with C for equal work: the headline
-  gap is that kama's stdlib chooses a **stronger default hash** (splitmix64 — two dependent 64-bit multiplies
-  vs C's single multiply) and does **not yet preallocate** (grows from 8, rehashing on a bulk insert, while
-  the C map is sized up front). Measured (100 k×10, `-O3`): give C the same splitmix64 hash and it goes
-  2.9 → 5.7 ms; give kama a single-multiply hash and it goes 8.7 → 3.3 ms ≈ C. With an equal hash **and**
-  equal preallocation, kama ≈ C (the Map machinery — probe, `Optional`, value copy — is already at parity).
-  Both levers are stdlib design choices tracked in ROADMAP §5 (Map `reserve` + a pluggable hasher).
+- **map_kernel** — the hash-map **codegen** row: every language runs the *same* hand-rolled
+  open-addressing (linear-probe) `int32 -> int64` map — one shared hash (a single 32-bit Fibonacci
+  multiply), the same fixed 262 144-slot preallocation, no stdlib map anywhere. Insert 100 000 keys, then
+  look every key up 10× in a scrambled (bijective LCG) order. Because the algorithm, hash, and capacity
+  are pinned, **this is the row that answers "is kama on par with C?"** — the AOT cluster
+  (kama/C/C++/Rust) should converge, exactly as it does on the compute kernels. (TS is absent: its
+  `tsconfig.json` covers only the six compute workloads.)
+- **map** — the hash-map **library-design** row: the same workload, but each language uses its *idiomatic*
+  map — kama `Map<int32, int64>`, C++ `unordered_map`, Rust `HashMap`, Go `map`, C# `Dictionary`, Java
+  `HashMap` (boxed), Lua table, Python `dict`, JS `Map`. **⚠️ This measures map DESIGN, not codegen** —
+  hash strength, growth policy, and layout all differ, so the languages legitimately do not cluster.
+  **C is absent by design, not by omission: C has no stdlib hashmap.** Its hand-rolled map is what
+  `map_kernel` runs, in every language at once; entering that bespoke, preallocated structure here and
+  ranking it against everyone else's general-purpose library maps would read as a codegen win when the
+  actual finding is the trivial "a purpose-built preallocated map beats a general-purpose one".
+  kama's real peer here is Rust's `HashMap`, which also grows from small.
+  For the record, kama's two design choices and what each costs (measured, 100 k×10, `-O3`): a **stronger
+  default hash** (splitmix64, two dependent 64-bit multiplies vs one) — give C the same hash and it goes
+  2.9 → 5.7 ms; and **no preallocation by default** (grows from 8, rehashing on a bulk insert) — give kama
+  a single-multiply hash and it goes 8.7 → 3.3 ms ≈ C. Both knobs ship (`Map.withCapacity` /
+  `Map.reserve`, and the pluggable `H: Hasher` slot whose `FastHasher` *is* C's single Fibonacci multiply),
+  so a kama program that wants C's tradeoff can write `Map<int32, int64, FastHasher>.withCapacity(...)`.
+  They are deliberately NOT used here: tuning one language's row while the others stay idiomatic would
+  just tilt the mismatch the other way. That is what `map_kernel` is for.
 - **math** — 2×10⁶ iterations of the `std::math` hot ops an engine leans on: `Vec4` add/sub/scale, `dot`,
   `Mat4*Vec4`, `Mat4*Mat4`, and the `Quat` Hamilton product. Every input is a small integer-valued
   float32 so all intermediates are **exactly representable** (`|v| < 2^24`) — the checksum is therefore

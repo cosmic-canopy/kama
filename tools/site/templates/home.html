@@ -219,9 +219,51 @@
   </p>
 </section>
 
-<section class="page">
+<section class="page" id="performance">
   <div class="section-head">
     <span class="numeral">五</span>
+    <h2>What it costs</h2>
+    <span class="kicker">measured, not claimed</span>
+  </div>
+
+  <p class="lede section-lede">
+    kama compiles to C and is built by the <em>same clang</em> as the C baseline, so parity with C is
+    the design rather than a discovery. These are all nine native workloads — no subset, no favourites —
+    each panel scaled to its own slowest bar. Lower is better; times are medians in milliseconds.
+  </p>
+
+  <div class="bench-grid">
+    {{benchPanels}}
+  </div>
+
+  <div class="grid grid-3 bench-stats">
+    <article class="tile"><h3>{{benchKamaRss}} MB peak</h3>
+      <p>Resident memory on the integer workload — against <b>{{benchJavaRss}} MB</b> for the JVM.
+      No collector means nothing stays resident waiting to be freed.</p>
+    </article>
+    <article class="tile"><h3>{{benchKamaSize}} KB shipped</h3>
+      <p>A self-contained native binary, no runtime to install — against <b>{{benchGoSize}} MB</b>
+      for the same program in Go.</p>
+    </article>
+    <article class="tile"><h3>Honest gaps</h3>
+      <p>kama trails C slightly on <code>alloc</code> and sits behind on <code>map</code>, which compares
+      <em>library design</em>, not codegen — C has no stdlib hash map to enter there.
+      <code>map_kernel</code> runs one algorithm in every language.</p>
+    </article>
+  </div>
+
+  <p class="note">
+    Measured on {{benchArch}} in a pinned container, {{benchDate}} — every language must return the same
+    checksum or the run fails. C#, Java, Lua and Python are in the data but off this graph: at 5–40× they
+    would flatten the cluster above. See the
+    <a href="/docs/benchmarks/">full benchmark tables</a> for every language, peak memory, binary size,
+    compile time, the WebAssembly track, and the caveats that come with each.
+  </p>
+</section>
+
+<section class="page">
+  <div class="section-head">
+    <span class="numeral">六</span>
     <h2>Where it runs</h2>
     <span class="kicker">one language, three worlds</span>
   </div>

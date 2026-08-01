@@ -15,6 +15,19 @@ public class Bench {
   abstract static class Shape { abstract long area(); }
   static class Circle extends Shape { long r; Circle(long r){this.r=r;} long area(){ return r*r; } }
   static class Square extends Shape { long s; Square(long s){this.s=s;} long area(){ return s*s; } }
+  // Equal-workload kernel (see bench/src/c/map_kernel.c): open-addressing linear-probe int->long map,
+  // one shared hash, fixed prealloc. Primitive arrays — no HashMap, no boxing (that is the `map` row).
+  static class IntMap {
+    int[] keys; long[] vals; byte[] used; int cap;
+    IntMap(int cap){ this.keys=new int[cap]; this.vals=new long[cap]; this.used=new byte[cap]; this.cap=cap; }
+    int slotFor(int k){ long x=(k & 0xFFFFFFFFL)*2654435761L; return (int)(Long.remainderUnsigned(x, cap)); }
+    void put(int k, long v){ int i=slotFor(k);
+      while(used[i]!=0){ if(keys[i]==k){ vals[i]=v; return; } i++; if(i>=cap) i=0; }
+      keys[i]=k; vals[i]=v; used[i]=1; }
+    long get(int k){ int i=slotFor(k);
+      while(used[i]!=0){ if(keys[i]==k) return vals[i]; i++; if(i>=cap) i=0; }
+      return 0; }
+  }
   static long measure(Shape sh){ return sh.area(); }
 
   static long add1(long x){ return x+1; }
@@ -49,6 +62,7 @@ public class Bench {
     else if(w.equals("alloc")){ for(int iter=0;iter<2000;iter++){ ArrayList<Integer> xs=new ArrayList<>(); for(int j=1;j<=1000;j++) xs.add(j); long s=0; for(int v: xs) s+=v; sum+=s; } }
     else if(w.equals("fnptr")){ LongUnaryOperator a=Bench::add1, b=Bench::mul3; for(long i=0;i<8000000;i++){ if(i%2==0) sum+=apply(a,i); else sum+=apply(b,i); } }
     else if(w.equals("map")){ final long N=100000, PASSES=10; HashMap<Integer,Long> m=new HashMap<>(); for(long i=0;i<N;i++) m.put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=m.get(k); } }
+    else if(w.equals("map_kernel")){ final long N=100000, PASSES=10; IntMap m=new IntMap(262144); for(long i=0;i<N;i++) m.put((int)i, i*2); for(long p=0;p<PASSES;p++) for(long i=0;i<N;i++){ int k=(int)((i*2654435761L)%N); sum+=m.get(k); } }
     else if(w.equals("math")){ float[][] mat={{1,1,0,0},{0,1,1,0},{0,0,1,1},{1,0,0,1}}; double ms=0.0; for(long i=0;i<2000000L;i++){ float s=(float)(i%8); float[] a={s,s+1,s+2,s+3}, b={s+2,s+3,s+4,s+5}; float[] c=v4add(a,b); float[] e=v4scale(c,3.0f); float[] f=v4sub(e,b); float dp=v4dot(a,b); float[] mv=m4transform(mat,a); float[][] mm=m4mul(mat,mat); float[] q1={s,s+1,s+2,s+3}, q2={s+1,s,s+3,s+2}; float[] qq=quatMul(q1,q2); float qdot=qq[0]*qq[0]+qq[1]*qq[1]+qq[2]*qq[2]+qq[3]*qq[3]; float acc=(f[0]+f[1]+f[2]+f[3])+dp+(mv[0]+mv[1]+mv[2]+mv[3])+(mm[0][0]+mm[1][1]+mm[2][2]+mm[3][3])+qdot; ms+=acc; } sum=(long)ms; }
     System.exit((int)(sum%256));
   }

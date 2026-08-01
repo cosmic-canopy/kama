@@ -8,9 +8,11 @@
 // same file the installer and `kama update` reference.
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { PAGES, GROUPS, ORIGIN } from './pages.mjs';
+import { benchSection } from './bench.mjs';
 import { renderDoc, checkAnchors } from './render.mjs';
 import { highlight, kamaWords } from './highlight.mjs';
 import { shell, sidebar, toc, template, fill, setVersion } from './layout.mjs';
@@ -41,18 +43,42 @@ for (const f of ['install.sh', 'install.ps1', 'llms.txt']) {
 // repo, not visitors, so the leading comment block is dropped before the code goes on the page.
 const sample = readFileSync(path.join(root, 'tests/site_sample.kama'), 'utf8')
   .replace(/^(\/\/[^\n]*\n)+/, '').trimEnd();
+// The performance section is rendered from docs/benchmarks/results.json — the same file the
+// benchmark harness writes — so the marketing numbers ARE the measured numbers.
+const bench = benchSection(root);
+const homeDescription =
+  'kama is a C-family language with no garbage collector, no exceptions and one way to say ' +
+  'each thing — deterministic RAII, named parameters, real OOP. It compiles to portable C11: ' +
+  'native, WebAssembly, or bare metal.';
 writeFileSync(path.join(out, 'index.html'), shell({
   url: '/',
   title: 'kama — a no-GC language that compiles to C',
-  description: 'kama is a C-family language with no garbage collector, no exceptions and one way to say ' +
-               'each thing — deterministic RAII, named parameters, real OOP. It compiles to portable C11: ' +
-               'native, WebAssembly, or bare metal.',
+  description: homeDescription,
   bodyClass: 'home',
   content: fill(template('home.html'), {
     scene: template('scene.html'),
     sample: highlight(sample, 'kama', words),
     version,
+    benchPanels: bench.panels,
+    benchKamaRss: bench.kamaRss,
+    benchJavaRss: bench.javaRss,
+    benchKamaSize: bench.kamaSize != null ? bench.kamaSize.toFixed(0) : '?',
+    benchGoSize: bench.goSize != null ? (bench.goSize / 1024).toFixed(1) : '?',
+    benchArch: `${bench.env.kernel || ''} ${bench.env.arch || ''}`.trim(),
+    benchDate: bench.env.generated || '',
   }),
+  jsonld: {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareSourceCode',
+    name: 'kama',
+    description: homeDescription,
+    url: ORIGIN + '/',
+    codeRepository: 'https://github.com/cosmic-canopy/kama',
+    programmingLanguage: { '@type': 'ComputerLanguage', name: 'kama' },
+    license: 'https://opensource.org/licenses/MIT',
+    softwareVersion: version,
+    author: { '@type': 'Organization', name: 'Cosmic Canopy LLC' },
+  },
   scripts: '<script src="/app.js" defer></script>',
 }));
 
@@ -119,10 +145,21 @@ writeFileSync(path.join(out, '404.html'), shell({
 </main>`,
 }));
 
-const urls = ['/', '/docs/', ...PAGES.map(p => p.url)];
+// <lastmod> per URL, taken from the last commit that touched the page's own source, so crawlers
+// re-fetch what actually changed. A page with no git history (or no git) simply omits it.
+const lastmod = src => {
+  try {
+    const d = execFileSync('git', ['log', '-1', '--format=%cs', '--', src],
+                           { cwd: root, encoding: 'utf8' }).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  } catch { return null; }
+};
+const HOME_SRC = 'tools/site/templates/home.html';
+const urls = [['/', lastmod(HOME_SRC)], ['/docs/', lastmod(HOME_SRC)],
+              ...PAGES.map(p => [p.url, lastmod(p.src)])];
 writeFileSync(path.join(out, 'sitemap.xml'),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
-  urls.map(u => `  <url><loc>${ORIGIN}${u}</loc></url>`).join('\n') +
+  urls.map(([u, m]) => `  <url><loc>${ORIGIN}${u}</loc>${m ? `<lastmod>${m}</lastmod>` : ''}</url>`).join('\n') +
   `\n</urlset>\n`);
 
 console.log(`built _site/ — ${urls.length} pages, v${version}`);

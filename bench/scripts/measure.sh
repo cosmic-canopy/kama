@@ -9,7 +9,7 @@ OUT=bench/build/results.tsv
 printf "track\tlang\tworkload\ttime_ms\trss_kb\tsize_bytes\texit\n" > "$OUT"
 
 WORKLOADS="${1:-all}"
-[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr map math"
+[ "$WORKLOADS" = "all" ] && WORKLOADS="fib pi collatz dispatch alloc fnptr map map_kernel math"
 
 NATIVE="kama c cpp rust go csharp java lua python"
 WASM="kama-wasm js ts"
@@ -33,10 +33,10 @@ cmd_for() {  # lang workload -> run command (empty if artifact missing)
     go)         [ -x bench/build/go/$w ]       && echo "bench/build/go/$w" ;;
     csharp)     [ -f bench/build/csharp/bench.dll ] && echo "dotnet bench/build/csharp/bench.dll $w" ;;
     java)       [ -f bench/build/java/Bench.class ] && echo "java -cp bench/build/java Bench $w" ;;
-    lua)        echo "lua5.4 bench/src/lua/$w.lua" ;;
-    python)     echo "python3 bench/src/python/$w.py" ;;
+    lua)        [ -f bench/src/lua/$w.lua ] && echo "lua5.4 bench/src/lua/$w.lua" ;;
+    python)     [ -f bench/src/python/$w.py ] && echo "python3 bench/src/python/$w.py" ;;
     kama-wasm) [ -f bench/build/wasm/$w.js ] && echo "node --no-liftoff bench/build/wasm/$w.js" ;;
-    js)         echo "node bench/src/js/$w.js" ;;
+    js)         [ -f bench/src/js/$w.js ] && echo "node bench/src/js/$w.js" ;;
     ts)         [ -f bench/build/ts/$w.js ]   && echo "node bench/build/ts/$w.js" ;;
   esac
 }

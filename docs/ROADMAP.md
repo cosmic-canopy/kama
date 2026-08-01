@@ -406,30 +406,6 @@ rather than here, so there is one number to keep current. Forward work:
   11 bench languages have stdlib JSON. **v1:** a by-value tree round-trip across the stdlib-JSON six —
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
-- **`map` — equalize the workload, don't re-chase.** Native `map` is off C parity because each language uses its
-  *idiomatic* map (kama grow-from-8 splitmix64 vs C preallocated single-mul), so it measures *map design*, not
-  codegen. Root-caused (2026-07-13): at equal hash **and** equal prealloc, kama ≈ C (the Map machinery is already
-  at parity; identity-hash kama is *faster* than C). **Both levers now ship** — `Map.reserve(n:)` /
-  `Map.withCapacity(capacity:)` and the pluggable `H: Hasher` slot, whose `FastHasher` *is* C's single
-  Fibonacci multiply.
-
-  **The row is mis-framed in BOTH directions, and the fix has to be symmetric.** Pinning
-  `Map<int32,int64,FastHasher>.withCapacity(262144)` in the kama version alone would tune one language while
-  C++/Rust/Go keep their idiomatic maps — cheating. But leaving it as-is is *also* dishonest: C has **no
-  stdlib hashmap**, so its entry is a bespoke preallocated open-addressing map written for this benchmark.
-  Ranking that against everyone else's general-purpose library maps, under a heading that says "execution
-  time", reads as a codegen verdict when the actual finding is the trivial "a purpose-built preallocated
-  structure beats a general-purpose one". No caveat paragraph repairs a number that is being read off a table.
-
-  Split it into two honestly-scoped rows:
-  - **`map_kernel`** — the *same* hand-rolled open-addressing int→int map, one shared hash, fixed prealloc,
-    ported to every language. A pure codegen number; the AOT cluster (kama/C/C++/Rust) should converge. This
-    is the row that answers "is kama on par with C?".
-  - **`map_stdlib`** — each language's idiomatic map, measuring *library design* (hash strength, growth
-    policy, layout). **C is N/A here and must be shown as such, not as a winning number** — it has no stdlib
-    map to enter. kama's real peer is Rust `HashMap`, which also grows from small; kama currently sits ahead
-    of it.
-
 ## 10. Tooling / distribution (deferred)
 
 - **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
