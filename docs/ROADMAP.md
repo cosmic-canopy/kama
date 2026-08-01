@@ -177,12 +177,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   2026-08-01). Statics work on a non-generic type (`Plain::tag()`), and a ctor on a generic type has BOTH
   an inferred and an explicit spelling (`Box.make(v:)` / `Box::<int32>.make(v:)`). Statics got neither: `::`
   never learned a type-argument list, so there is nowhere to put the `<int32>` that says which monomorph.
-  All four candidates fail. Note that `Box::<int32>.tag()`'s message is the RIGHT DIAGNOSIS with the WRONG
-  ADVICE: `.` means ctor and `tag` is not one, so rejecting is correct — but the advice text hardcodes
-  `Type::name(...)`, valid only for a NON-generic owner, so it points at the one spelling that does not
-  exist and the reader goes in a circle. (The ctor dot form itself is fine: `Box::<int32>.make(v: 35)`
-  builds and runs.) Make the advice owner-aware as part of the fix — suggest the turbofish form when the
-  type is generic:
+  All four candidates fail. The ctor dot form itself is fine (`Box::<int32>.make(v: 35)` builds and runs);
+  what is wrong is the dot-on-type REJECTION MESSAGE, and it is wrong in three separate ways — fix them
+  with this feature:
+
+  1. **It mislabels an instance method as a static.** `Type.name(…)` correctly reports "no constructor
+     `name`" when the name does not exist, but when the name IS a member it asserts "`name` is a static
+     function" without ever checking which kind it is. `Plain.inst()` (an instance method) is told it is a
+     static.
+  2. **The advice that follows is therefore unusable**, and sends the reader on a two-hop chase:
+     `Plain.inst()` → "call it with `Plain::inst(...)`" → "`_F4__Plain::inst` names a non-static method —
+     call it on an instance". *(That second message also leaks a MANGLED name into user-facing output,
+     which should never happen — worth fixing wherever else it occurs.)*
+  3. **On a generic owner the advice omits the turbofish**, pointing at `Box::tag(...)` — the one spelling
+     that does not exist.
+
+  The shared preamble ("dot-on-type calls a constructor") is right and teaches the rule; keep it and branch
+  the second clause on what the name actually is: nothing → "no constructor `X`, define one" (already
+  correct); a static → `Type::X(…)`, or `Type::<args>::X(…)` when the owner is generic; an instance method
+  → "call it on a value (`obj.X(…)`)"; a field → its own arm. Fixture each arm — this is exactly the class
+  of message that rots silently.
 
   | Spelling | Result |
   | --- | --- |
