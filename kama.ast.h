@@ -20,6 +20,17 @@ public:
     // nodes (bison lookahead skew); precise per-node spans are refined where hover/rename need them.
     int endLine;
     int endColumn;
+    // Built by the EMITTER, not the parser — a synthesized type node (`Chars`, `Split`, the `Optional<T>`
+    // a fallible ctor returns) or a substituted/absolutized clone of one. Two things follow, and the
+    // reference index (recordRef / recordNodeRef) relies on both:
+    //   - it names no source text, so indexing its `line`/`column` would point a cursor at whatever
+    //     happens to sit at the synth context's default position (line 1, column 1);
+    //   - it is usually a TEMPORARY — `cType(std::make_shared<IdentifierNode>(…))` frees it at the end of
+    //     the full expression — so storing its raw address outlives the node (a real use-after-free that
+    //     crashed `kama check`/the language server on any file reaching such a site).
+    // A parser-built node is owned by its CompilationUnit and outlives the emitter, so it is safe to index;
+    // nothing the emitter invents is. Set via CEmitter::synthId(), and on every hand-made clone.
+    bool synthesized = false;
     explicit ASTNode(CodeGenContext& context);
     ASTNode(const ASTNode&) = default;                  // Copy constructor
     ASTNode(ASTNode&&) = default;                       // Move constructor

@@ -458,6 +458,60 @@ elif [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 0 ]; then
     done
 fi
 
+# Analysis-path agreement: `kama check` must reach the SAME accept/reject verdict as `kama build`.
+#
+# Why this leg exists. Everything above drives `kama build`; `kama check` runs a different entry point
+# (`analyze()`) that the LANGUAGE SERVER also runs, and until this leg was added NOTHING in the suite
+# executed it. Two whole classes of defect lived in that blind spot:
+#   - a use-after-free in the reference index crashed `kama check` (and so the editor) on any file that
+#     reached an emitter-synthesized type node — 45 fixtures, while the build leg stayed green; and
+#   - a diagnostic recorded on only ONE of the two paths makes the editor call a file clean that the
+#     compiler rejects (comptime evaluation errors did exactly that), which is the single worst thing a
+#     language server can do.
+# So: every positive fixture must pass `check`, and every negative fixture must fail it. `check` does no C
+# compilation, so this is cheap and target-independent — it runs on every leg.
+analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
+    case "$1" in
+        # `fn int f() { }` is rejected by CLANG (-Werror=return-type), not by kama — kama has no
+        # fall-off-the-end analysis yet, so the error names generated C and the editor cannot see it.
+        # Tracked in docs/ROADMAP.md; delete this arm when kama rejects it natively.
+        missing_return) return 0 ;;
+    esac
+    return 1
+}
+# This leg is ONE assertion, not one per fixture. It re-checks every fixture the suite already built, so
+# counting each as a separate pass would double the headline number without doubling what is covered —
+# the corpus is the same, only the entry point differs. A mismatch names the fixture; the tally is a
+# single PASS/FAIL plus the sample size.
+ck_pos=0; ck_neg=0; ck_bad=0
+for src in "$TESTS_DIR"/*.kama; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .kama)"
+    [ -f "$TMP/$name.res" ] && [ "$(cat "$TMP/$name.res")" = "PASS" ] || continue   # only fixtures that built
+    ck_pos=$((ck_pos+1))
+    if ! "$KAMA" check "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
+        echo "  MISMATCH $name: builds, but \`kama check\` rejects it (the editor would show a clean file as broken)"
+        head -3 "$TMP/ck_$name.err"; ck_bad=$((ck_bad+1))
+    fi
+done
+for src in "$TESTS_DIR"/xfail/*.kama; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .kama)"
+    if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
+    ck_neg=$((ck_neg+1))
+    if "$KAMA" check "$src" >/dev/null 2>&1; then
+        echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)"
+        ck_bad=$((ck_bad+1))
+    fi
+done
+if [ "$ck_bad" -eq 0 ]; then
+    echo "PASS analysis agreement ($ck_pos accepted + $ck_neg rejected, kama check matches kama build)"
+    pass=$((pass+1))
+else
+    echo "FAIL analysis agreement ($ck_bad mismatch(es) across $((ck_pos+ck_neg)) fixtures)"
+    fail=$((fail+1))
+fi
+
 # Report-only timing summary (never affects pass/fail). Total suite wall-clock + the slowest fixtures, so a
 # creeping compile cost is visible as the suite grows. Skipped if EPOCHREALTIME was unavailable (all 0 ms).
 suite_ms=$(( $(now_ms) - suite_start ))

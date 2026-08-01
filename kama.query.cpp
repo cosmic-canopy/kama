@@ -689,6 +689,8 @@ static void addParamTypes(const SharedParameterList& params, std::vector<PosEntr
 void CEmitter::recordRef(const std::string& key, const IdentifierNode* site)
 {
     if (!_analysis || !_refUnit || !site || key.empty()) return;
+    if (site->synthesized) return;   // an emitter-built node: no source text to point at, and often a
+                                     // temporary whose address would dangle (see ASTNode::synthesized)
     _bodyRefs.push_back(RecordedRef{ _refUnit, site, key });
 }
 
@@ -707,6 +709,7 @@ void CEmitter::recordDef(const std::string& key, const IdentifierNode* site, Sym
 void CEmitter::recordNodeRef(const IdentifierNode* site, const ASTNode* declNode)
 {
     if (!_analysis || !_refUnit || !site || !declNode) return;
+    if (site->synthesized || declNode->synthesized) return;   // see recordRef
     _nodeRefs.push_back(RecordedNodeRef{ _refUnit, site, declNode });
 }
 

@@ -829,6 +829,11 @@ private:
     std::map<std::string, int64_t>                  _constSubst;    // const-param name (`const N: int`) -> value (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
+    // Build a type node the PARSER never saw (`Chars`, `Split`, a fallible ctor's `Optional<T>`), tagged
+    // `synthesized` so the reference index skips it — see ASTNode::synthesized for why that matters.
+    // Every emitter-built IdentifierNode should come from here; a hand-made clone sets the flag itself.
+    SharedIdentifier synthId(const std::string& name, int builtInVal = 0 /* IDENTIFIER_NONE_VAL */);
+    SharedIdentifier synthClone(const IdentifierNode& src);   // a copy of a real node is still not source text
 
     // Generic TYPES (`type value Box<T>`). The TEMPLATE is kept OUT of _classes (so the normal
     // class loops never see it); each reachable `Box<Arg>` becomes a synthetic specialized ClassInfo
@@ -1358,6 +1363,7 @@ private:
     bool isTypeParamName(const std::string& n) const;              // `n` is a generic type-param (any template's, or an active binding)
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
+    void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive

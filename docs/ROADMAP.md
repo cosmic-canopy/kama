@@ -60,8 +60,11 @@ Everything else here is library or toolchain work that does **not** gate the tag
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
 2. **Standard-library follow-ups** (no new language surface — pure library/codegen):
-   - **`std::net`** — UDP, DNS/`getaddrinfo`, ephemeral-port `getsockname`.
-   - **`std::fs` / `std::io`** — buffered readers, richer `Metadata` (mtime/perms), path helpers, `mkdir`.
+   - **`std::net`** — DNS/`getaddrinfo` (numeric hosts only today). *(UDP and ephemeral-port `getsockname`
+     ship — `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2.)*
+   - **`std::fs` / `std::io`** — richer `Metadata` (mtime/perms), path helpers, `mkdir`/`rename`/`exists`,
+     `OpenMode.Append`, stdin/stdout/stderr as `Reader`/`Writer` handles, `readLine`/`lines()`.
+     *(Buffered readers/writers ship — `BufReader`/`BufWriter` in `lib/std/io/streams.kama`.)*
    - **`std::io` transform adapters (compression et al.)** — `Writer`/`Reader` *wrappers* that transform bytes
      in flight, composing with serde and net (Go/Rust `io`-wrapper style): `DeflateWriter<W>`/`InflateReader<R>`
      (gzip/deflate), later checksums/hashing/framing. On the **web target** these are a near-free ride — wrap
@@ -70,8 +73,20 @@ Everything else here is library or toolchain work that does **not** gate the tag
      (WebSocket `permessage-deflate`, HTTP `Content-Encoding`). Pairs naturally with the binary serde backend
      (crushes its field-name redundancy). (Engine-level replication — snapshots/deltas/dirty-tracking — stays
      above this, in the engine.)
-   - **Windows CI** — the `windows-latest` leg passes the full suite; promote it from best-effort to
-     **required** so a Windows regression blocks a merge.
+   - **⚠️ Windows CI is RED, and must be green + required before the tag.** The `windows-latest` leg last
+     reported **779 passed, 48 failed** (2026-08-01, MSYS2/UCRT64). It is still best-effort, so those
+     failures do not block a merge — which is how a red leg stayed invisible. Two pieces:
+     - **Triage the 48.** Only one was captured in the log tail, and it was a *harness* bug, not a compiler
+       one: `check-target` asserted the `--shared` output name by grepping the stubbed `--cc echo` command
+       line, which a natively-built Windows kama emits through `cmd.exe` — whose `echo` keeps the quotes
+       that POSIX `sh` strips, so `-o "…/arith.dll"` failed an anchored `arith\.dll$` match while the build
+       itself was correct. **Fixed** (`tr -d '"'` in `tools/check-target.sh`). The other 47 need the full
+       CI log — the excerpt on hand stops after the first failing guard.
+     - **The Windows suite takes 1496 s vs ~75 s in the container**, and every `net_*` fixture costs ~30 s
+       (`net_refused` 30.7 s, `net_nonblocking_connect` 30.2 s). That is the shape of a connect/accept
+       timeout being waited out rather than a test running, so it is likely one root cause across a dozen
+       fixtures, not a dozen bugs.
+     Promote to **required** once green, so a Windows regression blocks a merge.
 3. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
    ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
    flash pass — detail in §5 (embedded "Toolchain / build" row).
@@ -137,22 +152,31 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   has no struct to walk and today takes a retroactive `implements` instead. A `Copyable` derive is a
   **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
   walk can make (a memberwise copy of a raw handle double-frees).
-- **Unresolved type names outside local declarations are still silent (bug, small; half-fixed 2026-07-27).**
-  `resolveUserName` hands an unresolved name straight back ("caller handles"), and for a long time no caller
-  did — a misspelled or unimported type passed analysis and only failed later in the C compiler, as an
-  `undeclared identifier` against *generated* code. `kama check` and the LSP (same analysis path) said OK, so
-  the editor showed a clean file that wouldn't build. **`checkTypeResolves` now covers LOCAL declarations**
-  (`unknown type X` / `type X is not imported — it lives in ns`), guarded against generic type params, which
-  flow through that funnel unresolved by design and in huge volume (a probe over the fixture corpus counted
-  ~30 K hits for `T`/`K`/`A`/`V` alone). **Still silent: parameter types, return types, and field types** —
-  same one-line check, but those are walked at 8+ emission sites (prototype, definition, vtable, per generic
-  instance), so wiring it there naively would emit duplicate diagnostics — the fix is either a single-visit
-  declaration pass or a dedupe guard (file:line:message) in `checkTypeResolves`, whichever reads cleaner.
-  **De-risked:** real stdlib types (`Stdio`, `DynamicArray`, `File`, `ExitStatus`) *do* reach the unresolved
-  funnel, but only from SPECULATIVE `cType` calls (enum-member probing, `exprClass`) — verified they all
-  resolve correctly at actual param/return/field declaration sites, so the check won't false-positive there
-  and the only guard needed is the existing type-param one. Guarded by `tests/xfail/unknown_type_local` +
-  two `tools/check-lsp.sh` cases.
+- **Unresolved type names — one residual: GENERIC ARGUMENTS.** Declared type names are now checked
+  (`checkDeclaredTypes`, a single-visit walk at the tail of `collectProgram`), so a misspelled or unimported
+  type in a parameter, return, field or variant payload is a kama-level error instead of a C-level
+  `undeclared identifier` against generated code. What is still unchecked is a type name *inside* a generic
+  argument — `DynamicArray<Bogos>` — because `checkTypeResolves` early-returns on `type->genericArg`.
+  Recursing into `genericArgs` (as `addTypeRef` does in kama.query.cpp) is the natural phase 2, but it
+  widens the surface onto const-generic size expressions, defaulted allocator args and bounds, so it wants
+  its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
+  variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
+  shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
+- **No fall-off-the-end analysis (bug, small — the last `kama check`/`kama build` disagreement).** A
+  non-void function whose body can reach the closing brace without returning is rejected by **clang**
+  (`-Werror=return-type`), not by kama. So the diagnostic names *generated C*, and `kama check` — the path
+  the language server runs — accepts the file, which is the one thing a language server must never do.
+  `tests/xfail/missing_return` is the repro, and it is the single declared exception in the analysis-agreement
+  leg of `run_tests.sh` (delete the `analysis_skip` arm when this lands). Fix = an `alwaysReturns(BlockNode*)`
+  walk: last statement is a `return`; an `if`/`else` where both arms always return; a `match` whose every arm
+  does; or a diverging tail (`panic`, a `while (true)` with no `break`). The design risk is false positives on
+  valid code, so it wants fixtures for each of those shapes before it flips to an error.
+- **`kama check <file>` on a single member of a DIRECTORY module reports false errors.** Sibling units in the
+  same namespace are not loaded for a bare single-file check, so `kama check lib/std/math/quat.kama` reports
+  `Vec3`/`Mat4` as unknown — they live in `vec.kama`/`mat.kama` under the same `namespace std::math`. Harmless
+  for the language server (it resolves the whole program from the manifest) and for any file reached through
+  an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
+  stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
 - **Enum-variant payload-type registration gap (bug, small).** A type used *only* as an enum variant's payload
   — where that variant is never constructed — is not registered/emitted, so the enum's C `struct` references an
   undeclared type (`unknown type name 'Shared_Probe'`). Reproduces with `enum E { A, B(Shared<Probe>) }`

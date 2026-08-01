@@ -93,8 +93,13 @@ want   WINDOWS -Wl,--gc-sections "a mingw target links with a GNU-style linker"
 #    cross build does not produce a `.dylib` for Windows.
 for spec in "WINDOWS .dll" "MACOS .dylib" "LINUX .so"; do
     set -- $spec
+    # `tr -d '"'` because the driver always emits `-o "<path>"`, and whether the stub `--cc echo` strips
+    # those quotes depends on the SHELL `system()` hands the command to: POSIX `sh` removes them, but a
+    # natively-built Windows kama goes through `cmd.exe`, whose `echo` prints them verbatim. Without this
+    # the anchored match sees `"…/arith.dll"` and fails on Windows only — reported as "did not default its
+    # shared-library output to *.dll" even though the very next line of the report says it built arith.dll.
     out=$(tryline "shared$1" build --shared --cc "echo" "$FIXTURE" --target "$1" \
-          | tr ' ' '\n' | grep -E "arith\\$2$" || true)
+          | tr ' ' '\n' | tr -d '"' | grep -E "arith\\$2$" || true)
     if [ -z "$out" ]; then
         echo "check-target: FAIL — target $1 did not default its shared-library output to *$2" >&2
         why "shared$1"

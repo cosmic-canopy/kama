@@ -1,0 +1,8 @@
+// An enum VARIANT PAYLOAD typed by an undeclared type. The payload rides an ordinary parameter list, so
+// it is the same check — but a variant that is never constructed is never otherwise walked.
+enum Shape {
+    Empty,
+    Filled(Nonexistent what)
+}
+
+fn int main() { return 42; }

@@ -1,0 +1,7 @@
+// A FIELD typed by an undeclared type. This one never even reached a body, so nothing checked it: the
+// emitted C struct simply named a type that does not exist.
+type value Holder {
+    public Nonexistent slot1;
+}
+
+fn int main() { return 42; }

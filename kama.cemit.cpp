@@ -332,6 +332,119 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
                      + " — no such type is declared or imported").c_str(), line);
 }
 
+// A type node the emitter invents. Lazily creates the shared synth context on first use (several call
+// sites used to do that inline). See ASTNode::synthesized for what the flag buys.
+SharedIdentifier CEmitter::synthId(const std::string& name, int builtInVal)
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+    auto n = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(name), builtInVal);
+    n->synthesized = true;
+    return n;
+}
+
+// A copy of a parsed node, re-tagged: the ORIGINAL is source text and stays indexable, but this copy is an
+// emitter artifact (a substituted or absolutized type) and is frequently a temporary.
+SharedIdentifier CEmitter::synthClone(const IdentifierNode& src)
+{
+    auto n = std::make_shared<IdentifierNode>(src);
+    n->synthesized = true;
+    return n;
+}
+
+// The same check as `checkTypeResolves`, applied to every type a DECLARATION spells: parameter types,
+// return types, field types and enum-variant payload types. Those positions used to be silent — only a
+// local's type was checked (the single call site in `emitStatement`) — so a misspelled or unimported type
+// in a signature passed `kama check` AND the language server and failed later in the C compiler, against
+// generated code.
+//
+// A single-visit walk, deliberately NOT a check bolted onto the emission sites. Those positions are walked
+// at 8+ places (prototype, definition, vtable slot, contract slot, once per generic instance), and a
+// generic that is never instantiated is never emitted at all — so an emission-site check would both
+// duplicate diagnostics and stay blind to exactly the templates that need it most. This visits each
+// declaration's own AST node once, whether or not it is ever instantiated. The walk mirrors
+// `buildPositions` step (2) in kama.query.cpp, which already covers this same structure for the position
+// index; keep the two in sync when the language gains a declaration form.
+//
+// Runs from the tail of `collectProgram` — see the call site for why that point, and not earlier, is the
+// only sound one.
+void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units)
+{
+    // The prelude and the built-in modules are compiler-owned sources: they are collect-only, they are not
+    // user code, and `analyze()` excludes them from `_units` for the same reason.
+    std::set<const CompilationUnit*> builtIn;
+    if (_preludeUnit) builtIn.insert(_preludeUnit.get());
+    for (auto& p : _preludeModuleUnits) if (p) builtIn.insert(p.get());
+
+    // The declaring node's OWN type params. `isTypeParamName` only knows generic classes/enums
+    // (`_genericTypeParams`); a generic FUNCTION keeps its params on the AST node alone, and `_typeSubst`
+    // is empty here, so without this every `T` in every generic signature would be reported as unknown.
+    std::set<std::string> tp;
+    auto check = [&](const SharedIdentifier& t, const char* what) {
+        if (!t || !t->value) return;
+        // `This` is resolved against the enclosing type, which is not on the stack during this pass —
+        // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
+        if (*t->value == "This") return;
+        if (tp.count(*t->value)) return;
+        checkTypeResolves(t, cType(t), what, t->line);
+    };
+    auto checkParams = [&](const SharedParameterList& params, const char* what) {
+        if (!params) return;
+        for (auto& p : *params) if (p) check(p->type, what);
+    };
+    auto bindTypeParams = [&](const SharedStringList& names) {
+        tp.clear();
+        if (names) for (auto& n : *names) if (n) tp.insert(*n);
+    };
+
+    NsCtx saved = _nsCtx;
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList || builtIn.count(u.get())) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                // An `extern fn` signature names C types owned by the `extern "header.h"` it binds — a
+                // `CompareFn` typedef the header declares is deliberately NOT a kama type, and `cType`
+                // passes such a name through verbatim as the literal C spelling. That is the FFI seam
+                // working as designed (tests/callback_qsort.d), so the check stops at it.
+                if (isExtern(fn)) continue;
+                bindTypeParams(fn->typeParams);
+                check(fn->returnType, "a return type");
+                checkParams(fn->parameters, "a parameter");
+            } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                bindTypeParams(cd->typeParams);
+                if (cd->members) for (auto& m : *cd->members) {
+                    if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
+                        check(fld->type, "a field");
+                    } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        check(md->returnType, "a return type");
+                        checkParams(md->params, "a parameter");
+                    } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
+                        if (ct->declarator) checkParams(ct->declarator->params, "a parameter");
+                    } else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
+                        if (auto* od = op->operatorDeclarator.get()) {
+                            check(od->returnType, "a return type");
+                            check(od->param1Type, "a parameter");
+                            check(od->param2Type, "a parameter");
+                        }
+                    }
+                }
+            } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                bindTypeParams(ed->typeParams);
+                if (ed->body) for (auto& mem : *ed->body)
+                    if (mem) checkParams(mem->payload, "an enum variant payload");
+            } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
+                tp.clear();   // a retro impl declares no type params of its own
+                if (ri->members) for (auto& m : *ri->members)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        check(md->returnType, "a return type");
+                        checkParams(md->params, "a parameter");
+                    }
+            }
+        }
+    }
+    _nsCtx = saved;
+}
+
 // Resolve a function reference to its mangled cName (same search as types).
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier,
                                   const IdentifierNode* site)
@@ -960,7 +1073,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
 {
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<interp>"));
     CodeGenContext& ctx = *_synthCtx;
-    auto ident = [&](const std::string& s) { return std::make_shared<IdentifierNode>(ctx, std::make_shared<std::string>(s)); };
+    auto ident = [&](const std::string& s) { return synthId(s); };
     if (spec) { emitHoleSpec(fv, hole, *spec); return; }
     if (exprIsChar(hole)) { _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(hole) + ");"); return; }
     // synthesize `<hole>.format(f: ref fv)` so the hole's static type picks the right `format`.
@@ -1596,7 +1709,7 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
 // (a parallel_for always iterates a View — directly, or one we auto-`.view()` from a container). (M6.3)
 SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
 {
-    auto view = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("View"));
+    auto view = synthId("View");
     auto args = std::make_shared<IdentifierList>();
     args->push_back(elem);
     view->genericArgs = args;
@@ -1846,7 +1959,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _scopes.push_back(root);
 
         // Reuse the foreach `ref` lowering: `foreach (ref elemTy loopVar in __slice) { <body> }`.
-        auto sliceId = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("__slice"));
+        auto sliceId = synthId("__slice");
         auto fe = std::make_shared<ForEachNode>(*_synthCtx, pf->type, pf->name, sliceId, pf->body);
         fe->isRef = true;
         emitForeachIterator(fe.get(), viewCType, 1);
@@ -4153,11 +4266,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 // would. Without this the ctor's return type + return-slot stay unspecialized
                                 // (clang: `unknown type name '_F4__Pair'`). #M7-E1
                                 if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic-ctor>"));
-                                auto rt = std::make_shared<IdentifierNode>(*cd->name);   // copy name + qualifier
+                                auto rt = synthClone(*cd->name);   // copy name + qualifier
                                 rt->genericArgs = std::make_shared<IdentifierList>();
                                 for (auto& p : *cd->typeParams)
                                     if (p) rt->genericArgs->push_back(
-                                        std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(*p)));
+                                        synthId(*p));
                                 if (!rt->genericArgs->empty()) rt->genericArg = (*rt->genericArgs)[0];
                                 mi.returnType = rt;
                             } else {
@@ -4413,7 +4526,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
                     mi.isSynthFormat = true;
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("void"), IDENTIFIER_VOID_VAL);
+                    mi.returnType = synthId("void", IDENTIFIER_VOID_VAL);
                     ParamSig f; f.name = "f"; f.byRef = true; f.className = "Formatter"; mi.params.push_back(f);
                     ci.methods["format"] = mi;   // `fn void format(ref Formatter f)`
                 }
@@ -4465,7 +4578,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
                     mi.isSynthCmp = true;
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("bool"), IDENTIFIER_BOOL_VAL);
+                    mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
                     ParamSig o; o.name = "other"; o.byRef = true; o.className = ci.name; mi.params.push_back(o);
                     ci.methods["equals"] = mi;   // `fn bool equals(ref This other)`
                 }
@@ -4476,7 +4589,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
                     mi.isSynthCmp = true;
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    mi.returnType = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("uint64"), IDENTIFIER_UINT64_VAL);
+                    mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
                     ci.methods["hash"] = mi;     // `fn uint64 hash()`
                 }
             }
@@ -4887,7 +5000,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
         addMethod("get",    { ParamSig{"index", false, ""} }, elem);        // `s[i]` -> the i-th byte (uint8)
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
-        addMethod("chars",  {}, std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));   // codepoint iterator
+        addMethod("chars",  {}, synthId("Chars"));   // codepoint iterator
         // Phase 3 ergonomics. Bool-returning methods pass a NULL returnType (the `equals` pattern — the
         // emitter emits the raw C call and the C `bool` return governs). `substring`/`trim`/`replace`/case
         // return `collType` (a `string`), so their owned result is RAII-freed exactly like `.concat()`.
@@ -4906,11 +5019,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // struct + Some/None variants exist, and give `find` that return type; the emitter emits a wrapper
         // (emitStringFind) that builds the Optional. Mirrors Weak.tryUpgrade / registerOptionalOfShared.
         if (_genericTypeParams.count("Optional")) {
-            auto usizeArg = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("usize"));
+            auto usizeArg = synthId("usize");
             auto optArgs = std::make_shared<IdentifierList>();
             optArgs->push_back(usizeArg);
             registerGenericTypeInst("Optional", optArgs);
-            auto optRet = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Optional"));
+            auto optRet = synthId("Optional");
             optRet->genericArg  = usizeArg;
             optRet->genericArgs = std::make_shared<IdentifierList>();
             optRet->genericArgs->push_back(usizeArg);
@@ -4919,7 +5032,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // `split(separator:)` -> a lazy `Split` iterator (prelude value type; see the `.split()`
         // special-case in emitMethodCall). No collections import: pieces come out one at a time.
         addMethod("split", { ParamSig{"separator", false, ""} },
-                  std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
+                  synthId("Split"));
     }
 
     _classes[cName] = ci;
@@ -5043,7 +5156,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
         if (_genericTypeParams.count("Optional")) {
             if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
             auto mk = [&](const char* nm, SharedIdentifier arg) {
-                auto n = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(nm));
+                auto n = synthId(nm);
                 n->genericArg = arg; n->genericArgs = std::make_shared<IdentifierList>(); n->genericArgs->push_back(arg);
                 return n;
             };
@@ -5059,7 +5172,7 @@ void CEmitter::registerOptionalOfShared(SharedIdentifier elem)
 {
     if (!elem || !_genericTypeParams.count("Optional")) return;   // no prelude Optional -> skip
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-    auto sh = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Shared"));
+    auto sh = synthId("Shared");
     sh->genericArg  = elem;
     sh->genericArgs = std::make_shared<IdentifierList>();
     sh->genericArgs->push_back(elem);
@@ -5074,7 +5187,7 @@ void CEmitter::registerOptionalOfName(const std::string& sharedName)
 {
     if (sharedName.empty() || !_genericTypeParams.count("Optional")) return;
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-    auto sh = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(sharedName));
+    auto sh = synthId(sharedName);
     auto optArgs = std::make_shared<IdentifierList>();
     optArgs->push_back(sh);
     registerGenericTypeInst("Optional", optArgs);
@@ -5153,7 +5266,7 @@ SharedIdentifier CEmitter::deepSubstType(SharedIdentifier t)
         if (s != _typeSubst.end()) return s->second;           // its binding is already deep
     }
     if (t->genericArgs && !t->genericArgs->empty()) {          // a generic type — substitute its args
-        auto clone = std::make_shared<IdentifierNode>(*t);     // shallow copy (context + scalar fields)
+        auto clone = synthClone(*t);     // shallow copy (context + scalar fields)
         clone->genericArgs = std::make_shared<IdentifierList>();
         for (auto& a : *t->genericArgs) clone->genericArgs->push_back(deepSubstType(a));
         clone->genericArg = clone->genericArgs->empty() ? SharedIdentifier() : (*clone->genericArgs)[0];
@@ -5169,7 +5282,7 @@ SharedIdentifier CEmitter::deepSubstType(SharedIdentifier t)
 SharedIdentifier CEmitter::absolutizeType(SharedIdentifier t)
 {
     if (!t || !t->value) return t;
-    auto clone = std::make_shared<IdentifierNode>(*t);
+    auto clone = synthClone(*t);
     // A user class/enum/contract NAME is rebound to its use-site mangle (qualifier dropped); primitives,
     // `Ptr`, `This`, usize/isize keep their spelling (they resolve context-free). Generic args recurse
     // either way (`Ptr<Counter>`, `List<Counter>`, `Owned<Counter>`).
@@ -5342,7 +5455,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     _collections[weakMangled].ifacePartner = mangled;      // RcWeak_Shape upgrades to Rc_Shape
                     registerOptionalOfName(mangled);                       // Optional<Rc_Shape> for tryUpgrade
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
-                    auto bare = [&](const std::string& n){ return std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(n)); };
+                    auto bare = [&](const std::string& n){ return synthId(n); };
                     // downgrade intrinsic on Rc_Shape (-> RcWeak_Shape); dispatched via _classes[cls].methods
                     MethodInfo dm; dm.cName = mangled + "__" + downName; dm.isIntrinsic = true; dm.returnType = bare(weakMangled);
                     _classes[mangled].methods[downName] = dm;
@@ -5742,6 +5855,7 @@ SharedIdentifier CEmitter::primTypeNode(int builtInVal)
     if (it != _primTypeCache.end()) return it->second;
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
     auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(""), builtInVal);
+    node->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     _primTypeCache[builtInVal] = node;
     return node;
 }
@@ -5863,7 +5977,7 @@ SharedIdentifier CEmitter::inferInlineVariantInstance(InvocationNode* inv,
 
     // Build the instance node — BOTH genericArg (singular; mangling reads it) AND genericArgs (list).
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<a1>"));
-    auto inst = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>(*qual->back()));
+    auto inst = synthId(*qual->back());
     if (!tq->empty()) inst->qualifier = tq;
     inst->genericArg  = argList->front();
     inst->genericArgs = argList;
@@ -5903,6 +6017,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     auto constArgNode = [&](int64_t v) -> SharedIdentifier {
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
         auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
+        id->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
         id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, v);
         return id;
     };
@@ -12464,6 +12579,7 @@ SharedIdentifier CEmitter::sharedTypeNode(SharedIdentifier elem)
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Shared"),
                                                  std::make_shared<StringList>(), elem);
+    node->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     node->genericArgs = std::make_shared<IdentifierList>();
     node->genericArgs->push_back(elem);
     return node;
@@ -12475,6 +12591,7 @@ SharedIdentifier CEmitter::ownedErrorTypeNode()
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto err   = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Error"),
                                                   std::make_shared<StringList>());
+    err->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     // FULLY-QUALIFIED `std::memory::Owned` — bare `Owned` doesn't resolve from every context (e.g. the
     // global prelude), and it must mangle to the SAME canonical `std__memory__Owned_Error_GlobalAllocator`
     // as a user-written `Owned<Error>` (allocator default filled), else the Result monomorph diverges.
@@ -12482,6 +12599,7 @@ SharedIdentifier CEmitter::ownedErrorTypeNode()
     qual->push_back(std::make_shared<std::string>("std"));
     qual->push_back(std::make_shared<std::string>("memory"));
     auto owned = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Owned"), qual, err);
+    owned->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     owned->genericArgs = std::make_shared<IdentifierList>();
     owned->genericArgs->push_back(err);
     return owned;
@@ -12493,6 +12611,7 @@ SharedIdentifier CEmitter::resultOwnedErrorTypeNode(SharedIdentifier inner)
 {
     auto res   = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Result"),
                                                   std::make_shared<StringList>(), inner);
+    res->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     res->genericArgs = std::make_shared<IdentifierList>();
     res->genericArgs->push_back(inner);
     res->genericArgs->push_back(ownedErrorTypeNode());
@@ -12506,6 +12625,7 @@ SharedIdentifier CEmitter::resultUnitOwnedErrorTypeNode()
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto unit = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Unit"),
                                                  std::make_shared<StringList>());
+    unit->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     return resultOwnedErrorTypeNode(unit);
 }
 
@@ -12530,6 +12650,7 @@ SharedIdentifier CEmitter::optionalTypeNode(SharedIdentifier elem)
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto node = std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Optional"),
                                                  std::make_shared<StringList>(), elem);
+    node->synthesized = true;   // emitter-built: not source text (see ASTNode::synthesized)
     node->genericArgs = std::make_shared<IdentifierList>();
     node->genericArgs->push_back(elem);
     return node;
@@ -14326,7 +14447,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (method == "chars") {
             std::string sv = stableBorrow(receiver, "receiver");
             if (sv.empty()) return "0";
-            std::string charsC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Chars")));
+            std::string charsC = cType(synthId("Chars"));
             return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
         }
         // split — borrows the receiver AND the separator; materialize each independently.
@@ -14336,7 +14457,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (sv.empty()) return "0";
         std::string sep = sepExpr ? stableBorrow(sepExpr, "separator") : std::string("kama_string_lit(\"\", 0)");
         if (sep.empty()) return "0";
-        std::string splitC = cType(std::make_shared<IdentifierNode>(*_synthCtx, std::make_shared<std::string>("Split")));
+        std::string splitC = cType(synthId("Split"));
         return "((" + splitC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
              + sep + ").data, (int32_t)(" + sep + ").len, 0, false })";
     }
@@ -14917,6 +15038,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
         }
     }
+
+    // Every DECLARED type name resolves (params / returns / fields / variant payloads). Must be LAST: the
+    // check consults `_sigs`, which `collectSignatures` fills in FILE order, so a parameter typed by a
+    // `sig` declared in a later file is not yet registered mid-collect; retroactive `implements` has
+    // finished promoting enums into `_classes`; and `pruneInactiveDecls` has already rewritten the decl
+    // lists, so `@compileFor`-dropped declarations are simply absent here rather than needing a guard.
+    // Running inside `collectProgram` (rather than at emit) is also what makes `kama build`, `kama check`
+    // and the language server agree — all three take this path, which is the whole point of the check.
+    checkDeclaredTypes(units);
 }
 
 // All DECLARATIONS (the shared header): typedefs, enums, struct/vtable types,

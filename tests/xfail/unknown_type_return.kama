@@ -1,0 +1,9 @@
+// A return type naming an undeclared type — see unknown_type_param.
+fn Nonexistent make()
+{
+    slot int32 x;
+    x = 1;
+    return x;
+}
+
+fn int main() { return 42; }

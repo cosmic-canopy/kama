@@ -1,0 +1,7 @@
+// A METHOD parameter typed by an undeclared type — the class-member arm of checkDeclaredTypes.
+type value Box {
+    public int32 v;
+    public fn void put(Nonexistent x) { return; }
+}
+
+fn int main() { return 42; }

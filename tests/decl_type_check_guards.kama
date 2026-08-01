@@ -1,0 +1,30 @@
+// The three shapes checkDeclaredTypes must NOT reject. It walks every declared type name (params,
+// returns, fields, variant payloads) with `_typeSubst` empty, so each of these looks unresolved unless
+// its guard holds — and each guard failing would reject the standard library itself, not just this file.
+//
+//   1. a generic FREE FUNCTION's own type params — `isTypeParamName` only knows generic classes/enums
+//      (`_genericTypeParams`); a generic fn keeps its params on the AST node alone;
+//   2. `This` — resolved against the enclosing type, which is not on the stack during the pass;
+//   3. a `sig` (function-pointer) type used as a parameter — `_sigs` is filled in FILE order, which is
+//      why the pass runs at the very END of collectProgram.
+fnptr int32 Scorer(int32 v);
+
+type value Tally {
+    public int32 total;
+    public ctor make(int32 total) { slot Tally r; r.total = total; return give r; }
+    public fn This merge(This other) { return Tally.make(total: this.total + other.total); }   // (2)
+}
+
+fn T pickFirst<T>(T a, T b) { return a; }                                                      // (1)
+
+fn int32 twice(int32 v) { return v * 2; }
+
+fn int32 applyScorer(Scorer f, int32 v) { return f(v: v); }                                     // (3)
+
+fn int main()
+{
+    int32 a = pickFirst(a: 20, b: 99);
+    Tally t = Tally.make(total: 1).merge(other: Tally.make(total: 1));
+    Scorer s = twice;
+    return a + applyScorer(f: s, v: 10) + t.total;   // 20 + 20 + 2 = 42
+}

@@ -1,0 +1,9 @@
+// A parameter typed by an undeclared type. Sibling of unknown_type_local: a DECLARATION's types were
+// silent long after a local's were checked, so a typo in a signature passed `kama check` and the LSP and
+// failed only in the C compiler. Caught by checkDeclaredTypes.
+fn void take(Nonexistent x)
+{
+    return;
+}
+
+fn int main() { return 42; }
