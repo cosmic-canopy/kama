@@ -43,8 +43,13 @@ than leaving a reader to wonder.
 
 ## Session split
 
-Each is one session ending at a commit. Order matters only in that M2a's `Comparable`-generic work informs
-M3's naming reconcile.
+**Prerequisite, before M2a: the generic-static spelling** (`Type::<args>::name()`) and the three dot-on-type
+diagnostic defects — decided, and written up in [ROADMAP.md](../ROADMAP.md) §2. It is a LANGUAGE change, so
+it lands before M2's fixtures are written against a surface that is about to shift. Nothing in the parity
+gap depends on it; the ordering is only to avoid churning fixtures.
+
+Each of the three below is one session ending at a commit. Order otherwise matters only in that M2a's
+`Comparable`-generic work informs M3's naming reconcile.
 
 - **M2a — language-adjacent primitives.** parse · sort/binarySearch · `std::math` completion · `char`
   classification.

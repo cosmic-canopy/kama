@@ -177,9 +177,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   2026-08-01). Statics work on a non-generic type (`Plain::tag()`), and a ctor on a generic type has BOTH
   an inferred and an explicit spelling (`Box.make(v:)` / `Box::<int32>.make(v:)`). Statics got neither: `::`
   never learned a type-argument list, so there is nowhere to put the `<int32>` that says which monomorph.
-  All four candidates fail. The ctor dot form itself is fine (`Box::<int32>.make(v: 35)` builds and runs);
-  what is wrong is the dot-on-type REJECTION MESSAGE, and it is wrong in three separate ways — fix them
-  with this feature:
+  Every candidate spelling fails:
+
+  | Spelling | Result |
+  | --- | --- |
+  | `Box::<int32>::tag()` | parse error: `unexpected ::, expecting ( or .` |
+  | `Box<int32>::tag()` | parse error: `unexpected INT32` (the `<` ambiguity — see below) |
+  | `Box::tag()` | `scope-qualified call resolves to no known function` |
+  | `Box::<int32>.tag()` | `dot-on-type calls a constructor; `tag` is a static — call it with `Box::tag(...)`` |
+  | `Box.tag()` | `unknown type in constructor call `Box`` |
+
+  The ctor dot form itself is fine (`Box::<int32>.make(v: 35)` builds and runs); what is wrong is the
+  dot-on-type REJECTION MESSAGE, and it is wrong in three separate ways — fix them with this feature:
 
   1. **It mislabels an instance method as a static.** `Type.name(…)` correctly reports "no constructor
      `name`" when the name does not exist, but when the name IS a member it asserts "`name` is a static
@@ -197,14 +206,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   correct); a static → `Type::X(…)`, or `Type::<args>::X(…)` when the owner is generic; an instance method
   → "call it on a value (`obj.X(…)`)"; a field → its own arm. Fixture each arm — this is exactly the class
   of message that rots silently.
-
-  | Spelling | Result |
-  | --- | --- |
-  | `Box::<int32>::tag()` | parse error: `unexpected ::, expecting ( or .` |
-  | `Box<int32>::tag()` | parse error: `unexpected INT32` (the `<` ambiguity — see below) |
-  | `Box::tag()` | `scope-qualified call resolves to no known function` |
-  | `Box::<int32>.tag()` | `dot-on-type calls a constructor; `tag` is a static — call it with `Box::tag(...)`` |
-  | `Box.tag()` | `unknown type in constructor call `Box`` |
 
   **Worse than the missing call: the DECLARATION compiles clean.** A `static fn` on a generic type that is
   never called builds and ships, and only turns out to be unreachable when someone tries to use it — a
