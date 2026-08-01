@@ -81,8 +81,22 @@ if [ -f "$ZED_TOML" ]; then
     #     it needs no network and works while the repo is private.
     rev=$(sed -n 's/^rev = "\([^"]*\)".*/\1/p' "$ZED_TOML" | head -1)
     if [ -n "$rev" ] && command -v git >/dev/null 2>&1 && [ -d "$ROOT/.git" ]; then
+        # A SHALLOW clone holds only the tip commit, so a perfectly valid pin to anything older is
+        # absent from the local object database. Reading that as "not a commit" is wrong and actively
+        # misleading — the guard used to pass only while the pinned rev happened to BE HEAD, and broke
+        # on the next push. When shallow, ask the remote for it exactly the way Zed will
+        # (`git fetch --depth 1 origin <rev>`), which tests what actually matters: that the rev is
+        # SERVABLE. CI checks out with fetch-depth: 0 so this path normally never runs.
+        if ! git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null \
+           && [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+            git -C "$ROOT" fetch --depth 1 --quiet origin "$rev" 2>/dev/null || true
+        fi
         if ! git -C "$ROOT" cat-file -e "$rev^{commit}" 2>/dev/null; then
-            bad "editor/zed/extension.toml pins rev=$rev, which is not a commit in this repository"
+            if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then
+                bad "editor/zed/extension.toml pins rev=$rev, which this SHALLOW clone cannot resolve and the remote would not serve on demand — if the rev is good, check out with fetch-depth: 0 so this can be verified"
+            else
+                bad "editor/zed/extension.toml pins rev=$rev, which is not a commit in this repository"
+            fi
         elif [ -z "$(git -C "$ROOT" ls-tree --name-only "$rev" -- tree-sitter-kama 2>/dev/null)" ]; then
             bad "editor/zed/extension.toml pins rev=$rev, which does NOT contain tree-sitter-kama/ — Zed would fetch a tree with no grammar and the extension would fail to load"
         fi

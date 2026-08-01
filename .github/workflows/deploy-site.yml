@@ -15,6 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
+      # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
+      # generator dates sitemap <lastmod> from each page's last commit.
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with:
           node-version: '20'

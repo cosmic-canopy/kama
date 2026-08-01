@@ -27,6 +27,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
+      # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
+      # generator dates sitemap <lastmod> from each page's last commit.
+        with: { fetch-depth: 0 }
 
       - name: Install flex + bison (Linux)
         if: runner.os == 'Linux'
@@ -60,6 +64,10 @@ jobs:
       run: { shell: 'msys2 {0}' }
     steps:
       - uses: actions/checkout@v5
+      # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
+      # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
+      # generator dates sitemap <lastmod> from each page's last commit.
+        with: { fetch-depth: 0 }
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -79,6 +87,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
+      # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
+      # generator dates sitemap <lastmod> from each page's last commit.
+        with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
       - run: make
       - uses: mymindstorm/setup-emsdk@v16
@@ -98,6 +110,10 @@ jobs:
     # no-op" oracle meaningful) and the vscode-textmate tokenizer, then runs the whole-corpus parse.
     steps:
       - uses: actions/checkout@v5
+      # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
+      # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
+      # generator dates sitemap <lastmod> from each page's last commit.
+        with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
       - run: make
       - uses: actions/setup-node@v5
