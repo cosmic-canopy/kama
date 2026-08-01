@@ -52,22 +52,26 @@ M3's naming reconcile.
   `std::time` sleep + wall clock · DNS.
 - **M2c — the two new modules.** `std::random` · `std::encoding`.
 
-## Decisions to settle BEFORE writing code
+## Decisions
 
-The standing constraint is **no compromises on design**: at 1.0 these names and shapes freeze. Each has a
-lean; confirm or overrule, don't discover it halfway through.
+**1-3 are DECIDED (user, 2026-08-01) — build to them, do not re-open.** 4-7 carry a lean; confirm or
+overrule at session start rather than discovering it halfway through. The standing constraint is **no
+compromises on design**: at 1.0 these names and shapes freeze.
 
-1. **Where does `sort` live?** *Lean: free functions in `std::collections`*, beside `View`. A `sort` that
-   takes a `View<T>` gets `DynamicArray` and `FixedArray` for free through their existing `view()`, and
-   `View` is already the "contiguous run of T" abstraction. A separate `std::algorithm` module would be a
-   second place to look for one function.
-2. **`sort` must be allocation-free.** Heapsort, or introsort with a fixed-size stack. A merge sort needing
-   an auxiliary `DynamicArray<T>` inside a generic free function hits the tracked generic-instantiation
-   limitation (ROADMAP §2), *and* would be unusable under `@noheap` / `--no-heap` and on MCU targets — where
-   sorting a fixed buffer is exactly what you want. `PriorityQueue`'s `siftDown` is the in-place prior art.
-3. **What does parsing return?** *Lean: `Optional<T>`*, matching `string.find`'s shape — the failure is
-   "this isn't a number", which carries no detail worth a payload. `Result<T, ParseError>` invites an error
-   enum nobody reads. Revisit only if a caller genuinely needs to distinguish overflow from malformed.
+1. ✅ **DECIDED — `sort` lives in `std::collections` as free functions over `View<T>`.** Beside `View`,
+   not in a new `std::algorithm`. A `sort` taking a `View<T>` gets `DynamicArray` and `FixedArray` for
+   free through their existing `view()`, and `View` is already the "contiguous run of T" abstraction. A
+   separate module would be a second place to look for one function.
+2. ✅ **DECIDED — `sort` is ALLOCATION-FREE.** Heapsort, or introsort with a fixed-size stack. Not a
+   preference: a merge sort's auxiliary `DynamicArray<T>` inside a generic free function hits the tracked
+   generic-instantiation limitation (ROADMAP §2), *and* an allocating sort is unusable under
+   `@noheap` / `--no-heap` and on MCU — where sorting a fixed buffer is precisely the use case.
+   `PriorityQueue`'s `siftDown` is the in-place prior art. Ship `binarySearch` alongside.
+3. ✅ **DECIDED — parsing returns `Optional<T>`.** `parseInt` / `parseUint` / `parseFloat`, matching
+   `string.find`'s shape. The failure is "this isn't a number", which carries no detail worth a payload;
+   `Result<T, ParseError>` invites an error enum nobody reads. Lift the scanner out of `JsonReader`
+   (`numToken`/`readInt`/`readUint`, `lib/std/serialization/json/json.kama:291-320` — currently PRIVATE
+   methods) so there is one implementation and JSON calls it.
 4. **Path helpers: free functions on `string`, or a `Path` type?** *Lean: free functions*
    (`join`/`dirname`/`basename`/`extension`), because a `Path` type means two string-ish types and GOALS #4
    says one way to do a thing. Rust's `Path` earns its keep through OsString encoding concerns kama does not
@@ -148,6 +152,35 @@ IPv6 · UDP multicast · TLS/HTTPS · HTTP · Unix sockets · regex · crypto/ch
 unbounded channels/`select` · the job system + event-loop scheduler · `std::io` compression adapters ·
 YAML/XML serde backends · a Unicode module (casing/whitespace stay ASCII) · a `std::gpu` kama wrapper.
 
-All are tracked in [ROADMAP.md](../ROADMAP.md) §1–§2. Rust ships none of them in `std` either, so they are a
-post-1.0 *package ecosystem* story — **except Unicode**, which is the one place kama's `string` is honestly
-behind every peer and should be scheduled rather than quietly deferred.
+All are tracked in [ROADMAP.md](../ROADMAP.md) §1–§2. Rust ships none of them in `std` either, so they are
+a post-1.0 *package ecosystem* story.
+
+### On Unicode — and the one thing that IS worth scheduling
+
+**ASCII-only casing and whitespace do not violate UTF-8-everywhere, and are not a stdlib gap.**
+[utf8everywhere.org](https://utf8everywhere.org) is a doctrine about **encoding**: one internal
+representation, UTF-8, never UTF-16/`wchar_t`, no conversion at internal boundaries. kama satisfies that
+completely — one `string` type, byte `length()`, `s[i]` a `uint8`, `.chars()` the explicit opt-in for
+codepoints, and `foreach (char c in s)` a deliberate type error. Case mapping is a different axis
+(*Unicode semantics*), and utf8everywhere actively argues against casual per-character operations, pointing
+at a real library when you need them.
+
+It is also **safe**: `toLower`/`toUpper` leave bytes ≥ 0x80 untouched, and `is_ws` matches only bytes that
+can never appear inside a multibyte sequence, so casing and trimming cannot split or corrupt a codepoint.
+The observable limit is that `"Ä".toLower()` is unchanged and U+00A0 is not trimmed.
+
+**Zig — the closest peer (no-GC, AOT, and kama's own bundled backend) — does exactly the same**:
+`std.ascii.toLower` is ASCII, and full Unicode casing is a package. Rust/Go/Python/C#/JS bake Unicode
+tables into their stdlib, but they are all either GC'd or indifferent to binary size; kama targets MCUs
+with `--no-heap`. So this is a **considered non-goal for `std`** and belongs in a package. *(An earlier
+note in this file called it "behind every peer" — that was wrong, and is corrected here.)*
+
+**What genuinely deserves scheduling is `substring`.** It takes a **byte** range and bounds-checks only
+against `len`, not against codepoint boundaries — so `"AéZ".substring(start: 0, end: 2)` returns a 2-byte
+string ending in a lone `0xC3` lead byte. **That is not valid UTF-8, produced from valid input, in the
+safe surface, with no `unsafe` and no error** — the one place kama can break its own string invariant.
+Recommended fix, consistent with the language's existing discipline (indexing traps rather than invoking
+UB, and `Optional` is for absence rather than for programmer error): **trap on a non-boundary offset**,
+exactly as it already traps out-of-range, and exactly as Rust's `&s[0..2]` panics on a non-char-boundary.
+The check is O(1) — a byte at a boundary must not be a continuation byte (`(b & 0xC0) != 0x80`). Decide
+this at session start; it is a one-line runtime change plus a `tests/trap/` fixture.
