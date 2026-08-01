@@ -46,6 +46,15 @@ docs/naming reconcile — 1.0 is the API-stability point, so naming and case con
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
 
+**At the tag itself — repoint the Zed grammar pin.** `editor/zed/extension.toml` pins a *commit*, and Zed
+installs the grammar by fetching that rev — so the pin, not the working tree, is what Zed users get. It is
+currently behind (the commit predates `slot` and named match patterns, so neither highlights for them).
+Bump `rev` to the release tag when 1.0.0 is cut, and add the guard that cannot exist while it is a moving
+SHA: assert the tag's `tree-sitter-kama/grammar.js` + `queries/` match the tree. Doing it at the tag is what
+dissolves the chicken-and-egg — a content check against a *commit* pin would fail the very commit that
+changes the grammar. `tools/check-editors.sh` §2c today proves only that the rev resolves and carries a
+grammar, never that it is the current one.
+
 Everything else here is library or toolchain work that does **not** gate the tag:
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
