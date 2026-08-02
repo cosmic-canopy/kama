@@ -48,6 +48,43 @@ inside a `ctor` for the constructed type (where `checkNamedCtorComplete` already
 narrows `slot` back to holes. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
+**⚠️ A second construction-model hole: a derived type never runs its base's constructor.** Found
+2026-08-01. Three facts, in order of severity:
+
+1. **`checkNamedCtorComplete` stops at the class boundary.** It proves a ctor assigns the type's OWN
+   fields; **inherited fields are not covered** and silently take the zero-fill. This compiles, runs, and
+   returns 12 — `getX()` yields 0 from a field no ctor ever assigned:
+
+   ```kama
+   type virtual resource Base { int32 x;  protected fn void setX(int32 x) { this.x = x; } … }
+   type final resource Derived extends Base {
+       int32 y;
+       public ctor make(int32 y) { slot Derived r; r.y = y; return give r; }   // never calls setX
+   }
+   ```
+
+   Not memory-unsafe (the fill is deterministic), but it contradicts the guarantee the construction model
+   advertises, and **a base's invariants are unenforceable for its subclasses** because the base's ctor
+   never runs.
+2. **The only sanctioned workaround weakens encapsulation.** A base must expose a `protected` setter **per
+   field** for subclasses to initialize it. A ctor initializes once; a protected setter is a permanent
+   mutator any subclass method may call at any time — and the derived author has to know which setters
+   exist, which is knowing the base's field set.
+3. **`: base(...)` was never implemented.** SPEC documented it until this was found; the grammar has no
+   such production (`BASE` exists only for `base.m()` upcalls). SPEC now says so.
+
+   **Fix shape — install a base VALUE, don't chain.** A factory has no `self`, but it can build the base
+   through the base's own ctor and install it, which needs no chaining and leaks nothing:
+
+   ```kama
+   public ctor make(int32 x, int32 y) { This r; r.base = Base.make(x: x); r.y = y; return give r; }
+   ```
+
+   Needs a blessed name for the embedded sub-object (`__base` is reserved), `checkNamedCtorComplete`
+   extended to require it whenever the base has fields, and a decision on how an `abstract` base exposes a
+   ctor for this purpose (C#/Java use a protected constructor). Pairs naturally with the
+   [slot-scope campaign](design/slot-scope.md), which is already rewriting every ctor body.
+
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that

@@ -1575,8 +1575,10 @@ type final resource Circle extends Shape {             // `type final resource` 
 }
 ```
 
-Single inheritance (`extends`), base embedded by value (upcast is offset-0), base ctor via `: base(...)`,
-`base.m()` for non-virtual upcalls. `virtual`/`override` methods dispatch through a vtable. **Inheritance is
+Single inheritance (`extends`), base embedded by value (upcast is offset-0), `base.m()` for non-virtual
+upcalls. **There is no base-constructor delegation** — a factory has no `self` to chain into, so a derived
+ctor initializes inherited state through the base's `protected` accessors. That is a known gap, not the
+intended end state: see [ROADMAP.md](ROADMAP.md) §1. `virtual`/`override` methods dispatch through a vtable. **Inheritance is
 opt-in and one-way:** only a `type virtual resource`/`type abstract resource` may be `extends`-ed (a `value`,
 a plain `resource`, and a `type final resource` are sealed); an overridable method is written `protected`
 (never public/private — public polymorphism is a `contract`'s job); `type final resource`/`final` method seal

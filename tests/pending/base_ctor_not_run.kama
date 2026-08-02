@@ -1,0 +1,22 @@
+// PARKED REPRO (not in the suite — it compiles today, which is the bug).
+//
+// A derived type never runs its base's constructor, and `checkNamedCtorComplete` stops at the class
+// boundary: it proves `Derived` assigns its OWN field `y`, and says nothing about the inherited `x`.
+// So this builds, runs, and returns 12 — `getX()` yields 0 from a field no constructor ever assigned.
+//
+// Not memory-unsafe (the fill is deterministic), but the base's invariant is unenforceable: `Base` has no
+// way to require that `x` was ever set. See ROADMAP §1 for the fix shape (install a base VALUE built by
+// the base's own ctor, rather than chaining into a `self` a factory does not have).
+type virtual resource Base {
+    int32 x;
+    protected fn void setX(int32 x) { this.x = x; }
+    protected fn int32 getX() { return this.x; }
+    protected virtual fn int32 tag() { return 0; }
+}
+type final resource Derived extends Base {
+    int32 y;
+    public ctor make(int32 y) { slot Derived r; r.y = y; return give r; }   // never initializes `x`
+    protected override fn int32 tag() { return 1; }
+    public fn int32 sum() { return this.getX() + this.y; }
+}
+fn int main() { Derived d = Derived.make(y: 12); return d.sum(); }   // 12 — should not have compiled
