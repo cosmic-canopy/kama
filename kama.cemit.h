@@ -1667,6 +1667,9 @@ private:
     void warning(const char* rawWhat, int srcLine);   // soft: reported, does NOT fail the build
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
     std::string demangleForDisplay(const std::string& msg, int depth = 0) const;
+    // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the
+    // classes; exprEnumType keeps the enums. See the .cpp.
+    std::string callReturnTypeRaw(InvocationNode* inv);
 
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
     // `fn` is null for a module static (which accepts `@section` only).

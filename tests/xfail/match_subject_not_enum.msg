@@ -1,0 +1,1 @@
+which is neither an enum nor a tagged union

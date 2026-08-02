@@ -1,0 +1,13 @@
+// A `match` subject that resolves to a real type which simply is not matchable. The message must NAME
+// that type: it used to say "`match` requires an enum subject (a tagged union, or a plain enum)", which
+// described the requirement but never said what the subject actually was — and said the same thing about
+// a call returning a plain enum, where it was flatly false.
+type value Point {
+    public int32 x;
+    public ctor make(int32 x) { slot Point p; p.x = x; return give p; }
+}
+fn Point origin() { return Point.make(x: 0); }
+fn int main() {
+    int32 r = match (origin()) { case Ok: 1; case _: 0; };
+    return r;
+}

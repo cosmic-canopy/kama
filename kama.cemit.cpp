@@ -10444,7 +10444,14 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
         if (!enumTy.empty()) { emitMatchPlainEnum(m, enumTy, resultTemp, depth); return; }
-        unsupported("`match` requires an enum subject (a tagged union, or a plain enum)", m->line);
+        // Say which of the two it is. Claiming "requires an enum subject" about a resolvable non-enum
+        // named the wrong cause; claiming it about something unresolvable said nothing about the fix.
+        if (!subjCls.empty())
+            unsupported(("`match` subject has type `" + subjCls + "`, which is neither an enum nor a "
+                         "tagged union").c_str(), m->line);
+        else
+            unsupported("`match` subject's type could not be resolved — bind it to a typed local first "
+                        "(a nested value-producing `match` or a variant-producing ternary needs one)", m->line);
         return;
     }
     ClassInfo& ci = cit->second;
@@ -10770,6 +10777,8 @@ std::string CEmitter::exprEnumType(SharedExpression e)
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {   // `obj.field` of enum type
+        // A method CALL is an InvocationNode wrapping this MemberAccess, so it is handled below — this
+        // arm is a bare field read.
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
@@ -10779,6 +10788,12 @@ std::string CEmitter::exprEnumType(SharedExpression e)
         }
         return "";
     }
+    // A CALL returning a plain enum — `match (classify(x: 1))`. The resolution was always there (it is
+    // the same one exprClass runs for all five call shapes); it was just filtered through `isClass`,
+    // which only knows `_classes`, so a payload-less enum fell out and the subject was rejected with
+    // "`match` requires an enum subject" about an expression that plainly was one.
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
+        return asEnum(callReturnTypeRaw(inv));
     return "";
 }
 
@@ -10811,7 +10826,12 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                 unsupported(("`match` on '" + enumTy + "' is not exhaustive: case '" + mem.name
                              + "' is unhandled — add `case " + mem.name + ":` or `case _:`").c_str(), m->line);
 
-    indent(depth); *_out << "switch (" << emitExpression(m->subject) << ") {\n";
+    // Build the subject FIRST: a call subject can hoist (a string argument temp), and those declarations
+    // have to land before the `switch` line rather than inside it. Evaluated exactly once either way, so
+    // the tagged path's owning `__msubj` temp is not needed here.
+    std::string subjExpr = emitExpression(m->subject);
+    flushHoisted(depth);
+    indent(depth); *_out << "switch (" << subjExpr << ") {\n";
     auto beforeMove = _moveState;
     std::vector<std::map<std::string, MoveState>> armEnds;
     std::vector<bool> armDivs;
@@ -13492,6 +13512,130 @@ std::string CEmitter::lvalueCType(SharedExpression e)
     return "";
 }
 
+// The resolved return type of a CALL, UNFILTERED — it may name a class, a plain enum, or a primitive.
+// Extracted from exprClass so the enum path can reuse it: exprClass keeps only what `isClass` accepts,
+// which silently dropped plain enums (they live in `_enums`, not `_classes`) and is why a call could not
+// be a `match` subject unless its enum happened to carry a payload. One resolver, two filters.
+std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
+{
+    // Method call `recv.method(args)` — call->expression is a MemberAccessNode.
+    if (auto* ma = inv->expression ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr) {
+        std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+        std::string cls = exprClass(ma->expression);
+        if (isSmartPtrClass(cls)) {   // an intrinsic (tryUpgrade/valid/…) — returnType is on the smart-ptr
+            auto mit = _classes[cls].methods.find(method);
+            if (mit != _classes[cls].methods.end() && mit->second.returnType) {
+                std::string rc = cType(mit->second.returnType);
+                return rc;
+            }
+            cls = _classes[cls].collElemClass;   // else auto-deref to the pointee's method
+        }
+        if (!cls.empty() && _classes.count(cls)) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&_classes[cls], method, &owner);
+            // auto-deref via a user Deref<T> contract: the method may live on the pointee T.
+            if (!mi) { std::string dt = derefTarget(cls);
+                       if (!dt.empty() && _classes.count(dt)) mi = findMethod(&_classes[dt], method, &owner); }
+            if (mi && mi->returnType) {
+                // A method on a generic INSTANCE returns the template's unbound type
+                // (`Weak<T>.tryUpgrade() -> Optional<Shared<T>>`). Bind the owning instance's
+                // type args + its ctx so the return mangles concretely (else `match(w.tryUpgrade())`
+                // can't find the Optional variant). Mirrors emitGenericTypeInst's binding.
+                std::string ownerCls = owner ? owner->name : cls;
+                NsCtx savedCtx = _nsCtx;
+                std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+                auto gi = _genericTypeInsts.find(ownerCls);
+                if (gi != _genericTypeInsts.end()) {
+                    _typeSubst.clear();
+                    const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
+                    for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
+                        _typeSubst[ps[i]] = gi->second.typeArgs[i];
+                    _nsCtx = _genericTypeInstCtx.count(ownerCls) ? _genericTypeInstCtx[ownerCls]
+                                                                 : _genericTypeCtx[gi->second.templateKey];
+                }
+                std::string rc = cType(mi->returnType);
+                _typeSubst = savedSubst; _nsCtx = savedCtx;
+                return rc;
+            }
+        }
+        // A CONTRACT (fat-pointer) receiver: the method lives in _interfaces, not _classes, so the
+        // resolution above missed it. Resolve the contract method's declared return type — rendered
+        // under the CONTRACT's own name-resolution scope (its imports/type-args, like the vtbl slot,
+        // so a `Result<usize, IoError>` mangles concretely) — so `match (g.method())` on a contract
+        // value is a first-class subject / value site without binding to a typed local first. #§1.2
+        if (isInterface(cls)) {
+            InterfaceInfo& ii = _interfaces[cls];
+            for (auto& m : ii.methods) {
+                if (m.name != method || !m.returnType) continue;
+                NsCtx savedNs = _nsCtx;
+                if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+                std::string rc;
+                { ContractSubst _cs(*this, ii); rc = cType(m.returnType); }   // binds T for a generic-contract instance
+                _nsCtx = savedNs;
+                return rc;
+            }
+            return "";
+        }
+        // A dot-on-type ctor call `V.of(x:…)` / `Vec3.make(…)`: the receiver NAMES a type, so `cls`
+        // (exprClass of the receiver) is empty and the method-resolution above missed it. Recover the
+        // constructed type — an infallible ctor returns the enclosing type by value — so an of/make
+        // result is first-class in operand position (operators, ref-arg hoist, arg upcast), exactly like
+        // the nameless inline ctor (Q3 below) it replaces. Concrete receiver only (a generic template
+        // needs an instance, which operand position lacks). #M8d.2
+        std::string dotTy;
+        if (isTypeReceiver(ma, dotTy) && _classes.count(dotTy)) {
+            auto cit = _classes[dotTy].ctors.find(method);
+            if (cit != _classes[dotTy].ctors.end()) {
+                // Infallible: the ctor yields the enclosing type by value.
+                if (!cit->second.isFallible) return dotTy;
+                // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
+                // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
+                // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
+                // what made an inline fallible ctor unusable as a subject. Now that construction has one
+                // spelling, that gap would leave the pattern unwritable.
+                if (cit->second.returnType) {
+                    std::string rc = cType(cit->second.returnType);
+                    return rc;
+                }
+            }
+        }
+        return "";
+    }
+    // Static method call `Class::method(args)` — a qualified identifier with no receiver expression
+    // (`File::open(...)`). Resolve the class, find the method, return its (class) return type, so a
+    // fallible factory is usable inline as a `match` subject / value site — not only after binding to
+    // a typed local. Mirrors the `Type::method` resolution in emitFnPtrBind.
+    if (inv->identifier && inv->identifier->value && !inv->expression
+        && inv->identifier->qualifier && !inv->identifier->qualifier->empty()) {
+        auto prefix = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i)
+            prefix->push_back((*inv->identifier->qualifier)[i]);
+        std::string cls = resolveUserName(*inv->identifier->qualifier->back(), prefix);
+        if (_classes.count(cls)) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* mi = findMethod(&_classes[cls], *inv->identifier->value, &owner);
+            if (mi && mi->returnType) {
+                std::string rc = cType(mi->returnType);
+                return rc;
+            }
+        }
+    }
+
+    // Q3: a bare inline constructor `Vec3(x: …)` — its own class (so an inline ctor works as an
+    // operator operand). Checked before _funcs since a class name is never a function.
+    if (inv->identifier && inv->identifier->value && !inv->expression
+        && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())) {
+        std::string rn = resolveUserName(*inv->identifier->value, inv->identifier->qualifier);
+        if (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) return rn;
+    }
+    // Free / qualified function call — its C return type, if that names a class.
+    if (inv->identifier && inv->identifier->value) {
+        auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+        if (f != _funcs.end()) return f->second.retCType;
+    }
+    return "";
+}
+
 std::string CEmitter::exprClass(SharedExpression e)
 {
     if (!e) return "";
@@ -13602,122 +13746,8 @@ std::string CEmitter::exprClass(SharedExpression e)
     // `match` subject / value site (`match(w.tryUpgrade())`). A class return maps to its name; a
     // primitive/void return stays "".
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
-        // Method call `recv.method(args)` — call->expression is a MemberAccessNode.
-        if (auto* ma = inv->expression ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr) {
-            std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
-            std::string cls = exprClass(ma->expression);
-            if (isSmartPtrClass(cls)) {   // an intrinsic (tryUpgrade/valid/…) — returnType is on the smart-ptr
-                auto mit = _classes[cls].methods.find(method);
-                if (mit != _classes[cls].methods.end() && mit->second.returnType) {
-                    std::string rc = cType(mit->second.returnType);
-                    return isClass(rc) ? rc : "";
-                }
-                cls = _classes[cls].collElemClass;   // else auto-deref to the pointee's method
-            }
-            if (!cls.empty() && _classes.count(cls)) {
-                ClassInfo* owner = nullptr;
-                MethodInfo* mi = findMethod(&_classes[cls], method, &owner);
-                // auto-deref via a user Deref<T> contract: the method may live on the pointee T.
-                if (!mi) { std::string dt = derefTarget(cls);
-                           if (!dt.empty() && _classes.count(dt)) mi = findMethod(&_classes[dt], method, &owner); }
-                if (mi && mi->returnType) {
-                    // A method on a generic INSTANCE returns the template's unbound type
-                    // (`Weak<T>.tryUpgrade() -> Optional<Shared<T>>`). Bind the owning instance's
-                    // type args + its ctx so the return mangles concretely (else `match(w.tryUpgrade())`
-                    // can't find the Optional variant). Mirrors emitGenericTypeInst's binding.
-                    std::string ownerCls = owner ? owner->name : cls;
-                    NsCtx savedCtx = _nsCtx;
-                    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-                    auto gi = _genericTypeInsts.find(ownerCls);
-                    if (gi != _genericTypeInsts.end()) {
-                        _typeSubst.clear();
-                        const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
-                        for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
-                            _typeSubst[ps[i]] = gi->second.typeArgs[i];
-                        _nsCtx = _genericTypeInstCtx.count(ownerCls) ? _genericTypeInstCtx[ownerCls]
-                                                                     : _genericTypeCtx[gi->second.templateKey];
-                    }
-                    std::string rc = cType(mi->returnType);
-                    _typeSubst = savedSubst; _nsCtx = savedCtx;
-                    return isClass(rc) ? rc : "";
-                }
-            }
-            // A CONTRACT (fat-pointer) receiver: the method lives in _interfaces, not _classes, so the
-            // resolution above missed it. Resolve the contract method's declared return type — rendered
-            // under the CONTRACT's own name-resolution scope (its imports/type-args, like the vtbl slot,
-            // so a `Result<usize, IoError>` mangles concretely) — so `match (g.method())` on a contract
-            // value is a first-class subject / value site without binding to a typed local first. #§1.2
-            if (isInterface(cls)) {
-                InterfaceInfo& ii = _interfaces[cls];
-                for (auto& m : ii.methods) {
-                    if (m.name != method || !m.returnType) continue;
-                    NsCtx savedNs = _nsCtx;
-                    if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
-                    std::string rc;
-                    { ContractSubst _cs(*this, ii); rc = cType(m.returnType); }   // binds T for a generic-contract instance
-                    _nsCtx = savedNs;
-                    return isClass(rc) ? rc : "";
-                }
-                return "";
-            }
-            // A dot-on-type ctor call `V.of(x:…)` / `Vec3.make(…)`: the receiver NAMES a type, so `cls`
-            // (exprClass of the receiver) is empty and the method-resolution above missed it. Recover the
-            // constructed type — an infallible ctor returns the enclosing type by value — so an of/make
-            // result is first-class in operand position (operators, ref-arg hoist, arg upcast), exactly like
-            // the nameless inline ctor (Q3 below) it replaces. Concrete receiver only (a generic template
-            // needs an instance, which operand position lacks). #M8d.2
-            std::string dotTy;
-            if (isTypeReceiver(ma, dotTy) && _classes.count(dotTy)) {
-                auto cit = _classes[dotTy].ctors.find(method);
-                if (cit != _classes[dotTy].ctors.end()) {
-                    // Infallible: the ctor yields the enclosing type by value.
-                    if (!cit->second.isFallible) return dotTy;
-                    // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
-                    // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
-                    // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
-                    // what made an inline fallible ctor unusable as a subject. Now that construction has one
-                    // spelling, that gap would leave the pattern unwritable.
-                    if (cit->second.returnType) {
-                        std::string rc = cType(cit->second.returnType);
-                        if (isClass(rc)) return rc;
-                    }
-                }
-            }
-            return "";
-        }
-        // Static method call `Class::method(args)` — a qualified identifier with no receiver expression
-        // (`File::open(...)`). Resolve the class, find the method, return its (class) return type, so a
-        // fallible factory is usable inline as a `match` subject / value site — not only after binding to
-        // a typed local. Mirrors the `Type::method` resolution in emitFnPtrBind.
-        if (inv->identifier && inv->identifier->value && !inv->expression
-            && inv->identifier->qualifier && !inv->identifier->qualifier->empty()) {
-            auto prefix = std::make_shared<StringList>();
-            for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i)
-                prefix->push_back((*inv->identifier->qualifier)[i]);
-            std::string cls = resolveUserName(*inv->identifier->qualifier->back(), prefix);
-            if (_classes.count(cls)) {
-                ClassInfo* owner = nullptr;
-                MethodInfo* mi = findMethod(&_classes[cls], *inv->identifier->value, &owner);
-                if (mi && mi->returnType) {
-                    std::string rc = cType(mi->returnType);
-                    if (isClass(rc)) return rc;
-                }
-            }
-        }
-
-        // Q3: a bare inline constructor `Vec3(x: …)` — its own class (so an inline ctor works as an
-        // operator operand). Checked before _funcs since a class name is never a function.
-        if (inv->identifier && inv->identifier->value && !inv->expression
-            && (!inv->identifier->qualifier || inv->identifier->qualifier->empty())) {
-            std::string rn = resolveUserName(*inv->identifier->value, inv->identifier->qualifier);
-            if (isClass(rn) && _classes.count(rn) && !_classes[rn].isIntrinsicColl) return rn;
-        }
-        // Free / qualified function call — its C return type, if that names a class.
-        if (inv->identifier && inv->identifier->value) {
-            auto f = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
-            if (f != _funcs.end() && isClass(f->second.retCType)) return f->second.retCType;
-        }
-        return "";
+        std::string rc = callReturnTypeRaw(inv);
+        return isClass(rc) ? rc : "";
     }
 
     // a user-operator result carries the operator's return type, so a NESTED operator

@@ -1,0 +1,45 @@
+// A `match` SUBJECT may be a call that returns a PLAIN (payload-less) enum.
+//
+// This used to be rejected with "`match` requires an enum subject (a tagged union, or a plain enum)" —
+// false about the code in front of it, and it sent the reader looking for the wrong problem. The rule was
+// really "the subject must be a bound local", and the workaround was one line, which is why it went
+// unnoticed; but matching on a call result is the first thing anyone from Rust/Swift/ML tries.
+//
+// `tests/match_on_freecall.kama` looks like it already covered this — it does not. Its enum carries a
+// payload, so it is a tagged union and resolves through a different table. Payload-less is the gap.
+
+enum Code { Ok, Bad }
+
+fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
+
+type value Grader {
+    public int32 bar;
+    public ctor make(int32 bar) { slot Grader g; g.bar = bar; return give g; }
+    public fn Code grade(int32 score) { if (score >= this.bar) { return Code::Ok; } return Code::Bad; }
+    public static fn Code always() { return Code::Ok; }
+}
+
+fn int main()
+{
+    // (1) a FREE function call
+    int32 a = match (classify(x: 1))  { case Ok: 10; case Bad: 0; };
+    int32 b = match (classify(x: -1)) { case Ok: 0;  case Bad: 20; };
+
+    // (2) a METHOD call
+    Grader g = Grader.make(bar: 50);
+    int32 c = match (g.grade(score: 70)) { case Ok: 3; case Bad: 0; };
+
+    // (3) a STATIC call
+    int32 d = match (Grader::always()) { case Ok: 4; case Bad: 0; };
+
+    // (4) statement position, with a wildcard arm. `e` is initialized rather than a bare `slot`: the
+    // definite-assignment pass does not yet count an exhaustive `match`'s arms as assigning it
+    // (tracked in ROADMAP §2) — unrelated to the subject rule this fixture is about.
+    int32 e = 7;
+    match (classify(x: 5)) {
+        case Ok: { e = 0; }
+        case _:  { e = 99; }
+    };
+
+    return a + b + c + d + e;         // 10 + 20 + 3 + 4 + 0 = 37
+}
