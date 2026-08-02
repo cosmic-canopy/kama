@@ -1,0 +1,14 @@
+// A diagnostic must name a type the way the SOURCE spells it. This file declares no `namespace`, so
+// `Plain` is file-private and registers internally as `_F<n>__Plain`; a message that interpolates the
+// resolved name used to leak that mangled form (`'hidden' is private in '_F4__Plain'`), which names a
+// symbol the reader cannot find anywhere in their code. The `.msg` asserts the source spelling, so a
+// regression to the mangled form fails this fixture.
+type value Plain {
+    int32 hidden;                                    // no `public` — private
+    public ctor make(int32 h) { slot Plain p; p.hidden = h; return give p; }
+}
+
+fn int main() {
+    Plain p = Plain.make(h: 1);
+    return p.hidden;                                 // rejected: reading a private field
+}

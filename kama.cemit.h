@@ -1661,8 +1661,12 @@ private:
     // (ISO C — no statement-expressions) so chained `a + b + c` works.
     std::string addrOfOperand(SharedExpression e, const std::string& cls, int line);
 
-    void unsupported(const char* what, int srcLine);
-    void warning(const char* what, int srcLine);   // soft: reported, does NOT fail the build
+    // Both render their message through demangleForDisplay first, so an internal mangled name
+    // (`_F4__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
+    void unsupported(const char* rawWhat, int srcLine);
+    void warning(const char* rawWhat, int srcLine);   // soft: reported, does NOT fail the build
+    // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
+    std::string demangleForDisplay(const std::string& msg, int depth = 0) const;
 
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
     // `fn` is null for a module static (which accepts `@section` only).

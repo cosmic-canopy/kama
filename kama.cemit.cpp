@@ -81,9 +81,86 @@ void CEmitter::line(int srcLine)
     }
 }
 
-void CEmitter::unsupported(const char* what, int srcLine)
+// Render an INTERNAL mangled name the way the user spelled it. Declarations are scope-prefixed by
+// `qualify()` as `<scope>__<name>`, where the scope is a namespace (`std__collections`) or, for a
+// file-private type, `_F<fileIndex>` — so a diagnostic that interpolates a resolved name leaks
+// `_F4__Plain` or `std__collections__Map` at the user. Applied once here, at the single point where a
+// message becomes visible, rather than at the ~30 call sites that interpolate a name (and every future one).
+//
+// Per identifier token: an INTERIOR `__` becomes `::`, then a leading `_F<digits>::` is dropped. A LEADING
+// `__` is left alone — the emitter's own reserved identifiers (`__base`, `__vptr`, `__ret_N`, `__match0`;
+// SPEC § Reserved/runtime) must render verbatim.
+// A monomorphized instance is additionally mangled as `Tmpl_<arg>_<arg>` — rendered back to the source
+// `Tmpl<arg, arg>`, with trailing DEFAULTED args dropped so `Map<int32, int32>` doesn't read as
+// `Map<int32, int32, DefaultHasher, GlobalAllocator>`. `depth` bounds the recursion through nested args:
+// a diagnostic must never be the thing that hangs the compiler.
+std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) const
+{
+    auto identChar = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
+    std::string out;
+    for (size_t i = 0; i < msg.size(); ) {
+        if (!identChar(msg[i])) { out += msg[i++]; continue; }
+        size_t start = i;
+        while (i < msg.size() && identChar(msg[i])) ++i;
+        std::string tok = msg.substr(start, i - start);
+
+        // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
+        // splices scope-qualified argument names into the same token.
+        auto gi = _genericTypeInsts.find(tok);
+        if (depth < 4 && gi != _genericTypeInsts.end()) {
+            const auto& args = gi->second.typeArgs;
+            auto df = _genericTypeDefaults.find(gi->second.templateKey);
+            // A template's default is written UNQUALIFIED in the template's own scope (`DefaultHasher`)
+            // while the recorded arg is resolved and qualified (`std::collections::DefaultHasher`), so an
+            // unqualified default matches on its leaf. A default that IS qualified must match exactly —
+            // two same-leaf types in different namespaces are different types, and hiding one would lie.
+            auto sameType = [](const std::string& arg, const std::string& dflt) {
+                if (arg == dflt) return true;
+                if (dflt.find("::") != std::string::npos) return false;
+                size_t p = arg.rfind("::");
+                return p != std::string::npos && arg.compare(p + 2, std::string::npos, dflt) == 0;
+            };
+            size_t n = args.size();
+            if (df != _genericTypeDefaults.end())                       // drop trailing args left at default
+                while (n > 0 && n <= df->second.size() && df->second[n - 1] && args[n - 1]
+                       && args[n - 1]->value && df->second[n - 1]->value
+                       && sameType(demangleForDisplay(*args[n - 1]->value, depth + 1),
+                                   demangleForDisplay(*df->second[n - 1]->value, depth + 1)))
+                    --n;
+            std::string s = demangleForDisplay(gi->second.templateKey, depth + 1);
+            if (n) {
+                s += "<";
+                for (size_t a = 0; a < n; ++a)
+                    s += (a ? ", " : "") + (args[a] && args[a]->value
+                                            ? demangleForDisplay(*args[a]->value, depth + 1) : std::string("?"));
+                s += ">";
+            }
+            out += s;
+            continue;
+        }
+
+        // Leading underscores are reserved-identifier territory — measure the token's real start.
+        size_t lead = tok.find_first_not_of('_');
+        if (lead == std::string::npos) { out += tok; continue; }
+        std::string body = tok.substr(lead);
+        for (size_t p = body.find("__"); p != std::string::npos; p = body.find("__", p + 2))
+            body.replace(p, 2, "::");
+        // `_F<digits>::` is a private FILE scope — it names no namespace a user could write.
+        if (lead == 1 && body.size() > 1 && body[0] == 'F') {
+            size_t d = 1;
+            while (d < body.size() && std::isdigit((unsigned char)body[d])) ++d;
+            if (d > 1 && body.compare(d, 2, "::") == 0) { out += body.substr(d + 2); continue; }
+        }
+        out += tok.substr(0, lead) + body;
+    }
+    return out;
+}
+
+void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
     ++_unsupported;
+    const std::string display = demangleForDisplay(rawWhat);
+    const char* what = display.c_str();
     std::fprintf(stderr, "kama: warning: unsupported %s at %s:%d (not yet lowered)\n",
                  what, _sourcePath.c_str(), srcLine);
     // Structured form for the query surface. `unsupported` is a hard error at the driver (unsupported > 0
@@ -102,8 +179,10 @@ void CEmitter::unsupported(const char* what, int srcLine)
 // A SOFT diagnostic: it reports and shows up in an editor, but does not fail the build. Distinct from
 // `unsupported`, which is a hard error. Used to land a breaking rule in two steps — warn while the corpus
 // is swept, then flip to `unsupported` — so every intermediate commit stays green.
-void CEmitter::warning(const char* what, int srcLine)
+void CEmitter::warning(const char* rawWhat, int srcLine)
 {
+    const std::string display = demangleForDisplay(rawWhat);
+    const char* what = display.c_str();
     std::fprintf(stderr, "kama: warning: %s at %s:%d\n", what, _sourcePath.c_str(), srcLine);
     Diagnostic d;
     d.line = srcLine;

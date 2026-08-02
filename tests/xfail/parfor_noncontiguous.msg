@@ -1,1 +1,1 @@
-contiguous
+`std::collections::Map<int32, int32>` is not contiguous
