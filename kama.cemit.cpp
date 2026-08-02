@@ -9892,9 +9892,33 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             rec(al->fillValue);
         } else if (auto* mt = dynamic_cast<MatchNode*>(n)) {
             rec(mt->subject);
-            if (mt->arms) for (auto& arm : *mt->arms) if (arm) {
-                if (arm->body) rec(arm->body);
-                if (arm->block) walkSkippable(arm->block);
+            // A `match` IS a join, exactly like the `if`/`else` case below. It is exhaustive by
+            // construction — the emitter rejects a non-exhaustive one, the same assumption `alwaysExits`
+            // already makes — so exactly one arm runs, and a key is assigned afterwards iff every arm
+            // that REACHES the join assigns it. Treating each arm as independently skippable (which is
+            // what this did) rejected the ordinary way to fill a `slot` from a match:
+            //     slot int32 e;
+            //     match (c) { case Ok: { e = 0; } case _: { e = 99; } };
+            //     return e;                        // was: "'e' is used before it is assigned"
+            // and there is no other spelling for it — the workaround is to abandon the `slot` and give
+            // the local a throwaway initializer, which is exactly the habit `slot` exists to remove.
+            if (mt->arms && !mt->arms->empty()) {
+                std::set<std::string> before = unassigned, joined;
+                bool anyReaches = false;
+                for (auto& arm : *mt->arms) {
+                    if (!arm) continue;
+                    unassigned = before;                       // each arm starts from the pre-match state
+                    if (arm->body) rec(arm->body);
+                    if (arm->block) walk(std::static_pointer_cast<StatementNode>(arm->block), true);
+                    // The same divergence test the emitter uses to merge MOVE state at this very join
+                    // (`armDivs`), so the two passes agree about which arms reach it. Under-detecting
+                    // divergence only keeps a key unassigned longer, which is the safe direction.
+                    if (arm->block && bodyDiverges(std::static_pointer_cast<StatementNode>(arm->block)))
+                        continue;                              // never reaches the join; contributes nothing
+                    if (!anyReaches) { joined = unassigned; anyReaches = true; }
+                    else for (auto& k : unassigned) joined.insert(k);   // union: a hole if ANY arm leaves one
+                }
+                unassigned = anyReaches ? joined : before;      // no arm reaches the join — state is moot
             }
         }
     };

@@ -1,0 +1,96 @@
+// Definite assignment sees through a `match`. A match is exhaustive by construction, so exactly one arm
+// runs: a hole filled by every arm that REACHES the join is filled after it.
+//
+// Before this, each arm was treated as independently skippable — correct for a lone `if`, wrong here.
+// The headline case is (0): an `out` PARAMETER filled in every arm, which is what `slot`/`out` exists
+// for, and which had no working spelling at all. `tests/xfail/slot_match_*.kama` pin the other direction.
+
+enum Code { Ok, Bad }
+fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
+
+fn void fill(int32 v, out int32 dst) { dst = v; }
+
+// (0) THE case: an `out` parameter is the callee's promise to assign on every path. A match is exhaustive,
+//     so filling it in every arm IS every path — but the arms were discarded, so this was rejected with
+//     "`out` parameter 'dst' is not assigned on every path before this function returns".
+fn void pickInto(int32 x, out int32 dst) {
+    match (classify(x: x)) {
+        case Ok:  { fill(v: 1, dst: out dst); }
+        case Bad: { dst = 90; }
+    };
+}
+
+fn int main()
+{
+    int32 total = 0;
+
+    // (0) the `out` case, from the caller's side: `r` is a hole until `pickInto` fills it.
+    slot int32 r;
+    pickInto(x: 1, dst: out r);
+    total = total + r;                       // 1
+
+    // ── The cases below fill a hole by ASSIGNMENT rather than through `out`. They are legal today; if
+    //    the `slot`-scope campaign narrows `slot` to out-parameters only, these move to that spelling.
+    //    The join rule being tested is the same either way.
+
+    // (1) every arm assigns
+    slot int32 a;
+    match (classify(x: 1)) {
+        case Ok:  { a = 1; }
+        case Bad: { a = 90; }
+    };
+    total = total + a;                       // 1
+
+    // (2) a wildcard arm counts like any other
+    slot int32 b;
+    match (classify(x: -1)) {
+        case Ok: { b = 90; }
+        case _:  { b = 2; }
+    };
+    total = total + b;                       // 2
+
+    // (3) an arm that DIVERGES never reaches the join, so it constrains nothing — the remaining arm
+    //     alone decides. This is the same rule the `if`/`else` join already used.
+    slot int32 c;
+    match (classify(x: 1)) {
+        case Ok:  { c = 4; }
+        case Bad: { return 91; }             // diverges
+    };
+    total = total + c;                       // 4
+
+    // (4) an `out` argument fills a slot inside an arm, exactly as it does anywhere else
+    slot int32 d;
+    match (classify(x: 1)) {
+        case Ok:  { fill(v: 8, dst: out d); }
+        case Bad: { fill(v: 90, dst: out d); }
+    };
+    total = total + d;                       // 8
+
+    // (5) nested: the inner match is itself a join, so the outer one sees `e` as assigned
+    slot int32 e;
+    match (classify(x: 1)) {
+        case Ok: {
+            match (classify(x: 2)) {
+                case Ok:  { e = 16; }
+                case Bad: { e = 90; }
+            };
+        }
+        case Bad: { e = 90; }
+    };
+    total = total + e;                       // 16
+
+    // (6) a match nested inside a lone `if` must NOT leak its assignments past the `if` — the outer
+    //     restore still applies. `f` is read only inside, where it is genuinely assigned.
+    int32 g = 0;
+    if (total > 0) {
+        slot int32 f;
+        match (classify(x: 1)) {
+            case Ok:  { f = 32; }
+            case Bad: { f = 90; }
+        };
+        g = f;
+    }
+    total = total + g;                       // 32
+
+    return total;                            // 1 + 1 + 2 + 4 + 8 + 16 + 32 = 64
+}
