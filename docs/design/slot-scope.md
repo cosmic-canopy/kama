@@ -205,6 +205,50 @@ commit. Same shape:
 A `view` has ctors and must materialize its return value like anything else; its own rules (borrows, owns
 nothing, no destructor) are orthogonal to how its storage is spelled. 3 sites, no special case.
 
+## ⚠️ D5 is REOPENED — implicit `this` is the current lean
+
+The user leans to an implicit `this` in a ctor over `This x;`, and the objections recorded below did not
+survive checking:
+
+- *"`this` in a ctor is an error today"* — circular. It is an error because nobody blessed it.
+- *"it gives `this` a second meaning"* — overstated. `slot`'s two meanings had different lowering and two
+  analysis sets; `this`-in-a-ctor vs `this`-in-a-method is the same storage and type at two lifecycle
+  stages.
+- *"half-constructed objects"* — **collapses.** kama has **no constructor chaining** (M8 Phase E), so the
+  C++ hazard (a base ctor running while the vptr is not yet the derived one) cannot occur.
+- *"the move becomes implicit"* — separable; an explicit `return give this;` can coexist with implicit
+  `this`.
+
+It also reads better against the base fix, which is the deciding factor: `this.base = Base.createIt();`
+sits naturally beside `this.x = 0;` in a way `r.base = …` does not.
+
+**One question left before D5 can be re-decided: what does a ctor RETURN?** *Lean: keep it explicit* —
+`return give this;` / `return Result::Ok(value: give this);`. Fallible ctors force the issue: they must
+write `return Result::Err(…)` on failure, so an implicit success return would leave one path returning and
+the other not.
+
+**A `Base`/`base` parallel is wanted too** — `Base` the type, `base` the object, mirroring `This`/`this`.
+It makes `this.base = Base.createIt()` rename-safe and means a derived author never types the concrete base
+type name, which is the encapsulation point the base-ctor hole is about. Only meaningful in a type that has
+a base; note `base` in a type WITHOUT one currently reports the bare fragment "base access" (ROADMAP §1).
+
+## Constructor reuse — what works today (measured)
+
+Relevant because the base fix and D5 both depend on it:
+
+| form | status |
+| --- | --- |
+| `ctor origin() { return P.make(x: 0, y: 0); }` — delegate wholesale | ✅ legal |
+| `ctor make(…) { … P::helper(…) … }` — private static helper | ✅ legal |
+| `slot P r; r = P.make(…); r.y = 5; return give r;` — delegate **then tweak** | ❌ *"'x' is never assigned"* |
+
+**`checkNamedCtorComplete` credits only FIELD-BY-FIELD assignment.** A whole-value assignment does not
+count. That blocks "build via another ctor, then adjust", which looks like an oversight rather than a
+decision — and it is a **prerequisite for the base fix**, since `this.base = Base.createIt()` is exactly a
+whole-value assignment to a sub-object. Extending the check to credit whole-value assignment (to a
+sub-object and to the value itself) is therefore shared work between this campaign and ROADMAP §1's
+base-constructor hole.
+
 ## Two traps for the sweep
 
 - **`tests/slot_drop_elided.kama:16` becomes illegal.** It proves the no-destructor payoff with
