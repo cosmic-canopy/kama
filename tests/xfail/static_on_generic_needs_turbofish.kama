@@ -1,0 +1,8 @@
+// `Box::tag()` — the head names a generic template with no turbofish. This used to fall through to
+// "scope-qualified call resolves to no known function", which names neither the cause nor the fix.
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public static fn int32 tag() { return 7; }
+}
+fn int main() { Box<int32> b = Box::<int32>.make(v: 1); return Box::tag(); }

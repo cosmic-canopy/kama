@@ -1,0 +1,1 @@
+is a static function — call it with `Plain::tag(...)`

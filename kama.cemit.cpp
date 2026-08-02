@@ -11519,7 +11519,19 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (fit != _funcs.end())
             return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
                              fit->second.isPlaceReturn);
-        unsupported("scope-qualified call resolves to no known function", call->line);
+        // The head names a GENERIC template with no turbofish (`Box::tag()`). `typeName` is the bare
+        // template, which is in no instance table, so this used to land on the catch-all below — a
+        // message that names neither the cause nor the fix. A static has no receiver and its parameters
+        // need not mention `T`, so the type arguments cannot be inferred and must be written.
+        if (_genericTypeParams.count(typeName) && _genericTypes.count(typeName)
+            && _genericTypes[typeName].methods.count(name)) {
+            const std::string& disp = *qual->back();
+            unsupported(("`" + disp + "` is generic — a static needs its type arguments: `"
+                         + disp + "::<...>::" + name + "(...)`").c_str(), call->line);
+            return "0";
+        }
+        unsupported(("`" + *qual->back() + "::" + name + "` — scope-qualified call resolves to no known "
+                     "function").c_str(), call->line);
         return "0";
     }
 
@@ -14423,6 +14435,22 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // (`implements Deserialize for int32`) resolves through `retroTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : retroTargetInfo(tn);
+    // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
+    // infer from). `Box` is a perfectly known type, so "unknown type" names the wrong problem — say which
+    // instance is missing, and for a STATIC say that dot-on-type was never the spelling to begin with.
+    if (!stci && _genericTypeParams.count(typeName) && _genericTypes.count(typeName)) {
+        auto& gt = _genericTypes[typeName];
+        auto mit = gt.methods.find(method);
+        if (mit != gt.methods.end() && mit->second.isStatic && !mit->second.isCtor)
+            unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
+                         + "` is a static function — call it with `" + disp + "::<...>::" + method
+                         + "(...)`").c_str(), call->line);
+        else
+            unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
+                         + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "
+                         "inferred").c_str(), call->line);
+        return "0";
+    }
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
     // M6 B3d: the RECEIVER of `Type.name(...)` is a reference to the type, exactly as the same spelling in
     // an annotation is — it was missing only because this path resolves without passing a site. Record
@@ -14455,6 +14483,13 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 return "0";
             }
         }
+        // A FIELD of that name: `findMethod` cannot see fields, so without this arm a field is reported
+        // as "no constructor `x` — define one", which sends the reader to write a ctor they don't want.
+        if (findFieldOwner(stci, method)) {
+            unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
+                         + "` is a field. Read it from a value (`obj." + method + "`)").c_str(), call->line);
+            return "0";
+        }
         // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the
         // context-aware advice (which offers `of`/`zero` only for a transparent value).
         if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))
@@ -14464,9 +14499,21 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         return "0";
     }
     if (!mi->isCtor) {
-        // `name` is a real static fn (or non-static method) — dot-on-type is for constructors only.
-        unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
-                     + "` is a static function — call it with `" + disp + "::" + method + "(...)`").c_str(),
+        // Dot-on-type is for constructors only. The shared preamble teaches the rule; the second clause
+        // must then say what the name ACTUALLY is. It used to assert "is a static function" without ever
+        // checking, so an INSTANCE method was mislabelled a static and the advice that followed
+        // (`Type::name(...)`) sent the reader to a second error telling them the opposite.
+        std::string advice;
+        if (mi->isStatic) {
+            // On a GENERIC owner the turbofish is mandatory (a static has nothing to infer from), so
+            // `Type::name(...)` would be the one spelling that does not exist — name the real one.
+            advice = _genericTypeParams.count(typeName)
+                   ? ("`" + method + "` is a static function — call it with `" + disp + "::<...>::" + method + "(...)`")
+                   : ("`" + method + "` is a static function — call it with `" + disp + "::" + method + "(...)`");
+        } else {
+            advice = "`" + method + "` is a method — call it on a value (`obj." + method + "(...)`)";
+        }
+        unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; " + advice).c_str(),
                     call->line);
         return "0";
     }

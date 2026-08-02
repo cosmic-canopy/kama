@@ -1,0 +1,7 @@
+// A FIELD reached by dot-on-type. `findMethod` cannot see fields, so this used to be reported as "no
+// constructor `n` — define one", sending the reader to write a constructor they do not want.
+type value Holder {
+    public int32 n;
+    public ctor make(int32 n) { slot Holder h; h.n = n; return give h; }
+}
+fn int main() { return Holder.n(); }

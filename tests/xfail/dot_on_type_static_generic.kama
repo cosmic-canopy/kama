@@ -1,0 +1,8 @@
+// On a GENERIC owner the advice must carry the turbofish: `Box::tag(...)` is the one spelling that does
+// not exist, because a static has no receiver and nothing to infer the monomorph from.
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public static fn int32 tag() { return 7; }
+}
+fn int main() { Box<int32> b = Box::<int32>.make(v: 1); return Box.tag(); }

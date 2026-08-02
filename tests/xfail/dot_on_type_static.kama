@@ -1,0 +1,7 @@
+// A real static reached by dot-on-type: the advice is the `::` spelling, and on a NON-generic owner it
+// carries no turbofish.
+type value Plain {
+    public ctor make() { slot Plain p; return give p; }
+    public static fn int32 tag() { return 5; }
+}
+fn int main() { return Plain.tag(); }

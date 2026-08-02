@@ -1,0 +1,1 @@
+is generic — a static needs its type arguments
