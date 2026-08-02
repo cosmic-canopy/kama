@@ -40,8 +40,15 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**The language surface is feature-complete**, and the last breaking change (`slot` + a real `out`) has
-landed — see SPEC § *Uninitialized storage* and § *Functions*. What is left before the tag is the
+**One breaking change is still open: `slot`'s scope** — briefed in
+[design/slot-scope.md](design/slot-scope.md) (cold-start ready). `slot` was designed to name the storage an
+`out` parameter fills; `c2ae0c8` then required it on *every* initializer-less local, so ~73% of its 787 uses
+are constructors saying "this is the value I am building", not holes. The campaign blesses a bare `T x;`
+inside a `ctor` for the constructed type (where `checkNamedCtorComplete` already proves completion) and
+narrows `slot` back to holes. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
+side of this shipped already — `T.default()`, `5edb4d9`.)*
+
+Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
@@ -181,10 +188,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   for the language server (it resolves the whole program from the manifest) and for any file reached through
   an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
   stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
-- **Definite assignment does not see through a `match`.** An exhaustive `match` whose every arm assigns a
-  `slot` still reports "used before it is assigned" — the pass does not treat the arms as a covering set.
-  Workaround is an initializer. Noticed while fixturing the call-subject fix
-  (`tests/match_call_plain_enum.kama` carries the note); the same reasoning would extend to `if`/`else`.
 - **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
