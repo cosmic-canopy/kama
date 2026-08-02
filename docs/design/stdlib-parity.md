@@ -43,23 +43,11 @@ than leaving a reader to wonder.
 
 ## Session split
 
-**Prerequisite, before M2a — a small LANGUAGE batch**, decided with the user and written up in
-[ROADMAP.md](../ROADMAP.md) §2. These land first so M2's fixtures are not written against a surface that is
-about to shift; nothing in the parity gap depends on them, the ordering is only to avoid churn.
-
-1. **A `match` SUBJECT may be a call result**, not only a bound local — `match (classify(x: 1))`. The
-   first thing anyone from Rust/Swift/ML tries. **Fix the message first, independently**: it currently
-   says "`match` requires an enum subject" about an expression that plainly *is* one, which sends the
-   reader after the wrong thing. Correct the SPEC § *Known limitations* text either way — it lists only
-   nested matches and variant-producing ternaries, so it understates the real rule.
-2. **The generic-static spelling** `Type::<args>::name()` — one grammar production, sibling of the
-   existing on-type ctor rule — plus static-call resolution under `_typeSubst`.
-3. **The three dot-on-type diagnostic defects** that came with it: an instance method reported as "a
-   static function", the unusable advice that follows, and a mangled name (`_F4__Plain::inst`) leaking
-   into user-facing output.
-
-Items 1 and 3 are the same class of bug — **a diagnostic naming a plausible cause instead of the actual
-one** — and are worth fixing together, with a fixture per message arm.
+**The prerequisite language batch is DONE** — shipped ahead of M2a so these fixtures are not written
+against a surface about to shift. `match` now takes a call subject (plain enums included), a static on a
+generic type is reachable as `Type::<args>::name()`, the dot-on-type diagnostics say what the name
+actually is, and no message leaks a mangled name. See SPEC § *Strings* / § *Known limitations* and the
+git log; nothing in the parity gap below depended on any of it.
 
 Each of the three below is one session ending at a commit. Order otherwise matters only in that M2a's
 `Comparable`-generic work informs M3's naming reconcile.
@@ -118,9 +106,10 @@ fn int32 mergeScratch<T>(View<T> items) {
 }
 ```
 
-The ROADMAP §2 entry claiming otherwise was stale and has been corrected. (What IS still broken is narrower
-and unrelated: a `static fn` on a GENERIC type has no spelling that reaches it — see ROADMAP §2. It affects
-nothing in M2.) So stability is a genuine trade-off with both options available, not a capability limit:
+The ROADMAP §2 entry claiming otherwise was stale and has been corrected. (The other gap this paragraph
+used to name — a `static fn` on a GENERIC type having no spelling — has since SHIPPED as
+`Type::<args>::name()`; see SPEC § *Types*.) So stability is a genuine trade-off with both options
+available, not a capability limit:
 
 | | allocation-free (heapsort / introsort) | stable (merge / timsort) |
 |---|---|---|
@@ -146,26 +135,11 @@ MALFORMED.** And kama's own doctrine (GOALS #3d) says `Optional<T>` is *absence*
 one obvious spelling, and most callers print a generic message anyway. Resolve it on the merits, not on
 which is less typing.
 
-### Bug fix — `substring` can produce invalid UTF-8
+### Bug fix — `substring` — SHIPPED
 
-Not a design question; a defect with a decision attached. **Verified:**
-
-```kama
-string s = "A\u{E9}Z";                       // 4 bytes: 'A', 'é' (C3 A9), 'Z'
-string cut = s.substring(start: 0, end: 2);   // len=2, second byte = 195 (0xC3)
-```
-
-That result is **not valid UTF-8** — a lone lead byte — produced from valid input, in the safe surface, with
-no `unsafe` and no error. It is the ONLY such hole: `split`, `replace` and `find` all operate on whole
-needles, so a valid needle in a valid haystack always lands on codepoint boundaries.
-
-`substring` bounds-checks against `len` only
-([kama_runtime.h:483](../../kama_runtime.h#L483)). Recommended fix, consistent with the language's existing
-discipline (indexing **traps** rather than invoking UB; `Optional` is for absence, not for programmer
-error) and with Rust, where `&s[0..2]` panics on a non-char-boundary: **trap on a non-boundary offset**.
-The check is O(1) — a boundary byte must not be a UTF-8 continuation byte, `(b & 0xC0) != 0x80`. Ship with
-a `tests/trap/` fixture. Confirm the breaking-change appetite first: code that currently slices
-mid-codepoint would start trapping, though it is already producing invalid UTF-8 today.
+`substring` traps on an offset that splits a character, and `floorCharBoundary(at:)` /
+`truncate(maxBytes:)` are the total operations that make an arithmetic offset safe. Recorded in
+SPEC § *Strings*; grapheme segmentation is tracked as a package concern in ROADMAP §2.
 
 ### Still open, unchanged (leans only)
 
@@ -225,7 +199,13 @@ tools/cdev exec sh tools/check-noheap.sh               # nothing new reaches the
 tools/cdev exec sh tools/check-embedded.sh             # freestanding build still links
 ```
 
-Baseline at the end of M1: **native 855 / ASan 821 / wasm 795, all 0 failed.**
+Baseline at the end of the prerequisite batch: **native 867 / ASan 832 / wasm 806, all 0 failed.**
+(End of M1 was 855 / 821 / 795.)
+
+One harness invariant was added with that batch and is worth knowing before you write fixtures: an `xfail`
+must be rejected **cleanly**. A compiler that dies by signal used to satisfy "did not build" and scored a
+PASS, which is how three segfaults sat green — both the xfail leg and the analysis-agreement leg now fail
+on a signal.
 
 Every new function needs a fixture. `std::log` currently has **zero** and `std::time` has **two** — do not
 add to that pattern; the module you write is the module you test.
@@ -259,12 +239,5 @@ tables into their stdlib, but they are all either GC'd or indifferent to binary 
 with `--no-heap`. So this is a **considered non-goal for `std`** and belongs in a package. *(An earlier
 note in this file called it "behind every peer" — that was wrong, and is corrected here.)*
 
-**What genuinely deserves scheduling is `substring`.** It takes a **byte** range and bounds-checks only
-against `len`, not against codepoint boundaries — so `"AéZ".substring(start: 0, end: 2)` returns a 2-byte
-string ending in a lone `0xC3` lead byte. **That is not valid UTF-8, produced from valid input, in the
-safe surface, with no `unsafe` and no error** — the one place kama can break its own string invariant.
-Recommended fix, consistent with the language's existing discipline (indexing traps rather than invoking
-UB, and `Optional` is for absence rather than for programmer error): **trap on a non-boundary offset**,
-exactly as it already traps out-of-range, and exactly as Rust's `&s[0..2]` panics on a non-char-boundary.
-The check is O(1) — a byte at a boundary must not be a continuation byte (`(b & 0xC0) != 0x80`). Decide
-this at session start; it is a one-line runtime change plus a `tests/trap/` fixture.
+*(The `substring` hole that this section used to schedule has SHIPPED — it traps on a split codepoint,
+with `floorCharBoundary`/`truncate` as the total operations. SPEC § *Strings*.)*

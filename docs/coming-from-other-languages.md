@@ -9,20 +9,22 @@ so this page cannot rot silently.
 
 ## The one theme worth internalising: bind it to a local
 
-kama's inference works from **bound locals**, not from arbitrary nested expressions. Three separate rules
-follow from that, and hitting any of them means the same fix — give the intermediate a name:
+kama's inference works from **bound locals**, not from arbitrary nested expressions. Two rules follow from
+that, and hitting either means the same fix — give the intermediate a name:
 
 | You write | kama says | Do this |
 | --- | --- | --- |
-| `match (classify(x: 1)) { … }` | *"`match` requires an enum subject"* ⚠️ **misleading — it IS one** | `Code c = classify(x: 1); match (c) { … }` |
 | `"len=${a.length()}"` | lexical error in the hole | `int32 n = a.length(); "len=${n}"` |
 | `showIt(x: Leaf.make(n: 7))` | *"cannot infer generic type parameter"* | `Leaf lf = Leaf.make(n: 7); showIt(x: lf)` |
 
 The naming is not busywork: an interpolation hole stays statically checked rather than becoming a
 mini-language (the boundary Rust's `format!` also draws), and a named intermediate is what generic
-inference reads. The **first row is a real gap**, not a design choice — matching directly on a call result
-is ordinary in every ML-descended language, and the diagnostic actively misdirects by naming the wrong
-cause. Tracked in [ROADMAP.md](ROADMAP.md) §2.
+inference reads.
+
+A `match` **subject** used to be a third row here, and is not one any more: `match (classify(x: 1))` works,
+for every call shape and for a plain (payload-less) enum as well as a tagged union. The forms that still
+want a bound local are a *nested* value-producing `match` and a *variant-producing ternary* — see
+[SPEC.md](SPEC.md) § *Known limitations*.
 
 ## A `resource`'s fields are always private
 
@@ -96,11 +98,14 @@ no function overloading, and why a call site reads without jumping to the declar
 Box.make(v: 10)            // ctor, T inferred from the argument
 Box::<int32>.make(v: 10)   // ctor, T explicit — dot after the turbofish
 Plain::tag()               // static function on a type
+Box::<int32>::tag()        // static function on a GENERIC type — turbofish is mandatory
 pick::<int32>(a: 1, b: 2)  // generic FREE function with explicit type args
 ```
 
-A dot after a type always means construction; `::` always means scope resolution. The two never blur.
-*(Known gap: a `static fn` on a **generic** type has no spelling yet — ROADMAP §2.)*
+A dot after a type always means construction; `::` always means scope resolution. The two never blur, and
+that holds on generic types too. The turbofish is **mandatory** for a generic static: a ctor can infer its
+instance from its arguments, but a static has no receiver and its parameters need not mention `T`, so
+there is nothing to infer from.
 
 ## Other things that surprise
 
@@ -113,11 +118,20 @@ A dot after a type always means construction; `::` always means scope resolution
 - **A `string` is UTF-8 bytes.** `length()` is bytes, `s[i]` is a `uint8`, and `.chars()` is the explicit
   opt-in for codepoints; `foreach (char c in s)` is a deliberate type error. Casing and whitespace are
   **ASCII-only** by design (as in Zig) — Unicode-correct casing is a package, not `std`.
+- **`substring` traps on an offset that splits a character**, so it can never return an ill-formed
+  `string`. Offsets from `find`/`split` are boundary-aligned by construction and cannot trap; for one you
+  computed yourself (a byte budget), use `truncate(maxBytes:)`, or snap it with `floorCharBoundary(at:)`
+  and slice as usual. Both are total. Coming from Go, where byte slicing silently yields invalid UTF-8,
+  this is the difference worth knowing.
 - **Integer overflow traps** in debug rather than wrapping; `std::num`'s `wrapping*` helpers are the opt-in.
 
 ## If a diagnostic misleads you
 
-A few messages currently name a *plausible* cause instead of the actual one — the `match` subject case
-above, and the dot-on-type message that reports an instance method as "a static function". Both are
-tracked in [ROADMAP.md](ROADMAP.md) §2 and are being fixed; if a message here disagrees with what you
-observe, trust the observation and check the ROADMAP.
+It shouldn't. The messages that named a *plausible* cause instead of the actual one have been fixed — the
+`match` subject case, and the dot-on-type message that reported an instance method as "a static function"
+and then advised a spelling that produced a second, contradictory error. A rejection now says what the
+name you wrote actually **is** (a static, a method, a field, or nothing) and gives a spelling that
+compiles.
+
+If a message still disagrees with what you observe, trust the observation and file it — that is a bug now,
+not a known gap.

@@ -131,6 +131,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace; a later module adds Unicode-correct casing + whitespace, and an eager
   `DynamicArray<string>` collect for `split` (the lazy `Split` iterator ships today).
+  **Grapheme-cluster segmentation belongs here too.** `substring` traps on a split *codepoint* and
+  `floorCharBoundary`/`truncate` snap to one (SPEC § *Strings*), which guarantees valid UTF-8 but **not**
+  visually intact text — a boundary cut can still split an `e` + combining accent, an emoji ZWJ sequence
+  or a flag. Cluster boundaries are defined by UAX #29 and need the `Grapheme_Cluster_Break` property per
+  codepoint, i.e. a data table — not a bit trick. A cheap partial version (range-checking the combining
+  diacriticals) would be wrong for emoji, flags, Hangul and Indic while *looking* like a guarantee, so it
+  is deliberately not shipped. Same stance as Zig, and utf8everywhere points at ICU for it; baking the
+  tables into `std` would also contradict targeting MCUs under `--no-heap`.
 - **Stdlib layering — 3 LOW-prio follow-ups.** The prelude-vs-`std::`-vs-primitive split is principled and
   documented in [FLOOR.md](FLOOR.md) § "What is floor, and what is an `import`"; nothing is mis-placed. What
   is left, none of it blocking:
@@ -173,85 +181,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   for the language server (it resolves the whole program from the manifest) and for any file reached through
   an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
   stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
-- **A `static fn` on a GENERIC type has no spelling that reaches it — ✅ DECIDED: add one** (user,
-  2026-08-01). Statics work on a non-generic type (`Plain::tag()`), and a ctor on a generic type has BOTH
-  an inferred and an explicit spelling (`Box.make(v:)` / `Box::<int32>.make(v:)`). Statics got neither: `::`
-  never learned a type-argument list, so there is nowhere to put the `<int32>` that says which monomorph.
-  Every candidate spelling fails:
-
-  | Spelling | Result |
-  | --- | --- |
-  | `Box::<int32>::tag()` | parse error: `unexpected ::, expecting ( or .` |
-  | `Box<int32>::tag()` | parse error: `unexpected INT32` (the `<` ambiguity — see below) |
-  | `Box::tag()` | `scope-qualified call resolves to no known function` |
-  | `Box::<int32>.tag()` | `dot-on-type calls a constructor; `tag` is a static — call it with `Box::tag(...)`` |
-  | `Box.tag()` | `unknown type in constructor call `Box`` |
-
-  The ctor dot form itself is fine (`Box::<int32>.make(v: 35)` builds and runs); what is wrong is the
-  dot-on-type REJECTION MESSAGE, and it is wrong in three separate ways — fix them with this feature:
-
-  1. **It mislabels an instance method as a static.** `Type.name(…)` correctly reports "no constructor
-     `name`" when the name does not exist, but when the name IS a member it asserts "`name` is a static
-     function" without ever checking which kind it is. `Plain.inst()` (an instance method) is told it is a
-     static.
-  2. **The advice that follows is therefore unusable**, and sends the reader on a two-hop chase:
-     `Plain.inst()` → "call it with `Plain::inst(...)`" → "`_F4__Plain::inst` names a non-static method —
-     call it on an instance". *(That second message also leaks a MANGLED name into user-facing output,
-     which should never happen — worth fixing wherever else it occurs.)*
-  3. **On a generic owner the advice omits the turbofish**, pointing at `Box::tag(...)` — the one spelling
-     that does not exist.
-
-  The shared preamble ("dot-on-type calls a constructor") is right and teaches the rule; keep it and branch
-  the second clause on what the name actually is: nothing → "no constructor `X`, define one" (already
-  correct); a static → `Type::X(…)`, or `Type::<args>::X(…)` when the owner is generic; an instance method
-  → "call it on a value (`obj.X(…)`)"; a field → its own arm. Fixture each arm — this is exactly the class
-  of message that rots silently.
-
-  **Worse than the missing call: the DECLARATION compiles clean.** A `static fn` on a generic type that is
-  never called builds and ships, and only turns out to be unreachable when someone tries to use it — a
-  silent trap, against the "reject early with guidance" discipline.
-
-  **The fix is one grammar production.** The turbofish prefix is already factored out for exactly this kind
-  of reuse (`generic_turbofish_name : IDENTIFIER COLONCOLON LT type_arg_list GT`, [kama.y:1182]) and already
-  feeds three forms — free-fn call, receiver turbofish, and `generic_turbofish_name DOT IDENTIFIER (…)`
-  (the on-type ctor). Add the `COLONCOLON IDENTIFIER (…)` sibling, plus static-call resolution under
-  `_typeSubst`, so the two on-type forms are symmetric:
-
-  ```kama
-  Box::<int32>.make(v: 5)     // ctor   — dot
-  Box::<int32>::tag()         // static — colon-colon   (the addition)
-  ```
-
-  This also keeps the language's spelling rule intact and makes it UNIFORM: `.` after a type is
-  construction, `::` is scope resolution, and neither is ever confused for the other. Today generics are
-  the one place that symmetry breaks, which is the actual defect.
-
-  **The turbofish is MANDATORY here**, unlike for a ctor: a static has no receiver and its arguments need
-  not mention `T`, so there is nothing to infer from. And `Box<int32>::tag()` cannot be the spelling —
-  in expression position `Box < int32 >` is indistinguishable from two comparisons, which is why kama has
-  a turbofish at all (the grammar tracks `genericDepth` around it).
-  *(**Corrected 2026-08-01.** This entry used to also claim a generic FREE FUNCTION could not instantiate a
-  generic type from its own type param — `fn f<W: C>(…) { Foo<W> x = Foo.make(…); }`. That is no longer true
-  and was verified in all three shapes: an intrinsic collection (`DynamicArray<T>` inside `fn f<T>`), a user
-  generic type, and a contract-bounded param. It presumably fixed itself under the construction-model work.
-  The stale claim mattered: it was being cited as the reason a stable merge sort could not be written, which
-  would have forced an unstable-only `sort` on a false premise.)*
-  *(**Corrected 2026-08-01.** This entry used to also claim a generic FREE FUNCTION could not instantiate a
-  generic type from its own type param — `fn f<W: C>(…) { Foo<W> x = Foo.make(…); }`. That is no longer true
-  and was verified in all three shapes: an intrinsic collection (`DynamicArray<T>` inside `fn f<T>`), a user
-  generic type, and a contract-bounded param. It presumably fixed itself under the construction-model work.
-  The stale claim mattered: it was being cited as the reason a stable merge sort could not be written, which
-  would have forced an unstable-only `sort` on a false premise.)*
-- **A `match` SUBJECT must be a named local — a call result is rejected (bug, small; misleading message).**
-  `match (pick(x: 1))`, where `pick` returns a plain enum, fails with "`match` requires an enum subject (a
-  tagged union, or a plain enum)" — which is false and sends the reader looking at the wrong thing: it IS
-  an enum, and the actual rule is that the subject must be a bound local. Workaround is one line
-  (`Code c = pick(x: 1); match (c) { … }`), which is why it has gone unnoticed, but matching directly on a
-  call result is completely ordinary in every ML-descended language and it is the first thing anyone tries.
-  **Wider than [SPEC.md](SPEC.md) § *Known limitations* admits** — that section lists only a nested
-  value-producing `match` and a variant-producing ternary as the deferred subject forms, not an ordinary
-  call. Fix the message first (it is wrong regardless), then the inference; correct the SPEC text either
-  way.
+- **Definite assignment does not see through a `match`.** An exhaustive `match` whose every arm assigns a
+  `slot` still reports "used before it is assigned" — the pass does not treat the arms as a covering set.
+  Workaround is an initializer. Noticed while fixturing the call-subject fix
+  (`tests/match_call_plain_enum.kama` carries the note); the same reasoning would extend to `if`/`else`.
 - **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.

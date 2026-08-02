@@ -36,11 +36,24 @@ fn void split(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b
 enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 
+// (8) `.` constructs, `::` resolves scope — including on a GENERIC type, where a static's turbofish is
+//     mandatory (a ctor infers its instance from its arguments; a static has no receiver to infer from).
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public static fn int32 tag() { return 3; }
+}
+type value Plain {
+    public ctor make() { slot Plain p; return give p; }
+    public static fn int32 tag() { return 4; }
+}
+fn W pick<W>(W a, W b) { if (true) { return a; } return b; }
+
 fn int main()
 {
-    // (5) A `match` SUBJECT must be a bound local — not a call result. (ROADMAP §2: real gap.)
-    Code c = classify(x: 1);
-    int32 a = match (c) { case Ok: 10; case Bad: 0; };
+    // (5) A `match` SUBJECT may be a CALL RESULT — no intermediate binding needed. (This was the page's
+    //     one real gap; `tests/match_call_plain_enum.kama` covers every call shape.)
+    int32 a = match (classify(x: 1)) { case Ok: 10; case Bad: 0; };
 
     slot int32 q; slot int32 r;
     split(a: 17, b: 5, q: out q, r: out r);          // 3, 2
@@ -61,5 +74,20 @@ fn int main()
     Result<string, Owned<Error>> j = encode(v: p);
     int32 ok = match (give j) { case Ok(value: t): 2; case Err(error: e): 0; };
 
-    return a + q + r + v + s + ok - msg.length();    // 44 - len("v=20 len=23") = 44 - 11 = 33
+    // (8) The four spellings, exactly as the page prints them.
+    Box<int32> bi = Box.make(v: 10);                 // ctor, T inferred from the argument
+    Box<int32> bx = Box::<int32>.make(v: 10);        // ctor, T explicit — dot after the turbofish
+    int32 t1 = Plain::tag();                         // static function on a type
+    int32 t2 = Box::<int32>::tag();                  // static on a GENERIC type — turbofish mandatory
+    int32 pk = pick::<int32>(a: 1, b: 2);            // generic FREE function with explicit type args
+    int32 eight = bi.v - bx.v + t1 + t2 + pk;        // 0 + 4 + 3 + 1 = 8
+
+    // (9) `substring` traps on an offset that splits a character; an offset from a SEARCH cannot.
+    //     For one you computed yourself, `truncate` and `floorCharBoundary` are total.
+    string acc = "AéZ";
+    int32 keep = cast<int32>(acc.truncate(maxBytes: 2).length());          // 1 — "A", never a split é
+    int32 bnd  = cast<int32>(acc.floorCharBoundary(at: 2));               // 1 — snapped down
+
+    return a + q + r + v + s + ok - msg.length() + eight - keep - bnd;
+    // 33 + 8 - 1 - 1 = 39
 }

@@ -94,8 +94,19 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   operands must be `string` (`string + <number>` is a compile error — **string interpolation** is the one way
   to mix values into text; see below). An interpolation counts as a `string` operand (`name == "hi ${x}"`).
   Chains and compose: `a + b + c`, `s.trim() == "x"`.
-- **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string
-  (bounds-checked; a **byte** range, not codepoint-validated — use `.chars()` for codepoints).
+- **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string. A
+  **byte** range (use `.chars()` for codepoints), and **total with respect to the UTF-8 invariant**: it
+  traps on an out-of-range offset *and* on one that would split a character, so it can never hand back an
+  ill-formed `string`. Offsets that come from a search (`find`, `split`) are boundary-aligned by
+  construction and cannot trap; an offset computed by *arithmetic* is the case to guard.
+- **boundary + budget** — `floorCharBoundary(at:)` returns the greatest character boundary `<= at`
+  (unchanged when `at` already is one, clamped to `length()` past the end). **Total** — never traps, O(1).
+  It is what makes an arithmetic offset safe at either end of a range:
+  `s.substring(start: 0, end: s.floorCharBoundary(at: 80))`. `truncate(maxBytes:)` names the common case
+  on top of it — at most `maxBytes` bytes, never splitting — for a wire field, a column limit or a log cap.
+  Both guarantee **valid UTF-8, not visually intact text**: a cut at a codepoint boundary can still split a
+  grapheme cluster (an `e` + combining accent, an emoji ZWJ sequence, a flag). Segmentation is defined by
+  UAX #29, needs Unicode tables, and stays a package concern — see [ROADMAP.md](ROADMAP.md) §2.
 - **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
   null-safe, no `-1` sentinel); `contains(substring:)`, `startsWith(prefix:)`, `endsWith(suffix:)` return
   `bool`; `isEmpty()`.
@@ -2158,7 +2169,19 @@ dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called wi
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserialize` — and for a
 `ctor` added to a primitive by retroactive conformance. Every spelling is pinned by
-`tests/ctor_spelling_edges.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised
+`tests/ctor_spelling_edges.kama`.
+
+On a **generic type** both forms take a turbofish, and the same `.`-vs-`::` split applies:
+
+```kama
+Box::<int32>.make(v: 5)     // ctor   — dot
+Box::<int32>::tag()         // static — colon-colon
+```
+
+Here the turbofish is **mandatory**, unlike for a ctor: a ctor can infer its instance from its arguments,
+but a static has no receiver and its parameters need not mention `T`, so there is nothing to infer from.
+(`Box<int32>::tag()` cannot be the spelling — in expression position `Box < int32 >` is two comparisons,
+which is why kama has a turbofish at all.) Pinned by `tests/generic_static.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised
 constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the enclosing type or
 `Result<This, E>`, declare it a `ctor`. `main` is the global entry point (unmangled).
 
@@ -2465,10 +2488,13 @@ Everything below **hard-errors** (never miscompiles) and has a clean workaround.
 
 **Open (deferred inference)** — a rare residual; bind the subject to a typed local:
 - **A value-producing `match`/ternary as a `match` SUBJECT** — a bare variant constructor subject
-  (`match (Optional::Some(x)) { … }`) now works: the instance (`Optional<T>`) is inferred from the payload
+  (`match (Optional::Some(x)) { … }`) works: the instance (`Optional<T>`) is inferred from the payload
   during the discovery pass (a function-level pre-scan supplies the param/local types) and reused at emit.
-  The still-deferred forms are a *nested* value-producing `match` or a *variant-producing ternary* directly
-  as a subject; bind those to a typed local (`Optional<int32> o = …; match (o) …`).
+  A **call** subject works too, for every call shape and for a plain (payload-less) enum as well as a
+  tagged union — `match (classify(x: 1))`, `match (g.grade(score: 70))`, `match (Grader::always())`
+  (`tests/match_call_plain_enum.kama`). The still-deferred forms are a *nested* value-producing `match` or
+  a *variant-producing ternary* directly as a subject; bind those to a typed local
+  (`Optional<int32> o = …; match (o) …`).
 
 (Target-typed inline construction works in initializers, `return`, `operator[]` place-stores,
 value-producing `match` arms, class-typed lvalue stores, call arguments, variant payloads, and string-rvalue
