@@ -43,9 +43,10 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 **One breaking change is still open: `slot`'s scope** — briefed in
 [design/slot-scope.md](design/slot-scope.md) (cold-start ready). `slot` was designed to name the storage an
 `out` parameter fills; `c2ae0c8` then required it on *every* initializer-less local, so ~73% of its 787 uses
-are constructors saying "this is the value I am building", not holes. The campaign blesses a bare `T x;`
-inside a `ctor` for the constructed type (where `checkNamedCtorComplete` already proves completion) and
-narrows `slot` back to holes. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
+are constructors saying "this is the value I am building", not holes. The campaign gives a ctor an implicit
+`this` (and an implicit return), so the value under construction needs no declaration at all — which also
+makes "one value per ctor" unrepresentable rather than merely rejected — and narrows `slot` back to the
+`out` holes it was designed for. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
 **⚠️ A second construction-model hole: a derived type never runs its base's constructor.** Found
@@ -74,20 +75,32 @@ side of this shipped already — `T.default()`, `5edb4d9`.)*
    (`constructor_initializer : COLON BASE LPAREN argument_list_opt RPAREN`), but it hangs off the
    class-named ctor declarator — the form `72dfdbc` made a hard error — and **no emitter code ever reads
    `ClassConstructorInitializerNode`**. So even when that form was legal the base arguments were parsed and
-   silently discarded. SPEC claimed the feature worked until this was found; it now says otherwise. Retiring
-   the orphaned production belongs with the nameless-ctor cleanup.
+   silently discarded. SPEC claimed the feature worked until this was found; it now says otherwise.
+
+   **Do NOT simply delete the production.** It is the only reason a class-named ctor *parses*, which is what
+   lets the emitter answer with the guided message ("class-named constructor `X(...)` is no longer allowed —
+   declare a named constructor `ctor make(...)`"). Removing it turns that into a raw parse error. Keep it as
+   a diagnostic path and give `: base(...)` a message of its own — *"base-constructor delegation is not
+   supported; assign `this.base = Base.<ctor>(...)` instead"* — rather than discarding the arguments.
 
    **Fix shape — install a base VALUE, don't chain.** A factory has no `self`, but it can build the base
    through the base's own ctor and install it, which needs no chaining and leaks nothing:
 
    ```kama
-   public ctor make(int32 x, int32 y) { This r; r.base = Base.make(x: x); r.y = y; return give r; }
+   public ctor make(int32 x, int32 y) {
+       this.base = Base.make(x: x);      // the base's OWN ctor runs, enforcing its invariant
+       this.x = x;
+       this.y = y;
+   }
    ```
 
-   Needs a blessed name for the embedded sub-object (`__base` is reserved), `checkNamedCtorComplete`
-   extended to require it whenever the base has fields, and a decision on how an `abstract` base exposes a
-   ctor for this purpose (C#/Java use a protected constructor). Pairs naturally with the
-   [slot-scope campaign](design/slot-scope.md), which is already rewriting every ctor body.
+   The rule is narrow — **`this.base` must be assigned exactly once, from a ctor call on the base type.**
+   Not general whole-value assignment: delegate-then-tweak is rejected BY DESIGN, and base fields are
+   private, so there is nothing to tweak through. Also wants a `Base`/`base` pair mirroring `This`/`this`
+   (the type / the object) so a derived author never types the concrete base type name — which is the
+   encapsulation point this hole is about — plus a decision on how an `abstract` base exposes a ctor for
+   the purpose (C#/Java use a protected constructor). Pairs with the
+   [slot-scope campaign](design/slot-scope.md), whose D5 supplies the implicit `this` shown above.
 
 **⚠️ `this` / `This` / `base` — four defects from a full audit of the three spellings** (2026-08-01). Two
 are the M1 class — a kama-level mistake escaping as a **C-compiler** error against generated code, which is
@@ -99,6 +112,11 @@ what `kama check` ≡ `kama build` and the warning-free rule exist to prevent:
 | bare `this` **as a value** (`return this;`) | C error: `assigning to 'P' from incompatible type 'P *'` | a kama diagnostic — `this` is a borrow, so say so |
 | `This` in a **field** (`Ptr<This> link;`) | *"`This` is only valid inside a `type` or `contract`"* — **false, it IS inside one** | say `This` is unsupported in field position (the real rule) |
 | `base.field`, or `base` with no base type | *"base access"* — a bare fragment, not a sentence | name the member and the type, or say the type has no base |
+
+**`base.method()` is NOT legacy and stays.** All four uses in the corpus are non-virtual upcalls inside
+instance methods (`override fn step() { return base.step() + 10; }`) — the override-with-extension pattern
+every OO language has. What becomes ctor-only is base *construction* (`this.base = Base.ctor(…)`); the
+upcall is orthogonal to it.
 
 `this` is correctly rejected inside a `ctor` and a `static fn` ("a `static` method has no `this`"), and
 `This` is correct in local declarations, parameters, return types and contract signatures — those arms are

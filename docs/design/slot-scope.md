@@ -57,22 +57,23 @@ When one keyword needs two sets to model it, it is carrying two meanings.
 | --- | --- | --- | ---: | --- |
 | 1 | a **hole an `out` parameter fills** | `slot T x;` | see below | ships — the original design |
 | 2 | bag / zero construction of a transparent value | `T x = T.zero()` / `T.of(…)` | ≤284 | ships |
-| 3 | **storage a ctor is obliged to complete** | `This x;` — legal only in a ctor | 577 | **this campaign** |
+| 3 | **storage a ctor is obliged to complete** | implicit `this` inside a ctor — no declaration at all | 577 | **this campaign** |
 | — | call a type's elected default ctor | `T x = T.default()` | — | ✅ **SHIPPED** `5edb4d9` |
 
 Concept 3 is irreducible: to build a `resource` field by field, the ctor needs storage that does not exist
-yet, and it cannot come from another ctor without infinite regress. It needs *a* spelling; the argument for
-`This x;` is that a `ctor` is a special function whose whole job is to produce the type before it
-returns, and **`checkNamedCtorComplete` already proves every field is assigned there**. `slot` adds no proof
-in that position — it is pure ceremony in 73% of its uses and load-bearing in the rest.
+yet, and it cannot come from another ctor without infinite regress. But it needs no *declaration* — a `ctor`
+is a special function whose whole job is to produce the type before it returns, so the storage is implied by
+the function itself, and **`checkNamedCtorComplete` already proves every field is assigned there**. `slot`
+adds no proof in that position: it is pure ceremony in 73% of its uses and load-bearing in the rest.
 
 ## What ships
 
-1. **`This x;` declares a ctor's result** — exactly one per ctor, legal only there. Same lowering as
-   today's class slot (zero-init + field-default fill + vptr); only the keyword goes away. `slot This x;`
-   already compiles, so this is largely dropping the requirement for the keyword.
-2. **`slot` becomes an error in that position** — one way to say each thing (GOALS #4). Source-breaking,
-   ~577 sites, mechanical, and the compiler names every one.
+1. **A ctor's value is an implicit `this`** (D5) — no declaration. Same lowering as today's class slot
+   (zero-init + field-default fill + vptr) applied to the implied storage; the return is implicit too.
+   `this` in a ctor is an error today, so this is the one genuinely new piece of surface.
+2. **A declaration of the constructed type in a ctor becomes an error** — `slot Point r;` and a bare
+   `Point r;` alike, since `this` is now the only way to name the value under construction (GOALS #4).
+   Source-breaking, ~577 sites, mechanical, and the compiler names every one.
 3. **`slot` narrows to `out` only** (D2). A hole filled by assignment takes an explicit initializer instead.
 4. **A `slot` never filled on any path becomes an error.** A hole declared and never filled is a dead
    declaration; silently eliding its drop is the wrong answer.
@@ -91,7 +92,7 @@ Row 2 is exactly why the `fd >= 0` runtime guards did not retire with the origin
 is why they should not be retired now. A conditionally-filled owning value *must* still drop when it was
 filled, or it leaks.
 
-## Decisions — ALL SETTLED (user, 2026-08-01)
+## Decisions — ALL SETTLED (user, 2026-08-01 / D5 2026-08-02)
 
 ### D2 — `slot` narrows to `out` ONLY. ✅ DECIDED
 
@@ -118,7 +119,13 @@ The earlier worry — that this would force throwaway initializers and lose the 
 does not survive contact with those two forms. Where neither fits, a helper taking an `out` parameter is the
 sanctioned shape, which returns `slot` to its own job.
 
-### D1 — **exactly one** bare declaration, of the ENCLOSING type. ✅ DECIDED
+### D1 — one value per ctor, and D5 makes it STRUCTURAL. ✅ DECIDED
+
+*(Recorded before D5 landed. Its conclusion holds and is now enforced by construction: with an implicit
+`this` there is no declaration to duplicate, so `This x; This y;` is not merely rejected — it is
+unrepresentable. That was the user's original argument for implicit `this`, and it is why this decision
+needs no check to enforce it.)*
+
 
 Not any local in a ctor body. **D2 forces this**: if `T x;` is the habit being removed, it cannot be
 re-admitted for arbitrary locals merely because they sit inside a ctor. The blessing exists for exactly one
@@ -148,45 +155,6 @@ worded for the first one that builds in place.
 implicit `result` binding would introduce implicit behaviour immediately after this campaign removes it.
 Convention, not a compiler rule.
 
-### D5 — the blessed declaration is spelled **`This x;`**. ✅ DECIDED
-
-Not `TypeName x;`, and not an implicit `this`.
-
-```kama
-public ctor make(int32 n) { This r; r.x = n; return give r; }
-```
-
-**`slot This r;` already compiles today** — verified, including on a generic, where it also removes the
-need to restate the type arguments (`slot This b;` inside `Box<T>`, no `<T>` to get wrong). So step 1 is
-close to free: allow the same declaration without the keyword.
-
-Why `This` beats the plain `TypeName` blessing — it makes the rule **lexical rather than contextual**:
-
-- `This x;` is legal **only** inside a ctor, so "exactly one" (D1) is trivially checkable, and a bare
-  `Point p;` stays an error *everywhere* with the message it already has. No context-sensitive diagnostic
-  to write, and no rule of the form "…except here".
-- `grep 'This '` finds every construction site in the language.
-- Rename-safe, and on a generic type the arguments cannot be restated wrongly.
-- **Free in the sweep** — step 2 already rewrites all 577 lines to delete `slot `; changing the type name
-  in the same pass costs nothing.
-- `This` is *already* the enclosing type's name in kama (`Result<This, E>` on a fallible ctor), so it gains
-  no new meaning — unlike the alternatives below.
-
-**Rejected — an implicit `this` (`this.x = 0; this.y = 0;`).** Tempting, and it is the C++/C#/Java shape,
-but:
-
-1. **`this` in a ctor is an error today** — *"a `static` method has no `this`"* — because a kama ctor IS a
-   static factory with no receiver. That is the basis of the construction model, not an incidental
-   restriction.
-2. It would give `this` a **second meaning** (storage under construction, alongside instance-method
-   receiver) — the exact dual-meaning pattern this campaign exists to undo.
-3. It erodes a real safety property. In C++/C#/Java `this` is live mid-constructor: you can call methods on
-   it, call virtuals on it, and leak it — the half-constructed-object bug family. kama's build-a-local-and
-   -`give`-it-away model means no half-built object is ever observable *as the object*. An implicit `this`
-   reintroduces that shape.
-4. It would make the move implicit, against GOALS #5, immediately after a campaign whose whole point is
-   removing implicit construction.
-
 ### D3 — warn-first, in five steps. ✅ DECIDED
 
 `c2ae0c8` landed its breaking half warn-first and swept in between, which is why it had no red intermediate
@@ -194,9 +162,9 @@ commit. Same shape:
 
 | step | change | breaking |
 | ---: | --- | --- |
-| 1 | accept `This x;` in a ctor without `slot` | no — additive; both spellings briefly legal |
-| 2 | sweep the 577 sites (drop `slot`, and normalize the type name to `This` in the same pass) | no |
-| 3 | flip `slot`-of-the-constructed-type-in-a-ctor to an error | yes (corpus already clean) |
+| 1 | accept an implicit `this` (and an implicit return) inside a ctor | no — additive; both forms briefly legal |
+| 2 | sweep the 577 sites: drop the declaration, rewrite `r.field` -> `this.field`, drop `return give r;` | no |
+| 3 | flip a declaration of the constructed type in a ctor to an error | yes (corpus already clean) |
 | 4 | warn on an assignment-filled `slot`, sweep ~164 + fixtures, then error | yes |
 | 5 | error on a never-filled `slot` | yes |
 
@@ -205,10 +173,17 @@ commit. Same shape:
 A `view` has ctors and must materialize its return value like anything else; its own rules (borrows, owns
 nothing, no destructor) are orthogonal to how its storage is spelled. 3 sites, no special case.
 
-## ⚠️ D5 is REOPENED — implicit `this` is the current lean
+### D5 — the ctor's value is an implicit `this`. ✅ DECIDED (user, 2026-08-02)
 
-The user leans to an implicit `this` in a ctor over `This x;`, and the objections recorded below did not
-survive checking:
+```kama
+public ctor make(int32 x, int32 y) {
+    this.base = Base.createIt();      // reads beside the field assignments, which `r.base` does not
+    this.x = x;
+    this.y = y;
+}                                     // implicit return of the constructed value
+```
+
+Not `This x;`. The objections recorded against implicit `this` did not survive checking:
 
 - *"`this` in a ctor is an error today"* — circular. It is an error because nobody blessed it.
 - *"it gives `this` a second meaning"* — overstated. `slot`'s two meanings had different lowering and two
@@ -222,10 +197,21 @@ survive checking:
 It also reads better against the base fix, which is the deciding factor: `this.base = Base.createIt();`
 sits naturally beside `this.x = 0;` in a way `r.base = …` does not.
 
-**One question left before D5 can be re-decided: what does a ctor RETURN?** *Lean: keep it explicit* —
-`return give this;` / `return Result::Ok(value: give this);`. Fallible ctors force the issue: they must
-write `return Result::Err(…)` on failure, so an implicit success return would leave one path returning and
-the other not.
+**The return is IMPLICIT** — an infallible ctor spells no return type, so it need spell no return either.
+`return give this;` stays legal, and this is NOT two ways to say one thing: it is the **early-return** form,
+exactly as `return;` is in a `void` function, while falling off the end is the normal path.
+
+```kama
+public ctor make(int32 x) {
+    this.x = x;
+    if (x < 0) { return give this; }   // early exit — needs the explicit form
+    this.y = 1;
+}                                      // normal path — implicit
+```
+
+**A fallible ctor follows the same rule**, which is what keeps it from being a special case: it writes
+`return Result::Err(…)` on a failure path, and falling off the end means `Ok(give this)`. Say so in SPEC, so
+a missing `Ok` does not read as an omission.
 
 **A `Base`/`base` parallel is wanted too** — `Base` the type, `base` the object, mirroring `This`/`this`.
 It makes `this.base = Base.createIt()` rename-safe and means a derived author never types the concrete base
@@ -240,14 +226,16 @@ Relevant because the base fix and D5 both depend on it:
 | --- | --- |
 | `ctor origin() { return P.make(x: 0, y: 0); }` — delegate wholesale | ✅ legal |
 | `ctor make(…) { … P::helper(…) … }` — private static helper | ✅ legal |
-| `slot P r; r = P.make(…); r.y = 5; return give r;` — delegate **then tweak** | ❌ *"'x' is never assigned"* |
+| `slot P r; r = P.make(…); r.y = 5; return give r;` — delegate **then tweak** | ❌ *"'x' is never assigned"* — **and this is BY DESIGN** |
 
-**`checkNamedCtorComplete` credits only FIELD-BY-FIELD assignment.** A whole-value assignment does not
-count. That blocks "build via another ctor, then adjust", which looks like an oversight rather than a
-decision — and it is a **prerequisite for the base fix**, since `this.base = Base.createIt()` is exactly a
-whole-value assignment to a sub-object. Extending the check to credit whole-value assignment (to a
-sub-object and to the value itself) is therefore shared work between this campaign and ROADMAP §1's
-base-constructor hole.
+**`checkNamedCtorComplete` credits only FIELD-BY-FIELD assignment**, and the third row is the intended
+behaviour, not an oversight (user, 2026-08-02): delegation exists to hand off to a *more specialized* ctor,
+not to build-then-adjust.
+
+So the base fix needs far less than "credit whole-value assignment" generally. It needs one narrow rule:
+**`this.base` must be assigned exactly once, from a ctor call on the base type.** No general whole-value
+support, no tweak path — base fields are private, so there is nothing to tweak through anyway. A derived
+ctor's completeness rule becomes: *every own field assigned, plus `base` assigned from a `Base` ctor.*
 
 ## Two traps for the sweep
 
