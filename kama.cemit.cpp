@@ -14524,6 +14524,21 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(stci, method, &owner);
+    // `T.default()` names the ELECTION, not a ctor name: the author marked one zero-arg ctor `default`
+    // and may have called it anything (`empty`, `zero`, …). Resolve through the mark. Scanning `methods`
+    // (not `ctors`) is deliberate — the `when [A: default]` gate drops a gated-away `empty()` from
+    // `methods` per-monomorph but leaves it in `ctors`, so `methods` is the gate-accurate set and a
+    // custom-allocator collection correctly has no default here either.
+    if (!mi && method == "default") {
+        for (auto& kv : stci->methods)
+            if (kv.second.isDefaultCtor) { mi = &kv.second; owner = stci; break; }
+        if (!mi) {
+            unsupported(("`" + disp + "` has no `default` constructor — electing one is the type's own "
+                         "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
+                         "named constructor").c_str(), call->line);
+            return "0";
+        }
+    }
     if (!mi) {
         // A generic type's ctor may be DEFINED on the template but GATED AWAY for this instantiation
         // (`empty() when [A: default]` — dropped when the concrete `A` has no `default` ctor). Say exactly

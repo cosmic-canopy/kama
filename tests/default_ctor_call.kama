@@ -1,0 +1,44 @@
+// `T.default()` calls the ctor a type ELECTED with `default ctor …()` (M8b), without the caller having
+// to know the name it chose (`empty`, `zero`, `fresh`, …).
+//
+// The election shipped long ago but nothing could USE it: `default` is a keyword, so `T.default()` was a
+// parse error, and the mark was reachable only from the compiler's own field-fill loop. The sharp edge
+// was generic code — `when [A: default]` states the bound and then had no way to construct an `A`.
+//
+// Electing a default stays the TYPE's choice: a type without one is a compile error at the call site,
+// not a silently synthesized zero (`tests/xfail/default_ctor_missing.kama`).
+
+type value Thing {
+    public int32 n;
+    public default ctor empty() { slot Thing t; t.n = 7; return give t; }   // elected, but named `empty`
+}
+
+type resource Handle {
+    int32 fd;
+    public default ctor closed() { slot Handle h; h.fd = -1; return give h; }   // a resource may elect too
+    public fn int32 raw() { return this.fd; }
+}
+
+// The one place `A: default` is spelled. Before this, the bound could be stated and never used.
+type value Holder<A> {
+    public A item;
+    public ctor of(A item) { slot Holder<A> h; h.item = item; return give h; }
+    public ctor fresh() when [A: default] { slot Holder<A> h; h.item = A.default(); return give h; }
+}
+
+fn int main()
+{
+    // (1) a concrete value type — reached through the election, not the name `empty`
+    Thing t = Thing.default();
+
+    // (2) a resource electing a drop-safe zero value
+    Handle h = Handle.default();
+
+    // (3) the payoff: a generic constructs its type argument through the bound it declared
+    Holder<Thing> hold = Holder::<Thing>.fresh();
+
+    // (4) the named ctor still works — `default` is an alias for the election, not a replacement
+    Thing named = Thing.empty();
+
+    return t.n + hold.item.n + named.n + h.raw();      // 7 + 7 + 7 + (-1) = 20
+}

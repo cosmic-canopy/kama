@@ -1136,6 +1136,12 @@ member_access
   : primary_expression DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | class_type DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+    /* `T.default()` — call the ctor the type ELECTED with `default ctor …()` (M8b), without having to
+       know the name it chose (`empty`/`zero`/…). `default` is a keyword, so it cannot arrive as the
+       IDENTIFIER the rules above expect; this is the only extra production it needs. It matters most in
+       GENERIC code: `fn f<A: default>()` states the bound and, until now, had no way to use it — the
+       election was reachable only by the compiler's own field-fill loop. */
+  | qualified_identifier_no_generic DOT DEFAULT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }

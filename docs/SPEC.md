@@ -1450,6 +1450,19 @@ bound to `A` must itself have a `default` ctor; there is no nominal `Default` co
 `DynamicArray<T, BumpAllocator>.empty()` **does not exist**: you get a clean "not available for this
 instantiation" error rather than a collection with a zero allocator. Use `withAllocator` for a custom `A`.
 
+**Calling the election — `T.default()`.** The mark names *which* ctor is canonical; `T.default()` calls it
+without the caller knowing the name the author chose (`empty`, `zero`, `closed`, …). It works on any type
+that elected one, `value` or `resource`, and it is what makes the `when [A: default]` bound usable from
+kama rather than only by the compiler's field fill:
+
+```kama
+ctor fresh() when [A: default] { slot Holder<A> h; h.item = A.default(); return give h; }
+```
+
+Electing a default stays the **type's** choice: a type that never marked one has no `default()`, and the
+call site is a compile error naming that choice rather than a silently synthesized zero
+(`tests/default_ctor_call.kama`, `tests/xfail/default_ctor_missing.kama`).
+
 ### Derives — `@generate(...)` ✅
 
 One opt-in surface, on a plain (non-generic, non-variant) type. Every name is **opt-in by design**; a

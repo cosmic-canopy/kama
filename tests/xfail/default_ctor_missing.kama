@@ -1,0 +1,7 @@
+// Electing a default constructor is the TYPE's choice. A type that never marked one has no `default()`,
+// and the call site is a clean error naming that choice — not a silently synthesized zero value.
+type value NoDefault {
+    public int32 n;
+    public ctor make(int32 n) { slot NoDefault d; d.n = n; return give d; }
+}
+fn int main() { NoDefault d = NoDefault.default(); return d.n; }

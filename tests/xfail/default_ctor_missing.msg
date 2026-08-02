@@ -1,0 +1,1 @@
+has no `default` constructor — electing one is the type
