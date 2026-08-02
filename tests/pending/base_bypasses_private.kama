@@ -1,0 +1,21 @@
+// PARKED REPRO (not in the suite — it compiles today, which is the bug).
+//
+// `base.` skips the visibility check. `secret` is PRIVATE to `B`, and a derived type reaching it through
+// `this.secret()` is correctly rejected ("'secret' is private in 'B'") — but the same call through
+// `base.secret()` compiles, runs, and returns 42. So a derived type can reach any private method of its
+// base by choosing the other spelling.
+//
+// Not memory-unsafe; it breaks an encapsulation guarantee the language otherwise enforces. See ROADMAP §1:
+// the fix is to run `canAccess` on the base path, which lands naturally with tightening `base.` to
+// PROTECTED-only — the only visibility that can be overridden, and therefore the only one for which `base.`
+// means anything at all.
+type virtual resource B {
+    fn int32 secret() { return 42; }                  // no modifier -> private to B
+    protected virtual fn int32 t() { return 1; }
+}
+type final resource D extends B {
+    public ctor make() { slot D r; return give r; }
+    protected override fn int32 t() { return 2; }
+    public fn int32 peek() { return base.secret(); }   // should be rejected; today it is not
+}
+fn int main() { D d = D.make(); return d.peek(); }    // 42 — should not have compiled

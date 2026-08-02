@@ -118,6 +118,29 @@ instance methods (`override fn step() { return base.step() + 10; }`) — the ove
 every OO language has. What becomes ctor-only is base *construction* (`this.base = Base.ctor(…)`); the
 upcall is orthogonal to it.
 
+**⚠️ But `base.` BYPASSES ACCESS CONTROL — a real hole, not a wart** (2026-08-02). A derived type may reach
+any **private** method of its base by choosing the `base.` spelling; the same call through `this.` is
+correctly rejected:
+
+| from a derived type | result |
+| --- | --- |
+| `this.secret()` — base's private method | ✅ rejected, *"'secret' is private in 'B'"* |
+| `base.secret()` — the same method | ❌ **compiles, runs, returns 42** |
+
+Repro parked at `tests/pending/base_bypasses_private.kama`. Not memory-unsafe, but it breaks an
+encapsulation guarantee the language otherwise enforces — `canAccess` simply is not run on the base path.
+
+**Fix: tighten `base.` to PROTECTED-only**, which closes the hole and falls out of the model rather than
+being imposed on it:
+
+- `private` — not accessible to derived at all. *(the bug above)*
+- `public` — **cannot be overridden**; kama already enforces this ("overridable method must be declared
+  `protected`"). So `base.publicX()` is identical to `this.publicX()` — a distinction with no difference.
+- `protected` — the only overridable visibility, so the only one for which `base.` means anything: reach
+  the implementation your override shadowed.
+
+`base.` exists to bypass an override; overrides are protected; therefore `base.` reaches protected only.
+
 `this` is correctly rejected inside a `ctor` and a `static fn` ("a `static` method has no `this`"), and
 `This` is correct in local declarations, parameters, return types and contract signatures — those arms are
 fine. The four above are not.
