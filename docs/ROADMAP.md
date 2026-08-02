@@ -49,101 +49,17 @@ makes "one value per ctor" unrepresentable rather than merely rejected — and n
 `out` holes it was designed for. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
-**⚠️ A second construction-model hole: a derived type never runs its base's constructor.** Found
-2026-08-01. Three facts, in order of severity:
+**⚠️ INHERITANCE — five holes, briefed in [design/inheritance.md](design/inheritance.md)** (found
+2026-08-01/02, cold-start ready). Two are guarantees the language claims elsewhere: a derived type never
+runs its base's constructor (so base invariants are unenforceable for subclasses), and `base.` skips
+`canAccess` (so a derived type reaches base privates). One is a footgun: shadowing a non-virtual base
+method is silently legal at any visibility, decided by static type — while `public virtual` is already
+rejected as bad design. Two are diagnostics.
 
-1. **`checkNamedCtorComplete` stops at the class boundary.** It proves a ctor assigns the type's OWN
-   fields; **inherited fields are not covered** and silently take the zero-fill. This compiles, runs, and
-   returns 12 — `getX()` yields 0 from a field no ctor ever assigned:
-
-   ```kama
-   type virtual resource Base { int32 x;  protected fn void setX(int32 x) { this.x = x; } … }
-   type final resource Derived extends Base {
-       int32 y;
-       public ctor make(int32 y) { slot Derived r; r.y = y; return give r; }   // never calls setX
-   }
-   ```
-
-   Not memory-unsafe (the fill is deterministic), but it contradicts the guarantee the construction model
-   advertises, and **a base's invariants are unenforceable for its subclasses** because the base's ctor
-   never runs.
-2. **The only sanctioned workaround weakens encapsulation.** A base must expose a `protected` setter **per
-   field** for subclasses to initialize it. A ctor initializes once; a protected setter is a permanent
-   mutator any subclass method may call at any time — and the derived author has to know which setters
-   exist, which is knowing the base's field set.
-3. **`: base(...)` parses but was never wired up.** The production exists
-   (`constructor_initializer : COLON BASE LPAREN argument_list_opt RPAREN`), but it hangs off the
-   class-named ctor declarator — the form `72dfdbc` made a hard error — and **no emitter code ever reads
-   `ClassConstructorInitializerNode`**. So even when that form was legal the base arguments were parsed and
-   silently discarded. SPEC claimed the feature worked until this was found; it now says otherwise.
-
-   **Do NOT simply delete the production.** It is the only reason a class-named ctor *parses*, which is what
-   lets the emitter answer with the guided message ("class-named constructor `X(...)` is no longer allowed —
-   declare a named constructor `ctor make(...)`"). Removing it turns that into a raw parse error. Keep it as
-   a diagnostic path and give `: base(...)` a message of its own — *"base-constructor delegation is not
-   supported; assign `this.base = Base.<ctor>(...)` instead"* — rather than discarding the arguments.
-
-   **Fix shape — install a base VALUE, don't chain.** A factory has no `self`, but it can build the base
-   through the base's own ctor and install it, which needs no chaining and leaks nothing:
-
-   ```kama
-   public ctor make(int32 x, int32 y) {
-       this.base = Base.make(x: x);      // the base's OWN ctor runs, enforcing its invariant
-       this.x = x;
-       this.y = y;
-   }
-   ```
-
-   The rule is narrow — **`this.base` must be assigned exactly once, from a ctor call on the base type.**
-   Not general whole-value assignment: delegate-then-tweak is rejected BY DESIGN, and base fields are
-   private, so there is nothing to tweak through. Also wants a `Base`/`base` pair mirroring `This`/`this`
-   (the type / the object) so a derived author never types the concrete base type name — which is the
-   encapsulation point this hole is about — plus a decision on how an `abstract` base exposes a ctor for
-   the purpose (C#/Java use a protected constructor). Pairs with the
-   [slot-scope campaign](design/slot-scope.md), whose D5 supplies the implicit `this` shown above.
-
-**⚠️ `this` / `This` / `base` — four defects from a full audit of the three spellings** (2026-08-01). Two
-are the M1 class — a kama-level mistake escaping as a **C-compiler** error against generated code, which is
-what `kama check` ≡ `kama build` and the warning-free rule exist to prevent:
-
-| spelling | today | should be |
-| --- | --- | --- |
-| `this` in a **free function** | C error: `use of undeclared identifier 'self'` | a kama diagnostic |
-| bare `this` **as a value** (`return this;`) | C error: `assigning to 'P' from incompatible type 'P *'` | a kama diagnostic — `this` is a borrow, so say so |
-| `This` in a **field** (`Ptr<This> link;`) | *"`This` is only valid inside a `type` or `contract`"* — **false, it IS inside one** | say `This` is unsupported in field position (the real rule) |
-| `base.field`, or `base` with no base type | *"base access"* — a bare fragment, not a sentence | name the member and the type, or say the type has no base |
-
-**`base.method()` is NOT legacy and stays.** All four uses in the corpus are non-virtual upcalls inside
-instance methods (`override fn step() { return base.step() + 10; }`) — the override-with-extension pattern
-every OO language has. What becomes ctor-only is base *construction* (`this.base = Base.ctor(…)`); the
-upcall is orthogonal to it.
-
-**⚠️ But `base.` BYPASSES ACCESS CONTROL — a real hole, not a wart** (2026-08-02). A derived type may reach
-any **private** method of its base by choosing the `base.` spelling; the same call through `this.` is
-correctly rejected:
-
-| from a derived type | result |
-| --- | --- |
-| `this.secret()` — base's private method | ✅ rejected, *"'secret' is private in 'B'"* |
-| `base.secret()` — the same method | ❌ **compiles, runs, returns 42** |
-
-Repro parked at `tests/pending/base_bypasses_private.kama`. Not memory-unsafe, but it breaks an
-encapsulation guarantee the language otherwise enforces — `canAccess` simply is not run on the base path.
-
-**Fix: tighten `base.` to PROTECTED-only**, which closes the hole and falls out of the model rather than
-being imposed on it:
-
-- `private` — not accessible to derived at all. *(the bug above)*
-- `public` — **cannot be overridden**; kama already enforces this ("overridable method must be declared
-  `protected`"). So `base.publicX()` is identical to `this.publicX()` — a distinction with no difference.
-- `protected` — the only overridable visibility, so the only one for which `base.` means anything: reach
-  the implementation your override shadowed.
-
-`base.` exists to bypass an override; overrides are protected; therefore `base.` reaches protected only.
-
-`this` is correctly rejected inside a `ctor` and a `static fn` ("a `static` method has no `this`"), and
-`This` is correct in local declarations, parameters, return types and contract signatures — those arms are
-fine. The four above are not.
+Three repros are parked in `tests/pending/`; each COMPILES today, which is the bug. Root cause is thin
+coverage — the stdlib uses **0** `extends` against **340** `implements`, so nothing pressed on the
+feature. The construction fix depends on [slot-scope.md](design/slot-scope.md) D5, and both are
+source-breaking: before the tag, or 2.0.
 
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
