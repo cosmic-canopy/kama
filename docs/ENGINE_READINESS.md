@@ -49,6 +49,61 @@ shared-nothing model (isolates + ownership-transferring channels + structured-co
 
 ---
 
+## The data-oriented core: ECS is expressible today, with zero dispatch ✅
+
+The architecture modern engines converged on — Bevy, Unity DOTS, the Overwatch model — needs **no new
+language surface**. Entities are generational IDs, components are plain data in contiguous arrays, systems
+are plain functions over those arrays, and nothing in the per-entity loop is polymorphic. Every primitive
+ships:
+
+| ECS piece | kama |
+| --- | --- |
+| entity store | **`SlotMap<T>`** — a generational-index map; that *is* the entity primitive |
+| component storage (SoA) | **`DynamicArray<T>`** per component type — one flat, contiguous buffer |
+| a system | a free function over **`View<T>`** with `foreach (ref T x in …)` — borrows the buffer, mutates in place |
+| system parallelism | **`parallel_for`** — splits the View into **disjoint** sub-views, one worker isolate each, no locks |
+| zero-cost polymorphism | a **contract as a generic bound** (`<T: Tickable>`) — monomorphized to a direct call |
+| SIMD / no-heap | `std::simd`, `@noheap` / `--no-heap` for frame allocators and audio callbacks |
+
+**The zero-dispatch claim is verified against emitted C, not asserted.** `tests/ecs_pattern.kama` is the
+worked example and `tools/check-ecs-zero-dispatch.sh` runs in the suite, asserting that a system loop walks
+a concrete `T*` and that a contract-bounded generic lowers to a **direct** call:
+
+```c
+_F4__Transform* t = …__next(&__it0);
+(*t).x = ((*t).x + ((*t).vx * dt));          // direct writes into the contiguous buffer
+sum = sum + _F4__Timer__tick(&(*it));        // contract BOUND -> direct call, no vtable
+```
+
+**Contracts have two modes, and you choose per call site** — this is the point that decides engine
+performance:
+
+| | shape | cost |
+| --- | --- | --- |
+| generic **bound** — `<T: Tickable>` | monomorphized to the concrete type | direct call, inlinable, **zero** |
+| contract as a **value** — `Owned<Shape>` | `{ void* obj; const vtbl* }` | fat pointer + indirect call |
+
+A fat pointer is opt-in. An ECS never enters that path.
+
+**Components must be `type value`, and the type model already enforces it.** A `value` is sealed —
+*"`virtual`/`abstract`/`final` apply to a `resource`; for polymorphism declare a `contract`"* — so
+inheritance cannot reach component data by construction. That is the right answer independent of speed: a
+component is *data*, and a polymorphic type carries a runtime type tag the loop never reads. Storing a
+polymorphic type by value would add an 8-byte `__vptr` per element (on a 16-byte `Transform`, a **50%**
+size increase for dead weight), and storing *different* derived types in one array forces
+`DynamicArray<Owned<Base>>` — heap allocation and a pointer chase per entity, the AoS-of-pointers design
+ECS exists to escape.
+
+Inheritance's place in an engine is the **cold** paths: asset importers, editor tooling, plugin boundaries,
+scene authoring. Never the per-entity loop.
+
+⚠️ **Known bug, tracked:** a polymorphic class stored **by value** in any generic collection
+(`DynamicArray<SomeVirtualResource>`) fails to build — the collection's methods are emitted before the
+class's vtable constant, so the C references an undeclared symbol. Repro:
+`tests/pending/virtual_class_in_collection.kama`; see [design/inheritance.md](design/inheritance.md). It
+does not block the ECS path (components are `value` types) but it breaks any by-value collection of a
+`virtual`/`abstract resource`.
+
 ## Tier 0 — Hard blockers (can't build a real engine without these)
 
 | Feature | Status | Why an engine needs it | Effort |

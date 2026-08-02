@@ -1,0 +1,49 @@
+// PARKED REPRO (not in the suite — it fails to BUILD, at the C level).
+//
+// Storing a polymorphic class (one with a vtable) BY VALUE in a generic collection emits a use of its
+// vtable constant BEFORE that constant is defined:
+//
+//   error: use of undeclared identifier '_F4__DerivedTick__vtable'
+//     x.__base.__vptr = &_F4__DerivedTick__vtable;
+//
+// Diagnosed: the vtable IS emitted, but late. `DynamicArray<DerivedTick>::takeAt` — a generic-collection
+// method — is emitted BEFORE the user class bodies, and it fills `__vptr`. Since the vtable is a
+// `static const`, C requires a prior declaration. A virtual/final pair with no collection works fine
+// (tests/devirt_final_class.kama), so this is the inheritance x generics intersection.
+//
+// Fix shape: forward-declare vtable constants (or emit them before generic instances). See
+// docs/design/inheritance.md.
+//
+// Consequence for the engine track: a component array of a polymorphic type cannot be built at all today
+// (ENGINE_READINESS.md) — which is one more reason ECS components should be plain `value` types.
+
+import std::collections::{DynamicArray, View};
+
+// (A) plain value type — the ECS shape
+type value PlainTick { public int32 n;
+    public ctor make(int32 n) { slot PlainTick t; t.n = n; return give t; }
+    public fn int32 tick() { return this.n + 1; } }
+
+// (B) a virtual base + final derived — the OOP shape
+type virtual resource BaseTick { int32 n;
+    protected fn void setN(int32 n) { this.n = n; }
+    protected fn int32 getN() { return this.n; }
+    protected virtual fn int32 tickImpl() { return this.n; }
+    public fn int32 tick() { return this.tickImpl(); } }
+type final resource DerivedTick extends BaseTick {
+    public ctor make(int32 n) { slot DerivedTick d; d.setN(n: n); return give d; }
+    protected override fn int32 tickImpl() { return this.getN() + 1; } }
+
+fn int32 sumPlain(View<PlainTick> xs) {
+    int32 s = 0; foreach (ref PlainTick t in xs) { s = s + t.tick(); } return s; }
+
+fn int32 sumDerived(View<DerivedTick> xs) {
+    int32 s = 0; foreach (ref DerivedTick t in xs) { s = s + t.tick(); } return s; }
+
+fn int main() {
+    DynamicArray<PlainTick> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: PlainTick.make(n: 10)); a.add(item: PlainTick.make(n: 20));
+    DynamicArray<DerivedTick> b = DynamicArray.withCapacity(capacity: 2);
+    b.add(item: DerivedTick.make(n: 10)); b.add(item: DerivedTick.make(n: 20));
+    return sumPlain(xs: a.view()) + sumDerived(xs: b.view());   // 32 + 32 = 64
+}

@@ -1,11 +1,11 @@
-# Inheritance — closing five holes (cold-start brief)
+# Inheritance — closing six holes (cold-start brief)
 
 *In-flight campaign doc. **Delete this file when the campaign ships**, once SPEC carries the record — see
 the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
 ## Why this campaign exists
 
-Five defects were found in one afternoon (2026-08-01/02), all by asking design questions rather than by
+Six defects were found in one afternoon (2026-08-01/02), all by asking design questions rather than by
 reading code — because in every case the code does exactly what it was written to do. The reason they
 survived is visible in one table:
 
@@ -21,7 +21,7 @@ survived is visible in one table:
 fixtures, so nothing has pressed on it. That is context for prioritising, not an argument to leave it
 broken: what ships must be sound, and two of these are guarantees the language claims elsewhere.
 
-## The five
+## The six
 
 ### 1. A derived type never runs its base's constructor ⚠️ *soundness of a stated guarantee*
 
@@ -86,12 +86,29 @@ base's member is invisible to the derived type, so the two names are unrelated a
 Verified working today (a base and a derived each with a private `n` and `helper()`, each resolving to its
 own); the fix must not break it. A `friend` grant must not open a back door here either.
 
-### 4. `base.field` and `base` with no base type report a fragment
+### 4. A polymorphic class stored BY VALUE in a generic collection does not build ⚠️ *codegen*
+
+`DynamicArray<SomeVirtualResource>` fails at the **C** level:
+
+```
+error: use of undeclared identifier '_F4__DerivedTick__vtable'
+    x.__base.__vptr = &_F4__DerivedTick__vtable;
+```
+
+The vtable IS emitted — just late. `DynamicArray<T>::takeAt` (a generic-collection method) is emitted
+before the user class bodies and fills `__vptr`, and the vtable is a `static const`, so C needs a prior
+declaration. A virtual/final pair with no collection is fine (`tests/devirt_final_class.kama`), so this is
+specifically the **inheritance × generics** intersection — the same under-tested seam as the rest of this
+brief. Repro: `tests/pending/virtual_class_in_collection.kama`.
+
+**Fix shape:** forward-declare vtable constants, or order them before generic instances.
+
+### 5. `base.field` and `base` with no base type report a fragment
 
 Both produce `"base access"` — not a sentence, naming neither the member nor the type. Should say what
 happened: name the member, or say the type has no base.
 
-### 5. `: base(...)` is orphaned — parses, never read
+### 6. `: base(...)` is orphaned — parses, never read
 
 The production exists (`constructor_initializer : COLON BASE LPAREN argument_list_opt RPAREN`) but hangs
 off the class-named ctor declarator, the form `72dfdbc` made a hard error, and **no emitter code reads
@@ -107,7 +124,8 @@ supported; assign `this.base = Base.<ctor>(...)` instead"*.
 ## Sequencing
 
 1 and 3 are **source-breaking**, so they land before the 1.0 tag or wait for 2.0. 2 is breaking only for
-code exploiting the hole. 4 and 5 are diagnostics and can land any time.
+code exploiting the hole. 4 is a codegen fix with no surface change — it can land immediately and
+independently, and it is the only one that blocks working code today. 5 and 6 are diagnostics.
 
 1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so run that campaign first or fold
 them together — it is already rewriting every ctor body.
@@ -120,13 +138,14 @@ tools/cdev exec env KAMA_SAN=1 ./run_tests.sh
 tools/cdev exec env KAMA_WASM=1 ./run_tests.sh
 ```
 
-Baseline: **native 873 / ASan 838 / wasm 806, all 0 failed.**
+Baseline: **native 875 / ASan 838 / wasm 806, all 0 failed.**
 
-The three parked repros in `tests/pending/` are the acceptance test: each currently COMPILES, and each must
-become a rejection with a fixture asserting its message. They are deliberately outside the suite — a
-fixture that passes by compiling is exactly how these hid.
+The four parked repros in `tests/pending/` are the acceptance test. Three currently COMPILE and must become
+rejections with a fixture asserting the message; the fourth
+(`virtual_class_in_collection.kama`) currently FAILS TO BUILD and must become a passing fixture. They are
+deliberately outside the suite — a fixture that passes by compiling is exactly how the first three hid.
 
-**Widen the corpus while you are here.** 25 `extends` fixtures for a feature with five holes is the root
+**Widen the corpus while you are here.** 25 `extends` fixtures for a feature with six holes is the root
 cause, not a coincidence. Anything added should exercise: a derived ctor initializing base state, `base.`
 across all three visibilities, an `abstract` base, and a three-level chain (`tests/vtable_depth3.kama` is
-the only one today).
+the only one today) — and a `DynamicArray` of a polymorphic type, which is hole 4 and has no fixture at all.

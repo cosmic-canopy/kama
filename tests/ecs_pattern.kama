@@ -1,0 +1,88 @@
+// The ECS shape, end to end, in the language as it ships — and a guard that it stays zero-dispatch.
+//
+// This is the data-oriented architecture modern engines use (Bevy, Unity DOTS, the Overwatch model):
+// entities are generational IDs, components are plain data in contiguous arrays, and systems are plain
+// functions over those arrays. The point is that NOTHING in the per-entity loop is polymorphic — the win
+// is cache-linear iteration, not a dispatch trick.
+//
+// kama needs no new surface for this. The primitives already ship:
+//   SlotMap<T>            generational-index entity store
+//   DynamicArray<T>       contiguous component storage (SoA — one array per component type)
+//   View<T> + foreach ref systems, borrowing the buffer and mutating in place
+//   parallel_for          the same, split into disjoint sub-views across workers, no locks
+//   <T: Contract>         polymorphism that MONOMORPHIZES — a direct call, no fat pointer
+//
+// Verified in the emitted C (tools/check-ecs-zero-dispatch.sh keeps it honest): the system loops write
+// through `Transform*` directly, and the contract-bounded generic lowers to a DIRECT call to
+// `Timer__tick` rather than an indirect one through a vtable.
+//
+// ⚠️ Components must be `type value`. A polymorphic class stored by value in a collection does not build
+// today — see tests/pending/virtual_class_in_collection.kama.
+import std::concurrent;
+import std::collections::{DynamicArray, SlotMap, View};
+
+// ── components: plain data ───────────────────────────────────────────────────────────────────
+type value Transform {
+    public float32 x; public float32 y; public float32 vx; public float32 vy;
+    public ctor make(float32 x, float32 y, float32 vx, float32 vy) {
+        slot Transform t; t.x = x; t.y = y; t.vx = vx; t.vy = vy; return give t; }
+}
+
+type value Health {
+    public int32 hp;
+    public ctor make(int32 hp) { slot Health h; h.hp = hp; return give h; }
+}
+
+// ── a system: a free function over a contiguous View. No contract, no dispatch. ──────────────
+fn void integrate(View<Transform> xs, float32 dt) {
+    foreach (ref Transform t in xs) {
+        t.x = t.x + t.vx * dt;
+        t.y = t.y + t.vy * dt;
+    }
+}
+
+// ── the same system, PARALLEL: disjoint sub-views, one worker each, no locks ─────────────────
+fn void integratePar(View<Transform> xs, float32 dt) {
+    parallel_for (ref Transform t in xs) {
+        t.x = t.x + t.vx * dt;
+        t.y = t.y + t.vy * dt;
+    }
+}
+
+// ── polymorphism that costs nothing: a contract used as a BOUND monomorphizes ────────────────
+type contract Tickable for value { fn int32 tick(); }
+
+type value Timer implements Tickable {
+    public int32 n;
+    public ctor make(int32 n) { slot Timer t; t.n = n; return give t; }
+    public fn int32 tick() { return this.n + 1; }
+}
+
+fn int32 tickAll<T: Tickable>(View<T> items) {
+    int32 sum = 0;
+    foreach (ref T it in items) { sum = sum + it.tick(); }
+    return sum;
+}
+
+fn int main()
+{
+    // component storage — one contiguous array per component type
+    DynamicArray<Transform> xf = DynamicArray.withCapacity(capacity: 4);
+    xf.add(item: Transform.make(x: 0.0f32, y: 0.0f32, vx: 1.0f32, vy: 2.0f32));
+    xf.add(item: Transform.make(x: 5.0f32, y: 5.0f32, vx: 1.0f32, vy: 1.0f32));
+
+    integrate(xs: xf.view(), dt: 2.0f32);          // (0,0)->(2,4)   (5,5)->(7,7)
+    integratePar(xs: xf.view(), dt: 0.0f32);       // parallel, dt=0 keeps it deterministic
+
+    // a contract-bounded generic system — direct calls, no vtable
+    DynamicArray<Timer> ts = DynamicArray.withCapacity(capacity: 2);
+    ts.add(item: Timer.make(n: 10));
+    ts.add(item: Timer.make(n: 20));
+    int32 ticks = tickAll::<Timer>(items: ts.view());          // 11 + 21 = 32
+
+    // entities: a generational-index store, the ECS entity primitive
+    SlotMap<Health> ents = SlotMap.empty();
+    ents.insert(value: Health.make(hp: 3));
+
+    return cast<int32>(xf[0].x) + cast<int32>(xf[1].y) + ticks;   // 2 + 7 + 32 = 41
+}

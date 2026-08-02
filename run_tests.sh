@@ -218,6 +218,13 @@ fi
 
 # MCU step 5: `--no-heap` flag guard (flag-driven rejection can't ride the no-flag xfail loop). Run once on
 # the plain native pass, like the guards above.
+# The ECS architecture guard: tests/ecs_pattern.kama runs as an ordinary fixture, but its CLAIM is about
+# the emitted C (zero dispatch in a system loop, a contract bound monomorphized to a direct call). This
+# checks that against the generated code, so ENGINE_READINESS.md's engine story can't rot silently.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-ecs-zero-dispatch.sh ]; then
+    if sh tools/check-ecs-zero-dispatch.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noheap.sh ]; then
     if sh tools/check-noheap.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
