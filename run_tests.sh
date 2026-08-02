@@ -421,8 +421,16 @@ for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
     err="$TMP/xf_$name.err"
-    if "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; then
+    "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+    if [ "$rc" -eq 0 ]; then
         echo "FAIL xfail/$name (compiled, but must be REJECTED)"; fail=$((fail+1)); continue
+    fi
+    # A rejection must be CLEAN. Death by signal (>=128) is a compiler crash, and without this arm it
+    # scored a PASS here — "did not build" was indistinguishable from "segfaulted", which is exactly how
+    # three diagnose-then-dereference bugs sat green in this suite.
+    if [ "$rc" -ge 128 ]; then
+        echo "FAIL xfail/$name (compiler CRASHED, signal $((rc-128)) — a rejection must be clean, not a crash)"
+        head -2 "$err"; fail=$((fail+1)); continue
     fi
     msg_file="$TESTS_DIR/xfail/$name.msg"
     if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$err"; then
@@ -502,8 +510,14 @@ for src in "$TESTS_DIR"/xfail/*.kama; do
     name="$(basename "$src" .kama)"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1))
-    if "$KAMA" check "$src" >/dev/null 2>&1; then
+    "$KAMA" check "$src" >/dev/null 2>&1; ck_rc=$?
+    if [ "$ck_rc" -eq 0 ]; then
         echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)"
+        ck_bad=$((ck_bad+1))
+    elif [ "$ck_rc" -ge 128 ]; then
+        # `kama lsp` runs this analysis in-process on every keystroke, so a crash here kills the editor's
+        # language server. Rejecting-by-crashing agreed with `build` and therefore used to pass silently.
+        echo "  MISMATCH xfail/$name: \`kama check\` CRASHED (signal $((ck_rc-128))) — the language server would die on this input"
         ck_bad=$((ck_bad+1))
     fi
 done

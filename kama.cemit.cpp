@@ -1875,10 +1875,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     } else {
         MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
         if (!viewMi || !viewMi->params.empty()
-            || !isViewCType(cTypeInInstance(itCls, viewMi->returnType)))
+            || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
             unsupported(("parallel_for needs a `View<T>` or a contiguous container with a nullary `.view()` "
                          "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
                          "collection cannot be split into disjoint slices").c_str(), pf->line);
+            return;   // `viewMi` may be the null this guard rejected — never fall through and deref it
+        }
         viewCType = cTypeInInstance(itCls, viewMi->returnType);
         viewExpr  = viewMi->cName + "(&(" + emitExpression(pf->expression) + "))";
     }
@@ -7408,8 +7410,10 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
     // Must be a BARE top-level fn call: `spawn worker(...)`. A receiver call (`spawn obj.m(...)`) or an
     // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
-    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression)
+    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression) {
         unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso->line);
+        return "";   // `inv`/`identifier` may be the null this guard rejected — never fall through and deref it
+    }
 
     const std::string fname = *inv->identifier->value;
     auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
@@ -7446,9 +7450,11 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         // lifetime we don't track), mirroring moveOnlySource's restriction on the move side.
         bool isRef = argNode && argNode->modifier && argNode->modifier->value && *argNode->modifier->value == "ref";
         auto* id = argNode ? dynamic_cast<IdentifierNode*>(argNode->expression.get()) : nullptr;
-        if (!isRef || !id || !id->value || (id->qualifier && !id->qualifier->empty()))
+        if (!isRef || !id || !id->value || (id->qualifier && !id->qualifier->empty())) {
             unsupported(("`spawn` to `" + fname + "` borrows — pass a bare local by `ref` "
                          "(e.g. `spawn " + fname + "(b: ref myBundle)`)").c_str(), iso->line);
+            return "";   // `id` may be the null this guard rejected — never fall through and deref it
+        }
         const std::string root = *id->value;
 
         // Escape check: the borrowed root must OUTLIVE the scope's join barrier — i.e. be declared in
@@ -7495,8 +7501,10 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // the HandoffNode ourselves (we emit no call — just the move + spawn).
     SharedExpression argExpr = argNode ? argNode->expression : (*inv->args)[0]->expression;
     auto* h = dynamic_cast<HandoffNode*>(argExpr.get());
-    if (!h || !h->isGive)
+    if (!h || !h->isGive) {
         unsupported("`spawn` argument must be `give`n (moved) — a borrow would alias state across the thread", iso->line);
+        return "";   // `h` may be the null this guard rejected — never fall through and deref it
+    }
     SharedExpression src = h->value;
 
     // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
@@ -7525,13 +7533,16 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 // closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
 void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
-    if (!innermostTaskScope())
+    if (!innermostTaskScope()) {
         unsupported("a bare `spawn` must appear inside a `scope { }` (which owns the join) — outside a "
                     "scope use the handle form `Isolate h = spawn worker(...)`", iso->line);
+        return;   // there is no scope to register the handle into; the tail would deref that same null
+    }
 
     std::string cls, val;
     bool isBorrow = false;
     std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/true);
+    if (cName.empty()) return;   // prep already reported; its `cls`/`val` outputs are unset
     std::string hnd = "__kama_iso" + std::to_string(_tempCounter++);
 
     line(iso->line);
@@ -7566,6 +7577,7 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
     std::string cls, val;
     bool isBorrow = false;   // the handle form may outlive the scope, so borrowing is rejected in isolatePrep
     std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/false);
+    if (cName.empty()) return "0";   // prep already reported; its `cls`/`val` outputs are unset
     std::string iso_t = resolveUserName("Isolate", SharedStringList());
     if (!_classes.count(iso_t))
         unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);
@@ -11513,8 +11525,10 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // `@interrupt` → Cortex-M / RISC-V / classic-ARM ISR calling convention. (AVR's
             // `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a later step.) `used` keeps it from
             // being dropped by `--gc-sections`; the vector table references it by symbol.
-            if (!fn)
+            if (!fn) {
                 unsupported("`@interrupt` applies only to a function, not a `static`", line);
+                continue;   // every check below is about the function; `fn` is the null just rejected
+            }
             if (at->args && !at->args->empty())
                 unsupported("`@interrupt` takes no arguments (AVR `ISR(vector)` is a later step)", line);
             if (cType(fn->returnType) != "void")
