@@ -5229,6 +5229,12 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // emitter emits the raw C call and the C `bool` return governs). `substring`/`trim`/`replace`/case
         // return `collType` (a `string`), so their owned result is RAII-freed exactly like `.concat()`.
         addMethod("substring", { ParamSig{"start", false, ""}, ParamSig{"end", false, ""} }, collType);
+        // `substring` traps on an offset that splits a character, so the safe path has to be reachable:
+        // `floorCharBoundary` snaps an arbitrary offset DOWN to a boundary (total, O(1)) and `truncate`
+        // names the budget case on top of it. A `usize`-returning intrinsic passes a NULL returnType, like
+        // `length` — the C return type governs.
+        addMethod("floorCharBoundary", { ParamSig{"at", false, ""} }, SharedIdentifier());
+        addMethod("truncate", { ParamSig{"maxBytes", false, ""} }, collType);   // owned result, like trim
         addMethod("contains",   { ParamSig{"substring", false, ""} }, SharedIdentifier());
         addMethod("startsWith", { ParamSig{"prefix", false, ""} },    SharedIdentifier());
         addMethod("endsWith",   { ParamSig{"suffix", false, ""} },    SharedIdentifier());

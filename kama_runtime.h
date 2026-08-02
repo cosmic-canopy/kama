@@ -340,6 +340,11 @@ static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
 }
+static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
+    (void)off;
+    kama_panic_handler();
+    for (;;) {}
+}
 // On embedded the fatal handler IS the weak `kama_panic_handler` symbol (firmware provides a strong
 // override at link time), so a runtime setter doesn't apply — this stub lets the prelude `setPanicHandler`
 // surface still compile on --target embedded (a no-op; use the weak-symbol mechanism instead).
@@ -376,6 +381,18 @@ static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     const char* c = ")\n";                        while (*c) buf[p++] = *c++;
     (void)kama_raw_write(2, buf, p);
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
+    abort();
+}
+// A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
+// range, so "out of bounds" would name the wrong problem.
+static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
+    extern void abort(void);
+    char buf[96]; size_t p = 0;
+    const char* a = "kama: byte offset ";                     while (*a) buf[p++] = *a++;
+    kama_u64_to_buf(buf, &p, off);
+    const char* b = " splits a UTF-8 character\n";            while (*b) buf[p++] = *b++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();
     abort();
 }
 #endif
@@ -477,11 +494,35 @@ static inline uint8_t kama_string__get(kama_string* self, size_t i) {
 }
 
 // --- Strings Phase 3 (ergonomics) -------------------------------------------
-// Owned byte-range copy of `[start, end)` — a fresh heap-owned string (cap>0). Traps
-// (kama_bounds_fail, the same clean abort as __get) on `start > end || end > len`. This is a
-// BYTE range, NOT codepoint-validated — honest to the UTF-8-bytes model; use .chars() for codepoints.
+// True when `off` is a character boundary: `len` is one (a range's exclusive end), and any other offset
+// is a boundary unless it names a CONTINUATION byte (10xxxxxx). O(1), no decoding.
+static inline bool kama_utf8_is_boundary(const kama_string* self, size_t off) {
+    return off >= self->len || ((unsigned char)self->data[off] & 0xC0) != 0x80;
+}
+// The greatest character boundary <= `off` (Rust's `floor_char_boundary`). Total: never traps, clamps
+// past-the-end to `len`. At most 3 bytes back, since a UTF-8 sequence is at most 4 bytes long. This is
+// THE primitive that makes an arithmetic offset safe — at either end of a range and at any position — so
+// `substring` stays the one slicing operation instead of growing a safe twin.
+static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t off) {
+    if (off >= self->len) return self->len;
+    while (off > 0 && ((unsigned char)self->data[off] & 0xC0) == 0x80) --off;
+    return off;
+}
+// Owned byte-range copy of `[start, end)` — a fresh heap-owned string (cap>0). Traps on
+// `start > end || end > len` (kama_bounds_fail, the same clean abort as __get) and on an offset that
+// SPLITS a character (kama_utf8_split_fail).
+//
+// The split check is what keeps `string`'s UTF-8 invariant total. Every other string operation preserves
+// it by construction — literals are valid, `concat` of two valid strings is valid, `split`/`find` cut on
+// whole needles, `trim` removes only ASCII, and casing leaves bytes >= 0x80 alone — so this was the one
+// place the SAFE surface could produce an ill-formed string from well-formed input, with no `unsafe` and
+// no error. Trapping matches how indexing already behaves (a bad index aborts rather than invoking UB)
+// and how Rust's `&s[0..2]` panics on a non-char-boundary. For an offset from arithmetic rather than from
+// a search, snap it with `floorCharBoundary` (or use `truncate`) — both are total.
 static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end) {
     if (start > end || end > self->len) kama_bounds_fail(end, self->len);
+    if (!kama_utf8_is_boundary(self, start)) kama_utf8_split_fail(start);
+    if (!kama_utf8_is_boundary(self, end))   kama_utf8_split_fail(end);
     size_t n = end - start;
     kama_string r; r.len = n;
     if (n == 0) { r.data = NULL; r.cap = 0; return r; }
@@ -490,6 +531,13 @@ static inline kama_string kama_string__substring(kama_string* self, size_t start
     buf[n] = '\0';
     r.data = buf; r.cap = n + 1;   // heap-owned
     return r;
+}
+// At most `maxBytes` bytes from the start, never splitting a character — the named form of the common
+// case where an offset comes from a BUDGET (a wire field, a column limit, a log cap) rather than from a
+// search. Total: never traps. One line over the primitive, kept because a caller who never discovers
+// `floorCharBoundary` still writes correct code by reaching for the obvious name.
+static inline kama_string kama_string__truncate(kama_string* self, size_t maxBytes) {
+    return kama_string__substring(self, 0, kama_string__floorCharBoundary(self, maxBytes));
 }
 // Byte offset of the first occurrence of `needle`; an empty needle matches at 0. Internal helper
 // (raw found-flag + offset); the emitter wraps it as `Optional<usize>` for `.find()`. A plain

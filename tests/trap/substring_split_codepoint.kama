@@ -1,0 +1,12 @@
+// `substring` with an offset that lands INSIDE a UTF-8 character traps, rather than returning a string
+// that is not valid UTF-8. "AéZ" is 4 bytes — 'A', then é as C3 A9, then 'Z' — so byte 2 is the é's
+// continuation byte. Before this trap the call returned a 2-byte string ending in a lone C3 lead byte,
+// from valid input, in the safe surface, with no `unsafe` and no error.
+// The offset is built from an opaque source so it is not constant-folded (as in substring_oob).
+import std::num::{int32Max};
+fn int main() {
+    string s = "AéZ";
+    int32 mid = int32Max() - int32Max() + 2;                     // 2, opaque; splits the é
+    string cut = s.substring(start: 0, end: cast<usize>(mid));   // -> split trap
+    return cast<int32>(cut.length());
+}

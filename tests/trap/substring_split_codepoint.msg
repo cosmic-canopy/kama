@@ -1,0 +1,1 @@
+splits a UTF-8 character
