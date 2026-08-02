@@ -69,6 +69,9 @@ bench/src/csharp/obj/
 *.wasm.map
 *.wasm
 
+# throwaway language probes (a scratch dir, not a fixture — a probe worth keeping becomes a tests/ fixture)
+.scratch/
+
 # local secrets — seed from .env.example
 .env
 # assembled site output (from tools/build-site) and packaged extension
