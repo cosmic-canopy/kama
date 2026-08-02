@@ -57,19 +57,20 @@ When one keyword needs two sets to model it, it is carrying two meanings.
 | --- | --- | --- | ---: | --- |
 | 1 | a **hole an `out` parameter fills** | `slot T x;` | see below | ships — the original design |
 | 2 | bag / zero construction of a transparent value | `T x = T.zero()` / `T.of(…)` | ≤284 | ships |
-| 3 | **storage a ctor is obliged to complete** | `T x;` blessed inside a ctor | 577 | **this campaign** |
+| 3 | **storage a ctor is obliged to complete** | `This x;` — legal only in a ctor | 577 | **this campaign** |
 | — | call a type's elected default ctor | `T x = T.default()` | — | ✅ **SHIPPED** `5edb4d9` |
 
 Concept 3 is irreducible: to build a `resource` field by field, the ctor needs storage that does not exist
 yet, and it cannot come from another ctor without infinite regress. It needs *a* spelling; the argument for
-a bare `T x;` is that a `ctor` is a special function whose whole job is to produce the type before it
+`This x;` is that a `ctor` is a special function whose whole job is to produce the type before it
 returns, and **`checkNamedCtorComplete` already proves every field is assigned there**. `slot` adds no proof
 in that position — it is pure ceremony in 73% of its uses and load-bearing in the rest.
 
 ## What ships
 
-1. **Bless a bare `T x;` inside a `ctor`** — exactly one, of the enclosing type. Same lowering as today's
-   class slot (zero-init + field-default fill + vptr); only the keyword goes away.
+1. **`This x;` declares a ctor's result** — exactly one per ctor, legal only there. Same lowering as
+   today's class slot (zero-init + field-default fill + vptr); only the keyword goes away. `slot This x;`
+   already compiles, so this is largely dropping the requirement for the keyword.
 2. **`slot` becomes an error in that position** — one way to say each thing (GOALS #4). Source-breaking,
    ~577 sites, mechanical, and the compiler names every one.
 3. **`slot` narrows to `out` only** (D2). A hole filled by assignment takes an explicit initializer instead.
@@ -82,7 +83,7 @@ After this, `slot` means exactly one thing: *the storage an `out` parameter is a
 
 | slot state at scope exit | drop |
 | --- | --- |
-| never filled on any path | **error** (new, item 3) |
+| never filled on any path | **error** (new, item 4) |
 | filled on **some** paths | legal; drop **guarded by liveness** — nothing dropped if unassigned |
 | filled on **all** paths | unconditional drop, statically known |
 
@@ -147,6 +148,45 @@ worded for the first one that builds in place.
 implicit `result` binding would introduce implicit behaviour immediately after this campaign removes it.
 Convention, not a compiler rule.
 
+### D5 — the blessed declaration is spelled **`This x;`**. ✅ DECIDED
+
+Not `TypeName x;`, and not an implicit `this`.
+
+```kama
+public ctor make(int32 n) { This r; r.x = n; return give r; }
+```
+
+**`slot This r;` already compiles today** — verified, including on a generic, where it also removes the
+need to restate the type arguments (`slot This b;` inside `Box<T>`, no `<T>` to get wrong). So step 1 is
+close to free: allow the same declaration without the keyword.
+
+Why `This` beats the plain `TypeName` blessing — it makes the rule **lexical rather than contextual**:
+
+- `This x;` is legal **only** inside a ctor, so "exactly one" (D1) is trivially checkable, and a bare
+  `Point p;` stays an error *everywhere* with the message it already has. No context-sensitive diagnostic
+  to write, and no rule of the form "…except here".
+- `grep 'This '` finds every construction site in the language.
+- Rename-safe, and on a generic type the arguments cannot be restated wrongly.
+- **Free in the sweep** — step 2 already rewrites all 577 lines to delete `slot `; changing the type name
+  in the same pass costs nothing.
+- `This` is *already* the enclosing type's name in kama (`Result<This, E>` on a fallible ctor), so it gains
+  no new meaning — unlike the alternatives below.
+
+**Rejected — an implicit `this` (`this.x = 0; this.y = 0;`).** Tempting, and it is the C++/C#/Java shape,
+but:
+
+1. **`this` in a ctor is an error today** — *"a `static` method has no `this`"* — because a kama ctor IS a
+   static factory with no receiver. That is the basis of the construction model, not an incidental
+   restriction.
+2. It would give `this` a **second meaning** (storage under construction, alongside instance-method
+   receiver) — the exact dual-meaning pattern this campaign exists to undo.
+3. It erodes a real safety property. In C++/C#/Java `this` is live mid-constructor: you can call methods on
+   it, call virtuals on it, and leak it — the half-constructed-object bug family. kama's build-a-local-and
+   -`give`-it-away model means no half-built object is ever observable *as the object*. An implicit `this`
+   reintroduces that shape.
+4. It would make the move implicit, against GOALS #5, immediately after a campaign whose whole point is
+   removing implicit construction.
+
 ### D3 — warn-first, in five steps. ✅ DECIDED
 
 `c2ae0c8` landed its breaking half warn-first and swept in between, which is why it had no red intermediate
@@ -154,8 +194,8 @@ commit. Same shape:
 
 | step | change | breaking |
 | ---: | --- | --- |
-| 1 | bless bare `T x;` in a ctor for the constructed type | no — additive; both spellings briefly legal |
-| 2 | sweep the 577 sites | no |
+| 1 | accept `This x;` in a ctor without `slot` | no — additive; both spellings briefly legal |
+| 2 | sweep the 577 sites (drop `slot`, and normalize the type name to `This` in the same pass) | no |
 | 3 | flip `slot`-of-the-constructed-type-in-a-ctor to an error | yes (corpus already clean) |
 | 4 | warn on an assignment-filled `slot`, sweep ~164 + fixtures, then error | yes |
 | 5 | error on a never-filled `slot` | yes |
