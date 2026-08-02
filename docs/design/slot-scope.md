@@ -55,7 +55,7 @@ When one keyword needs two sets to model it, it is carrying two meanings.
 
 | # | concept | spelling | sites | status |
 | --- | --- | --- | ---: | --- |
-| 1 | a **hole** that will be filled before use | `slot T x;` | ~210 | ships — the original design |
+| 1 | a **hole an `out` parameter fills** | `slot T x;` | see below | ships — the original design |
 | 2 | bag / zero construction of a transparent value | `T x = T.zero()` / `T.of(…)` | ≤284 | ships |
 | 3 | **storage a ctor is obliged to complete** | `T x;` blessed inside a ctor | 577 | **this campaign** |
 | — | call a type's elected default ctor | `T x = T.default()` | — | ✅ **SHIPPED** `5edb4d9` |
@@ -68,12 +68,15 @@ in that position — it is pure ceremony in 73% of its uses and load-bearing in 
 
 ## What ships
 
-1. **Bless a bare `T x;` inside a `ctor`** for the constructed type. Same lowering as today's class slot
-   (zero-init + field-default fill + vptr); only the keyword goes away.
+1. **Bless a bare `T x;` inside a `ctor`** — exactly one, of the enclosing type. Same lowering as today's
+   class slot (zero-init + field-default fill + vptr); only the keyword goes away.
 2. **`slot` becomes an error in that position** — one way to say each thing (GOALS #4). Source-breaking,
    ~577 sites, mechanical, and the compiler names every one.
-3. **A `slot` never filled on any path becomes an error.** A hole declared and never filled is a dead
+3. **`slot` narrows to `out` only** (D2). A hole filled by assignment takes an explicit initializer instead.
+4. **A `slot` never filled on any path becomes an error.** A hole declared and never filled is a dead
    declaration; silently eliding its drop is the wrong answer.
+
+After this, `slot` means exactly one thing: *the storage an `out` parameter is about to fill.*
 
 **Drop behaviour does not change** — it is already correct, and this is why:
 
@@ -114,7 +117,7 @@ The earlier worry — that this would force throwaway initializers and lose the 
 does not survive contact with those two forms. Where neither fits, a helper taking an `out` parameter is the
 sanctioned shape, which returns `slot` to its own job.
 
-### D1 — the blessing covers the CONSTRUCTED TYPE only. ✅ DECIDED
+### D1 — **exactly one** bare declaration, of the ENCLOSING type. ✅ DECIDED
 
 Not any local in a ctor body. **D2 forces this**: if `T x;` is the habit being removed, it cannot be
 re-admitted for arbitrary locals merely because they sit inside a ctor. The blessing exists for exactly one
@@ -128,6 +131,21 @@ public ctor adopt(Ptr<T> raw) {
     Ptr<Ctrl> k = null;                  // was: slot Ptr<Ctrl> k;
     unsafe { k = cast<Ptr<Ctrl>>(…); }
 ```
+
+**At most ONE per ctor.** A ctor produces one value; declaring several uninitialized ones is not a shape the
+language should allow. This is **free to enforce — 0 ctors in the corpus declare two**, so the rule codifies
+existing practice rather than forcing any rewrite. A second value of the same type is still fine when it is
+*initialized* (`Point other = Point.make(…);`) — the restriction is on uninitialized storage, not on the type.
+
+**Say "the enclosing type (`This`)", not "the returned type".** A fallible ctor returns `Result<This, E>`
+while the thing it builds is a `This`. All 42 fallible ctors in the corpus delegate to an infallible named
+ctor (`return Result::Ok(value: File.make(fd: fd));`) and so need no blessing today, but the rule must be
+worded for the first one that builds in place.
+
+**Do NOT mandate the variable's name.** There is a de-facto convention — `r`, 422 of ~570 uses (74%) — but a
+23-name tail, and `result` itself only 22. Mandating one costs ~150 sites for no semantic gain, and an
+implicit `result` binding would introduce implicit behaviour immediately after this campaign removes it.
+Convention, not a compiler rule.
 
 ### D3 — warn-first, in five steps. ✅ DECIDED
 
@@ -163,6 +181,15 @@ nothing, no destructor) are orthogonal to how its storage is spelled. 3 sites, n
 - **The bare-local rejection is emitter-side, not grammar-side.** `T x;` parses today; `c2ae0c8` made it a
   hard error in the emitter. So the blessing is a rule change, not a grammar change — no parser, tree-sitter
   or LSP-query work, which is most of what would otherwise make this expensive.
+- **⚠️ Sweep with `kama query`, not with grep.** The 164-site "hole" group still has to be split into
+  *out-filled* (stays `slot`) and *assignment-filled* (step 4 rewrites it), and that split **cannot be
+  measured by regex** — this was attempted and produced garbage. A one-line ctor
+  (`public ctor make() { slot Animal r; return give r; }`) puts the declaration, the fill and the return on
+  the same line, so line-oriented matching mis-files construction as a hole, and a fixed lookahead window
+  misses fills further down the function. The repo already has the right tool: the front end is a reusable
+  query API with real source spans ([editors.md](../editors.md)). Drive the sweep from that, or from the
+  compiler's own warning output in step 4 — the warn-first phase names every site precisely, which is the
+  cheapest correct enumeration available and is exactly how `c2ae0c8` swept 524 of them.
 - **`checkNamedCtorComplete`** is what makes the blessing sound: it already proves a named ctor assigns
   every field before returning. Confirm it cannot be evaded (ROADMAP §2 notes a legacy self-returning
   `static fn` factory that it cannot see through — that residual should close with this campaign, since it
