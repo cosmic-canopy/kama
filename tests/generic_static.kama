@@ -1,0 +1,45 @@
+// A `static fn` on a GENERIC type is reachable: `Box::<int32>::tag()`.
+//
+// The turbofish is MANDATORY here, unlike for a ctor. A ctor can infer its monomorph from its arguments
+// (`Box.make(v: 10)`), but a static has no receiver and its parameters need not mention `T` at all — so
+// there is nothing to infer from, and the type arguments have to be written.
+//
+// `Pair<int32, int32>` is named ONLY through this spelling: no annotation, no ctor call, nothing else in
+// the unit mentions that instance. That is the part worth guarding — the monomorph has to be registered
+// from the call itself, or it never reaches the emitter and the static cannot resolve.
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public static fn int32 tag() { return 7; }
+    public fn int32 unwrapped() { return cast<int32>(this.v); }
+}
+
+type value Pair<A, B> {
+    public A a;
+    public B b;
+    public ctor make(A a, B b) { slot Pair<A, B> p; p.a = a; p.b = b; return give p; }
+    public static fn int32 arity() { return 2; }
+}
+
+// A non-generic type's static keeps its existing, turbofish-free spelling.
+type value Plain {
+    public ctor make() { slot Plain p; return give p; }
+    public static fn int32 tag() { return 5; }
+}
+
+fn int main()
+{
+    // `.` constructs, `::` resolves scope — on the SAME generic type, in both spellings.
+    Box<int32> b = Box::<int32>.make(v: 30);       // ctor   — dot after the turbofish
+    int32 viaStatic = Box::<int32>::tag();         // static — colon-colon after the turbofish
+    int32 viaMethod = b.unwrapped();               // instance method — dot on a value
+
+    // The ONLY mention of Pair<int32, int32> in this unit. If the call site did not register the
+    // instance, this would not resolve.
+    int32 arity = Pair::<int32, int32>::arity();
+
+    int32 plain = Plain::tag();                    // non-generic static — unchanged
+
+    return viaStatic + viaMethod + arity + plain;  // 7 + 30 + 2 + 5 = 44
+}

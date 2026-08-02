@@ -1176,6 +1176,21 @@ invocation_expression
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, method, std::static_pointer_cast<ExpressionNode>($1));
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $5);
     }
+    /* On-type turbofish through `::` — `Box::<int32>::tag()`, a STATIC on a generic type. The sibling of
+       the ctor form above, and the one that makes the spelling rule uniform: after a type, `.` is
+       construction and `::` is scope resolution, generic or not. The turbofish is MANDATORY here (unlike
+       for a ctor, which can infer from its arguments): a static has no receiver and its parameters need
+       not mention `T`, so there is nothing to infer the monomorph from. Builds the SAME shape the plain
+       `Type::name(...)` resolver already consumes — a qualified IdentifierNode with a null `expression` —
+       with the type args parked in `qualifierGenericArgs`, since `qualifier` is a bare StringList. */
+  | generic_turbofish_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN {
+        auto q = std::make_shared<StringList>();
+        q->push_back($1->value);
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, q);
+        id->qualifierGenericArgs = $1->genericArgs;
+        STAMP_LOC(id, @3);      /* the method NAME only — not the turbofish */
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, id, $5);
+    }
   ;
 /* Shared `IDENTIFIER::<type_args>` prefix — a type name (or generic free-fn name) carrying explicit type
    args in turbofish form. Factored out so the genericDepth mid-rule actions live in exactly one place. */

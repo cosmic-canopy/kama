@@ -6422,6 +6422,22 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
             }
             // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
             // hard build error — a bare `::<…>` that resolves to no generic template.
+            //
+            // `Box::<int32>::tag()` — a STATIC on a generic type. Here the turbofish rides the QUALIFIER
+            // (the owning type), not the callee, so register the concrete instance: without this a call
+            // that is the unit's ONLY mention of `Box<int32>` never reaches `_classes` and the static
+            // cannot resolve. Sibling of the two dot-on-type ctor arms below.
+            SharedIdentifierList qArgs = inv->identifier->qualifierGenericArgs;
+            if (qArgs && !qArgs->empty() && inv->identifier->qualifier && !inv->identifier->qualifier->empty()) {
+                auto tq = std::make_shared<StringList>();
+                for (size_t i = 0; i + 1 < inv->identifier->qualifier->size(); ++i)
+                    tq->push_back((*inv->identifier->qualifier)[i]);
+                std::string tn = resolveUserName(*inv->identifier->qualifier->back(), tq);
+                if (_genericTypeParams.count(tn)) {
+                    for (auto& ta : *qArgs) scanTypeForCollections(ta);
+                    registerGenericTypeInst(tn, qArgs);
+                }
+            }
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
             // Receiver turbofish `r.deserialize::<T>()` — the type args ride the method identifier's
             // `genericArgs` (see kama.y). Lower it through the `__kamaDeserialize<T>` trampoline: register
@@ -11432,6 +11448,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
+        // `Box::<int32>::tag()` — an EXPLICIT turbofish on the qualifier names the monomorph directly.
+        // Mirrors what emitDotOnTypeCtorCall does for the ctor form, and takes precedence over the
+        // inference below: the user said which instance, so there is nothing to infer.
+        if (call->identifier->qualifierGenericArgs && !call->identifier->qualifierGenericArgs->empty()
+            && !_classes.count(typeName) && _genericTypeParams.count(typeName))
+            typeName = genericTypeMangle(typeName, call->identifier->qualifierGenericArgs);
         // A generic-type static factory (`Map<int32,int32> m = Map::withCapacity(...)`): the qualifier head
         // names the bare template, so infer the concrete instance from the enclosing typed position — the
         // same `_variantTargetType` channel the bare ctor and `Optional::Some` already consume (mirrors

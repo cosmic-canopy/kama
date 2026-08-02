@@ -270,6 +270,10 @@ public:
     SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
     SharedIdentifier defaultArg;       // type-PARAMETER default (`H: BuildHasher = DefaultHasher`) — the default type; null if none
     SharedString argName;              // use-site type-ARGUMENT named override (`A:` in `Map<int32, A: Arena>`); null = positional
+    // `Box::<int32>::tag()` — type args riding the QUALIFIER (the owning type), not this name. Distinct
+    // from `genericArgs`, which on a called name means the CALLEE's own type args (`deserialize::<T>()`).
+    // `qualifier` is a StringList of bare segments and has nowhere to put them, so they live here.
+    SharedIdentifierList qualifierGenericArgs;
     void setQualifier(SharedStringList qualifier){ this->qualifier = qualifier; }
 
     IdentifierNode(CodeGenContext& context, SharedString value, int builtInVal = IDENTIFIER_NONE_VAL)
