@@ -87,43 +87,76 @@ Row 2 is exactly why the `fd >= 0` runtime guards did not retire with the origin
 is why they should not be retired now. A conditionally-filled owning value *must* still drop when it was
 filled, or it leaks.
 
-## Decisions needed before any code
+## Decisions — ALL SETTLED (user, 2026-08-01)
 
-### D1 — how wide is the ctor blessing? *(lean: the constructed type only)*
+### D2 — `slot` narrows to `out` ONLY. ✅ DECIDED
 
-Only `This` inside its own ctor, or any local in a ctor body? The wider form re-admits silently
-uninitialized locals of arbitrary type, fenced to one function kind — the exact hole `slot` closed. The
-narrow form reads as the ctor's named return slot and is the argument the user actually made. It leaves the
-**46** "hole of another type inside a ctor" sites still saying `slot`, which is correct: they are holes.
-
-### D2 — ⚠️ does `slot` narrow to `out` ONLY, or to *holes*? **This is the load-bearing decision.**
-
-The stated goal is "`slot` is only for `out` params — that is ALL a slot can do." Taken literally that also
-outlaws the ~164 sites that are holes filled by **assignment** rather than through an `out`:
+`slot` names the storage an `out` parameter fills. That is all it does. A hole filled by **assignment** is
+not a slot — it takes an explicit initializer, because `T x;` is precisely the habit being removed:
 
 ```kama
-slot float64 area;                       // no `out` anywhere
+slot float64 area;                                  // ✗ no `out` anywhere
 if (c) { area = w * h; } else { area = 0.0; }
+
+float64 area = (c) ? w * h : 0.0;                   // ✓ explicit, and the branch disappears
 ```
 
-Forbidding that pushes those sites back to a throwaway initializer (`float64 area = 0.0;` then overwrite),
-which **loses the read-before-assign guarantee** and re-introduces exactly the habit `slot` was built to
-remove. The distinction that carries weight is not *out-vs-assignment* — both fill a hole, and the analysis
-treats them identically — it is **hole vs. storage-a-ctor-completes**, which is the split the compiler
-already models.
+**This is well-supported, and better than a placeholder — verified.** kama's `match` and ternary are
+value-producing and can build a `resource`, so branch-initialization has an explicit spelling that is
+*stronger* than a hole (the value arrives as an expression rather than being assembled through storage):
 
-*Lean: `slot` = a hole, filled by an `out` **or** an assignment.* `out` is the motivating case, not the
-only legal one. Deciding otherwise is defensible but should be deliberate, since it is a second narrowing
-of the same kind as the original over-broadening.
+```kama
+Conn c = match (k) { case A: Conn.tcp(fd: 3); case B: Conn.udp(fd: 3); };   // builds a resource
+Conn d = (n > 0) ? Conn.tcp(fd: 1) : Conn.udp(fd: 1);
+```
 
-### D3 — warn-first, or straight to an error?
+The earlier worry — that this would force throwaway initializers and lose the read-before-assign guarantee —
+does not survive contact with those two forms. Where neither fits, a helper taking an `out` parameter is the
+sanctioned shape, which returns `slot` to its own job.
 
-`c2ae0c8` landed its breaking half warn-first and swept the corpus in between, which kept every
-intermediate commit green. Same shape is available here and is recommended for items 2 and 3.
+### D1 — the blessing covers the CONSTRUCTED TYPE only. ✅ DECIDED
 
-### D4 — do `view` types (3 sites) follow the `value`/`resource` rule?
+Not any local in a ctor body. **D2 forces this**: if `T x;` is the habit being removed, it cannot be
+re-admitted for arbitrary locals merely because they sit inside a ctor. The blessing exists for exactly one
+reason — a ctor must materialize its own return value, and no expression can do that without infinite
+regress. That reason does not extend to a `Ptr<Ctrl>` local.
 
-Almost certainly yes; called out only so it is not discovered mid-sweep.
+So the **46** "hole of another type inside a ctor" sites take an explicit initializer like everything else:
+
+```kama
+public ctor adopt(Ptr<T> raw) {
+    Ptr<Ctrl> k = null;                  // was: slot Ptr<Ctrl> k;
+    unsafe { k = cast<Ptr<Ctrl>>(…); }
+```
+
+### D3 — warn-first, in five steps. ✅ DECIDED
+
+`c2ae0c8` landed its breaking half warn-first and swept in between, which is why it had no red intermediate
+commit. Same shape:
+
+| step | change | breaking |
+| ---: | --- | --- |
+| 1 | bless bare `T x;` in a ctor for the constructed type | no — additive; both spellings briefly legal |
+| 2 | sweep the 577 sites | no |
+| 3 | flip `slot`-of-the-constructed-type-in-a-ctor to an error | yes (corpus already clean) |
+| 4 | warn on an assignment-filled `slot`, sweep ~164 + fixtures, then error | yes |
+| 5 | error on a never-filled `slot` | yes |
+
+### D4 — `view` types follow the same rule. ✅ DECIDED
+
+A `view` has ctors and must materialize its return value like anything else; its own rules (borrows, owns
+nothing, no destructor) are orthogonal to how its storage is spelled. 3 sites, no special case.
+
+## Two traps for the sweep
+
+- **`tests/slot_drop_elided.kama:16` becomes illegal.** It proves the no-destructor payoff with
+  `slot Tracker unfilled;` — *never assigned*, which step 5 makes an error. After step 5 the only reachable
+  elision case is a **partial** fill, so the fixture must be restructured to prove it that way, and SPEC's
+  "an unassigned slot has no destructor emitted" needs the same qualification.
+- **The `match`-join fixtures added in `9968d34` fill by assignment** (`slot_match_assign` and its three
+  `xfail` siblings), so step 4 rewrites them. The join rule they pin is unaffected — only the spelling of
+  the hole changes. Their `out`-parameter case (`pickInto`) is already in the durable form and should stay
+  the fixture's lead.
 
 ## Mechanics you will want to know
 
