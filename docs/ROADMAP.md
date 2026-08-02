@@ -70,8 +70,12 @@ side of this shipped already — `T.default()`, `5edb4d9`.)*
    field** for subclasses to initialize it. A ctor initializes once; a protected setter is a permanent
    mutator any subclass method may call at any time — and the derived author has to know which setters
    exist, which is knowing the base's field set.
-3. **`: base(...)` was never implemented.** SPEC documented it until this was found; the grammar has no
-   such production (`BASE` exists only for `base.m()` upcalls). SPEC now says so.
+3. **`: base(...)` parses but was never wired up.** The production exists
+   (`constructor_initializer : COLON BASE LPAREN argument_list_opt RPAREN`), but it hangs off the
+   class-named ctor declarator — the form `72dfdbc` made a hard error — and **no emitter code ever reads
+   `ClassConstructorInitializerNode`**. So even when that form was legal the base arguments were parsed and
+   silently discarded. SPEC claimed the feature worked until this was found; it now says otherwise. Retiring
+   the orphaned production belongs with the nameless-ctor cleanup.
 
    **Fix shape — install a base VALUE, don't chain.** A factory has no `self`, but it can build the base
    through the base's own ctor and install it, which needs no chaining and leaks nothing:
@@ -84,6 +88,21 @@ side of this shipped already — `T.default()`, `5edb4d9`.)*
    extended to require it whenever the base has fields, and a decision on how an `abstract` base exposes a
    ctor for this purpose (C#/Java use a protected constructor). Pairs naturally with the
    [slot-scope campaign](design/slot-scope.md), which is already rewriting every ctor body.
+
+**⚠️ `this` / `This` / `base` — four defects from a full audit of the three spellings** (2026-08-01). Two
+are the M1 class — a kama-level mistake escaping as a **C-compiler** error against generated code, which is
+what `kama check` ≡ `kama build` and the warning-free rule exist to prevent:
+
+| spelling | today | should be |
+| --- | --- | --- |
+| `this` in a **free function** | C error: `use of undeclared identifier 'self'` | a kama diagnostic |
+| bare `this` **as a value** (`return this;`) | C error: `assigning to 'P' from incompatible type 'P *'` | a kama diagnostic — `this` is a borrow, so say so |
+| `This` in a **field** (`Ptr<This> link;`) | *"`This` is only valid inside a `type` or `contract`"* — **false, it IS inside one** | say `This` is unsupported in field position (the real rule) |
+| `base.field`, or `base` with no base type | *"base access"* — a bare fragment, not a sentence | name the member and the type, or say the type has no base |
+
+`this` is correctly rejected inside a `ctor` and a `static fn` ("a `static` method has no `this`"), and
+`This` is correct in local declarations, parameters, return types and contract signatures — those arms are
+fine. The four above are not.
 
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
