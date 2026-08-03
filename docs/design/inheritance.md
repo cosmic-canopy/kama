@@ -212,8 +212,30 @@ deleting them.
 
 **So size is not the argument either way.** 11 KB in a 17 MB compiler, and nothing at all in user
 programs — the real cost of inheritance is the six holes above and the design surface they came from,
-not bytes. The knob's value is the *experiment* it enables (build a corpus as pure kama and see what
-actually breaks), not the measurement.
+not bytes. The knob's value is the *experiment* it enables, which is below.
+
+#### The corpus as "pure kama" (2026-08-02)
+
+Every single-file fixture, built with `--inherit-depth=0`:
+
+| | |
+| --- | ---: |
+| compile with inheritance **off** | **549** |
+| require inheritance | **13** |
+
+And the 13 are *exactly* the 13 that exist to test inheritance — `devirt_final_class`,
+`devirt_final_method`, `devirt_no_override`, `inherit_dtor`, `inherit_field`, `new_ret_upcast`,
+`poly_in_collection`, `upcast_new_base`, `upcast_shared_base`, `virtual_ref`, `virtual_this`,
+`vtable_default_ctor`, `vtable_depth2`. **Zero collateral.** Nothing in the prelude, the stdlib, or any
+other feature's fixtures reaches for it, which is the same fact the 0-`extends`/340-`implements` table at
+the top of this file reports, now confirmed by the compiler rather than by grep.
+
+⚠️ **Read this as "the feature is unexercised", not "the feature is unnecessary".** The corpus is
+kama's own code, and kama's own code is systems-level — it was never the constituency for `virtual`. The
+argument for keeping inheritance is unchanged and is stated above: contracts are pure, so `virtual`
+(a hole you MAY fill, defaulted otherwise) has no contract equivalent. What the experiment settles is the
+*cost* question — nothing depends on it, so the restrictions in A and B can be as tight as the design
+wants without breaking anything that exists.
 
 ## How the decision changes the six fixes below
 
