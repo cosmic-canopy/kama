@@ -1,0 +1,10 @@
+// The parameter half of the same rule — `T__m(T* self, int32 self)` is a duplicate C parameter. Checked
+// in checkDeclaredTypes rather than the emitter, so an uninstantiated generic type is covered too.
+// A free `fn`/`fnptr` parameter named `self` stays legal (tests/fnptr_method.kama) — this is a type-body
+// rule, and that fixture spells an explicit receiver on purpose.
+type value Box {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public fn int32 plus(int32 self) { return this.x + self; }
+}
+fn int32 main() { Box b = Box.make(x: 2); return b.plus(self: 1); }

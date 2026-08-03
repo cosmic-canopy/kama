@@ -1376,7 +1376,7 @@ including deserialization and copying.
 type resource Buffer {
     Ptr<uint8> data = null;                                  // a field default states the empty value
     int32 size;
-    public ctor make(int32 size) { Buffer b; b.size = size; return give b; }
+    public ctor make(int32 size) { this.size = size; }        // the value under construction is `this`
     public ctor withCapacity(int32 n) { return Buffer.make(size: n); }   // reuse = an ordinary call
 }
 Buffer b = Buffer.make(size: 8);          // dot-on-type: construction
@@ -1441,6 +1441,11 @@ uninitialized storage *of the type being built* inside its own ctor is therefore
 only name it has. (An *initialized* local of the same type is untouched — it is a finished value like any
 other.) Falling off the end returns that value, exactly as a `void` function need spell no return;
 `return give this;` is the **early-return** form.
+
+**`self` is reserved inside a type body.** It is the emitted C name of the receiver pointer, so a local or
+parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error
+pointing at `this`. Outside a type body it is an ordinary identifier: a free `fn` or `fnptr` may name a
+parameter `self` to spell an explicit receiver.
 
 ### Collections — the four-ctor matrix ✅
 

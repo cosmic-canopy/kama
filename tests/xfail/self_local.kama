@@ -1,0 +1,10 @@
+// `self` is the C name of the receiver pointer inside a type body, so a local of that name used to
+// collide with it and the author got clang's "redefinition of 'self' with a different type" instead of
+// anything kama said. Always broken for methods; constructors joined them when a ctor's value became an
+// implicit `this` (and so gained a `self` of its own). Reserved with a real diagnostic instead.
+type value Box {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public fn int32 get() { int32 self = 1; return this.x + self; }
+}
+fn int32 main() { Box b = Box.make(x: 2); return b.get(); }

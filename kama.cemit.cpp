@@ -576,6 +576,16 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (!params) return;
         for (auto& p : *params) if (p) check(p->type, what);
     };
+    // `self` is the C name of the receiver pointer, so a parameter of that name inside a type body
+    // redeclares it. Checked here rather than in the emitter so an uninstantiated generic type is covered
+    // too, and so free `fn`/`fnptr` — which this pass never reaches with a type body — stay untouched.
+    auto checkNoSelfParam = [&](const SharedParameterList& params) {
+        if (!params) return;
+        for (auto& p : *params)
+            if (p && p->identifier && p->identifier->value && *p->identifier->value == "self")
+                unsupported("`self` names the receiver inside a type body — the kama spelling is `this`; "
+                            "rename this parameter", p->identifier->line);
+    };
     auto bindTypeParams = [&](const SharedStringList& names) {
         tp.clear();
         if (names) for (auto& n : *names) if (n) tp.insert(*n);
@@ -604,9 +614,11 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
+                        checkNoSelfParam(md->params);
                         checkReturns(nullptr, md, "method");
                     } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
-                        if (ct->declarator) checkParams(ct->declarator->params, "a parameter");
+                        if (ct->declarator) { checkParams(ct->declarator->params, "a parameter");
+                                              checkNoSelfParam(ct->declarator->params); }
                     } else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                         if (auto* od = op->operatorDeclarator.get()) {
                             check(od->returnType, "a return type");
@@ -625,6 +637,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
+                        checkNoSelfParam(md->params);
                     }
             }
         }
@@ -2558,6 +2571,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
                 if (!nm.empty()) {
+                    // `self` is the C name of the receiver pointer inside a type body, so a local of that
+                    // name collides with it and the author gets clang's "redefinition of 'self'" rather
+                    // than anything kama said. Reserve it across the whole type body — a `static fn` has
+                    // no receiver to collide with today, but one rule is worth more than one exemption,
+                    // and a free fn is not a type body at all (tests/fnptr_method.kama names a `fnptr`
+                    // parameter `self` deliberately, and keeps doing so).
+                    if (nm == "self" && _currentClass)
+                        unsupported("`self` names the receiver inside a type body — the kama spelling is "
+                                    "`this`; rename this local", n->line);
                     if (_paramNames.count(nm))
                         unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n->line);
                     else {
