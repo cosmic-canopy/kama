@@ -1,0 +1,28 @@
+// A generic FREE FUNCTION called from inside a generic TYPE's member, with its type argument coming from
+// the ENCLOSING template's parameter. Discovery used to walk a generic class body exactly once with the
+// type parameters still bare, so `T` resolved to no concrete type and inference rejected the call outright
+// ("not a literal or a locally-typed value"). The members are now re-walked once per instantiation with
+// the substitution bound, the same way const-generic collection sizes are.
+//
+// Two element types, so the per-instantiation walk is exercised rather than one lucky binding.
+
+fn void copyInto<T>(T from, out T into) { into = from; }
+
+type value Pair<T> {
+    T a;
+    T b;
+    public ctor make(T a, T b) { this.a = a; this.b = b; }
+    // The call this fixture exists for: `T` is the enclosing template's parameter, not a local type.
+    public fn T first() {
+        T src = this.a;
+        slot T r;
+        copyInto(from: src, into: out r);
+        return r;
+    }
+}
+
+fn int32 main() {
+    Pair<int32> pi = Pair::<int32>.make(a: 7, b: 9);
+    Pair<int64> pl = Pair::<int64>.make(a: 100, b: 200);
+    return pi.first() + cast<int32>(pl.first());   // 107
+}

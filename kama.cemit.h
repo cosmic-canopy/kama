@@ -864,7 +864,13 @@ private:
     std::map<std::string, FunctionDeclarationNode*> _generics;      // template cName -> node
     std::map<std::string, NsCtx>                    _genericCtx;    // template cName -> home namespace ctx
     std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
-    std::map<const InvocationNode*, std::string>    _callInst;      // generic call site -> instantiation mangled name
+    // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
+    // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
+    // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
+    // specializations of the same generic function. The signature is empty everywhere else.
+    std::map<const InvocationNode*, std::map<std::string, std::string>> _callInst;
+    std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
+    std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
     std::map<std::string, int64_t>                  _constSubst;    // const-param name (`const N: int`) -> value (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
@@ -1176,6 +1182,7 @@ private:
                              int line, GenericInst& out);
     void emitGenericInst(const GenericInst& gi, bool prototypeOnly);
     void registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
+    void registerInstGenerics(); // discover generic-fn calls inside a generic TYPE's members (per instantiation)
 
     // Smart pointers (Owned, Shared). If `cls` is a smart-pointer type,
     // rewrite `cls` -> pointee T and `recvExpr` -> "(recv).ptr" (a T*) (auto-deref).

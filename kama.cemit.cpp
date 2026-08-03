@@ -6355,7 +6355,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             auto ai = byName.find(pname);
             if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
-            SharedIdentifier at = exprTypeNode(ai->second, localTys);
+            SharedIdentifier at = deepSubstType(exprTypeNode(ai->second, localTys));
             if (!at || !at->value || *at->value != "InlineArray" || !at->genericArgs || at->genericArgs->size() != 2) {
                 unsupported(("cannot infer the generic parameters of `InlineArray<…>` — argument '" + pname +
                              "' is not an `InlineArray<…>` value").c_str(), line);
@@ -6397,7 +6397,10 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
         auto ai = byName.find(pname);
         if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
-        SharedIdentifier at = exprTypeNode(ai->second, localTys);
+        // `_typeSubst` is bound when this runs from registerInstGenerics — i.e. the call sits inside a
+        // generic TYPE's member, being re-walked for one instantiation. Substituting first is what lets
+        // an argument declared with the ENCLOSING template's parameter (`V`) read as the concrete type.
+        SharedIdentifier at = deepSubstType(exprTypeNode(ai->second, localTys));
         if (!isConcreteTypeArg(at)) {
             unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
                          "' is not a literal or a locally-typed value").c_str(), line);
@@ -6501,7 +6504,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                                  : inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi);
                 if (ok) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
-                    _callInst[inv] = gi.mangledName;   // one call node -> one instantiation
+                    _callInst[inv][substSig()] = gi.mangledName;   // per call node, per enclosing substitution
                 }
             }
             // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
@@ -6537,7 +6540,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                     GenericInst gi;
                     if (explicitGenericInst(git->second, k, tfArgs, inv->line, gi)) {
                         if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
-                        _callInst[inv] = gi.mangledName;
+                        _callInst[inv][substSig()] = gi.mangledName;
                     }
                 }
             }
@@ -6644,6 +6647,11 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
             std::map<std::string, SharedIdentifier> lt; seed(fn->parameters, lt);
             scanStmtForGenerics(fn->block, lt);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+            // A GENERIC type's members belong to registerInstGenerics, which re-walks them once per
+            // instantiation with `_typeSubst` bound. Walking them here — with the type parameters still
+            // bare — is what used to reject a generic call whose argument is typed by the enclosing
+            // template, and a template with no instantiation has no code to discover anyway.
+            if (cd->typeParams && !cd->typeParams->empty()) continue;
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
@@ -6740,6 +6748,90 @@ void CEmitter::registerInstColls()
     }
     _typeSubst.clear();
     _constSubst.clear();
+    _nsCtx = savedCtx;
+}
+
+// A generic FREE FUNCTION called from inside a generic TYPE's member could not bind its type parameter:
+// collectGenericInsts walks a class body ONCE, verbatim, with `_typeSubst` empty, so an argument whose
+// declared type is the enclosing template's own parameter (`V`) reads as a bare name and inferGenericInst
+// rejects it ("not a literal or a locally-typed value"). That is the same problem registerInstColls
+// already answers for const-generic sizes, so it gets the same answer: re-walk each generic type's member
+// bodies ONCE PER INSTANTIATION with `_typeSubst` bound, after every type instantiation is known.
+//
+// Runs to a fixpoint — scanning a member body can itself register a new type instantiation (a nested
+// `Optional<V>`, a `Shared<V>`), which then has its own members to walk. Iterating a SNAPSHOT rather than
+// the live map is load-bearing: `scanExprForGenerics` calls `registerGenericTypeInst`, so the map grows
+// underneath us.
+// The active type substitution as a stable key. `_typeSubst` is a std::map, so the order is deterministic.
+std::string CEmitter::substSig()
+{
+    std::string s;
+    for (auto& kv : _typeSubst) { s += kv.first; s += '='; s += mangleElem(kv.second); s += ';'; }
+    return s;
+}
+
+// Which instantiation `call` routes to from HERE. An exact substitution match first (a call inside a
+// generic type's member, discovered once per instantiation); then the unsubstituted entry, which is where
+// every ordinary call lands; then a lone entry, for a call discovered outside a substitution and emitted
+// inside one (a generic FUNCTION template's body, whose own params bind at emit time).
+std::string CEmitter::callInstOf(const InvocationNode* call)
+{
+    auto ci = _callInst.find(call);
+    if (ci == _callInst.end() || ci->second.empty()) return "";
+    auto si = ci->second.find(substSig());
+    if (si == ci->second.end()) si = ci->second.find("");
+    if (si == ci->second.end() && ci->second.size() == 1) si = ci->second.begin();
+    return si == ci->second.end() ? "" : si->second;
+}
+
+void CEmitter::registerInstGenerics()
+{
+    if (_generics.empty()) return;          // no generic functions in the program — nothing to infer
+    NsCtx savedCtx = _nsCtx;
+    auto seed = [&](SharedParameterList params, std::map<std::string, SharedIdentifier>& lt) {
+        if (params) for (auto& p : *params)
+            if (p && p->identifier && p->identifier->value && p->type) lt[*p->identifier->value] = p->type;
+    };
+    std::set<std::string> done;
+    for (;;) {
+        std::vector<std::string> todo;
+        for (auto& kv : _genericTypeInsts) if (!done.count(kv.first)) todo.push_back(kv.first);
+        if (todo.empty()) break;
+        for (auto& mangled : todo) {
+            done.insert(mangled);
+            auto iit = _genericTypeInsts.find(mangled);
+            if (iit == _genericTypeInsts.end()) continue;
+            const GenericTypeInst gi = iit->second;      // COPY — the scan below may rehash the map
+            auto tit = _genericTypes.find(gi.templateKey);
+            auto pit = _genericTypeParams.find(gi.templateKey);
+            if (tit == _genericTypes.end() || !tit->second.node || pit == _genericTypeParams.end()) continue;
+            // Walk the SPECIALIZED method set, not the template's raw AST members. `registerGenericTypeInst`
+            // has already dropped every `when [V: Copyable]`-gated member that does not hold for this
+            // instantiation, and walking those would pull in code the program never uses — a `Map<int32, C>`
+            // for a move-only `C` would register `MapValueIter<C>` off the gated `values()`, whose
+            // `return copy v;` then fails to lower.
+            auto sit = _classes.find(mangled);
+            if (sit == _classes.end()) continue;
+            auto cit = _genericTypeCtx.find(gi.templateKey);
+            _nsCtx = (cit != _genericTypeCtx.end()) ? cit->second : savedCtx;
+            _typeSubst.clear();
+            for (size_t i = 0; i < pit->second.size() && i < gi.typeArgs.size(); ++i)
+                if (gi.typeArgs[i]) _typeSubst[pit->second[i]] = gi.typeArgs[i];
+            for (auto& kv : sit->second.methods) {
+                ClassMethodDeclarationNode* md = kv.second.node;
+                if (!md || !md->body) continue;                       // intrinsic / synthesized — no body
+                std::map<std::string, SharedIdentifier> lt; seed(md->params, lt);
+                scanStmtForGenerics(md->body, lt);
+            }
+            if (tit->second.node->members)                            // the dtor is never gated
+              for (auto& m : *tit->second.node->members)
+                if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
+                    std::map<std::string, SharedIdentifier> lt;
+                    scanStmtForGenerics(dd->body, lt);
+                }
+        }
+    }
+    _typeSubst.clear();
     _nsCtx = savedCtx;
 }
 
@@ -11609,9 +11701,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 // (registered in scanExprForGenerics), passing the receiver as its single `Deserializer` arg.
                 // Intercept BEFORE emitMethodCall: the receiver types as the `Deserializer` interface, so the
                 // method path would send it to emitInterfaceDispatch looking for a nonexistent `deserialize`.
-                auto ci = _callInst.find(call);
-                if (ci != _callInst.end()) {
-                    const GenericInst& gi = _genericInsts[ci->second];
+                std::string instKey = callInstOf(call);
+                if (!instKey.empty()) {
+                    const GenericInst& gi = _genericInsts[instKey];
                     return gi.mangledName + "(" + emitExpression(ma->expression) + ")";
                 }
                 // `Type.name(...)` — dot-on-type constructor call: the receiver names a TYPE, not an
@@ -11664,9 +11756,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // a call to a generic function was resolved to a concrete instantiation at discovery.
     // Route it to that specialized C name; reorder named args off the template's param list.
     {
-        auto ci = _callInst.find(call);
-        if (ci != _callInst.end()) {
-            const GenericInst& gi = _genericInsts[ci->second];
+        std::string instKey = callInstOf(call);
+        if (!instKey.empty()) {
+            const GenericInst& gi = _genericInsts[instKey];
             const FuncSig& tmpl = _funcs[gi.templateKey];
             // M6 B3: the call names the TEMPLATE, not the instantiation it was routed to — the instance's
             // mangled name has no def-site, and two instantiations must not split one declaration's
@@ -15792,6 +15884,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectGenericInsts(u); }
+    registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
+                              // _typeSubst bound — before registerInstColls, which reads _genericInsts.
     evalComptimeConsts();  // const-eval 6b-3: run `comptime fn`-initialized module constants now that all
                            // comptime fns are registered — before const-generic sizes so a baked scalar can size an array.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
