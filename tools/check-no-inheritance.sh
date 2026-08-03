@@ -54,7 +54,7 @@ GATE='needs inheritance, and this kama was built without it'
 cat > "$tmp/ext.kama" <<'EOF'
 type virtual resource B { protected virtual fn int32 t() { return 0; } }
 type final resource D extends B {
-    public ctor make() { slot D r; return give r; }
+    public ctor make() { }
     protected override fn int32 t() { return 1; } }
 fn int main() { D d = D.make(); return 0; }
 EOF
@@ -84,7 +84,7 @@ cat > "$tmp/ok.kama" <<'EOF'
 import std::collections::{DynamicArray};
 type contract Shape for value { fn int32 area(); }
 type value Sq implements Shape { public int32 s;
-    public ctor make(int32 s) { slot Sq r; r.s = s; return give r; }
+    public ctor make(int32 s) { this.s = s; }
     public fn int32 area() { return this.s * this.s; } }
 fn int32 total(Shape a, Shape b) { return a.area() + b.area(); }
 fn int main() {

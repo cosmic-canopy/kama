@@ -697,7 +697,7 @@ export { Config };
 
 type value Config {
     public int32 port;
-    public ctor of(int32 port) { slot Config r; r.port = port; return give r; }
+    public ctor of(int32 port) { this.port = port; }
 }
 KAMA
 cat > "$ws/libs/net/kama.json" <<'JSON'

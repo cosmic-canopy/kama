@@ -225,7 +225,7 @@ namespace geo;
 export { Point };
 type value Point {
     public int32 x;
-    public ctor of(int32 x) { slot Point r; r.x = x; return give r; }
+    public ctor of(int32 x) { this.x = x; }
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'

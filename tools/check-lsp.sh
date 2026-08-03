@@ -48,7 +48,7 @@ NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { re
 # whole production's span. That is a DATA-LOSS bug, not cosmetics: rename REPLACES the range it is handed,
 # so renaming `Box` would have overwritten `Box<T>` and deleted the type-parameter list.
 SPURI="file:///span.kama"
-SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { slot Box<T> b; b.v = v; return give b; } }\ntype resource R { public ctor make() { slot R r; return give r; } ~R() { } }\n'
+SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntype resource R { public ctor make() { } ~R() { } }\n'
 
 # M5.3/M5.4 fixture: THREE independent syntax errors at three grains — a malformed class member (LSP
 # line 2), and a missing semicolon in each of two DIFFERENT functions (LSP lines 6 and 10). Before error
@@ -73,7 +73,7 @@ XDROP='type value ! Widget {\n    public int32 w;\n}\nfn int32 use() {\n    Widg
 # lives only in `_refIndex`, never in `_positions`, so an exact-array assertion here is what proves the
 # facade's own overlap filter runs.
 TOKURI="file:///semtok.kama"
-TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { slot P r; r.x = v; return give r; }\n}\nfn int32 main() { P p = P.make(v: 1); return p.x; }\n'
+TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; }\n}\nfn int32 main() { P p = P.make(v: 1); return p.x; }\n'
 
 # TOKG is the GENERIC-body fixture. It documented the M6 A2-era gap (nothing inside a generic type's body
 # reached the reference index) as an exact array, precisely so that closing it in B3 could not be silent —
@@ -127,7 +127,7 @@ IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
 WWURI="file://$ROOT/tests/query/ws/widget.kama"
-WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { slot Widget r; r.size = size; return give r; }\n}\nfn int32 defaultSize() { return 7; }\n'
+WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 SURI="file:///sem.kama"
@@ -169,7 +169,7 @@ namespace geo;
 export { Point };
 type value Point {
     public int32 x;
-    public ctor of(int32 x) { slot Point r; r.x = x; return give r; }
+    public ctor of(int32 x) { this.x = x; }
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
@@ -567,14 +567,15 @@ expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","inte
        "initialize advertises semanticTokensProvider with the legend, full-only"
 # Exact array, because every interesting property of the encoding is positional. Decoded, 5 ints per token
 # (deltaLine, deltaStartChar, length, type, modifiers), against
-#   type value P {\n    int32 x;\n    public ctor make(int32 v) { slot P r; r.x = v; return give r; }\n}\n
+#   type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; }\n}\n
 #   fn int32 main() { P p = P.make(v: 1); return p.x; }
-#   L1c11 P     struct+decl     L2c10 x   property+decl   L3c16 make method+decl
-#   L3c27 v     parameter+decl  L3c32 P   struct          L3c34 r    variable+decl
-#   L3c37 r     variable        L3c39 x   property        L3c43 v    parameter
-#   L3c58 r     variable        L5c9  main function+decl  L5c18 P    struct
-#   L5c20 p     variable+decl   L5c24 P   STRUCT          L5c26 make METHOD
-#   L5c31 v     parameter       L5c45 p   variable        L5c47 x    property
+#   L1c11 P     struct+decl     L2c10 x    property+decl  L3c16 make method+decl
+#   L3c27 v     parameter+decl  L3c37 x    property       L3c41 v    parameter
+#   L5c9  main  function+decl   L5c18 P    struct         L5c20 p    variable+decl
+#   L5c24 P     STRUCT          L5c26 make METHOD         L5c31 v    parameter
+#   L5c45 p     variable        L5c47 x    property
+# Fourteen tokens, four fewer than when the ctor declared the value it built: `P`, its declarator and
+# that declarator's three uses are gone, and `this` is a keyword, so it is not a token at all.
 # Four of those carry a milestone. ONE token at `P`'s decl name, though `_positions` holds two entries
 # there (the ctor's implicit result type resolves through the class's own decl identifier, and the existing
 # de-duplication lives only in `_refIndex`) — the protocol forbids overlap, so the facade's own filter is
@@ -583,7 +584,7 @@ expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","inte
 # not exist and F2 on `make` rewrote the declaration alone. And `P` at L5c24 is B3d — the type RECEIVER of
 # a `Type.name(...)` call, which resolved without passing a site while the same spelling in an annotation
 # (L5c18) indexed fine.
-expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,10,1,1,0,0,2,1,8,1,0,3,1,8,0,0,2,1,7,0,0,4,1,9,0,0,15,1,8,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,4,1,1,0,0,2,4,6,0,0,5,1,9,0,0,14,1,8,0,0,2,1,7,0]}}' \
+expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,10,1,7,0,0,4,1,9,0,2,9,4,5,1,0,9,1,1,0,0,2,1,8,1,0,4,1,1,0,0,2,4,6,0,0,5,1,9,0,0,14,1,8,0,0,2,1,7,0]}}' \
        "semanticTokens/full -> delta-encoded tokens, deduped, non-overlapping, ascending"
 # This assertion PINNED the pre-B3 gap as an exact array so that closing it could not be silent. B3 closed
 # it, so it changed — which is the whole point. In

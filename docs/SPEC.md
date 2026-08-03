@@ -1426,7 +1426,7 @@ calls at the fill site. (A generic field could not spell the latter anyway — t
 type resource Ring {
     Ptr<uint8> data = null; int32 len = 0;   // stated defaults — every ctor inherits them
     int32 cap;                                // no default -> every ctor must assign it
-    public ctor withCapacity(int32 cap) { Ring r; r.cap = cap; return give r; }
+    public ctor withCapacity(int32 cap) { this.cap = cap; }
 }
 ```
 
@@ -1434,8 +1434,13 @@ The idiom for a raw handle follows: give the field's empty value a **niche** rat
 as "unset". `std::fs::File` declares `int32 fd = -1`, so its destructor is `if (fd >= 0)` and descriptor 0
 (stdin) is an ordinary ownable handle — Rust's `OwnedFd`.
 
-> A bare `T x;` outside a constructor is still permitted; making it an explicit `slot` declaration, so that
-> an unassigned slot is provably never dropped, is tracked in [ROADMAP.md](ROADMAP.md) §3.
+**The value under construction is `this`, and it needs no declaration.** A constructor's whole job is to
+produce the type before it returns, so the storage is implied by the function itself — and since definite
+assignment already proves every field is set, a declaration would add ceremony, not proof. Declaring
+uninitialized storage *of the type being built* inside its own ctor is therefore an error: `this` is the
+only name it has. (An *initialized* local of the same type is untouched — it is a finished value like any
+other.) Falling off the end returns that value, exactly as a `void` function need spell no return;
+`return give this;` is the **early-return** form.
 
 ### Collections — the four-ctor matrix ✅
 
@@ -1456,7 +1461,7 @@ that elected one, `value` or `resource`, and it is what makes the `when [A: defa
 kama rather than only by the compiler's field fill:
 
 ```kama
-ctor fresh() when [A: default] { slot Holder<A> h; h.item = A.default(); return give h; }
+ctor fresh() when [A: default] { this.item = A.default(); }
 ```
 
 Electing a default stays the **type's** choice: a type that never marked one has no `default()`, and the
@@ -1515,7 +1520,7 @@ each thing is said exactly one way. `slot` does **not** run the type's `default`
 | whole assignment | `x = …` |
 | field write | `x.f = …` — how a factory builds a value field by field |
 | `out` argument | `f(dst: out x)` — the callee is separately proven to assign it |
-| method call | `x.reserve(n: 8)` — the builder shape (`slot FixedArray<T,A> r; r.allocBuffer(size: n);`) |
+| method call | `x.reserve(n: 8)` — the builder shape (`slot FixedArray<T,A> a; a.allocBuffer(size: n);`) |
 | `addr(of: x)` | the vouch for the raw move-out dance, inside `unsafe` |
 
 **Assigned on only some paths?** Then it drops. A slot's storage is always valid — the declaration applies

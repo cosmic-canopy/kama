@@ -11,7 +11,7 @@ type resource RcWeak<T> {
 type resource Rc<T> implements Deref<T>, HeapOwner<T> {
     Ptr<T> p; Ptr<Ctrl> c;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
-    public ctor adopt(Ptr<T> raw) { slot Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }
+    public ctor adopt(Ptr<T> raw) { Ptr<Ctrl> k = null; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak.make(p: this.p, c: this.c); }
     ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; } }

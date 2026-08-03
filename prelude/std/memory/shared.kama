@@ -59,14 +59,14 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     // `when [A: default]` gate (a custom `A` box comes through `adoptIn`). `GlobalAllocator` is stateless — its
     // `deallocate` == `free` (matching the malloc) and never reads the handle, so an unset value is inert.
     public ctor adopt(Ptr<T> raw) when [A: default] {
-        slot Ptr<Ctrl> ctrl;
+        Ptr<Ctrl> ctrl = null;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         this.p = raw; this.c = ctrl;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
     // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
     public ctor adoptIn(Ptr<T> raw, A allocator) {
-        slot Ptr<Ctrl> ctrl;
+        Ptr<Ctrl> ctrl = null;
         unsafe { ctrl = cast<Ptr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }

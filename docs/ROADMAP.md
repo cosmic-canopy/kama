@@ -214,11 +214,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **A legacy self-returning `static fn` factory is TRUSTED by the ctor-completeness check.**
-  `checkNamedCtorComplete` cannot see through one, so a type constructed that way can skip the
-  "every field is assigned" guarantee. Closing it means making a self-returning `static fn` an error now
-  that `ctor` is the one construction spelling — a small breaking change, so it belongs with the 1.0
-  naming/API reconcile rather than after it.
 - **Windows long-path support is deferred** (`kama_os.h`): the temp-path builder assumes `MAX_PATH`-class
   lengths. Surfaces only on a deep working directory.
 - **UBSan's `function` check is disabled suite-wide** (`run_tests.sh`). Vtable / contract /

@@ -1,0 +1,14 @@
+// The ban is on UNINITIALIZED storage of the type under construction, not on the type. A ctor may still
+// build a second, finished value of its own type and read it — that value came through a constructor of
+// its own, so it carries the same guarantee every other value does.
+type value P {
+    public int32 x; public int32 y;
+    public ctor of(int32 x, int32 y) { this.x = x; this.y = y; }
+    // Mirrors `of` about the diagonal, by building one and reading it back.
+    public ctor flipped(int32 x, int32 y) {
+        P other = P.of(x: y, y: x);
+        this.x = other.x;
+        this.y = other.y;
+    }
+}
+fn int main() { P p = P.flipped(x: 2, y: 5); return p.x * 10 + p.y; }   // 5*10 + 2 = 52

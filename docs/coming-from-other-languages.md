@@ -31,7 +31,7 @@ want a bound local are a *nested* value-producing `match` and a *variant-produci
 ```kama
 type resource Counter {
     int32 n;                                  // no `public` — a resource guards its invariant
-    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 value() { return this.n; }
 }
 ```

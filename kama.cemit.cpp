@@ -2546,6 +2546,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     unsupported(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring "
                                  "a hole that must be assigned before it is used) or give it a value").c_str(),
                                 n->line);
+                // A ctor's value is `this`, so declaring uninitialized storage OF THE TYPE BEING BUILT is
+                // a second name for the same thing — and there is no way to hand two of them back. `this`
+                // is the only spelling. An INITIALIZED local of the same type is untouched: it is a
+                // finished value like any other, not a second thing under construction.
+                if (_inNamedCtorBody && !d->initializer && _currentClass && ty == _currentClass->name)
+                    unsupported(("a constructor builds `" + ty + "`, and that value is `this` — assign its "
+                                 "fields directly (`this.<field> = …`) instead of declaring `" + nm
+                                 + "`").c_str(), n->line);
                 // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
@@ -9685,8 +9693,9 @@ bool CEmitter::isDefaultFillable(const std::string& c)
 // The rule (delegation-aware, sound top-level-only discipline): the returned
 // value is COMPLETE unless it is a local that was declared bare (no constructing initializer) and is missing
 // an unconditional assignment to some owning field. Any construction / factory call / param is trusted
-// complete — it came through something that itself satisfies the guarantee (a legacy `static fn` factory is
-// trusted during coexistence; that gap closes at M8 when self-returning `static fn` becomes an error).
+// complete — it came through something that itself satisfies the guarantee. (There is no back door left:
+// a self-returning `static fn` is rejected outright as a disguised constructor, so `ctor` is the only way
+// a value of a type comes into being.)
 void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 {
     std::set<std::string> owning;       // Owned/Shared fields — never-null (drives the sharper message)

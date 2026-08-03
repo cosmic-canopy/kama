@@ -31,7 +31,7 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<Ctrl> c;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
     public ctor adopt(Ptr<T> raw) {
-        slot Ptr<Ctrl> ctrl;
+        Ptr<Ctrl> ctrl = null;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
         return Rc.make(p: raw, c: ctrl);                                     // fresh ctor -> no marker
     }
