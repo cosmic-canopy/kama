@@ -41,13 +41,13 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
 **One breaking change is still open: `slot`'s scope** — briefed in
-[design/slot-scope.md](design/slot-scope.md) (cold-start ready). `slot` was designed to name the storage an
-`out` parameter fills; `c2ae0c8` then required it on *every* initializer-less local, so ~73% of its 787 uses
-are constructors saying "this is the value I am building", not holes. The campaign gives a ctor an implicit
-`this` (and an implicit return), so the value under construction needs no declaration at all — which also
-makes "one value per ctor" unrepresentable rather than merely rejected — and narrows `slot` back to the
-`out` holes it was designed for. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
-side of this shipped already — `T.default()`, `5edb4d9`.)*
+[design/slot-scope.md](design/slot-scope.md), now **half shipped** (steps 1–3 of 7, `e1edf1f`→`3098b21`).
+A ctor's value is an implicit `this` with an implicit return, so it needs no declaration — which also makes
+"one value per ctor" unrepresentable rather than merely rejected — and the 652 constructor sites are swept.
+**What remains is `slot` itself**: narrowing it to the `out` holes it was designed for (175 declarations
+left), then inheritance hole 1, then closeout. The brief's status section says where to start and lists what
+the rest of it gets wrong. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable side
+shipped earlier — `T.default()`, `5edb4d9`.)*
 
 **⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
 campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule,
