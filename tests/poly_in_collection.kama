@@ -1,21 +1,19 @@
-// PARKED REPRO (not in the suite — it fails to BUILD, at the C level).
+// A polymorphic class stored BY VALUE in a generic collection — the inheritance x generics seam.
 //
-// Storing a polymorphic class (one with a vtable) BY VALUE in a generic collection emits a use of its
-// vtable constant BEFORE that constant is defined:
+// This used to fail at the C level, never at the kama level:
 //
 //   error: use of undeclared identifier '_F4__DerivedTick__vtable'
 //     x.__base.__vptr = &_F4__DerivedTick__vtable;
 //
-// Diagnosed: the vtable IS emitted, but late. `DynamicArray<DerivedTick>::takeAt` — a generic-collection
-// method — is emitted BEFORE the user class bodies, and it fills `__vptr`. Since the vtable is a
-// `static const`, C requires a prior declaration. A virtual/final pair with no collection works fine
-// (tests/devirt_final_class.kama), so this is the inheritance x generics intersection.
+// `DynamicArray<DerivedTick>`'s `_FUNCS` body lives in the SHARED HEADER and stores `&C__vtable` when it
+// moves an element by value, while the vtable instance is defined later, per-module. It was `static
+// const`, so C had no prior declaration to work from. The instance now carries external linkage and
+// emitHeaderContent forward-declares it, next to the `C__as_I` contract vtables that needed the same
+// treatment for the same reason. A virtual/final pair with NO collection always worked
+// (tests/devirt_final_class.kama), which is why this hid.
 //
-// Fix shape: forward-declare vtable constants (or emit them before generic instances). See
-// docs/design/inheritance.md.
-//
-// Consequence for the engine track: a component array of a polymorphic type cannot be built at all today
-// (ENGINE_READINESS.md) — which is one more reason ECS components should be plain `value` types.
+// Both shapes are exercised deliberately: (A) the plain `value` type an ECS component should be, and
+// (B) the OOP virtual/final pair. Keep both — the bug lived only in (B), and only in a collection.
 
 import std::collections::{DynamicArray, View};
 

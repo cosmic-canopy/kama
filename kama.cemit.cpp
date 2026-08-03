@@ -12023,14 +12023,18 @@ void CEmitter::emitVtableType(ClassInfo& ci)
     *_out << "};\n\n";
 }
 
-// Static const vtable INSTANCE per class with a vtable, filled with the most-
-// derived impl visible to this class (designated initializers; missing slots zero).
+// The vtable INSTANCE per class with a vtable, filled with the most-derived impl visible to this class
+// (designated initializers; missing slots zero). ONE definition, in the class's home module — with
+// EXTERNAL linkage, because a generic collection's `_FUNCS` body in the shared header may store this
+// address when it moves a polymorphic element by value. Its `extern` declaration is emitted in
+// emitHeaderContent, and the two must agree (a `static` definition after a non-static declaration is
+// an error), so neither may grow an exclusion the other lacks.
 void CEmitter::emitVtableInstance(ClassInfo& ci)
 {
     if (!ci.hasVtable) return;
     auto it = _rootVtables.find(ci.vtableRoot);
     if (it == _rootVtables.end()) return;
-    *_out << "static const " << ci.vtableRoot << "_vtable " << ci.name << "__vtable = {\n";
+    *_out << "const " << ci.vtableRoot << "_vtable " << ci.name << "__vtable = {\n";
     for (auto& s : it->second) {
         auto impl = ci.slotImpl.find(s.name);
         if (impl == ci.slotImpl.end()) continue;   // not visible here -> zero
@@ -15586,6 +15590,19 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (it == _interfaces.end()) continue;
             *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
         }
+    }
+
+    // Forward-declare each CLASS vtable instance, for the same reason as the `C__as_I` block above and
+    // one order-of-emission step further: a generic collection's `_FUNCS` body (emitted just below, from
+    // `emitCollectionDefs`) stores `&C__vtable` when it moves a polymorphic element BY VALUE — but the
+    // instance itself is defined per-module by emitVtableInstance, i.e. AFTER this header. The instance
+    // therefore carries external linkage (one definition, in its home module) and is declared here.
+    // Without this, `DynamicArray<SomeVirtualResource>` fails at the C level with "use of undeclared
+    // identifier 'C__vtable'" — the inheritance x generics seam (docs/design/inheritance.md, hole 4).
+    for (ClassInfo* ci : classes) {
+        if (ci->isIntrinsicColl || ci->isExternStruct || ci->isGenericInst) continue;
+        if (!ci->hasVtable || !_rootVtables.count(ci->vtableRoot)) continue;   // mirrors emitVtableInstance
+        *_out << "extern const " << ci->vtableRoot << "_vtable " << ci->name << "__vtable;\n";
     }
 
     // Element destructor prototypes the collection/smart-pointer macros call, then the
