@@ -49,17 +49,20 @@ makes "one value per ctor" unrepresentable rather than merely rejected — and n
 `out` holes it was designed for. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
-**⚠️ INHERITANCE — five holes, briefed in [design/inheritance.md](design/inheritance.md)** (found
-2026-08-01/02, cold-start ready). Two are guarantees the language claims elsewhere: a derived type never
-runs its base's constructor (so base invariants are unenforceable for subclasses), and `base.` skips
-`canAccess` (so a derived type reaches base privates). One is a footgun: shadowing a non-virtual base
-method is silently legal at any visibility, decided by static type — while `public virtual` is already
-rejected as bad design. Two are diagnostics.
+**⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
+campaign shipped the switch (`--inherit-depth`), the depth cap, the `final` rule, no-public-widening, the
+`base.` visibility fix, the shadowing ban and both diagnostics. What remains is **hole 1: a derived type
+never runs its base's constructor**, so a base's invariants are unenforceable for its subclasses — and
+not only the ctor, a base's *field defaults* do not reach a derived instance either. Its repro is parked
+at `tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on
+[slot-scope.md](design/slot-scope.md) D5, the implicit `this`. Run that campaign first: it is already
+rewriting every ctor body, and the two sweeps must not interleave. Source-breaking, so before the tag or
+2.0.
 
-Three repros are parked in `tests/pending/`; each COMPILES today, which is the bug. Root cause is thin
-coverage — the stdlib uses **0** `extends` against **340** `implements`, so nothing pressed on the
-feature. The construction fix depends on [slot-scope.md](design/slot-scope.md) D5, and both are
-source-breaking: before the tag, or 2.0.
+A second question fell out of the cap and is **not decided**: `final` on a METHOD is now near-vacuous,
+because the only shape that isolated it (a non-final class that derives) is unrepresentable at depth 1.
+Whether `final fn` stays in the language deserves its own decision rather than a side effect — see the
+brief.
 
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there

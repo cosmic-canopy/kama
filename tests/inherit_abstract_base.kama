@@ -1,0 +1,54 @@
+import std::memory::{Owned};
+
+extern fn void kama_trace(int code);
+extern fn int kama_trace_get();
+
+// An `abstract` base: the shape where the base declares a seam a subclass MUST fill, which is the one
+// case with a clean contract equivalent — and therefore the case most worth pinning, since `virtual`
+// (a hole you MAY fill) is the only reason inheritance keeps a niche at all.
+//
+// The corpus had NO passing abstract-base fixture before this: every `abstract` test was an xfail
+// (can't instantiate, unimplemented pure, ...), so the working path was never exercised. That is the
+// thin coverage docs/design/inheritance.md names as the root cause of six holes.
+//
+// Covers in one program:
+//   - `abstract fn` (must override) beside `virtual fn` (may override, defaulted) on the same base
+//   - `base.<protected>` and `base.<public>` upcalls — the visibilities `base.` may legitimately reach
+//   - an `Owned<Abstract>` handle built from a leaf (upcast, offset-0)
+//   - virtual DESTRUCTION through that base handle: the most-derived dtor chain runs, no slicing
+type abstract resource Codec
+{
+    int32 tag;
+    protected fn void setTag(int32 v) { this.tag = v; }
+    protected fn int32 getTag() { return this.tag; }
+
+    public fn int32 encode() { return this.body() + this.salt() + this.extra(); }   // surface at the root
+    protected abstract fn int32 body();                              // MUST be overridden
+    protected virtual fn int32 salt() { return 1; }                  // MAY be overridden — defaulted here
+    protected virtual fn int32 extra() { return 0; }
+    public fn int32 describe() { return 100; }                       // reached via base.describe() below
+    ~Codec() { kama_trace(code: 1); }
+}
+
+type final resource Doubler extends Codec
+{
+    public ctor make(int32 seed) { slot Doubler r; r.setTag(v: seed); return give r; }
+    protected override fn int32 body() { return this.getTag() * 2; }
+    // `base.salt()` reaches the base's PROTECTED default and ADDS to it — the upcall `virtual` exists
+    // for, and the thing a pure contract cannot express without every implementor restating the default.
+    protected override fn int32 salt() { return base.salt() + 10; }
+    // `base.describe()` reaches a PUBLIC base method non-virtually. Legal from a protected override: the
+    // restriction on `base.` is the MEMBER's visibility, not the calling method's.
+    protected override fn int32 extra() { return base.describe(); }
+    ~Doubler() { kama_trace(code: 2); }
+}
+
+fn int main()
+{
+    int32 sum = 0;
+    {
+        Owned<Codec> c = new Doubler.make(seed: 5);   // upcast: leaf built, held as the abstract base
+        sum = c.encode();                             // body 10 + salt (1+10) + extra 100 = 121
+    }                                                 // drops through the BASE handle -> Doubler then Codec
+    return sum + kama_trace_get();                    // 121 + 63 = 184
+}
