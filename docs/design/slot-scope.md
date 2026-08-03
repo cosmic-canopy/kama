@@ -95,7 +95,29 @@ every exit, so a slot never reaches `MaybeMoved`. **Every non-fixture site in th
 — the only cross-scope fill anywhere is `tests/slot_match_assign.kama` case (4), a fixture written to prove
 the match join. That join rule still holds for `out` **parameters** (`pickInto`), which stays its lead.
 
-### Step 4 — the boundary helpers (do this first; step 5's rule 1 depends on it)
+### Step 3.5 — reserve `self` (one commit, do it first; independent of everything else)
+
+**Decided (user, 2026-08-03): reserve it.** `self` is not a kama keyword — the lexer table has `base` and
+`this` only — but it IS the emitted C name for the receiver pointer, so a local or parameter named `self`
+inside a type body collides and the user gets clang's words, not kama's:
+
+```kama
+public fn int32 get() { int32 self = 1; return this.x + self; }
+// error: redefinition of 'self' with a different type: 'int32_t' vs '_F4__P *'
+```
+
+**Pre-existing for methods** — that has always been broken. What this campaign changed is that a *ctor*
+now emits a `self` too, so the same collision reaches constructors, where it previously compiled. Five
+corpus ctors named the value they were building `self`; the step-2 sweep removed all five, so nothing is
+broken today and the fix is purely about the next person to write one.
+
+Reject a local/param named `self` inside a type body with a real kama diagnostic pointing at `this`. Cover
+methods and ctors together, and pin both with xfail fixtures. The alternative — mangling the emitted
+receiver to something unspellable so `self` becomes an ordinary identifier — is cleaner in principle but
+touches every hardcoded `"self"` in the emitter; **rejected for now, not forever.** If the 1.0 naming
+reconcile wants no compiler-reserved names, that is where it belongs.
+
+### Step 4 — the boundary helpers (step 5's rule 1 depends on it)
 
 Two seams hide in the 9 `addr(of:)` sites, and naming them is what lets rule 1 have no exceptions.
 
