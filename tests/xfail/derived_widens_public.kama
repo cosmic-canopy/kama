@@ -1,0 +1,22 @@
+// A derived type may not widen the hierarchy's public interface (decision A).
+//
+// `Exposer` is the leak this closes: `Base` deliberately keeps `secretHook` protected — an internal seam
+// for subclasses — and the subclass republishes it under a public name. Every handle to a `Base` promised
+// a fixed surface, and this hands the world a hook the base kept internal. Substitutability has to be
+// total, not aspirational: what a base handle can do is what ANY subclass can do, and no more.
+//
+// A derived type may still add fields, add PRIVATE helpers, and override the protected seams the base
+// sanctioned. Constructors are exempt — construction is not part of the substitutable surface.
+type virtual resource Base
+{
+    public ctor make() { slot Base r; return give r; }
+    public fn int32 rank() { return this.secretHook(); }
+    protected virtual fn int32 secretHook() { return 1; }
+}
+type final resource Exposer extends Base
+{
+    public ctor make() { slot Exposer r; return give r; }      // fine — ctors are exempt
+    protected override fn int32 secretHook() { return 2; }
+    public fn int32 hook() { return this.secretHook(); }       // ERROR: republishes a protected seam
+}
+fn int main() { Exposer e = Exposer.make(); return e.hook(); }

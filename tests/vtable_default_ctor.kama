@@ -6,17 +6,19 @@
 // behind a public method; the sealed leaf is a `final` class.
 type virtual resource Shape {
     protected virtual fn int32 val() { return 0; }
+    protected virtual fn void put(int32 v) { }           // the seam the leaf fills; public entry below
     public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
+    public fn void set(int32 v) { this.put(v: v); }      // public surface is fixed at the ROOT (decision A)
 }
 type final resource Box extends Shape {
     int32 n = 0;                                      // private (kind-decides); the field default IS the
                                                       // stated empty state — `make()` need not repeat it
     public ctor make() { slot Box b; return give b; }      // bare local -> __vptr set by the vtable-typed store
-    public fn void put(int32 v) { this.n = v; }
+    protected override fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }
 }
 fn int32 main() {
     Box b = Box.make();   // named ctor; the built object carries a valid vptr
-    b.put(v: 41);
+    b.set(v: 41);
     return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42
 }

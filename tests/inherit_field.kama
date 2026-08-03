@@ -11,6 +11,8 @@ type virtual resource Base
     protected fn void setX(int x) { this.x = x; }   // subclasses initialize base data through this
     protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
     protected virtual fn int tag() { return 0; }
+    public fn int sum() { return this.sumImpl(); }   // public surface is fixed at the ROOT (decision A)
+    protected virtual fn int sumImpl() { return this.getX(); }
 }
 type final resource Derived extends Base
 {
@@ -23,7 +25,7 @@ type final resource Derived extends Base
         return give r;
     }
     protected override fn int tag() { return 1; }
-    public fn int sum() { return this.getX() + y; }   // base data via the protected accessor
+    protected override fn int sumImpl() { return this.getX() + y; }   // base data via the protected accessor
 }
 fn int main()
 {

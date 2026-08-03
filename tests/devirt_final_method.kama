@@ -1,19 +1,28 @@
-// Tier-1 devirtualization (trigger 2): a `final override` seals a slot, so calls to it lower to a
-// direct call even though the method IS overridden at the root level (trigger 3 would not fire).
-// Inside `midGo`, `this` is a `Mid` whose `tick` is `final` -> direct Mid__tick.
+// `final override` seals a slot: no subclass may re-override it, and a call to it lowers to a direct
+// call. Inside `midGo`, `this` is a `Leaf` whose `tick` is `final` -> direct Leaf__tick.
+//
+// ⚠️ This used to isolate devirtualization trigger 2 (`mi->isFinal`) from triggers 1 (`final` receiver
+// class) and 3 (nobody overrides the slot), with a NON-final `virtual resource Mid` in the middle. The
+// inheritance depth cap makes that shape unrepresentable — at `--inherit-depth=1` a deriving type is
+// `final`, so trigger 1 always fires first (emitDispatch short-circuits left to right). Trigger 2 is
+// therefore no longer reachable as the SOLE reason to devirtualize, which makes `final` on a METHOD
+// close to redundant at depth 1; see docs/design/inheritance.md. The fixture still pins that
+// `final override` parses, seals (tests/xfail/override_final), and dispatches directly.
 type virtual resource Base
 {
     public ctor make() { slot Base r;  return give r; }
+    public fn int32 midGo() { return this.run(); }       // public surface, on the root (decision A)
+    protected virtual fn int32 run() { return this.tick(); }
     protected virtual fn int32 tick() { return 1; }
 }
-type virtual resource Mid extends Base
+type final resource Leaf extends Base
 {
-    public ctor make() { slot Mid r;  return give r; }
+    public ctor make() { slot Leaf r;  return give r; }
     protected final override fn int32 tick() { return 5; }
-    public fn int32 midGo() { return this.tick(); }
+    protected override fn int32 run() { return this.tick(); }   // `this` is a Leaf; tick is final -> direct
 }
 fn int main()
 {
-    Mid m = Mid.make();
+    Leaf m = Leaf.make();
     return m.midGo();
 }

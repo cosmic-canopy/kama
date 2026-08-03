@@ -254,17 +254,31 @@ wants without breaking anything that exists.
 | ---: | --- |
 | **4** polymorphic type by value in a generic collection | ✅ shipped `0f8b2a9` — vtable instances gained external linkage + a header forward declaration, beside the `C__as_I` block that already needed it. Fixture `tests/poly_in_collection`. |
 | **C** the switch | ✅ shipped — `--inherit-depth=N` / `"inheritDepth"`, one gate (`rejectIfNoInherit`), guard `tools/check-inherit-cost.sh`, cost measured above. |
-| **B** depth cap | ◐ the **cap** ships with C (walked in `linkBases`; `tests/vtable_depth3` restructured to `vtable_depth2`, rejection pinned by `tests/xfail/inherit_depth_exceeded`). The `final`-must-be-written half is still to do. |
-| **A** no public widening | ☐ — and a deriving type may not declare `implements` either (decided 2026-08-02; contracts belong on the root, 0 corpus sites, free today and breaking later). |
+| **B** depth cap + `final` | ✅ shipped — both walked in `linkBases`; `tests/vtable_depth3` restructured to `vtable_depth2`; rejections pinned by `tests/xfail/inherit_depth_exceeded` + `tests/xfail/deriving_type_not_final`. |
+| **A** no public widening | ✅ shipped — `checkDerivedPublicSurface`, ctors exempt, plus the `implements` half (contracts belong on the root). Pinned by `tests/xfail/derived_widens_public` (the `Exposer` leak) + `tests/xfail/derived_implements_contract`. |
 | **1**, **2**, **3**, **5**, **6** | ☐ |
+
+### ⚠️ A consequence of the cap worth a decision later: `final` on a METHOD is now near-vacuous
+
+`emitDispatch` devirtualizes on three independent triggers, short-circuiting left to right:
+`sc.isFinalClass || mi->isFinal || !overriddenAnywhere`. Trigger 2 (`final` method) was isolable only
+with a **non-final class that derives** — `tests/devirt_final_method` used exactly that shape. Under the
+cap, a deriving type is `final`, so trigger 1 always fires first, and trigger 2 is unreachable as the
+*sole* reason to devirtualize.
+
+A root can still write `protected final virtual fn`, but nothing may then override it, so trigger 3 fires
+too. So `final` on a method no longer buys any lowering the other two triggers do not already buy; what
+remains is its *documentary* value (marking a slot as sealed) and the rejection in
+`tests/xfail/override_final`. **Not decided here** — it is a live question of whether `final fn` should
+stay in the language at depth 1, and it should be answered deliberately rather than as a side effect of
+this campaign. `tests/devirt_final_method` records the situation in its own comment.
 
 ## Sequencing
 
 **Decision items A and B are source-breaking**, as are holes 1 and 3, so they land before the 1.0 tag or
 wait for 2.0. Hole 2 is breaking only for code exploiting the hole. Holes 5 and 6 are diagnostics.
 
-Remaining order: **B** (the `final` rule), **A** (the restrictions) → **2**, **3** → **5**, **6** →
-*[the slot-scope campaign]* → **1**.
+Remaining order: **2**, **3** → **5**, **6** → *[the slot-scope campaign]* → **1**.
 
 1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so that campaign runs first — it is
 already rewriting every ctor body, and the two sweeps must not interleave.

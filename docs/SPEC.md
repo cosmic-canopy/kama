@@ -1587,11 +1587,40 @@ a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outsid
 they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for the full kind
 table.
 
+### A derived type may not widen the public interface ✅
+
+The hierarchy's public surface is fixed at its **root**. A derived type may add **fields**, add
+**private** helpers, and **override the protected seams the base sanctioned** (`virtual` = may,
+`abstract` = must) — it may not add a public method, and it may not declare `implements`.
+
+```kama
+type final resource Exposer extends Base {
+    public ctor make() { … }                                // ✓ ctors are exempt
+    protected override fn int32 secretHook() { return 2; }  // ✓ a seam the base sanctioned
+    public fn int32 hook() { return this.secretHook(); }    // ✗ republishes a protected seam
+}
+type final resource Icon extends Widget implements Clickable { … }   // ✗ contracts belong on the root
+```
+
+Substitutability is then **total rather than aspirational**: what a base handle can do is what *any*
+subclass can do, and no more. The rule exists for the second line above — a subclass republishing an
+internal seam under a new public name, handing the world a hook the base deliberately kept private.
+
+**Constructors are exempt.** A derived type needs its own public `ctor` (`RawChannel.open(…)`), and
+construction is not part of the substitutable surface — you build a concrete type, then hand it out as
+its base.
+
+**`implements` is barred on a deriving type** because a contract's methods are public and need not exist
+on the base, so allowing it would widen the surface through a door the rule never looked at. If a
+hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance.
+
 ### Depth — `--inherit-depth` ✅
 
-A hierarchy is **one level deep by default**: a root, and leaves that extend it. `Widget -> Control ->
-Button` — a middle layer that both adds state and declares seams for its own extenders — is rejected, and
-becomes composition instead.
+A hierarchy is **one level deep by default**: a root, and leaves that extend it. A deriving type must be
+written **`final`** — the compiler could infer it at depth 1, and deliberately does not, because writing
+it teaches the constraint at the point of use and means raising the cap later cannot silently change what
+existing code means. `Widget -> Control -> Button` — a middle layer that both adds state and declares
+seams for its own extenders — is rejected, and becomes composition instead.
 
 ```
 'Button' extends 'Control', which already extends 'Widget' — the inheritance depth limit is 1

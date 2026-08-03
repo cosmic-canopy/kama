@@ -1,0 +1,18 @@
+// A deriving type must be WRITTEN `final`, not merely be a leaf by arithmetic.
+//
+// At `--inherit-depth=1` nothing may extend `Derived` anyway, so the compiler could infer this. It
+// deliberately does not: writing `final` teaches the constraint at the point of use rather than letting
+// it surface later as a puzzling rejection of a subclass, and it means raising the cap cannot silently
+// change what existing code means — a type that opted into being a leaf stays one.
+type virtual resource Base
+{
+    public ctor make() { slot Base r; return give r; }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+type virtual resource Derived extends Base        // must be `type final resource Derived`
+{
+    public ctor make() { slot Derived r; return give r; }
+    protected override fn int32 step() { return 2; }
+}
+fn int main() { Derived d = Derived.make(); return d.rank(); }

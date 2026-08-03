@@ -1,0 +1,23 @@
+// A deriving type may not declare `implements` — contracts belong on the ROOT.
+//
+// This is the other half of decision A, and without it the first half is unenforceable: a contract's
+// methods are public and need not exist on the base, so `extends B implements C` would widen the public
+// surface through a door the rule never looked at. If a hierarchy conforms to a contract, its root says
+// so and every leaf inherits the conformance.
+//
+// Nothing in the corpus used the combination when the rule landed, so it cost nothing then — and it is
+// source-breaking to add later, which is why it landed with A rather than after it.
+type contract Clickable for resource { fn int32 click(); }
+type virtual resource Widget
+{
+    public ctor make() { slot Widget r; return give r; }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+type final resource Icon extends Widget implements Clickable
+{
+    public ctor make() { slot Icon r; return give r; }
+    protected override fn int32 step() { return 2; }
+    public fn int32 click() { return 3; }
+}
+fn int main() { Icon i = Icon.make(); return i.rank(); }

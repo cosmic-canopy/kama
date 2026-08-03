@@ -7842,14 +7842,71 @@ void CEmitter::linkBases()
             if (ci.isGenericInst || !ci.base) continue;
             int hops = 0;
             for (ClassInfo* b = ci.base; b; b = b->base) ++hops;
-            if (hops <= _inheritDepth) continue;
-            unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which already extends '"
-                         + (ci.base->base ? ci.base->base->name : std::string("a base"))
-                         + "' — the inheritance depth limit is " + std::to_string(_inheritDepth)
-                         + " (`--inherit-depth`). For a middle layer, compose the base rather than "
-                           "extending it.").c_str(),
-                        ci.node ? ci.node->line : 0);
+            int line = ci.node ? ci.node->line : 0;
+            if (hops > _inheritDepth) {
+                unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which already extends '"
+                             + (ci.base->base ? ci.base->base->name : std::string("a base"))
+                             + "' — the inheritance depth limit is " + std::to_string(_inheritDepth)
+                             + " (`--inherit-depth`). For a middle layer, compose the base rather than "
+                               "extending it.").c_str(), line);
+                continue;   // already over the line; don't also demand `final` of it
+            }
+            // A class AT the limit is a leaf by arithmetic — nothing may extend it and stay in bounds. It
+            // must still be WRITTEN `final` rather than have that inferred: the constraint is then taught
+            // at the point of use instead of surfacing later as a puzzling rejection of a subclass, and
+            // lifting the cap later cannot silently change what existing code means (a type that opted
+            // into being a leaf stays one). Below the limit, `virtual`/`abstract` remains legal — that is
+            // the middle layer a higher `--inherit-depth` buys.
+            if (hops == _inheritDepth && !ci.isFinalClass)
+                unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', so it is a leaf — declare "
+                             "it `type final resource " + ci.name + "`. At `--inherit-depth="
+                             + std::to_string(_inheritDepth) + "` nothing may extend a type this deep; for "
+                             "a middle layer, compose the base rather than extending it.").c_str(), line);
         }
+}
+
+// A derived type may NOT widen the hierarchy's public interface (decision A, docs/design/inheritance.md).
+//
+// It may add FIELDS, add PRIVATE helpers, and override the protected seams the base sanctioned
+// (`virtual` = may, `abstract` = must). It may not add a public method, and it may not declare
+// `implements`. The public surface is therefore fixed at the ROOT, which makes substitutability total
+// rather than aspirational: every handle to a base sees the whole of what any subclass can do.
+//
+// This is what closes the `Exposer` leak — a subclass re-publishing a protected seam under a new public
+// name, which compiles today and hands the world a hook the base deliberately kept internal.
+//
+// Runs after linkBases (bases + interfaces resolved) and before buildVtables.
+void CEmitter::checkDerivedPublicSurface()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.isGenericInst || !ci.base) continue;
+        int line = ci.node ? ci.node->line : 0;
+
+        // A contract's methods are public and need not exist on the base, so allowing `implements` here
+        // would be a hole straight through the rule. If a hierarchy conforms to a contract, its ROOT says
+        // so and every leaf inherits the conformance.
+        if (!ci.interfaces.empty())
+            unsupported(("a deriving type may not declare `implements` — '" + ci.name + "' extends '"
+                         + ci.base->name + "', whose public surface is fixed at the root. Declare the "
+                         "contract on '" + ci.base->name + "', or compose instead of extend.").c_str(), line);
+
+        for (auto& mkv : ci.methods) {
+            MethodInfo& mi = mkv.second;
+            if (mi.visibility != Visibility::Public) continue;
+            // ⚠️ Constructors are EXEMPT. A derived type needs its own public `ctor` (`RawChannel.open(…)`),
+            // and construction is not part of the substitutable surface — you build a concrete type, then
+            // hand it out as its base. Letting the rule swallow ctors would make derived types
+            // unconstructible.
+            if (mi.isCtor) continue;
+            if (findMethod(ci.base, mkv.first, nullptr)) continue;   // redeclaring is a separate question
+            unsupported(("'" + ci.name + "' adds a public method '" + mkv.first + "' that '"
+                         + ci.base->name + "' does not have — a derived type may not widen the public "
+                         "interface. Declare it on '" + ci.base->name + "' (as public, calling a "
+                         "`protected virtual` hook), or make it private.").c_str(),
+                        mi.node ? mi.node->line : line);
+        }
+    }
 }
 
 // Classes in base-before-derived order.
@@ -15321,6 +15378,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     }
     linkBases();
     linkContracts();    // merge refined-parent methods into each contract before vtables are built
+    checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
     // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target cType -> contracts)

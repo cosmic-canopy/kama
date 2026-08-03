@@ -1327,6 +1327,7 @@ private:
                      SharedIdentifierList bounds, int line);
     std::string basePathTo(ClassInfo* from, ClassInfo* to);   // "__base." chain from `from` down to `to`
     std::string vptrPrefix(ClassInfo* ci);                    // "__base." * (hops to vtableRoot)
+    void checkDerivedPublicSurface();                         // decision A: no widening, no `implements`
     void emitVtableType(ClassInfo& ci);                       // only when ci is its own vtableRoot
     void emitVtableInstance(ClassInfo& ci);                   // for every class with hasVtable
     std::string vtableSlotSig(const VSlot& s);                // "(Owner* self, T a, ...)"

@@ -1,16 +1,23 @@
 // Tier-1 devirtualization (trigger 1): a call whose static receiver is a `final` class
 // devirtualizes even an overridden method — no subclass can exist, so the target is unique.
-// Inside `meow`, `this` is a `Cat` (final), so `this.noise()` lowers to a direct Cat__noise.
+// Inside `meowImpl`, `this` is a `Cat` (final), so `this.noise()` lowers to a direct Cat__noise.
+//
+// The observation point has to sit INSIDE the final class, and decision A says a derived type may not
+// add public methods — so the public entry lives on the root and dispatches into a protected seam the
+// leaf overrides. That is the Template Method shape SPEC documents anyway, and the devirtualized call is
+// still the one made from inside `Cat`.
 type virtual resource Animal
 {
     public ctor make() { slot Animal r; return give r; }
+    public fn int32 meow() { return this.meowImpl(); }   // public surface, on the root
+    protected virtual fn int32 meowImpl() { return this.noise(); }
     protected virtual fn int32 noise() { return 1; }
 }
 type final resource Cat extends Animal
 {
     public ctor make() { slot Cat r; return give r; }
     protected override fn int32 noise() { return 7; }
-    public fn int32 meow() { return this.noise(); }
+    protected override fn int32 meowImpl() { return this.noise(); }   // `this` is a Cat -> direct Cat__noise
 }
 fn int main()
 {
