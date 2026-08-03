@@ -1,0 +1,27 @@
+// `base.` runs the visibility check, so a derived type cannot reach a PRIVATE member of its base by
+// choosing the other spelling.
+//
+// This used to compile, run, and return 42 while the same call written `this.secret()` was correctly
+// rejected ("'secret' is private in 'B'") — the base path skipped `canAccess` entirely. Not
+// memory-unsafe; it broke an encapsulation guarantee the language otherwise enforces.
+//
+// The fix applies the EXISTING rule rather than adding one: `_currentClass` is the derived type at a
+// `base.` call, so `canAccess` walks its base chain and admits protected while rejecting private.
+//
+// ⚠️ `base.` is NOT restricted to protected-only. An earlier draft proposed that, and it is wrong on two
+// counts: a derived type may legitimately call `base.<protected>` from a PUBLIC method, so the
+// restriction would be on the wrong axis; and a `resource` field is always private while inheritance is
+// resource-only, so there are no protected FIELDS to reach — this is entirely about methods.
+// tests/vtable_depth2 covers the legal `base.<protected>` direction.
+type virtual resource B {
+    fn int32 secret() { return 42; }                  // no modifier -> private to B
+    public fn int32 peek() { return this.peekImpl(); }
+    protected virtual fn int32 peekImpl() { return 0; }
+    protected virtual fn int32 t() { return 1; }
+}
+type final resource D extends B {
+    public ctor make() { slot D r; return give r; }
+    protected override fn int32 t() { return 2; }
+    protected override fn int32 peekImpl() { return base.secret(); }   // ERROR: 'secret' is private in 'B'
+}
+fn int main() { D d = D.make(); return d.peek(); }

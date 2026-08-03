@@ -1529,7 +1529,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          recordFieldRef(owner, name, ba->identifier.get());
                          return "self->__base." + basePathTo(_currentClass->base, owner) + name; }
         }
-        unsupported("base access", ba->line);
+        // Say what actually happened. This used to report the bare fragment "base access", naming
+        // neither the member nor the type — the two failures below are quite different problems.
+        if (!_currentClass)
+            unsupported("`base` is only meaningful inside a method of a derived type", ba->line);
+        else if (!_currentClass->base)
+            unsupported(("'" + _currentClass->name + "' has no base class, so `base` names nothing "
+                         "(only a type declared `extends …` has one)").c_str(), ba->line);
+        else
+            unsupported(("'" + name + "' is not a field of the base class '" + _currentClass->base->name
+                         + "'").c_str(), ba->line);
         return name;
     }
 
@@ -4583,9 +4592,23 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // serde exemption is gone (M8e removed the `onConstruction` hook).
                     {
                         std::string tnm = (cd->name && cd->name->value) ? *cd->name->value : "T";
-                        unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
-                                     "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
-                                     + ".make(...)`)").c_str(), cc->line);
+                        // `: base(...)` deserves its own answer. The production exists ONLY so that a
+                        // class-named ctor still PARSES — which is what lets the guided message below be
+                        // reported instead of a raw parse error — and no emitter code ever read
+                        // ClassConstructorInitializerNode, so its arguments were parsed and silently
+                        // discarded even when the enclosing form was legal. Saying "base delegation is not
+                        // supported" is a far better answer than a general "no class-named ctors" for
+                        // someone who wrote it because they wanted base delegation specifically.
+                        if (cc->declarator && cc->declarator->initializer)
+                            unsupported(("base-constructor delegation (`: base(...)`) is not supported — a "
+                                         "named `ctor` is a factory with no `self` to chain into. Initialize "
+                                         "inherited state through the base's `protected` accessors instead, "
+                                         "in a named constructor `ctor make(...)` on `" + tnm + "`").c_str(),
+                                        cc->line);
+                        else
+                            unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
+                                         "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
+                                         + ".make(...)`)").c_str(), cc->line);
                     }
                     // Nothing is recorded: the form is rejected above, so no later pass may act on it.
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
@@ -8031,9 +8054,33 @@ void CEmitter::buildVtables()
             }
             return false;
         };
+        // SHADOWING IS AN ERROR. Redeclaring a non-virtual base method with no `override` used to be
+        // silently legal at any visibility, and which body ran was decided by the STATIC type — `d.h()`
+        // yielding 2 while `base.h()` yielded 1. kama already rejects `public virtual` precisely because
+        // a public override is a footgun; this is the same footgun with no keyword marking it at all
+        // (C# at least demands `new`). The only way to redefine an inherited method is `override` on a
+        // `protected virtual` (may) or `protected abstract` (must) — the type designer decides what is
+        // overridable, which is what `protected` + `virtual`/`abstract` is for.
+        //
+        // ⚠️ Reusing a name that is PRIVATE in the base stays legal, and must: that is not shadowing at
+        // all. The base's member is invisible to the derived type, so the two names are unrelated and
+        // each type sees its own. `canAccess` is the existing predicate for "would the derived type even
+        // see this", so it decides here too — and a `friend` grant cannot open a back door, because
+        // visibility is what is asked, not friendship.
         for (auto& kv : ci->methods) {
             MethodInfo& mi = kv.second;
             const std::string& mname = kv.first;
+            if (!mi.isVirtual && !mi.isCtor && !mi.isStatic && !mi.isRetro && ci->base) {
+                ClassInfo* bowner = nullptr;
+                MethodInfo* bmi = findMethod(ci->base, mname, &bowner);
+                if (bmi && bowner && bmi->visibility != Visibility::Private)
+                    unsupported(("'" + ci->name + "' redeclares '" + mname + "', which it inherits from '"
+                                 + bowner->name + "' — shadowing is not allowed, because which body runs "
+                                 "would be decided by the static type. To redefine it, '" + bowner->name
+                                 + "' must declare it `protected virtual`/`protected abstract` and this "
+                                 "must say `override`; otherwise rename it.").c_str(),
+                                mi.node ? mi.node->line : 0);
+            }
             if (!mi.isVirtual) continue;
             // Step 3: `override` must override an actual virtual method in a base class —
             // otherwise there is no vtable slot to re-seat and the emitted C is malformed.
@@ -11424,13 +11471,29 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             }
             if (auto* ba = dynamic_cast<BaseAccessNode*>(call->expression.get())) {
                 // base.m(args) -> direct (non-virtual) call into the base.
-                if (!_currentClass || !_currentClass->base) {
-                    unsupported("base call outside a derived class", call->line); return "0";
+                if (!_currentClass) {
+                    unsupported("`base` is only meaningful inside a method of a derived type", call->line);
+                    return "0";
+                }
+                if (!_currentClass->base) {
+                    unsupported(("'" + _currentClass->name + "' has no base class, so `base` names nothing "
+                                 "(only a type declared `extends …` has one)").c_str(), call->line);
+                    return "0";
                 }
                 std::string m = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
                 ClassInfo* owner = nullptr;
                 MethodInfo* mi = findMethod(_currentClass->base, m, &owner);
-                if (!mi) { unsupported("unknown base method", call->line); return "0"; }
+                if (!mi) {
+                    unsupported(("'" + m + "' is not a method of the base class '"
+                                 + _currentClass->base->name + "'").c_str(), call->line);
+                    return "0";
+                }
+                // The base path used to skip access control entirely, so a derived type could reach any
+                // PRIVATE method of its base just by choosing this spelling — `this.secret()` rejected,
+                // `base.secret()` compiled. Apply the existing rule; no new one is needed. `_currentClass`
+                // is the derived type here, so canAccess walks its base chain and admits protected while
+                // rejecting private, which is exactly right. (The base FIELD path already did this.)
+                canAccess(owner, mi->visibility, m, call->line);
                 recordNodeRef(ba->identifier.get(), mi->node);   // M6 B3a: `base.m()` references the base's m
                 std::string self = "(" + owner->name + "*)&self->__base";
                 return emitReorderedCall(mi->cName, self, mi->params, call->args, call->line);

@@ -256,7 +256,30 @@ wants without breaking anything that exists.
 | **C** the switch | ✅ shipped — `--inherit-depth=N` / `"inheritDepth"`, one gate (`rejectIfNoInherit`), guard `tools/check-inherit-cost.sh`, cost measured above. |
 | **B** depth cap + `final` | ✅ shipped — both walked in `linkBases`; `tests/vtable_depth3` restructured to `vtable_depth2`; rejections pinned by `tests/xfail/inherit_depth_exceeded` + `tests/xfail/deriving_type_not_final`. |
 | **A** no public widening | ✅ shipped — `checkDerivedPublicSurface`, ctors exempt, plus the `implements` half (contracts belong on the root). Pinned by `tests/xfail/derived_widens_public` (the `Exposer` leak) + `tests/xfail/derived_implements_contract`. |
-| **1**, **2**, **3**, **5**, **6** | ☐ |
+| **2** `base.` bypasses `canAccess` | ✅ shipped — one `canAccess` on the base-method path; `_currentClass` is the derived type there, so the existing rule is exactly right. Pinned by `tests/xfail/base_bypasses_private`. |
+| **3** shadowing | ✅ shipped — in `buildVtables`, which already walks the chain. Private-name reuse stays legal and is pinned by `tests/inherit_private_name_reuse`. |
+| **5** base diagnostics | ✅ shipped — "no base at all" / "no such member" / "outside a method" are three messages now, not the fragment `"base access"`. Pinned by `tests/xfail/base_without_base_class`. |
+| **6** `: base(...)` orphaned | ✅ shipped — the production is KEPT (it is the only reason a class-named ctor parses, hence the guided message) and given its own answer. Pinned by `tests/xfail/base_ctor_delegation`. |
+| **1** base ctor never runs | ☐ — blocked on the slot-scope campaign (D5, the implicit `this`). |
+
+### ⚠️ Hole 1 is wider than recorded: a base's FIELD DEFAULTS do not reach a derived instance either
+
+Found while writing `tests/inherit_private_name_reuse` (2026-08-02). The brief describes hole 1 as "a
+derived type never runs its base's constructor", which is true but understates it — even a field
+*initializer* on the base is skipped:
+
+```kama
+type virtual resource Base { int32 n = 10;  public fn int32 rank() { return this.n; } … }
+type final resource Leaf extends Base { … }
+
+Base.make().rank()   // 10
+Leaf.make().rank()   // 0   — the base's own field default never applied
+```
+
+So the base sub-object is zero-filled outright, not merely un-constructed. The fix is unchanged (install
+a base VALUE built by the base's own ctor), and this makes the case for it stronger: a base author cannot
+establish an invariant even by writing the default at the field, which is the one mechanism SPEC otherwise
+offers as the escape hatch from "a ctor must assign every field".
 
 ### ⚠️ A consequence of the cap worth a decision later: `final` on a METHOD is now near-vacuous
 
@@ -278,7 +301,7 @@ this campaign. `tests/devirt_final_method` records the situation in its own comm
 **Decision items A and B are source-breaking**, as are holes 1 and 3, so they land before the 1.0 tag or
 wait for 2.0. Hole 2 is breaking only for code exploiting the hole. Holes 5 and 6 are diagnostics.
 
-Remaining order: **2**, **3** → **5**, **6** → *[the slot-scope campaign]* → **1**.
+Remaining: *[the slot-scope campaign]* → **1**.
 
 1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so that campaign runs first — it is
 already rewriting every ctor body, and the two sweeps must not interleave.

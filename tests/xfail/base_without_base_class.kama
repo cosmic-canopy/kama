@@ -1,0 +1,11 @@
+// `base` in a type that has no base names nothing, and says so.
+//
+// Both the field form and the call form used to report a fragment — "base access" and "base call outside
+// a derived class" — the first naming neither the member nor the type. Two quite different problems
+// (there is no base at all / the base has no such member) reported as one non-sentence.
+type resource Lonely {
+    int32 n;
+    public ctor make() { slot Lonely r; r.n = 1; return give r; }
+    public fn int32 peek() { return base.n; }        // ERROR: 'Lonely' has no base class
+}
+fn int main() { Lonely l = Lonely.make(); return l.peek(); }

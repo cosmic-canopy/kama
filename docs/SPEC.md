@@ -1576,16 +1576,39 @@ type final resource Circle extends Shape {             // `type final resource` 
 ```
 
 Single inheritance (`extends`), base embedded by value (upcast is offset-0), `base.m()` for non-virtual
-upcalls. **There is no base-constructor delegation.** A `: base(...)` clause still parses, but only as part
-of the class-named ctor form that is now rejected outright, and the emitter never read it — so a derived
-ctor initializes inherited state through the base's `protected` accessors instead. That is a known gap, not
-the intended end state: see [ROADMAP.md](ROADMAP.md) §1. `virtual`/`override` methods dispatch through a vtable. **Inheritance is
+upcalls — **subject to the same visibility rules as `this.`**, so a derived type cannot reach a `private`
+base member by choosing the other spelling. **There is no base-constructor delegation.** A `: base(...)`
+clause still parses, but only as part of the class-named ctor form that is now rejected outright, and the
+emitter never read it — so a derived ctor initializes inherited state through the base's `protected`
+accessors instead. That is a known gap, not the intended end state: see [ROADMAP.md](ROADMAP.md) §1.
+`virtual`/`override` methods dispatch through a vtable. **Inheritance is
 opt-in and one-way:** only a `type virtual resource`/`type abstract resource` may be `extends`-ed (a `value`,
 a plain `resource`, and a `type final resource` are sealed); an overridable method is written `protected`
 (never public/private — public polymorphism is a `contract`'s job); `type final resource`/`final` method seal
 a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outside an extensible `resource` —
 they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for the full kind
 table.
+
+### Shadowing is an error ✅
+
+A derived type may not redeclare a method it inherits. The only way to redefine one is `override` on a
+`protected virtual` (*may* override) or `protected abstract` (*must* override) — the type designer decides
+what is overridable, which is what `protected` + `virtual`/`abstract` is for.
+
+```kama
+type virtual resource B { protected fn int32 h() { return 1; } }   // no seam offered
+type final resource D extends B {
+    protected fn int32 h() { return 2; }        // ✗ shadows B.h() — which body runs would depend
+}                                               //   on the STATIC type of the receiver
+```
+
+kama already rejects `public virtual` because a public override is a footgun; silent shadowing is the same
+footgun with no keyword marking it at all (C# at least demands `new`).
+
+**Reusing a name that is `private` in the base stays legal**, and is not shadowing: the base's member is
+invisible to the derived type, so the two names are unrelated and each type sees its own. The rule asks the
+same question access control does — *would the derived type even see this?* — so a `friend` grant opens no
+back door either.
 
 ### A derived type may not widen the public interface ✅
 

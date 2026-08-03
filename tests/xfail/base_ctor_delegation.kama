@@ -1,0 +1,21 @@
+// `: base(...)` gets its own answer, rather than being reported as "no class-named constructors".
+//
+// The grammar production exists ONLY so a class-named ctor still PARSES — which is what lets the
+// emitter answer with a guided message instead of a raw parse error. It must therefore NOT be deleted.
+// But no emitter code ever read `ClassConstructorInitializerNode`, so the base arguments were parsed and
+// silently discarded even back when the enclosing form was legal; SPEC claimed the feature worked until
+// that was found.
+//
+// Someone who writes this wanted base delegation specifically, so that is what the message is about.
+type virtual resource Base {
+    int32 x;
+    public ctor make(int32 x) { slot Base r; r.x = x; return give r; }
+    protected fn void setX(int32 v) { this.x = v; }
+    protected virtual fn int32 tag() { return 0; }
+}
+type final resource Derived extends Base {
+    int32 y;
+    public Derived(int32 x, int32 y) : base(x: x) { this.y = y; }   // ERROR: no base delegation
+    protected override fn int32 tag() { return 1; }
+}
+fn int main() { Derived d = Derived.make(x: 1, y: 2); return 0; }

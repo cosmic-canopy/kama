@@ -1,0 +1,30 @@
+// Shadowing an inherited method is an error.
+//
+// `D` redeclares `h()` with no `override`, and `B.h()` is not virtual. That used to compile silently at
+// any visibility, and which body ran was decided by the STATIC type — `d.h()` yielded 2 while
+// `base.h()` yielded 1.
+//
+// kama already rejects `public virtual` ("overridable method must be declared `protected`") precisely
+// because a public override is a footgun. Silent shadowing is the same footgun with no keyword marking it
+// at all; C# at least demands `new`. The only way to redefine an inherited method is `override` on a
+// `protected virtual` (may) or `protected abstract` (must) — the type designer decides what is
+// overridable, which is what `protected` + `virtual`/`abstract` is for.
+//
+// ⚠️ NOT covered by this rule: reusing a name that is PRIVATE in the base. That is not shadowing at all —
+// the base's member is invisible to the derived type, so the two names are unrelated and each type sees
+// its own. tests/inherit_private_name_reuse pins that it stays legal.
+//
+// (Decision A subsumes the PUBLIC case — a derived type may not add public methods either way — so `h`
+// is `protected` here, to test the shadowing rule itself rather than the widening rule.)
+type virtual resource B {
+    public ctor make() { slot B r; return give r; }
+    public fn int32 rank() { return this.h() + this.t(); }
+    protected fn int32 h() { return 1; }              // NOT virtual — no seam was offered
+    protected virtual fn int32 t() { return 1; }
+}
+type final resource D extends B {
+    public ctor make() { slot D r; return give r; }
+    protected fn int32 h() { return 2; }              // ERROR: shadows B.h(), which is not overridable
+    protected override fn int32 t() { return 2; }
+}
+fn int main() { D d = D.make(); return d.rank(); }
