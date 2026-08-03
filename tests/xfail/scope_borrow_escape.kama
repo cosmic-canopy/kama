@@ -8,7 +8,7 @@ type value Acc {
     int32 total;
     int32 lo;
     int32 hi;
-    public ctor range(int32 lo, int32 hi) { slot Acc a; a.total = 0; a.lo = lo; a.hi = hi; return a; }
+    public ctor range(int32 lo, int32 hi) { this.total = 0; this.lo = lo; this.hi = hi; return this; }
     public fn void run() { int32 i = this.lo; while (i < this.hi) { this.total = this.total + i; i = i + 1; } }
 }
 

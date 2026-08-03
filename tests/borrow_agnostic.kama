@@ -3,7 +3,7 @@ import std::memory::{Owned};
 // lives — `ref stackValue` or `ref ownedHandle` (auto-derefs to the heap object). Same fn.
 type value Counter {
     int32 n;
-    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 get() { return this.n; }
 }
 fn int32 read(ref Counter c) { return c.get(); }

@@ -68,9 +68,7 @@ type resource Atomic<T> {
 
     // Build a cell holding `value`. The only constructor — an `Atomic` is always created initialized.
     public ctor make(T value) {
-        slot Atomic<T> a;
-        a.value = value;
-        return give a;
+        this.value = value;
     }
 
     // Atomically read the current value (seq-cst). `loadExplicit` takes a weaker ordering.

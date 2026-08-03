@@ -403,7 +403,7 @@ extern fn bool   kama_program_path(Ptr<string> dst);
 extern fn bool   kama_env_lookup(Ptr<int8> name, Ptr<string> dst);
 type value Args implements Iterator<string> {
     int32 pos;
-    public ctor make() { slot Args a; a.pos = 0; return a; }   // a free fn can't touch the private cursor
+    public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
     // foreach protocol: yield each user arg once (a fresh owned string), then None.
     public fn Optional<string> next() {
         if (this.pos >= kama_args_count()) { return Optional::None; }
@@ -516,7 +516,7 @@ type value GlobalAllocator implements Allocator {
     // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
     // the nameless primary until M8d removes it.
-    public default ctor make() { slot GlobalAllocator g; return g; }
+    public default ctor make() { return this; }
     public fn Optional<Ptr> allocate(usize bytes) {
         slot Ptr p;
         unsafe { p = malloc(n: bytes); }
@@ -568,7 +568,7 @@ type contract Format for both { fn void format(ref Formatter f); }
 // whole nested value materializes in ONE growing allocation rather than one per `+`.
 type resource Formatter {
     string buf;
-    public ctor make() { slot Formatter r; r.buf = ""; return give r; }
+    public ctor make() { this.buf = ""; }
     // Append a string's UTF-8 bytes verbatim (borrowed — reads the fat pointer, doesn't dup the bytes).
     public fn void writeStr(ref string s) { unsafe { kama_str_push(buf: addr(of: this.buf), src: s); } }
     public fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }

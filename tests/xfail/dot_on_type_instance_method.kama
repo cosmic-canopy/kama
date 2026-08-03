@@ -2,7 +2,7 @@
 // to assert "`inst` is a static function" without ever checking which kind it was, then advise
 // `Plain::inst(...)`, which produced a SECOND error saying the opposite. One hop, correct the first time.
 type value Plain {
-    public ctor make() { slot Plain p; return give p; }
+    public ctor make() { }
     public fn int32 inst() { return 1; }
 }
 fn int main() { return Plain.inst(); }

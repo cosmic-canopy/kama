@@ -4,14 +4,14 @@ import std::collections::{DynamicArray};
 // virtual (no slicing). Derived owns a heap DynamicArray, so a slice would leak — ASan proves the virtual dtor ran.
 type virtual resource Shape {
     DynamicArray<int32> tag;
-    public ctor make() { slot Shape r; r.tag.add(item: 0); return give r; }
+    public ctor make() { this.tag.add(item: 0); }
     ~Shape() { }
     public fn int32 area() { return this.compute(); }
     protected virtual fn int32 compute() { return 1; }
 }
 type final resource Square extends Shape {
     DynamicArray<int32> parts;
-    public ctor make(int32 s) { slot Square r; r.parts.add(item: s); return give r; }
+    public ctor make(int32 s) { this.parts.add(item: s); }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }

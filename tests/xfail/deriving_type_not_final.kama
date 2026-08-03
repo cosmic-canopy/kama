@@ -6,13 +6,13 @@
 // you try to extend that type once more.
 type virtual resource Base
 {
-    public ctor make() { slot Base r; return give r; }
+    public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
 type virtual resource Derived extends Base        // must be `type final resource Derived`
 {
-    public ctor make() { slot Derived r; return give r; }
+    public ctor make() { }
     protected override fn int32 step() { return 2; }
 }
 fn int main() { Derived d = Derived.make(); return d.rank(); }

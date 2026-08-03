@@ -20,11 +20,9 @@ type resource Arena {
     Ptr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
 
     public ctor make(int32 capacity) {
-        slot Arena r;
-        unsafe { r.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
-        if (cast<usize>(r.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
-        r.capacity = capacity; r.offset = 0;
-        return give r;
+        unsafe { this.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
+        if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
+        this.capacity = capacity; this.offset = 0;
     }
 
     // Hand out a copyable allocator handle that bumps THIS arena. It captures the buffer base (stable
@@ -51,7 +49,7 @@ type value BumpAllocator implements Allocator {
     Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
 
     public ctor make(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
-        slot BumpAllocator r; r.buffer = buffer; r.offset = offset; r.capacity = capacity; return give r;
+        this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
     public fn Optional<Ptr> allocate(usize bytes) {

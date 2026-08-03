@@ -5,7 +5,7 @@
 // (there is no base at all / the base has no such member) reported as one non-sentence.
 type resource Lonely {
     int32 n;
-    public ctor make() { slot Lonely r; r.n = 1; return give r; }
+    public ctor make() { this.n = 1; }
     public fn int32 peek() { return base.n; }        // ERROR: 'Lonely' has no base class
 }
 fn int main() { Lonely l = Lonely.make(); return l.peek(); }

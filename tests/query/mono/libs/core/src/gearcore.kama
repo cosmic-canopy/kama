@@ -9,5 +9,5 @@ export { Gear };
 type value Gear {
     public int32 teeth;
 
-    public ctor of(int32 teeth) { slot Gear r; r.teeth = teeth; return give r; }
+    public ctor of(int32 teeth) { this.teeth = teeth; }
 }

@@ -3,9 +3,7 @@ type value Counter
     int value;
     public ctor make(int start)
     {
-        slot Counter r;
-        r.value = start;
-        return give r;
+        this.value = start;
     }
     public fn void add(int n)
     {

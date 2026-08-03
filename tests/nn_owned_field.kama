@@ -3,13 +3,13 @@
 import std::memory::{Owned, Shared};
 type value Box {
     int32 v;
-    public ctor make(int32 v) { slot Box r; r.v = v; return give r; }
+    public ctor make(int32 v) { this.v = v; }
     public fn int32 get() { return this.v; }
 }
 type resource Holder {
     Owned<Box>  a;
     Shared<Box> b;
-    public ctor make(Owned<Box> a, Shared<Box> b) { slot Holder r; r.a = give a; r.b = give b; return give r; }
+    public ctor make(Owned<Box> a, Shared<Box> b) { this.a = give a; this.b = give b; }
     public fn void bump() {                        // reassign: release old, install new (never null)
         Owned<Box> n = new Box.make(v: this.a.get() + 1);
         this.a = give n;

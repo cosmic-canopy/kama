@@ -4,7 +4,7 @@
 type value Wrap<T, U = int32> {
     public T first;
     public U second;
-    public ctor make(T a, U b) { slot Wrap<T, U> r; r.first = a; r.second = b; return give r; }
+    public ctor make(T a, U b) { this.first = a; this.second = b; }
 }
 
 fn int32 main() {

@@ -6,7 +6,7 @@ import std::serialization::json::{decode};
 @generate(Serialize, Deserialize)
 type value Bad {
     @field int32 v;
-    public ctor make(int32 v) { slot Bad r; r.v = v; return give r; }
+    public ctor make(int32 v) { this.v = v; }
     public ctor Result<Bad, Owned<Error>> deserialize(Deserializer r) {
         r.beginObject();
         r.moreFields();

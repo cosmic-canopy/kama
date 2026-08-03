@@ -7,12 +7,12 @@ import std::collections::{DynamicArray};
 type contract Shape for both { fn int32 area(); }
 type resource Box implements Shape {          // owns a DynamicArray -> moves; satisfies a contract
     DynamicArray<int32> sides;
-    public ctor make(int32 w, int32 h) { slot Box r; r.sides.add(item: w); r.sides.add(item: h); return give r; }
+    public ctor make(int32 w, int32 h) { this.sides.add(item: w); this.sides.add(item: h); }
     public fn int32 area() { return this.sides[0] * this.sides[1]; }
 }
 type value Point {                             // owns nothing -> copies freely
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { slot Point r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn int32 sum() { return this.x + this.y; }
 }
 type resource Token { }                        // empty resource — move-only identity (unused here)

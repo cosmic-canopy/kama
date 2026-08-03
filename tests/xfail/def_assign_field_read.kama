@@ -1,10 +1,10 @@
 import std::memory::{Owned};
 // Definite-assignment for locals: reading an owning FIELD of a bare resource local (`h.a`) before it is
 // assigned is a null-deref -> rejected. (Positive: def_assign_field_ok.)
-type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 type resource Holder {
     Owned<Box> a;
-    public ctor make(Owned<Box> a) { slot Holder r; r.a = give a; return give r; }
+    public ctor make(Owned<Box> a) { this.a = give a; }
     public static fn int32 broken() {
         slot Holder h;              // h.a is null
         return h.a.get();      // ERROR: 'h.a' used before it is assigned

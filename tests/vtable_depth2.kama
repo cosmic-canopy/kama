@@ -9,13 +9,13 @@
 // pinned by tests/xfail/inherit_depth_exceeded.
 type virtual resource Base
 {
-    public ctor make() { slot Base r; return give r; }
+    public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
 type final resource Leaf extends Base
 {
-    public ctor make() { slot Leaf r; return give r; }
+    public ctor make() { }
     protected override fn int32 step() { return base.step() + 10; }
 }
 fn int32 measure(ref Base b) { return b.rank(); }

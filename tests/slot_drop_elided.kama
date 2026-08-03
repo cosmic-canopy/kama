@@ -7,7 +7,7 @@ static int32 drops = 0;
 
 type resource Tracker {
     int32 id = -1;
-    public ctor make(int32 id) { slot Tracker r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     public fn int32 value() { return this.id; }
     ~Tracker() { drops = drops + 1; }
 }

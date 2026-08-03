@@ -13,7 +13,7 @@ type virtual resource Shape {
 type final resource Box extends Shape {
     int32 n = 0;                                      // private (kind-decides); the field default IS the
                                                       // stated empty state — `make()` need not repeat it
-    public ctor make() { slot Box b; return give b; }      // bare local -> __vptr set by the vtable-typed store
+    public ctor make() { }      // bare local -> __vptr set by the vtable-typed store
     protected override fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }
 }

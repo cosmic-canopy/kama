@@ -4,7 +4,7 @@ import std::collections::{DynamicArray, FixedArray};
 // stored element and a mutating method mutates it (uniform with every other `x.m()`).
 type value Counter {
     int32 n;                                     // default private
-    public ctor make(int32 start) { slot Counter r; r.n = start; return give r; }
+    public ctor make(int32 start) { this.n = start; }
     public fn int32 get() { return this.n; }     // read-only
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates the stored element
 }

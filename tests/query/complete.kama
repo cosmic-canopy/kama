@@ -26,13 +26,13 @@ type value Cell implements Sized {
 type virtual resource Base {
     int32 shared = 0;
     int32 hidden = 0;
-    public ctor make() { slot Base b; return give b; }
+    public ctor make() { }
     protected virtual fn int32 baseOnly() { return this.shared; }
 }
 
 type final resource Derived extends Base {
     int32 own = 0;
-    public ctor make() { slot Derived d; return give d; }
+    public ctor make() { }
     public fn int32 total() { return this.own + this.baseOnly(); }
 }
 
@@ -43,7 +43,7 @@ type value Holder {
 
 type resource Node {
     int32 tag;
-    public ctor make(int32 tag) { slot Node n; n.tag = tag; return give n; }
+    public ctor make(int32 tag) { this.tag = tag; }
     public fn int32 read() { return this.tag; }
 }
 
@@ -143,7 +143,7 @@ type value Stat implements Sized {
     public int32 n;
     public comptime int32 LIMIT = 7;
     public static fn int32 zero() { return 0; }
-    public ctor of(int32 n) { slot Stat s; s.n = n; return give s; }
+    public ctor of(int32 n) { this.n = n; }
     public fn int32 size() { return this.n; }
 }
 

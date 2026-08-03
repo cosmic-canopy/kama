@@ -8,7 +8,7 @@ import std::time::{Duration};
 // A user type mirroring the same shape: one `implements`, six operators, plus sorted/keyed containers.
 type value Cents implements Equatable, Comparable, Hashable {
     public int32 v;
-    public ctor of(int32 v) { slot Cents c; c.v = v; return give c; }
+    public ctor of(int32 v) { this.v = v; }
     public fn uint64 hash() { return cast<uint64>(this.v); }
     public fn bool equals(ref Cents other) { return this.v == other.v; }
     public fn Ordering compareTo(ref Cents other) {

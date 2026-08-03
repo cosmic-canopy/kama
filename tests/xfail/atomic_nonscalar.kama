@@ -5,7 +5,7 @@ import std::concurrent::{Atomic};
 
 type resource Thing {
     int32 x;
-    public ctor make() { slot Thing t; t.x = 0; return give t; }
+    public ctor make() { this.x = 0; }
 }
 
 fn int main() {

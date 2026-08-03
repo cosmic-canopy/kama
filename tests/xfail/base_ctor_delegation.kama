@@ -9,7 +9,7 @@
 // Someone who writes this wanted base delegation specifically, so that is what the message is about.
 type virtual resource Base {
     int32 x;
-    public ctor make(int32 x) { slot Base r; r.x = x; return give r; }
+    public ctor make(int32 x) { this.x = x; }
     protected fn void setX(int32 v) { this.x = v; }
     protected virtual fn int32 tag() { return 0; }
 }

@@ -15,7 +15,7 @@
 // A `resource` (owns its `string`) works too — a hand ctor, fields private.
 @generate(Format) type resource Named {
     string name; int32 n;
-    public ctor make(string name, int32 n) { slot Named r; r.name = give name; r.n = n; return give r; }
+    public ctor make(string name, int32 n) { this.name = give name; this.n = n; }
 }
 
 fn int main() {

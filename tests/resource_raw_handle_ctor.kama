@@ -8,14 +8,14 @@ extern fn int kama_trace_get();
 
 type resource Handle {
     int32 h;
-    public ctor open(int32 v) { slot Handle r; r.h = v; return give r; }
+    public ctor open(int32 v) { this.h = v; }
     public fn int32 val() { return this.h; }
     ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
 }
 
 type resource Wrapper {
     Handle inner;
-    public ctor wrap(Handle hh) { slot Wrapper w; w.inner = give hh; return give w; }   // field-first-write (A)
+    public ctor wrap(Handle hh) { this.inner = give hh; }   // field-first-write (A)
     public fn int32 val() { return this.inner.val(); }
 }
 

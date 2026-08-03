@@ -13,7 +13,7 @@ extern fn void free(Ptr p);
 
 type resource Tracked {
     Ptr<int32> tally;   // non-owning: a shared drop counter living in main
-    public ctor make(Ptr<int32> tally) { slot Tracked t; t.tally = tally; return give t; }
+    public ctor make(Ptr<int32> tally) { this.tally = tally; }
     ~Tracked() { unsafe { this.tally[0] = this.tally[0] + 1; } }
 }
 

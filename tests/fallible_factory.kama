@@ -8,7 +8,7 @@ enum BufferErr { BadSize }
 implements Error for BufferErr { public fn string message() { return "bad size"; } }
 type resource Buffer {
     int32 size;
-    private ctor make(int32 size) { slot Buffer r; r.size = size; return give r; }             // trivial, infallible, private
+    private ctor make(int32 size) { this.size = size; }             // trivial, infallible, private
     public fn int32 capacity() { return this.size; }
     public static fn Result<Owned<Buffer>, BufferErr> create(int32 size) {
         if (size <= 0) { return Result::Err(error: BufferErr::BadSize); }        // fail before the resource exists

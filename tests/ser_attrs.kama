@@ -6,7 +6,7 @@ type value Config {
     @skip int32 internalCounter;
     @field bool enabled;
     public ctor make(int32 maxRetries, int32 internalCounter, bool enabled) {
-        slot Config r; r.maxRetries = maxRetries; r.internalCounter = internalCounter; r.enabled = enabled; return give r;
+        this.maxRetries = maxRetries; this.internalCounter = internalCounter; this.enabled = enabled;
     }
 }
 fn int main() {

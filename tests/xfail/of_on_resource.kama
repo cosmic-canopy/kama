@@ -2,6 +2,6 @@
 @generate(of)
 type resource Bad {
     int32 x;
-    public ctor make(int32 x) { slot Bad b; b.x = x; return b; }
+    public ctor make(int32 x) { this.x = x; return this; }
 }
 fn int32 main() { return 0; }

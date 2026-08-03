@@ -40,12 +40,10 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     SerError code;
 
     public ctor make(W sink) {
-        slot BinaryWriter<W> r;
-        r.sink = give sink;
-        r.scratch = FixedArray.make(size: 1);
-        r.err = false;
-        r.code = SerError::NotRepresentable;
-        return give r;
+        this.sink = give sink;
+        this.scratch = FixedArray.make(size: 1);
+        this.err = false;
+        this.code = SerError::NotRepresentable;
     }
 
     // Borrow the underlying sink (e.g. so `encode` can `takeBytes()` its concrete StringWriter). W-agnostic.
@@ -140,14 +138,12 @@ type resource BinaryReader implements Deserializer {
     DeError code;
 
     public ctor make(DynamicArray<uint8> src) {
-        slot BinaryReader r;
-        r.len = cast<int32>(src.length());
-        r.buf = give src;
-        r.pos = 0;
-        r.err = false;
-        r.objMark = 0;
-        r.code = DeError::Malformed;
-        return give r;
+        this.len = cast<int32>(src.length());
+        this.buf = give src;
+        this.pos = 0;
+        this.err = false;
+        this.objMark = 0;
+        this.code = DeError::Malformed;
     }
 
     // --- low-level cursor ---

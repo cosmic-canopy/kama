@@ -4,7 +4,7 @@
 // separately). Mutable receivers keep full access.
 type value Counter {
     int32 n;
-    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public const fn int32 value() { return this.n; }              // read-only
     public const fn int32 doubled() { return this.value() * 2; }  // const calling const: OK
     public fn void bump() { this.n = this.n + 1; }                // mutating

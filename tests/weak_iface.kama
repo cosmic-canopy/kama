@@ -6,12 +6,12 @@ extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type value Ctrl { public int32 strong; public int32 weak; }
 type contract Shape for both { fn int32 area(); }
-type value Circle implements Shape { int32 r; public ctor make(int32 r){ slot Circle res; res.r=r; return give res; } public fn int32 area(){return this.r*this.r;} }
-type value Square implements Shape { int32 s; public ctor make(int32 s){ slot Square res; res.s=s; return give res; } public fn int32 area(){return this.s*this.s;} }
+type value Circle implements Shape { int32 r; public ctor make(int32 r){ this.r=r; } public fn int32 area(){return this.r*this.r;} }
+type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s=s; } public fn int32 area(){return this.s*this.s;} }
 
 type resource RcWeak<T> {
     Ptr<T> p; Ptr<Ctrl> c;
-    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { slot RcWeak<T> r; r.p = p; r.c = c; return give r; }
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
     public fn Optional<Rc<T>> tryUpgrade() {
         unsafe { if (this.c[0].strong > 0) { this.c[0].strong = this.c[0].strong + 1; return Optional::Some(value: Rc.make(p: this.p, c: this.c)); } }
         return Optional::None;
@@ -20,7 +20,7 @@ type resource RcWeak<T> {
 }
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     Ptr<T> p; Ptr<Ctrl> c;
-    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { slot Rc<T> r; r.p = p; r.c = c; return give r; }
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
     public ctor adopt(Ptr<T> raw) { slot Ptr<Ctrl> k; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public ctor copy(ref Rc<T> source) { unsafe { source.c[0].strong = source.c[0].strong + 1; } return Rc.make(p: source.p, c: source.c); }

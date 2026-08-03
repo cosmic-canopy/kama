@@ -3,7 +3,7 @@
 // MOVES (no "scream", no accidental duplication) and the method named `copy` is just a method.
 type resource R {
     int32 n;
-    public ctor make(int32 n) { slot R r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     ~R() { }
     public ctor copy(ref R source) { return R.make(n: source.n); }   // a method named `copy` — NOT the Copyable opt-in
     public fn int32 get() { return this.n; }

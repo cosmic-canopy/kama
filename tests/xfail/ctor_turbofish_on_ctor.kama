@@ -5,7 +5,7 @@
 type value Pair<T> {
     public T a;
     public T b;
-    public ctor make(T a, T b) { slot Pair<T> p; p.a = a; p.b = b; return p; }
+    public ctor make(T a, T b) { this.a = a; this.b = b; return this; }
     public fn T sum() { return this.a + this.b; }
 }
 fn int32 main() {

@@ -11,12 +11,12 @@ type contract Speaker for both { fn int32 speak(); }
 
 type value Cat implements Speaker {
     int32 volume;
-    public ctor loud() { slot Cat c; c.volume = 9; return c; }
+    public ctor loud() { this.volume = 9; return this; }
     public fn int32 speak() { return this.volume; }
 }
 
 type value Dog implements Speaker {
-    public ctor quiet() { slot Dog d; return d; }
+    public ctor quiet() { return this; }
     public fn int32 speak() { return 1; }
 }
 

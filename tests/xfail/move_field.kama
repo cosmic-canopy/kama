@@ -1,9 +1,9 @@
 // M26f-2 — you can't `give` a `resource` value OUT of a field: it would leave the owner
 // holding a moved-from value. (Deferred to Optional<T>, M28.) Compile error.
-type resource Res { int32 v; public ctor make(int32 v){ slot Res r; r.v = v; return give r; } ~Res(){} }
+type resource Res { int32 v; public ctor make(int32 v){ this.v = v; } ~Res(){} }
 type resource Box {
     Res r;
-    public ctor make(int32 v) { slot Box b; b.r = Res.make(v: v); return give b; }
+    public ctor make(int32 v) { this.r = Res.make(v: v); }
     public fn Res steal() { return give this.r; }   // ERROR: cannot give out of a field
 }
 fn int32 main() { Box b = Box.make(v: 0); return 0; }

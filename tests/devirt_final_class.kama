@@ -8,14 +8,14 @@
 // still the one made from inside `Cat`.
 type virtual resource Animal
 {
-    public ctor make() { slot Animal r; return give r; }
+    public ctor make() { }
     public fn int32 meow() { return this.meowImpl(); }   // public surface, on the root
     protected virtual fn int32 meowImpl() { return this.noise(); }
     protected virtual fn int32 noise() { return 1; }
 }
 type final resource Cat extends Animal
 {
-    public ctor make() { slot Cat r; return give r; }
+    public ctor make() { }
     protected override fn int32 noise() { return 7; }
     protected override fn int32 meowImpl() { return this.noise(); }   // `this` is a Cat -> direct Cat__noise
 }

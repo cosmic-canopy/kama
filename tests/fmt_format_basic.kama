@@ -3,7 +3,7 @@
 // natural form; nested formatting shares the single buffer. Exit code encodes which checks passed (15 = all).
 type value Point implements Format {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { slot Point p; p.x = x; p.y = y; return p; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
     public fn void format(ref Formatter f) {
         f.writeStr(s: "(");
         f.writeI64(v: cast<int64>(this.x));

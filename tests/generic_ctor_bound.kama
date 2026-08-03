@@ -5,12 +5,12 @@ type contract Something for both { ctor something(int32 someval); }
 
 type value Widget implements Something {
     public int32 v;
-    public ctor something(int32 someval) { slot Widget w; w.v = someval + 1; return w; }
+    public ctor something(int32 someval) { this.v = someval + 1; return this; }
 }
 
 type value Gizmo implements Something {
     public int32 g;
-    public ctor something(int32 someval) { slot Gizmo z; z.g = someval * 2; return z; }
+    public ctor something(int32 someval) { this.g = someval * 2; return this; }
 }
 
 fn T fresh<T: Something>(int32 seed) { return T.something(someval: seed); }

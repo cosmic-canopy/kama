@@ -11,12 +11,10 @@ type resource IntMap {
     int32 cap;
 
     public ctor make(int32 cap) {
-        slot IntMap m;
-        m.keys = FixedArray.make(size: cap);      // zero-initialized, like C's calloc'd `used`
-        m.vals = FixedArray.make(size: cap);
-        m.used = FixedArray.make(size: cap);
-        m.cap = cap;
-        return give m;
+        this.keys = FixedArray.make(size: cap);      // zero-initialized, like C's calloc'd `used`
+        this.vals = FixedArray.make(size: cap);
+        this.used = FixedArray.make(size: cap);
+        this.cap = cap;
     }
 
     private fn int32 slotFor(int32 k) {

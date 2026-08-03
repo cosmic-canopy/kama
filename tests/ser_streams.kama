@@ -14,7 +14,7 @@ type resource Rec {
     @field string name;
     @field bool ok;
     public ctor make(int32 id, string name, bool ok) {
-        slot Rec r; r.id = id; r.name = give name; r.ok = ok; return give r;
+        this.id = id; this.name = give name; this.ok = ok;
     }
     public fn int32 verify() { if (this.id == 7 && this.ok && this.name == "hi") { return 0; } return 99; }
 }

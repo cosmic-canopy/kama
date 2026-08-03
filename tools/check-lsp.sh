@@ -640,7 +640,7 @@ echo "check-lsp: M6 B3c contract methods are one name with their implementations
 # implementation of it — that is the group, and it is why the rename below has to refuse.
 expect '/lib/std/io/streams.kama","range":{"start":{"line":20,"character":30}' \
        "references from an impl reach the std contract's own declaration"
-expect '/lib/std/io/streams.kama","range":{"start":{"line":92,"character":37}' \
+expect '/lib/std/io/streams.kama","range":{"start":{"line":90,"character":37}' \
        "...and StringWriter, the stdlib's other implementation of it"
 expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
 expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"

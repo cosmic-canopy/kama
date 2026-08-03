@@ -5,7 +5,7 @@ import std::serialization::json::{encode};
 type resource Address {
     @field string city;
     @field int32 zip;
-    public ctor make(string city, int32 zip) { slot Address r; r.city = give city; r.zip = zip; return give r; }
+    public ctor make(string city, int32 zip) { this.city = give city; this.zip = zip; }
 }
 @generate(Serialize)
 type resource Person {
@@ -13,8 +13,7 @@ type resource Person {
     @field int32 age;
     @field Address addr;
     public ctor make(string name, int32 age, Address addr) {
-        slot Person r; r.name = give name; r.age = age; r.addr = give addr;
-        return give r;
+        this.name = give name; this.age = age; this.addr = give addr;
     }
 }
 fn int main() {

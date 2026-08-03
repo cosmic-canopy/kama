@@ -1,12 +1,12 @@
 type contract Shape for both { fn int64 area(); }
 type value Circle implements Shape {
     int64 r;
-    public ctor make(int64 r) { slot Circle r2; r2.r = r; return give r2; }
+    public ctor make(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
 type value Square implements Shape {
     int64 s;
-    public ctor make(int64 s) { slot Square r; r.s = s; return give r; }
+    public ctor make(int64 s) { this.s = s; }
     public fn int64 area() { return s * s; }
 }
 fn void swapTo(out Shape sh, Shape other) { sh = other; }   // reseat the caller's handle

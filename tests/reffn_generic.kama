@@ -4,7 +4,7 @@
 type value Pair<T> {
     public T a;
     public T b;
-    public ctor make(T x, T y) { slot Pair<T> r; r.a = x; r.b = y; return give r; }
+    public ctor make(T x, T y) { this.a = x; this.b = y; }
 }
 fn ref T first<T>(ref Pair<T> p) { return p.a; }
 fn int32 main() {

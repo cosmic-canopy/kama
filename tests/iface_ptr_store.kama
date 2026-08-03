@@ -9,12 +9,12 @@ import std::memory::{Owned, Shared};
 type contract Shape for both { fn int32 area(); }
 type resource Sq implements Shape {
     DynamicArray<int32> side;
-    public ctor make(int32 s) { slot Sq r; r.side.add(item: s); return give r; }
+    public ctor make(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 type resource Holder {
     Shared<Shape> shape;                                  // owning-interface FIELD
-    public ctor make(Shared<Shape> s) { slot Holder r; r.shape = give s; return give r; }
+    public ctor make(Shared<Shape> s) { this.shape = give s; }
     public fn int32 area() { return this.shape.area(); }   // polymorphic dispatch through the field
 }
 fn Owned<Shape> makeShape(int32 s) {                      // RETURN an owned interface

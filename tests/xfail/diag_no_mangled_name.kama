@@ -5,7 +5,7 @@
 // regression to the mangled form fails this fixture.
 type value Plain {
     int32 hidden;                                    // no `public` — private
-    public ctor make(int32 h) { slot Plain p; p.hidden = h; return give p; }
+    public ctor make(int32 h) { this.hidden = h; }
 }
 
 fn int main() {

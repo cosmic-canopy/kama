@@ -2405,8 +2405,12 @@ bool CEmitter::ctorThisAsValue(SharedExpression e, const std::string& dstCType) 
            && dynamic_cast<ThisAccessNode*>(e.get()) != nullptr;
 }
 
-void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth)
+void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
+                                 const std::string& moveKey)
 {
+    // Move-state keys are spelled the way the SOURCE names the value, which is not always the C name:
+    // a ctor's storage is `__self` in C but `this` in kama, and `lvalueMoveKey` keys off the source.
+    const std::string& mk = moveKey.empty() ? nm : moveKey;
     for (auto& f : _classes[ty].fields) {
         // An inline field initializer (`const int32 kind = 7;`) applies here too, exactly as the
         // instance-ctor path applies it — else a factory-built value loses it (zero instead of 7). #M8d.2
@@ -2431,7 +2435,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
         // move-state Moved so the first `f.field = give …` does NOT drop the zeroed slot (which for a raw
         // handle would e.g. close(0)).
         if (!filled && isMoveOnlyValue(fcls))
-            _moveState[nm + "." + f.name] = MoveState::Moved;
+            _moveState[mk + "." + f.name] = MoveState::Moved;
     }
     // Construction-model M8 Phase E: a polymorphic (vtable-carrying) value sets its `__vptr` directly — the
     // value (`.`) mirror of a method body's `self->…__vptr` store. With `synthCtor` removed, a factory-built
@@ -7221,6 +7225,10 @@ bool CEmitter::isNamedValue(ASTNode* e)
 {
     if (dynamic_cast<MemberAccessNode*>(e) || dynamic_cast<ElementAccessNode*>(e)
         || dynamic_cast<BaseAccessNode*>(e)) return true;
+    // `this` inside a ctor names the value under construction — real storage the ctor owns and hands
+    // out, so `give this` is a move like any other. (In a METHOD `this` is a borrowed receiver, and
+    // moving out of it is exactly what the caller must not be able to do.)
+    if (_inNamedCtorBody && dynamic_cast<ThisAccessNode*>(e)) return true;
     if (auto* id = dynamic_cast<IdentifierNode*>(e)) {
         // a `::`-scope-resolved enum member / variant construction (`Color::Blue`, `Box::Empty`)
         // is a FRESH rvalue, not a movable named lvalue. Distinguish it from an object access
@@ -7539,6 +7547,10 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
         std::string nm = id->value ? *id->value : "";
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
     }
+    // `give this` inside a ctor: `this` is not a field of some other owner, it IS the value the ctor
+    // is handing back, and its storage dies at the return. Nothing is left holding a moved-from value.
+    // (There is no move state to key on — the storage is the function's own — so report no source.)
+    if (_inNamedCtorBody && dynamic_cast<ThisAccessNode*>(e.get())) return "";
     unsupported("cannot `give` out of a field/element — it would leave the owner holding a "
                 "moved-from value; move a local instead, or use Optional<T>", line);
     return "";
@@ -7553,10 +7565,17 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
     if (auto* id = dynamic_cast<IdentifierNode*>(lhs.get()))
         if (id->value && (!id->qualifier || id->qualifier->empty())) return *id->value;
     if (auto* ma = dynamic_cast<MemberAccessNode*>(lhs.get()))
-        if (ma->identifier && ma->identifier->value)
+        if (ma->identifier && ma->identifier->value) {
+            // `this.field` — in a ctor this is THE construction target, and its move state is what stops
+            // the first `this.f = give …` from dropping the zeroed field. Without a key here that
+            // suppression cannot fire, and for a raw-handle field whose zero is `fd = 0` the drop is a
+            // `close(0)`: it shuts the process's own stdin. `Process.make` is exactly that shape.
+            if (dynamic_cast<ThisAccessNode*>(ma->expression.get()))
+                return "this." + *ma->identifier->value;
             if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
                 if (id->value && (!id->qualifier || id->qualifier->empty()))
                     return *id->value + "." + *ma->identifier->value;
+        }
     return "";
 }
 
@@ -9859,7 +9878,10 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
     std::set<std::string> params;                            // param names -> roots that outlive the call
     if (mnode->params) for (auto& p : *mnode->params)
         if (p->identifier && p->identifier->value) params.insert(*p->identifier->value);
-    auto safeRoot = [&](const std::string& r) { return r == "this" || params.count(r) > 0; };
+    // This check runs ONLY for a ctor, and a ctor's `this` is the view being built — its storage is the
+    // returned value, so a pointer into it dangles just as a pointer into a local does. Only a parameter
+    // names memory that outlives the call.
+    auto safeRoot = [&](const std::string& r) { return params.count(r) > 0; };
 
     std::set<std::string> viewLocals;                        // locals of THIS view type (the object being built)
     std::map<std::string, std::map<std::string, std::string>> borrowRoot;   // local -> borrow-field -> root of its RHS
@@ -9868,10 +9890,25 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
     auto localFieldRef = [&](SharedExpression e) -> std::pair<std::string, std::string> {
         auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
         if (!ma || !ma->identifier || !ma->identifier->value) return {"", ""};
+        // `this.field` — the view under construction, which needs no declaration.
+        if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) return {"this", *ma->identifier->value};
         auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
         if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return {"", ""};
         if (!viewLocals.count(*id->value)) return {"", ""};
         return {*id->value, *ma->identifier->value};
+    };
+
+    // Every borrow field of `key` must trace to a parameter; an unset one traces nowhere and is rejected.
+    auto checkBorrows = [&](const std::string& key, int line) {
+        auto& roots = borrowRoot[key];
+        for (auto& f : owner.fields) {
+            if (!borrowFields.count(f.name)) continue;
+            auto it = roots.find(f.name);
+            std::string r = it == roots.end() ? "" : it->second;   // an unset borrow field -> "" -> reject
+            if (!safeRoot(r))
+                unsupported("a view borrows its buffer, so a view constructor may only borrow its "
+                            "parameters — returning a view over a local would dangle", line);
+        }
     };
 
     std::function<void(SharedStatement, bool)> walk = [&](SharedStatement st, bool topLevel) {
@@ -9891,18 +9928,10 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             SharedExpression e = ret->expression;
             if (e) if (auto* h = dynamic_cast<HandoffNode*>(e.get())) e = h->value;   // `return give r`
+            if (e && dynamic_cast<ThisAccessNode*>(e.get())) { checkBorrows("this", ret->line); return; }
             auto* id = e ? dynamic_cast<IdentifierNode*>(e.get()) : nullptr;
-            if (id && id->value && (!id->qualifier || id->qualifier->empty()) && viewLocals.count(*id->value)) {
-                auto& roots = borrowRoot[*id->value];
-                for (auto& f : owner.fields) {
-                    if (!borrowFields.count(f.name)) continue;
-                    auto it = roots.find(f.name);
-                    std::string r = it == roots.end() ? "" : it->second;   // an unset borrow field -> "" -> reject
-                    if (!safeRoot(r))
-                        unsupported("a view borrows its buffer, so a view constructor may only borrow its "
-                                    "parameters — returning a view over a local would dangle", ret->line);
-                }
-            }
+            if (id && id->value && (!id->qualifier || id->qualifier->empty()) && viewLocals.count(*id->value))
+                checkBorrows(*id->value, ret->line);
         } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
             walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional
             walk(iff->elseStatement, false);
@@ -9912,7 +9941,12 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
             if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
         }
     };
-    for (auto& st : *mnode->body->statements) walk(st, true);
+    SharedStatement vlast;
+    for (auto& st : *mnode->body->statements) { walk(st, true); vlast = st; }
+    // Falling off the end returns the view under construction — the same escape, at the return the
+    // author did not write. Without this the check simply stopped seeing view ctors once the value
+    // they build lost its declaration.
+    if (!(vlast && stmtIsJump(vlast))) checkBorrows("this", vlast ? vlast->line : mnode->body->line);
 }
 
 // Definite-assignment for LOCALS — the whole-function dual of the use-after-move check. Reading an owning
@@ -9948,10 +9982,27 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         bareOwning.insert(pn); unassigned.insert(pn); outParams.insert(pn);
     }
 
+    // A ctor's `this` is the value under construction: its owning fields start EMPTY and reading one
+    // before it is assigned is the same never-null violation as reading through an unassigned local.
+    // Tracked under the key "this.f", exactly as a declared local's fields are under "r.f" — which is
+    // what that shape was before the value stopped needing a declaration.
+    if (_inNamedCtorBody && _currentClass) {
+        for (auto& f : _currentClass->fields)
+            if (!heapOwnerTarget(cType(f.type)).empty()) {
+                resFields["this"].insert(f.name);
+                unassigned.insert("this." + f.name);
+            }
+    }
+
     // `x.f` where x is a tracked resource local and f one of its owning fields -> key "x.f"; else "".
     auto fieldKey = [&](SharedExpression e) -> std::string {
         auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
         if (!ma || !ma->identifier || !ma->identifier->value) return "";
+        if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
+            auto ti = resFields.find("this");
+            return (ti != resFields.end() && ti->second.count(*ma->identifier->value))
+                   ? "this." + *ma->identifier->value : "";
+        }
         auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
         if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return "";
         auto it = resFields.find(*id->value);
@@ -12692,7 +12743,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         std::ostream* sv = _out; _out = &ctorPrologue;
         int ln = body ? body->line : 0;
         indent(1); *_out << owner.name << " __self = {0};\n";
-        emitAggregateFill("__self", owner.name, ln, 1);
+        emitAggregateFill("__self", owner.name, ln, 1, "this");
         indent(1); *_out << owner.name << "* self = &__self;\n";
         _out = sv;
         _ctorSelfUsed = false;   // a field initializer naming another field must not count as a use
@@ -12706,18 +12757,30 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
     }
-    if (!(last && stmtIsJump(last))) {
+    bool fellOffEnd = !(last && stmtIsJump(last));
+    if (fellOffEnd) {
         emitScopeCleanup(_scopes.back(), 1);
         // Falling off the end of a ctor RETURNS the value it built. A ctor's whole job is to produce that
         // value before it returns, so it need spell no return — exactly as a `void` function need spell
         // none. `return give this;` stays legal as the EARLY-return form, not a second way to say this.
-        if (ctorBody && _ctorSelfUsed && _currentReturnCType == owner.name) {
-            indent(1); *_out << "return __self;\n";
+        if (ctorBody) {
+            indent(1);
+            if (_currentReturnCType == owner.name)
+                *_out << "return __self;\n";
+            else
+                // A fallible ctor is not a special case: it spells its `Err` returns and nothing else, so
+                // falling off the end is the `Ok`. Saying so here is what keeps a missing `Ok` from
+                // reading as an omission.
+                *_out << "return (" << _currentReturnCType << "){ .tag = " << _currentReturnCType
+                      << "_Ok, .u.Ok = { .value = __self } };\n";
         }
     }
     if (ctorBody) {
         _out = savedOut;
-        if (_ctorSelfUsed) *_out << ctorPrologue.str();
+        // The storage is needed when the body NAMES `this`, and also when the ctor falls off the end —
+        // there the value is returned without ever being mentioned (`default ctor empty() { }`, whose
+        // every field is default-fillable, is exactly that shape).
+        if (_ctorSelfUsed || fellOffEnd) *_out << ctorPrologue.str();
         *_out << ctorStmts.str();
     }
     *_out << "}\n\n";

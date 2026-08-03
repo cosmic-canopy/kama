@@ -13,9 +13,8 @@ type value Steel
     // constructor sets every field, so a half-built value cannot escape one.
     public ctor make(int32 carbon)
     {
-        slot Steel s;
-        s.carbon = carbon;
-        return s;
+        this.carbon = carbon;
+        return this;
     }
 }
 
@@ -36,10 +35,8 @@ type resource Blade
     // The infallible constructor: nothing here can go wrong.
     public ctor make(Steel steel, int32 folds)
     {
-        slot Blade b;
-        b.steel = steel;
-        b.folds = folds;
-        return give b;
+        this.steel = steel;
+        this.folds = folds;
     }
 
     // The fallible one returns a Result and fails *before* the blade exists,

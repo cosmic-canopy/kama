@@ -5,13 +5,13 @@ import std::serialization::json::{decode};
 import std::memory::{Shared, Owned};
 
 @generate(Serialize, Deserialize)
-type resource Child { @field int32 v; public ctor make(int32 v) { slot Child r; r.v = v; return give r; } }
+type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
 @generate(Serialize, Deserialize)
 type resource Twin {
     @field Owned<Child> a;
     @field Owned<Child> b;
-    public ctor make(Owned<Child> a, Owned<Child> b) { slot Twin r; r.a = give a; r.b = give b; return give r; }
+    public ctor make(Owned<Child> a, Owned<Child> b) { this.a = give a; this.b = give b; }
 }
 
 fn int main() {

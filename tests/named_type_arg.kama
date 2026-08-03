@@ -1,15 +1,15 @@
 // M8: NAMED type-arg override. With two trailing defaults `M = Tag1, N = Tag2`, a use site can set a LATER
 // param by name (`N: Tag3`) without spelling the earlier default — the C++ positional-default wart, fixed by
 // Kama's named-argument model applied to type args. Leading args stay positional; naming skips a default.
-type value Tag1 { public int32 code; public ctor make() { slot Tag1 r; r.code = 1; return give r; } }
-type value Tag2 { public int32 code; public ctor make() { slot Tag2 r; r.code = 2; return give r; } }
-type value Tag3 { public int32 code; public ctor make() { slot Tag3 r; r.code = 3; return give r; } }
+type value Tag1 { public int32 code; public ctor make() { this.code = 1; } }
+type value Tag2 { public int32 code; public ctor make() { this.code = 2; } }
+type value Tag3 { public int32 code; public ctor make() { this.code = 3; } }
 
 type value Cfg<T, M = Tag1, N = Tag2> {
     public T value;
     public M mid;
     public N last;
-    public ctor make(T v, M m, N n) { slot Cfg<T, M, N> r; r.value = v; r.mid = m; r.last = n; return give r; }
+    public ctor make(T v, M m, N n) { this.value = v; this.mid = m; this.last = n; }
 }
 
 fn int32 main() {

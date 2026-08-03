@@ -1,7 +1,7 @@
 import std::memory::{Owned};
 // Definite-assignment for locals: a bare owning (`Owned`) local read (here via auto-deref `.get()`) before it
 // is assigned is a null-deref in safe code -> rejected. (Positive: def_assign_assign_then_read.)
-type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 fn int32 main() {
     slot Owned<Box> b;        // zero-inited -> null Owned
     return b.get();      // ERROR: 'b' used before it is assigned

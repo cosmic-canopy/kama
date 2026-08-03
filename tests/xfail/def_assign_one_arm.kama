@@ -2,7 +2,7 @@ import std::memory::{Owned};
 // Definite assignment is a real flow merge, not "assigned somewhere". A LONE `if` may be skipped, so what
 // it assigns is not definite at the read below. (Both arms assigning IS accepted — see
 // tests/slot_assign_then_read.kama — which is what makes an `out` parameter's fill-on-every-path usable.)
-type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 fn int32 main() {
     slot Owned<Box> b;
     if (true) { Owned<Box> t = new Box.make(v: 1); b = give t; }   // assigned only in the then-arm

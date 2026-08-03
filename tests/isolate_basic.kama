@@ -9,10 +9,8 @@ type resource Payload {
     int32 value;
 
     public ctor make(Ptr<int32> dst, int32 value) {
-        slot Payload r;
-        r.dst = dst;
-        r.value = value;
-        return give r;
+        this.dst = dst;
+        this.value = value;
     }
 
     // Write the value through the slot — runs on the isolate's own thread.

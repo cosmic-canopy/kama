@@ -7,7 +7,7 @@ import std::collections::{Map, Arena, BumpAllocator};
 
 type resource Holder {
     Map<int32, int32, A: BumpAllocator> m;
-    public ctor make() { slot Holder h; return give h; }   // FORGETS `h.m` (non-default-fillable)
+    public ctor make() { }   // FORGETS `h.m` (non-default-fillable)
     public fn int32 size() { return this.m.length(); }
 }
 

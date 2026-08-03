@@ -1,4 +1,4 @@
 // A grant must name real members (catches typos).
-type value Account { int64 balance; public ctor make(int64 b){ slot Account r; r.balance = b; return give r; } friend audit[blance]; }
+type value Account { int64 balance; public ctor make(int64 b){ this.balance = b; } friend audit[blance]; }
 fn int64 audit(ref Account a) { return a.balance; }
 fn int main() { Account acc = Account.make(b: 1); return cast<int>(audit(a: ref acc)); }

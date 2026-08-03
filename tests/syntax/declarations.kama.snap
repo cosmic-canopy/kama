@@ -44,7 +44,7 @@
 #^^^^ source.kama
 #    ^^^^^ source.kama storage.type.primitive.kama
 #         ^^^^ source.kama
->    public ctor make(int32 x) { slot Point r; r.x = x; return give r; }
+>    public ctor make(int32 x) { this.x = x; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama
 #          ^ source.kama
@@ -54,16 +54,10 @@
 #                    ^ source.kama
 #                     ^^^^^ source.kama storage.type.primitive.kama
 #                          ^^^^^^ source.kama
-#                                ^^^^ source.kama keyword.other.modifier.kama
-#                                    ^ source.kama
-#                                     ^^^^^ source.kama entity.name.type.kama
-#                                          ^^^^^^^^ source.kama
-#                                                  ^ source.kama keyword.operator.assignment.kama
-#                                                   ^^^^ source.kama
-#                                                       ^^^^^^ source.kama keyword.control.kama
-#                                                             ^ source.kama
-#                                                              ^^^^ source.kama keyword.other.kama
-#                                                                  ^^^^^^ source.kama
+#                                ^^^^ source.kama variable.language.kama
+#                                    ^^^ source.kama
+#                                       ^ source.kama keyword.operator.assignment.kama
+#                                        ^^^^^^ source.kama
 >    public fn int32 get() { return this.x; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama
@@ -93,7 +87,7 @@
 #^^^^ source.kama
 #    ^^^^^ source.kama storage.type.primitive.kama
 #         ^^^^^ source.kama
->    public ctor make(int32 fd) { slot Handle r; r.fd = fd; return give r; }
+>    public ctor make(int32 fd) { this.fd = fd; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama
 #          ^ source.kama
@@ -103,16 +97,10 @@
 #                    ^ source.kama
 #                     ^^^^^ source.kama storage.type.primitive.kama
 #                          ^^^^^^^ source.kama
-#                                 ^^^^ source.kama keyword.other.modifier.kama
-#                                     ^ source.kama
-#                                      ^^^^^^ source.kama entity.name.type.kama
-#                                            ^^^^^^^^^ source.kama
-#                                                     ^ source.kama keyword.operator.assignment.kama
-#                                                      ^^^^^ source.kama
-#                                                           ^^^^^^ source.kama keyword.control.kama
-#                                                                 ^ source.kama
-#                                                                  ^^^^ source.kama keyword.other.kama
-#                                                                      ^^^^^^ source.kama
+#                                 ^^^^ source.kama variable.language.kama
+#                                     ^^^^ source.kama
+#                                         ^ source.kama keyword.operator.assignment.kama
+#                                          ^^^^^^^ source.kama
 >    public fn int32 raw() { return this.fd; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama

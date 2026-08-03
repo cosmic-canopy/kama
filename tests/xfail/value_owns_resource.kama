@@ -1,4 +1,4 @@
 // M26h — a `value` owns nothing; owning a collection (a resource) is a compile error.
 import std::collections::{DynamicArray};
-type value Bad { DynamicArray<int32> items; public ctor make() { slot Bad r; r.items.add(item: 1); return give r; } }
+type value Bad { DynamicArray<int32> items; public ctor make() { this.items.add(item: 1); } }
 fn int32 main() { Bad b = Bad.make(); return 0; }

@@ -52,7 +52,7 @@ type resource SqlQuery {
     string text;
     DynamicArray<string> params;
     public ctor of(string text, DynamicArray<string> params) {
-        slot SqlQuery r; r.text = give text; r.params = give params; return give r;
+        this.text = give text; this.params = give params;
     }
     public fn ref string queryText() { return this.text; }
     public fn int32 paramCount() { return this.params.length(); }

@@ -4,7 +4,7 @@ type contract Weighable for both { fn int32 weight(); }
 type contract Named for both { fn int32 tag(); }
 type value Crate implements Weighable, Named {
     int32 g;
-    public ctor make(int32 g) { slot Crate r; r.g = g; return give r; }
+    public ctor make(int32 g) { this.g = g; }
     public fn int32 weight() { return this.g; }
     public fn int32 tag() { return 100; }
 }

@@ -5,7 +5,7 @@ import std::collections::{Map};
 
 type value Point implements Hashable, Equatable {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { slot Point r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn uint64 hash() { return cast<uint64>(this.x) * 2654435761ui64 + cast<uint64>(this.y); }
     public fn bool equals(ref Point other) { return this.x == other.x && this.y == other.y; }
 }

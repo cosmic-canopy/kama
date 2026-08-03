@@ -5,7 +5,7 @@ type value Vec {
     @field int32 x;
     @field int32 y;
     @field int32 z;
-    public ctor make(int32 x, int32 y, int32 z) { slot Vec r; r.x = x; r.y = y; r.z = z; return give r; }
+    public ctor make(int32 x, int32 y, int32 z) { this.x = x; this.y = y; this.z = z; }
     public fn int32 dot() { return this.x + this.y + this.z; }
 }
 fn int main() {

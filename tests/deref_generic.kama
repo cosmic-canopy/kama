@@ -15,7 +15,7 @@ type value Point {
 
 type resource Own<T> implements Deref<T> {
     Ptr<T> p;
-    public ctor make(T v) { slot Own<T> r; unsafe { r.p = cast<Ptr<T>>(malloc(n: sizeof(T))); r.p[0] = v; } return give r; }
+    public ctor make(T v) { unsafe { this.p = cast<Ptr<T>>(malloc(n: sizeof(T))); this.p[0] = v; } }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     ~Own() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }

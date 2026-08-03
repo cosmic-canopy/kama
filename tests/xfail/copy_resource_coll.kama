@@ -2,7 +2,7 @@
 // method) is a compile error: each element would need its own deep copy. Add a `copy` method to
 // the element to opt into `Copyable` (see coll_copy_resource), or `give` to move the collection.
 import std::collections::{DynamicArray};
-type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ slot Res r; r.items.add(item: v); return give r; } ~Res(){} }
+type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} }
 fn int32 main() {
     DynamicArray<Res> a = DynamicArray.empty();
     DynamicArray<Res> b = copy a;   // ERROR: elements own resources but aren't Copyable

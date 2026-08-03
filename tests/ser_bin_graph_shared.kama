@@ -7,13 +7,13 @@ import std::collections::{DynamicArray};
 import std::memory::{Shared};
 
 @generate(Serialize, Deserialize)
-type resource Leaf { @field int32 v; public ctor make(int32 v) { slot Leaf r; r.v = v; return give r; } }
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
 @generate(Serialize, Deserialize)
 type resource Pair {
     @field Shared<Leaf> a;
     @field Shared<Leaf> b;
-    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { slot Pair r; r.a = give a; r.b = give b; return give r; }
+    public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
 }
 
 fn DynamicArray<uint8> clone(ref DynamicArray<uint8> src) {

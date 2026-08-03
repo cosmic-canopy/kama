@@ -4,13 +4,13 @@
 // 0). Proves "default-fillable" actually fills correctly for a non-zero default (the M8b-deferred codegen).
 type value Counter {
     int32 n;
-    public default ctor start() { slot Counter c; c.n = 7; return give c; }
+    public default ctor start() { this.n = 7; }
     public fn int32 value() { return this.n; }
 }
 
 type resource Holder {
     Counter c;
-    public ctor make() { slot Holder h; return give h; }   // leaves `c` — filled via Counter.start()
+    public ctor make() { }   // leaves `c` — filled via Counter.start()
     public fn int32 read() { return this.c.value(); }
 }
 

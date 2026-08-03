@@ -7,7 +7,7 @@ type value Palette {
     public comptime int32 SIZE = 4;
     comptime int32 SEED = 100;                 // private (default for a `value`) — internal use only
     int32 v;
-    public ctor make(int32 v) { slot Palette r; r.v = v; return give r; }
+    public ctor make(int32 v) { this.v = v; }
     public const fn int32 seeded() { return this.v + Palette::SEED; }   // private const OK inside the type
 }
 fn int32 main() {

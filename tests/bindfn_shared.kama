@@ -8,7 +8,7 @@ extern fn int kama_trace_get();
 fnptr int32 Get(int32 d);
 type resource Probe {
     int32 id;
-    public ctor make(int32 id) { slot Probe r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     ~Probe() { kama_trace(code: 9); }
     public fn int32 read(int32 d) { return this.id + d; }
 }

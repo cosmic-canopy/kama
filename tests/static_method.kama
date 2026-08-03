@@ -3,7 +3,7 @@
 type value Vec2 {
     int32 x;
     int32 y;
-    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public static fn int32 dot(Vec2 left, Vec2 right) {
         return left.x * right.x + left.y * right.y;   // no `this` — both operands are params
     }

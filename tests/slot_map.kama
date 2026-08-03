@@ -5,7 +5,7 @@ import std::collections::{SlotMap, Handle};
 
 type resource Counter {
     int32 n;
-    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public fn void bump() { this.n = this.n + 1; }
     public fn int32 get() { return this.n; }
 }

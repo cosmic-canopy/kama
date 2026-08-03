@@ -2,6 +2,6 @@
 // constructor `n` — define one", sending the reader to write a constructor they do not want.
 type value Holder {
     public int32 n;
-    public ctor make(int32 n) { slot Holder h; h.n = n; return give h; }
+    public ctor make(int32 n) { this.n = n; }
 }
 fn int main() { return Holder.n(); }

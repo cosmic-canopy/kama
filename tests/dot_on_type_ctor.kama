@@ -8,7 +8,7 @@ implements Error for PointErr { public fn string message() { return "negative x"
 type value Point {
     int32 x;
     int32 y;
-    public ctor make(int32 x, int32 y) { slot Point p; p.x = x; p.y = y; return p; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
     public ctor Result<Point, PointErr> checked(int32 x, int32 y) {
         if (x < 0) { return Result::Err(error: PointErr::NegativeX); }   // fail before the object exists
         return Result::Ok(value: Point.make(x: x, y: y));   // delegate to the infallible ctor (dot chain)

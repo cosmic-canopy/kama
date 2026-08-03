@@ -3,9 +3,7 @@ type value Accum
     int total;
     public ctor make(int init)
     {
-        slot Accum r;
-        r.total = init;
-        return give r;
+        this.total = init;
     }
     public fn void bump()
     {

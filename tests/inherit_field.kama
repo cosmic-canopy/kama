@@ -19,10 +19,8 @@ type final resource Derived extends Base
     int y;
     public ctor make(int x, int y)
     {
-        slot Derived r;
-        r.setX(x: x);      // initialize the inherited base field
-        r.y = y;
-        return give r;
+        this.setX(x: x);      // initialize the inherited base field
+        this.y = y;
     }
     protected override fn int tag() { return 1; }
     protected override fn int sumImpl() { return this.getX() + y; }   // base data via the protected accessor

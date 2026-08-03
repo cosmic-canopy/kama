@@ -5,13 +5,13 @@ extern fn int kama_trace_get();
 // M25b: extension is opt-in, so Base is a `virtual class`; the dtor chain is unchanged.
 type virtual resource Base
 {
-    public ctor make() { slot Base r;  return give r; }
+    public ctor make() { }
     ~Base() { kama_trace(code: 1); }
     protected virtual fn int kind() { return 0; }
 }
 type final resource Derived extends Base
 {
-    public ctor make() { slot Derived r;  return give r; }
+    public ctor make() { }
     ~Derived() { kama_trace(code: 2); }
     protected override fn int kind() { return 1; }
 }

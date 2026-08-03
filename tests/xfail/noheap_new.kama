@@ -1,5 +1,5 @@
 // `@noheap` forbids heap allocation in this body — `new` must be rejected.
 import std::memory::{Owned};
-type resource Box { int32 v; public ctor make(int32 v) { slot Box b; b.v = v; return give b; } public fn int32 get() { return this.v; } }
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 @noheap fn int32 hot() { Owned<Box> b = new Box.make(v: 1); return b.get(); }
 fn int32 main() { return hot(); }

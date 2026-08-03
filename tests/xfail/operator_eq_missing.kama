@@ -2,7 +2,7 @@
 // compared (there is no auto structural `==`). The diagnostic names the contract, not an operator.
 type value Vec2 {
     public int32 x;
-    public ctor make(int32 x) { slot Vec2 r; r.x = x; return give r; }
+    public ctor make(int32 x) { this.x = x; }
 }
 fn int32 main() {
     Vec2 a = Vec2.make(x: 3);

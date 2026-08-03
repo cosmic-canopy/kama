@@ -11,11 +11,10 @@ type value Acc {
     int32 hi;
 
     public ctor range(int32 lo, int32 hi) {
-        slot Acc a;
-        a.total = 0;
-        a.lo = lo;
-        a.hi = hi;
-        return a;
+        this.total = 0;
+        this.lo = lo;
+        this.hi = hi;
+        return this;
     }
 
     // Runs on the child's thread, mutating the borrowed bundle in place.

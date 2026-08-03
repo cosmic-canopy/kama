@@ -4,7 +4,7 @@
 // skipped, so no double-drop — ASan-clean; a bare copy would leave `w` live and drop it twice).
 type resource Widget {
     int32 id;
-    public ctor make(int32 id) { slot Widget r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     public fn int32 get() { return this.id; }
     ~Widget() { }
 }

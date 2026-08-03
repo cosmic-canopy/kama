@@ -5,7 +5,7 @@ enum PercentErr { OutOfRange }
 implements Error for PercentErr { public fn string message() { return "out of range"; } }
 type value Percent {
     public int32 v;
-    public ctor make(int32 v) { slot Percent r; r.v = v; return give r; }
+    public ctor make(int32 v) { this.v = v; }
     public ctor Result<Percent, PercentErr> of(int32 v) {
         if (v < 0 || v > 100) { return Result::Err(error: PercentErr::OutOfRange); }   // fail before the object exists
         Percent p = Percent.make(v: v);

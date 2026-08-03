@@ -5,7 +5,7 @@ import std::collections::{DynamicArray};
 type contract Draw for both { fn int32 v(); }
 type resource Dot implements Draw {
     DynamicArray<int32> h;
-    public ctor make(int32 x) { slot Dot r; r.h.add(item: x); return give r; }
+    public ctor make(int32 x) { this.h.add(item: x); }
     public fn int32 v() { return this.h[0]; }
 }
 fn int32 main() {

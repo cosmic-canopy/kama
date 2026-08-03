@@ -3,12 +3,12 @@
 type value Row {
     public int32 a;
     public int32 b;
-    public ctor make() { slot Row r; r.a = 0; r.b = 0; return give r; }
+    public ctor make() { this.a = 0; this.b = 0; }
     public ref int32 operator[](usize j) { if (j == 0) { return this.a; } return this.b; }
 }
 type value Mat {
     InlineArray<Row, 2> rows;
-    public ctor make() { slot Mat r; Row r2 = Row.make(); r.rows = [r2; 2]; return give r; }
+    public ctor make() { Row r2 = Row.make(); this.rows = [r2; 2]; }
     public ref Row operator[](usize i) { return this.rows[i]; }
 }
 fn int32 main() {

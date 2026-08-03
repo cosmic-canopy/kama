@@ -1,7 +1,7 @@
 // Granting a public member is redundant — flag it rather than let it mislead.
 type value Account {
     int64 balance;
-    public ctor make(int64 b) { slot Account r; r.balance = b; return give r; }
+    public ctor make(int64 b) { this.balance = b; }
     public fn int64 get() { return this.balance; }
     friend audit[get];   // get is already public
 }

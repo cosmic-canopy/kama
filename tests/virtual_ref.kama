@@ -9,7 +9,7 @@ type virtual resource Shape
 type final resource Square extends Shape
 {
     int s;
-    public ctor make(int s) { slot Square r; r.s = s; return give r; }
+    public ctor make(int s) { this.s = s; }
     protected override fn int compute() { return s * s; }
 }
 fn int measure(ref Shape sh)

@@ -11,7 +11,7 @@ type resource Node {
     DynamicArray<int32> data;                                  // owns heap -> a real pointee dtor runs on cycle drop
     Optional<Shared<Node>> next;                       // forward edge (owns)
     Optional<Weak<Node>> back;                          // back edge (weak) — breaks the ownership cycle
-    public ctor make(int32 v) { slot Node r; r.data.add(item: v); r.next = Optional::None; r.back = Optional::None; return give r; }
+    public ctor make(int32 v) { this.data.add(item: v); this.next = Optional::None; this.back = Optional::None; }
     public fn void setNext(Shared<Node> n) { this.next = Optional::Some(value: give n); }
     public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
     public fn int32 val() { return this.data[0]; }

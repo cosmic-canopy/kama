@@ -20,7 +20,7 @@ type virtual resource B {
     protected virtual fn int32 t() { return 1; }
 }
 type final resource D extends B {
-    public ctor make() { slot D r; return give r; }
+    public ctor make() { }
     protected override fn int32 t() { return 2; }
     protected override fn int32 peekImpl() { return base.secret(); }   // ERROR: 'secret' is private in 'B'
 }

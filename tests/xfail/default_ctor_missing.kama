@@ -2,6 +2,6 @@
 // and the call site is a clean error naming that choice — not a silently synthesized zero value.
 type value NoDefault {
     public int32 n;
-    public ctor make(int32 n) { slot NoDefault d; d.n = n; return give d; }
+    public ctor make(int32 n) { this.n = n; }
 }
 fn int main() { NoDefault d = NoDefault.default(); return d.n; }

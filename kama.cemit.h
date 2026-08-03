@@ -1441,7 +1441,10 @@ private:
     // Bring zero-inited storage of class `ty` (named `nm` in C) up to a valid empty state — field
     // initializers, each field's `default` ctor, and the vtable pointer. Shared by the bare class-local
     // declaration path and by a `ctor`'s implicit `this` storage, which must agree exactly.
-    void emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth);
+    // `moveKey` is the prefix under which the fill seeds per-field MOVE STATE; it defaults to `nm`
+    // but differs where the C name differs from the source name (a ctor's storage: `__self` / `this`).
+    void emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
+                           const std::string& moveKey = std::string());
     // `this` in a ctor is `self`, a `T*`. True where the destination wants the `T` BY VALUE (a return temp,
     // a variant payload) and the pointer must therefore be dereferenced.
     bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;

@@ -8,7 +8,7 @@ extern fn void free(Ptr p);
 
 type resource Cell {
     Ptr<int32> buf;
-    public ctor make(int32 v) { slot Cell r; unsafe { r.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); r.buf[0] = v; } return give r; }
+    public ctor make(int32 v) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
     public fn int32 get() { unsafe { return this.buf[0]; } }
     ~Cell() { unsafe { free(p: cast<Ptr>(this.buf)); } }
 }

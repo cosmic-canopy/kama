@@ -7,7 +7,7 @@ import std::collections::{DynamicArray};
 // (A `type value Wrap<T>` here is correctly rejected — a value can't own a resource; see the xfail.)
 type resource Wrap<T> {
     DynamicArray<T> items;
-    public ctor make(T a, T b) { slot Wrap<T> r; r.items.add(item: a); r.items.add(item: b); return give r; }
+    public ctor make(T a, T b) { this.items.add(item: a); this.items.add(item: b); }
     public fn T first() { return this.items[0]; }
     public fn int32 size() { return this.items.length(); }
 }

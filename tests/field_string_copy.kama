@@ -4,7 +4,7 @@
 // proof (the confirmed double-free repro, now safe).
 type resource Box {
     string a;
-    public ctor make(string x) { slot Box r; r.a = give x; return give r; }
+    public ctor make(string x) { this.a = give x; }
     public fn int32 len() { return cast<int32>(this.a.length()); }
 }
 fn int main() { string x = "he" + "llo"; Box b = Box.make(x: copy x); return b.len() + cast<int32>(x.length()); }  // 5 + 5 = 10

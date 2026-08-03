@@ -45,7 +45,7 @@ type resource Sender<T> {
     Ptr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
-    public ctor make(Ptr handle) { slot Sender<T> s; s.handle = handle; return give s; }
+    public ctor make(Ptr handle) { this.handle = handle; }
 
     // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
     // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
@@ -91,7 +91,7 @@ type resource Sender<T> {
 type resource Receiver<T> {
     Ptr handle;   // the shared queue; null once moved-from
 
-    public ctor make(Ptr handle) { slot Receiver<T> r; r.handle = handle; return give r; }
+    public ctor make(Ptr handle) { this.handle = handle; }
 
     // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
     // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
@@ -131,9 +131,7 @@ type resource Channel<T> {
     Ptr handle;
 
     public ctor bounded(usize capacity) {
-        slot Channel<T> c;
-        c.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
-        return give c;
+        this.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
     }
 
     public fn Sender<T>   sender()   { return Sender::<T>.make(handle: this.handle); }

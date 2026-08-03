@@ -5,7 +5,7 @@ import std::collections::{FixedArray};
 
 type value Tag implements Equatable {
     int32 id;
-    public ctor make(int32 id) { slot Tag r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     public fn bool equals(ref Tag other) { return this.id == other.id; }
 }
 

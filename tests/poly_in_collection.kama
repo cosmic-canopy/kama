@@ -19,7 +19,7 @@ import std::collections::{DynamicArray, View};
 
 // (A) plain value type — the ECS shape
 type value PlainTick { public int32 n;
-    public ctor make(int32 n) { slot PlainTick t; t.n = n; return give t; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 tick() { return this.n + 1; } }
 
 // (B) a virtual base + final derived — the OOP shape
@@ -29,7 +29,7 @@ type virtual resource BaseTick { int32 n;
     protected virtual fn int32 tickImpl() { return this.n; }
     public fn int32 tick() { return this.tickImpl(); } }
 type final resource DerivedTick extends BaseTick {
-    public ctor make(int32 n) { slot DerivedTick d; d.setN(n: n); return give d; }
+    public ctor make(int32 n) { this.setN(n: n); }
     protected override fn int32 tickImpl() { return this.getN() + 1; } }
 
 fn int32 sumPlain(View<PlainTick> xs) {

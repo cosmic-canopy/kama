@@ -2,7 +2,7 @@
 // must not mark a same-named local in a LATER sibling block as already-moved (the sorted_map bug).
 // Also covers a foreach-bound name reused by a later sibling local.
 import std::collections::{DynamicArray};
-type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ slot Res r; r.items.add(item: v); return give r; } ~Res(){} public fn int32 head(){ return this.items[0]; } }
+type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 take(Res r) { return r.head(); }
 fn int32 main() {
     int32 total = 0;

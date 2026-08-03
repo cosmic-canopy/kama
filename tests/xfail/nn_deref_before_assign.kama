@@ -2,15 +2,13 @@
 // A named `ctor` factory builds a bare local; the definite-assignment pass flags a read of its
 // owning field before it is assigned (the same rule the legacy in-ctor path had).
 import std::memory::{Owned};
-type value Box { int32 v; public ctor make(int32 v) { slot Box r; r.v = v; return give r; } public fn int32 get() { return this.v; } }
+type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 type resource Bad {
     Owned<Box> a;
     public ctor make(int32 seed) {
-        slot Bad r;
-        int32 x = r.a.get() + seed;            // reads `a` before it is assigned
+        int32 x = this.a.get() + seed;            // reads `a` before it is assigned
         Owned<Box> n = new Box.make(v: x);
-        r.a = give n;
-        return give r;
+        this.a = give n;
     }
 }
 fn int main() { Bad b = Bad.make(seed: 5); return 0; }

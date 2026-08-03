@@ -1,3 +1,3 @@
 // M8: supplying more type args than the template has parameters is a compile-time error.
-type value Wrap<T, U = int32> { public T a; public U b; public ctor make(T x, U y){ slot Wrap<T, U> r; r.a = x; r.b = y; return give r; } }
+type value Wrap<T, U = int32> { public T a; public U b; public ctor make(T x, U y){ this.a = x; this.b = y; } }
 fn int main() { Wrap<int32, float64, bool> w = Wrap.make(x: 1, y: 2.0); return 0; }

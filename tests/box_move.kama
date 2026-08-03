@@ -2,10 +2,10 @@
 // moved-from `a` is not freed (no double-free). Nothing smart-pointer-specific — general resource RAII.
 extern "<stdlib.h>";
 extern fn void free(Ptr p);
-type value Counter { public int32 n; public ctor make(int32 s) { slot Counter r; r.n = s; return give r; } public fn int32 get() { return this.n; } }
+type value Counter { public int32 n; public ctor make(int32 s) { this.n = s; } public fn int32 get() { return this.n; } }
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     Ptr<T> p;
-    public ctor adopt(Ptr<T> raw) { slot Box<T> b; b.p = raw; return b; }
+    public ctor adopt(Ptr<T> raw) { this.p = raw; return this; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     ~Box() { unsafe { free(p: cast<Ptr>(this.p)); } }
 }

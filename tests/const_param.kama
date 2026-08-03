@@ -4,7 +4,7 @@
 // separately). Mirrors the same deep-const rules as const locals.
 type value Vec2 {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public const fn int32 lenSq() { return this.x * this.x + this.y * this.y; }
 }
 fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + const value

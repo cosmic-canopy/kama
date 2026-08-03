@@ -24,13 +24,13 @@
 //   name private in base   -> legal               (tests/inherit_private_name_reuse)
 //   `override` of a seam   -> legal               (tests/vtable_depth2)
 type virtual resource B {
-    public ctor make() { slot B r; return give r; }
+    public ctor make() { }
     public fn int32 h() { return 1; }                 // public, NOT virtual — no seam was offered
     protected fn int32 g() { return 1; }              // protected, NOT virtual
     protected virtual fn int32 t() { return 1; }
 }
 type final resource D extends B {
-    public ctor make() { slot D r; return give r; }
+    public ctor make() { }
     public fn int32 h() { return 2; }                 // ERROR: shadows B.h(), which is not overridable
     protected fn int32 g() { return 2; }              // ERROR: same, at protected
     protected override fn int32 t() { return 2; }

@@ -8,7 +8,7 @@ type value Box {
     int32 v;
     public ctor Result<Box, BoxErr> tryMake(int32 v) {
         if (v < 0) { return Result::Err(error: BoxErr::Negative); }
-        slot Box b; b.v = v; return Result::Ok(value: b);
+        this.v = v; return Result::Ok(value: this);
     }
 }
 fn int32 main() {

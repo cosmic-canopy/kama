@@ -5,22 +5,22 @@ import std::collections::{DynamicArray};
 // Nested inline ctors compose (inner constructed before outer).
 type value Counter {
     int32 n;
-    public ctor make(int32 start) { slot Counter r; r.n = start; return give r; }
+    public ctor make(int32 start) { this.n = start; }
     public fn int32 get() { return this.n; }
 }
 type value Pair {
     int32 a; int32 b;
-    public ctor make(int32 a, int32 b) { slot Pair r; r.a = a; r.b = b; return give r; }
+    public ctor make(int32 a, int32 b) { this.a = a; this.b = b; }
     public fn int32 sum() { return this.a + this.b; }
 }
 type value Wrap {
     int32 v;
-    public ctor make(Counter c) { slot Wrap r; r.v = c.get(); return give r; }   // ctor takes a value param
+    public ctor make(Counter c) { this.v = c.get(); }   // ctor takes a value param
     public fn int32 val() { return this.v; }
 }
 type resource Res {
     DynamicArray<int32> data;                                   // owns a heap buffer -> destructible
-    public ctor make(int32 v) { slot Res r; r.data.add(item: v); return give r; }
+    public ctor make(int32 v) { this.data.add(item: v); }
     public fn int32 get() { return this.data[0]; }
 }
 fn int32 useIt(Counter c) { return c.get(); }

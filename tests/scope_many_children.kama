@@ -9,10 +9,8 @@ type resource Slot {
     int32 value;
 
     public ctor make(Ptr<int32> cell, int32 value) {
-        slot Slot r;
-        r.cell = cell;
-        r.value = value;
-        return give r;
+        this.cell = cell;
+        this.value = value;
     }
 
     public fn void run() { unsafe { this.cell[0] = this.value; } }

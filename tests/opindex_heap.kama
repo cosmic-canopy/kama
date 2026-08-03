@@ -9,11 +9,9 @@ type resource IntVec {
     Ptr<int32> data;
     int32 len;
     public ctor make(int32 n) {
-        slot IntVec r;
-        r.data = malloc(n: cast<usize>(n) * 4);
-        r.len = n;
-        unsafe { int32 i = 0; while (i < n) { r.data[i] = 0; i = i + 1; } }
-        return give r;
+        this.data = malloc(n: cast<usize>(n) * 4);
+        this.len = n;
+        unsafe { int32 i = 0; while (i < n) { this.data[i] = 0; i = i + 1; } }
     }
     public ref int32 operator[](int32 i) { unsafe { return this.data[i]; } }
     public fn int32 length() { return this.len; }

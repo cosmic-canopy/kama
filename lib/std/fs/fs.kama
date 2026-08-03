@@ -41,7 +41,7 @@ type resource File implements Reader, Writer {
     int32 fd = -1;
     // Adopt an already-open fd (e.g. a child pipe end from std::process, mirroring TcpStream.make). Prefer
     // `open` for files. The File closes this fd on drop (RAII); pass -1 for an empty/moved-from slot.
-    public ctor make(int32 fd) { slot File r; r.fd = fd; return give r; }
+    public ctor make(int32 fd) { this.fd = fd; }
 
     // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the
     // File still owns the fd and closes it on drop.

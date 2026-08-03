@@ -17,13 +17,13 @@ type contract Clock for both { fn int32 tick(); }
 
 @compileFor(!ARCH_WASM32)
 type value NativeClock implements Clock {
-    public ctor make() { slot NativeClock c; return give c; }
+    public ctor make() { }
     public fn int32 tick() { return 42; }
 }
 
 @compileFor(ARCH_WASM32)
 type value WasmClock implements Clock {
-    public ctor make() { slot WasmClock c; return give c; }
+    public ctor make() { }
     public fn int32 tick() { return 42; }
 }
 

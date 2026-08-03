@@ -11,7 +11,7 @@ fnptr int32 Scorer(int32 v);
 
 type value Tally {
     public int32 total;
-    public ctor make(int32 total) { slot Tally r; r.total = total; return give r; }
+    public ctor make(int32 total) { this.total = total; }
     public fn This merge(This other) { return Tally.make(total: this.total + other.total); }   // (2)
 }
 

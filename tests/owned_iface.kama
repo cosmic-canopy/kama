@@ -8,12 +8,12 @@ import std::memory::{Owned};
 type contract Shape for both { fn int32 area(); }
 type value Rect implements Shape {
     int32 w; int32 h;
-    public ctor make(int32 w, int32 h) { slot Rect r; r.w = w; r.h = h; return give r; }
+    public ctor make(int32 w, int32 h) { this.w = w; this.h = h; }
     public fn int32 area() { return this.w * this.h; }         // non-destructible impl
 }
 type resource Square implements Shape {
     DynamicArray<int32> side;                                          // owns heap -> destructible impl
-    public ctor make(int32 s) { slot Square r; r.side.add(item: s); return give r; }
+    public ctor make(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
 fn int32 areaOf(Owned<Shape> s) { return s.area(); }          // callee owns s, drops it at fn-end

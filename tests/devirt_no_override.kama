@@ -2,7 +2,7 @@
 // program-wide, so `this.pixels()` lowers to a direct call (no __vptr) — even through a base ref.
 type virtual resource Widget
 {
-    public ctor make() { slot Widget r;  return give r; }
+    public ctor make() { }
     public fn int32 render() { return this.pixels(); }
     protected virtual fn int32 pixels() { return 42; }
 }

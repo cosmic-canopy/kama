@@ -23,7 +23,7 @@ type virtual resource Base
     int32 n;                                          // private to Base
     friend Leaf[helper];                              // Leaf MAY reach Base::helper — and still has its own
     fn int32 helper() { return this.n; }              // private to Base; reads BASE's n
-    public ctor make() { slot Base r; r.n = 5; return give r; }
+    public ctor make() { this.n = 5; }
     protected fn void setN(int32 v) { this.n = v; }
     public fn int32 rank() { return this.baseSide() + this.derivedSide(); }
     protected fn int32 baseSide() { return this.helper(); }        // inside Base: Base's helper -> 5
@@ -33,7 +33,7 @@ type final resource Leaf extends Base
 {
     int32 n;                                          // its OWN n — unrelated to Base's
     fn int32 helper() { return this.n * 2; }          // its OWN helper — unrelated to Base's
-    public ctor make() { slot Leaf r; r.setN(v: 5); r.n = 3; return give r; }
+    public ctor make() { this.setN(v: 5); this.n = 3; }
     // `this.` and `base.` are how you say WHICH one — nearest wins for `this.`, and there is no
     // ambiguity to report, because the two names were never related in the first place.
     protected override fn int32 derivedSide()

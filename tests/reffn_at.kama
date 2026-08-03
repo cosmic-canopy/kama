@@ -3,7 +3,7 @@
 // enforces it. Used as read / write / compound / a `ref` argument, like the method version.
 type value Buf {
     public InlineArray<int32, 4> d;
-    public ctor make() { slot Buf r; r.d = [0; 4]; return give r; }
+    public ctor make() { this.d = [0; 4]; }
 }
 fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
 fn void bump(ref int32 v) { v = v + 100; }

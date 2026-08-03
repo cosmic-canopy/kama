@@ -3,7 +3,7 @@
 // each: dot = construction, `::` = scope resolution.
 type value Vec2 {
     int32 x;
-    public ctor make(int32 x) { slot Vec2 v; v.x = x; return v; }
+    public ctor make(int32 x) { this.x = x; return this; }
     public static fn int32 twice(int32 n) { return n + n; }
 }
 fn int32 main() {

@@ -6,7 +6,7 @@ type value Widget {
     const int32 id;          // set from the ctor arg
     const int32 kind = 7;    // inline initializer
     int32 count;             // private (kind-decides); read via the accessor
-    public ctor make(int32 id) { slot Widget r; r.id = id; r.count = 0; return give r; }
+    public ctor make(int32 id) { this.id = id; this.count = 0; }
     public fn void tick() { this.count = this.count + 1; }    // mutating non-const field: OK
     public const fn int32 count() { return this.count; }
     public const fn int32 tag() { return this.id + this.kind; }

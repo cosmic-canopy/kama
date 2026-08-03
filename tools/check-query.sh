@@ -154,7 +154,8 @@ echo "check-query: M3.5 workspace indexing"
 # Without --project: only widget.kama's own uses are visible. (`--refs` prints absolute paths under
 # --project and the given path without it, so match on the basename+position, which both forms carry.)
 expect --refs 12:11 -- "widget.kama:12:11"          # the declaration itself
-expect --refs 12:11 -- "widget.kama:15:38"          # 'Widget r;' inside the ctor
+expect --refs 12:11 -- "widget.kama:22:3"           # 'fn Widget defaultWidget()' return type
+expect --refs 12:11 -- "widget.kama:22:35"          # ... and the 'Widget.of(...)' call in its body
 reject --refs 12:11 -- "app.kama"                   # ... and app.kama is INVISIBLE (the M3.3 blind spot)
 # With --project: the same query reaches every file in the package.
 expect --project --refs 12:11 -- "app.kama:5:3"     # 'fn Widget make(...)' return type

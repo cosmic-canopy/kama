@@ -2,7 +2,7 @@
 // error: the callee's mutation would be lost into a discarded temp — bind to a local first.
 type value Vec2 {
     int32 x; int32 y;
-    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
 }
 fn Vec2 makeVec() { return Vec2.make(x: 1, y: 2); }
 fn int32 bump(ref Vec2 v) { v.x = v.x + 1; return v.x; }

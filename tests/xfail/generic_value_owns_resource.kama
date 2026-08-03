@@ -1,5 +1,5 @@
 // M27b-alpha: a `type value` owns nothing. Instantiating a value `Box` with `string` (which owns
 // heap when non-empty) is rejected PER INSTANTIATION — exactly as a normal `value` with a `string`
 // field is. The fix is `type resource Box<T>` (deferred to M27b-beta).
-type value Box<T> { public T value; public ctor make(T v) { slot Box<T> r; r.value = v; return give r; } }
+type value Box<T> { public T value; public ctor make(T v) { this.value = v; } }
 fn int main() { Box<string> b = Box.make(v: "x"); return 0; }

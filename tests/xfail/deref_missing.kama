@@ -2,12 +2,12 @@
 // still fails cleanly — the Deref fallback doesn't invent methods.
 type value Point {
     public int32 x;
-    public ctor make(int32 x) { slot Point r; r.x = x; return give r; }
+    public ctor make(int32 x) { this.x = x; }
     public fn int32 get() { return this.x; }
 }
 type value BoxP implements Deref<Point> {
     Point inner;
-    public ctor make(Point p) { slot BoxP r; r.inner = p; return give r; }
+    public ctor make(Point p) { this.inner = p; }
     public fn ref Point deref() { return this.inner; }
 }
 fn int32 main() {

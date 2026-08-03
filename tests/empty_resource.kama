@@ -1,6 +1,6 @@
 // M26h — an empty `type resource` is a valid move-only identity (a linear token): move-only even
 // though it owns nothing to drop. `give` moves it; the source is consumed.
-type resource Token { public ctor make() { slot Token r; return give r; } }
+type resource Token { public ctor make() { } }
 fn int32 use(Token t) { return 7; }              // t moves into the callee
 fn int32 main() {
     Token a = Token.make();

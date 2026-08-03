@@ -4,7 +4,7 @@
 import std::collections::{DynamicArray};
 type value Counter {
     int32 n;
-    public ctor make(int32 start) { slot Counter r; r.n = start; return give r; }
+    public ctor make(int32 start) { this.n = start; }
     public fn int32 get() { return this.n; }
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates
 }

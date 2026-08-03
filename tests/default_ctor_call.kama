@@ -10,20 +10,20 @@
 
 type value Thing {
     public int32 n;
-    public default ctor empty() { slot Thing t; t.n = 7; return give t; }   // elected, but named `empty`
+    public default ctor empty() { this.n = 7; }   // elected, but named `empty`
 }
 
 type resource Handle {
     int32 fd;
-    public default ctor closed() { slot Handle h; h.fd = -1; return give h; }   // a resource may elect too
+    public default ctor closed() { this.fd = -1; }   // a resource may elect too
     public fn int32 raw() { return this.fd; }
 }
 
 // The one place `A: default` is spelled. Before this, the bound could be stated and never used.
 type value Holder<A> {
     public A item;
-    public ctor of(A item) { slot Holder<A> h; h.item = item; return give h; }
-    public ctor fresh() when [A: default] { slot Holder<A> h; h.item = A.default(); return give h; }
+    public ctor of(A item) { this.item = item; }
+    public ctor fresh() when [A: default] { this.item = A.default(); }
 }
 
 fn int main()

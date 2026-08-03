@@ -11,14 +11,14 @@ type contract Shape for both { fn int32 area(); }
 @generate(Serialize, Deserialize)
 type resource Sq implements Shape {
     @field int32 side;
-    public ctor make(int32 side) { slot Sq r; r.side = side; return give r; }
+    public ctor make(int32 side) { this.side = side; }
     public fn int32 area() { return this.side * this.side; }
 }
 
 @generate(Serialize, Deserialize)
 type resource Circle implements Shape {
     @field int32 r;
-    public ctor make(int32 r) { slot Circle self; self.r = r; return give self; }
+    public ctor make(int32 r) { this.r = r; }
     public fn int32 area() { return 3 * this.r * this.r; }
 }
 
@@ -26,7 +26,7 @@ type resource Circle implements Shape {
 type resource Scene {
     @field Shared<Shape> a;
     @field Shared<Shape> b;
-    public ctor make(Shared<Shape> a, Shared<Shape> b) { slot Scene r; r.a = give a; r.b = give b; return give r; }
+    public ctor make(Shared<Shape> a, Shared<Shape> b) { this.a = give a; this.b = give b; }
     public fn int32 areaA() { return this.a.area(); }
     public fn int32 areaB() { return this.b.area(); }
 }

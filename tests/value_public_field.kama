@@ -4,7 +4,7 @@ type value Vec2 {
     public int32 x;
     public int32 y;
     int32 tag;                                   // default private
-    public ctor make(int32 x, int32 y) { slot Vec2 r; r.x = x; r.y = y; r.tag = 100; return give r; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; this.tag = 100; }
     public fn int32 getTag() { return this.tag; }
 }
 fn int32 main() {

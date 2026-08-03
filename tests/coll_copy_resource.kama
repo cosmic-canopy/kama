@@ -5,7 +5,7 @@ import std::collections::{DynamicArray};
 // a shallow copy would alias each element's inner `DynamicArray` and double-free it at scope exit.
 type resource Res implements Copyable(bare: give) {
     DynamicArray<int32> items;                                     // owns a heap buffer
-    public ctor make(int32 v) { slot Res r; r.items.add(item: v); return give r; }
+    public ctor make(int32 v) { this.items.add(item: v); }
     ~Res() { }                                             // resource
     public ctor copy(ref Res source) { Res r = Res.make(v: source.items[0]); return give r; }   // opt into Copyable
     public fn int32 head() { return this.items[0]; }

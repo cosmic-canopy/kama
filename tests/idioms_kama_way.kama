@@ -8,7 +8,7 @@ type contract Shown for value { fn int32 show(); }
 // (1) A `resource`'s fields are ALWAYS private — expose behavior, not state.
 type resource Counter {
     int32 n;                                  // no `public` — a resource guards its invariant
-    public ctor make(int32 n) { slot Counter r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 value() { return this.n; }
 }
 
@@ -17,7 +17,7 @@ type resource Counter {
 type value Point {
     @field int32 x;
     @skip  int32 cachedHash;
-    public ctor make(int32 x) { slot Point r; r.x = x; r.cachedHash = 0; return give r; }
+    public ctor make(int32 x) { this.x = x; this.cachedHash = 0; }
 }
 
 // (3) A free function's bounds go in the TYPE-PARAMETER LIST — `when [...]` is for a generic
@@ -26,7 +26,7 @@ fn int32 showIt<W: Shown>(W x) { return x.show(); }
 
 type value Leaf implements Shown {
     public int32 n;
-    public ctor make(int32 n) { slot Leaf r; r.n = n; return give r; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 show() { return this.n; }
 }
 
@@ -40,11 +40,11 @@ fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 //     mandatory (a ctor infers its instance from its arguments; a static has no receiver to infer from).
 type value Box<T> {
     public T v;
-    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public ctor make(T v) { this.v = v; }
     public static fn int32 tag() { return 3; }
 }
 type value Plain {
-    public ctor make() { slot Plain p; return give p; }
+    public ctor make() { }
     public static fn int32 tag() { return 4; }
 }
 fn W pick<W>(W a, W b) { if (true) { return a; } return b; }

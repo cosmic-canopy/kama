@@ -19,13 +19,13 @@ type contract Area for both { fn int32 area(); }
 
 type virtual resource Base {
     int32 tag;
-    public ctor make() { slot Base b; b.tag = 1; return give b; }
+    public ctor make() { this.tag = 1; }
     protected virtual fn int32 kind() { return 1; }
     public fn int32 tagIs() { return this.tag; }        // implicit `this.` field read
 }
 
 type final resource Derived extends Base {
-    public ctor make() { slot Derived d; return give d; }
+    public ctor make() { }
     protected override fn int32 kind() { return 2; }
     public fn int32 viaBase() { return base.kind(); }   // the non-virtual base call
     public fn int32 viaThis() { return this.kind(); }
@@ -34,7 +34,7 @@ type final resource Derived extends Base {
 type value Point implements Area {
     public int32 x;
     public int32 y;
-    public ctor at(int32 px, int32 py) { slot Point p; p.x = px; p.y = py; return p; }
+    public ctor at(int32 px, int32 py) { this.x = px; this.y = py; return this; }
     public fn int32 area() { return this.x * this.y; }
     public fn int32 sum() { return this.x + this.y; }
     public static fn int32 origin() { return 0; }

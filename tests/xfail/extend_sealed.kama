@@ -1,4 +1,4 @@
 // A plain (sealed) class cannot be extended; only virtual/abstract classes may.
-type value Base { public ctor make() { slot Base r; return give r; } }
+type value Base { public ctor make() { } }
 type virtual resource Derived extends Base { protected virtual fn int h() { return 0; } }
 fn int main() { return 0; }

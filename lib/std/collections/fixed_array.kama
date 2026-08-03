@@ -8,7 +8,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type value FixedArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { slot FixedArrayIter<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -19,7 +19,7 @@ type value FixedArrayIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
 type value FixedArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { slot FixedArrayIterMut<T> r; r.data = data; r.pos = 0; r.len = len; return give r; }
+    public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
@@ -35,7 +35,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
     // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray.make(size:)` path (gated
     // `when [A: default]`) — and the arena path goes through `withAllocator`, which sets the handle FIRST.
-    public ctor make(int32 size) when [A: default] { slot FixedArray<T, A> r; r.allocBuffer(size: size); return give r; }
+    public ctor make(int32 size) when [A: default] { this.allocBuffer(size: size); }
 
     // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
     // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
@@ -56,10 +56,8 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
     // on a bare (zero-init) local FIRST, then allocates through it — the eager-ctor analogue of
     // DynamicArray.withCapacityAndAllocator (no nameless-primary detour).
     public ctor withAllocator(A allocator, int32 size) {
-        slot FixedArray<T, A> result;
-        result.alloc = allocator;
-        result.allocBuffer(size: size);
-        return give result;
+        this.alloc = allocator;
+        this.allocBuffer(size: size);
     }
 
     public fn int32 length() { return this.size; }

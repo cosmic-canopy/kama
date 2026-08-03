@@ -26,40 +26,32 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // makes the LARGEST element come out first. They return the enclosing instance's own `A` (so `q` is the
     // SAME class — the private `maxOrder` write resolves); for a non-default `A` use `withAllocator` instead,
     // which supplies the allocator (the bare ctor here would leave a custom `A`'s handle uninitialized).
-    public default ctor minHeap() when [A: default] { slot PriorityQueue<T, A> q; return give q; }
-    public ctor maxHeap() when [A: default] { slot PriorityQueue<T, A> q; q.maxOrder = true; return give q; }
+    public default ctor minHeap() when [A: default] { }
+    public ctor maxHeap() when [A: default] { this.maxOrder = true; }
 
     // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
     // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
     public ctor minHeapWithCapacity(int32 capacity) when [A: default] {
-        slot PriorityQueue<T, A> q;
-        q.data = DynamicArray.withCapacity(capacity: capacity);
-        q.maxOrder = false;
-        return give q;
+        this.data = DynamicArray.withCapacity(capacity: capacity);
+        this.maxOrder = false;
     }
     public ctor maxHeapWithCapacity(int32 capacity) when [A: default] {
-        slot PriorityQueue<T, A> q;
-        q.data = DynamicArray.withCapacity(capacity: capacity);
-        q.maxOrder = true;
-        return give q;
+        this.data = DynamicArray.withCapacity(capacity: capacity);
+        this.maxOrder = true;
     }
 
     // Back the heap's array with a caller-owned allocator (e.g. an `Arena`); `maxOrder` chooses direction
     // (private, so it can't be set post-hoc — this one factory covers both min and max in-arena). All
     // allocation rides the embedded `DynamicArray<T, A>`.
     public ctor withAllocator(A allocator, bool maxOrder) {
-        slot PriorityQueue<T, A> q;
-        q.data = DynamicArray.withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
-        q.maxOrder = maxOrder;
-        return give q;
+        this.data = DynamicArray.withAllocator(allocator: allocator);   // drops the empty default-built data (cap=0)
+        this.maxOrder = maxOrder;
     }
 
     // Caller-owned allocator AND presized — both direction and capacity in one arena-backed factory.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity, bool maxOrder) {
-        slot PriorityQueue<T, A> q;
-        q.data = DynamicArray.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
-        q.maxOrder = maxOrder;
-        return give q;
+        this.data = DynamicArray.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
+        this.maxOrder = maxOrder;
     }
 
     public fn int32 length() { return this.data.length(); }
@@ -142,9 +134,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
     // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
     public ctor copy(ref PriorityQueue<T, A> source) when [T: Copyable] {
-        slot PriorityQueue<T, A> result;
-        result.data = copy source.data;   // DynamicArray.copy carries the allocator handle over — same arena
-        result.maxOrder = source.maxOrder;
-        return give result;
+        this.data = copy source.data;   // DynamicArray.copy carries the allocator handle over — same arena
+        this.maxOrder = source.maxOrder;
     }
 }

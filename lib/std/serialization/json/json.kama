@@ -24,13 +24,11 @@ type resource JsonWriter<W: Writer> implements Serializer {
     SerError code;         // the recorded write error
 
     public ctor make(W sink) {
-        slot JsonWriter<W> r;
-        r.sink = give sink;
-        r.scratch = FixedArray.make(size: 1);
-        r.needComma = false;
-        r.err = false;
-        r.code = SerError::NotRepresentable;
-        return give r;
+        this.sink = give sink;
+        this.scratch = FixedArray.make(size: 1);
+        this.needComma = false;
+        this.err = false;
+        this.code = SerError::NotRepresentable;
     }
 
     // Borrow the underlying sink (e.g. so `encode` can `finish()` its concrete StringWriter). W-agnostic body.
@@ -222,14 +220,12 @@ type resource JsonReader implements Deserializer {
     DeError code;       // the specific error `failWith` recorded; `Malformed` by default
 
     public ctor make(string src) {
-        slot JsonReader r;
-        r.len = cast<int32>(src.length());
-        r.src = give src;
-        r.pos = 0;
-        r.err = false;
-        r.objMark = 0;
-        r.code = DeError::Malformed;
-        return give r;
+        this.len = cast<int32>(src.length());
+        this.src = give src;
+        this.pos = 0;
+        this.err = false;
+        this.objMark = 0;
+        this.code = DeError::Malformed;
     }
 
     // --- low-level cursor ---

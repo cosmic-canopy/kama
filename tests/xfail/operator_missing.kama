@@ -1,7 +1,7 @@
 // M31b — using `+` on a type that defines no `operator+` is a clean error (not silent bad C).
 type value Vec2 {
     public int32 x;
-    public ctor make(int32 x) { slot Vec2 r; r.x = x; return give r; }
+    public ctor make(int32 x) { this.x = x; }
     public Vec2 operator-(Vec2 rhs) { return Vec2.make(x: this.x - rhs.x); }   // only `-` defined
 }
 fn int32 main() {

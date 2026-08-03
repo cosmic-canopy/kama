@@ -8,7 +8,7 @@ type resource Rec {
     @field Optional<int32> parent;
     @field Optional<int32> next;
     @field DynamicArray<int32> tags;
-    public ctor make(int32 id, Optional<int32> parent, Optional<int32> next, DynamicArray<int32> tags) { slot Rec r; r.id = id; r.parent = parent; r.next = next; r.tags = give tags; return give r; }
+    public ctor make(int32 id, Optional<int32> parent, Optional<int32> next, DynamicArray<int32> tags) { this.id = id; this.parent = parent; this.next = next; this.tags = give tags; }
     public fn int32 score() {
         int32 pv = match (this.parent) { case Some(value: p): p; case None: 0; };
         int32 nv = match (this.next) { case Some(value: n): n * 100; case None: 7; };

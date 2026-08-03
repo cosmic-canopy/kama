@@ -15,7 +15,7 @@ type virtual resource Base {
 }
 type final resource Derived extends Base {
     int32 y;
-    public ctor make(int32 y) { slot Derived r; r.y = y; return give r; }   // never initializes `x`
+    public ctor make(int32 y) { this.y = y; }   // never initializes `x`
     protected override fn int32 tag() { return 1; }
     public fn int32 sum() { return this.getX() + this.y; }
 }

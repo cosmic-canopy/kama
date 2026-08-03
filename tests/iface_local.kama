@@ -4,7 +4,7 @@ type contract Shape for both{
 type value Circle implements Shape
 {
     int64 r;
-    public ctor make(int64 r) { slot Circle r_; r_.r = r; return give r_; }
+    public ctor make(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
 fn int main()

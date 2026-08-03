@@ -10,13 +10,13 @@
 type contract Clickable for resource { fn int32 click(); }
 type virtual resource Widget
 {
-    public ctor make() { slot Widget r; return give r; }
+    public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
 type final resource Icon extends Widget implements Clickable
 {
-    public ctor make() { slot Icon r; return give r; }
+    public ctor make() { }
     protected override fn int32 step() { return 2; }
     public fn int32 click() { return 3; }
 }

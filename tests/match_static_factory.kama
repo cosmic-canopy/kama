@@ -5,7 +5,7 @@ enum WidgetErr { Negative }
 implements Error for WidgetErr { public fn string message() { return "negative"; } }
 type resource Widget {
     int32 id;
-    private ctor fromId(int32 id) { slot Widget r; r.id = id; return give r; }
+    private ctor fromId(int32 id) { this.id = id; }
     public ctor Result<Widget, WidgetErr> make(int32 n) {
         if (n < 0) { return Result::Err(error: WidgetErr::Negative); }
         return Result::Ok(value: Widget.fromId(id: n));

@@ -2,7 +2,7 @@
 type contract Drawable for both { fn int32 area(); }
 type contract Animated for both implements Drawable { fn int32 step(); }
 type resource Bad implements Animated {
-    public ctor make() { slot Bad r; return give r; }
+    public ctor make() { }
     public fn int32 step() { return 1; }   // missing the inherited `area()`
 }
 fn int32 main() { Bad b = Bad.make(); return b.step(); }

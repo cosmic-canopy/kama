@@ -6,7 +6,7 @@
 // instance is monomorphized on demand rather than being a plain named struct.)
 type resource Probe {
     int32 v;
-    public ctor make(int32 v) { slot Probe r; r.v = v; return give r; }
+    public ctor make(int32 v) { this.v = v; }
     public fn int32 value() { return this.v; }
 }
 

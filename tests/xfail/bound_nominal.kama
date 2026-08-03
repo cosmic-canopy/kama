@@ -6,7 +6,7 @@
 type contract Weighable for both { fn int32 weight(); }
 type value Rock {
     public int32 g;
-    public ctor make(int32 g) { slot Rock r; r.g = g; return give r; }
+    public ctor make(int32 g) { this.g = g; }
     public fn int32 weight() { return this.g; }   // has the method, but no `implements Weighable`
 }
 fn int32 heavier<T: Weighable>(T x) { return x.weight(); }

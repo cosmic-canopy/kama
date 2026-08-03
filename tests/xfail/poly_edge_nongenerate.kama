@@ -10,21 +10,21 @@ type contract Shape for both { fn int32 area(); }
 @generate(Serialize, Deserialize)
 type resource Sq implements Shape {
     @field int32 side;
-    public ctor make(int32 side) { slot Sq r; r.side = side; return give r; }
+    public ctor make(int32 side) { this.side = side; }
     public fn int32 area() { return this.side * this.side; }
 }
 
 // The hole: nominally implements the serialized graph-edge contract Shape, but is not @generate.
 type resource Tri implements Shape {
     int32 b; int32 h;
-    public ctor make(int32 b, int32 h) { slot Tri r; r.b = b; r.h = h; return give r; }
+    public ctor make(int32 b, int32 h) { this.b = b; this.h = h; }
     public fn int32 area() { return (this.b * this.h) / 2; }
 }
 
 @generate(Serialize, Deserialize)
 type resource Scene {
     @field Shared<Shape> s;
-    public ctor make(Shared<Shape> s) { slot Scene r; r.s = give s; return give r; }
+    public ctor make(Shared<Shape> s) { this.s = give s; }
 }
 
 fn int main() {

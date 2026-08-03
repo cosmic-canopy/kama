@@ -11,13 +11,13 @@ type virtual resource Base {
     int32 n;
     friend Leaf[helper];                 // grants ONLY helper — NOT n
     fn int32 helper() { return this.n; }
-    public ctor make() { slot Base r; r.n = 10; return give r; }
+    public ctor make() { this.n = 10; }
     public fn int32 rank() { return this.derivedSide(); }
     protected virtual fn int32 derivedSide() { return 0; }
 }
 type final resource Leaf extends Base {
     int32 n;
-    public ctor make() { slot Leaf r; r.n = 3; return give r; }
+    public ctor make() { this.n = 3; }
     protected override fn int32 derivedSide() {
         base.n = 7;                      // ERROR: 'n' is private in 'Base'
         return base.n;                   // ERROR: likewise

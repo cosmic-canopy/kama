@@ -6,7 +6,7 @@ type contract Classify for value { fn Optional<int32> classify(); }
 
 type value Cell implements Classify {
     int32 v; bool present;
-    public ctor make(int32 v, bool present) { slot Cell r; r.v = v; r.present = present; return give r; }
+    public ctor make(int32 v, bool present) { this.v = v; this.present = present; }
     public fn Optional<int32> classify() {
         if (this.present) { return Optional::Some(value: this.v); }
         return Optional::None;

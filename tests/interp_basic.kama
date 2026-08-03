@@ -3,7 +3,7 @@
 // adjacent holes, and an index hole. Exit code is a bitset of the checks that passed (127 = all seven).
 type value Pt implements Format {
     public int32 x; public int32 y;
-    public ctor make(int32 x, int32 y) { slot Pt p; p.x = x; p.y = y; return p; }
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
     public fn void format(ref Formatter f) {
         f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
         f.writeStr(s: ","); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");

@@ -32,7 +32,7 @@ type abstract resource Codec
 
 type final resource Doubler extends Codec
 {
-    public ctor make(int32 seed) { slot Doubler r; r.setTag(v: seed); return give r; }
+    public ctor make(int32 seed) { this.setTag(v: seed); }
     protected override fn int32 body() { return this.getTag() * 2; }
     // `base.salt()` reaches the base's PROTECTED default and ADDS to it — the upcall `virtual` exists
     // for, and the thing a pure contract cannot express without every implementor restating the default.

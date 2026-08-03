@@ -12,7 +12,11 @@ export { Widget, defaultSize };
 type value Widget {
     public int32 size;
 
-    public ctor of(int32 size) { slot Widget r; r.size = size; return give r; }
+    public ctor of(int32 size) { this.size = size; }
 }
 
 fn int32 defaultSize() { return 7; }
+
+// A second in-file use of `Widget`, so "only this file's own uses are visible" has something to find:
+// a ctor no longer names the type it builds, so the reference that used to sit inside `of` is gone.
+fn Widget defaultWidget() { return Widget.of(size: defaultSize()); }

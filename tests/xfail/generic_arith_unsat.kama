@@ -3,7 +3,7 @@ type contract Arithmetic for both { This operator+(This rhs); }
 
 type value Plain {
     public int32 v;
-    public ctor make(int32 v) { slot Plain r; r.v = v; return give r; }   // no operator+
+    public ctor make(int32 v) { this.v = v; }   // no operator+
 }
 
 fn T sum<T: Arithmetic>(T a, T b) { return a + b; }

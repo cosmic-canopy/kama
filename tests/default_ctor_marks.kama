@@ -6,8 +6,8 @@
 // ctor coexists on the same type.
 type value Counter {
     public int32 n;
-    public default ctor empty() { slot Counter c; c.n = 0; return c; }   // the canonical zero-arg ctor
-    public ctor of(int32 n) { slot Counter c; c.n = n; return c; }        // a non-default named ctor
+    public default ctor empty() { this.n = 0; return this; }   // the canonical zero-arg ctor
+    public ctor of(int32 n) { this.n = n; return this; }        // a non-default named ctor
 }
 
 fn int32 main() {

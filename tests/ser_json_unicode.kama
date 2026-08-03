@@ -15,7 +15,7 @@ import std::serialization::json::{encode, decode};
 @generate(Serialize, Deserialize)
 type resource Msg {
     @field string text;
-    public ctor make(string text) { slot Msg r; r.text = give text; return give r; }
+    public ctor make(string text) { this.text = give text; }
     public fn int32 len() { return this.text.length(); }
     public fn bool same(ref string other) { return this.text == other; }
 }
@@ -23,7 +23,7 @@ type resource Msg {
 @generate(Serialize, Deserialize)
 type resource CharBox {
     @field char c;
-    public ctor make(char c) { slot CharBox r; r.c = c; return give r; }
+    public ctor make(char c) { this.c = c; }
     public fn int32 code() { return cast<int32>(this.c); }
 }
 

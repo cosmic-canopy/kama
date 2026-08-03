@@ -40,7 +40,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     Ptr<T> p;
     Ptr<Ctrl> c;
     A alloc;
-    public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { slot Shared<T, A> r; r.p = p; r.c = c; r.alloc = alloc; return give r; }   // shares an existing ctrl
+    public ctor make(Ptr<T> p, Ptr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
     // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
     // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
@@ -61,7 +61,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     public ctor adopt(Ptr<T> raw) when [A: default] {
         slot Ptr<Ctrl> ctrl;
         unsafe { ctrl = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
-        slot Shared<T, A> s; s.p = raw; s.c = ctrl; return give s;
+        this.p = raw; this.c = ctrl;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
     // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).

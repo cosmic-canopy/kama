@@ -25,12 +25,12 @@ import std::collections::{DynamicArray, SlotMap, View};
 type value Transform {
     public float32 x; public float32 y; public float32 vx; public float32 vy;
     public ctor make(float32 x, float32 y, float32 vx, float32 vy) {
-        slot Transform t; t.x = x; t.y = y; t.vx = vx; t.vy = vy; return give t; }
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy; }
 }
 
 type value Health {
     public int32 hp;
-    public ctor make(int32 hp) { slot Health h; h.hp = hp; return give h; }
+    public ctor make(int32 hp) { this.hp = hp; }
 }
 
 // ── a system: a free function over a contiguous View. No contract, no dispatch. ──────────────
@@ -54,7 +54,7 @@ type contract Tickable for value { fn int32 tick(); }
 
 type value Timer implements Tickable {
     public int32 n;
-    public ctor make(int32 n) { slot Timer t; t.n = n; return give t; }
+    public ctor make(int32 n) { this.n = n; }
     public fn int32 tick() { return this.n + 1; }
 }
 

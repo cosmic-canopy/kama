@@ -8,7 +8,7 @@ import std::collections::{Arena, BumpAllocator};
 
 type value Counter {
     int32 value;
-    public ctor make(int32 start) { slot Counter r; r.value = start; return give r; }
+    public ctor make(int32 start) { this.value = start; }
     public fn int32 get() { return this.value; }
 }
 

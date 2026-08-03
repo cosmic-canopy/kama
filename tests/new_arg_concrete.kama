@@ -1,5 +1,5 @@
 import std::memory::{Owned};
 // B4 — inline `new` in a call-ARG (by value): the box is hoisted and the callee owns + drops it.
-type value Counter { int32 n; public ctor make(int32 n){ slot Counter r; r.n = n; return give r; } public fn int32 get(){ return this.n; } }
+type value Counter { int32 n; public ctor make(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
 fn int32 take(Owned<Counter> c) { return c.get(); }
 fn int32 main() { return take(c: new Counter.make(n: 42)); }

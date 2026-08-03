@@ -3,7 +3,7 @@
 type value Pair<T> {
     T a;
     T b;
-    public ctor make(T x, T y) { slot Pair<T> r; r.a = x; r.b = y; return give r; }
+    public ctor make(T x, T y) { this.a = x; this.b = y; }
     public ref T operator[](usize i) { if (i == 0) { return this.a; } return this.b; }
 }
 fn int32 main() {

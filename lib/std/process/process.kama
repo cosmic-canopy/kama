@@ -75,7 +75,7 @@ type resource Output {
     // Internal — produced by Command.run() (a resource ctor is type-private, so this is exposed like
     // TcpStream.make; not meant to be called directly).
     public ctor make(ExitStatus status, DynamicArray<uint8> stdout, DynamicArray<uint8> stderr) {
-        slot Output r; r.st = status; r.outBytes = give stdout; r.errBytes = give stderr; return give r;
+        this.st = status; this.outBytes = give stdout; this.errBytes = give stderr;
     }
     public fn ExitStatus status() { return this.st; }
     public fn ref DynamicArray<uint8> stdout() { return this.outBytes; }
@@ -146,15 +146,13 @@ type resource Command {
     // Build a command for `program` (PATH-resolved by execvp unless it contains '/'). Args take ownership of
     // the passed string (pass a literal, or `copy someVar`).
     public ctor make(string program) {
-        slot Command c;
-        c.program = give program;
-        c.args    = DynamicArray.empty();
-        c.envKeys = DynamicArray.empty();
-        c.envVals = DynamicArray.empty();
-        c.envClear = false;
-        c.cwd = "";
-        c.inCfg = Stdio::Inherit; c.outCfg = Stdio::Inherit; c.errCfg = Stdio::Inherit;
-        return give c;
+        this.program = give program;
+        this.args    = DynamicArray.empty();
+        this.envKeys = DynamicArray.empty();
+        this.envVals = DynamicArray.empty();
+        this.envClear = false;
+        this.cwd = "";
+        this.inCfg = Stdio::Inherit; this.outCfg = Stdio::Inherit; this.errCfg = Stdio::Inherit;
     }
 
     // Opt-in shell form: run `sh -c <line>`. The default (argv vector) stays injection-safe; this is the
@@ -300,10 +298,8 @@ type resource Process {
 
     // Internal — produced by Command.start() (exposed like TcpStream.make; not meant to be called directly).
     public ctor make(isize handle, int32 pid, File inKeep, File outKeep, File errKeep) {
-        slot Process r;
-        r.handle = handle; r.pid = pid; r.reaped = false;
-        r.inPipe = give inKeep; r.outPipe = give outKeep; r.errPipe = give errKeep;
-        return give r;
+        this.handle = handle; this.pid = pid; this.reaped = false;
+        this.inPipe = give inKeep; this.outPipe = give outKeep; this.errPipe = give errKeep;
     }
 
     // The child's process id (Rust `.id()`).

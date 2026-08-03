@@ -13,14 +13,14 @@
 // keeps it covered: `final override` parses, seals (tests/xfail/override_final), and dispatches directly.
 type virtual resource Base
 {
-    public ctor make() { slot Base r;  return give r; }
+    public ctor make() { }
     public fn int32 midGo() { return this.run(); }       // public surface, on the root (decision A)
     protected virtual fn int32 run() { return this.tick(); }
     protected virtual fn int32 tick() { return 1; }
 }
 type final resource Leaf extends Base
 {
-    public ctor make() { slot Leaf r;  return give r; }
+    public ctor make() { }
     protected final override fn int32 tick() { return 5; }
     protected override fn int32 run() { return this.tick(); }   // `this` is a Leaf; tick is final -> direct
 }

@@ -14,15 +14,13 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // capacity ctors build the inner map via the matching `Map` ctor. `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `Set<K,H,A> r;`
     // default-fills the inner `m` (`Map.empty()`); the M8d.1 completeness gate proves it's initialized.
-    public default ctor empty() when [A: default] { slot Set<K,H,A> r; return give r; }
+    public default ctor empty() when [A: default] { }
 
     // Build an empty set whose backing map draws from `allocator` (e.g. an `Arena` bump handle). The
     // bare `Set()` builds an empty (cap-0) inner map that is dropped when replaced by the arena-backed one.
     public ctor withAllocator(A allocator) {
-        slot Set<K,H,A> result;
         Map<K, Unit, H, A> inner = Map.withAllocator(allocator: allocator);
-        result.m = give inner;
-        return give result;
+        this.m = give inner;
     }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
@@ -31,18 +29,14 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     // Build an empty set already sized for `capacity` entries. M8c: now a `ctor` returning the enclosing
     // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
     public ctor withCapacity(int32 capacity) when [A: default] {
-        slot Set<K,H,A> s;
         Map<K, Unit, H, A> inner = Map.withCapacity(capacity: capacity);
-        s.m = give inner;
-        return give s;
+        this.m = give inner;
     }
 
     // Caller-owned allocator AND pre-sized — builds the inner map via `Map::withCapacityAndAllocator`.
     public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
-        slot Set<K,H,A> s;
         Map<K, Unit, H, A> inner = Map.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
-        s.m = give inner;
-        return give s;
+        this.m = give inner;
     }
     public fn bool contains(ref K key) { return this.m.contains(key: key); }
     // `Map.remove` now returns the removed VALUE moved out (`Optional<Unit>` here — the payload is nothing).
@@ -69,15 +63,14 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
         return Result::Ok(value: Unit::Unit);
     }
     public ctor Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
-        slot Set<K,H> result;
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
                 case Err(error: e): { return Result::Err(error: give e); }
-                case Ok(value: v):  { result.add(key: give v); }
+                case Ok(value: v):  { this.add(key: give v); }
             };
         }
-        return Result::Ok(value: give result);
+        return Result::Ok(value: give this);
     }
 }

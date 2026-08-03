@@ -5,13 +5,13 @@ type value Pair<A, B>
 {
     public A a;
     public B b;
-    public ctor make(A x, B y) { slot Pair<A, B> r; r.a = x; r.b = y; return give r; }
+    public ctor make(A x, B y) { this.a = x; this.b = y; }
     public fn A first() { return this.a; }
 }
 type value Box<T>
 {
     public T value;
-    public ctor make(T v) { slot Box<T> r; r.value = v; return give r; }
+    public ctor make(T v) { this.value = v; }
     public fn T unbox() { return this.value; }
 }
 fn int main()

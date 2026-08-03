@@ -2,7 +2,7 @@ import std::memory::{Shared};
 type resource Probe
 {
     int32 id;
-    public ctor make(int32 id) { slot Probe r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     ~Probe() { }
     public fn int32 val() { return this.id; }
 }

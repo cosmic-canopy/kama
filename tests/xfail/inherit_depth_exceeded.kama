@@ -8,18 +8,18 @@
 // tests/vtable_depth2 is the accepted form.
 type virtual resource Widget
 {
-    public ctor make() { slot Widget r; return give r; }
+    public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
 type virtual resource Control extends Widget
 {
-    public ctor make() { slot Control r; return give r; }
+    public ctor make() { }
     protected override fn int32 step() { return base.step() + 10; }
 }
 type final resource Button extends Control       // one hop too far
 {
-    public ctor make() { slot Button r; return give r; }
+    public ctor make() { }
     protected override fn int32 step() { return base.step() + 100; }
 }
 fn int main() { Button b = Button.make(); return b.rank(); }

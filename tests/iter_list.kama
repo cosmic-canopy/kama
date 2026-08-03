@@ -4,11 +4,11 @@ extern "<stdlib.h>";
 extern fn Ptr malloc(usize n);
 extern fn void free(Ptr p);
 type value Node { public int32 val; public Ptr<Node> nextp;
-    public ctor make(int32 v) { slot Node r; r.val = v; r.nextp = cast<Ptr<Node>>(null); return give r; }
+    public ctor make(int32 v) { this.val = v; this.nextp = cast<Ptr<Node>>(null); }
 }
 type value DynamicArrayIter implements Iterator<int32> {                       // the iterator IS iterated directly (has next(), no iterator())
     Ptr<Node> cur;
-    public ctor make(Ptr<Node> head) { slot DynamicArrayIter r; r.cur = head; return give r; }
+    public ctor make(Ptr<Node> head) { this.cur = head; }
     public fn Optional<int32> next() {
         if (this.cur == null) { return Optional::None; }
         unsafe { int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v); }

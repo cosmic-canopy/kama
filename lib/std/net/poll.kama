@@ -30,7 +30,7 @@ type value Ready {
 // A readiness set. Move-only; frees its C cursor on drop (RAII).
 type resource Poller {
     Ptr state;
-    private ctor make(Ptr state) { slot Poller r; r.state = state; return give r; }
+    private ctor make(Ptr state) { this.state = state; }
 
     public ctor Result<Poller, IoError> create() {
         Ptr s = kama_poller_create();

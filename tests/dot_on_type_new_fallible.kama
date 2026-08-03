@@ -11,8 +11,8 @@ implements Error for GaugeErr { public fn string message() { return "negative"; 
 type resource Gauge {
     int32 v;
     public ctor Result<Gauge, GaugeErr> open(int32 v) {
-        if (v < 0) { return Result::Err(error: GaugeErr::Negative); }   slot // fail before the object exists (no allocation)
-        Gauge g; g.v = v; return Result::Ok(value: g);
+        if (v < 0) { return Result::Err(error: GaugeErr::Negative); }   // fail before the object exists (no allocation)
+        this.v = v; return Result::Ok(value: this);
     }
     public fn int32 get() { return this.v; }
 }

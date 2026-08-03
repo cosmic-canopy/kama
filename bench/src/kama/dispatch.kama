@@ -9,13 +9,13 @@ type contract Shape for both { fn int64 area(); }
 type resource Circle implements Shape
 {
     int64 r;
-    public ctor make(int64 r) { slot Circle self; self.r = r; return give self; }
+    public ctor make(int64 r) { this.r = r; }
     public fn int64 area() { return this.r * this.r; }
 }
 type resource Square implements Shape
 {
     int64 s;
-    public ctor make(int64 s) { slot Square self; self.s = s; return give self; }
+    public ctor make(int64 s) { this.s = s; }
     public fn int64 area() { return this.s * this.s; }
 }
 fn int main()

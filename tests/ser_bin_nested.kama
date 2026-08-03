@@ -4,7 +4,7 @@ import std::serialization::binary::{encode, decode};
 import std::collections::{DynamicArray};
 
 @generate(Serialize, Deserialize)
-type value Pt { @field public int32 x; @field public int32 y; public ctor make(int32 x, int32 y) { slot Pt r; r.x = x; r.y = y; return give r; } }
+type value Pt { @field public int32 x; @field public int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
 
 @generate(Serialize, Deserialize)
 type resource Scene {
@@ -12,7 +12,7 @@ type resource Scene {
     @field DynamicArray<int32> ids;
     @field DynamicArray<Pt> pts;
     public ctor make(string name, DynamicArray<int32> ids, DynamicArray<Pt> pts) {
-        slot Scene r; r.name = give name; r.ids = give ids; r.pts = give pts; return give r;
+        this.name = give name; this.ids = give ids; this.pts = give pts;
     }
     public fn int32 score() {   // resource fields are private -> expose the check through a method
         int32 sum = this.ids[0] + this.ids[1] + this.pts[0].x + this.pts[0].y + this.pts[1].x + this.pts[1].y;   // 25

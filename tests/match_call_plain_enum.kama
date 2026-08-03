@@ -14,7 +14,7 @@ fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 
 type value Grader {
     public int32 bar;
-    public ctor make(int32 bar) { slot Grader g; g.bar = bar; return give g; }
+    public ctor make(int32 bar) { this.bar = bar; }
     public fn Code grade(int32 score) { if (score >= this.bar) { return Code::Ok; } return Code::Bad; }
     public static fn Code always() { return Code::Ok; }
 }

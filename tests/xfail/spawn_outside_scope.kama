@@ -5,7 +5,7 @@ import std::concurrent;
 
 type resource Payload {
     int32 value;
-    public ctor make(int32 value) { slot Payload r; r.value = value; return give r; }
+    public ctor make(int32 value) { this.value = value; }
 }
 
 fn void worker(Payload p) { int32 x = p.value; }

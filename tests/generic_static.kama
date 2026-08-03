@@ -10,7 +10,7 @@
 
 type value Box<T> {
     public T v;
-    public ctor make(T v) { slot Box<T> b; b.v = v; return give b; }
+    public ctor make(T v) { this.v = v; }
     public static fn int32 tag() { return 7; }
     public fn int32 unwrapped() { return cast<int32>(this.v); }
 }
@@ -18,13 +18,13 @@ type value Box<T> {
 type value Pair<A, B> {
     public A a;
     public B b;
-    public ctor make(A a, B b) { slot Pair<A, B> p; p.a = a; p.b = b; return give p; }
+    public ctor make(A a, B b) { this.a = a; this.b = b; }
     public static fn int32 arity() { return 2; }
 }
 
 // A non-generic type's static keeps its existing, turbofish-free spelling.
 type value Plain {
-    public ctor make() { slot Plain p; return give p; }
+    public ctor make() { }
     public static fn int32 tag() { return 5; }
 }
 

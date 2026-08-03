@@ -6,7 +6,7 @@ extern fn int kama_trace_get();
 type resource Probe
 {
     int32 id;
-    public ctor make(int32 id) { slot Probe r; r.id = id; return give r; }
+    public ctor make(int32 id) { this.id = id; }
     ~Probe() { kama_trace(code: 7); }
 }
 

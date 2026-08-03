@@ -38,12 +38,10 @@ type resource BTreeNode<K: Comparable, V, A: Allocator = GlobalAllocator> {
     // is never dereferenced here — allocation waits for the first `add`. Interior child boxes are drawn
     // from this same `alloc` via the placement `new(allocator: this.alloc)` sites below.
     public ctor make(bool leaf, A allocator) {
-        slot BTreeNode<K,V,A> r;
         DynamicArray<K, A> k = DynamicArray.withAllocator(allocator: allocator);
         DynamicArray<V, A> v = DynamicArray.withAllocator(allocator: allocator);
         DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> c = DynamicArray.withAllocator(allocator: allocator);
-        r.keys = give k; r.vals = give v; r.kids = give c; r.leaf = leaf; r.alloc = allocator;
-        return give r;
+        this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf; this.alloc = allocator;
     }
 
     public fn int32 keyCount() { return this.keys.length(); }
@@ -479,20 +477,16 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // zero-inits `len`/`mods`, default-fills `alloc`, and leaves the owning `root` for us to assign — the
     // M8d.1 completeness gate REQUIRES `root` be set before return, which building it satisfies.
     public default ctor empty() when [A: default] {
-        slot SortedMap<K,V,A> result;
-        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: result.alloc);
-        result.root = give r;
-        return give result;
+        Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: this.alloc);
+        this.root = give r;
     }
 
     // Back the whole tree with a caller-owned allocator (e.g. an `Arena`). The bare local zero-inits `root`;
     // we set `alloc` from the real handle, then build the root from it — mirrors `PriorityQueue::withAllocator`.
     public ctor withAllocator(A allocator) {
-        slot SortedMap<K,V,A> result;
-        result.alloc = allocator;
+        this.alloc = allocator;
         Owned<BTreeNode<K,V,A>> r = new BTreeNode::<K,V,A>.make(leaf: true, allocator: allocator);
-        result.root = give r;
-        return give result;
+        this.root = give r;
     }
 
     public fn int32 length() { return this.len; }
