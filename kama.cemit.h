@@ -412,6 +412,14 @@ public:
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
 
+    // `--inherit-depth=N` / kama.json `"inheritDepth"`: how many `extends` hops a class may sit below its
+    // root. **0 bans inheritance outright** — no `extends`, and no `virtual`/`abstract` either, since a
+    // `virtual class` with no subclass still emits a vtable and would leave the "off means no inheritance
+    // machinery at all" claim false. `final` stays legal at 0: it seals, it does not extend. Default 1
+    // (a root plus a `final` leaf). Set from the driver before emission; gated in `linkBases` and in the
+    // class/method modifier checks.
+    void setInheritDepth(int n) { _inheritDepth = n; }
+
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
     // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
     void setRelease(bool on) { _release = on; _logCompileMin = on ? 3 /*Debug*/ : 99 /*no strip*/; }
@@ -854,6 +862,7 @@ private:
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
     bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
+    int                                       _inheritDepth  = 1;        // `--inherit-depth=N`: `extends` hops below a root (0 = off)
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
@@ -1676,6 +1685,7 @@ private:
     std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line);
     bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
     void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
+    void rejectIfNoInherit(const char* what, int line);                 // the ONE gate for `--inherit-depth=0`
 
     // Multi-file: collect a whole program, then emit declarations (shared
     // header) and definitions (per module) separately.

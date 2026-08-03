@@ -4339,6 +4339,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
             }
+        // `--inherit-depth=0`: no `extends`, and no `virtual`/`abstract` either — a `virtual class` with no
+        // subclass still emits a vtable, so banning only `extends` would leave inheritance machinery in
+        // the output of a build that asked for none.
+        if (!ci.baseName.empty())   rejectIfNoInherit("`extends`", cd->line);
+        if (ci.isAbstractClass)     rejectIfNoInherit("an `abstract class`", cd->line);
+        else if (ci.isVirtualClass) rejectIfNoInherit("a `virtual class`", cd->line);
         // A plain `value`/`resource` type is sealed: only virtual/abstract/final classes may extend a base.
         // (The base must itself be extensible — checked in linkBases once names resolve.)
         if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
@@ -4548,6 +4554,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         if (mi.isVirtual) {
                             const std::string& mname = *md->name->value;
                             const char* kw = mi.isAbstract ? "abstract" : mi.isOverride ? "override" : "virtual";
+                            // `--inherit-depth=0`: an overridable method is a vtable slot, so it goes too.
+                            rejectIfNoInherit((std::string(mi.isVirtual && !mi.isAbstract && !mi.isOverride ? "a `" : "an `")
+                                               + kw + "` method").c_str(), md->line);
                             // (3) an overridable method is written `protected` (never public/private):
                             //     a private virtual can't be overridden, a public one is the interface's job.
                             if (mi.visibility != Visibility::Protected)
@@ -7818,6 +7827,29 @@ void CEmitter::linkBases()
             if (b == &kv.second || ++hops > 1000) { kv.second.base = nullptr; kv.second.baseName.clear(); break; }
         }
     }
+    // `--inherit-depth=N` (default 1): how many `extends` hops a class may sit below its root. Walked
+    // AFTER the cycle break, so the loop is guaranteed to terminate. Depth 0 was already rejected at the
+    // declaration (rejectIfNoInherit), which reports the far better message, so only N >= 1 reaches here.
+    //
+    // 1 is the deliberate starting point, not a guess at the right number. Real designs do want a middle
+    // layer (Widget -> Control -> Button), but the failure modes are asymmetric: a cap that is too strict
+    // pushes the middle layer into COMPOSITION, which is the outcome this design wants anyway, while a cap
+    // that is too loose grows deep hierarchies, which is the thing being prevented. Too strict fails
+    // toward the goal. And a restriction is cheap to lift and expensive to add.
+    if (_inheritDepth >= 1)
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (ci.isGenericInst || !ci.base) continue;
+            int hops = 0;
+            for (ClassInfo* b = ci.base; b; b = b->base) ++hops;
+            if (hops <= _inheritDepth) continue;
+            unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which already extends '"
+                         + (ci.base->base ? ci.base->base->name : std::string("a base"))
+                         + "' — the inheritance depth limit is " + std::to_string(_inheritDepth)
+                         + " (`--inherit-depth`). For a middle layer, compose the base rather than "
+                           "extending it.").c_str(),
+                        ci.node ? ci.node->line : 0);
+        }
 }
 
 // Classes in base-before-derived order.
@@ -11763,6 +11795,21 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
     unsupported((std::string("heap allocation (") + what + ") is forbidden here — this code is "
                  "`@noheap`/`--no-heap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
                  "with no dynamic growth").c_str(), line);
+}
+
+// The ONE gate for `--inherit-depth=0` / kama.json `"inheritDepth": 0` — inheritance disabled outright.
+// Every surface that would emit or require vtable machinery funnels through here (`extends`, a
+// `virtual`/`abstract` class, a `virtual`/`override`/`abstract` method), so "off" means the emitter has
+// no inheritance path left to take rather than merely no `extends` to read. `final` does NOT come here:
+// it seals a type, it does not extend one, and a `final class`/`final fn` is meaningful with no
+// hierarchy at all. `what` names the construct. The DEPTH check for a non-zero limit is a different
+// question and lives in linkBases, where bases are resolved and a chain can be walked.
+void CEmitter::rejectIfNoInherit(const char* what, int line)
+{
+    if (_inheritDepth != 0) return;
+    unsupported((std::string(what) + " requires inheritance, which is disabled for this build "
+                 "(`--inherit-depth=0`); compose the type instead, or declare a `contract` for "
+                 "polymorphism").c_str(), line);
 }
 
 void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride)

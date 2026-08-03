@@ -229,6 +229,13 @@ if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noh
     if sh tools/check-noheap.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
 fi
 
+# `--inherit-depth` / kama.json "inheritDepth": the same shape as the no-heap guard — a flag-driven
+# rejection can't ride the no-flag xfail loop. Also carries the MEASUREMENT behind "inheritance costs a
+# program that doesn't use it nothing": same source, same flags, only the depth differs -> same binary size.
+if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-inherit-cost.sh ]; then
+    if sh tools/check-inherit-cost.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+fi
+
 # Conditional compilation: `@compileFor(FLAG)` decl-gate guard — builds the same fixture DEBUG vs
 # RELEASE and asserts (via transpile-grep) the gated body reaches the emitted C in exactly one build
 # (Kama-level selection, no #ifdef). Transpile+build, so run once on the plain native pass.

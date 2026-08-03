@@ -1587,6 +1587,39 @@ a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outsid
 they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for the full kind
 table.
 
+### Depth — `--inherit-depth` ✅
+
+A hierarchy is **one level deep by default**: a root, and leaves that extend it. `Widget -> Control ->
+Button` — a middle layer that both adds state and declares seams for its own extenders — is rejected, and
+becomes composition instead.
+
+```
+'Button' extends 'Control', which already extends 'Widget' — the inheritance depth limit is 1
+(`--inherit-depth`). For a middle layer, compose the base rather than extending it.
+```
+
+1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric: a cap that is too
+strict pushes the middle layer into composition, which is the outcome this design wants anyway, while a cap
+that is too loose grows the deep hierarchies the restriction exists to prevent. Too strict fails *toward*
+the goal — and a restriction is cheap to lift and expensive to add.
+
+The limit is a project setting, so raising it needs no source change:
+
+```jsonc
+{ "inheritDepth": 2 }     // kama.json — this project's limit
+```
+```sh
+kama build app.kama --inherit-depth=2   # per-build; an explicit flag outranks the manifest
+kama build app.kama --inherit-depth=0   # inheritance OFF: no `extends`, no `virtual`/`abstract`
+```
+
+**`--inherit-depth=0` disables inheritance outright** — `extends`, a `virtual`/`abstract` class, and a
+`virtual`/`override`/`abstract` method are all rejected, since a `virtual class` with no subclass still
+carries a vtable. `final` stays legal (it seals a type; it does not extend one), and **contracts are
+untouched** — they are the intended way to express polymorphism, and they keep their own vtables. A program
+that uses no inheritance emits byte-identical output at either setting: turning the feature off costs
+nothing because a program that never used it never paid.
+
 **Owning a derived through a base handle (upcast).** A `Shared`/`Owned` over a derived class widens to one
 over a base class (or a contract it satisfies) — the IS-A relationship, Liskov-style:
 

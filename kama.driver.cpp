@@ -907,6 +907,18 @@ static bool g_noHeap = false;
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
 static bool g_release = false;
 
+// `--inherit-depth=N` / kama.json `"inheritDepth"`: how many `extends` hops a class may sit below its
+// root. **0 bans inheritance outright** — no `extends`, no `virtual`/`abstract` — which is what lets a
+// project (or the whole corpus) be built as "pure kama" and its cost measured rather than argued about.
+// Default 1: a root plus a `final` leaf. Threaded to each CEmitter via `setInheritDepth`, and gated in
+// ONE place (CEmitter::linkBases) the way `--no-heap` funnels through rejectIfNoHeap.
+//
+// Deliberately NOT a `select` group and NOT a `@compileFor` flag, unlike every knob it sits beside: those
+// describe a BUILD (this target, that build type) and may legitimately differ between two builds of one
+// source tree. This describes the LANGUAGE the source is written in, so a file that compiles under one
+// build configuration and not another would be the wrong kind of variance.
+static int g_inheritDepth = 1;
+
 // `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
 // and a missing signature both become hard errors. Off by default (warn-only: a present signature is
 // checked and a failure only warns), so the signing mechanism lands before the enforcement policy.
@@ -1180,6 +1192,7 @@ static void configureEmitter(CEmitter& e)
 {
     e.setPrelude(preludeUnit());       // Optional/Result available implicitly
     e.setNoHeap(g_noHeap);             // `--no-heap`: reject heap allocation program-wide
+    e.setInheritDepth(g_inheritDepth); // `--inherit-depth=N`: `extends` hops below a root (0 = inheritance off)
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
@@ -1444,6 +1457,8 @@ struct ManifestReader {
     std::vector<std::string>* sourcesOut  = nullptr;
     std::vector<std::string>* projectsOut = nullptr;
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
+    int*  inheritDepthOut = nullptr;                      // set to capture `inheritDepth` (else skipped)
+    bool* inheritDepthSet = nullptr;                       // ...and whether the key was present at all
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
     RegConfig* registriesOut = nullptr;                   // set to capture the `registries` config (M3.1b)
@@ -1490,6 +1505,20 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ']') { ++i; return true; }
             return fail("expected ',' or ']' in a string array");
         }
+    }
+
+    // A non-negative JSON integer (`inheritDepth`). Rejects a float, a sign, a string or anything else
+    // rather than tolerating it: a depth typed as `"1"` or `1.0` would silently fall back to the default
+    // and quietly re-enable a restriction the project asked for.
+    bool nonNegInt(int& out) {
+        ws(); size_t start = i;
+        while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+        if (i == start) return fail("expected a non-negative integer");
+        if (i < s.size() && (s[i] == '.' || s[i] == 'e' || s[i] == 'E'))
+            return fail("expected a non-negative integer, not a fractional number");
+        if (i - start > 9) return fail("integer out of range");
+        out = std::atoi(s.substr(start, i - start).c_str());
+        return true;
     }
 
     bool skipValue() {   // string | number | true/false/null | balanced object/array
@@ -1825,6 +1854,12 @@ struct ManifestReader {
             else if (key == "projects" && projectsOut) { if (!stringArray(*projectsOut)) return false; } // sub-projects
             else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
+            // How deep `extends` may go in this project; 0 bans inheritance outright. A LANGUAGE setting,
+            // deliberately not a `select` group or a `@compileFor` flag — it does not vary per build.
+            else if (key == "inheritDepth" && inheritDepthOut) {
+                if (!nonNegInt(*inheritDepthOut)) return false;
+                if (inheritDepthSet) *inheritDepthSet = true;
+            }
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
             else if (key == "version" && versionOut) { if (!str(*versionOut)) return false; }
             else if (!skipValue()) return false;         // name / version / future package keys
@@ -2023,6 +2058,21 @@ static bool loadManifestLog(const std::string& path, LogConfig& out, std::string
     return true;
 }
 
+// Load a manifest's `inheritDepth` into `out` (untouched, and `found` false, if the key is absent).
+// Reuses ManifestReader. Returns false + `err` on malformed JSON or a non-integer/negative value.
+static bool loadManifestInheritDepth(const std::string& path, int& out, bool& found, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.inheritDepthOut = &out;
+    r.inheritDepthSet = &found;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
 // Load a manifest's `name` + `version` (both empty if absent). Reused by `kama publish`. Returns false +
 // `err` only on malformed JSON.
 static bool loadManifestNameVersion(const std::string& path, std::string& nameOut, std::string& versionOut,
@@ -2059,6 +2109,8 @@ struct BuildConfigRequest {
     std::vector<std::string> selects, defines, undefines;
     bool                     release = false;          // --release/--debug value
     bool                     releaseExplicit = false;  // was either passed? (sugar must lose to --select)
+    int                      inheritDepth = 1;         // --inherit-depth=N (0 = inheritance off)
+    bool                     inheritDepthExplicit = false;   // was it passed? (a manifest value must lose to it)
 };
 struct BuildConfigResult {
     std::string manifest;        // echoed back — the caller's dep-view check keys off it
@@ -2088,6 +2140,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_logDefault.clear();
     g_target  = TargetSpec();
     g_release = false;
+    g_inheritDepth = req.inheritDepth;   // the CLI value (its own default 1); a manifest may lower it below
 
     bool        release = req.release;
     std::string selTarget = req.target;
@@ -2110,6 +2163,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // spec, seeded into the process env in `main` (overwrite=0, so `--log`/env still win).
         LogConfig logCfg;
         if (!loadManifestLog(manifest, logCfg, err)) { err = manifest + ": " + err; return false; }
+
+        // `inheritDepth` — the project's own answer, which an explicit `--inherit-depth` still overrides
+        // (one build wanting to check "does this still compile with inheritance off?" must not need an
+        // edit to a committed file).
+        int  mDepth = g_inheritDepth; bool mDepthSet = false;
+        if (!loadManifestInheritDepth(manifest, mDepth, mDepthSet, err)) { err = manifest + ": " + err; return false; }
 
         // `kama.local.json` (M5.2): a gitignored sibling of the manifest that DEEP-MERGES over it for the
         // fields the compiler reads directly here — `flags` (union: local declares/enables more), `select`
@@ -2170,7 +2229,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             LogConfig localLog;
             if (!loadManifestLog(localManifest, localLog, err)) { err = localManifest + ": " + err; return false; }
             logCfg.applyLocal(localLog);
+            int lDepth = mDepth; bool lDepthSet = false;
+            if (!loadManifestInheritDepth(localManifest, lDepth, lDepthSet, err)) { err = localManifest + ": " + err; return false; }
+            if (lDepthSet) { mDepth = lDepth; mDepthSet = true; }   // local wins, per field, like everything else here
         }
+        if (mDepthSet && !req.inheritDepthExplicit) g_inheritDepth = mDepth;
 
         g_declaredFlags = declared;
         // A declared select VALUE is a legitimate `@compileFor` name too — it enters the active set
@@ -3911,7 +3974,7 @@ void usage()
         "  kama build     <in.kama>... [-o out] [--target <name-or-triple>] [--release|--debug] [--shared]\n"
         "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
         "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
-        "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
+        "                             [--no-heap] [--inherit-depth=N] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
@@ -4848,6 +4911,8 @@ int main(int argc, char** argv)
     bool        webgpu     = false;
     bool        release    = false;        // debug by default
     bool releaseExplicit   = false;        // was --release/--debug passed? (sugar must not beat a manifest default)
+    int  inheritDepth      = 1;            // --inherit-depth=N: `extends` hops allowed below a root (0 = off)
+    bool inheritDepthExplicit = false;     // was it passed? (a manifest `inheritDepth` must lose to it)
     bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
     std::vector<std::string> selects;      // --select GROUP=VALUE: pick a single-select group (repeatable)
@@ -4878,6 +4943,18 @@ int main(int argc, char** argv)
         else if (a == "--webgpu")                 webgpu = true;
         else if (a == "--shared")                 shared = true;
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
+        // `--inherit-depth=N` — how deep `extends` may go; 0 bans inheritance outright. `=N` rather than a
+        // separate argument so it reads as one setting, and because a bare `--inherit-depth` with a missing
+        // value would otherwise swallow the input file.
+        else if (a.compare(0, 16, "--inherit-depth=") == 0) {
+            std::string v = a.substr(16);
+            if (v.empty() || v.find_first_not_of("0123456789") != std::string::npos) {
+                fprintf(stderr, "kama: --inherit-depth takes a non-negative integer (got '%s'); "
+                                "0 disables inheritance\n", v.c_str());
+                return 2;
+            }
+            inheritDepth = std::atoi(v.c_str()); inheritDepthExplicit = true;
+        }
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE
@@ -4949,6 +5026,8 @@ int main(int argc, char** argv)
     bcReq.undefines       = undefines;
     bcReq.release         = release;
     bcReq.releaseExplicit = releaseExplicit;
+    bcReq.inheritDepth         = inheritDepth;
+    bcReq.inheritDepthExplicit = inheritDepthExplicit;
 
     BuildConfigResult bcfg;
     {

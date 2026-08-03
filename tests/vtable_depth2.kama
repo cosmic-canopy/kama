@@ -1,0 +1,25 @@
+// Virtual dispatch across the full inheritance depth the language allows: Base <- Leaf, the leaf
+// overriding a protected virtual hook and composing its parent through base.step().
+//
+// This was a THREE-level chain until `--inherit-depth` landed with a default of 1. It only ever tested
+// the vtable MECHANISM, not a design — a middle layer is exactly what the cap pushes into composition —
+// and the mechanism is unchanged: a `ref Base` still dispatches to the most-derived override, and
+// `base.step()` still reaches the parent implementation non-virtually. The rejected three-level form is
+// pinned by tests/xfail/inherit_depth_exceeded.
+type virtual resource Base
+{
+    public ctor make() { slot Base r; return give r; }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+type final resource Leaf extends Base
+{
+    public ctor make() { slot Leaf r; return give r; }
+    protected override fn int32 step() { return base.step() + 10; }
+}
+fn int32 measure(ref Base b) { return b.rank(); }
+fn int main()
+{
+    Leaf leaf = Leaf.make();
+    return measure(b: ref leaf);   // Leaf.step: Base 1 + 10 = 11
+}

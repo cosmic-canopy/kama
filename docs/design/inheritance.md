@@ -173,16 +173,47 @@ design later proves depth is needed, lifting the cap to 2 breaks no existing cod
 to be extended AT ALL, so every level is an explicit opt-in. C++/Java/C# all default to extensible. The cap
 is an additional brake on top of that, not the only one.)*
 
-### C. Gate inheritance behind a compiler `#if`, so kama can be built without it
+### C. A switch, so kama can be built without inheritance ✅ SHIPPED
 
-Two purposes: **(1)** run the whole corpus as "pure kama" with no inheritance at all, to see what actually
-breaks; **(2)** measure binary size — both the kama compiler itself and the programs it emits.
+**One knob, not two mechanisms** (user, 2026-08-02): `--inherit-depth=N` / kama.json `"inheritDepth"`,
+default **1**, **0 = inheritance off entirely**. It covers both this decision and decision B, and raising
+the cap to 2 later is a config change rather than a compiler change.
 
-⚠️ **Set the expectation before measuring, or the numbers will mislead.** A program that uses no
-inheritance *already* emits zero vtable machinery (measured: 11 vtable structs/instances → 0, 7 `__vptr`
-→ 0 between the two TEMP examples), and **contracts keep their own vtables** because a fat pointer needs
-one. So the emitted-program delta for non-inheritance programs should be ≈0, and the real signal is the
-**compiler's** size and the emitter paths that disappear. Measure both, but predict them separately.
+The originally-briefed shape — a C-preprocessor `#if` so the *compiler* could be built without the
+feature — was **not** taken. It buys only the compiler-size number, and it buys it with `#ifdef`s threaded
+through `kama.cemit.cpp`, the same soup rejected for platform variance. The number was measured directly
+instead (below), which costs nothing to carry.
+
+At depth 0 the gate rejects `extends`, a `virtual`/`abstract` **class**, and a `virtual`/`override`/
+`abstract` **method** — all four, not just `extends`, because a `virtual class` with no subclass still
+emits a vtable and would leave "no inheritance machinery in the output" false. `final` stays legal: it
+seals a type, it does not extend one. One choke point, `CEmitter::rejectIfNoInherit`, mirroring
+`rejectIfNoHeap`.
+
+#### Measured cost (2026-08-02)
+
+| what | cost |
+| --- | ---: |
+| emitted program that uses no inheritance — bytes attributable to the feature | **0** |
+| the compiler's dedicated inheritance/vtable emitter functions | **11,121 bytes** |
+
+**The emitted-program number is 0 and always was.** The prediction held exactly: a program that uses no
+inheritance never emitted vtable machinery in the first place, so turning the feature off cannot shrink
+it. `tools/check-inherit-cost.sh` now pins this — same source, same flags, only the depth differs, and
+the binaries must match to the byte. ⚠️ It also asserts the program still emits **contract** vtables
+(`_vtbl`), because a fat pointer needs one; without that half, the check would pass on an empty file.
+
+**The compiler number is a lower bound**, and deliberately so — it is the summed `.text` of the functions
+that exist *only* for inheritance (`linkBases` 3352, `buildVtables` 2120, `vtableSlotSig` 976,
+`emitVtableInstance` 828, `emitVtableType` 628, `vptrPrefix` 456, `topoOrderClasses` 380+lambdas,
+`basePathTo` 260, `isBaseOf` 252). It does **not** count the inheritance branches inlined through
+`emitStruct`, `emitDispatch`, `canAccess` and the class collector, which cannot be attributed without
+deleting them.
+
+**So size is not the argument either way.** 11 KB in a 17 MB compiler, and nothing at all in user
+programs — the real cost of inheritance is the six holes above and the design surface they came from,
+not bytes. The knob's value is the *experiment* it enables (build a corpus as pure kama and see what
+actually breaks), not the measurement.
 
 ## How the decision changes the six fixes below
 
@@ -191,24 +222,30 @@ one. So the emitted-program delta for non-inheritance programs should be ≈0, a
 | 1. base ctor never runs | **still needed** — and A/B do not touch it |
 | 2. `base.` bypasses `canAccess` | **still needed** |
 | 3. shadowing is legal at any visibility | **largely subsumed by A** — no new public methods means no public shadowing; keep the rule for the private/protected cases |
-| 4. polymorphic class by value in a collection | **still needed** — independent codegen bug |
+| 4. polymorphic class by value in a collection | ✅ **SHIPPED** `0f8b2a9` — independent codegen bug |
 | 5. `base.field` / no-base diagnostics | still needed |
 | 6. `: base(...)` orphaned | still needed |
+
+## Progress
+
+| item | status |
+| ---: | --- |
+| **4** polymorphic type by value in a generic collection | ✅ shipped `0f8b2a9` — vtable instances gained external linkage + a header forward declaration, beside the `C__as_I` block that already needed it. Fixture `tests/poly_in_collection`. |
+| **C** the switch | ✅ shipped — `--inherit-depth=N` / `"inheritDepth"`, one gate (`rejectIfNoInherit`), guard `tools/check-inherit-cost.sh`, cost measured above. |
+| **B** depth cap | ◐ the **cap** ships with C (walked in `linkBases`; `tests/vtable_depth3` restructured to `vtable_depth2`, rejection pinned by `tests/xfail/inherit_depth_exceeded`). The `final`-must-be-written half is still to do. |
+| **A** no public widening | ☐ — and a deriving type may not declare `implements` either (decided 2026-08-02; contracts belong on the root, 0 corpus sites, free today and breaking later). |
+| **1**, **2**, **3**, **5**, **6** | ☐ |
 
 ## Sequencing
 
 **Decision items A and B are source-breaking**, as are holes 1 and 3, so they land before the 1.0 tag or
-wait for 2.0. Hole 2 is breaking only for code exploiting the hole. **Hole 4 is a codegen fix with no
-surface change** — it can land immediately and independently, and it is the only one that blocks working
-code today. Holes 5 and 6 are diagnostics. **Decision item C (the `#if` gate) is additive** and is worth
-doing EARLY: building without inheritance is the cheapest way to find out what the corpus actually depends
-on, before any of the breaking work starts.
+wait for 2.0. Hole 2 is breaking only for code exploiting the hole. Holes 5 and 6 are diagnostics.
 
-Suggested order: **4** (unblocks working code) → **C** (measure and learn) → **B**, **A** (the restrictions,
-warn-first) → **1**, **2**, **3** → **5**, **6**.
+Remaining order: **B** (the `final` rule), **A** (the restrictions) → **2**, **3** → **5**, **6** →
+*[the slot-scope campaign]* → **1**.
 
-1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so run that campaign first or fold
-them together — it is already rewriting every ctor body.
+1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so that campaign runs first — it is
+already rewriting every ctor body, and the two sweeps must not interleave.
 
 ## Verification
 

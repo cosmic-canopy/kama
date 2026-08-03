@@ -1,0 +1,25 @@
+// The inheritance depth cap: `extends` may go exactly ONE hop below a root by default, so a middle
+// layer (the Widget -> Control -> Button archetype) is rejected and must become composition.
+//
+// 1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric — a cap that is
+// too strict pushes the middle layer into composition, which is what this design wants anyway, while a
+// cap that is too loose grows the deep hierarchies the restriction exists to prevent. A project that
+// proves it needs depth raises `--inherit-depth` / kama.json `"inheritDepth"` without any source change;
+// tests/vtable_depth2 is the accepted form.
+type virtual resource Widget
+{
+    public ctor make() { slot Widget r; return give r; }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+type virtual resource Control extends Widget
+{
+    public ctor make() { slot Control r; return give r; }
+    protected override fn int32 step() { return base.step() + 10; }
+}
+type final resource Button extends Control       // one hop too far
+{
+    public ctor make() { slot Button r; return give r; }
+    protected override fn int32 step() { return base.step() + 100; }
+}
+fn int main() { Button b = Button.make(); return b.rank(); }
