@@ -284,7 +284,14 @@ tools/cdev exec sh tools/check-query.sh                # coordinates shift with 
 tools/cdev exec sh tools/check-lsp.sh
 ```
 
-Baseline entering this campaign: **native 873 / ASan 838 / wasm 806, all 0 failed.**
+Baseline entering this campaign: **native 886 / ASan 850 / wasm 824, all 0 failed** (re-measured
+2026-08-02, after the inheritance campaign; the 873/838/806 figure this file was written with is stale).
+
+⚠️ **The inheritance campaign lands first and changes what this one sweeps.** Every `extends` fixture and
+the last parked repro (`tests/pending/base_ctor_not_run.kama`) still use the old
+`slot D r; … return give r;` form, and the fixture set grew — `tests/inherit_abstract_base`,
+`tests/inherit_private_name_reuse`, `tests/poly_in_collection`, `tests/vtable_depth2` are new, and four
+more were restructured. Re-count before trusting any site number in this brief.
 
 The audit `c2ae0c8` ran is worth repeating in reverse: confirm no `xfail` fixture starts being rejected by
 a *different* rule than its own once the bare-local rule relaxes inside ctors.
@@ -293,3 +300,9 @@ a *different* rule than its own once the bare-local rule relaxes inside ctors.
 
 **Source-breaking, so it lands before the 1.0 tag or waits for 2.0** — ROADMAP §1's own rule. It belongs
 with the docs/naming reconcile that is the last gate before the tag.
+
+**This campaign is now the immediate next one, and it BLOCKS the last inheritance hole.** Hole 1 of
+[inheritance.md](inheritance.md) — a derived type never runs its base's constructor — is fixed by
+`this.base = Base.make(…)`, which needs D5's implicit `this`. Since this campaign is already rewriting
+every ctor body, the two sweeps must not interleave: finish here, then close hole 1, then delete
+`inheritance.md`. Everything else in that campaign has shipped (`0f8b2a9` → `f9c0e59`).
