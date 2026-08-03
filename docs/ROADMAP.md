@@ -50,14 +50,16 @@ makes "one value per ctor" unrepresentable rather than merely rejected — and n
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
 **⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
-campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule, no-public-widening, the
-`base.` visibility fix, the shadowing ban and both diagnostics. What remains is **hole 1: a derived type
-never runs its base's constructor**, so a base's invariants are unenforceable for its subclasses — and
-not only the ctor, a base's *field defaults* do not reach a derived instance either. Its repro is parked
-at `tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on
+campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule,
+no-public-widening, the `base.` visibility fix, the shadowing ban and both diagnostics. What remains is
+**hole 1: a derived type never runs its base's constructor**, so a base's invariants are unenforceable for
+its subclasses — a base's field *initializers* don't reach a derived instance either, which is the same
+hole seen from another angle rather than a second one. Its repro is parked at
+`tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on
 [slot-scope.md](design/slot-scope.md) D5, the implicit `this`. Run that campaign first: it is already
 rewriting every ctor body, and the two sweeps must not interleave. Source-breaking, so before the tag or
-2.0.
+2.0. ⚠️ The brief names a tempting shallow fix (make the bare-local fill walk `__base`) and why it is
+wrong — read that before starting.
 
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there

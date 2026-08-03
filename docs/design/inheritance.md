@@ -287,11 +287,10 @@ wants without breaking anything that exists.
 | **6** `: base(...)` orphaned | ✅ shipped — the production is KEPT (it is the only reason a class-named ctor parses, hence the guided message) and given its own answer. Pinned by `tests/xfail/base_ctor_delegation`. |
 | **1** base ctor never runs | ☐ — blocked on the slot-scope campaign (D5, the implicit `this`). |
 
-### ⚠️ Hole 1 is wider than recorded: a base's FIELD DEFAULTS do not reach a derived instance either
+### Hole 1 in the emitter, and the shallow fix to avoid
 
-Found while writing `tests/inherit_private_name_reuse` (2026-08-02). The brief describes hole 1 as "a
-derived type never runs its base's constructor", which is true but understates it — even a field
-*initializer* on the base is skipped:
+A visible symptom, found while writing `tests/inherit_private_name_reuse` (2026-08-02) — a base's field
+*initializers* do not reach a derived instance either:
 
 ```kama
 type virtual resource Base { int32 n = 10;  public fn int32 rank() { return this.n; } … }
@@ -301,10 +300,21 @@ Base.make().rank()   // 10
 Leaf.make().rank()   // 0   — the base's own field default never applied
 ```
 
-So the base sub-object is zero-filled outright, not merely un-constructed. The fix is unchanged (install
-a base VALUE built by the base's own ctor), and this makes the case for it stronger: a base author cannot
-establish an invariant even by writing the default at the field, which is the one mechanism SPEC otherwise
-offers as the escape hatch from "a ctor must assign every field".
+⚠️ *An earlier revision filed this as "hole 1 is WIDER than recorded", i.e. a second defect. It is not —
+it is the same one (user, 2026-08-02). Once a derived ctor must write `this.base = Base.make(…)`,
+`Base.make` builds a `Base` and **its own** fill applies Base's initializers. One bug, one fix.*
+
+The reason to keep the symptom written down is the **trap it sets**, which is exactly why mis-filing it
+was dangerous. The bare-local fill loop lives at `kama.cemit.cpp:2613` and iterates `_classes[ty].fields`
+— own fields only — while the `__vptr` store six lines below it *does* reach into the base through
+`vptrPrefix`'s `__base.` hops. So the fill demonstrably knows how to walk the base chain, and making it
+also apply base field initializers is a three-line change sitting right there.
+
+**Do not take it.** It would re-introduce implicit base construction — the model M8 Phase E deliberately
+removed ("nothing is constructible by default") — and it papers over the hole rather than closing it:
+field defaults would apply, but the base's *constructor* still would not run, so any base invariant that
+needs computation rather than a literal is still unenforceable. The fix is the one above: install a base
+VALUE built by the base's own ctor.
 
 ### The two `final`s are different things, and the cap affects only one of them
 
