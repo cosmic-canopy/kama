@@ -1,4 +1,4 @@
-# Inheritance — closing six holes (cold-start brief)
+# Inheritance — the decision, and six holes (cold-start brief)
 
 *In-flight campaign doc. **Delete this file when the campaign ships**, once SPEC carries the record — see
 the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
@@ -121,11 +121,71 @@ declare a named constructor `ctor make(...)`"*). Deleting it turns that into a r
 a diagnostic path and give `: base(...)` a message of its own — *"base-constructor delegation is not
 supported; assign `this.base = Base.<ctor>(...)` instead"*.
 
+## ✅ THE DECISION (user, 2026-08-02) — keep inheritance, weakened where it is abusable
+
+Reached after working the alternatives all the way down; the reasoning is preserved below because the
+conclusion is only defensible with it.
+
+**Contracts stay PURE** — no default method bodies, ever. That is a deliberate choice and it has a known
+price: `abstract` (a hole you MUST fill) has a clean contract equivalent, but **`virtual` (a hole you MAY
+fill, defaulted otherwise) does not**. Every implementor of a contract must write every method, even to
+restate a default. This is the single reason inheritance keeps a niche — the two questions are the same
+question, and Rust only escapes inheritance because its traits carry default bodies.
+
+Three additions, on top of the six fixes below:
+
+### A. A derived type may NOT widen the public interface
+
+It may add **fields**, add **private** helpers, and **override the protected seams the base sanctioned**
+(`virtual` = may, `abstract` = must). It may not add public methods. The hierarchy's public surface is
+fixed at its root, so substitutability is total rather than aspirational — and the `Exposer` leak (a
+subclass re-publishing a protected seam, which compiles today) becomes impossible.
+
+⚠️ **Constructors must be exempt** — a derived type needs its own public `ctor` (`RawChannel.open(…)`), and
+construction is not part of the substitutable surface. Do not let the rule swallow them.
+
+### B. Exactly ONE level — a deriving type must be `final`
+
+`extends` implies a leaf. `virtual`/`abstract` become legal only on a **root**. The author must still
+*write* `final` rather than have it inferred: it teaches the constraint at the point of use, and it leaves
+room to lift the restriction later without changing the meaning of existing code.
+
+⚠️ `tests/vtable_depth3.kama` is a three-level chain and becomes illegal — it must be restructured or
+retired, and it is the only multi-level fixture in the tree.
+
+### C. Gate inheritance behind a compiler `#if`, so kama can be built without it
+
+Two purposes: **(1)** run the whole corpus as "pure kama" with no inheritance at all, to see what actually
+breaks; **(2)** measure binary size — both the kama compiler itself and the programs it emits.
+
+⚠️ **Set the expectation before measuring, or the numbers will mislead.** A program that uses no
+inheritance *already* emits zero vtable machinery (measured: 11 vtable structs/instances → 0, 7 `__vptr`
+→ 0 between the two TEMP examples), and **contracts keep their own vtables** because a fat pointer needs
+one. So the emitted-program delta for non-inheritance programs should be ≈0, and the real signal is the
+**compiler's** size and the emitter paths that disappear. Measure both, but predict them separately.
+
+## How the decision changes the six fixes below
+
+| hole | status under the decision |
+| --- | --- |
+| 1. base ctor never runs | **still needed** — and A/B do not touch it |
+| 2. `base.` bypasses `canAccess` | **still needed** |
+| 3. shadowing is legal at any visibility | **largely subsumed by A** — no new public methods means no public shadowing; keep the rule for the private/protected cases |
+| 4. polymorphic class by value in a collection | **still needed** — independent codegen bug |
+| 5. `base.field` / no-base diagnostics | still needed |
+| 6. `: base(...)` orphaned | still needed |
+
 ## Sequencing
 
-1 and 3 are **source-breaking**, so they land before the 1.0 tag or wait for 2.0. 2 is breaking only for
-code exploiting the hole. 4 is a codegen fix with no surface change — it can land immediately and
-independently, and it is the only one that blocks working code today. 5 and 6 are diagnostics.
+**Decision items A and B are source-breaking**, as are holes 1 and 3, so they land before the 1.0 tag or
+wait for 2.0. Hole 2 is breaking only for code exploiting the hole. **Hole 4 is a codegen fix with no
+surface change** — it can land immediately and independently, and it is the only one that blocks working
+code today. Holes 5 and 6 are diagnostics. **Decision item C (the `#if` gate) is additive** and is worth
+doing EARLY: building without inheritance is the cheapest way to find out what the corpus actually depends
+on, before any of the breaking work starts.
+
+Suggested order: **4** (unblocks working code) → **C** (measure and learn) → **B**, **A** (the restrictions,
+warn-first) → **1**, **2**, **3** → **5**, **6**.
 
 1 depends on [slot-scope.md](slot-scope.md) D5 (the implicit `this`), so run that campaign first or fold
 them together — it is already rewriting every ctor body.
