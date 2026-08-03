@@ -4,10 +4,13 @@
 // ⚠️ This used to isolate devirtualization trigger 2 (`mi->isFinal`) from triggers 1 (`final` receiver
 // class) and 3 (nobody overrides the slot), with a NON-final `virtual resource Mid` in the middle. The
 // inheritance depth cap makes that shape unrepresentable — at KAMA_INHERIT_DEPTH=1 a deriving type is
-// `final`, so trigger 1 always fires first (emitDispatch short-circuits left to right). Trigger 2 is
-// therefore no longer reachable as the SOLE reason to devirtualize, which makes `final` on a METHOD
-// close to redundant at depth 1; see docs/design/inheritance.md. The fixture still pins that
-// `final override` parses, seals (tests/xfail/override_final), and dispatches directly.
+// `final`, so trigger 1 always fires first (emitDispatch short-circuits left to right).
+//
+// That makes the `final` METHOD modifier DORMANT at depth 1 — not dead. Sealing a slot only matters when
+// someone below could re-override it, and at depth 1 nobody can (a leaf is already a `final class`; a
+// root's non-virtual method is already un-redefinable, since shadowing is an error). At depth 2 the
+// middle layer exists and the modifier is the only thing that does its job. So it stays, and this fixture
+// keeps it covered: `final override` parses, seals (tests/xfail/override_final), and dispatches directly.
 type virtual resource Base
 {
     public ctor make() { slot Base r;  return give r; }

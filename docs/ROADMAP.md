@@ -59,11 +59,6 @@ at `tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(�
 rewriting every ctor body, and the two sweeps must not interleave. Source-breaking, so before the tag or
 2.0.
 
-A second question fell out of the cap and is **not decided**: `final` on a METHOD is now near-vacuous,
-because the only shape that isolated it (a non-final class that derives) is unrepresentable at depth 1.
-Whether `final fn` stays in the language deserves its own decision rather than a side effect — see the
-brief.
-
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that

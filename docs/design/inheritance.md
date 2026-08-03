@@ -306,20 +306,36 @@ a base VALUE built by the base's own ctor), and this makes the case for it stron
 establish an invariant even by writing the default at the field, which is the one mechanism SPEC otherwise
 offers as the escape hatch from "a ctor must assign every field".
 
-### ⚠️ A consequence of the cap worth a decision later: `final` on a METHOD is now near-vacuous
+### The two `final`s are different things, and the cap affects only one of them
 
-`emitDispatch` devirtualizes on three independent triggers, short-circuiting left to right:
-`sc.isFinalClass || mi->isFinal || !overriddenAnywhere`. Trigger 2 (`final` method) was isolable only
-with a **non-final class that derives** — `tests/devirt_final_method` used exactly that shape. Under the
-cap, a deriving type is `final`, so trigger 1 always fires first, and trigger 2 is unreachable as the
-*sole* reason to devirtualize.
+⚠️ *An earlier revision of this file called `final` "near-vacuous" without saying WHICH `final`, which
+reads as a claim about the class marker. It was never that. Corrected 2026-08-02.*
 
-A root can still write `protected final virtual fn`, but nothing may then override it, so trigger 3 fires
-too. So `final` on a method no longer buys any lowering the other two triggers do not already buy; what
-remains is its *documentary* value (marking a slot as sealed) and the rejection in
-`tests/xfail/override_final`. **Not decided here** — it is a live question of whether `final fn` should
-stay in the language at depth 1, and it should be answered deliberately rather than as a side effect of
-this campaign. `tests/devirt_final_method` records the situation in its own comment.
+| spelling | what it does | under the cap |
+| --- | --- | --- |
+| `type final resource X` — a final **class** | seals the type: nothing may extend it | **required** on a deriving type. This is the design's visible limit marker (decision B) and the cap is the whole reason it exists. |
+| `protected final override fn f()` — a final **method** | seals one virtual slot: no subclass may re-override *that method* | **dormant at depth 1, load-bearing at depth 2+** |
+
+**Why the method modifier is dormant at depth 1, and why that is not a reason to remove it.** Sealing a
+slot only matters when someone below you could re-override it, and at depth 1 nobody can:
+
+- on a **leaf**, the class is already `final`, so nothing derives from it;
+- on a **root**, a plain non-virtual method is already un-redefinable, because shadowing is now an error.
+
+Devirtualization tells the same story. `emitDispatch` short-circuits left to right on
+`sc.isFinalClass || mi->isFinal || !overriddenAnywhere`; trigger 2 was isolable only with a **non-final
+class that derives**, which the cap makes unrepresentable, so trigger 1 or 3 always fires first.
+
+But at **depth 2** the middle layer exists and the modifier is the only thing that does its job —
+verified by building a `KAMA_INHERIT_DEPTH=2` compiler against a fully legal `Base <- virtual Mid <-
+final Leaf` chain: `final override fn h()` on `Mid` is the **sole** cause of rejection, and deleting just
+that one keyword makes the same chain compile.
+
+**So `final fn` stays.** It is dormant rather than dead, and it wakes up the moment the cap rises — which
+this design explicitly anticipates. Removing a feature because a *starting-point* restriction currently
+hides it would be exactly backwards. `tests/devirt_final_method` and `tests/xfail/override_final` keep it
+covered at depth 1 (the fixture pins that it parses, seals, and dispatches directly, even though trigger 1
+is what fires).
 
 ## Sequencing
 
