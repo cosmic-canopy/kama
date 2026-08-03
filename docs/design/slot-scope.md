@@ -284,7 +284,7 @@ tools/cdev exec sh tools/check-query.sh                # coordinates shift with 
 tools/cdev exec sh tools/check-lsp.sh
 ```
 
-Baseline entering this campaign: **native 886 / ASan 850 / wasm 824, all 0 failed** (re-measured
+Baseline entering this campaign: **native 887 / ASan 851 / wasm 825, all 0 failed** (re-measured
 2026-08-02, after the inheritance campaign; the 873/838/806 figure this file was written with is stale).
 
 ⚠️ **The inheritance campaign lands first and changes what this one sweeps.** Every `extends` fixture and

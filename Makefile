@@ -31,6 +31,15 @@ BUILD     = build/$(PLATFORM)
 # `tools/check-no-inheritance.sh` builds it and proves the variant still works.
 KAMA_INHERITANCE   ?= 1
 KAMA_INHERIT_DEPTH ?= 1
+# ⚠️ Refuse the EXTRA_CXXFLAGS spelling rather than silently ignoring it. These `-D`s are appended AFTER
+# EXTRA_CXXFLAGS, so a `-DKAMA_INHERITANCE=0` passed that way loses to the default and you would get a
+# compiler WITH inheritance while believing otherwise — and the build directory would not switch either,
+# mixing objects compiled under different macro values. For a switch whose entire purpose is measurement,
+# a silently-wrong build is the worst possible failure, so make it loud.
+ifneq (,$(findstring KAMA_INHERIT,$(EXTRA_CXXFLAGS)))
+$(error set KAMA_INHERITANCE / KAMA_INHERIT_DEPTH as make variables — `make KAMA_INHERITANCE=0` — not \
+through EXTRA_CXXFLAGS, which is appended earlier and would be overridden without switching BUILD)
+endif
 CXXFLAGS += -DKAMA_INHERITANCE=$(KAMA_INHERITANCE) -DKAMA_INHERIT_DEPTH=$(KAMA_INHERIT_DEPTH)
 ifeq ($(KAMA_INHERITANCE),0)
 BUILD = build/$(PLATFORM)-noinherit
