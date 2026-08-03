@@ -1,0 +1,33 @@
+// An `out` argument FILLS the slot it names, so the value the callee built must be dropped at the
+// caller's scope exit. It was not: the emitter had a slot-clearing rule for assignment, for a method call
+// on the slot, and for `addr(of:)` — but none for the `out` path, the one fill `slot` exists for. So
+// `slot T x; fill(dst: out x);` emitted no destructor at all and the value leaked. (tests/out_arg_definite
+// hid it: its `b.get()` tripped the method-call rule a line later.)
+//
+// The mirror half, same commit: an `out` parameter arrives EMPTY, so the callee's first assignment must
+// NOT drop the incoming contents. It did — a destructor call on a value no constructor ever ran. Harmless
+// for a counter, not harmless for a raw handle whose zero is a real descriptor.
+//
+// Differential: `drops` counts BOTH mistakes. 2 = the spurious callee drop is back, 0 = the caller's drop
+// is missing again, 1 = correct.
+static int32 drops = 0;
+
+type resource Tracker {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 value() { return this.id; }
+    ~Tracker() { drops = drops + 1; }
+}
+
+fn void makeInto(int32 id, out Tracker dst) { dst = Tracker.make(id: id); }
+
+fn int32 run() {
+    slot Tracker t;
+    makeInto(id: 41, dst: out t);
+    return t.value();
+}
+
+fn int32 main() {
+    int32 v = run();                       // 41, and exactly one drop on the way out
+    return (drops == 1) ? v + 1 : 0;       // 42
+}

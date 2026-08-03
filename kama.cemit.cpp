@@ -11715,6 +11715,22 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     _moveState[*rid->value] = MoveState::NotMoved;
                 }
 
+    // `f(dst: out x)` fills a slot as well, and this is the fill `slot` exists for. The callee is
+    // separately proven to assign the parameter (verifyOutsAssigned), so `x` holds a live value from here
+    // on and its destructor comes back. Without this the value the callee built was never dropped: the
+    // three sibling rules above cover assignment, a method call and `addr(of:)`, and the `out` path — the
+    // one the analysis has always ACCEPTED as a fill — had no emitter half at all. Runs before the
+    // arguments are emitted, like the receiver rule above.
+    if (!_slotLocals.empty() && call->args)
+        for (auto& a : *call->args)
+            if (a && a->modifier && a->modifier->value && *a->modifier->value == "out")
+                if (auto* aid = dynamic_cast<IdentifierNode*>(a->expression.get()))
+                    if (aid->value && (!aid->qualifier || aid->qualifier->empty())
+                        && _slotLocals.count(*aid->value)) {
+                        _slotLocals.erase(*aid->value);
+                        _moveState[*aid->value] = MoveState::NotMoved;
+                    }
+
     // Expression-form callee (this.method(...), base.method(...), parenthesized).
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
@@ -12250,6 +12266,11 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
+            // An `out` parameter arrives EMPTY — the analysis seeds it as unassigned and the callee is
+            // obliged to fill it, so its incoming contents are not a live value. Seed the move state the
+            // way a `slot` declaration does, so the first assignment does not emit a dtor for something
+            // that was never constructed. (A SECOND assignment still drops: the first one clears this.)
+            if (paramIsOut(p.get())) _moveState[pn] = MoveState::Moved;
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
@@ -12834,6 +12855,11 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
             _paramNames.insert(pn);   // a later local declaration shadowing a param is a compile error
             registerBinding(p->identifier.get(), SymKind::Param);
             if (paramByRef(p.get())) _refParams.insert(pn);
+            // An `out` parameter arrives EMPTY — the analysis seeds it as unassigned and the callee is
+            // obliged to fill it, so its incoming contents are not a live value. Seed the move state the
+            // way a `slot` declaration does, so the first assignment does not emit a dtor for something
+            // that was never constructed. (A SECOND assignment still drops: the first one clears this.)
+            if (paramIsOut(p.get())) _moveState[pn] = MoveState::Moved;
             if (p->isConst) _constLocals.insert(pn);   // const param is immutable
             std::string pty = p->type ? cType(p->type) : "";
             _localTypes[pn] = (isClass(pty) || isInterface(pty) || isSigType(pty)) ? pty : "";   // record (incl. fnptr params)
