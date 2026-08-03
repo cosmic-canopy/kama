@@ -1493,6 +1493,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) {
                 if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
+                // In a `ctor` the value under construction is named `this` and its fields are reached only
+                // through it. A bare name is therefore always a local or a param — which is what lets a
+                // ctor write `int32 fd = openRaw(…); this.fd = fd;` without the two `fd`s colliding. Say so
+                // rather than silently resolving to the field, which would make the two spellings differ.
+                if (_inNamedCtorBody)
+                    unsupported(("'" + nm + "' is a field of '" + owner->name + "' — inside a constructor, "
+                                 "reach it through the value being built: `this." + nm + "`").c_str(), v->line);
+                _ctorSelfUsed = true;           // in a ctor: the implicit `this` storage is needed
                 checkFieldAccess(owner, nm, v->line);
                 recordFieldRef(owner, nm, v);   // implicit `this.` field read
                 return "self->" + basePathTo(_currentClass, owner) + nm;
@@ -1513,6 +1521,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", tn->line);
+        _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
         return "self";
     }
 
@@ -2376,6 +2385,65 @@ void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
     _hoistOK = ph;
 }
 
+// Bring zero-inited storage of class `ty`, named `nm` in C, up to a valid empty state: apply each field's
+// inline initializer, call each field's `default` ctor, and set the vtable pointer. Shared by the bare
+// class-local declaration path and by a `ctor`'s implicit `this` storage — the two places a value of a
+// class type comes into being without an initializer, and they must agree exactly.
+//
+// Construction-model M8d.1: `= {0}` alone is valid only for a PROVABLY-ZERO default (a primitive, a raw
+// `Ptr`, an intrinsic collection). A field whose `default` ALLOCATES (a `SortedMap` building a B-tree root)
+// would otherwise zero-init to a broken null-root value; this is what makes `isDefaultFillable` actually
+// FILL correctly. A gated-away default (a custom-`A` collection) has no `isDefaultCtor` method and is not
+// filled — it is `mustAssign`, so the completeness gate already forces an explicit assignment.
+// `this` inside a `ctor` lowers to `self`, a `T*` pointing at the storage the ctor is filling. Wherever the
+// destination is a `T` BY VALUE — the return temp, a variant payload such as `Result::Ok(value: this)` — it
+// has to be dereferenced. True for exactly that case. (As an ARGUMENT to an ordinary call, `this` already
+// has its own by-value handling at each argument site.)
+bool CEmitter::ctorThisAsValue(SharedExpression e, const std::string& dstCType) const
+{
+    return _inNamedCtorBody && _currentClass && dstCType == _currentClass->name
+           && dynamic_cast<ThisAccessNode*>(e.get()) != nullptr;
+}
+
+void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth)
+{
+    for (auto& f : _classes[ty].fields) {
+        // An inline field initializer (`const int32 kind = 7;`) applies here too, exactly as the
+        // instance-ctor path applies it — else a factory-built value loses it (zero instead of 7). #M8d.2
+        if (f.initializer) {
+            line(lineNo); indent(depth);
+            *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
+            continue;
+        }
+        std::string fcls = cTypeInInstance(ty, f.type);
+        auto cit = _classes.find(fcls);
+        if (cit == _classes.end()) continue;
+        bool filled = false;
+        for (auto& kv : cit->second.methods)
+            if (kv.second.isDefaultCtor) {
+                line(lineNo); indent(depth);
+                *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
+                filled = true;
+                break;
+            }
+        // Drop-only-if-live (A): a move-only-value field left `{0}` by the fill (no inline initializer, no
+        // `default` ctor — e.g. a raw-handle `resource` field) is NOT yet live. Seed its `local.field`
+        // move-state Moved so the first `f.field = give …` does NOT drop the zeroed slot (which for a raw
+        // handle would e.g. close(0)).
+        if (!filled && isMoveOnlyValue(fcls))
+            _moveState[nm + "." + f.name] = MoveState::Moved;
+    }
+    // Construction-model M8 Phase E: a polymorphic (vtable-carrying) value sets its `__vptr` directly — the
+    // value (`.`) mirror of a method body's `self->…__vptr` store. With `synthCtor` removed, a factory-built
+    // value of a polymorphic class would otherwise dispatch through a NULL vptr. Most-derived vtable at the
+    // root slot.
+    if (_classes[ty].hasVtable && !_classes[ty].isAbstractClass) {
+        line(lineNo); indent(depth);
+        *_out << nm << "." << vptrPrefix(&_classes[ty]) << "__vptr = &"
+              << _classes[ty].name << "__vtable;\n";
+    }
+}
+
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
@@ -2485,8 +2553,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         for (auto& sc : _scopes) { for (auto& dn : sc.declaredNames) if (dn == nm) { enc = true; break; } if (enc) break; }
                         if (enc)
                             unsupported(("local `" + nm + "` shadows an enclosing-scope local — rename it").c_str(), n->line);
-                        else if (_currentClass && !_inStaticMethod && _currentClass->fieldNames.count(nm))
+                        else if (_currentClass && !_inStaticMethod && !_inNamedCtorBody
+                                 && _currentClass->fieldNames.count(nm))
                             // A static method has no `this` → no bare field access → nothing to shadow.
+                            // Neither does a `ctor`: a bare name there is ALWAYS a local or a param, because
+                            // the value under construction is reached only through `this` (below). So
+                            // `int32 fd = openRaw(…); this.fd = fd;` shadows nothing — it is the clearest
+                            // spelling there is, and it is what the stdlib's raw-handle ctors already write.
                             unsupported(("local `" + nm + "` shadows a field — rename it").c_str(), n->line);
                     }
                     if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
@@ -2602,52 +2675,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // the storage must still be well-defined, because filling it field-by-field reads and
                     // releases what is already there. The `= {0}` above plus the field-default fill below
                     // is that valid state.
-                    if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct) {
-                        // Construction-model M8d.1: a zero-inited bare aggregate FILLS each field whose type has
-                        // an explicit `default` ctor by CALLING it — `= {0}` is valid only for a PROVABLY-ZERO
-                        // default (a primitive, raw `Ptr`, or intrinsic collection). A field whose `default`
-                        // ALLOCATES (e.g. a `SortedMap` building a B-tree root) would otherwise zero-init to a
-                        // broken (null-root) value; this makes `isDefaultFillable` actually FILL correctly. A
-                        // gated-away default (a custom-`A` collection) has no `isDefaultCtor` method → not filled
-                        // (it is `mustAssign`, so the completeness gate already forces an explicit assignment).
-                        for (auto& f : _classes[ty].fields) {
-                            // An inline field initializer (`const int32 kind = 7;`) applies to a bare local too,
-                            // exactly as the instance-ctor path applies it (kama.cemit.cpp ~9405) — else a
-                            // factory-built value loses it (zero instead of 7). #M8d.2
-                            if (f.initializer) {
-                                line(n->line); indent(depth);
-                                *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
-                                continue;
-                            }
-                            std::string fcls = cTypeInInstance(ty, f.type);
-                            auto cit = _classes.find(fcls);
-                            if (cit == _classes.end()) continue;
-                            bool filled = false;
-                            for (auto& kv : cit->second.methods)
-                                if (kv.second.isDefaultCtor) {
-                                    line(n->line); indent(depth);
-                                    *_out << nm << "." << f.name << " = " << kv.second.cName << "();\n";
-                                    filled = true;
-                                    break;
-                                }
-                            // Drop-only-if-live (A): a move-only-value field left `{0}` by the fill loop (no
-                            // inline initializer, no `default` ctor — e.g. a raw-handle `resource` field) is NOT
-                            // yet live. Seed its `local.field` move-state Moved so the first `f.field = give …`
-                            // does NOT drop the zeroed slot (which for a raw handle would e.g. close(0)).
-                            if (!filled && isMoveOnlyValue(fcls))
-                                _moveState[nm + "." + f.name] = MoveState::Moved;
-                        }
-                        // Construction-model M8 Phase E: a polymorphic (vtable-carrying) bare local sets its
-                        // `__vptr` directly — the value-local (`.`) mirror of the synth ctor body's
-                        // `self->…__vptr = &T__vtable` store. Previously the synth default ctor did this via
-                        // `T__ctor(&r)`; with `synthCtor` removed a factory-built bare local of a polymorphic
-                        // class would otherwise dispatch through a NULL vptr. Most-derived vtable at the root slot.
-                        if (_classes[ty].hasVtable && !_classes[ty].isAbstractClass) {
-                            line(n->line); indent(depth);
-                            *_out << nm << "." << vptrPrefix(&_classes[ty]) << "__vptr = &"
-                                  << _classes[ty].name << "__vtable;\n";
-                        }
-                    }
+                    if (zeroInit && !_classes[ty].isIntrinsicColl && !_classes[ty].isExternStruct)
+                        emitAggregateFill(nm, ty, n->line, depth);
                     return;   // otherwise declared-only (zero-inited empty, or a non-destructible value)
                 }
 
@@ -9680,10 +9709,33 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     auto localFieldRef = [&](SharedExpression e) -> std::pair<std::string, std::string> {
         auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
         if (!ma || !ma->identifier || !ma->identifier->value) return {"", ""};
+        // `this.field = …` — the value under construction has no DECLARATION, so it is keyed by the name
+        // it is spelled with. `ownerLocals` holds declared locals; `this` is always in play in a ctor.
+        if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) return {"this", *ma->identifier->value};
         auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get());
         if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return {"", ""};
         if (!ownerLocals.count(*id->value)) return {"", ""};
         return {*id->value, *ma->identifier->value};
+    };
+
+    // The first `mustAssign` field this key has not been credited with, in declaration order ("" if none).
+    auto missingField = [&](const std::string& key) -> std::string {
+        auto& done = assigned[key];
+        for (auto& f : owner.fields)
+            if (mustAssign.count(f.name) && !done.count(f.name)) return f.name;
+        return "";
+    };
+    auto reportMissing = [&](const std::string& bad, int line) {
+        if (owning.count(bad))
+            unsupported(("'" + bad + "' must be set before the constructor returns "
+                         "(`Owned`/`Shared` are never-null)").c_str(), line);
+        else if (noDefault.count(bad))
+            unsupported(("'" + bad + "' has no `default` — assign it in the constructor "
+                         "(or give its type a `default ctor`)").c_str(), line);
+        else
+            unsupported(("'" + bad + "' is never assigned — a constructor must initialize every "
+                         "field; assign it here, or declare the field's default at the field "
+                         "(`T " + bad + " = …;`)").c_str(), line);
     };
 
     // Classify a RETURNED value expression: report the first missing owning field (via `bad`), or leave empty.
@@ -9711,13 +9763,20 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
                 }
             }
         }
+        // `return give this;` — the ctor's EARLY-return form. Same proof as a returned owner-local, on the
+        // value the ctor is obliged to complete.
+        if (dynamic_cast<ThisAccessNode*>(e.get())) {
+            std::string m = missingField("this");
+            if (!m.empty()) { bad = m; badLine = e->line; }
+            return;
+        }
         // A returned bare owner-local: require every owning field assigned (unless complete-by-init).
         if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
             if (id->value && (!id->qualifier || id->qualifier->empty()) && ownerLocals.count(*id->value)) {
                 if (completeByInit.count(*id->value)) return;
-                auto& done = assigned[*id->value];
-                for (auto& f : owner.fields)
-                    if (mustAssign.count(f.name) && !done.count(f.name)) { bad = f.name; badLine = e->line; return; }
+                std::string m = missingField(*id->value);
+                if (!m.empty()) { bad = m; badLine = e->line; }
+                return;
             }
         }
         // else — a construction / delegating factory call / param: complete by delegation.
@@ -9748,18 +9807,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             std::string bad; int line = 0;
             classify(ret->expression, bad, line);
-            if (!bad.empty()) {
-                if (owning.count(bad))
-                    unsupported(("'" + bad + "' must be set before the constructor returns "
-                                 "(`Owned`/`Shared` are never-null)").c_str(), line ? line : st->line);
-                else if (noDefault.count(bad))
-                    unsupported(("'" + bad + "' has no `default` — assign it in the constructor "
-                                 "(or give its type a `default ctor`)").c_str(), line ? line : st->line);
-                else
-                    unsupported(("'" + bad + "' is never assigned — a constructor must initialize every "
-                                 "field; assign it here, or declare the field's default at the field "
-                                 "(`T " + bad + " = …;`)").c_str(), line ? line : st->line);
-            }
+            if (!bad.empty()) reportMissing(bad, line ? line : st->line);
         } else if (auto* iff = dynamic_cast<IfNode*>(n)) {
             walk(iff->ifStatement, false);                    // branch bodies don't count as unconditional assigns
             walk(iff->elseStatement, false);
@@ -9776,7 +9824,19 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         }
         // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
     };
-    for (auto& st : *body->statements) walk(st, true);
+    SharedStatement last;
+    for (auto& st : *body->statements) { walk(st, true); last = st; }
+
+    // Falling off the end of a ctor returns the value it built (the implicit `this`), so that value must be
+    // complete AT THAT POINT — the same proof a written `return give this;` gets, at the return the author
+    // did not write. The condition mirrors the emitter's exactly (kama.cemit.cpp, emitMethodOrCtorBody):
+    // wherever it emits `return __self;`, this has proven `__self` complete. A ctor that ends in a `return`
+    // was already checked by the ReturnNode arm; one that delegates never credits `this` and would be
+    // flagged here, which is correct — a delegating ctor returns, it does not fall off the end.
+    if (!(last && stmtIsJump(last))) {
+        std::string bad = missingField("this");
+        if (!bad.empty()) reportMissing(bad, last ? last->line : body->line);
+    }
 }
 
 // Option-B view-ctor escape check. A `type view` ctor is a factory: it builds a local view and RETURNS it
@@ -10563,6 +10623,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
     if (rv.empty()) rv = tryHoistInlineNew(v, dstCType, line); // `:= new T(…)`
     if (rv.empty()) rv = emitExpression(v);
+    if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
     flushHoisted(depth);
     indent(depth); *_out << dst << " = " << rv << ";\n";
@@ -11340,6 +11401,8 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             std::string val = tryHoistInlineNew(argExpr, fcls, srcLine);
             if (val.empty()) val = tryHoistInlineCtor(argExpr, fcls, srcLine);
             if (val.empty()) val = emitExpression(argExpr);
+            // `return Result::Ok(value: this);` — a fallible ctor handing back the value it built.
+            if (ctorThisAsValue(argExpr, fcls)) val = "(*" + val + ")";
             _matchTargetCType = pmt; _variantTargetType = pvt;
             std::string argCls = exprClass(argExpr);
             std::string field;
@@ -12571,6 +12634,12 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
+    // A named `ctor` is emitted as a static factory (no `self` PARAMETER), but it does have a `this`: the
+    // value it is building. Storage for it is synthesized below, so `this` must resolve here even though
+    // the C signature is static.
+    bool ctorBody = _inNamedCtorBody;
+    if (ctorBody) _inStaticMethod = false;
+    _ctorSelfUsed = false;
     _refParams.clear();
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
@@ -12608,12 +12677,48 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
           << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str()) << ")\n{\n";   // static: no self
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
+
+    // The ctor's implicit `this`. Same lowering as a bare class local — zero-init, field-default fill,
+    // vptr store — applied to storage the function synthesizes, with `self` pointing at it so every
+    // existing `this` path (`self->field`, `self` as a receiver) works unchanged.
+    //
+    // Emitted to a buffer BEFORE the body, because the fill SEEDS MOVE STATE (a move-only field is marked
+    // Moved so the first `this.f = give …` does not drop the zeroed slot) and the body needs that seeding
+    // already in place. It is written out only if the body actually names `this`: the fill can CALL a
+    // field's `default` ctor, so emitting it for a ctor that never names `this` would construct a whole
+    // object for nothing. During coexistence most ctors still build a `slot` local and want none of it.
+    std::ostringstream ctorPrologue;
+    if (ctorBody) {
+        std::ostream* sv = _out; _out = &ctorPrologue;
+        int ln = body ? body->line : 0;
+        indent(1); *_out << owner.name << " __self = {0};\n";
+        emitAggregateFill("__self", owner.name, ln, 1);
+        indent(1); *_out << owner.name << "* self = &__self;\n";
+        _out = sv;
+        _ctorSelfUsed = false;   // a field initializer naming another field must not count as a use
+    }
+
+    std::ostringstream ctorStmts;
+    std::ostream* savedOut = _out;
+    if (ctorBody) _out = &ctorStmts;
+
     SharedStatement last;
     if (body && body->statements) {
         for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
     }
     if (!(last && stmtIsJump(last))) {
         emitScopeCleanup(_scopes.back(), 1);
+        // Falling off the end of a ctor RETURNS the value it built. A ctor's whole job is to produce that
+        // value before it returns, so it need spell no return — exactly as a `void` function need spell
+        // none. `return give this;` stays legal as the EARLY-return form, not a second way to say this.
+        if (ctorBody && _ctorSelfUsed && _currentReturnCType == owner.name) {
+            indent(1); *_out << "return __self;\n";
+        }
+    }
+    if (ctorBody) {
+        _out = savedOut;
+        if (_ctorSelfUsed) *_out << ctorPrologue.str();
+        *_out << ctorStmts.str();
     }
     *_out << "}\n\n";
 
@@ -14103,6 +14208,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
+        _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
         return "self->" + basePath + field;
     }
     // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`

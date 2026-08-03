@@ -1,0 +1,64 @@
+// A `ctor`'s value is an implicit `this` — it needs no declaration. A constructor's whole job is to
+// produce the type before it returns, so the storage is implied by the function itself: `checkNamedCtorComplete`
+// already proves every field is assigned there, and a declaration adds no proof on top of that.
+//
+// Falling off the end RETURNS that value, exactly as a `void` function need spell no return. The explicit
+// `return give this;` is the EARLY-return form, not a second way to say the same thing.
+import std::memory::{Owned};
+
+enum E { Bad }
+implements Error for E { public fn string message() { return "bad"; } }
+
+type value Cell { int32 v; public ctor of(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+
+// A resource: an owning field and a raw handle with a `-1` niche, both assigned through `this`.
+type resource Res {
+    Owned<Cell> box; int32 fd = -1;
+    public ctor make(int32 v) {
+        Owned<Cell> b = new Cell.of(v: v);
+        this.box = give b;
+        this.fd = 3;
+    }
+    public fn int32 get() { return this.box.get() + this.fd; }
+}
+
+// The early-return form. `y` keeps its field default on the path that returns early, which is what makes
+// the implicit `this` a real value from the first statement rather than an accumulator.
+type value Early {
+    int32 x; int32 y = 9;
+    public ctor make(int32 x) {
+        this.x = x;
+        if (x < 0) { return give this; }
+        this.y = 1;
+    }
+    public fn int32 sum() { return this.x + this.y; }
+}
+
+// A fallible ctor is not a special case: it returns `Err` before the object exists, and hands back the
+// value it built the same way.
+type value Fal {
+    int32 n;
+    public ctor Result<Fal, E> make(int32 n) {
+        if (n < 0) { return Result::Err(error: E::Bad); }
+        this.n = n;
+        return Result::Ok(value: this);
+    }
+    public fn int32 get() { return this.n; }
+}
+
+// A bare name in a ctor is ALWAYS a local or a param — the value under construction is reached only
+// through `this` — so a local may carry the same name as the field it is about to become.
+type value Handle {
+    int32 fd;
+    public ctor open(int32 raw) { int32 fd = raw + 1; this.fd = fd; }
+    public fn int32 get() { return this.fd; }
+}
+
+fn int main() {
+    Res r = Res.make(v: 4);                  // 4 + 3 = 7
+    Early a = Early.make(x: 2);              // 2 + 1 = 3
+    Early b = Early.make(x: -5);             // -5 + 9 = 4
+    int32 f = match (Fal.make(n: 6)) { case Ok(value: v): v.get(); case Err(error: e): 0; };
+    Handle h = Handle.open(raw: 9);          // 10
+    return r.get() + a.sum() + b.sum() + f + h.get();   // 7 + 3 + 4 + 6 + 10 = 30
+}

@@ -996,6 +996,12 @@ private:
     bool               _inUnsafe = false;             // inside an `unsafe { }` block
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
+    // A `ctor` names the value it is building with `this`, but a ctor is a static factory with no `self`
+    // PARAMETER — so the storage is synthesized at ctor entry and `self` points at it. Set the moment the
+    // body first mentions `this` (explicitly, or implicitly through a bare field name), which is what
+    // decides whether that prologue is emitted at all: the field-default fill can CALL a field's `default`
+    // ctor, so emitting it for a ctor that never names `this` would construct a whole object for nothing.
+    bool               _ctorSelfUsed = false;
 
     void line(int srcLine);                          // emit a #line directive
     void indent(int depth);
@@ -1432,6 +1438,13 @@ private:
                               SharedParameterList params, SharedBlock body,
                               ClassInfo& owner, bool isConstMethod = false,
                               bool isStatic = false);
+    // Bring zero-inited storage of class `ty` (named `nm` in C) up to a valid empty state — field
+    // initializers, each field's `default` ctor, and the vtable pointer. Shared by the bare class-local
+    // declaration path and by a `ctor`'s implicit `this` storage, which must agree exactly.
+    void emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth);
+    // `this` in a ctor is `self`, a `T*`. True where the destination wants the `T` BY VALUE (a return temp,
+    // a variant payload) and the pointer must therefore be dereferenced.
+    bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;
     std::string emitMemberAccess(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
