@@ -17,6 +17,45 @@
 #include "kama.diagnostic.h"   // structured Diagnostic accumulated by unsupported() (query surface)
 #include "kama.query.h"        // LSP query surface: SrcRange / DefSite / PosEntry / SymbolInfo / Location
 
+// ---------------------------------------------------------------------------------------------
+// INHERITANCE — a build-time feature switch, not a runtime one.
+//
+//     make                      # inheritance in
+//     make KAMA_INHERITANCE=0   # a compiler built without it
+//
+// Two purposes, and only a preprocessor gate serves either:
+//
+//   1. ISOLATE THE SIZE DELTA. "What does inheritance cost the compiler?" is answerable only by
+//      building the compiler both ways and subtracting. A runtime flag leaves every byte in place.
+//   2. BE THE EXTRACTION POINT. kama is still deciding whether to keep inheritance at all
+//      (docs/design/inheritance.md). If the answer becomes no, the `#if KAMA_INHERITANCE` blocks ARE
+//      the deletion list — mechanical, complete, and already proven to compile without their contents.
+//
+// Purpose 2 is why the gate must stay honest: `tools/check-no-inheritance.sh` builds the KAMA_INHERITANCE=0
+// compiler and exercises it, because an untested build variant rots within weeks.
+//
+// SCOPE: the emitter only. The grammar still PARSES `extends`/`virtual`/`base` in an inheritance-free
+// build and the emitter answers with a real diagnostic, rather than the syntax error that removing the
+// productions would give. That is also where the bytes are — the parser tables are generated either way,
+// so gating the grammar would buy almost no delta for real bison risk (every `_opt` rule must set `$$`).
+// Removing the grammar later is 5 tokens, 3 productions and 3 AST node types.
+#ifndef KAMA_INHERITANCE
+#define KAMA_INHERITANCE 1
+#endif
+
+// How many `extends` hops a class may sit below its root. A class AT the limit must be written `final`
+// — the compiler could infer that at depth 1 and deliberately does not, so a user meets the limit as an
+// intentional marker on the type they are writing rather than as a surprise the first time they try to
+// extend it once more.
+//
+// 1 is a starting point, not a claim that 2 is wrong: the failure modes are asymmetric. Too strict pushes
+// a middle layer into COMPOSITION, which is the outcome this design wants anyway; too loose grows the deep
+// hierarchies the restriction exists to prevent. Too strict fails toward the goal.
+#ifndef KAMA_INHERIT_DEPTH
+#define KAMA_INHERIT_DEPTH 1
+#endif
+// ---------------------------------------------------------------------------------------------
+
 // A function parameter, in declared order. Named kama arguments are matched
 // against these to recover C's positional order at each call site.
 struct ParamSig {
@@ -412,13 +451,6 @@ public:
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
 
-    // `--inherit-depth=N` / kama.json `"inheritDepth"`: how many `extends` hops a class may sit below its
-    // root. **0 bans inheritance outright** — no `extends`, and no `virtual`/`abstract` either, since a
-    // `virtual class` with no subclass still emits a vtable and would leave the "off means no inheritance
-    // machinery at all" claim false. `final` stays legal at 0: it seals, it does not extend. Default 1
-    // (a root plus a `final` leaf). Set from the driver before emission; gated in `linkBases` and in the
-    // class/method modifier checks.
-    void setInheritDepth(int n) { _inheritDepth = n; }
 
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
     // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
@@ -862,7 +894,6 @@ private:
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
     bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
-    int                                       _inheritDepth  = 1;        // `--inherit-depth=N`: `extends` hops below a root (0 = off)
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
@@ -1686,7 +1717,9 @@ private:
     std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line);
     bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
     void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
-    void rejectIfNoInherit(const char* what, int line);                 // the ONE gate for `--inherit-depth=0`
+#if !KAMA_INHERITANCE
+    void rejectInheritance(const char* what, int line);                 // the ONE gate for KAMA_INHERITANCE=0
+#endif
 
     // Multi-file: collect a whole program, then emit declarations (shared
     // header) and definitions (per module) separately.

@@ -17,6 +17,25 @@ CXXFLAGS += $(EXTRA_CXXFLAGS)
 PLATFORM ?= $(shell uname -s)-$(shell uname -m)
 BUILD     = build/$(PLATFORM)
 
+# Inheritance is a BUILD-TIME feature switch on the compiler, not a runtime flag (docs/SPEC.md,
+# docs/design/inheritance.md). Two purposes: isolate what the feature costs the compiler — answerable only
+# by building both ways and subtracting — and be the extraction point if inheritance is ever dropped, since
+# the `#if KAMA_INHERITANCE` blocks are then the deletion list.
+#
+#   make                        # inheritance in
+#   make KAMA_INHERITANCE=0     # a compiler without it, into build/<platform>-noinherit
+#   make KAMA_INHERIT_DEPTH=2   # allow one middle layer (a root + 2 derived levels)
+#
+# The no-inheritance build gets its OWN directory: objects compiled under different macro values must never
+# mix, and sharing build/<platform> would silently do exactly that (make sees the .o as up to date).
+# `tools/check-no-inheritance.sh` builds it and proves the variant still works.
+KAMA_INHERITANCE   ?= 1
+KAMA_INHERIT_DEPTH ?= 1
+CXXFLAGS += -DKAMA_INHERITANCE=$(KAMA_INHERITANCE) -DKAMA_INHERIT_DEPTH=$(KAMA_INHERIT_DEPTH)
+ifeq ($(KAMA_INHERITANCE),0)
+BUILD = build/$(PLATFORM)-noinherit
+endif
+
 # The grammar uses %code/api.pure full, which need bison >= 2.7. macOS ships
 # 2.3, so prefer a Homebrew keg-only bison when present.
 BISON = $(shell [ -x /opt/homebrew/opt/bison/bin/bison ] && echo /opt/homebrew/opt/bison/bin/bison || ([ -x /usr/local/opt/bison/bin/bison ] && echo /usr/local/opt/bison/bin/bison || echo bison))

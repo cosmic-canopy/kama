@@ -50,7 +50,7 @@ makes "one value per ctor" unrepresentable rather than merely rejected — and n
 side of this shipped already — `T.default()`, `5edb4d9`.)*
 
 **⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
-campaign shipped the switch (`--inherit-depth`), the depth cap, the `final` rule, no-public-widening, the
+campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule, no-public-widening, the
 `base.` visibility fix, the shadowing ban and both diagnostics. What remains is **hole 1: a derived type
 never runs its base's constructor**, so a base's invariants are unenforceable for its subclasses — and
 not only the ctor, a base's *field defaults* do not reach a derived instance either. Its repro is parked

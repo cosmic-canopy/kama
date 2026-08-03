@@ -1,8 +1,9 @@
 // Virtual dispatch across the full inheritance depth the language allows: Base <- Leaf, the leaf
 // overriding a protected virtual hook and composing its parent through base.step().
 //
-// This was a THREE-level chain until `--inherit-depth` landed with a default of 1. It only ever tested
-// the vtable MECHANISM, not a design — a middle layer is exactly what the cap pushes into composition —
+// This was a THREE-level chain until the inheritance depth cap landed (KAMA_INHERIT_DEPTH, default 1).
+// It only ever tested the vtable MECHANISM, not a design — a middle layer is what the cap pushes into
+// composition —
 // and the mechanism is unchanged: a `ref Base` still dispatches to the most-derived override, and
 // `base.step()` still reaches the parent implementation non-virtually. The rejected three-level form is
 // pinned by tests/xfail/inherit_depth_exceeded.

@@ -3,7 +3,7 @@
 //
 // ⚠️ This used to isolate devirtualization trigger 2 (`mi->isFinal`) from triggers 1 (`final` receiver
 // class) and 3 (nobody overrides the slot), with a NON-final `virtual resource Mid` in the middle. The
-// inheritance depth cap makes that shape unrepresentable — at `--inherit-depth=1` a deriving type is
+// inheritance depth cap makes that shape unrepresentable — at KAMA_INHERIT_DEPTH=1 a deriving type is
 // `final`, so trigger 1 always fires first (emitDispatch short-circuits left to right). Trigger 2 is
 // therefore no longer reachable as the SOLE reason to devirtualize, which makes `final` on a METHOD
 // close to redundant at depth 1; see docs/design/inheritance.md. The fixture still pins that

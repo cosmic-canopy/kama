@@ -1520,6 +1520,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return emitMemberAccess(v);
     }
 
+#if KAMA_INHERITANCE
     if (auto* ba = dynamic_cast<BaseAccessNode*>(n)) {
         // base.field (bare; base.method(...) is handled in emitInvocation).
         std::string name = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
@@ -1541,6 +1542,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          + "'").c_str(), ba->line);
         return name;
     }
+#endif
 
     if (auto* v = dynamic_cast<ObjectCreationNode*>(n)) {
         // `new T(...)` is supported only as a local-variable initializer
@@ -4348,12 +4350,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
             }
-        // `--inherit-depth=0`: no `extends`, and no `virtual`/`abstract` either — a `virtual class` with no
-        // subclass still emits a vtable, so banning only `extends` would leave inheritance machinery in
-        // the output of a build that asked for none.
-        if (!ci.baseName.empty())   rejectIfNoInherit("`extends`", cd->line);
-        if (ci.isAbstractClass)     rejectIfNoInherit("an `abstract class`", cd->line);
-        else if (ci.isVirtualClass) rejectIfNoInherit("a `virtual class`", cd->line);
+#if !KAMA_INHERITANCE
+        // A `virtual class` goes too, not just `extends` — it carries a vtable with or without a subclass,
+        // so rejecting only `extends` would leave the machinery this build exists to remove.
+        if (!ci.baseName.empty())   rejectInheritance("`extends`", cd->line);
+        if (ci.isAbstractClass)     rejectInheritance("an `abstract class`", cd->line);
+        else if (ci.isVirtualClass) rejectInheritance("a `virtual class`", cd->line);
+#endif
         // A plain `value`/`resource` type is sealed: only virtual/abstract/final classes may extend a base.
         // (The base must itself be extensible — checked in linkBases once names resolve.)
         if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
@@ -4563,9 +4566,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         if (mi.isVirtual) {
                             const std::string& mname = *md->name->value;
                             const char* kw = mi.isAbstract ? "abstract" : mi.isOverride ? "override" : "virtual";
-                            // `--inherit-depth=0`: an overridable method is a vtable slot, so it goes too.
-                            rejectIfNoInherit((std::string(mi.isVirtual && !mi.isAbstract && !mi.isOverride ? "a `" : "an `")
+#if !KAMA_INHERITANCE
+                            // An overridable method is a vtable slot, so it goes too.
+                            rejectInheritance((std::string(mi.isVirtual && !mi.isAbstract && !mi.isOverride ? "a `" : "an `")
                                                + kw + "` method").c_str(), md->line);
+#endif
                             // (3) an overridable method is written `protected` (never public/private):
                             //     a private virtual can't be overridden, a public one is the interface's job.
                             if (mi.visibility != Visibility::Protected)
@@ -7809,8 +7814,10 @@ void CEmitter::linkBases()
         // (its `node` is the template's, whose refs still name the raw param `T`) — don't re-resolve here.
         if (ci.isGenericInst) continue;
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+#if KAMA_INHERITANCE
         if (ci.node && ci.node->baseTypes && ci.node->baseTypes->base && ci.node->baseTypes->base->value)
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
+#endif
         // resolve each interface name; a generic-contract `implements Iterator<int32>` resolves to the
         // specialized instance name (`Iterator_int32`) — its genericArgs live on the AST node, which
         // ci.interfaces (a plain name list) dropped, so read them back in parallel.
@@ -7824,6 +7831,7 @@ void CEmitter::linkBases()
             ci.interfaces[i] = base;
         }
     }
+#if KAMA_INHERITANCE
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.baseName.empty()) continue;
@@ -7850,42 +7858,39 @@ void CEmitter::linkBases()
             if (b == &kv.second || ++hops > 1000) { kv.second.base = nullptr; kv.second.baseName.clear(); break; }
         }
     }
-    // `--inherit-depth=N` (default 1): how many `extends` hops a class may sit below its root. Walked
-    // AFTER the cycle break, so the loop is guaranteed to terminate. Depth 0 was already rejected at the
-    // declaration (rejectIfNoInherit), which reports the far better message, so only N >= 1 reaches here.
-    //
-    // 1 is the deliberate starting point, not a guess at the right number. Real designs do want a middle
-    // layer (Widget -> Control -> Button), but the failure modes are asymmetric: a cap that is too strict
-    // pushes the middle layer into COMPOSITION, which is the outcome this design wants anyway, while a cap
-    // that is too loose grows deep hierarchies, which is the thing being prevented. Too strict fails
-    // toward the goal. And a restriction is cheap to lift and expensive to add.
-    if (_inheritDepth >= 1)
+    // KAMA_INHERIT_DEPTH (default 1): how many `extends` hops a class may sit below its root. Walked
+    // AFTER the cycle break, so the loop is guaranteed to terminate.
+    {
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.isGenericInst || !ci.base) continue;
             int hops = 0;
             for (ClassInfo* b = ci.base; b; b = b->base) ++hops;
             int line = ci.node ? ci.node->line : 0;
-            if (hops > _inheritDepth) {
+            if (hops > KAMA_INHERIT_DEPTH) {
                 unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which already extends '"
                              + (ci.base->base ? ci.base->base->name : std::string("a base"))
-                             + "' — the inheritance depth limit is " + std::to_string(_inheritDepth)
-                             + " (`--inherit-depth`). For a middle layer, compose the base rather than "
-                               "extending it.").c_str(), line);
+                             + "' — the inheritance depth limit is " + std::to_string(KAMA_INHERIT_DEPTH)
+                             + ". For a middle layer, compose the base rather than extending it.").c_str(),
+                            line);
                 continue;   // already over the line; don't also demand `final` of it
             }
             // A class AT the limit is a leaf by arithmetic — nothing may extend it and stay in bounds. It
-            // must still be WRITTEN `final` rather than have that inferred: the constraint is then taught
-            // at the point of use instead of surfacing later as a puzzling rejection of a subclass, and
-            // lifting the cap later cannot silently change what existing code means (a type that opted
-            // into being a leaf stays one). Below the limit, `virtual`/`abstract` remains legal — that is
-            // the middle layer a higher `--inherit-depth` buys.
-            if (hops == _inheritDepth && !ci.isFinalClass)
+            // must still be WRITTEN `final`, and the compiler deliberately does not infer that: the point
+            // is that a user meets the limit as an INTENTIONAL, VISIBLE marker on the type they are
+            // writing, rather than being surprised by it later the first time they try to extend that
+            // type once more. Below the limit `virtual`/`abstract` remains legal — that is the middle
+            // layer a higher KAMA_INHERIT_DEPTH buys.
+            if (hops == KAMA_INHERIT_DEPTH && !ci.isFinalClass)
                 unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', so it is a leaf — declare "
-                             "it `type final resource " + ci.name + "`. At `--inherit-depth="
-                             + std::to_string(_inheritDepth) + "` nothing may extend a type this deep; for "
-                             "a middle layer, compose the base rather than extending it.").c_str(), line);
+                             "it `type final resource " + ci.name + "`. The inheritance depth limit is "
+                             + std::to_string(KAMA_INHERIT_DEPTH) + ", so nothing may extend a type this "
+                             "deep; writing `final` is how you see that here rather than discovering it "
+                             "later. For a middle layer, compose the base rather than extending it.").c_str(),
+                            line);
         }
+    }
+#endif   // KAMA_INHERITANCE
 }
 
 // A derived type may NOT widen the hierarchy's public interface (decision A, docs/design/inheritance.md).
@@ -7899,6 +7904,7 @@ void CEmitter::linkBases()
 // name, which compiles today and hands the world a hook the base deliberately kept internal.
 //
 // Runs after linkBases (bases + interfaces resolved) and before buildVtables.
+#if KAMA_INHERITANCE
 void CEmitter::checkDerivedPublicSurface()
 {
     for (auto& kv : _classes) {
@@ -7931,6 +7937,9 @@ void CEmitter::checkDerivedPublicSurface()
         }
     }
 }
+#else
+void CEmitter::checkDerivedPublicSurface() {}
+#endif
 
 // Classes in base-before-derived order.
 std::vector<ClassInfo*> CEmitter::topoOrderClasses()
@@ -8038,6 +8047,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
 }
 
 // Build the per-class virtual slot tables and the per-root vtable union.
+#if KAMA_INHERITANCE
 void CEmitter::buildVtables()
 {
     for (ClassInfo* ci : topoOrderClasses()) {
@@ -8131,6 +8141,9 @@ void CEmitter::buildVtables()
             if (mkv.second.isOverride)
                 _overriddenSlots.insert(std::make_pair(kv.second.vtableRoot, mkv.first));
 }
+#else
+void CEmitter::buildVtables() {}
+#endif
 
 // A class is destructible if it declares a dtor, has a destructible field, OR
 // its base is destructible (transitive). Fixed-point — cycle-safe.
@@ -8738,6 +8751,7 @@ std::string CEmitter::ptrLocalElemType(SharedExpression e)
 
 // Is `base` reachable by walking `derived`'s single-inheritance chain (inclusive)? Used to admit a
 // `Derived -> ref Base` upcast while rejecting an unrelated `ref` (e.g. borrowing through a `Weak`).
+#if KAMA_INHERITANCE
 bool CEmitter::isBaseOf(const std::string& base, const std::string& derived) const
 {
     auto it = _classes.find(derived);
@@ -8745,6 +8759,9 @@ bool CEmitter::isBaseOf(const std::string& base, const std::string& derived) con
         if (c->name == base) return true;
     return false;
 }
+#else
+bool CEmitter::isBaseOf(const std::string&, const std::string&) const { return false; }
+#endif
 
 // If `cls` implements the prelude `HeapOwner<T>` contract, return the owned element `T` (so `new T(args)`
 // placement-constructs into `cls` via `cls::adopt(Ptr<T>)`); "" otherwise. The element is the contract
@@ -8807,19 +8824,27 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
 }
 
 // "__base." repeated for each hop from `from` down to ancestor `to` ("" if equal).
+#if KAMA_INHERITANCE
 std::string CEmitter::basePathTo(ClassInfo* from, ClassInfo* to)
 {
     std::string path;
     for (ClassInfo* c = from; c && c != to; c = c->base) path += "__base.";
     return path;
 }
+#else
+std::string CEmitter::basePathTo(ClassInfo*, ClassInfo*) { return ""; }
+#endif
 
+#if KAMA_INHERITANCE
 std::string CEmitter::vptrPrefix(ClassInfo* ci)
 {
     if (!ci || ci->vtableRoot.empty()) return "";
     auto it = _classes.find(ci->vtableRoot);
     return (it != _classes.end()) ? basePathTo(ci, &it->second) : "";
 }
+#else
+std::string CEmitter::vptrPrefix(ClassInfo*) { return ""; }
+#endif
 
 bool CEmitter::isExtern(FunctionDeclarationNode* fn)
 {
@@ -11469,6 +11494,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     return emitDotOnTypeCtorCall(call, ma, dotType);
                 return emitMethodCall(call, ma);
             }
+#if KAMA_INHERITANCE
             if (auto* ba = dynamic_cast<BaseAccessNode*>(call->expression.get())) {
                 // base.m(args) -> direct (non-virtual) call into the base.
                 if (!_currentClass) {
@@ -11498,6 +11524,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 std::string self = "(" + owner->name + "*)&self->__base";
                 return emitReorderedCall(mi->cName, self, mi->params, call->args, call->line);
             }
+#endif
         }
         unsupported("indirect call", call->line);
         return "0";
@@ -11917,20 +11944,19 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
                  "with no dynamic growth").c_str(), line);
 }
 
-// The ONE gate for `--inherit-depth=0` / kama.json `"inheritDepth": 0` — inheritance disabled outright.
-// Every surface that would emit or require vtable machinery funnels through here (`extends`, a
-// `virtual`/`abstract` class, a `virtual`/`override`/`abstract` method), so "off" means the emitter has
-// no inheritance path left to take rather than merely no `extends` to read. `final` does NOT come here:
-// it seals a type, it does not extend one, and a `final class`/`final fn` is meaningful with no
-// hierarchy at all. `what` names the construct. The DEPTH check for a non-zero limit is a different
-// question and lives in linkBases, where bases are resolved and a chain can be walked.
-void CEmitter::rejectIfNoInherit(const char* what, int line)
+#if !KAMA_INHERITANCE
+// The ONE gate for a `KAMA_INHERITANCE=0` compiler. Every surface that would need vtable machinery
+// funnels through here (`extends`, a `virtual`/`abstract` class, a `virtual`/`override`/`abstract`
+// method), so the rest of the emitter's inheritance code can be compiled out entirely: nothing
+// downstream is reachable once these are rejected. `final` does NOT come here — it seals a type, it does
+// not extend one, and `final class`/`final fn` is meaningful with no hierarchy at all.
+void CEmitter::rejectInheritance(const char* what, int line)
 {
-    if (_inheritDepth != 0) return;
-    unsupported((std::string(what) + " requires inheritance, which is disabled for this build "
-                 "(`--inherit-depth=0`); compose the type instead, or declare a `contract` for "
+    unsupported((std::string(what) + " needs inheritance, and this kama was built without it "
+                 "(`KAMA_INHERITANCE=0`); compose the type instead, or declare a `contract` for "
                  "polymorphism").c_str(), line);
 }
+#endif
 
 void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride)
 {
@@ -12105,7 +12131,10 @@ void CEmitter::emitStruct(ClassInfo& ci)
     }
     if (ci.base) {
         indent(1);
+#if KAMA_INHERITANCE
         *_out << ci.baseName << " __base;\n";
+#endif
+
         hasMember = true;
     }
     for (auto& f : ci.fields) {
@@ -12160,6 +12189,7 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
 }
 
 // "(Owner* self, T a, U b)" — the C signature of a vtable slot.
+#if KAMA_INHERITANCE
 std::string CEmitter::vtableSlotSig(const VSlot& s)
 {
     std::string sig = "(" + s.owner + "* self";
@@ -12171,9 +12201,13 @@ std::string CEmitter::vtableSlotSig(const VSlot& s)
     }
     return sig + ")";
 }
+#else
+std::string CEmitter::vtableSlotSig(const VSlot&) { return ""; }
+#endif
 
 // Vtable struct TYPE — one per root (the class that first introduces a virtual).
 // Lists every slot in the hierarchy; fn-ptr self type is pinned to the slot owner.
+#if KAMA_INHERITANCE
 void CEmitter::emitVtableType(ClassInfo& ci)
 {
     auto it = _rootVtables.find(ci.name);
@@ -12189,6 +12223,9 @@ void CEmitter::emitVtableType(ClassInfo& ci)
     indent(1); *_out << "void (*__dtor)(void*);\n";
     *_out << "};\n\n";
 }
+#else
+void CEmitter::emitVtableType(ClassInfo&) {}
+#endif
 
 // The vtable INSTANCE per class with a vtable, filled with the most-derived impl visible to this class
 // (designated initializers; missing slots zero). ONE definition, in the class's home module — with
@@ -12196,6 +12233,7 @@ void CEmitter::emitVtableType(ClassInfo& ci)
 // address when it moves a polymorphic element by value. Its `extern` declaration is emitted in
 // emitHeaderContent, and the two must agree (a `static` definition after a non-static declaration is
 // an error), so neither may grow an exclusion the other lacks.
+#if KAMA_INHERITANCE
 void CEmitter::emitVtableInstance(ClassInfo& ci)
 {
     if (!ci.hasVtable) return;
@@ -12220,6 +12258,9 @@ void CEmitter::emitVtableInstance(ClassInfo& ci)
     // since `static` cannot resolve across units). It is now defined in the header next to its prototype;
     // see emitClassPrototypes.
 }
+#else
+void CEmitter::emitVtableInstance(ClassInfo&) {}
+#endif
 
 // ---- Interfaces -----------------------------------------------------
 
@@ -12396,6 +12437,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
     if (ci.destructible)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
+#if KAMA_INHERITANCE
     if (ci.hasVtable) {
         // Virtual drop: read the runtime vtable off the object's vptr and call its `__dtor`. A base handle
         // (`Shared<Base>`) drops through this so a Derived's full chain runs even though the static type is
@@ -12411,6 +12453,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         indent(1); *_out << "if (__vt && __vt->__dtor) __vt->__dtor(self);\n";
         *_out << "}\n";
     }
+#endif
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
@@ -12501,11 +12544,13 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
             *_out << cit->second.name << "__dtor(&self->" << it->name << ");\n";
         }
     }
+#if KAMA_INHERITANCE
     // Base destructor LAST.
     if (ci.base && ci.base->destructible) {
         indent(1);
         *_out << ci.baseName << "__dtor(&self->__base);\n";
     }
+#endif
     *_out << "}\n\n";
 
     _scopes.clear();
@@ -14090,6 +14135,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     // it) so a generic instance's call collapses onto the template's one declaration.
     recordNodeRef(site, mi->node);
 
+#if KAMA_INHERITANCE
     if (mi->isVirtual) {
         // Devirtualize when the concrete target is unique for every possible dynamic type: a
         // `final` receiver class (no subclass), a `final` method (unoverridable), or a virtual
@@ -14110,6 +14156,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             return emitReorderedCall(vptr + "->" + method, self, mi->params, args, srcLine);
         }
     }
+#endif
     // Static call; upcast self to the declaring class (offset-0 valid). Also the devirtualized path.
     std::string self = "(" + owner->name + "*)" + recvPtr;
     return emitReorderedCall(mi->cName, self, mi->params, args, srcLine);
@@ -15673,8 +15720,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             continue;
         }
         *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
+#if KAMA_INHERITANCE
         if (ci->hasVtable && ci->vtableRoot == ci->name)
             *_out << "typedef struct " << ci->name << "_vtable " << ci->name << "_vtable;\n";
+#endif
     }
     for (auto& kv : _interfaces) {
         *_out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
@@ -15738,7 +15787,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             emitGenericTypeInst(_genericTypeInsts[ci->name], /*phase=*/0);   // body-only (forward split out)
         } else {
             scopeOf(ci->scope, ci->usings, ci->symbolAliases);
+#if KAMA_INHERITANCE
             if (ci->hasVtable && ci->vtableRoot == ci->name) emitVtableType(*ci);
+#endif
+
             emitStruct(*ci);   // dispatches to emitVariantStruct for a union
         }
     }
@@ -15760,6 +15812,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         }
     }
 
+#if KAMA_INHERITANCE
     // Forward-declare each CLASS vtable instance, for the same reason as the `C__as_I` block above and
     // one order-of-emission step further: a generic collection's `_FUNCS` body (emitted just below, from
     // `emitCollectionDefs`) stores `&C__vtable` when it moves a polymorphic element BY VALUE — but the
@@ -15772,6 +15825,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (!ci->hasVtable || !_rootVtables.count(ci->vtableRoot)) continue;   // mirrors emitVtableInstance
         *_out << "extern const " << ci->vtableRoot << "_vtable " << ci->name << "__vtable;\n";
     }
+#endif
 
     // Element destructor prototypes the collection/smart-pointer macros call, then the
     // macros themselves, then class prototypes — so a method (or any class member)
@@ -16119,8 +16173,11 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         _out = svd;
     }
     // vtable instances + interface vtables first (referenced by ctor bodies).
+#if KAMA_INHERITANCE
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitVtableInstance(*ci);
+#endif
+
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitClassInterfaceVtables(*ci);
     // class definitions, then free-function definitions.

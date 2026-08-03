@@ -144,11 +144,24 @@ subclass re-publishing a protected seam, which compiles today) becomes impossibl
 ⚠️ **Constructors must be exempt** — a derived type needs its own public `ctor` (`RawChannel.open(…)`), and
 construction is not part of the substitutable surface. Do not let the rule swallow them.
 
-### B. Exactly ONE level — a deriving type must be `final`
+### B. Exactly ONE level — a deriving type must be `final` ✅ SHIPPED
 
 `extends` implies a leaf. `virtual`/`abstract` become legal only on a **root**. The author must still
-*write* `final` rather than have it inferred: it teaches the constraint at the point of use, and it leaves
-room to lift the restriction later without changing the meaning of existing code.
+*write* `final` rather than have it inferred — and the reason is the user's, worth stating in their terms
+(2026-08-02): **`final` is an early, visible, INTENTIONAL trigger.** You meet the hard limit while writing
+the type that reaches it, instead of being surprised by an error later, the first time you try to extend
+that type once more. Inference would move the discovery to the wrong place.
+
+**As shipped, the rule generalizes to the limit rather than hard-coding 1.** `KAMA_INHERIT_DEPTH` counts
+`extends` edges from a root; a class *at* the limit must be `final`, and a class *below* it may still be
+`virtual`/`abstract`. So raising the constant to 2 moves the `final` requirement down to the second
+derived level and legalizes exactly one middle layer — verified:
+
+| | depth 1 | depth 2 |
+| --- | --- | --- |
+| `Widget` (root, 0 hops) | `virtual` | `virtual` |
+| `Control extends Widget` (1 hop) | must be `final` | may be `virtual` — the middle layer |
+| `Button extends Control` (2 hops) | rejected: too deep | must be `final` |
 
 ⚠️ `tests/vtable_depth3.kama` is a three-level chain and becomes illegal — it must be restructured or
 retired, and it is the only multi-level fixture in the tree.
@@ -167,7 +180,8 @@ the only multi-level fixture in the tree tests the vtable mechanism, not a real 
 
 **Make the diagnostic teach the alternative**, or the cap just reads as arbitrary — something like
 *"a deriving type is `final`; for a middle layer, compose the base rather than extending it."* If a real
-design later proves depth is needed, lifting the cap to 2 breaks no existing code.
+design later proves depth is needed, lifting the cap to 2 breaks no existing code — a `final` leaf stays a
+legal `final` leaf, it simply stops being required to be one at that level.
 
 *(kama already brakes depth harder than any mainstream language: a type must declare `virtual`/`abstract`
 to be extended AT ALL, so every level is an explicit opt-in. C++/Java/C# all default to extensible. The cap
@@ -175,60 +189,71 @@ is an additional brake on top of that, not the only one.)*
 
 ### C. A switch, so kama can be built without inheritance ✅ SHIPPED
 
-**One knob, not two mechanisms** (user, 2026-08-02): `--inherit-depth=N` / kama.json `"inheritDepth"`,
-default **1**, **0 = inheritance off entirely**. It covers both this decision and decision B, and raising
-the cap to 2 later is a config change rather than a compiler change.
+**A build-time `#if` on the compiler, exactly as briefed.**
 
-The originally-briefed shape — a C-preprocessor `#if` so the *compiler* could be built without the
-feature — was **not** taken. It buys only the compiler-size number, and it buys it with `#ifdef`s threaded
-through `kama.cemit.cpp`, the same soup rejected for platform variance. The number was measured directly
-instead (below), which costs nothing to carry.
+```sh
+make                      # inheritance in
+make KAMA_INHERITANCE=0   # a compiler built without it
+```
 
-At depth 0 the gate rejects `extends`, a `virtual`/`abstract` **class**, and a `virtual`/`override`/
-`abstract` **method** — all four, not just `extends`, because a `virtual class` with no subclass still
-emits a vtable and would leave "no inheritance machinery in the output" false. `final` stays legal: it
-seals a type, it does not extend one. One choke point, `CEmitter::rejectIfNoInherit`, mirroring
-`rejectIfNoHeap`.
+⚠️ **This was got wrong once and corrected (user, 2026-08-02).** A runtime knob shipped first —
+`--inherit-depth=N` / kama.json `"inheritDepth"`, with 0 meaning off — and it served *neither* purpose of
+this decision. A flag cannot produce a size delta, because every byte is still in the binary; and it is
+not an extraction point, because nothing about it tells you what to delete. The knob was reverted whole:
+there is **no** way for a program or a project to turn inheritance off, and there should not be, because
+neither purpose is about end users. `KAMA_INHERIT_DEPTH` became a compile-time constant beside the switch.
+
+Scope is the **emitter only**. The grammar still parses `extends`/`virtual`/`base` in an inheritance-free
+build and the emitter answers with a real diagnostic — better than the syntax error that gating the
+grammar would give, and worth almost nothing in bytes, since the parser tables are generated either way.
+Removing the grammar later is 5 tokens, 3 productions and 3 AST node types. One choke point,
+`CEmitter::rejectInheritance`, mirroring `rejectIfNoHeap`; everything downstream is then unreachable,
+which is what lets the rest be compiled out entirely.
+
+`tools/check-no-inheritance.sh` builds the variant and exercises it. That guard is the point, not a
+nicety: **an untested build variant rots within weeks, and a rotted extraction point is worse than none,
+because it looks like an option and isn't.** It asserts the variant builds warning-clean, rejects all four
+surfaces with its own diagnostic (not a parse error), and still *runs* a contract/generic program to the
+right answer — compiling is not enough, since the gate sits beside the contract vtable machinery.
 
 #### Measured cost (2026-08-02)
 
-| what | cost |
-| --- | ---: |
-| emitted program that uses no inheritance — bytes attributable to the feature | **0** |
-| the compiler's dedicated inheritance/vtable emitter functions | **11,121 bytes** |
+Same tree, same compiler, same flags — only `KAMA_INHERITANCE` differs:
 
-**The emitted-program number is 0 and always was.** The prediction held exactly: a program that uses no
-inheritance never emitted vtable machinery in the first place, so turning the feature off cannot shrink
-it. `tools/check-inherit-cost.sh` now pins this — same source, same flags, only the depth differs, and
-the binaries must match to the byte. ⚠️ It also asserts the program still emits **contract** vtables
-(`_vtbl`), because a fat pointer needs one; without that half, the check would pass on an empty file.
+| | with | without | delta |
+| --- | ---: | ---: | ---: |
+| **`.text`** (machine code) | 3,844,930 | 3,810,682 | **34,248 B** |
+| stripped binary | 3,937,264 | 3,871,728 | 65,536 B |
+| unstripped (`-g`) | 17,129,704 | 16,978,128 | 151,576 B |
 
-**The compiler number is a lower bound**, and deliberately so — it is the summed `.text` of the functions
-that exist *only* for inheritance (`linkBases` 3352, `buildVtables` 2120, `vtableSlotSig` 976,
-`emitVtableInstance` 828, `emitVtableType` 628, `vptrPrefix` 456, `topoOrderClasses` 380+lambdas,
-`basePathTo` 260, `isBaseOf` 252). It does **not** count the inheritance branches inlined through
-`emitStruct`, `emitDispatch`, `canAccess` and the class collector, which cannot be attributed without
-deleting them.
+**`.text` is the honest number: ~34 KB, about 0.9% of the compiler.** The stripped delta is larger only
+because of section padding, and the `-g` delta is mostly debug info for the removed code.
 
-**So size is not the argument either way.** 11 KB in a 17 MB compiler, and nothing at all in user
-programs — the real cost of inheritance is the six holes above and the design surface they came from,
-not bytes. The knob's value is the *experiment* it enables, which is below.
+And in **emitted programs: 0 bytes.** A program that uses no inheritance never emitted vtable machinery in
+the first place, so removing the feature cannot shrink it — contracts keep their own vtables regardless,
+because a fat pointer needs one.
+
+**So size is not the argument either way.** 34 KB in a 3.8 MB compiler, and nothing at all in user
+programs. The real cost of inheritance is the six holes above and the design surface they came from. What
+the switch is genuinely for is purpose 2 — a mechanical, tested extraction point — and the experiment
+below.
 
 #### The corpus as "pure kama" (2026-08-02)
 
-Every single-file fixture, built with `--inherit-depth=0`:
+Every single-file fixture, checked with a real `KAMA_INHERITANCE=0` compiler:
 
 | | |
 | --- | ---: |
-| compile with inheritance **off** | **549** |
-| require inheritance | **13** |
+| compile with inheritance **compiled out** | **549** |
+| require inheritance | **15** |
 
-And the 13 are *exactly* the 13 that exist to test inheritance — `devirt_final_class`,
-`devirt_final_method`, `devirt_no_override`, `inherit_dtor`, `inherit_field`, `new_ret_upcast`,
-`poly_in_collection`, `upcast_new_base`, `upcast_shared_base`, `virtual_ref`, `virtual_this`,
-`vtable_default_ctor`, `vtable_depth2`. **Zero collateral.** Nothing in the prelude, the stdlib, or any
-other feature's fixtures reaches for it, which is the same fact the 0-`extends`/340-`implements` table at
-the top of this file reports, now confirmed by the compiler rather than by grep.
+And the 15 are *exactly* the 15 that exist to test inheritance — `devirt_final_class`,
+`devirt_final_method`, `devirt_no_override`, `inherit_abstract_base`, `inherit_dtor`, `inherit_field`,
+`inherit_private_name_reuse`, `new_ret_upcast`, `poly_in_collection`, `upcast_new_base`,
+`upcast_shared_base`, `virtual_ref`, `virtual_this`, `vtable_default_ctor`, `vtable_depth2`.
+**Zero collateral.** Nothing in the prelude, the stdlib, or any other feature's fixtures reaches for it,
+which is the same fact the 0-`extends`/340-`implements` table at the top of this file reports, now
+confirmed by a compiler that physically cannot compile inheritance rather than by grep.
 
 ⚠️ **Read this as "the feature is unexercised", not "the feature is unnecessary".** The corpus is
 kama's own code, and kama's own code is systems-level — it was never the constituency for `virtual`. The
@@ -253,8 +278,8 @@ wants without breaking anything that exists.
 | item | status |
 | ---: | --- |
 | **4** polymorphic type by value in a generic collection | ✅ shipped `0f8b2a9` — vtable instances gained external linkage + a header forward declaration, beside the `C__as_I` block that already needed it. Fixture `tests/poly_in_collection`. |
-| **C** the switch | ✅ shipped — `--inherit-depth=N` / `"inheritDepth"`, one gate (`rejectIfNoInherit`), guard `tools/check-inherit-cost.sh`, cost measured above. |
-| **B** depth cap + `final` | ✅ shipped — both walked in `linkBases`; `tests/vtable_depth3` restructured to `vtable_depth2`; rejections pinned by `tests/xfail/inherit_depth_exceeded` + `tests/xfail/deriving_type_not_final`. |
+| **C** the switch | ✅ shipped — `make KAMA_INHERITANCE=0`, one gate (`rejectInheritance`), guard `tools/check-no-inheritance.sh`, cost measured above. ⚠️ A runtime flag shipped first and was reverted whole: it served neither purpose. |
+| **B** depth cap + `final` | ✅ shipped — both walked in `linkBases` against the compile-time `KAMA_INHERIT_DEPTH` (1 = a root plus ONE derived level; raising it moves the `final` requirement down to the new deepest level); `tests/vtable_depth3` restructured to `vtable_depth2`; rejections pinned by `tests/xfail/inherit_depth_exceeded` + `tests/xfail/deriving_type_not_final`. |
 | **A** no public widening | ✅ shipped — `checkDerivedPublicSurface`, ctors exempt, plus the `implements` half (contracts belong on the root). Pinned by `tests/xfail/derived_widens_public` (the `Exposer` leak) + `tests/xfail/derived_implements_contract`. |
 | **2** `base.` bypasses `canAccess` | ✅ shipped — one `canAccess` on the base-method path; `_currentClass` is the derived type there, so the existing rule is exactly right. Pinned by `tests/xfail/base_bypasses_private`. |
 | **3** shadowing | ✅ shipped — in `buildVtables`, which already walks the chain. Private-name reuse stays legal and is pinned by `tests/inherit_private_name_reuse`. |

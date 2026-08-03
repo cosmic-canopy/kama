@@ -1637,40 +1637,48 @@ its base.
 on the base, so allowing it would widen the surface through a door the rule never looked at. If a
 hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance.
 
-### Depth — `--inherit-depth` ✅
+### Depth — exactly one level ✅
 
-A hierarchy is **one level deep by default**: a root, and leaves that extend it. A deriving type must be
-written **`final`** — the compiler could infer it at depth 1, and deliberately does not, because writing
-it teaches the constraint at the point of use and means raising the cap later cannot silently change what
-existing code means. `Widget -> Control -> Button` — a middle layer that both adds state and declares
-seams for its own extenders — is rejected, and becomes composition instead.
+A hierarchy is **one level deep**: a root, and leaves that extend it. A deriving type must be written
+**`final`**. The compiler could infer that — nothing may extend it anyway — and deliberately does not:
+`final` is an early, visible, *intentional* marker that you have reached the hard limit, so you meet it
+while writing the type rather than being surprised by it later, the first time you try to extend that
+type once more.
+
+`Widget -> Control -> Button` — a middle layer that both adds state and declares seams for its own
+extenders — is rejected, and becomes composition instead:
 
 ```
-'Button' extends 'Control', which already extends 'Widget' — the inheritance depth limit is 1
-(`--inherit-depth`). For a middle layer, compose the base rather than extending it.
+'Button' extends 'Control', which already extends 'Widget' — the inheritance depth limit is 1.
+For a middle layer, compose the base rather than extending it.
 ```
 
-1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric: a cap that is too
-strict pushes the middle layer into composition, which is the outcome this design wants anyway, while a cap
-that is too loose grows the deep hierarchies the restriction exists to prevent. Too strict fails *toward*
-the goal — and a restriction is cheap to lift and expensive to add.
+1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric: too strict pushes
+the middle layer into composition, which is the outcome this design wants anyway; too loose grows the deep
+hierarchies the restriction exists to prevent. Too strict fails *toward* the goal — and a restriction is
+cheap to lift and expensive to add.
 
-The limit is a project setting, so raising it needs no source change:
+The limit is `KAMA_INHERIT_DEPTH` in `kama.cemit.h`, a **compile-time constant of the compiler**, not a
+per-project setting. It is a property of the language, not of a build.
 
-```jsonc
-{ "inheritDepth": 2 }     // kama.json — this project's limit
-```
+### Building kama without inheritance — `KAMA_INHERITANCE=0` ✅
+
 ```sh
-kama build app.kama --inherit-depth=2   # per-build; an explicit flag outranks the manifest
-kama build app.kama --inherit-depth=0   # inheritance OFF: no `extends`, no `virtual`/`abstract`
+make                      # inheritance in
+make KAMA_INHERITANCE=0   # a compiler built without it
 ```
 
-**`--inherit-depth=0` disables inheritance outright** — `extends`, a `virtual`/`abstract` class, and a
-`virtual`/`override`/`abstract` method are all rejected, since a `virtual class` with no subclass still
-carries a vtable. `final` stays legal (it seals a type; it does not extend one), and **contracts are
-untouched** — they are the intended way to express polymorphism, and they keep their own vtables. A program
-that uses no inheritance emits byte-identical output at either setting: turning the feature off costs
-nothing because a program that never used it never paid.
+This is a **build-time switch on the compiler itself**, and it is not exposed to programs — there is no
+flag or manifest key that turns inheritance off for a project. It exists for kama's own development, for
+two reasons: to isolate what the feature costs the compiler (answerable only by building both ways and
+subtracting), and to be the **extraction point** if inheritance is dropped — the `#if KAMA_INHERITANCE`
+blocks are then the deletion list, already proven to compile without their contents.
+
+Such a compiler rejects `extends`, a `virtual`/`abstract` class, and a `virtual`/`override`/`abstract`
+method — all four, since a `virtual class` with no subclass still carries a vtable. `final` stays legal
+(it seals a type; it does not extend one), and **contracts are untouched**: they are the intended way to
+express polymorphism and keep their own vtables. The grammar still parses `extends`, so you get a real
+diagnostic rather than a syntax error. `tools/check-no-inheritance.sh` builds the variant and exercises it.
 
 **Owning a derived through a base handle (upcast).** A `Shared`/`Owned` over a derived class widens to one
 over a base class (or a contract it satisfies) — the IS-A relationship, Liskov-style:

@@ -1,9 +1,9 @@
 // A deriving type must be WRITTEN `final`, not merely be a leaf by arithmetic.
 //
-// At `--inherit-depth=1` nothing may extend `Derived` anyway, so the compiler could infer this. It
-// deliberately does not: writing `final` teaches the constraint at the point of use rather than letting
-// it surface later as a puzzling rejection of a subclass, and it means raising the cap cannot silently
-// change what existing code means — a type that opted into being a leaf stays one.
+// At KAMA_INHERIT_DEPTH=1 nothing may extend `Derived` anyway, so the compiler could infer this. It
+// deliberately does not: `final` is an EARLY, VISIBLE, INTENTIONAL marker that you have reached the hard
+// limit, so you meet it while writing the type rather than being surprised by it later, the first time
+// you try to extend that type once more.
 type virtual resource Base
 {
     public ctor make() { slot Base r; return give r; }

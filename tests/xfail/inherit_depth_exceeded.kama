@@ -4,7 +4,7 @@
 // 1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric — a cap that is
 // too strict pushes the middle layer into composition, which is what this design wants anyway, while a
 // cap that is too loose grows the deep hierarchies the restriction exists to prevent. A project that
-// proves it needs depth raises `--inherit-depth` / kama.json `"inheritDepth"` without any source change;
+// proves it needs depth raises KAMA_INHERIT_DEPTH (kama.cemit.h) and rebuilds the compiler;
 // tests/vtable_depth2 is the accepted form.
 type virtual resource Widget
 {

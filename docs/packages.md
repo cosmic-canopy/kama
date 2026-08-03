@@ -449,24 +449,6 @@ a cross target at their own sysroot without editing the committed file.
 The **`toolchain`** field is read by the PATH selector and overrides the committed pin locally (see
 below).
 
-## Language settings — `inheritDepth`
-
-```json
-{ "inheritDepth": 1 }
-```
-
-How deep `extends` may go in this project: **1 by default** (a root plus a leaf), and **0 disables
-inheritance outright**. It is a *language* setting rather than a build-configuration flag — it describes
-what the source may say, not which target it is built for — so it is a plain manifest field, not a
-`select` group, and it derives no `@compileFor` flag.
-
-`--inherit-depth=N` on the command line overrides it, in both directions: a one-off check of whether a
-project still compiles with inheritance off should not need an edit to a committed file. A
-`kama.local.json` sibling may also set it, and wins over `kama.json` like every other field there.
-
-Full semantics — what depth 0 rejects, and why the default is 1 — are in
-[SPEC.md](SPEC.md#depth----inherit-depth-).
-
 ## Toolchain versions
 
 kama is its own version manager — there's no `nvm`/`pyenv`/`rustup` to wrap around it. Each
