@@ -153,6 +153,26 @@ room to lift the restriction later without changing the meaning of existing code
 ⚠️ `tests/vtable_depth3.kama` is a three-level chain and becomes illegal — it must be restructured or
 retired, and it is the only multi-level fixture in the tree.
 
+**Why 1 and not 2 or 3 — the depth question was reopened and settled the same way (2026-08-02).** Real
+patterns do want a middle layer: `Widget -> Control -> Button` is the archetype, where `Control` adds state
+AND declares seams for its own extenders. A cap of 1 blocks that. It is still the right starting point,
+because the failure modes are **asymmetric**:
+
+- cap too strict -> the middle layer becomes **composition** -> which is the outcome this design wants
+- cap too loose -> deep hierarchies appear -> the anti-pattern the whole campaign exists to prevent
+
+Too-strict fails *toward* the goal; too-loose fails *away* from it. And a restriction is cheap to lift and
+expensive to add, so 1 is the version that cannot be regretted. There is also **zero demonstrated demand**:
+the only multi-level fixture in the tree tests the vtable mechanism, not a real design.
+
+**Make the diagnostic teach the alternative**, or the cap just reads as arbitrary — something like
+*"a deriving type is `final`; for a middle layer, compose the base rather than extending it."* If a real
+design later proves depth is needed, lifting the cap to 2 breaks no existing code.
+
+*(kama already brakes depth harder than any mainstream language: a type must declare `virtual`/`abstract`
+to be extended AT ALL, so every level is an explicit opt-in. C++/Java/C# all default to extensible. The cap
+is an additional brake on top of that, not the only one.)*
+
 ### C. Gate inheritance behind a compiler `#if`, so kama can be built without it
 
 Two purposes: **(1)** run the whole corpus as "pure kama" with no inheritance at all, to see what actually
