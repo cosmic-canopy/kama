@@ -8074,9 +8074,15 @@ void CEmitter::buildVtables()
         //
         // ⚠️ Reusing a name that is PRIVATE in the base stays legal, and must: that is not shadowing at
         // all. The base's member is invisible to the derived type, so the two names are unrelated and
-        // each type sees its own. `canAccess` is the existing predicate for "would the derived type even
-        // see this", so it decides here too — and a `friend` grant cannot open a back door, because
-        // visibility is what is asked, not friendship.
+        // each type sees its own.
+        //
+        // ⚠️⚠️ The test below asks the base member's VISIBILITY DIRECTLY, and must NOT be "tidied up" into
+        // a `canAccess` call, which is the obvious-looking refactor. `canAccess` answers "may this
+        // context REACH that member", and a `friend` grant makes it true — so a base that befriended its
+        // subclass would turn the subclass's own same-named private helper into a shadowing error.
+        // Friendship grants ACCESS; it does not merge namespaces. The question here is narrower: is the
+        // base's member part of the derived type's inherited surface at all? Only visibility answers that.
+        // Pinned by tests/inherit_private_name_reuse, which includes the `friend` case.
         for (auto& kv : ci->methods) {
             MethodInfo& mi = kv.second;
             const std::string& mname = kv.first;

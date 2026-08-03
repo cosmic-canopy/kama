@@ -2,36 +2,48 @@
 //
 // It is not shadowing: the base's member is invisible to the derived type, so the two names are
 // unrelated and each type sees its own. The shadowing rule (tests/xfail/derived_shadows_base_method)
-// asks `canAccess` — "would the derived type even see this?" — so a private base member never triggers
-// it, and a `friend` grant cannot open a back door either, because visibility is what is asked, not
-// friendship.
+// asks the base member's VISIBILITY, so a private base member never triggers it.
 //
 // Both a private FIELD and a private METHOD, since the two resolve through different paths
 // (findFieldOwner vs findMethod).
 //
+// ⚠️ `Base` also BEFRIENDS `Leaf` for `helper`, and that is the point of this fixture rather than a
+// flourish. A `friend` grant makes `canAccess(Base::helper)` true from inside `Leaf` — so if the
+// shadowing rule were ever "tidied up" from a visibility test into a `canAccess` call (the
+// obvious-looking refactor), THIS program would start failing: a base that befriended its subclass
+// would turn the subclass's own same-named private helper into a shadowing error. Friendship grants
+// ACCESS; it does not merge namespaces.
+//
 // ⚠️ `Base.n` is set through a protected setter rather than a field default, because a base's field
-// DEFAULTS DO NOT REACH A DERIVED INSTANCE — `Base.make()` yields 10 while `Leaf.make()` yields 0 for
+// initializers do not reach a derived instance — `Base.make()` yields 10 while `Leaf.make()` yields 0 for
 // the same field. That is hole 1 (a derived type never runs its base's constructor), still open; see
 // docs/design/inheritance.md. Written this way so this fixture pins name resolution and nothing else.
 type virtual resource Base
 {
     int32 n;                                          // private to Base
-    fn int32 helper() { return this.n; }              // private to Base
-    public ctor make() { slot Base r; r.n = 10; return give r; }
+    friend Leaf[helper];                              // Leaf MAY reach Base::helper — and still has its own
+    fn int32 helper() { return this.n; }              // private to Base; reads BASE's n
+    public ctor make() { slot Base r; r.n = 5; return give r; }
     protected fn void setN(int32 v) { this.n = v; }
     public fn int32 rank() { return this.baseSide() + this.derivedSide(); }
-    protected fn int32 baseSide() { return this.helper(); }        // Base's n via Base's helper -> 10
+    protected fn int32 baseSide() { return this.helper(); }        // inside Base: Base's helper -> 5
     protected virtual fn int32 derivedSide() { return 0; }
 }
 type final resource Leaf extends Base
 {
     int32 n;                                          // its OWN n — unrelated to Base's
     fn int32 helper() { return this.n * 2; }          // its OWN helper — unrelated to Base's
-    public ctor make() { slot Leaf r; r.setN(v: 10); r.n = 3; return give r; }
-    protected override fn int32 derivedSide() { return this.helper(); }   // resolves to Leaf's -> 6
+    public ctor make() { slot Leaf r; r.setN(v: 5); r.n = 3; return give r; }
+    // `this.` and `base.` are how you say WHICH one — nearest wins for `this.`, and there is no
+    // ambiguity to report, because the two names were never related in the first place.
+    protected override fn int32 derivedSide()
+    {
+        return this.helper()      // Leaf's  -> 3 * 2 = 6
+             + base.helper();     // Base's  -> 5      (reachable ONLY because of the friend grant)
+    }
 }
 fn int main()
 {
     Leaf l = Leaf.make();
-    return l.rank();   // Base's helper 10 + Leaf's helper 6 = 16
+    return l.rank();   // baseSide 5 + derivedSide (6 + 5) = 16
 }

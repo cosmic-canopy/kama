@@ -14,17 +14,25 @@
 // the base's member is invisible to the derived type, so the two names are unrelated and each type sees
 // its own. tests/inherit_private_name_reuse pins that it stays legal.
 //
-// (Decision A subsumes the PUBLIC case — a derived type may not add public methods either way — so `h`
-// is `protected` here, to test the shadowing rule itself rather than the widening rule.)
+// ⚠️ Decision A does NOT subsume the public case, though it looks like it should. A rejects a public
+// method the base does NOT have ("may not widen the public interface") and deliberately steps aside when
+// the name DOES exist on the base — widening and redefining are different questions. So a public method
+// shadowing a public base method is caught HERE, by this rule, and both visibilities are covered below:
+//
+//   new public name        -> decision A          (tests/xfail/derived_widens_public)
+//   existing name          -> this rule           (public `h` and protected `g` below)
+//   name private in base   -> legal               (tests/inherit_private_name_reuse)
+//   `override` of a seam   -> legal               (tests/vtable_depth2)
 type virtual resource B {
     public ctor make() { slot B r; return give r; }
-    public fn int32 rank() { return this.h() + this.t(); }
-    protected fn int32 h() { return 1; }              // NOT virtual — no seam was offered
+    public fn int32 h() { return 1; }                 // public, NOT virtual — no seam was offered
+    protected fn int32 g() { return 1; }              // protected, NOT virtual
     protected virtual fn int32 t() { return 1; }
 }
 type final resource D extends B {
     public ctor make() { slot D r; return give r; }
-    protected fn int32 h() { return 2; }              // ERROR: shadows B.h(), which is not overridable
+    public fn int32 h() { return 2; }                 // ERROR: shadows B.h(), which is not overridable
+    protected fn int32 g() { return 2; }              // ERROR: same, at protected
     protected override fn int32 t() { return 2; }
 }
-fn int main() { D d = D.make(); return d.rank(); }
+fn int main() { D d = D.make(); return d.h(); }

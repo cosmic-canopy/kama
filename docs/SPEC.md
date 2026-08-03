@@ -1596,11 +1596,15 @@ A derived type may not redeclare a method it inherits. The only way to redefine 
 what is overridable, which is what `protected` + `virtual`/`abstract` is for.
 
 ```kama
-type virtual resource B { protected fn int32 h() { return 1; } }   // no seam offered
+type virtual resource B { public fn int32 h() { return 1; } }   // no seam offered
 type final resource D extends B {
-    protected fn int32 h() { return 2; }        // ✗ shadows B.h() — which body runs would depend
-}                                               //   on the STATIC type of the receiver
+    public fn int32 h() { return 2; }        // ✗ shadows B.h() — which body runs would depend
+}                                            //   on the STATIC type of the receiver
 ```
+
+This holds at **every** visibility, public included. It is a separate rule from *no widening* above, and
+they divide the work rather than overlapping: widening is about a name the base does **not** have,
+shadowing about one it **does**.
 
 kama already rejects `public virtual` because a public override is a footgun; silent shadowing is the same
 footgun with no keyword marking it at all (C# at least demands `new`).

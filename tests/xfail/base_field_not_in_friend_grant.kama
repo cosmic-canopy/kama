@@ -1,0 +1,26 @@
+// A `friend` grant is PER-MEMBER, and `base.` honours it on fields exactly as on methods — for writes
+// as well as reads.
+//
+// `Base` befriends `Leaf` for `helper` only. `Leaf` may therefore call `base.helper()`
+// (tests/inherit_private_name_reuse proves that works), but `base.n` stays private to `Base`: reaching
+// a base's private state is not something a grant of one member hands over wholesale.
+//
+// Both lines below are rejected — the write first, then the read — which is the point: `base.` runs the
+// same visibility check in an assignment target as it does in an expression, so there is no lvalue hole.
+type virtual resource Base {
+    int32 n;
+    friend Leaf[helper];                 // grants ONLY helper — NOT n
+    fn int32 helper() { return this.n; }
+    public ctor make() { slot Base r; r.n = 10; return give r; }
+    public fn int32 rank() { return this.derivedSide(); }
+    protected virtual fn int32 derivedSide() { return 0; }
+}
+type final resource Leaf extends Base {
+    int32 n;
+    public ctor make() { slot Leaf r; r.n = 3; return give r; }
+    protected override fn int32 derivedSide() {
+        base.n = 7;                      // ERROR: 'n' is private in 'Base'
+        return base.n;                   // ERROR: likewise
+    }
+}
+fn int main() { Leaf l = Leaf.make(); return l.rank(); }

@@ -268,7 +268,7 @@ wants without breaking anything that exists.
 | --- | --- |
 | 1. base ctor never runs | **still needed** — and A/B do not touch it |
 | 2. `base.` bypasses `canAccess` | **still needed** |
-| 3. shadowing is legal at any visibility | **largely subsumed by A** — no new public methods means no public shadowing; keep the rule for the private/protected cases |
+| 3. shadowing is legal at any visibility | **still needed at every visibility, including public.** ⚠️ An earlier revision said "largely subsumed by A" — wrong. A rejects a public method the base does NOT have, and deliberately steps aside when the name DOES exist, because widening and redefining are different questions. Public-shadows-public is caught by rule 3 alone |
 | 4. polymorphic class by value in a collection | ✅ **SHIPPED** `0f8b2a9` — independent codegen bug |
 | 5. `base.field` / no-base diagnostics | still needed |
 | 6. `: base(...)` orphaned | still needed |
