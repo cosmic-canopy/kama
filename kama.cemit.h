@@ -827,6 +827,7 @@ private:
     std::string                        _currentFunc;             // C-name of the function/method being emitted (friend match)
     std::string                        _thisType;                // C name `This` resolves to (the class being emitted, or the contract type inside its vtbl slot)
     bool                               _basesLinked = false;     // linkBases() has run, so an empty ClassInfo::baseName means "no base" rather than "not resolved yet"
+    bool                               _inBaseInstall = false;   // emitting the RHS of `this.base = …`: the one place an `abstract` type's ctor may be CALLED
 
     // Virtual dispatch: per-root union of vtable slots, in introduction order.
     struct VSlot { std::string name; std::string owner; ClassMethodDeclarationNode* node; };
@@ -1452,12 +1453,15 @@ private:
     // `moveKey` is the prefix under which the fill seeds per-field MOVE STATE; it defaults to `nm`
     // but differs where the C name differs from the source name (a ctor's storage: `__self` / `this`).
     void emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
-                           const std::string& moveKey = std::string());
+                           const std::string& moveKey = std::string(),
+                           SharedExpression baseInit = SharedExpression());
     // `this` in a ctor is `self`, a `T*`. True where the destination wants the `T` BY VALUE (a return temp,
     // a variant payload) and the pointer must therefore be dereferenced.
     bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;
     std::string emitMemberAccess(MemberAccessNode* ma);
-    void        rejectBaseMember(MemberAccessNode* ma);
+    void             rejectBaseMember(MemberAccessNode* ma);
+    bool             isThisBase(SharedExpression e);
+    SharedExpression baseInstallOf(SharedStatement st);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory

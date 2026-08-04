@@ -1,0 +1,47 @@
+// A derived type runs its base's CONSTRUCTOR — inheritance hole 1.
+//
+// `this.base = Base.<ctor>(…)` installs a base VALUE built by the base's own ctor. It is not delegation:
+// a named ctor is a factory with no `self` to chain into, so the base part is constructed the same way
+// everything else in kama is, and then embedded. It must be the constructor's FIRST statement, so that
+// no inherited member is ever read from a half-built base.
+//
+// Two things were broken here, and they were always one bug:
+//   1. the base's ctor never ran, so `scale` kept the zero-fill instead of the 6 it is passed;
+//   2. the base's field INITIALIZER never applied either, so `n` was 0 rather than 10.
+// Both are fixed by the same install, because `Base.make(…)` builds a real `Base` and its own fill
+// applies `n = 10` before its body sets `scale`.
+//
+// The vtable pointer is the subtle part: `__base` sits at offset 0 and the vptr lives at the chain ROOT,
+// i.e. INSIDE `__base` — so a whole-struct store would clobber it with the base's own vtable. The install
+// is emitted before the field fill, whose vptr store then re-stamps the MOST-DERIVED vtable. `kind()`
+// returning the leaf's answer is what proves that ordering held.
+type virtual resource Base {
+    int32 n = 10;                                   // a field initializer, on the BASE
+    int32 scale;
+
+    public ctor make(int32 scale) { this.scale = scale; }
+
+    protected fn int32 n_() { return this.n; }
+    protected fn int32 scale_() { return this.scale; }
+    protected virtual fn int32 kind() { return 1; }
+
+    public fn int32 total() { return this.n_() + this.scale_() + this.kind(); }
+}
+
+type final resource Leaf extends Base {
+    int32 own;
+
+    public ctor make(int32 own)
+    {
+        this.base = Base.make(scale: 6);            // FIRST — the base's own ctor runs
+        this.own = own;
+    }
+
+    protected override fn int32 kind() { return 100 + this.own; }
+}
+
+fn int main()
+{
+    Leaf l = Leaf.make(own: 5);
+    return l.total();                               // 10 + 6 + (100 + 5) = 121
+}

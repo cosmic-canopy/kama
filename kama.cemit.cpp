@@ -2458,11 +2458,30 @@ bool CEmitter::ctorThisAsValue(SharedExpression e, const std::string& dstCType) 
 }
 
 void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, int lineNo, int depth,
-                                 const std::string& moveKey)
+                                 const std::string& moveKey, SharedExpression baseInit)
 {
     // Move-state keys are spelled the way the SOURCE names the value, which is not always the C name:
     // a ctor's storage is `__self` in C but `this` in kama, and `lvalueMoveKey` keys off the source.
     const std::string& mk = moveKey.empty() ? nm : moveKey;
+#if KAMA_INHERITANCE
+    // `this.base = Base.<ctor>(…)` — the base part is built by the BASE'S OWN constructor and installed
+    // whole. It goes FIRST, and that ordering is the entire answer to the vtable pointer: `__base` sits at
+    // offset 0 and the vptr lives at the chain ROOT, i.e. INSIDE `__base` for a derived type, so a
+    // whole-struct store would clobber it. The vptr store at the end of this function then re-stamps the
+    // most-derived vtable over whatever the base wrote (or, for an `abstract` base, over the zero it left).
+    //
+    // The storage is fresh `{0}`, so there is no old value to drop — which is why this is emitted here
+    // rather than routed through the general assignment path, whose first act would be a `Base__dtor` on
+    // zeroed memory.
+    if (baseInit && _classes[ty].base) {
+        _inBaseInstall = true;                  // lets an `abstract` base's ctor be called HERE and nowhere else
+        std::string rhs = emitExpression(baseInit);
+        _inBaseInstall = false;
+        flushHoisted(depth);                    // emitReorderedCall may have hoisted argument temps
+        line(lineNo); indent(depth);
+        *_out << nm << ".__base = " << rhs << ";\n";
+    }
+#endif
     for (auto& f : _classes[ty].fields) {
         // An inline field initializer (`const int32 kind = 7;`) applies here too, exactly as the
         // instance-ctor path applies it — else a factory-built value loses it (zero instead of 7). #M8d.2
@@ -13031,15 +13050,25 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // already in place. It is written out only if the body actually names `this`: the fill can CALL a
     // field's `default` ctor, so emitting it for a ctor that never names `this` would construct a whole
     // object for nothing. During coexistence most ctors still build a `slot` local and want none of it.
+    // A derived ctor's FIRST statement installs its base (`this.base = Base.<ctor>(…);`). It is lifted
+    // out of the body and into the fill, because that is where it has to happen: before the field
+    // defaults, and before the vptr store that must overwrite whatever vtable the base wrote.
+    SharedExpression baseInit;
+    if (ctorBody && body && body->statements && !body->statements->empty())
+        baseInit = baseInstallOf(body->statements->front());
+
     std::ostringstream ctorPrologue;
     if (ctorBody) {
         std::ostream* sv = _out; _out = &ctorPrologue;
         int ln = body ? body->line : 0;
         indent(1); *_out << owner.name << " __self = {0};\n";
-        emitAggregateFill("__self", owner.name, ln, 1, "this");
+        emitAggregateFill("__self", owner.name, ln, 1, "this", baseInit);
         indent(1); *_out << owner.name << "* self = &__self;\n";
         _out = sv;
         _ctorSelfUsed = false;   // a field initializer naming another field must not count as a use
+        // The storage EXISTS the moment a base is installed into it, even if the body never says `this`
+        // again — otherwise the prologue (and with it the install) is discarded at the flush below.
+        if (baseInit) _ctorSelfUsed = true;
     }
 
     std::ostringstream ctorStmts;
@@ -13048,7 +13077,11 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
     SharedStatement last;
     if (body && body->statements) {
-        for (auto& st : *body->statements) { emitStatement(st, 1); last = st; }
+        bool skipFirst = (baseInit != nullptr);   // already emitted, as part of the fill
+        for (auto& st : *body->statements) {
+            if (skipFirst) { skipFirst = false; last = st; continue; }
+            emitStatement(st, 1); last = st;
+        }
     }
     bool fellOffEnd = !(last && stmtIsJump(last));
     if (fellOffEnd) {
@@ -14519,6 +14552,23 @@ std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpressi
     return isClass(rt) ? rt : "";
 }
 
+// Is `e` the expression `this.base`? (`base` is a keyword, so no field can ever be spelled that way.)
+bool CEmitter::isThisBase(SharedExpression e)
+{
+    auto* ma = dynamic_cast<MemberAccessNode*>(e.get());
+    return ma && ma->identifier && ma->identifier->value && *ma->identifier->value == "base"
+        && dynamic_cast<ThisAccessNode*>(ma->expression.get()) != nullptr;
+}
+
+// `this.base = <expr>;` as a whole statement -> the <expr>. Null for anything else, including a
+// compound assignment (`this.base += …`), which is not an install.
+SharedExpression CEmitter::baseInstallOf(SharedStatement st)
+{
+    auto* as = dynamic_cast<AssignmentNode*>(st.get());
+    if (!as || as->token != EQ || !isThisBase(as->unaryExpression)) return SharedExpression();
+    return as->expression;
+}
+
 // `<expr>.base` reached a position where it means nothing. Three distinct answers, because the three
 // mistakes are different: the type has no base at all, the receiver is not `this`, or it is a READ of a
 // thing that is only ever written. The grammar admits `d.base` deliberately (kama.y `member_access`) so
@@ -15235,7 +15285,12 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // the former is the template key the declaration is registered under. Recorded here rather than in
     // isTypeReceiver, which is a predicate that also runs on non-types.
     recordRef(typeName, dynamic_cast<IdentifierNode*>(recv->expression.get()));
-    if (stci->isAbstractClass) {   // instantiating one leaves a NULL vtable slot
+    // Instantiating an abstract class leaves a NULL vtable slot — EXCEPT in a base install, where the
+    // value never exists as a standalone instance: it is blitted straight into `__base` and the fill's
+    // vptr store stamps the most-derived vtable over it before anything can dispatch. Without this
+    // carve-out an abstract base could only ever be derived from if it had a `default` ctor, which would
+    // make `abstract` and "carries constructor arguments" mutually exclusive for no reason.
+    if (stci->isAbstractClass && !_inBaseInstall) {
         unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
         return "0";
     }
