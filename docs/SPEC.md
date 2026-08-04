@@ -1030,6 +1030,13 @@ carries ownership across into unsafe manual storage. An *unmarked* `slot[i] = x`
 value back *out* is manual (bitwise-copy into a local, take responsibility) — there is no `give`-out of a
 raw slot; a safe `Slot<T>`/`MaybeUninit` wrapper for both directions is a tracked design spike.
 
+That move-out direction has one name: **`std::ptr::relocate(from:, at:, into:)`**, which bitwise-moves
+`from[at]` into an `out` parameter. `std::ptr` is the raw-pointer module, kept apart from `std::memory`
+(the *owning* handles `Owned`/`Shared`/`Weak`) and imported explicitly. The source is left **stale** — the
+bytes are still there — so the caller must vacate it (tombstone the entry, decrement the length) or the
+value is dropped twice. Every container's move-out goes through it, which is what keeps `addr(of: …)` on a
+[`slot`](#uninitialized-storage--slot-) out of the call site.
+
 ### Inline assembly — `asm("...")` ✅
 
 Some operations have **no C-level equivalent**: `wfi`/`wfe` (idle-sleep), `cpsid i`/`cpsie i`

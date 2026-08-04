@@ -75,9 +75,14 @@ type resource Atomic<T> {
     public fn T load() { return this.loadExplicit(order: MemoryOrder::SeqCst); }
     public fn T loadExplicit(MemoryOrder order) {
         slot T result;
-        unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: result)),
-                                  width: sizeof(T), mo: orderBits(o: order)); }
+        this.loadInto(order: order, dst: out result);
         return result;
+    }
+    // The `out` boundary over the type-erased C call: `kama_atomic_load` IS an out-parameter, just spelled
+    // `void*`. Naming it that way is what lets the caller's hole be filled the one way a `slot` allows.
+    fn void loadInto(MemoryOrder order, out T dst) {
+        unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: dst)),
+                                  width: sizeof(T), mo: orderBits(o: order)); }
     }
 
     // Atomically replace the value (seq-cst). `storeExplicit` takes a weaker ordering.
@@ -91,9 +96,12 @@ type resource Atomic<T> {
     public fn T swap(T value) { return this.swapExplicit(value: value, order: MemoryOrder::SeqCst); }
     public fn T swapExplicit(T value, MemoryOrder order) {
         slot T result;
-        unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
-                                  dst: cast<Ptr>(addr(of: result)), width: sizeof(T), mo: orderBits(o: order)); }
+        this.swapInto(value: value, order: order, dst: out result);
         return result;
+    }
+    fn void swapInto(T value, MemoryOrder order, out T dst) {
+        unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
+                                  dst: cast<Ptr>(addr(of: dst)), width: sizeof(T), mo: orderBits(o: order)); }
     }
 
     // Compare-and-swap: if the cell equals `expected`, store `desired` and return true; otherwise write the

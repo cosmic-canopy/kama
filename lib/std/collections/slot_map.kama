@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::ptr::{relocate};
 export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's
@@ -159,8 +160,8 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // vacates it). Bitwise-relocate through raw `Ptr<V>` aliases into a zero-init'd local, then `give` — the
     // move-out idiom `Map.takeVal` / `DynamicArray.takeAt` use.
     fn V takeVal(int32 at) {
-        slot V x; Ptr<V> dst = addr(of: x); Ptr<V> s = this.values;
-        unsafe { dst[0] = s[at]; }
+        slot V x;                                          // the hole `relocate`'s `out` parameter fills
+        relocate(from: this.values, at: at, into: out x);
         return give x;
     }
 

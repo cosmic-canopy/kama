@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::ptr::{relocate};
 export { Deque };
 
 // A by-value iterator (the `foreach (T x in deque)` protocol): yields each element by value, front to back.
@@ -101,10 +102,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     // DynamicArray.remove uses for `d[i] = d[i+1]`. The caller decrements `len` so the stale slot is never
     // dropped again, and `give`s out the returned local (single ownership preserved).
     fn T takeAt(int32 idx) {
-        slot T x;                                              // zero-init owned local (the move-out target)
-        Ptr<T> dst = addr(of: x);
-        Ptr<T> d = this.data;
-        unsafe { dst[0] = d[idx]; }                       // raw bitwise move out of the slot (untracked)
+        slot T x;                                              // the hole `relocate`'s `out` parameter fills
+        relocate(from: this.data, at: idx, into: out x);
         return give x;
     }
 

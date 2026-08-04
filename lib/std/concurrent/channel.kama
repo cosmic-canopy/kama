@@ -66,6 +66,13 @@ type resource Sender<T> {
         return SendResult::Undelivered(item: give item);
     }
 
+    // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
+    // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
+    // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
+    fn int32 tryPopInto(out T item) {
+        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item))); }
+    }
+
     // Close the sender side. If this is the LAST live endpoint, the queue is now quiescent (the receiver
     // is already gone and no further send can enqueue), so we DRAIN any items still buffered — relocating
     // each into a local so its `~dtor` runs exactly once — before freeing the queue. This is the M8
@@ -75,12 +82,10 @@ type resource Sender<T> {
             if (kama_channel_close_sender(ch: this.handle) != 0) {
                 bool more = true;
                 while (more) {
-                    unsafe {
-                        slot T item;
-                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item)));
-                        if (got == 0) { more = false; }   // ring empty: `item` is zero → its drop is a no-op
-                    }                                     // got != 0: `item` owns a buffered element, dropped here
-                }
+                    slot T item;
+                    if (this.tryPopInto(item: out item) == 0) { more = false; }   // ring empty: `item` is
+                }                                     // zero, its drop a no-op. Otherwise it owns a buffered
+                                                      // element and is dropped at the end of this iteration.
                 kama_channel_free(ch: this.handle);
             }
         }
@@ -96,12 +101,22 @@ type resource Receiver<T> {
     // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
     // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
     public fn Optional<T> recv() {
-        unsafe {
-            slot T dst;
-            int32 r = kama_channel_recv(ch: this.handle, dst: cast<Ptr>(addr(of: dst)));
-            if (r == 0) { return Optional::Some(value: give dst); }   // `give` suppresses dst's drop (moved into Some)
-        }
-        return Optional::None;                                  // out was untouched (zero) → its drop is a no-op
+        slot T dst;
+        int32 r = this.recvInto(dst: out dst);
+        if (r == 0) { return Optional::Some(value: give dst); }   // `give` suppresses dst's drop (moved into Some)
+        return Optional::None;                            // dst was untouched (zero) → its drop is a no-op
+    }
+
+    // The `out` boundary over the type-erased C call — the blocking sibling of `tryPopInto`.
+    fn int32 recvInto(out T dst) {
+        unsafe { return kama_channel_recv(ch: this.handle, dst: cast<Ptr>(addr(of: dst))); }
+    }
+
+    // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
+    // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
+    // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
+    fn int32 tryPopInto(out T item) {
+        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item))); }
     }
 
     // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the
@@ -111,12 +126,10 @@ type resource Receiver<T> {
             if (kama_channel_close_receiver(ch: this.handle) != 0) {
                 bool more = true;
                 while (more) {
-                    unsafe {
-                        slot T item;
-                        int32 got = kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item)));
-                        if (got == 0) { more = false; }   // ring empty: `item` is zero → its drop is a no-op
-                    }                                     // got != 0: `item` owns a buffered element, dropped here
-                }
+                    slot T item;
+                    if (this.tryPopInto(item: out item) == 0) { more = false; }   // ring empty: `item` is
+                }                                     // zero, its drop a no-op. Otherwise it owns a buffered
+                                                      // element and is dropped at the end of this iteration.
                 kama_channel_free(ch: this.handle);
             }
         }

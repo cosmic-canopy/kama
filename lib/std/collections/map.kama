@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::ptr::{relocate};
 export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
@@ -308,10 +309,8 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // `Ptr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
     // never dropped again — the same move-out idiom as `Deque.takeAt`.
     fn V takeVal(int32 at) {
-        slot V x;                                          // zero-init owned local (the move-out target)
-        Ptr<V> dst = addr(of: x);
-        Ptr<V> s = this.vals;
-        unsafe { dst[0] = s[at]; }                  // raw bitwise move out of the slot (untracked)
+        slot V x;                                          // the hole `relocate`'s `out` parameter fills
+        relocate(from: this.vals, at: at, into: out x);
         return give x;
     }
 

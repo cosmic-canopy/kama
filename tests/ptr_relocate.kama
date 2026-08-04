@@ -1,0 +1,30 @@
+// `std::ptr::relocate` — the bitwise move-out of raw storage, behind an `out` parameter. It replaces the
+// open-coded `slot T x; Ptr<T> d = addr(of: x); unsafe { d[0] = src[i]; }` that four collections carried,
+// which was the only fill a `slot` had that was neither an assignment nor an `out` argument.
+//
+// The source slot is left STALE — the bytes are still there — so the caller must vacate it or the value
+// gets dropped twice. Here the buffer is raw storage nothing owns, so there is nothing to vacate: the
+// relocated value is the sole owner and its drop is the only one.
+import std::ptr::{relocate};
+import std::collections::{DynamicArray};
+
+static int32 drops = 0;
+
+type resource Tag {
+    int32 id = -1;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 get() { return this.id; }
+    ~Tag() { drops = drops + 1; }
+}
+
+fn int32 main() {
+    // A DynamicArray whose element is moved OUT through `remove` — the path that goes via `takeAt`,
+    // which is now `relocate` behind an `out`.
+    DynamicArray<Tag> a = DynamicArray.empty();
+    a.add(item: Tag.make(id: 10));
+    a.add(item: Tag.make(id: 32));
+    Tag t = a.remove(index: 1);            // relocated out; the stale slot is vacated by `len`
+    int32 v = t.get();                     // 32
+    if (a.length() != 1 || drops != 0) { return 1; }   // nothing dropped yet — one in the array, one held
+    return v + a[0].get();                 // 32 + 10 = 42
+}

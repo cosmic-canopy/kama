@@ -6336,7 +6336,14 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 {
     if (!t) return false;
     if (t->builtInVal != IDENTIFIER_NONE_VAL) return true;   // primitive
-    if (t->genericArg) return false;                          // List<…>/Shared<…> arg
+    // A generic type argument (`DynamicArray<int32>`, `Shared<Node>`) is concrete exactly when it has
+    // already been REGISTERED as an instance — then it names a real struct and can be mangled into an
+    // instantiation key. An unregistered one is either still parameterized (an argument that is itself a
+    // bare type-param) or a type this program never builds, and neither can be specialized against.
+    if (t->genericArg) {
+        std::string m = mangleElem(t);
+        return _classes.count(m) || _genericTypeInsts.count(m) || _collections.count(m);
+    }
     if (!t->value) return false;
     std::string m = resolveUserName(*t->value, t->qualifier);
     return _classes.count(m) || _enums.count(m) || _interfaces.count(m);
@@ -6836,6 +6843,18 @@ void CEmitter::registerInstGenerics()
             if (sit == _classes.end()) continue;
             auto cit = _genericTypeCtx.find(gi.templateKey);
             _nsCtx = (cit != _genericTypeCtx.end()) ? cit->second : savedCtx;
+            // Skip an instance whose own arguments are not concrete. `_genericTypeInsts` can hold a
+            // partially-resolved registration whose argument is still a bare type-parameter name
+            // (`DynamicArray_K`, seen from inside `SortedMap<K,V>`); binding `T -> K` would substitute one
+            // unresolvable name for another and report the inference failure this pass exists to prevent.
+            // Such an instance is never emitted, so there is nothing in it to discover. A nested generic
+            // (`List<int32>`) and a const argument are both concrete for this purpose.
+            bool bogus = false;
+            for (size_t i = 0; i < pit->second.size() && i < gi.typeArgs.size(); ++i) {
+                SharedIdentifier a = gi.typeArgs[i];
+                if (a && a->value && !a->genericArg && !a->constArgValue && !isConcreteTypeArg(a)) bogus = true;
+            }
+            if (bogus) continue;
             _typeSubst.clear();
             for (size_t i = 0; i < pit->second.size() && i < gi.typeArgs.size(); ++i)
                 if (gi.typeArgs[i]) _typeSubst[pit->second[i]] = gi.typeArgs[i];
@@ -12757,6 +12776,12 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _refParams.clear();
     _paramNames.clear();
     _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
+    // Per-BODY analysis state, reset here for the same reason the two paths above reset it: a destructor
+    // body is a function body like any other, and inheriting the previously-emitted function's move
+    // analysis makes a local's state depend on emission order. It went unnoticed while no destructor
+    // happened to reuse a name another body had left moved-from.
+    _moveState.clear();
+    _slotLocals.clear(); _slotDeclared.clear();
     _currentReturnCType = "void";
     _tempCounter = 0;
     _scopes.clear();

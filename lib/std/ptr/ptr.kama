@@ -1,0 +1,24 @@
+namespace std::ptr;
+
+// Raw pointer operations — the unsafe half of memory handling, kept apart from `std::memory`, which is the
+// OWNING half (`Owned`/`Shared`/`Weak`). A `Ptr<T>` names storage nobody owns and nothing tracks, so
+// everything here is a manual move: the compiler will not drop what these functions leave behind, and it is
+// the caller's job to make sure the source is never dropped again.
+//
+// This module exists so that a container's move-out no longer needs `addr(of: <a slot>)` at the call site.
+// That was the one fill a `slot` had that was neither an assignment nor an `out` argument, and open-coding
+// it four times put a raw bitwise relocate in four places where a reader had to re-derive the invariant.
+// Behind an `out` parameter the same operation states it: the callee fills the hole, and the caller's
+// declaration reads as what it is.
+export { relocate };
+
+// Move `from[at]` OUT of raw storage into `into`, bitwise. The source slot is left STALE — it still holds
+// the bytes, so the caller must vacate it (tombstone the entry, decrement the length) or the value will be
+// dropped twice. `into` is an `out` parameter, so the caller declares a `slot` and the fill is proven here.
+fn void relocate<T>(Ptr<T> from, int32 at, out T into) {
+    debugAssert(cond: from != null, msg: "relocate: null source buffer");
+    unsafe {
+        Ptr<T> d = addr(of: into);
+        d[0] = from[at];
+    }
+}
