@@ -1,0 +1,32 @@
+// `Base` names the enclosing type's base, exactly as `This` names the enclosing type. A derived author
+// therefore never spells the concrete base type name, so renaming the base cannot break its subclasses —
+// which is the point, since `this.base = Base.<ctor>(…)` would otherwise hard-code it in every derived ctor.
+//
+// Both positions are exercised here, because they resolve through different funnels: `Base` as a TYPE
+// (the parameter, the local) goes through cType, while `Base.make()` is an EXPRESSION RECEIVER and goes
+// through resolveUserName. One arm in resolveUserNameImpl serves both.
+type virtual resource Animal {
+    public ctor make() { }
+    protected virtual fn int32 own() { return 0; }
+    public fn int32 legs() { return 4; }
+    public fn int32 total() { return this.own(); }      // the public surface lives on the base
+}
+
+type final resource Dog extends Animal {
+    public ctor make() { }
+
+    // `Base` in TYPE position. Private, so the no-public-widening rule does not apply.
+    private fn int32 legsOf(ref Base b) { return b.legs(); }
+
+    protected override fn int32 own()
+    {
+        Base a = Base.make();                  // `Base` as a declared type AND as a ctor receiver
+        return this.legsOf(b: a) + 3;
+    }
+}
+
+fn int main()
+{
+    Dog d = Dog.make();
+    return d.total();                          // 4 + 3
+}

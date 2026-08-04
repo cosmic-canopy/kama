@@ -331,6 +331,20 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
         std::string cand = u + "__" + value;
         if (known(cand)) return cand;
     }
+    // `Base` names the enclosing type's base, as `This` names the enclosing type — so a derived author
+    // never spells the concrete base name and `this.base = Base.make(…)` survives a rename of it.
+    // Resolved HERE rather than in `cType` because `This` is only ever a TYPE, while `Base.make(…)` is
+    // also an expression receiver; `resolveUserName` is the one funnel both go through (and it
+    // `recordRef`s, so the query index gets the reference for free).
+    //
+    // LAST, deliberately: a real type named `Base` wins. `This` can afford to shadow unconditionally
+    // because nobody names a type `This`, but `Base` is an ordinary name — four fixtures in this repo
+    // declare one, and stealing it would be a language-wide tax to save a derived author one identifier.
+    // Where the two would disagree, `checkBaseInstall` catches it as a type mismatch.
+    if ((!qualifier || qualifier->empty()) && value == "Base" && !_thisType.empty()) {
+        auto it = _classes.find(_thisType);
+        if (it != _classes.end() && !it->second.baseName.empty()) return it->second.baseName;
+    }
     return value;   // builtin/forward/unresolved — caller handles
 }
 
@@ -568,7 +582,9 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (!t || !t->value) return;
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
         // cType would reject it here for the wrong reason. It is always valid where the grammar allows it.
-        if (*t->value == "This") return;
+        // `Base` is resolved against that type's BASE, so it is not on the stack here either; a `Base` in
+        // a type that has none is still caught, just later, where the enclosing type is known.
+        if (*t->value == "This" || *t->value == "Base") return;
         if (tp.count(*t->value)) return;
         checkTypeResolves(t, cType(t), what, t->line);
     };
@@ -713,6 +729,29 @@ std::string CEmitter::cType(SharedIdentifier type)
         if (_currentClass)      return _currentClass->name;
         unsupported("`This` (the self-type) is only valid inside a `type` or `contract`", type->line);
         return "void";
+    }
+    // `Base` is `This`'s companion — the enclosing type's BASE. resolveUserNameImpl does the resolving;
+    // this arm exists only to answer the two ways it can have nothing to resolve to. Without it the
+    // name would flow on as the literal "Base" and be diagnosed as an unknown type, or (since the
+    // signature pre-pass has to skip it) not at all.
+    if (type->value && *type->value == "Base" && !type->genericArg) {
+        // Ask the resolver, which tries a REAL type named `Base` first and falls back to the alias.
+        std::string r = resolveUserNameImpl("Base", type->qualifier);
+        if (_classes.count(r) || _enums.count(r) || _interfaces.count(r)) return r;
+        // Nothing to resolve to. `baseName` is populated by linkBases(), which runs AFTER signatures are
+        // collected — so before that, "nothing" means "not linked yet" and diagnosing would reject every
+        // legal `Base` in a signature. After linking it means what it says.
+        if (_basesLinked) {
+            ClassInfo* encl = !_thisType.empty() && _classes.count(_thisType) ? &_classes[_thisType]
+                                                                              : _currentClass;
+            if (!encl)
+                unsupported("`Base` (the base type) is only valid inside a `type` that declares "
+                            "`extends …`", type->line);
+            else
+                unsupported(("'" + encl->name + "' has no base class, so `Base` names nothing "
+                             "(only a type declared `extends …` has one)").c_str(), type->line);
+            return "void";
+        }
     }
     // FFI: a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
     // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
@@ -7999,6 +8038,8 @@ void CEmitter::linkContracts()
 
 void CEmitter::linkBases()
 {
+    _basesLinked = true;   // from here on, an empty `baseName` means "no base", not "not resolved yet"
+
     // Now every file's declarations are registered: resolve each class's base +
     // interface references (bare/qualified) to their mangled names, in the
     // class's own namespace context.
