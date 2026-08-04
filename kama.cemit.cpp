@@ -4480,6 +4480,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (mv == "abstract") ci.isAbstractClass = true;
                 else if (mv == "virtual")  ci.isVirtualClass = true;
                 else if (mv == "final")    ci.isFinalClass = true;
+                if ((mv == "abstract" || mv == "virtual") && mod->args) ci.maxDepth = readMaxDepth(mod, cd->line);
                 else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
@@ -8132,36 +8133,48 @@ void CEmitter::linkBases()
             if (b == &kv.second || ++hops > 1000) { kv.second.base = nullptr; kv.second.baseName.clear(); break; }
         }
     }
-    // KAMA_INHERIT_DEPTH (default 1): how many `extends` hops a class may sit below its root. Walked
-    // AFTER the cycle break, so the loop is guaranteed to terminate.
+    // THE DEPTH BUDGET. A `virtual`/`abstract class` must state how many levels may still be added below
+    // it — `virtual(maxDepth: 2)` — and a deriving type must state its own, which may be AT MOST one less,
+    // or be `final` (which IS a budget of 0). Chain length is therefore bounded by the root's budget by
+    // construction, so no hop-count arithmetic is needed: one rule, checked where it is written.
+    //
+    // The point is that the limit is visible at the moment a designer OPTS IN to extensibility, instead of
+    // arriving as a surprise when a third level is refused — by which time the design has been built
+    // around an assumption the language was never going to honour. Inheritance is deliberately nerfed
+    // here (it is a footgun more often than a tool, and mainstream hierarchies rarely exceed three
+    // levels); a budget that must be written down is how that nerf announces itself.
+    //
+    // "At most one less" rather than "exactly one less" so the number carries information: a middle layer
+    // may shorten a chain its root left open. `final` is the only spelling for 0.
     {
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
-            if (ci.isGenericInst || !ci.base) continue;
-            int hops = 0;
-            for (ClassInfo* b = ci.base; b; b = b->base) ++hops;
+            if (ci.isGenericInst) continue;
             int line = ci.node ? ci.node->line : 0;
-            if (hops > KAMA_INHERIT_DEPTH) {
-                unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which already extends '"
-                             + (ci.base->base ? ci.base->base->name : std::string("a base"))
-                             + "' — the inheritance depth limit is " + std::to_string(KAMA_INHERIT_DEPTH)
-                             + ". For a middle layer, compose the base rather than extending it.").c_str(),
-                            line);
-                continue;   // already over the line; don't also demand `final` of it
-            }
-            // A class AT the limit is a leaf by arithmetic — nothing may extend it and stay in bounds. It
-            // must still be WRITTEN `final`, and the compiler deliberately does not infer that: the point
-            // is that a user meets the limit as an INTENTIONAL, VISIBLE marker on the type they are
-            // writing, rather than being surprised by it later the first time they try to extend that
-            // type once more. Below the limit `virtual`/`abstract` remains legal — that is the middle
-            // layer a higher KAMA_INHERIT_DEPTH buys.
-            if (hops == KAMA_INHERIT_DEPTH && !ci.isFinalClass)
-                unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', so it is a leaf — declare "
-                             "it `type final resource " + ci.name + "`. The inheritance depth limit is "
-                             + std::to_string(KAMA_INHERIT_DEPTH) + ", so nothing may extend a type this "
-                             "deep; writing `final` is how you see that here rather than discovering it "
-                             "later. For a middle layer, compose the base rather than extending it.").c_str(),
-                            line);
+            bool extensible = ci.isVirtualClass || ci.isAbstractClass;
+
+            // Opting in without stating the budget.
+            if (extensible && ci.maxDepth == 0)   // 0 = never annotated; -1 = annotated badly, already reported
+                unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
+                             + ci.name + "' must state how deep it may be extended — write `"
+                             + (ci.isAbstractClass ? "abstract" : "virtual") + "(maxDepth: "
+                             + std::to_string(KAMA_INHERIT_DEPTH) + ") resource " + ci.name
+                             + "`. The limit is part of the design, so it is written where the design "
+                               "opts in rather than discovered later.").c_str(), line);
+
+            if (!ci.base) continue;
+
+            // The base must have had room to spare.
+            int budget = ci.base->maxDepth;
+            if (budget <= 0) continue;                  // the base is already being diagnosed
+            int mine = ci.isFinalClass ? 0 : ci.maxDepth;
+            if (mine < 0) continue;                     // its own annotation is already being diagnosed
+            if (mine > budget - 1)
+                unsupported(("'" + ci.name + "' extends '" + ci.base->name + "', which allows "
+                             + std::to_string(budget) + " more level(s) — so '" + ci.name
+                             + "' may allow at most " + std::to_string(budget - 1)
+                             + (budget - 1 == 0 ? ", i.e. it must be `final`"
+                                                : ", not " + std::to_string(mine))).c_str(), line);
         }
     }
 #endif   // KAMA_INHERITANCE
@@ -14658,6 +14671,50 @@ std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpressi
     ScopedStr _ts(_thisType, owner ? owner->name : lc);   // a `This` return type resolves to the operator's owner
     std::string rt = cType(mi->returnType);
     return isClass(rt) ? rt : "";
+}
+
+// `virtual(maxDepth: N)` — read and validate N. Returns -1 on any error, which the callers read as
+// "already diagnosed": 0 has to keep meaning "never annotated", or a bad annotation would also draw the
+// "you must state a budget" complaint at an author who just did.
+//
+// The number exists so a designer meets the depth limit when they OPT IN to extensibility, rather than
+// discovering it later when a third level is refused. That is the same doctrine as requiring a deriving
+// type to be written `final`: the compiler deliberately does not infer what the author should see.
+int CEmitter::readMaxDepth(const SharedModifier& mod, int line)
+{
+    if (!mod->args || mod->args->size() != 1) {
+        unsupported("`virtual`/`abstract` takes exactly one argument, the extension budget "
+                    "(`virtual(maxDepth: 1)`)", line);
+        return -1;
+    }
+    auto& a = (*mod->args)[0];
+    if (!a || !a->name || !a->name->value || *a->name->value != "maxDepth") {
+        unsupported(("the extension budget is spelled `maxDepth:` — `"
+                     + std::string(a && a->name && a->name->value ? *a->name->value : "")
+                     + ":` is not a modifier argument kama knows").c_str(), line);
+        return -1;
+    }
+    long n = -1;
+    if (auto* lit = dynamic_cast<Int32Node*>(a->expression.get())) n = lit->value;
+    if (n < 0) {
+        unsupported("`maxDepth:` takes a literal whole number — how many levels may be added below this "
+                    "type", line);
+        return -1;
+    }
+    // Both bounds are ERRORS, never clamps: a clamp would hide exactly the surprise this annotation
+    // exists to prevent.
+    if (n == 0) {
+        unsupported("`maxDepth: 0` says this type is extensible but that nothing may extend it — to seal "
+                    "it, declare it `final` instead (which IS a budget of 0)", line);
+        return -1;
+    }
+    if (n > KAMA_INHERIT_DEPTH) {
+        unsupported(("`maxDepth: " + std::to_string(n) + "` exceeds the inheritance depth limit of "
+                     + std::to_string(KAMA_INHERIT_DEPTH) + " this kama was built with "
+                     "(KAMA_INHERIT_DEPTH)").c_str(), line);
+        return -1;
+    }
+    return (int)n;
 }
 
 // Is `e` the expression `this.base`? (`base` is a keyword, so no field can ever be spelled that way.)

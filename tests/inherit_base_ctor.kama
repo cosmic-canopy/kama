@@ -15,7 +15,7 @@
 // i.e. INSIDE `__base` — so a whole-struct store would clobber it with the base's own vtable. The install
 // is emitted before the field fill, whose vptr store then re-stamps the MOST-DERIVED vtable. `kind()`
 // returning the leaf's answer is what proves that ordering held.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n = 10;                                   // a field initializer, on the BASE
     int32 scale;
 

@@ -7,7 +7,7 @@
 // that was found.
 //
 // Someone who writes this wanted base delegation specifically, so that is what the message is about.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 x;
     public ctor make(int32 x) { this.x = x; }
     protected fn void setX(int32 v) { this.x = v; }

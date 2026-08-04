@@ -4914,7 +4914,17 @@
   {
     "type": "modifier",
     "named": true,
-    "fields": {}
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "argument_list",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "module_variable_declaration",

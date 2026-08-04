@@ -11,7 +11,7 @@
 // root's non-virtual method is already un-redefinable, since shadowing is an error). At depth 2 the
 // middle layer exists and the modifier is the only thing that does its job. So it stays, and this fixture
 // keeps it covered: `final override` parses, seals (tests/xfail/override_final), and dispatches directly.
-type virtual resource Base
+type virtual(maxDepth: 1) resource Base
 {
     public ctor make() { }
     public fn int32 midGo() { return this.run(); }       // public surface, on the root (decision A)

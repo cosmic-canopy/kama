@@ -23,7 +23,7 @@ type value Cell implements Sized {
     public fn int32 doubled() { return this.value * 2; }
 }
 
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 shared = 0;
     int32 hidden = 0;
     public ctor make() { }

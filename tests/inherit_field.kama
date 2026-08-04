@@ -5,7 +5,7 @@
 // by the type that owns it, and `Base` can enforce whatever invariant it likes on the way in. This used
 // to be a `protected` SETTER called from the derived ctor, which was the workaround for the base ctor
 // never running: it left `Base` unable to require that `x` was ever set at all.
-type virtual resource Base
+type virtual(maxDepth: 1) resource Base
 {
     int x;                                       // private; embedded in the derived layout
     public ctor make(int x) { this.x = x; }      // the base's own ctor — the only way its data is set

@@ -2,7 +2,7 @@ import std::memory::{Shared, Owned};
 import std::collections::{DynamicArray};
 // Inline `new Derived` into a Shared<Base>/Owned<Base>: build the derived, adopt its base
 // subobject; polymorphism via Template Method, destroyed through the base handle (virtual dtor).
-type virtual resource Shape {
+type virtual(maxDepth: 1) resource Shape {
     DynamicArray<int32> tag;
     public ctor make() { this.tag.add(item: 0); }
     ~Shape() { }

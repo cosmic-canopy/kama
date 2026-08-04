@@ -5,7 +5,7 @@
 // Both positions are exercised here, because they resolve through different funnels: `Base` as a TYPE
 // (the parameter, the local) goes through cType, while `Base.make()` is an EXPRESSION RECEIVER and goes
 // through resolveUserName. One arm in resolveUserNameImpl serves both.
-type virtual resource Animal {
+type virtual(maxDepth: 1) resource Animal {
     public ctor make() { }
     protected virtual fn int32 own() { return 0; }
     public fn int32 legs() { return 4; }

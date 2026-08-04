@@ -4,7 +4,7 @@
 // polymorphic class, whose `__vptr` is set directly by the vtable-typed bare-local store (the replacement
 // for the removed synth-ctor vptr init). M25b: polymorphism is opt-in — `virtual`/`protected virtual` hook
 // behind a public method; the sealed leaf is a `final` class.
-type virtual resource Shape {
+type virtual(maxDepth: 1) resource Shape {
     public ctor make() { }
     protected virtual fn int32 val() { return 0; }
     protected virtual fn void put(int32 v) { }           // the seam the leaf fills; public entry below

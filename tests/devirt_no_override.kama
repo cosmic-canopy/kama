@@ -1,6 +1,6 @@
 // Tier-1 devirtualization (trigger 3): a `virtual` hook no class overrides is monomorphic
 // program-wide, so `this.pixels()` lowers to a direct call (no __vptr) — even through a base ref.
-type virtual resource Widget
+type virtual(maxDepth: 1) resource Widget
 {
     public ctor make() { }
     public fn int32 render() { return this.pixels(); }

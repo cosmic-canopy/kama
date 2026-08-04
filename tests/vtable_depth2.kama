@@ -7,7 +7,7 @@
 // and the mechanism is unchanged: a `ref Base` still dispatches to the most-derived override, and
 // `base.step()` still reaches the parent implementation non-virtually. The rejected three-level form is
 // pinned by tests/xfail/inherit_depth_exceeded.
-type virtual resource Base
+type virtual(maxDepth: 1) resource Base
 {
     public ctor make() { }
     public fn int32 rank() { return this.step(); }

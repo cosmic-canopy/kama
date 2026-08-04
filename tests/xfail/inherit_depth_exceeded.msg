@@ -1,1 +1,1 @@
-the inheritance depth limit is 1
+may allow at most 0, i.e. it must be `final`

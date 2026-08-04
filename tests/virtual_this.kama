@@ -1,6 +1,6 @@
 // M25b: a public method (`describe`) over a `protected virtual` hook (`area`) — the
 // sanctioned way to publish polymorphism from a class hierarchy (vs. an interface).
-type virtual resource Shape
+type virtual(maxDepth: 1) resource Shape
 {
     public ctor make() { }
     public fn int describe() { return this.area(); }

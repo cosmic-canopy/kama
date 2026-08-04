@@ -1,4 +1,4 @@
 import std::memory::{Owned};
 // Same hole through a smart pointer.
-type abstract resource Shape { protected abstract fn int32 area(); }
+type abstract(maxDepth: 1) resource Shape { protected abstract fn int32 area(); }
 fn int main() { Owned<Shape> s = new Shape(); return 0; }

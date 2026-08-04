@@ -1,4 +1,4 @@
 // A subclass that leaves an inherited pure method un-overridden is itself abstract.
-type abstract resource Shape { public ctor make() { } protected abstract fn int32 area(); }
+type abstract(maxDepth: 1) resource Shape { public ctor make() { } protected abstract fn int32 area(); }
 type final resource Bad extends Shape { int32 x; public ctor make(int32 x){ this.base = Base.make(); this.x = x; } }   // forgot to override area
 fn int main() { Bad b = Bad.make(x: 1); return 0; }

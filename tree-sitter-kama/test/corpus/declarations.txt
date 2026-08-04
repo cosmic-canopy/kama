@@ -421,3 +421,51 @@ type resource Vec2
             (field_expression
               (this_expression)
               (identifier))))))))
+
+================================================================================
+The extension budget on a virtual/abstract class
+================================================================================
+
+type virtual(maxDepth: 2) resource Root { public ctor make() { } }
+type abstract(maxDepth: 1) resource Mid extends Root { public ctor make() { } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (modifier
+      (argument_list
+        (argument
+          (identifier)
+          (integer_literal))))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (constructor_declaration
+        (modifier)
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block))))
+  (type_declaration
+    (modifier
+      (argument_list
+        (argument
+          (identifier)
+          (integer_literal))))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_base
+      (type_name
+        (identifier)))
+    (class_body
+      (constructor_declaration
+        (modifier)
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block)))))

@@ -1,0 +1,10 @@
+// `maxDepth: 0` is a contradiction in terms: extensible, yet nothing may extend it. `final` IS a budget
+// of 0, so there is exactly one spelling for that and this is not it. A CLAMP would be the wrong answer —
+// it would silently hide the very surprise the annotation exists to prevent.
+type virtual(maxDepth: 0) resource Root
+{
+    public ctor make() { }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+fn int main() { return 0; }

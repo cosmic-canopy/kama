@@ -3,7 +3,7 @@ extern fn int kama_trace_get();
 
 // Destructor chaining through inheritance (Derived's dtor runs, then Base's).
 // M25b: extension is opt-in, so Base is a `virtual class`; the dtor chain is unchanged.
-type virtual resource Base
+type virtual(maxDepth: 1) resource Base
 {
     public ctor make() { }
     ~Base() { kama_trace(code: 1); }

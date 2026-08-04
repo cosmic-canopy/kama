@@ -1,6 +1,6 @@
 // `this.base` may only be ASSIGNED. It is not a member you can read — to reach an inherited member the
 // spelling is `base.<member>`, which is a different thing with its own access rules.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected virtual fn int32 tag() { return 0; }

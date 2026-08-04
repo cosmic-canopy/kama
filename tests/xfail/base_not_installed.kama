@@ -9,7 +9,7 @@
 // of the two answers — the fix belongs to `Base`, not to each subclass.
 //
 // A fixture that passes by COMPILING is how this hid; it is a rejection now.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 x;
     protected fn int32 getX() { return this.x; }
     protected virtual fn int32 tag() { return 0; }

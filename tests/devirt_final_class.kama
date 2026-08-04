@@ -6,7 +6,7 @@
 // add public methods — so the public entry lives on the root and dispatches into a protected seam the
 // leaf overrides. That is the Template Method shape SPEC documents anyway, and the devirtualized call is
 // still the one made from inside `Cat`.
-type virtual resource Animal
+type virtual(maxDepth: 1) resource Animal
 {
     public ctor make() { }
     public fn int32 meow() { return this.meowImpl(); }   // public surface, on the root

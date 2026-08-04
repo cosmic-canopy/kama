@@ -8,7 +8,7 @@
 // Nothing in the corpus used the combination when the rule landed, so it cost nothing then — and it is
 // source-breaking to add later, which is why it landed with A rather than after it.
 type contract Clickable for resource { fn int32 click(); }
-type virtual resource Widget
+type virtual(maxDepth: 1) resource Widget
 {
     public ctor make() { }
     public fn int32 rank() { return this.step(); }

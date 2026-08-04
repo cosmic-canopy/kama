@@ -1,6 +1,6 @@
 // `this.base` is not a general assignment: a base part is built by its own constructor or not at all.
 // Base fields are private, so there would be nothing to adjust afterwards anyway.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected virtual fn int32 tag() { return 0; }

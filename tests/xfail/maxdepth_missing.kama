@@ -1,0 +1,9 @@
+// Opting in to extensibility without saying how deep. The whole point of the annotation is that the
+// limit is met where the design opts in, so it cannot be omitted and defaulted.
+type virtual resource Root
+{
+    public ctor make() { }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+fn int main() { return 0; }

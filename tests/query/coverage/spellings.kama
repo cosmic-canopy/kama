@@ -17,7 +17,7 @@ enum Shape { Circle(int32 r), Empty }
 
 type contract Area for both { fn int32 area(); }
 
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 tag;
     public ctor make() { this.tag = 1; }
     protected virtual fn int32 kind() { return 1; }

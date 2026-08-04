@@ -2372,6 +2372,28 @@
         {
           "type": "STRING",
           "value": "immutable"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "virtual"
+                },
+                {
+                  "type": "STRING",
+                  "value": "abstract"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "argument_list"
+            }
+          ]
         }
       ]
     },

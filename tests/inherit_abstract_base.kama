@@ -18,7 +18,7 @@ extern fn int kama_trace_get();
 //   - virtual DESTRUCTION through that base handle: the most-derived dtor chain runs, no slicing
 //   - an ABSTRACT base's constructor called from a derived base install — legal there and nowhere else,
 //     since the value is embedded at offset 0 and the derived vtable is stamped over it in the same fill
-type abstract resource Codec
+type abstract(maxDepth: 1) resource Codec
 {
     int32 tag;
     public ctor make(int32 tag) { this.tag = tag; }   // callable ONLY as a base install

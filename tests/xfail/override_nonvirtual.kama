@@ -1,5 +1,5 @@
 // `override` requires a virtual method in a base class (Step 3) — else malformed vtable.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     public ctor make() { }
     public fn int32 plain() { return 1; }            // NON-virtual
     protected virtual fn int32 hook() { return 0; }  // makes Base a valid virtual class

@@ -1,0 +1,8 @@
+// The argument is named `maxDepth:`, and a typo says so rather than being ignored.
+type virtual(depth: 1) resource Root
+{
+    public ctor make() { }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+fn int main() { return 0; }

@@ -7,7 +7,7 @@
 //
 // Both lines below are rejected — the write first, then the read — which is the point: `base.` runs the
 // same visibility check in an assignment target as it does in an expression, so there is no lvalue hole.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     friend Leaf[helper];                 // grants ONLY helper — NOT n
     fn int32 helper() { return this.n; }

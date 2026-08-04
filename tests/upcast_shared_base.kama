@@ -3,7 +3,7 @@ import std::collections::{DynamicArray};
 // Base-class UPCAST: hold a Derived in a Shared<Base>/Owned<Base> handle. Polymorphism flows
 // through the Template-Method shape (public `area` calls protected virtual `compute`), and the
 // virtual destructor makes destruction through the base handle reach the derived dtor (no leak).
-type virtual resource Shape {
+type virtual(maxDepth: 1) resource Shape {
     DynamicArray<int32> tag;                                   // owns heap -> destructible; proves no slicing
     public ctor make() { this.tag.add(item: 0); }
     ~Shape() { }

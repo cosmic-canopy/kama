@@ -23,7 +23,7 @@ type value PlainTick { public int32 n;
     public fn int32 tick() { return this.n + 1; } }
 
 // (B) a virtual base + final derived — the OOP shape
-type virtual resource BaseTick { int32 n;
+type virtual(maxDepth: 1) resource BaseTick { int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected fn int32 getN() { return this.n; }
     protected virtual fn int32 tickImpl() { return this.n; }

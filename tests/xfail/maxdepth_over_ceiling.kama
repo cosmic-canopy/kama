@@ -1,0 +1,10 @@
+// A hierarchy may ask for less than KAMA_INHERIT_DEPTH but never more — the build-time ceiling is what
+// makes the budget a budget. This is also why a 4-level chain cannot even be DECLARED: the root would
+// have to open with more than the ceiling allows.
+type virtual(maxDepth: 3) resource Root
+{
+    public ctor make() { }
+    public fn int32 rank() { return this.step(); }
+    protected virtual fn int32 step() { return 1; }
+}
+fn int main() { return 0; }

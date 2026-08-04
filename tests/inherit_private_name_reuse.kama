@@ -18,7 +18,7 @@
 // resolution and nothing else. It used to reach through a protected setter, because a derived type never
 // ran its base's ctor and a base's field initializers never reached a derived instance either. Both are
 // closed now (tests/inherit_base_ctor).
-type virtual resource Base
+type virtual(maxDepth: 1) resource Base
 {
     int32 n;                                          // private to Base
     friend Leaf[helper];                              // Leaf MAY reach Base::helper — and still has its own

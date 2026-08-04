@@ -1,1 +1,1 @@
-so it is a leaf — declare it `type final resource
+may allow at most 0, i.e. it must be `final`

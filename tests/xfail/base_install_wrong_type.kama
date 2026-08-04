@@ -1,5 +1,5 @@
 // The install builds the BASE, not some other type that happens to be lying around.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected virtual fn int32 tag() { return 0; }

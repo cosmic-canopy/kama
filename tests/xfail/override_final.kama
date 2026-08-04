@@ -1,5 +1,20 @@
-// A `final` method seals its slot — no subclass may override it.
-type virtual resource Base { protected virtual fn int h() { return 0; } }
-type virtual resource Mid extends Base { protected final override fn int h() { return 1; } }   // seals h
-type virtual resource Leaf extends Mid { protected override fn int h() { return 2; } }          // ERROR: h is final
-fn int main() { return 0; }
+// A `final` METHOD seals its slot: no subclass may override it again.
+//
+// This is the only place that modifier can be observed. At depth 1 it is dormant — a leaf is already a
+// `final class`, so nothing exists below it to re-override anything, and devirtualization trigger 1 fires
+// before trigger 2 can. A middle layer is what wakes it, which is exactly the shape the depth budget now
+// admits. tests/vtable_depth3 is the same chain with the seal respected.
+type virtual(maxDepth: 2) resource Root {
+    public ctor make() { }
+    protected virtual fn int h() { return 0; }
+    public fn int go() { return this.h(); }
+}
+type virtual(maxDepth: 1) resource Mid extends Root {
+    public ctor make() { this.base = Base.make(); }
+    protected final override fn int h() { return 1; }        // seals h
+}
+type final resource Leaf extends Mid {
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int h() { return 2; }              // ERROR: h is `final` in Mid
+}
+fn int main() { Leaf l = Leaf.make(); return l.go(); }

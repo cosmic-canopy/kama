@@ -1,0 +1,1 @@
+declare it `final` instead

@@ -43,16 +43,21 @@
 #define KAMA_INHERITANCE 1
 #endif
 
-// How many `extends` hops a class may sit below its root. A class AT the limit must be written `final`
-// — the compiler could infer that at depth 1 and deliberately does not, so a user meets the limit as an
-// intentional marker on the type they are writing rather than as a surprise the first time they try to
-// extend it once more.
+// The CEILING on how many `extends` hops a class may sit below its root. Each `virtual`/`abstract class`
+// still has to state its OWN budget (`virtual(maxDepth: N)`), which may not exceed this; a type whose
+// budget reaches 0 must be written `final`. The compiler could infer that last step and deliberately does
+// not — a designer should meet the limit as an intentional marker on the type they are writing, not as a
+// surprise the first time they try to extend it once more.
 //
-// 1 is a starting point, not a claim that 2 is wrong: the failure modes are asymmetric. Too strict pushes
-// a middle layer into COMPOSITION, which is the outcome this design wants anyway; too loose grows the deep
-// hierarchies the restriction exists to prevent. Too strict fails toward the goal.
+// 2 — a root, a middle layer and a leaf — because that is what mainstream OOP designs actually use, and
+// stopping short of it would push a shape people legitimately want into composition for no gain. Beyond
+// it the failure modes turn asymmetric: too strict pushes a middle layer into COMPOSITION, which this
+// design is happy with, while too loose grows the deep hierarchies the restriction exists to prevent.
+//
+// ⚠️ Objects do NOT depend on the Makefile, so changing this needs a clean rebuild of build/<platform>/
+// (unlike KAMA_INHERITANCE=0, which gets its own directory).
 #ifndef KAMA_INHERIT_DEPTH
-#define KAMA_INHERIT_DEPTH 1
+#define KAMA_INHERIT_DEPTH 2
 #endif
 // ---------------------------------------------------------------------------------------------
 
@@ -309,6 +314,7 @@ struct ClassInfo {
     std::vector<std::string>          copyableWhenBounds;
 
     // Inheritance + virtual dispatch
+    int                               maxDepth = 0;    // `virtual(maxDepth: N)`: levels that may still be added BELOW this type (0 = sealed, i.e. `final`)
     std::string                       baseName;        // "" if no base
     ClassInfo*                        base = nullptr;  // resolved by linkBases()
     bool                              isAbstractClass = false;
@@ -1460,6 +1466,7 @@ private:
     bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;
     std::string emitMemberAccess(MemberAccessNode* ma);
     void             rejectBaseMember(MemberAccessNode* ma);
+    int              readMaxDepth(const SharedModifier& mod, int line);
     bool             isThisBase(SharedExpression e);
     bool             exprMentionsThis(SharedExpression e);
     SharedExpression baseInstallOf(SharedStatement st);

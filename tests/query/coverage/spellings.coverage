@@ -11,8 +11,9 @@
 18:14 Area decl:contract
 18:23 both -
 18:39 area decl:method
-20:13 resource -
-20:22 Base decl:resource
+20:13 maxDepth -
+20:26 resource -
+20:35 Base decl:resource
 21:10 tag decl:field
 22:16 make decl:ctor
 22:30 tag ref:field

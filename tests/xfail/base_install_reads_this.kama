@@ -1,6 +1,6 @@
 // The install runs BEFORE `this` exists — it is lowered ahead of the storage `self` points at, so an
 // argument naming `this` would emit `self->…` before `self` is declared. Parameters are fine.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected virtual fn int32 tag() { return 0; }

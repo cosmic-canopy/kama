@@ -1,0 +1,50 @@
+// A THREE-level chain — root, middle, leaf — which is what the default budget allows and what mainstream
+// OOP designs actually use. It exercises the two features that only meet at depth 2:
+//
+//   1. THE BUDGET COUNTS DOWN, and it is written at every level. `Root` opens with 2, so `Mid` may allow
+//      at most 1, so `Leaf` may allow 0 — which is spelled `final`. Nothing is inferred: a designer sees
+//      the limit approaching in the source instead of discovering it when a fourth level is refused.
+//      tests/xfail/inherit_depth_exceeded is the same chain with one level too many.
+//
+//   2. THE BASE INSTALL CHAINS. `Mid` installs a `Root` and `Leaf` installs a `Mid`, so every layer's
+//      constructor runs — `Root.make` sets 1, `Mid.make` adds 20, `Leaf.make` adds 100. Before hole 1
+//      was closed, none of that reached a `Leaf`. Note `Base` in `Leaf` means `Mid`, not `Root`: the
+//      alias is relative to the type that writes it, which is what makes it rename-safe at every level.
+//
+// It also wakes the `final` METHOD modifier from dormancy. At depth 1 `final override` is unobservable
+// (a leaf is already a `final class`, so devirtualization trigger 1 always fires first); here `Mid` is a
+// real middle layer, so `final override fn seal()` is the only thing stopping `Leaf` re-overriding it —
+// pinned by tests/xfail/override_final.
+type virtual(maxDepth: 2) resource Root
+{
+    int32 n;
+    public ctor make() { this.n = 1; }
+    protected fn int32 n_() { return this.n; }
+    protected virtual fn int32 step() { return 0; }
+    protected virtual fn int32 seal() { return 7; }
+    public fn int32 rank() { return this.n_() + this.step() + this.seal(); }
+}
+
+type virtual(maxDepth: 1) resource Mid extends Root
+{
+    int32 m;
+    public ctor make() { this.base = Base.make(); this.m = 20; }   // `Base` = Root
+    protected override fn int32 step() { return this.m; }
+    protected final override fn int32 seal() { return 8; }          // sealed: Leaf may not re-override
+}
+
+type final resource Leaf extends Mid
+{
+    int32 l;
+    public ctor make() { this.base = Base.make(); this.l = 100; }   // `Base` = Mid, not Root
+    protected override fn int32 step() { return base.step() + this.l; }
+}
+
+fn int32 measure(ref Root r) { return r.rank(); }
+
+fn int main()
+{
+    Leaf leaf = Leaf.make();
+    // n 1 (Root.make) + step (Mid.m 20 + Leaf.l 100) + seal 8 (sealed at Mid) = 129
+    return measure(r: ref leaf);
+}

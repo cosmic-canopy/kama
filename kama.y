@@ -648,6 +648,13 @@ modifier
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | DEFAULT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+    /* `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — how many levels may still be added BELOW this
+       type. Reuses `argument_list` so the spelling is kama's ordinary named-argument one; the emitter
+       checks the name and the value, per the usual permissive-grammar/diagnosing-emitter split. The
+       modifier list is shared with methods, so `virtual(maxDepth: 1) fn` parses too and is rejected
+       there — the same way a class-named ctor still parses so it can be answered with a sentence. */
+  | VIRTUAL LPAREN argument_list RPAREN   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+  | ABSTRACT LPAREN argument_list RPAREN   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   | IMMUTABLE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 

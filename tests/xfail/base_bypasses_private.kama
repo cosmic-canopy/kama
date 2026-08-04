@@ -13,7 +13,7 @@
 // restriction would be on the wrong axis; and a `resource` field is always private while inheritance is
 // resource-only, so there are no protected FIELDS to reach — this is entirely about methods.
 // tests/vtable_depth2 covers the legal `base.<protected>` direction.
-type virtual resource B {
+type virtual(maxDepth: 1) resource B {
     public ctor make() { }
     fn int32 secret() { return 42; }                  // no modifier -> private to B
     public fn int32 peek() { return this.peekImpl(); }

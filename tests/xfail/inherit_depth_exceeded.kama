@@ -1,23 +1,23 @@
-// The inheritance depth cap: `extends` may go exactly ONE hop below a root by default, so a middle
-// layer (the Widget -> Control -> Button archetype) is rejected and must become composition.
+// The budget runs out. `Widget` allows 2 more levels, so `Control` may allow at most 1 — and it does —
+// but that leaves `Button` a budget of 0, which is spelled `final`. Asking for one more is the
+// Widget -> Control -> Button -> ... archetype the cap exists to stop, and it is refused at the type that
+// asks, naming the number it may have.
 //
-// 1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric — a cap that is
-// too strict pushes the middle layer into composition, which is what this design wants anyway, while a
-// cap that is too loose grows the deep hierarchies the restriction exists to prevent. A project that
-// proves it needs depth raises KAMA_INHERIT_DEPTH (kama.cemit.h) and rebuilds the compiler;
-// tests/vtable_depth2 is the accepted form.
-type virtual resource Widget
+// The chain length is bounded by the ROOT's budget by construction, so there is no separate arithmetic:
+// each level states what it passes down, and the sum cannot exceed what the root opened with.
+// tests/vtable_depth3 is the accepted three-level form.
+type virtual(maxDepth: 2) resource Widget
 {
     public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
-type virtual resource Control extends Widget
+type virtual(maxDepth: 1) resource Control extends Widget
 {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return base.step() + 10; }
 }
-type final resource Button extends Control       // one hop too far
+type virtual(maxDepth: 1) resource Button extends Control       // one level too far — must be `final`
 {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return base.step() + 100; }

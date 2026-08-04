@@ -488,7 +488,14 @@ module.exports = grammar({
         ';',
       ),
 
-    modifier: ($) => choice(...MODIFIERS),
+    // `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — the extension budget, kama.y `modifier`. It
+    // reuses `argument_list` there for the same reason it does here: the spelling is kama's ordinary
+    // named-argument one, and the emitter (not the grammar) checks the name and the value.
+    modifier: ($) =>
+      choice(
+        ...MODIFIERS,
+        seq(choice('virtual', 'abstract'), $.argument_list),
+      ),
 
     // ── Attributes ──────────────────────────────────────────────────────────────────────────────────
     // kama.y:729. Attribute arguments are the ONLY near-positional argument form in the language.

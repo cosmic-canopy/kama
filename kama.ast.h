@@ -294,10 +294,13 @@ class ModifierNode : public ExpressionNode {
 public:
     SharedString value;
     SharedIdentifierList targets;
+    SharedArgumentList args;   // `virtual(maxDepth: 2)` — the extension budget; null for a bare modifier
     ModifierNode(CodeGenContext& context, SharedString value)
         : ASTNode(context),  ExpressionNode(context), value(value), targets( std::make_shared<IdentifierList>() ) { }
     ModifierNode(CodeGenContext& context, SharedString value, SharedIdentifierList targets)
         : ASTNode(context),  ExpressionNode(context), value(value), targets(targets) { }
+    ModifierNode(CodeGenContext& context, SharedString value, SharedArgumentList args)
+        : ASTNode(context),  ExpressionNode(context), value(value), targets( std::make_shared<IdentifierList>() ), args(args) { }
 };
 
 //------------------------------------------------------------------------------ 

@@ -1,16 +1,16 @@
-// A deriving type must be WRITTEN `final`, not merely be a leaf by arithmetic.
+// A deriving type must state its own budget, and it may be AT MOST one less than its base's. `Base`
+// allows 1 more level, so `Derived` may allow 0 — which is spelled `final`, the only spelling for 0.
 //
-// At KAMA_INHERIT_DEPTH=1 nothing may extend `Derived` anyway, so the compiler could infer this. It
-// deliberately does not: `final` is an EARLY, VISIBLE, INTENTIONAL marker that you have reached the hard
-// limit, so you meet it while writing the type rather than being surprised by it later, the first time
-// you try to extend that type once more.
-type virtual resource Base
+// The compiler could infer this and deliberately does not. `final` is an EARLY, VISIBLE, INTENTIONAL
+// marker that the chain ends here, met while writing the type rather than discovered later, the first
+// time someone tries to extend it once more.
+type virtual(maxDepth: 1) resource Base
 {
     public ctor make() { }
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
-type virtual resource Derived extends Base        // must be `type final resource Derived`
+type virtual(maxDepth: 1) resource Derived extends Base        // must be `type final resource Derived`
 {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return 2; }

@@ -22,15 +22,18 @@ BUILD     = build/$(PLATFORM)
 # by building both ways and subtracting — and be the extraction point if inheritance is ever dropped, since
 # the `#if KAMA_INHERITANCE` blocks are then the deletion list.
 #
-#   make                        # inheritance in
+#   make                        # inheritance in, up to 2 levels below a root
 #   make KAMA_INHERITANCE=0     # a compiler without it, into build/<platform>-noinherit
-#   make KAMA_INHERIT_DEPTH=2   # allow one middle layer (a root + 2 derived levels)
+#   make KAMA_INHERIT_DEPTH=1   # no middle layer: a root plus ONE derived level
+#
+# KAMA_INHERIT_DEPTH is the CEILING on what a hierarchy may ask for. Each `virtual`/`abstract class` still
+# has to state its own budget (`virtual(maxDepth: 2)`), which may not exceed this.
 #
 # The no-inheritance build gets its OWN directory: objects compiled under different macro values must never
 # mix, and sharing build/<platform> would silently do exactly that (make sees the .o as up to date).
 # `tools/check-no-inheritance.sh` builds it and proves the variant still works.
 KAMA_INHERITANCE   ?= 1
-KAMA_INHERIT_DEPTH ?= 1
+KAMA_INHERIT_DEPTH ?= 2
 # ⚠️ Refuse the EXTRA_CXXFLAGS spelling rather than silently ignoring it. These `-D`s are appended AFTER
 # EXTRA_CXXFLAGS, so a `-DKAMA_INHERITANCE=0` passed that way loses to the default and you would get a
 # compiler WITH inheritance while believing otherwise — and the build directory would not switch either,

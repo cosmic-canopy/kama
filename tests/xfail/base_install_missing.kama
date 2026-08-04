@@ -1,6 +1,6 @@
 // A derived ctor must install its base. Its own fields being complete is only half of construction —
 // `checkNamedCtorComplete` proves that half and stops at the class boundary.
-type virtual resource Base {
+type virtual(maxDepth: 1) resource Base {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     protected virtual fn int32 tag() { return 0; }

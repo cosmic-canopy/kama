@@ -23,7 +23,7 @@
 //   existing name          -> this rule           (public `h` and protected `g` below)
 //   name private in base   -> legal               (tests/inherit_private_name_reuse)
 //   `override` of a seam   -> legal               (tests/vtable_depth2)
-type virtual resource B {
+type virtual(maxDepth: 1) resource B {
     public ctor make() { }
     public fn int32 h() { return 1; }                 // public, NOT virtual — no seam was offered
     protected fn int32 g() { return 1; }              // protected, NOT virtual
