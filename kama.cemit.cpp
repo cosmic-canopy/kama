@@ -4857,7 +4857,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (ci.isVirtualClass || ci.isAbstractClass) {
             bool hasOverridable = false;
             for (auto& kv : ci.methods) if (kv.second.isVirtual) { hasOverridable = true; break; }
-            if (!hasOverridable)
+            // Only a ROOT must declare one. A middle layer's extensibility is justified by the seams it
+            // INHERITS — it may exist purely to add state between a root and its leaves, and demanding it
+            // invent a new hook would be asking for a seam nobody wanted. (Before the depth budget every
+            // extensible class was a root, so this distinction could not arise.)
+            if (!hasOverridable && ci.baseName.empty())
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
             // ...and it must declare a CONSTRUCTOR, for the same reason: without one it can be neither

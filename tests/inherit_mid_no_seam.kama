@@ -1,0 +1,36 @@
+// A MIDDLE layer need not declare an overridable method of its own.
+//
+// `virtual`/`abstract` classes must offer a seam — otherwise the qualifier is a lie. But that rule was
+// written when every extensible class was a root, because the depth cap made a middle layer
+// unrepresentable. A middle layer's extensibility is justified by the seams it INHERITS: `Mid` exists
+// here purely to add state between `Root` and `Leaf`, and demanding it invent a new hook would be asking
+// for a seam nobody wanted.
+//
+// A ROOT with no seam is still rejected — tests/xfail/virtual_class_empty.
+type virtual(maxDepth: 2) resource Root
+{
+    int32 a;
+    public ctor make() { this.a = 1; }
+    protected fn int32 a_() { return this.a; }
+    protected virtual fn int32 hook() { return 0; }        // the only seam in the chain
+    public fn int32 total() { return this.a_() + this.hook(); }
+}
+
+type virtual(maxDepth: 1) resource Mid extends Root        // adds state, declares NO new overridable
+{
+    int32 b;
+    public ctor make() { this.base = Base.make(); this.b = 20; }
+    protected fn int32 b_() { return this.b; }
+}
+
+type final resource Leaf extends Mid
+{
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int32 hook() { return this.b_() + 100; }   // fills the ROOT's seam
+}
+
+fn int main()
+{
+    Leaf l = Leaf.make();
+    return l.total();                                       // 1 + (20 + 100) = 121
+}

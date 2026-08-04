@@ -40,26 +40,7 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**`slot`'s scope is shipped** — briefed in [design/slot-scope.md](design/slot-scope.md), steps 1–5 of 7
-(`e1edf1f`→`3098b21`, `0c126fa`→`c7988d5`). A ctor's value is an implicit `this` with an implicit return, and
-`slot` now means exactly one thing: the storage an `out` parameter is about to fill (three rules — out-only
-fill, must be filled, fill on the declaration's own unconditional path). The record is in
-[SPEC.md](SPEC.md#uninitialized-storage--slot-). **What remains of that campaign is inheritance hole 1
-below, then closeout** — the brief's status section says where to start and what the rest of it gets wrong.
-*(The callable side shipped earlier — `T.default()`, `5edb4d9`.)*
-
-**⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
-campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule,
-no-public-widening, the `base.` visibility fix, the shadowing ban and both diagnostics. What remains is
-**hole 1: a derived type never runs its base's constructor**, so a base's invariants are unenforceable for
-its subclasses — a base's field *initializers* don't reach a derived instance either, which is the same
-hole seen from another angle rather than a second one. Its repro is parked at
-`tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on the implicit
-`this`, which has now shipped — so this is **unblocked and is the next thing to build**. Source-breaking, so
-before the tag or 2.0. ⚠️ The brief names a tempting shallow fix (make the bare-local fill walk `__base`) and why it is
-wrong — read that before starting.
-
-Otherwise **the language surface is feature-complete**. What is left before the tag is the
+**The language surface is feature-complete.** What is left before the tag is the
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
@@ -137,6 +118,14 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
+
+- **The unsafe seam — `Ptr<T>` -> `UnsafePtr<T>`, and no `null` in safe kama.** Its own campaign, agreed
+  while the `slot` work was in flight (which is where its customers came from: eight buffer-realloc sites
+  now carry `= null` field initializers). Shape: rename the raw pointer to say what it is; an
+  `unsafe UnsafePtr<T> p = null;` field-declaration modifier; `Optional`-returning FFI wrappers;
+  `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
+  compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
+  **Source-breaking**, so before the tag or 2.0.
 
 - **A lib/prelude diagnostic is attributed to the file being checked.** `kama check app.kama` reports an
   error raised inside `lib/std/…` or the prelude as `app.kama:<the LIB file's line>` — the line number is

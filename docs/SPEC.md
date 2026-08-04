@@ -1586,29 +1586,82 @@ Extensible hierarchies are a **`resource`** concern (an embedded vtable breaks a
 extensible base opts in with a qualifier after `type`:
 
 ```kama
-type virtual resource Shape {                          // `type virtual resource` opts in to extension
+type virtual(maxDepth: 1) resource Shape {             // opts in to extension, and says how deep
+    int32 sides;
+    public ctor make(int32 sides) { this.sides = sides; }
     public fn int describe() { return this.area(); }   // public surface
     protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
 }
 type final resource Circle extends Shape {             // `type final resource` = sealed leaf
-    public ctor make() { Circle r; return give r; }    // named ctor (sets its own vtable)
+    public ctor make() { this.base = Base.make(sides: 1); }   // installs its base FIRST
     protected override fn int area() { return 42; }
 }
 ```
 
 Single inheritance (`extends`), base embedded by value (upcast is offset-0), `base.m()` for non-virtual
 upcalls — **subject to the same visibility rules as `this.`**, so a derived type cannot reach a `private`
-base member by choosing the other spelling. **There is no base-constructor delegation.** A `: base(...)`
-clause still parses, but only as part of the class-named ctor form that is now rejected outright, and the
-emitter never read it — so a derived ctor initializes inherited state through the base's `protected`
-accessors instead. That is a known gap, not the intended end state: see [ROADMAP.md](ROADMAP.md) §1.
-`virtual`/`override` methods dispatch through a vtable. **Inheritance is
+base member by choosing the other spelling. `virtual`/`override` methods dispatch through a vtable. **Inheritance is
 opt-in and one-way:** only a `type virtual resource`/`type abstract resource` may be `extends`-ed (a `value`,
 a plain `resource`, and a `type final resource` are sealed); an overridable method is written `protected`
 (never public/private — public polymorphism is a `contract`'s job); `type final resource`/`final` method seal
 a leaf/slot. `virtual`/`abstract`/`final` and `protected` are meaningless outside an extensible `resource` —
 they are errors on a `value`, a plain `resource`, or a `contract`. See `docs/KEYWORDS.md` for the full kind
 table.
+
+### A derived constructor installs its base ✅
+
+A derived type's constructor **must install its base**, as its **first statement**:
+
+```kama
+public ctor make(int32 x, int32 y)
+{
+    this.base = Base.make(x: x);     // FIRST — the base's own ctor runs
+    this.y = y;
+}
+```
+
+This is not delegation. A named `ctor` is a factory with no `self` to chain into, so the base part is
+built by the base's **own constructor** and then embedded whole — which is why the base's invariants hold
+for every subclass, and why a base's field *initializers* reach a derived instance.
+
+- **`Base` names the base type**, as `This` names the enclosing type, so a derived author never spells the
+  concrete base name and renaming it cannot break subclasses. A real type literally named `Base` wins;
+  the alias is the fallback.
+- **First, and exactly once.** Until the install runs, every inherited member would read a half-built
+  base. Its arguments may read this constructor's parameters but not `this.<field>` — the install is
+  lowered before `this` exists.
+- **A ctor call on the base type, not a general assignment.** A base part is built by its own constructor
+  or not at all; base fields are private, so there is nothing to adjust afterwards.
+- **`this.base` may only be assigned.** To reach an inherited member the spelling is `base.<member>`.
+- A ctor that delegates wholesale (`return Other.make(…);`) owes no base — the ctor it hands off to does.
+- An **`abstract`** base's constructor may be called *here and nowhere else*: the value is embedded at
+  offset 0 and the derived vtable is stamped over it before anything can dispatch.
+
+Consequently **a `virtual`/`abstract class` must declare a `ctor`** — without one it can be neither
+instantiated nor installed, so it and every type below it would be unconstructible. No generator can
+stand in: `@generate(zero)`/`of` require a transparent `value`, and a `value` is sealed.
+
+### The depth budget ✅
+
+An extensible type states **how many levels may still be added below it**, and a deriving type states
+**at most one less** — or is `final`, which *is* a budget of 0 and the only spelling for it:
+
+```kama
+type virtual(maxDepth: 2) resource Root { … }
+type virtual(maxDepth: 1) resource Mid extends Root { … }
+type final                resource Leaf extends Mid { … }
+```
+
+The chain's length is therefore bounded by the root's budget by construction. The point is that the limit
+is met where a design **opts in** to extensibility, rather than arriving as a refusal on the third type —
+by which time the design has been built around an assumption the language was never going to honour.
+Inheritance is deliberately restricted here (it is a footgun more often than a tool), and a budget you
+must write down is how that restriction announces itself.
+
+`maxDepth: 0` is an error — extensible yet unextendable is a contradiction; write `final`. So is a budget
+above the compiler's ceiling, `KAMA_INHERIT_DEPTH` (**default 2**: a root, a middle layer and a leaf,
+which is what mainstream hierarchies use). Neither bound is clamped: a clamp would hide the very surprise
+the annotation exists to prevent.
 
 ### Shadowing is an error ✅
 
@@ -1617,7 +1670,7 @@ A derived type may not redeclare a method it inherits. The only way to redefine 
 what is overridable, which is what `protected` + `virtual`/`abstract` is for.
 
 ```kama
-type virtual resource B { public fn int32 h() { return 1; } }   // no seam offered
+type virtual(maxDepth: 1) resource B { public fn int32 h() { return 1; } }   // no seam offered
 type final resource D extends B {
     public fn int32 h() { return 2; }        // ✗ shadows B.h() — which body runs would depend
 }                                            //   on the STATIC type of the receiver
@@ -1662,29 +1715,20 @@ its base.
 on the base, so allowing it would widen the surface through a door the rule never looked at. If a
 hierarchy conforms to a contract, its root declares it and every leaf inherits the conformance.
 
-### Depth — exactly one level ✅
+### Depth — a declared budget ✅
 
-A hierarchy is **one level deep**: a root, and leaves that extend it. A deriving type must be written
-**`final`**. The compiler could infer that — nothing may extend it anyway — and deliberately does not:
-`final` is an early, visible, *intentional* marker that you have reached the hard limit, so you meet it
-while writing the type rather than being surprised by it later, the first time you try to extend that
-type once more.
-
-`Widget -> Control -> Button` — a middle layer that both adds state and declares seams for its own
-extenders — is rejected, and becomes composition instead:
+See *The depth budget* above for the rule. `Widget -> Control -> Button -> …` — a chain that keeps adding
+middle layers — runs out of budget and is refused at the type that asks for more than its base left:
 
 ```
-'Button' extends 'Control', which already extends 'Widget' — the inheritance depth limit is 1.
-For a middle layer, compose the base rather than extending it.
+'Button' extends 'Control', which allows 1 more level(s) — so 'Button' may allow at most 0,
+i.e. it must be `final`
 ```
 
-1 is a starting point, not a claim that 2 is wrong. The failure modes are asymmetric: too strict pushes
-the middle layer into composition, which is the outcome this design wants anyway; too loose grows the deep
-hierarchies the restriction exists to prevent. Too strict fails *toward* the goal — and a restriction is
-cheap to lift and expensive to add.
-
-The limit is `KAMA_INHERIT_DEPTH` in `kama.cemit.h`, a **compile-time constant of the compiler**, not a
-per-project setting. It is a property of the language, not of a build.
+The ceiling is `KAMA_INHERIT_DEPTH` in `kama.cemit.h`, a **compile-time constant of the compiler**, not a
+per-project setting — it is a property of the language, not of a build. A hierarchy may ask for less than
+the ceiling but never more, so a project can restrict itself further without rebuilding anything: a design
+pattern that is only ever two layers says `maxDepth: 1` and the compiler holds it to that.
 
 ### Building kama without inheritance — `KAMA_INHERITANCE=0` ✅
 

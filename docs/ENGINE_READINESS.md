@@ -97,12 +97,9 @@ ECS exists to escape.
 Inheritance's place in an engine is the **cold** paths: asset importers, editor tooling, plugin boundaries,
 scene authoring. Never the per-entity loop.
 
-⚠️ **Known bug, tracked:** a polymorphic class stored **by value** in any generic collection
-(`DynamicArray<SomeVirtualResource>`) fails to build — the collection's methods are emitted before the
-class's vtable constant, so the C references an undeclared symbol. Repro:
-`tests/pending/virtual_class_in_collection.kama`; see [design/inheritance.md](design/inheritance.md). It
-does not block the ECS path (components are `value` types) but it breaks any by-value collection of a
-`virtual`/`abstract resource`.
+A polymorphic class stored **by value** in a generic collection (`DynamicArray<SomeVirtualResource>`)
+works: vtable constants gained external linkage plus a header forward declaration, so a collection method
+emitted before the class body still resolves. Covered by `tests/poly_in_collection`.
 
 ## Tier 0 — Hard blockers (can't build a real engine without these)
 
