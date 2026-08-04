@@ -3,6 +3,26 @@
 *In-flight campaign doc. **Delete this file when M2 ships**, once SPEC + the module docs carry the
 record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
+> ### ►► Re-verified against the tree 2026-08-04 — read this first
+>
+> Every campaign brief in this repo has been wrong somewhere load-bearing, so the claims below were
+> re-checked rather than trusted. **The gap table still holds in full** — `parse`, `sort`, `char`
+> classification and the exported trig are all still absent; `std::log` still has zero fixtures and
+> `std::time` two. What changed:
+>
+> - **Baseline is now `native 915 / ASan 879 / wasm 853`** (was 867/832/806). The inheritance and
+>   slot-scope campaigns landed in between and both are CLOSED; their design docs are deleted. Neither
+>   touches this campaign — `lib/` and `prelude/` contain **zero** `extends`.
+> - **Spike B's premise was re-run, not assumed**: a generic free fn allocating a
+>   `DynamicArray<T>` scratch buffer of its own type param still compiles and runs. Stability remains a
+>   free trade-off.
+> - **One question the sort spikes no longer have to answer.** Float `Comparable` now gives a TOTAL order
+>   (`prelude/global.kama:157-161`, Rust's `f64::total_cmp` semantics: NaN sorts after every number and
+>   equals itself). That was a live bug — a bare three-way fold returned `Equal` for a NaN operand, so NaN
+>   compared equal to everything and silently corrupted sorted containers. **A `Comparable`-driven sort is
+>   therefore already NaN-safe**; do not re-derive this, and do not "simplify" the float impl back.
+> - `DynamicArray.swap` is at `dynamic_array.kama:212` (the brief said 213-222; the body moved).
+
 ## Why this campaign exists
 
 kama's language surface is complete and the correctness pass (M1) is done. What is left before 1.0 is that
@@ -83,10 +103,12 @@ Specific things the spike must resolve:
   effectively has, at the cost of two spellings (GOALS #4).
 - **⚠️ `View<T>` cannot swap elements today.** `DynamicArray.swap` needs a private `takeAt` plus raw
   `Ptr<T>` aliasing, because the move tracker rejects `this.data[i] = …`
-  ([dynamic_array.kama:213-222](../../lib/std/collections/dynamic_array.kama#L213)). `View` has a
+  ([dynamic_array.kama:212](../../lib/std/collections/dynamic_array.kama#L212)). `View` has a
   place-returning `operator[]` but no `swap`. So a View-based sort either restricts to a copyable element
   or needs a new `View.swap` with the same unsafe internals. **Decide this deliberately — it is the part
-  most likely to be hacked around.**
+  most likely to be hacked around.** *(The recipe transfers cleanly: a `View<T>` holds its own
+  `Ptr<T> data`, so the take-out / relocate / `give`-back dance works verbatim. What needs deciding is
+  whether a second-class borrow SHOULD be able to permute its buffer, not whether it can.)*
 - **How is the ordering supplied?** `T: Comparable` (kama's contract, prelude retro-impls on every
   primitive) is the obvious default. Do we also want a `sortBy(items:, less:)` taking an `fnptr`, given
   kama has no capturing closures (WEB_FRAMEWORK_READINESS Tier-1)? Without it, sorting by a computed key
@@ -197,10 +219,16 @@ tools/cdev exec env KAMA_SAN=1 ./run_tests.sh          # ASan + UBSan
 tools/cdev exec env KAMA_WASM=1 ./run_tests.sh         # wasm (net/process auto-skip)
 tools/cdev exec sh tools/check-noheap.sh               # nothing new reaches the heap unbidden
 tools/cdev exec sh tools/check-embedded.sh             # freestanding build still links
+sh tools/check-treesitter.sh                          # every new fixture must PARSE — run on the HOST
 ```
 
-Baseline at the end of the prerequisite batch: **native 867 / ASan 832 / wasm 806, all 0 failed.**
-(End of M1 was 855 / 821 / 795.)
+⚠️ **`check-treesitter.sh` SKIPs when no tree-sitter CLI is present**, which is always the case inside the
+container — that is how it sat red on `dev` through a whole campaign. Run `npm ci` in `tree-sitter-kama`
+once, then run the script on the **host**. Note `./kama` is a symlink to whichever platform built LAST, so
+a `tools/cdev make` leaves the host script pointing at a Linux binary.
+
+Baseline entering M2a: **native 915 / ASan 879 / wasm 853, all 0 failed** (re-measured 2026-08-04 after
+the inheritance campaign; the 867/832/806 this file was written with is stale, as was 855/821/795 before it).
 
 One harness invariant was added with that batch and is worth knowing before you write fixtures: an `xfail`
 must be rejected **cleanly**. A compiler that dies by signal used to satisfy "did not build" and scored a
