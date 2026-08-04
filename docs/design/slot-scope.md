@@ -67,13 +67,13 @@ is the ORIGINAL brief and is now history — read it for the reasoning, not for 
 
 ### Step 6 — inheritance hole 1 (the next session starts here)
 
-Unchanged from [inheritance.md](inheritance.md): `this.base = Base.make(…)` plus a `Base`/`base` alias pair
-mirroring `This`/`this`. `This` is contextual, resolved in `cType` (`kama.cemit.cpp` ~`:694`) and bound by
-`ScopedStr _thisType` at 11 sites — that is the recipe. `Base` must fail cleanly when there is no base, and
-sit inside `#if KAMA_INHERITANCE` or `check-no-inheritance` breaks. Extend `checkNamedCtorComplete` with one
-narrow rule: `this.base` assigned exactly once, from a ctor call on the base type. Its repro is parked at
-`tests/pending/base_ctor_not_run.kama`. **The shallow fix is a trap — read that section of inheritance.md
-first.**
+**Read [inheritance.md](inheritance.md) § *Cold start for hole 1*** — re-verified against the tree
+2026-08-03, with the line numbers corrected and one finding that changes the shape of the work:
+**`this.base = Base.make(…)` does not parse**, so hole 1 needs a grammar production, not just emitter work.
+`base` is a keyword with exactly two productions (`kama.y:1258-1259`) and `Base` is not reserved at all.
+The repro at `tests/pending/base_ctor_not_run.kama` had also gone stale — it was being rejected by the
+no-public-widening rule rather than demonstrating hole 1 — and is now fixed and live again (returns 12).
+**The shallow fix is a trap — read that section first.**
 
 ### Step 7 — closeout
 

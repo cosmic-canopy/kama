@@ -285,7 +285,7 @@ wants without breaking anything that exists.
 | **3** shadowing | ✅ shipped — in `buildVtables`, which already walks the chain. Private-name reuse stays legal and is pinned by `tests/inherit_private_name_reuse`. |
 | **5** base diagnostics | ✅ shipped — "no base at all" / "no such member" / "outside a method" are three messages now, not the fragment `"base access"`. Pinned by `tests/xfail/base_without_base_class`. |
 | **6** `: base(...)` orphaned | ✅ shipped — the production is KEPT (it is the only reason a class-named ctor parses, hence the guided message) and given its own answer. Pinned by `tests/xfail/base_ctor_delegation`. |
-| **1** base ctor never runs | ☐ — blocked on the slot-scope campaign (D5, the implicit `this`). |
+| **1** base ctor never runs | ☐ — **UNBLOCKED** 2026-08-03: the slot-scope campaign shipped the implicit `this` (steps 1–5). This is the next thing to build; the cold-start detail below was re-verified against the tree on 2026-08-03. |
 
 ### Hole 1 in the emitter, and the shallow fix to avoid
 
@@ -305,7 +305,8 @@ it is the same one (user, 2026-08-02). Once a derived ctor must write `this.base
 `Base.make` builds a `Base` and **its own** fill applies Base's initializers. One bug, one fix.*
 
 The reason to keep the symptom written down is the **trap it sets**, which is exactly why mis-filing it
-was dangerous. The bare-local fill loop lives at `kama.cemit.cpp:2613` and iterates `_classes[ty].fields`
+was dangerous. The bare-local fill loop lives at `kama.cemit.cpp:2427` (`emitAggregateFill`, moved from
+`:2613`) and iterates `_classes[ty].fields`
 — own fields only — while the `__vptr` store six lines below it *does* reach into the base through
 `vptrPrefix`'s `__base.` hops. So the fill demonstrably knows how to walk the base chain, and making it
 also apply base field initializers is a three-line change sitting right there.
@@ -315,6 +316,51 @@ removed ("nothing is constructible by default") — and it papers over the hole 
 field defaults would apply, but the base's *constructor* still would not run, so any base invariant that
 needs computation rather than a literal is still unenforceable. The fix is the one above: install a base
 VALUE built by the base's own ctor.
+
+### Cold start for hole 1 — verified against the tree, 2026-08-03
+
+Everything here was re-checked after the slot-scope campaign, because line numbers moved and one item in
+the plan turns out not to parse at all. Re-verify anyway; that is the lesson of every brief in this repo.
+
+**The repro is live again.** `tests/pending/base_ctor_not_run.kama` builds and returns 12 — a `Derived`
+whose base field `x` no constructor ever assigned. ⚠️ It had gone stale: the original spelled `sum()` on
+`Derived`, which the no-public-widening rule (item A) now rejects, so the file was demonstrating item A
+rather than hole 1. Rewritten to declare the public surface on `Base` over a `protected virtual` hook.
+
+**⚠️ `this.base = Base.make(…)` does not parse.** This is the plan of record everywhere else in the docs,
+and it is not currently expressible:
+
+    tests_basetest.kama:9:37: Parse error: syntax error, unexpected BASE, expecting IDENTIFIER or AS
+
+`base` is a keyword (`kama.l` → `BASE`), and `kama.y:1258-1259` gives it exactly two productions —
+`BASE DOT IDENTIFIER` (a `BaseAccessNode`) and `BASE LEFT_BRACKET … RIGHT_BRACKET`. There is no production
+for `base` as a standalone expression, and none for `base` as a member name after `this.`. So hole 1 needs
+**grammar work**, not just emitter work, and the first decision of the session is which spelling to add:
+
+| spelling | grammar cost | reads |
+| --- | --- | --- |
+| `this.base = Base.make(…)` | a `this.`-qualified BASE production, plus `BaseAccessNode` gaining an assignable form | beside `this.x = …`, which is D5's deciding argument for the implicit `this` |
+| `base = Base.make(…)` | one production for BASE as an assignment target | beside the existing `base.method()`, and a smaller change |
+
+**`Base` the type name is also not reserved** — `grep '"Base"' kama.cemit.cpp kama.l` finds nothing. It has
+to be added contextually, the way `This` is: resolved in `cType` at `kama.cemit.cpp:711` (the brief's old
+`~:694`) and bound by `ScopedStr _thisType` — **11 sites, still 11**, which remains the recipe to copy.
+`Base` must fail cleanly in a type with no base, and sit inside `#if KAMA_INHERITANCE` or
+`tools/check-no-inheritance.sh` breaks.
+
+**`checkNamedCtorComplete` (`kama.cemit.cpp:9838`) walks `owner.fields` only** — own fields, no base chain
+— which is precisely the "stops at the class boundary" claim, now confirmed rather than assumed. The narrow
+extension it needs: `base` assigned exactly once, from a ctor call on the base type. No general
+whole-value-assignment support is required, and none should be added — base fields are private, so there is
+nothing to tweak through afterwards, and `slot P r; r = P.make(…); r.y = 5;` is rejected **by design**
+(delegation hands off to a more specialized ctor; it is not build-then-adjust).
+
+**The emitted base subobject is `__base`**, offset 0, reached through `basePathTo` / `vptrPrefix`'s
+`__base.` hops (`kama.cemit.cpp:9027-9032`). A `Base` value assigned into it is a plain struct store.
+
+**Verification**, beyond the standard set: the repro must stop compiling (move it out of `tests/pending/`
+into `tests/xfail/` with a `.msg` guard), a positive fixture must show a base ctor's work reaching a derived
+instance, and `Leaf.make().rank()` must return the base's field initializer rather than 0.
 
 ### The two `final`s are different things, and the cap affects only one of them
 
