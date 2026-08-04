@@ -1,0 +1,12 @@
+// Rule 3: the fill must sit on the SAME unconditional path as the declaration. A conditionally-filled slot
+// cannot be tested before use — slot validity is a compile-time fact, never a runtime check — and keeping
+// it unconditional is what makes the drop statically decidable at every exit.
+//
+// Measured RELATIVE to the declaration: a slot declared AND filled inside the same branch is fine (see
+// tests/slot_match_assign case 4). What is rejected is a fill a path can skip.
+fn void fill(out int32 d) { d = 1; }
+fn void pick(bool c) {
+    slot int32 v;
+    if (c) { fill(d: out v); }   // ERROR: the declaration is outside this branch
+}
+fn int32 main() { pick(c: true); return 7; }

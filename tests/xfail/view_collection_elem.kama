@@ -1,3 +1,4 @@
-// A DynamicArray of views would store borrows that dangle. Own the elements instead.
 import std::collections::{DynamicArray, View};
-fn int32 main() { slot DynamicArray<View<int32>> xs; return 0; }
+// A `view` borrows; storing one as a collection ELEMENT would outlive the buffer it borrows.
+fn int32 use(DynamicArray<View<int32>> xs) { return 0; }
+fn int32 main() { return 0; }

@@ -1,0 +1,7 @@
+// Rule 2: a hole nothing fills is a dead declaration. Eliding its drop silently was the wrong answer — the
+// storage exists and the reader has been told a callee will fill it, so an unfilled slot is a statement
+// that never came true, not an optimization opportunity.
+fn int32 main() {
+    slot int32 unused;
+    return 7;
+}

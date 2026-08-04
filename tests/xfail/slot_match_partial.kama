@@ -1,13 +1,12 @@
-// The other direction: ONE arm leaves the slot unassigned, so it is still a hole after the match. The
-// join is a UNION — a key stays unassigned if ANY arm that reaches the join left it so. If this ever
-// compiles, the match join has been loosened too far and `slot` no longer guarantees anything.
+// The other direction: ONE arm leaves the destination unassigned, so it is still a hole after the match.
+// The join is a UNION — a key stays unassigned if ANY arm that reaches the join left it so. If this ever
+// compiles, the match join has been loosened too far and `out` no longer guarantees anything.
 enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
-fn int main() {
-    slot int32 a;
-    match (classify(x: 1)) {
+fn void pickInto(int32 x, out int32 a) {
+    match (classify(x: x)) {
         case Ok:  { a = 1; }
         case Bad: { }              // leaves `a` a hole
     };
-    return a;
 }
+fn int main() { slot int32 v; pickInto(x: 1, a: out v); return v; }

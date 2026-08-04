@@ -1,12 +1,12 @@
 // An arm that DIVERGES contributes nothing to the join — but it must not be mistaken for an arm that
-// ASSIGNS. Here the only non-diverging arm leaves the slot a hole, so the read after must still fail.
+// ASSIGNS. Here the only non-diverging arm leaves the destination a hole, so the join must still see it
+// as unassigned when the function returns.
 enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
-fn int main() {
-    slot int32 a;
-    match (classify(x: 1)) {
-        case Ok:  { }              // reaches the join, assigns nothing
-        case Bad: { return 5; }    // diverges
+fn void pickInto(int32 x, out int32 a) {
+    match (classify(x: x)) {
+        case Ok:  { }                    // reaches the join, assigns nothing
+        case Bad: { a = 5; return; }     // diverges (and assigns, so this arm is not the problem)
     };
-    return a;
-}
+}                                        // ERROR: 'a' not assigned on every path
+fn int main() { slot int32 v; pickInto(x: 1, a: out v); return v; }

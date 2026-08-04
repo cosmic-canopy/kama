@@ -2555,18 +2555,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // zero-inits, it is live, and its destructor runs — which is the only reason a raw-handle
                 // resource ever needed a runtime drop guard. Warn while the corpus is swept; M3 flips this
                 // to a hard error and drops the implicit default-ctor call below with it.
-                if (lvd && !lvd->isSlot && !d->initializer)
-                    unsupported(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring "
-                                 "a hole that must be assigned before it is used) or give it a value").c_str(),
-                                n->line);
                 // A ctor's value is `this`, so declaring uninitialized storage OF THE TYPE BEING BUILT is
                 // a second name for the same thing — and there is no way to hand two of them back. `this`
                 // is the only spelling. An INITIALIZED local of the same type is untouched: it is a
                 // finished value like any other, not a second thing under construction.
-                if (_inNamedCtorBody && !d->initializer && _currentClass && ty == _currentClass->name)
+                //
+                // Checked BEFORE the missing-initializer rule, and instead of it: here `slot` is not the
+                // answer the general rule would offer, so reporting both would give one declaration two
+                // messages, the first of them pointing the wrong way.
+                bool ctorOwnType = _inNamedCtorBody && !d->initializer
+                                && _currentClass && ty == _currentClass->name;
+                if (ctorOwnType)
                     unsupported(("a constructor builds `" + ty + "`, and that value is `this` — assign its "
                                  "fields directly (`this.<field> = …`) instead of declaring `" + nm
                                  + "`").c_str(), n->line);
+                else if (lvd && !lvd->isSlot && !d->initializer)
+                    unsupported(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring "
+                                 "a hole that must be assigned before it is used) or give it a value").c_str(),
+                                n->line);
                 // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
@@ -10107,6 +10113,15 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     std::set<std::string> unassigned;                        // live keys: "x" (bare) or "x.f" (resource field)
     std::set<std::string> outParams;                         // `out` params — must be assigned by every return
     std::set<std::string> slotDecls;                         // locals declared `slot T x;` (any type)
+    // Step 5's three rules. A `slot` names the storage an `out` parameter is about to fill, and nothing
+    // else: it must be filled by an `out` argument (rule 1), it must be filled somewhere (rule 2), and the
+    // fill must sit on the same unconditional path as the declaration (rule 3), so slot liveness is a
+    // compile-time fact at every exit rather than something to test for at runtime.
+    std::map<std::string, int> slotDeclLine;                  // slot -> its declaration line (for rule 2)
+    std::map<std::string, int> slotDeclDepth;                 // slot -> conditional depth where declared
+    std::set<std::string> slotOutFilled;                      // slots an `out` argument has filled
+    int condDepth = 0;                                        // +1 inside a branch/loop body a path may skip
+    auto slotFillRule = [&](const char* what, int line) { unsupported(what, line); };
     // Class-typed slots. Their storage is VALID-but-empty from the declaration on: the M8d.1 fill loop
     // applies field defaults, calls each field's `default` ctor, and sets the vptr. So handing one to a
     // callee (`collectKeys(dest: acc)` — a `ref` borrow the analysis can't see, since the `ref` marker is
@@ -10225,6 +10240,28 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
         return (bareOwning.count(*id->value) || resFields.count(*id->value)) ? *id->value : "";
     };
 
+    // Rule 1 — a `slot` is filled by an `out` argument and NOTHING else. Reported at the offending fill,
+    // named for the mechanism used, so the message points at the spelling that replaces it.
+    auto slotBadFill = [&](const std::string& nm, const char* how, const char* instead, int line) {
+        if (!slotDecls.count(nm) || slotOutFilled.count(nm)) return;   // filled already: an ordinary value now
+        slotFillRule(("`" + nm + "` is a `slot`, which only an `out` argument may fill — this " + how
+                      + ". " + instead).c_str(), line);
+        slotDecls.erase(nm);          // reported once; don't re-report the same hole at every later fill
+        slotDeclLine.erase(nm);
+    };
+    // Rule 3 — the fill must sit on the same unconditional path as the declaration. Measured RELATIVE to
+    // the declaration, so a slot declared and filled inside the same loop body is fine; what is rejected
+    // is a fill a path can skip, which would make slot liveness a runtime question.
+    auto slotOutFill = [&](const std::string& nm, int line) {
+        if (!slotDecls.count(nm)) return;
+        slotOutFilled.insert(nm);
+        auto d = slotDeclDepth.find(nm);
+        if (d != slotDeclDepth.end() && condDepth != d->second)
+            slotFillRule(("`" + nm + "` is a `slot` filled inside a branch or loop the declaration is "
+                          "outside of — an `out` fill must be on the same unconditional path, so the "
+                          "value's liveness is decided at compile time").c_str(), line);
+    };
+
     std::function<void(SharedExpression)> scan;
     std::function<void(SharedStatement, bool)> walk;
 
@@ -10234,7 +10271,9 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     // the set is what keeps those two from leaking out of a branch that may never run.
     auto walkSkippable = [&](SharedStatement s) {
         std::set<std::string> before = unassigned;
+        ++condDepth;          // a path may skip this body — a slot fill inside it is not unconditional
         walk(s, true);        // INSIDE the branch, sequencing is definite — `q = …; return;` must count…
+        --condDepth;
         unassigned = before;  // …but nothing it did survives the join.
     };
 
@@ -10263,7 +10302,12 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             rec(as->expression);
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
             std::string ax = addrOfLocal(inv);
-            if (!ax.empty()) { markAssigned(ax); return; }   // addr(of: x) — manual control; x is now managed
+            if (!ax.empty()) {                               // addr(of: x) — manual control; x is now managed
+                slotBadFill(ax, "vouches for it with `addr(of: …)`",
+                            "take an `out` parameter instead — `std::ptr::relocate` is the one for a raw "
+                            "move-out", inv->line);
+                markAssigned(ax); return;
+            }
             // `slot FixedArray<T,A> r; r.allocBuffer(size: size); return give r;` — calling a method ON a
             // slot FILLS it. The receiver is passed by pointer and the method's whole job here is to build
             // the value, so this is a write, not a read; the builder shape is how much of the stdlib
@@ -10273,24 +10317,31 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                 if (auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get()))
                     if (rid->value && (!rid->qualifier || rid->qualifier->empty())
                         && slotClassDecls.count(*rid->value)) {   // valid-empty only — NOT an Owned/Shared hole
+                        slotBadFill(*rid->value, "fills it with a method call",
+                                    "give it a value instead — `T x = T.empty();`", inv->line);
                         untrack(*rid->value);
                         if (inv->args) for (auto& a : *inv->args) if (a) {
                             std::string ot = outArgTarget(a.get());
-                            if (!ot.empty()) markAssigned(ot); else rec(a->expression);
+                            if (!ot.empty()) { slotOutFill(ot, inv->line); markAssigned(ot); }
+                            else rec(a->expression);
                         }
                         return;
                     }
             rec(inv->expression);
             if (inv->args) for (auto& a : *inv->args) if (a) {
                 std::string ot = outArgTarget(a.get());
-                if (!ot.empty()) { markAssigned(ot); continue; }
+                if (!ot.empty()) { slotOutFill(ot, inv->line); markAssigned(ot); continue; }
                 // Handing a class slot to a callee fills it — this is the `ref`-destination shape
                 // (`this.root.collectKeys(dest: acc)`), and the `ref` marker is optional at call sites so
                 // there is nothing syntactic to key off. Safe either way: by-ref the callee builds it, and
                 // by-value it copies a valid empty value.
                 if (auto* aid = dynamic_cast<IdentifierNode*>(a->expression.get()))
                     if (aid->value && (!aid->qualifier || aid->qualifier->empty())
-                        && slotClassDecls.count(*aid->value)) { untrack(*aid->value); continue; }
+                        && slotClassDecls.count(*aid->value)) {
+                        slotBadFill(*aid->value, "hands it to a callee as a `ref` destination",
+                                    "mark the parameter `out` and pass it `out`", a->expression->line);
+                        untrack(*aid->value); continue;
+                    }
                 rec(a->expression);
             }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
@@ -10367,6 +10418,8 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
                 if (lv->isSlot || !owned.empty()) {
                     if (lv->isSlot) {
                         slotDecls.insert(nm);
+                        slotDeclLine[nm] = n->line;
+                        slotDeclDepth[nm] = condDepth;
                         // `owned.empty()` is load-bearing: an `Owned`/`Shared` slot is NOT valid-but-empty.
                         // Its zero value is a NULL pointer, so calling through it derefs null — the very
                         // thing this check exists to catch. Only a plain class, whose field-default fill
@@ -10386,6 +10439,22 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             std::string wk = writeTargetKey(as->unaryExpression);
             if (wk.empty()) scan(as->unaryExpression);       // a write-through LHS may itself read
             scan(as->expression);
+            // Rule 1 — an assignment is not a slot fill. `T x = …;` states the same thing with the value
+            // in hand, and a branch-initialized one has a stronger spelling still (`match`/ternary build
+            // a resource), so nothing is lost by removing the hole.
+            {
+                std::string an;                                    // the slot this assignment targets
+                if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get())) {
+                    if (id->value && (!id->qualifier || id->qualifier->empty())) an = *id->value;
+                } else if (auto* ma = dynamic_cast<MemberAccessNode*>(as->unaryExpression.get())) {
+                    if (auto* bid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                        if (bid->value && (!bid->qualifier || bid->qualifier->empty())) an = *bid->value;
+                }
+                if (!an.empty())
+                    slotBadFill(an, "assigns it",
+                                "give the declaration a value instead — a `match` or a ternary builds one "
+                                "for a branch", n->line);
+            }
             if (topLevel) {
                 if (!wk.empty()) unassigned.erase(wk);
                 else if (auto* id = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))  // `h = …` reassigns whole
@@ -10480,6 +10549,15 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     };
 
     for (auto& st : *body->statements) walk(st, true);
+    // Rule 2 — a hole nothing ever fills is a dead declaration. Silently eliding its drop was the wrong
+    // answer: the storage exists, the reader is told a callee will fill it, and no callee does.
+    for (auto& nm : slotDecls)
+        if (!slotOutFilled.count(nm)) {
+            auto dl = slotDeclLine.find(nm);
+            slotFillRule(("`" + nm + "` is a `slot` that no `out` argument ever fills — a hole nothing "
+                          "fills is a dead declaration; give it a value, or pass it to a callee that "
+                          "takes an `out` parameter").c_str(), dl == slotDeclLine.end() ? body->line : dl->second);
+        }
     // Falling off the end is a return too (a `void` function need not spell one). Skip it when the body
     // ends in a jump — that path was already verified at the ReturnNode.
     if (!outParams.empty()

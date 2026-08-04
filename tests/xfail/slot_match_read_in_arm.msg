@@ -1,1 +1,1 @@
-is used before it is assigned
+it is write-only

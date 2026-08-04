@@ -1,12 +1,11 @@
-// Reading a slot INSIDE an arm, before that arm assigns it, is still a read-before-assign. Each arm
+// Reading a destination INSIDE an arm, before that arm assigns it, is still a read-before-assign. Each arm
 // starts from the pre-match state, so an assignment in a SIBLING arm must not make this look filled.
 enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
-fn int main() {
-    slot int32 a;
-    match (classify(x: 1)) {
+fn void pickInto(int32 x, out int32 a) {
+    match (classify(x: x)) {
         case Ok:  { a = 1; }
-        case Bad: { return a; }    // `a` is not assigned on THIS path
+        case Bad: { int32 r = a; a = r; }    // ERROR: `a` is not assigned on THIS path yet
     };
-    return a;
 }
+fn int main() { slot int32 v; pickInto(x: 1, a: out v); return v; }

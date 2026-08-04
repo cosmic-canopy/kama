@@ -5,6 +5,6 @@
 // reported with the namespace to import; see checkTypeResolves.
 fn int main()
 {
-    slot Nonexistent thing;
+    Nonexistent thing = 0;
     return 42;
 }

@@ -1,7 +1,10 @@
-// The payoff: an unassigned `slot` has NO destructor emitted, so "drop only if live" is proven statically
-// instead of defended against at runtime with a niche check. Two Trackers side by side — one left
-// unassigned, one assigned — so the property is differential and cannot pass by the dtor simply never
-// being emitted. Verified twice: at runtime by the drop counter here, and against the emitted C by
+// The payoff: a `slot` has NO destructor emitted where it is provably still empty, so "drop only if live"
+// is proven statically instead of defended against at runtime with a niche check.
+//
+// The differential now lives WITHIN one slot, across two exit points, because a slot that is never filled
+// is an error (a hole nothing fills is a dead declaration). The emitter tracks move state in emission
+// order, so an exit that PRECEDES the fill is provably empty and elides the drop, while an exit after it
+// does not. Verified twice: at runtime by the drop counter here, and against the emitted C by
 // tools/check-slot.sh (an exit code alone cannot tell a missing drop from a drop that is a no-op).
 static int32 drops = 0;
 
@@ -12,13 +15,17 @@ type resource Tracker {
     ~Tracker() { drops = drops + 1; }
 }
 
-fn int32 run() {
-    slot Tracker unfilled;                     // never assigned -> no Tracker__dtor emitted
-    Tracker filled = Tracker.make(id: 1);      // assigned       -> Tracker__dtor emitted
-    return filled.value();
+fn void makeInto(int32 id, out Tracker dst) { dst = Tracker.make(id: id); }
+
+fn int32 run(bool early) {
+    slot Tracker t;
+    if (early) { return 0; }                   // provably empty here -> NO dtor at this exit
+    makeInto(id: 1, dst: out t);               // the fill: an `out` argument, on the declaration's own path
+    return t.value();                          // live here          -> dtor at this exit
 }
 
 fn int main() {
-    int32 id = run();
-    return (drops == 1 && id == 1) ? 7 : 99;   // exactly ONE drop ran, not two
+    int32 a = run(early: true);                // returns 0, drops nothing
+    int32 b = run(early: false);               // returns 1, drops exactly once
+    return (drops == 1 && a == 0 && b == 1) ? 7 : 99;
 }

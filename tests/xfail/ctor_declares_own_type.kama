@@ -6,6 +6,6 @@
 // restriction is on uninitialized storage, not on the type.
 type value P {
     public int32 x;
-    public ctor make(int32 x) { slot P r; r.x = x; return give r; }
+    public ctor make(int32 x) { P r; r.x = x; return give r; }
 }
 fn int main() { P p = P.make(x: 1); return p.x; }

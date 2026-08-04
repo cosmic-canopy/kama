@@ -1510,35 +1510,39 @@ not from a funnel). Constructor **overloading** is a standing non-goal — named
 
 ## Uninitialized storage — `slot` ✅
 
-A constructor proves every field is assigned (above), but storage declared **outside** one needed the same
-treatment: a local with no initializer is a hole, and leaving it unstated meant it zero-initialized, counted
-as live, and ran its destructor. **`slot T x;` states it.**
+A `slot` names the storage an **`out` parameter is about to fill** — declared externally so the reader can
+see the scope the value will live in. That is the whole of it, and it is the only kind of local a kama
+program may leave without a value:
 
 ```kama
-slot File f;                     // a HOLE: no value in it yet
-f = File.open(path: p, mode: Read);   // now it is live
+slot File f;                          // a HOLE: an `out` argument will fill it
+openInto(path: p, dst: out f);        // now it is live, and drops normally from here
 ```
 
-A `slot` is **illegal to read until it is definitely assigned**, and — the point — **an unassigned slot has
-no destructor emitted**. "Drop only if live" is therefore *proven*, not defended against at runtime.
-A local with no initializer and no `slot` is a compile error, and `slot` with an initializer is one too:
-each thing is said exactly one way. `slot` does **not** run the type's `default` constructor; spell
-`T x = T.empty();` if that is what you want.
+**Three rules, and they are what make a hole worth declaring:**
 
-**What fills a hole.** Any of these makes a slot live, after which it drops normally:
+1. **Only an `out` argument fills a slot.** Not an assignment, not a field write, not a method call, not
+   `addr(of: x)`. A value that arrives one line late is an ordinary local — `T x = …;` says so with the
+   value in hand, and a branch has a stronger spelling still, since `match` and the ternary are
+   value-producing and can build a `resource` (`Conn c = match (k) { case A: Conn.tcp(fd: 3); … };`).
+2. **A slot with no `out` fill anywhere is an error.** A hole nothing fills is a dead declaration, not an
+   opportunity to elide a drop.
+3. **The fill sits on the same unconditional path as the declaration** — a statement of the declaring
+   block, or of a nested block that always runs. Not inside an `if`, a `match` arm or a loop the
+   declaration is outside of. Measured *relative* to the declaration, so a slot declared **and** filled
+   inside one branch is fine. The reason is that a conditionally-filled slot cannot be tested before use:
+   slot validity is a compile-time fact, never a runtime check.
 
-| | |
-|---|---|
-| whole assignment | `x = …` |
-| field write | `x.f = …` — how a factory builds a value field by field |
-| `out` argument | `f(dst: out x)` — the callee is separately proven to assign it |
-| method call | `x.reserve(n: 8)` — the builder shape (`slot FixedArray<T,A> a; a.allocBuffer(size: n);`) |
-| `addr(of: x)` | the vouch for the raw move-out dance, inside `unsafe` |
+A `slot` is **illegal to read until it is filled**, and — the point — **no destructor is emitted where it is
+provably still empty**. "Drop only if live" is therefore *proven*, not defended against at runtime. Move
+state is tracked in emission order, so this is decided **per exit point**: a `return` that precedes the fill
+drops nothing, while one after it drops normally. A local with no initializer and no `slot` is a compile
+error, and `slot` with an initializer is one too: each thing is said exactly one way. `slot` does **not**
+run the type's `default` constructor; spell `T x = T.empty();` if that is what you want.
 
-**Assigned on only some paths?** Then it drops. A slot's storage is always valid — the declaration applies
-field defaults, calls each field's `default` ctor, and sets the vtable pointer — so the drop is correct when
-it was filled and a no-op on the zero value when it was not. Only a slot untouched on *every* path has its
-drop elided.
+Rule 3 is about the slot's own declaration, not about the callee: an **`out` parameter** is still proven
+filled on *every* path, so the callee may fill it through an `if`/`else`, a `match`, or an early return —
+that join analysis is where conditional filling legitimately lives.
 
 Two consequences worth stating plainly. A **class-typed** slot is valid-but-empty from the declaration on,
 so reading a non-owning field of one or handing it to a callee is fine; an **`Owned`/`Shared`** slot is not

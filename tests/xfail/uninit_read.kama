@@ -1,4 +1,5 @@
 // Reading uninitialized storage must be rejected BY KAMA, with a kama-level message. This used to be
 // caught only by the C compiler (`-Werror=uninitialized` against generated code), which meant `kama check`
 // and the LSP said the file was fine. `slot` makes it a front-end rule.
-fn int main() { slot int32 x; return x; }
+fn void fill(out int32 d) { d = 1; }
+fn int main() { slot int32 x; int32 r = x; fill(d: out x); return r; }

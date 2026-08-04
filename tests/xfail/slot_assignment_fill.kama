@@ -1,0 +1,10 @@
+// Rule 1: a `slot` names the storage an `out` parameter is about to fill, and that is ALL it does. A hole
+// filled by ASSIGNMENT is not a slot — it is a local whose value arrives one line late, and `T x = …;` says
+// so with the value in hand. This is the habit the campaign removed: `slot` was the nearest keyword when
+// implicit default construction went away, and 73% of its uses were construction rather than holes.
+// (Branch initialization has a stronger spelling still — `match` and the ternary both build a value.)
+fn int32 main() {
+    slot int32 area;
+    area = 6 * 7;      // ERROR: an assignment does not fill a slot
+    return area;
+}

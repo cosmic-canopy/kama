@@ -4,10 +4,12 @@
 // access — exactly what GOALS.md's "favor one way to do a thing" rules out. It is now an error.
 // The legitimate `::` forms all keep a TYPE/NAMESPACE head and are unaffected: `Vec2::dot(...)` (static
 // fn), `Type::NAME` (comptime const), `Color::Blue` (enum variant), `ns::counter` (module static).
+@generate(of)
 type value Inner { public int32 deep; }
+@generate(of)
 type value Outer { public Inner inner; }
 
 fn int32 main() {
-    slot Outer o;
+    Outer o = Outer.of(inner: Inner.of(deep: 1));
     return o::inner::deep;   // ERROR: `o` is a value — write `o.inner.deep`
 }

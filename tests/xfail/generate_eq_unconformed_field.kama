@@ -2,11 +2,12 @@
 // `Plain` opts into nothing, so the derive cannot walk it and says which field type is the problem
 // (rather than emitting a memcmp that would compare padding and be wrong for any type whose equality
 // is not its representation).
+@generate(of)
 type value Plain { public int32 v; }
 
-@generate(Equatable)
+@generate(Equatable, of)
 type value Holder {
     public int32 id;
     public Plain p;      // not Equatable
 }
-fn int32 main() { slot Holder h; return h.id; }
+fn int32 main() { Holder h = Holder.of(id: 1, p: Plain.of(v: 0)); return h.id; }

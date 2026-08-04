@@ -9,7 +9,7 @@ type resource Widget {
 }
 
 fn int32 main() {
-    slot Ptr<Widget> buf;
+    Ptr<Widget> buf = null;
     unsafe { buf = cast<Ptr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)))); }
     Widget w = Widget.make(id: 42);
     unsafe { buf[0] = give w; }   // consumes w

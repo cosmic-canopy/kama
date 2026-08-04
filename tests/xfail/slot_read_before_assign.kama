@@ -1,6 +1,10 @@
-// A `slot` holds no value until it is assigned, so reading one is a compile error. A PRIMITIVE slot has no
-// field-default fill behind it, so this is a genuine uninitialized read.
+// A `slot` holds no value until an `out` argument fills it, so reading one before that is a compile error.
+// A PRIMITIVE slot has no field-default fill behind it, so this is a genuine uninitialized read. The fill
+// below is real — this pins the ORDER, not the absence of a fill (tests/xfail/slot_never_filled does that).
+fn void fill(out int32 d) { d = 1; }
 fn int main() {
     slot int32 x;
-    return x;      // ERROR: never assigned
+    int32 r = x;       // ERROR: read before the fill
+    fill(d: out x);
+    return r;
 }

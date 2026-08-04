@@ -1,1 +1,1 @@
-is used before it is assigned
+is not assigned on every path
