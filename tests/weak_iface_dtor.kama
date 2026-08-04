@@ -30,14 +30,17 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
     public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak.make(p: this.p, c: this.c); }
     ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); } } } }
 }
+// Build the strong ref, hand back a weak one through `out`, and let the strong drop on the way out —
+// which is what makes the weak dangle for the upgrade attempt below.
+fn int32 makeAndWeaken(int32 r, out RcWeak<Shape> w) {
+    Rc<Shape> a = new Circle.make(r: r);
+    w = a.downgrade();
+    return a.area();            // 49, read while `a` is still live
+}   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)
+
 fn int32 main() {
     slot RcWeak<Shape> w;
-    int32 v = 0;
-    {
-        Rc<Shape> a = new Circle.make(r: 7);
-        w = a.downgrade();
-        v = a.area();               // 49
-    }   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)
+    int32 v = makeAndWeaken(r: 7, w: out w);
     Optional<Rc<Shape>> o = w.tryUpgrade();
     int32 up = match (o) { case Some(value: r): r.area(); case None: 0; };   // 0 (expired)
     return v + up;                  // 49

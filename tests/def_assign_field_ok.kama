@@ -1,15 +1,16 @@
 import std::memory::{Owned};
-// An owning field of a resource local, assigned unconditionally, may then be read (inside the owner's own
-// method, where the private field is visible).
+// An owning field of a resource local, once the local is definitely assigned, may then be read (inside
+// the owner's own method, where the private field is visible).
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 type resource Holder {
     Owned<Box> a;
     public ctor make(Owned<Box> a) { this.a = give a; }
+    static fn void into(Owned<Box> a, out Holder dst) { dst = Holder.make(a: give a); }
     public static fn int32 build(int32 v) {
         Owned<Box> b = new Box.make(v: v);
         slot Holder h;
-        h.a = give b;          // owning field assigned unconditionally
-        return h.a.get();      // then read -> ok. (42)
+        Holder::into(a: give b, dst: out h);   // the `out` fill — the callee is proven to assign it
+        return h.a.get();              // then read -> ok. (42)
     }
 }
 fn int32 main() { return Holder::build(v: 42); }

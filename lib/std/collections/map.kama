@@ -344,7 +344,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
     fn void growTo(int32 nc) {
-        slot Ptr<K> nk; slot Ptr<V> nv; slot Ptr<uint8> ns;
+        Ptr<K> nk = null; Ptr<V> nv = null; Ptr<uint8> ns = null;
         unsafe {
             nk = cast<Ptr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
             nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));

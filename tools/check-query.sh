@@ -84,21 +84,21 @@ expect --type 17:22 -- "value Point"        # a Point type reference
 expect --type 11:14 -- "resource Widget"    # the Widget decl name
 expect --type 17:9  -- "function midpoint"  # a function decl name
 # M3: hover/def now reach BODY use-sites too (they are indexed positions like any other).
-expect --type 18:10 -- "value Point"        # 'Point m;' inside midpoint's body
-expect --def  25:10 -- "shapes.kama:6:11"   # 'Point p;' inside main's body -> Point decl
+expect --type 18:5  -- "value Point"        # 'Point m' inside midpoint's body
+expect --def  25:5  -- "shapes.kama:6:11"   # 'Point p' inside main's body -> Point decl
 
 echo "check-query: referencesAt (find-references, incl. body use-sites)"
 # Every Point spelling: the decl, the Widget field + ctor param, midpoint's return + 2 params, and the
-# two BODY declarations (18:10, 25:10) that only the M3 reference index can see.
+# two BODY declarations (18:5, 25:5) that only the M3 reference index can see.
 expect --refs 6:11 -- "shapes.kama:6:11"    # includeDecl -> the declaration itself
 expect --refs 6:11 -- "shapes.kama:12:4"    # 'Point origin' field type
 expect --refs 6:11 -- "shapes.kama:13:21"   # 'Point at' ctor param
 expect --refs 6:11 -- "shapes.kama:17:3"    # midpoint's return type
-expect --refs 6:11 -- "shapes.kama:18:9"    # BODY: 'Point m;' in midpoint
-expect --refs 6:11 -- "shapes.kama:25:9"    # BODY: 'Point p;' in main
+expect --refs 6:11 -- "shapes.kama:18:4"    # BODY: 'Point m;' in midpoint
+expect --refs 6:11 -- "shapes.kama:25:4"    # BODY: 'Point p;' in main
 # A cursor on a USE resolves to the same key, so it returns the same set as a cursor on the decl.
-expect --refs 18:10 -- "shapes.kama:6:11"
-expect --refs 18:10 -- "shapes.kama:25:9"
+expect --refs 18:5 -- "shapes.kama:6:11"
+expect --refs 18:5 -- "shapes.kama:25:4"
 # Prelude/std symbols are never renameable targets and have no user references to report.
 reject --refs 7:12 -- "shapes.kama"         # 'int32' (a builtin) -> "no references"
 
@@ -122,13 +122,13 @@ expect --type 30:12 -- "local seeded"       # a local USE
 expect --type 22:33 -- "param bias"         # a parameter declaration
 expect --type 19:17 -- "field limit"
 expect --type 14:4  -- "enum-member Ok"
-expect --def  30:12 -- "scopes.kama:29:10"  # local use -> its declaration
+expect --def  30:11 -- "scopes.kama:29:10"  # local use -> its declaration
 expect --def  23:20 -- "scopes.kama:19:17"  # 'this.limit' -> the field declaration
 expect --def  53:22 -- "scopes.kama:14:4"   # 'Code::Ok'  -> the enum member declaration
 expect --def  55:13 -- "scopes.kama:14:4"   # 'case Ok:'  -> the same enum member
 
 echo "check-query: M3.4 find-references"
-expect --refs 29:10 -- "scopes.kama:30:12"  # local 'seeded' decl -> its one use
+expect --refs 29:10 -- "scopes.kama:30:11"  # local 'seeded' decl -> its one use
 expect --refs 22:33 -- "scopes.kama:23:41"  # param 'bias' -> its use in the body
 expect --refs 19:17 -- "scopes.kama:23:20"  # field 'limit' -> 'this.limit'
 expect --refs 14:4  -- "scopes.kama:53:22"  # enum member 'Ok' -> the 'Code::Ok' read

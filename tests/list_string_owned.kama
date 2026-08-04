@@ -3,7 +3,7 @@
 // (A literal element mixes in fine — it is borrowed, cap==0, a no-op to drop.)
 import std::collections::{DynamicArray};
 fn int main() {
-    slot DynamicArray<string> xs;
+    DynamicArray<string> xs = DynamicArray.empty();
     string a = "ab" + ""; string b = "cde" + "";
     xs.add(item: give a);
     xs.add(item: give b);

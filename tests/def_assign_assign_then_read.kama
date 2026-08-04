@@ -1,9 +1,10 @@
 import std::memory::{Owned};
-// A bare owning local becomes definitely assigned after an unconditional (top-level) assignment.
+// A bare owning local becomes definitely assigned once an `out` argument has filled it.
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn void adopt(Owned<Box> t, out Owned<Box> dst) { dst = give t; }
 fn int32 main() {
     slot Owned<Box> b;
     Owned<Box> t = new Box.make(v: 42);
-    b = give t;                    // top-level assign -> 'b' now definitely assigned
+    adopt(t: give t, dst: out b);   // the `out` fill -> 'b' now definitely assigned
     return b.get();   // 42
 }

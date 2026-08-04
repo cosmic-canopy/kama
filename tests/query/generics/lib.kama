@@ -12,7 +12,7 @@ export { Box, firstOr };
 
 type value Box<T> {
     // L15: col 13 = `v` (the field declaration), col 41 = its use in the method body below
-    public T v;
+    public T v;   public ctor of(T v) { this.v = v; }
     // L17: col 17 = `get` (the method declaration), col 39 = the `this.v` inside a generic BODY
     public fn T get() { return this.v; }
     // L19: col 21 = `replace`, col 33 = its parameter `next`, col 51 = the body use

@@ -5,7 +5,7 @@ namespace shapes;
 
 type value Point {
     public int32 x;
-    public int32 y;
+    public int32 y;   public ctor at(int32 x, int32 y) { this.x = x; this.y = y; }
 }
 
 type resource Widget {
@@ -15,14 +15,14 @@ type resource Widget {
 }
 
 fn Point midpoint(Point a, Point b) {
-    slot Point m;
+    Point m = Point.at(x: 0, y: 0);
     m.x = (a.x + b.x) / 2;
     m.y = (a.y + b.y) / 2;
     return m;
 }
 
 fn int32 main() {
-    slot Point p;
+    Point p = Point.at(x: 0, y: 0);
     p.x = 4; p.y = 6;
     Widget w = Widget.make(at: p);
     return w.originX();

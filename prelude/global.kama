@@ -518,7 +518,7 @@ type value GlobalAllocator implements Allocator {
     // the nameless primary until M8d removes it.
     public default ctor make() { return this; }
     public fn Optional<Ptr> allocate(usize bytes) {
-        slot Ptr p;
+        Ptr p = null;
         unsafe { p = malloc(n: bytes); }
         if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
         return Optional::Some(value: p);

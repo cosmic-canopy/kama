@@ -14,7 +14,7 @@ export { scaleBy, Box };
 fn int32 scaleBy(int32 factor) { return factor * 2; }
 
 type value Box {
-    public int32 v;
+    public int32 v;   public ctor zero() { this.v = 0; }
     // L19: col 31 = `amount` (a METHOD parameter — a different ParamSig path), col 50 = its body use
     public fn void setTo(int32 amount) { this.v = amount; }
 }

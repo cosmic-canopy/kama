@@ -18,7 +18,7 @@ type contract Sized for both { fn int32 size(); }
 
 type value Cell implements Sized {
     public int32 value;
-    private int32 secret;
+    private int32 secret;   public ctor zero() { this.value = 0; this.secret = 0; }
     public fn int32 size() { return this.value; }
     public fn int32 doubled() { return this.value * 2; }
 }
@@ -37,7 +37,7 @@ type final resource Derived extends Base {
 }
 
 type value Holder {
-    public Cell cell;
+    public Cell cell;   public ctor zero() { this.cell = Cell.zero(); }
     public fn Cell get() { return this.cell; }
 }
 
@@ -55,50 +55,50 @@ fn int32 measure<T: Sized>(T item) {
 
 fn int32 blend(int32 lo, int32 hi) { return lo + hi; }
 
-fn Holder makeHolder() { slot Holder h; return h; }
+fn Holder makeHolder() { return Holder.zero(); }
 
 // The collectBindings under-cover guard. Every block-bearing statement kind declares a local of a type WITH
 // members, and immediately reads one — so a probe at the column just after each `.` proves the walker
 // descended into that statement kind. A miss here is silent in every other test: it just means fewer
 // suggestions. (scanStmtForCollections has under-scanned `unsafe` and `scope` since it was written.)
 fn int32 statements(int32 n) {
-    slot Cell inBlock;
+    Cell inBlock = Cell.zero();
     int32 total = inBlock.value;
     {
-        slot Cell inNested;
+        Cell inNested = Cell.zero();
         total = total + inNested.value;
     }
     if (n > 0) {
-        slot Cell inThen;
+        Cell inThen = Cell.zero();
         total = total + inThen.value;
     } else {
-        slot Cell inElse;
+        Cell inElse = Cell.zero();
         total = total + inElse.value;
     }
     while (total < 0) {
-        slot Cell inWhile;
+        Cell inWhile = Cell.zero();
         total = total + inWhile.value;
     }
     do {
-        slot Cell inDo;
+        Cell inDo = Cell.zero();
         total = total + inDo.value;
     } while (total < 0);
     for (int32 i = 0; i < 2; i = i + 1) {
-        slot Cell inFor;
+        Cell inFor = Cell.zero();
         total = total + inFor.value;
     }
-    slot DynamicArray<Cell> nums;
+    DynamicArray<Cell> nums = DynamicArray.empty();
     nums.add(item: inBlock);
     foreach (Cell each in nums) {
-        slot Cell inForeach;
+        Cell inForeach = Cell.zero();
         total = total + each.value + inForeach.value;
     }
     unsafe {
-        slot Cell inUnsafe;
+        Cell inUnsafe = Cell.zero();
         total = total + inUnsafe.value;
     }
     scope {
-        slot Cell inScope;
+        Cell inScope = Cell.zero();
         total = total + inScope.value;
     }
     Optional<Cell> maybe = Optional::Some(value: inBlock);
@@ -107,14 +107,14 @@ fn int32 statements(int32 n) {
 }
 
 fn int32 receivers() {
-    slot Cell c;
+    Cell c = Cell.zero();
     c.value = 1;
     int32 direct = c.value + c.doubled();
-    slot Holder h;
+    Holder h = Holder.zero();
     int32 chained = h.cell.value;
     int32 viaCall = makeHolder().cell.value;
     int32 viaChain = makeHolder().get().value;
-    slot DynamicArray<Cell> cells;
+    DynamicArray<Cell> cells = DynamicArray.empty();
     cells.add(item: c);
     int32 viaIndex = cells[0].value;
     Owned<Node> owned = new Node.make(tag: 2);
@@ -131,7 +131,7 @@ fn int32 receivers() {
 }
 
 fn int32 main() {
-    slot Cell c;
+    Cell c = Cell.zero();
     c.value = 5;
     int32 lvl = (Level::High == Level::Low) ? 1 : 0;
     return statements(n: 1) + receivers() + measure(item: c) + lvl;
@@ -159,7 +159,7 @@ fn int32 scopes() {
 extern fn int32 myOwnFfi(int32 x);
 
 fn int32 bareNames(int32 seed) {
-    slot Cell near;
+    Cell near = Cell.zero();
     int32 far = near.value + seed;
     return far;
 }

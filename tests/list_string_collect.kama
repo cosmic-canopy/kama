@@ -3,7 +3,7 @@
 import std::collections::{DynamicArray};
 fn int main() {
     string path = "usr/local/bin";
-    slot DynamicArray<string> parts;
+    DynamicArray<string> parts = DynamicArray.empty();
     foreach (string p in path.split(separator: "/")) { parts.add(item: give p); }
     int32 n = 0;
     foreach (string q in parts) { n = n + cast<int32>(q.length()); }   // 3 + 5 + 3 = 11

@@ -87,18 +87,18 @@ TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; 
 #
 # Layout (LSP 0-based lines, 0-based chars):
 #   L2 `    public fn int32 get() { return this.x; }` -> `get` decl at 20..23
-#   L4 `fn int32 main() { slot P p; p.x = 1; return p.get(); }` -> the CALL `get` at 41..44
+#   L4 `fn int32 main() { P p = P.zero(); p.x = 1; return p.get(); }` -> the CALL `get` at 52..55
 MRURI="file:///methodrename.kama"
-MREN='type value P {\n    public int32 x;\n    public fn int32 get() { return this.x; }\n}\nfn int32 main() { slot P p; p.x = 1; return p.get(); }\n'
+MREN='type value P {\n    public int32 x;   public ctor zero() { this.x = 0; }\n    public fn int32 get() { return this.x; }\n}\nfn int32 main() { P p = P.zero(); p.x = 1; return p.get(); }\n'
 
 # The generic half. TWO instantiations, each with its OWN call, on purpose: a single-instantiation fixture
 # passes under designs that canonicalize the instance key onto the template, which would break the moment a
 # second key shape appeared. `Box<int32>` and `Box<bool>` resolve through different instances and must land
 # on ONE symbol — three edits, no duplicate over any range, and none at the instances' mangled names.
 #   L2 `    public fn T get() { return this.v; }` -> `get` decl at 16..19
-#   L4 `... return bs.get() ? bi.get() : 0; }`   -> the two calls at 80..83 and 91..94
+#   L4 `... return bs.get() ? bi.get() : 0; }`   -> the two calls at 108..111 and 119..122
 MGURI="file:///genrename.kama"
-MGEN='type value Box<T> {\n    public T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { slot Box<int32> bi; bi.v = 1; slot Box<bool> bs; bs.v = false; return bs.get() ? bi.get() : 0; }\n'
+MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> bi = Box::<int32>.of(v: 1); Box<bool> bs = Box::<bool>.of(v: false); return bs.get() ? bi.get() : 0; }\n'
 
 # M6 B3f — the `::` QUALIFIER of a name. Before the grammar carried per-segment positions a qualifier was a
 # list of plain STRINGS, so `Color` in `Color::Green` was indexed nowhere: renaming the enum rewrote its
@@ -111,10 +111,10 @@ QRURI="file:///qualrename.kama"
 QREN='enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
 
 TOKGURI="file:///semtokgen.kama"
-TOKG='type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\nfn int32 main() { slot Box<int32> b; b.v = 7; return b.get(); }\n'
+TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
 
 QURI="file:///shapes.kama"
-SHP='namespace t;\ntype value Point { public int32 x; }\nfn Point mid(Point a) { return a; }\nfn int32 use() { slot Point p; Point q = mid(a: p); return q.x; }\n'
+SHP='namespace t;\ntype value Point { public int32 x;   public ctor zero() { this.x = 0; } }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p = Point.zero(); Point q = mid(a: p); return q.x; }\n'
 
 # Module-loading fixture: a REAL on-disk file that imports a std module. Unlike the in-memory buffers above
 # (fake paths -> single-file fallback), this exercises loadProgramUnits pulling std::collections off disk so
@@ -195,11 +195,11 @@ cat > "$tmp/own/proj/kama.json" <<'JSON'
 JSON
 cat > "$tmp/own/shared/shared.kama" <<'KAMA'
 namespace shared;
-type value Leak { public int32 v; }
+type value Leak { public int32 v;   public ctor zero() { this.v = 0; } }
 KAMA
 OURI="file://$tmp/own/proj/app.kama"
-OSRC='namespace shared;\nfn int32 main() { slot Leak l; l.v = 1; return l.v; }\n'
-printf 'namespace shared;\nfn int32 main() { slot Leak l; l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
+OSRC='namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n'
+printf 'namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
 
 # M6 B3c fixture: a project resource implementing a STD contract. `write` here and `Writer.write` in
 # lib/std/io/streams.kama are ONE renameable name, and the contract's half is not ours to rewrite — so
@@ -276,16 +276,16 @@ frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocu
 # --- M3: find-references + rename over the same buffer ---
 # 8:  references on the Point DECL name (LSP 1:11), includeDeclaration -> decl + both signature refs + both body refs.
 # 9:  the same query with includeDeclaration:false -> the decl's own range must be absent.
-# 10: references from a BODY use (LSP 3:22) -> the same set (a use and its decl resolve to one key).
-# 11: references on the `mid` call site (LSP 3:41) -> the fn decl + that call (the resolveFunc hook).
+# 10: references from a BODY use (LSP 3:17) -> the same set (a use and its decl resolve to one key).
+# 11: references on the `mid` call site (LSP 3:51) -> the fn decl + that call (the resolveFunc hook).
 # 12: prepareRename on the Point decl -> its identifier range.
 # 13: prepareRename on the local `a` (LSP 2:31) -> null (locals are M3.4).
 # 14: rename Point -> Pnt: a WorkspaceEdit with one TextEdit per reference, all in this file.
 # 15: rename to a KEYWORD must be refused (the lexer's own table decides, via kamaIsKeyword).
 frame '{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":true}}}'
 frame '{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":false}}}'
-frame '{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":22},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":41},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":51},"context":{"includeDeclaration":true}}}'
 frame '{"jsonrpc":"2.0","id":12,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11}}}'
 frame '{"jsonrpc":"2.0","id":13,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
 frame '{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"newName":"Pnt"}}'
@@ -336,7 +336,7 @@ frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"P
 fi
 # 34: a type declared in a source the project reaches OUTSIDE its own directory is still ours to rename.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$OURI"'","languageId":"kama","version":1,"text":"'"$OSRC"'"}}}'
-frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$OURI"'"},"position":{"line":1,"character":24},"newName":"Seep"}}' 
+frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$OURI"'"},"position":{"line":1,"character":19},"newName":"Seep"}}' 
 # --- M4: completion + signature help, over the M2 decl-rich buffer (`$SHP`, still open).
 #     Line 4 is `fn int32 use() { slot Point p; Point q = mid(a: p); return q.x; }` (LSP line 3):
 #       char 56 = the `x` of `q.x`  -> a Dot trigger on a `Point` local
@@ -344,11 +344,11 @@ frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDo
 #       char 17 = the `P` of the first `Point` -> a bare position
 #     17: member completion.  18: argument-LABEL completion.  19: signature help, active parameter 0.
 #     35: bare completion.    36: signature help outside any call -> null.
-frame '{"jsonrpc":"2.0","id":17,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":61}}}'
-frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":45}}}'
-frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":45}}}'
-frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":22}}}'
-frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":22}}}' 
+frame '{"jsonrpc":"2.0","id":17,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":71}}}'
+frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":55}}}'
+frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":55}}}'
+frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":73}}}'
+frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":73}}}' 
 # --- M4.6: a buffer that never parsed. Completion repairs by blanking the CURSOR'S LINE and
 #     re-analyzing — the lexical context still comes from the untouched text, so `p.` is not lost.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$NURI"'","languageId":"kama","version":1,"text":"'"$NEWB"'"}}}'
@@ -470,11 +470,11 @@ expect '"id":6,"result":{"contents":{"kind":"plaintext","value":"param a"}}'    
 
 echo "check-lsp: M3 find-references"
 expect '"id":8,"result":[{"uri":"file:///shapes.kama"'        "references: returns Locations in this file"
-expect '"start":{"line":3,"character":22}'                    "references: BODY use-site 'Point p' (LSP 3:22) is indexed"
-expect '"start":{"line":3,"character":31}'                    "references: BODY use-site 'Point q' (LSP 3:31) is indexed"
+expect '"start":{"line":3,"character":17}'                    "references: BODY use-site 'Point p' (LSP 3:17) is indexed"
+expect '"start":{"line":3,"character":41}'                    "references: BODY use-site 'Point q' (LSP 3:41) is indexed"
 expect '"id":11,"result":[{"uri":"file:///shapes.kama","range":{"start":{"line":2,"character":9}' \
                                                               "references: a CALL resolves to the fn decl (resolveFunc hook)"
-expect '"start":{"line":3,"character":41}'                    "references: the call site itself (LSP 3:41) is indexed"
+expect '"start":{"line":3,"character":51}'                    "references: the call site itself (LSP 3:51) is indexed"
 
 echo "check-lsp: M3 rename"
 expect '"id":12,"result":{"start":{"line":1,"character":11}'  "prepareRename: the Point identifier range"
@@ -599,7 +599,7 @@ expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,
 # `T` still yields NO token, and that is correct rather than a residual gap: inside the instance it is
 # substituted to `int32`, a builtin with no def-site, and semanticTokensFor emits nothing for a key it
 # cannot resolve. One `v` in the template also yields ONE symbol however many instantiations exist.
-expect '"id":56,"result":{"data":[0,11,3,0,1,1,6,1,7,1,1,16,3,6,1,0,20,1,7,0,2,9,4,5,1,0,14,3,0,0,0,11,1,8,1,0,3,1,8,0,0,2,1,7,0,0,14,1,8,0,0,2,3,6,0]}}' \
+expect '"id":56,"result":{"data":[0,11,3,0,1,1,6,1,7,1,0,17,2,6,1,0,5,1,9,1,0,10,1,7,0,0,4,1,9,0,1,16,3,6,1,0,20,1,7,0,2,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,4,3,0,0,0,13,2,6,0,0,3,1,9,0,0,14,1,8,0,0,2,3,6,0]}}' \
        "a generic type's BODY is indexed — declarations, uses, and one symbol per template (M6 B3b)"
 
 echo "check-lsp: M6 B3a renaming a method"
@@ -610,11 +610,11 @@ expect '"id":57,"result":{"start":{"line":2,"character":20},"end":{"line":2,"cha
 # came back no longer compiled.
 expect '"id":58,"result":{"changes":{"file:///methodrename.kama":[{"range":{"start":{"line":2,"character":20},"end":{"line":2,"character":23}},"newText":"fetch"}' \
        "renaming a method rewrites its declaration"
-expect '{"range":{"start":{"line":4,"character":46},"end":{"line":4,"character":49}},"newText":"fetch"}]}}' \
+expect '{"range":{"start":{"line":4,"character":52},"end":{"line":4,"character":55}},"newText":"fetch"}]}}' \
        "...AND its call site, which was silently left behind before B3a"
 # A generic template: the declaration is inside a body that is re-emitted once per instantiation, and the
 # call resolves through the INSTANCE. One symbol, so exactly two edits — no duplicate over one range.
-expect '"id":59,"result":{"changes":{"file:///genrename.kama":[{"range":{"start":{"line":2,"character":16},"end":{"line":2,"character":19}},"newText":"fetch"},{"range":{"start":{"line":4,"character":91},"end":{"line":4,"character":94}},"newText":"fetch"},{"range":{"start":{"line":4,"character":102},"end":{"line":4,"character":105}},"newText":"fetch"}]}}' \
+expect '"id":59,"result":{"changes":{"file:///genrename.kama":[{"range":{"start":{"line":2,"character":16},"end":{"line":2,"character":19}},"newText":"fetch"},{"range":{"start":{"line":4,"character":108},"end":{"line":4,"character":111}},"newText":"fetch"},{"range":{"start":{"line":4,"character":119},"end":{"line":4,"character":122}},"newText":"fetch"}]}}' \
        "renaming a generic method reaches BOTH instantiations' calls, as one symbol (M6 B3b)"
 
 echo "check-lsp: M6 B3f the :: qualifier of a name"

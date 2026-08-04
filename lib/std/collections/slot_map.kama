@@ -194,7 +194,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
     fn void growTo(int32 nc) {
-        slot Ptr<V> nv; slot Ptr<uint32> ng; slot Ptr<int32> nf;
+        Ptr<V> nv = null; Ptr<uint32> ng = null; Ptr<int32> nf = null;
         unsafe {
             nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
             ng = cast<Ptr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));

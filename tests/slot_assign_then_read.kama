@@ -1,12 +1,14 @@
-// A slot is readable once it is definitely assigned — including when every arm of an if/else assigns it,
-// which is the flow merge the `out` return-verdict introduced.
-fn int32 pick(bool hi) {
-    slot int32 v;
+// A slot is readable once an `out` argument has filled it. The CALLEE may fill through any control flow
+// it likes — both arms of an if/else here — because `verifyOutsAssigned` proves the parameter assigned at
+// every return. The DECLARATION's rule is the stricter one: the fill must sit on the slot's own
+// unconditional path, so a reader never has to ask whether the storage holds a value.
+fn void pick(bool hi, out int32 v) {
     if (hi) { v = 30; } else { v = 12; }   // both arms assign -> definite at the join
-    return v;
 }
+fn void five(out int32 v) { v = 5; }
 fn int main() {
-    slot int32 a;
-    a = 5;
-    return a + pick(hi: true) + pick(hi: false);   // 5 + 30 + 12
+    slot int32 a;   five(v: out a);
+    slot int32 hi;  pick(hi: true,  v: out hi);
+    slot int32 lo;  pick(hi: false, v: out lo);
+    return a + hi + lo;   // 5 + 30 + 12
 }

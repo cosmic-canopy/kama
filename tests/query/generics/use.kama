@@ -7,12 +7,12 @@
 import lib::{Box, firstOr};
 
 fn int32 main() {
-    slot Box<int32> bi;
+    Box<int32> bi = Box::<int32>.of(v: 0);
     // L11: col 7 = `v` through Box<int32>, L12 col 7 = `get` through the same instance
     bi.v = 1;
     int32 a = bi.get();
 
-    slot Box<bool> bs;
+    Box<bool> bs = Box::<bool>.of(v: false);
     // L16/L17: the SECOND instantiation — a different instance, the same two symbols
     bs.v = false;
     bool b = bs.get();

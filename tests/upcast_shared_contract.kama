@@ -16,8 +16,8 @@ fn int32 shared_case() {
     Shared<Sq> a = new Sq.make(s: 6);                       // library thin handle {p, c}
     Shared<Shape> s = a;                               // UPCAST: retain into the intrinsic fat handle
     int32 viaConcrete = a.area();                      // 36 (a still valid)
-    int32 viaContract = s.area();                      slot // 36 (dynamic dispatch through vtbl)
-    DynamicArray<Shared<Shape>> shapes;                         // a heterogeneous-capable owned collection
+    int32 viaContract = s.area();                      // 36 (dynamic dispatch through vtbl)
+    DynamicArray<Shared<Shape>> shapes = DynamicArray.empty();  // a heterogeneous-capable owned collection
     shapes.add(item: s);                               // retain again into the list
     int32 viaList = shapes[0].area();                  // 36
     return viaConcrete + viaContract + viaList;        // 108

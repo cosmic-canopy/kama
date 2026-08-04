@@ -191,7 +191,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable(bare: g
     // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
     fn void growTo(int32 nc) {
-        slot Ptr<uint64> nw;
+        Ptr<uint64> nw = null;
         unsafe {
             nw = cast<Ptr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
             memset(p: cast<Ptr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));

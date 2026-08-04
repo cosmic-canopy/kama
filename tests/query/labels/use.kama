@@ -8,7 +8,7 @@ import lib::{scaleBy, Box};
 fn int32 useThem() {
     // L10: col 22 = the `factor` LABEL -> lib.kama's parameter, ACROSS units
     int32 a = scaleBy(factor: 3);
-    slot Box b;
+    Box b = Box.zero();
     b.v = 0;
     // L14: col 12 = the `amount` LABEL -> Box.setTo's parameter (the method path)
     b.setTo(amount: a);

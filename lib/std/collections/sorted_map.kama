@@ -528,15 +528,15 @@ type resource SortedMap<K: Comparable, V, A: Allocator = GlobalAllocator>
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
     // valid independent of the tree; O(n) space. `values()` is ordered by key, parallel to `keys()`.
     public fn DynamicArray<K> keys() when [K: Copyable] {
-        slot DynamicArray<K> acc; this.root.collectKeys(dest: acc); return give acc;
+        DynamicArray<K> acc = DynamicArray.empty(); this.root.collectKeys(dest: acc); return give acc;
     }
     public fn DynamicArray<V> values() when [V: Copyable] {
-        slot DynamicArray<V> acc; this.root.collectVals(dest: acc); return give acc;
+        DynamicArray<V> acc = DynamicArray.empty(); this.root.collectVals(dest: acc); return give acc;
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
     public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] {
-        slot DynamicArray<K> acc; this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
+        DynamicArray<K> acc = DynamicArray.empty(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
     }
 
     // Drop every entry, resetting to an empty single-leaf tree (keeps the root box).

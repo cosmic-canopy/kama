@@ -27,7 +27,7 @@ type value Cfg {
 fn int32 tally(int32 first, int32 second) {
     slot int32 plain;                      // no initializer -> precise
     int32 seeded = first + second;    // initializer -> end span currently swallows the initializer
-    plain = seeded + first;
+    sum(a: seeded, b: first, into: out plain);
     return plain;
 }
 
@@ -66,3 +66,7 @@ fn int32 total(InlineArray<int32, 3> xs) {
     }
     return sum;
 }
+
+// Appended (see the header): the `out` callee that fills `plain` above, so its declaration can stay
+// initializer-free — the shape the decl-span probes contrast against `seeded`.
+fn void sum(int32 a, int32 b, out int32 into) { into = a + b; }

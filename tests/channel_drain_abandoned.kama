@@ -18,7 +18,7 @@ type resource Tracked {
 }
 
 fn int32 main() {
-    slot Ptr<int32> tally;
+    Ptr<int32> tally = null;
     unsafe { tally = cast<Ptr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0; }
     {
         Channel<Owned<Tracked>> ch = Channel.bounded(capacity: 4);
@@ -31,7 +31,7 @@ fn int32 main() {
         // tx and rx drop here with 3 items still buffered and recv never called: the last endpoint
         // to close must drain all three (dropping each Owned<Tracked> → Tracked bumps the tally).
     }
-    slot int32 n;
+    int32 n = 0;
     unsafe { n = tally[0]; free(p: cast<Ptr>(tally)); }
     return n;   // 3 iff every abandoned item was drained-and-dropped
 }

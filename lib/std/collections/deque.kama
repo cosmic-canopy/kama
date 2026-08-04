@@ -67,7 +67,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
     fn void growTo(int32 nc) {
-        slot Ptr<T> nd;
+        Ptr<T> nd = null;
         unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
         Ptr<T> od = this.data;
         int32 i = 0;
