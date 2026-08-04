@@ -40,14 +40,13 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**One breaking change is still open: `slot`'s scope** — briefed in
-[design/slot-scope.md](design/slot-scope.md), now **half shipped** (steps 1–3 of 7, `e1edf1f`→`3098b21`).
-A ctor's value is an implicit `this` with an implicit return, so it needs no declaration — which also makes
-"one value per ctor" unrepresentable rather than merely rejected — and the 652 constructor sites are swept.
-**What remains is `slot` itself**: narrowing it to the `out` holes it was designed for (175 declarations
-left), then inheritance hole 1, then closeout. The brief's status section says where to start and lists what
-the rest of it gets wrong. Source-breaking, so it lands before the tag or waits for 2.0. *(The callable side
-shipped earlier — `T.default()`, `5edb4d9`.)*
+**`slot`'s scope is shipped** — briefed in [design/slot-scope.md](design/slot-scope.md), steps 1–5 of 7
+(`e1edf1f`→`3098b21`, `0c126fa`→`c7988d5`). A ctor's value is an implicit `this` with an implicit return, and
+`slot` now means exactly one thing: the storage an `out` parameter is about to fill (three rules — out-only
+fill, must be filled, fill on the declaration's own unconditional path). The record is in
+[SPEC.md](SPEC.md#uninitialized-storage--slot-). **What remains of that campaign is inheritance hole 1
+below, then closeout** — the brief's status section says where to start and what the rest of it gets wrong.
+*(The callable side shipped earlier — `T.default()`, `5edb4d9`.)*
 
 **⚠️ INHERITANCE — one hole left, briefed in [design/inheritance.md](design/inheritance.md).** The
 campaign shipped the build-time switch (`make KAMA_INHERITANCE=0`), the depth cap, the `final` rule,
@@ -55,10 +54,9 @@ no-public-widening, the `base.` visibility fix, the shadowing ban and both diagn
 **hole 1: a derived type never runs its base's constructor**, so a base's invariants are unenforceable for
 its subclasses — a base's field *initializers* don't reach a derived instance either, which is the same
 hole seen from another angle rather than a second one. Its repro is parked at
-`tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on
-[slot-scope.md](design/slot-scope.md) D5, the implicit `this`. Run that campaign first: it is already
-rewriting every ctor body, and the two sweeps must not interleave. Source-breaking, so before the tag or
-2.0. ⚠️ The brief names a tempting shallow fix (make the bare-local fill walk `__base`) and why it is
+`tests/pending/base_ctor_not_run.kama`, and its fix (`this.base = Base.make(…)`) depends on the implicit
+`this`, which has now shipped — so this is **unblocked and is the next thing to build**. Source-breaking, so
+before the tag or 2.0. ⚠️ The brief names a tempting shallow fix (make the bare-local fill walk `__base`) and why it is
 wrong — read that before starting.
 
 Otherwise **the language surface is feature-complete**. What is left before the tag is the
@@ -140,6 +138,13 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+- **A lib/prelude diagnostic is attributed to the file being checked.** `kama check app.kama` reports an
+  error raised inside `lib/std/…` or the prelude as `app.kama:<the LIB file's line>` — the line number is
+  right for the wrong file, so it points into the middle of the user's source or past its end. Harmless for
+  a single error a human reads in context, and actively misleading in an editor or any sweep over the
+  corpus (enumerating rule violations across `tests/` had to filter by "is the reported line past this
+  file's end?" to tell the two apart). Wants the unit to travel with the diagnostic, as `RefUnitScope`
+  already does for the reference index.
 - **Contract refinement — one under-tested edge (clean workaround).** `type contract Child … implements
   Parent` works for dispatch, but was exercised mainly with scalar-param parents. Remaining: a concrete type
   implementing the child gets **no parent-contract conformance thunk** — pass it where the parent is expected

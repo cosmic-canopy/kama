@@ -5,158 +5,88 @@ the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
 ---
 
-## ►► STATUS — steps 1–3 SHIPPED (2026-08-03), start at step 4
+## ►► STATUS — steps 1-5 SHIPPED (2026-08-03), start at step 6
 
-`e1edf1f` → `3098b21` on `dev`. **native 890 / ASan 854 / wasm 828, 0 failed** — that is the baseline to
-hold. The ctor half is done: a ctor's value is an implicit `this`, the 652 sites are swept, and declaring
-the constructed type inside its own ctor is an error. **`slot` itself has not moved yet** — 175
-declarations remain, and narrowing it to `out` is step 5.
+`e1edf1f` → `3098b21`, then `0c126fa` → `c7988d5` on `dev`. **native 898 / ASan 862 / wasm 836, 0 failed** —
+that is the baseline to hold. **`slot` now means exactly one thing**: the storage an `out` parameter is
+about to fill. SPEC's *Uninitialized storage* section carries the record (three rules, per-exit-point drop
+elision); this file keeps only what is not written down there.
 
-### What the rest of this brief gets WRONG — read before trusting any of it
+**What is left: step 6 (inheritance hole 1) and step 7 (closeout).** Everything below the horizontal rule
+is the ORIGINAL brief and is now history — read it for the reasoning, not for instructions.
 
-- **Site counts are off.** Real totals, from a structural scan of 975 files: **762** declarations, not 787.
-  Bucket A (the constructed type in its own ctor) is **652**, not 577. The C bucket splits further than
-  recorded — see the table below.
-- **"No compiler change, just a rule change" is wrong**, and it was the single biggest mis-estimate. A
-  `ctor` is emitted as a static C factory with **no `self` at all** (`mi.isStatic = true`), so blessing
-  `this` needed a genuinely new lowering: synthesize the storage at ctor entry, run the class-slot fill on
-  it, point `self` at it. It is `emitAggregateFill` + the prologue buffer in `emitMethodOrCtorBody`.
-- **"Two analyses must change in lockstep" undercounts — it was FOUR**, and every one had the same shape:
-  it knew about a *declared local* and nothing else, so it silently stopped working when the value lost its
-  declaration. `checkDefiniteAssignment`, `checkNamedCtorComplete`, `checkViewCtorEscape`, and the
-  `isNamedValue`/`moveOnlySource` pair. **Assume the same of anything step 5 touches.**
-- **The drop-elision fixture guidance is unusable as written** (see step 5 below).
+### What steps 4-5 actually took, versus what this brief predicted
 
-### The bucket table, re-measured
+- **The step-4 helper is TWO shapes, not one.** The brief proposed a single `relocate` for all nine
+  `addr(of:)` sites. Wrong for atomic/channel: those five wrap five DIFFERENT extern C calls, so there is
+  no shared operation — they got per-type `out` wrappers. Only the four collection sites are one operation,
+  and they share `std::ptr::relocate`. `std::memory` could not host it (`import std::memory` is a satisfied
+  no-op, so nothing under `lib/std/memory/` is ever read) and the prelude would have put a raw unsafe
+  primitive in every program's global scope, so `std::ptr` is a new importable module.
+- **Two compiler holes had to close first**, neither of them in this brief:
+  - a generic free fn could not bind its type parameter from an ENCLOSING generic type's parameter, which
+    every `relocate` call site needs (`0c126fa`). The fix mirrors `registerInstColls`: re-walk a generic
+    type's members once per instantiation with `_typeSubst` bound. ⚠️ Walk the SPECIALIZED method set
+    (`_classes[mangled].methods`), not the template AST — the raw AST still carries `when [V: Copyable]`
+    members that do not hold for the instantiation, and walking them registers code the program never uses.
+    ⚠️ `_callInst` had to become (call site → substitution → instantiation): one AST node inside a generic
+    type serves every instantiation.
+  - an `out` argument did not make a slot live, so an out-filled slot's value LEAKED (`d4b544b`). The
+    mirror half: the callee dropped the incoming `out` value, which the analysis already treats as
+    not-live. Both fixed; `tests/out_arg_drops` is differential over them.
+- **`emitDtorDefinition` reset no move state** — a destructor inherited the previously-emitted function's
+  `_moveState`/`_slotLocals`. Invisible until `~Sender`/`~Receiver` reused a name another body had left
+  moved-from. Fixed in `3f40103`.
+- **`isConcreteTypeArg` rejected every generic type argument**, so `Deque<DynamicArray<int32>>` could not
+  instantiate a generic fn. A fully-resolved instance is concrete; an unregistered one still is not.
+- **The rule-3 seam is NOT `topLevel`.** It looks like one, but every call site passes `true` and
+  `walkSkippable` does so deliberately. Rule 3 needed a separate `condDepth`, compared against the
+  declaration's depth — relative, not absolute.
+- **A warn-first commit is impossible now**: `run_tests.sh:352` fails any fixture whose stderr contains
+  `warning`. The warn phase was a throwaway build used only to ENUMERATE sites; the sweep and the flip are
+  separate commits, both green.
 
-| bucket | n | status |
-| --- | ---: | --- |
-| A — constructed type inside its own ctor | 652 | ✅ swept (step 2), now an error (step 3) |
-| B — `slot Ptr<Ctrl>` inside an `Rc`/`Shared` ctor | 11 | ✅ now `Ptr<Ctrl> ctrl = null;` |
-| C1 — filled by an `out` argument | 9 | **stays `slot`** — the only surviving use |
-| C2 — filled by assignment | 43 | ☐ step 5 |
-| C3a — filled by a mutating method call | 11 | ☐ step 5 → `T x = T.empty();` |
-| C3b — filled via `addr(of:)` in `unsafe` | 9 | ☐ step 4 (the boundary helpers) |
-| C3c — filled through a `ref` parameter | 3 | ☐ step 5 — a `ref` needs a LIVE value, so these were always wrong |
-| C3d — never filled | 23 | ☐ step 5 — 13 in `tests/query/complete.kama`, 9 xfail, 1 `slot_drop_elided` |
+### Traps for step 6, learned here
 
-### Traps for steps 4–7, learned the hard way
+- **The xfail audit is worth doing properly.** All 20 slot-touching xfails still emitted their own
+  diagnostic under the new rules, so none was re-blessed — but 20 of them then reported TWO errors, one
+  irrelevant. "Still rejected" is not the bar; each xfail should pin one thing.
+- **Nothing in `tests/query/` was constructible.** `Cell`, `Point`, `Box<T>`, `Leak` are transparent bags
+  with no `ctor`, so `slot` was the only way to get one. Each needed a ctor appended to an existing field
+  line to keep the line COUNT stable, which is what those fixtures pin.
+- **`tools/check-lsp.sh` carries six inline `slot` buffers** no corpus sweep can see, plus pinned character
+  offsets and a delta-encoded semanticTokens array. Re-deriving it took 14 probe positions, two rename edit
+  ranges and a 16-token array decoded by hand against the new buffer. `check-query.sh` needed five
+  coordinate updates and a deliberate coverage-table regeneration.
+- **`kama check <file>` attributes a lib/prelude diagnostic to the file being checked**, at the LIB file's
+  line number. That makes enumeration across the corpus produce nonsense unless you split by whether the
+  reported line exceeds the checked file's length. Worth fixing on its own someday.
+- **Left in place deliberately**: `emitScopeCleanup`'s MaybeMoved-slot arm and `checkNotMoved`'s slot case.
+  This brief expects rule 3 to make them dead. It does not — rule 3 constrains the FILL, not a later
+  conditional `give`, so they are not provably unreachable.
 
-- **A drop that "cannot happen" closes fd 0.** `lvalueMoveKey` returned `""` for `this.field`, so the
-  first `this.f = give …` dropped the zeroed field; for a raw handle whose zero is `fd = 0` that is a
-  `close(0)`, which shut the *test harness's own stdin*. Every `proc_*` fixture then hung forever on a
-  child that could not answer, with no error anywhere. **A hanging suite is a symptom of this class.**
-  Move-state keys are spelled the way the SOURCE names a value (`this`), not the way C does (`__self`).
-- **The xfail `.msg` guards are the real safety net** — 271 of 278 carry one, and they caught two rules
-  that had silently stopped firing. Never "fix" an xfail by re-blessing; find out which rule now fires.
-- **Do not run two `run_tests.sh` at once.** They share `/work` and clobber each other's temp state.
-  Kill the container, not just the wrapper: `podman kill -a`.
-- **Inline kama lives inside the guard scripts** (`check-noheap`, `check-no-inheritance`, `check-packages`,
-  `check-query`, `check-lsp`) and no corpus sweep can see it. `check-lsp` also pins an exact delta-encoded
-  semanticTokens array, which moves whenever a fixture's tokens do.
-- **Seven `slot` keywords sit at the END of the preceding line**, ahead of a trailing comment (`c2ae0c8`
-  put them there). Two were in ctors and are fixed; **five remain** and step 5 will hit them:
-  `tests/assign_match.kama:6`, `tests/give_ptr_local.kama:16`, `tests/upcast_shared_contract.kama:19`,
-  `tests/query/coverage/spellings.kama:63` and `:65`. A line-oriented rewrite corrupts them.
+### Step 6 — inheritance hole 1 (the next session starts here)
 
-### Step 5's fixture problem — DECIDED, and not what this brief says
+Unchanged from [inheritance.md](inheritance.md): `this.base = Base.make(…)` plus a `Base`/`base` alias pair
+mirroring `This`/`this`. `This` is contextual, resolved in `cType` (`kama.cemit.cpp` ~`:694`) and bound by
+`ScopedStr _thisType` at 11 sites — that is the recipe. `Base` must fail cleanly when there is no base, and
+sit inside `#if KAMA_INHERITANCE` or `check-no-inheritance` breaks. Extend `checkNamedCtorComplete` with one
+narrow rule: `this.base` assigned exactly once, from a ctor call on the base type. Its repro is parked at
+`tests/pending/base_ctor_not_run.kama`. **The shallow fix is a trap — read that section of inheritance.md
+first.**
 
-`tests/slot_drop_elided.kama` proves the payoff with a slot that is *never* filled, which step 5 makes an
-error. This brief says to restructure it around a partial fill — **that does not work**: a partially-filled
-slot drops unconditionally (`emitScopeCleanup` treats a slot's `MaybeMoved` as "drop it", relying on the
-zero value being drop-safe), so nothing is elided and there is no property left to assert.
+### Step 7 — closeout
 
-The agreed replacement (user, 2026-08-03) is an **exit point that PRECEDES the fill**, which is the one
-case that still elides statically, since the emitter tracks move state in emission order:
+Migrate anything still worth keeping to SPEC, delete this file and `inheritance.md`, strip the shipped items
+from ROADMAP §1.
 
-```kama
-slot Tracker t;
-if (c) { return 0; }              // provably empty here -> no dtor emitted
-makeInto(id: 1, dst: out t);      // same-scope `out` fill
-return t.value();                 // live here          -> dtor emitted
-```
+### Still deferred, agreed as its own campaign
 
-⚠️ **Verify that against the emitted C before committing.** If the emitter does not in fact elide per exit
-point, stop and report rather than quietly weakening SPEC's "an unassigned slot has no destructor emitted".
-
-### The three rules step 5 must land
-
-Agreed with the user 2026-08-03, and **rule 3 is tighter than D2 as written below**:
-
-1. A `slot` is filled by an **`out` argument, and nothing else** — no assignment fill, no method-call fill,
-   no `addr(of:)` fill, no `ref` fill.
-2. A `slot` with no `out` fill anywhere in the function is an error.
-3. The fill must be on the **same unconditional path** as the declaration — a statement of the declaring
-   block, or of a nested block that always runs (`unsafe`). Not inside `if` / `match` / a loop.
-
-Rule 3's reason, in the user's words: a conditionally-filled slot cannot be tested before use, and slot
-validity must be a compile error, never a runtime test. It also makes the drop statically decidable at
-every exit, so a slot never reaches `MaybeMoved`. **Every non-fixture site in the corpus already obeys it**
-— the only cross-scope fill anywhere is `tests/slot_match_assign.kama` case (4), a fixture written to prove
-the match join. That join rule still holds for `out` **parameters** (`pickInto`), which stays its lead.
-
-### Step 3.5 — reserve `self` (one commit, do it first; independent of everything else)
-
-**Decided (user, 2026-08-03): reserve it.** `self` is not a kama keyword — the lexer table has `base` and
-`this` only — but it IS the emitted C name for the receiver pointer, so a local or parameter named `self`
-inside a type body collides and the user gets clang's words, not kama's:
-
-```kama
-public fn int32 get() { int32 self = 1; return this.x + self; }
-// error: redefinition of 'self' with a different type: 'int32_t' vs '_F4__P *'
-```
-
-**Pre-existing for methods** — that has always been broken. What this campaign changed is that a *ctor*
-now emits a `self` too, so the same collision reaches constructors, where it previously compiled. Five
-corpus ctors named the value they were building `self`; the step-2 sweep removed all five, so nothing is
-broken today and the fix is purely about the next person to write one.
-
-Reject a local/param named `self` inside a type body with a real kama diagnostic pointing at `this`. Cover
-methods and ctors together, and pin both with xfail fixtures. The alternative — mangling the emitted
-receiver to something unspellable so `self` becomes an ordinary identifier — is cleaner in principle but
-touches every hardcoded `"self"` in the emitter; **rejected for now, not forever.** If the 1.0 naming
-reconcile wants no compiler-reserved names, that is where it belongs.
-
-### Step 4 — the boundary helpers (step 5's rule 1 depends on it)
-
-Two seams hide in the 9 `addr(of:)` sites, and naming them is what lets rule 1 have no exceptions.
-
-**Seam 1 — an extern C callee fills it** (`atomic.kama:79,95`; `channel.kama:79,100,115`). The C function
-*is* an out-parameter, just type-erased to `void*`. Move the raw cast into a wrapper whose parameter is
-already `out`; an `out` param has its own rule and `addr(of:)` legitimately satisfies it.
-
-**Seam 2 — no callee at all** (`dynamic_array.kama:206`, `deque.kama:108`, `map.kama:316`,
-`slot_map.kama:166`): a raw relocate, open-coded four times. One name in `std::memory`:
-
-```kama
-// Bitwise move out of raw storage; the source is left stale.
-fn void relocate<T>(Ptr<T> from, int32 at, out T into) {
-    debugAssert(cond: from != null);
-    unsafe { Ptr<T> d = addr(of: into); d[0] = from[at]; }
-}
-```
-
-Both are ordinary kama — no compiler change.
-
-### After step 5
-
-**Step 6 — inheritance hole 1**, unchanged from [inheritance.md](inheritance.md): `this.base = Base.make(…)`
-plus a `Base`/`base` alias pair mirroring `This`/`this`. `This` is contextual, resolved in `cType`
-(`kama.cemit.cpp` ~`:694`) and bound by `ScopedStr _thisType` at 11 sites — that is the recipe. `Base` must
-fail cleanly when there is no base, and sit inside `#if KAMA_INHERITANCE` or `check-no-inheritance` breaks.
-Extend `checkNamedCtorComplete` with one narrow rule: `this.base` assigned exactly once, from a ctor call on
-the base type. **The shallow fix is a trap — read that section of inheritance.md first.**
-
-**Step 7 — closeout**: migrate to SPEC, delete this file and `inheritance.md`, strip the shipped items from
-ROADMAP §1.
-
-### Deferred, agreed as its own campaign
-
-The **unsafe-seam campaign**: rename `Ptr<T>` → `UnsafePtr<T>`, and deliver "no null in safe kama" (21
-sites in lib+prelude), via an `unsafe UnsafePtr<T> p = null;` field-declaration modifier, `Optional`-returning
-FFI wrappers, `unsafe { }` around the teardown guards, then banning the `null` token outside `unsafe`. Plus
-a **compiler-emitted debug null trap** at the two `_inUnsafe` deref gates. Runs AFTER this campaign: its
-field-initializer piece changes ctor-completeness rules, which is what steps 1–3 just rewrote.
+The **unsafe-seam campaign**: rename `Ptr<T>` → `UnsafePtr<T>`, and deliver "no null in safe kama" (the
+`= null` initializers this campaign's sweep just added to eight buffer-realloc sites are new customers for
+it), via an `unsafe UnsafePtr<T> p = null;` field-declaration modifier, `Optional`-returning FFI wrappers,
+`unsafe { }` around the teardown guards, then banning the `null` token outside `unsafe`. Plus a
+compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
 
 ---
 
