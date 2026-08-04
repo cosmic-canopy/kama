@@ -1,0 +1,25 @@
+// THE ACCEPTANCE TEST for inheritance hole 1. This lived in tests/pending/ for exactly as long as it
+// COMPILED, which was the bug: it built, ran, and returned 12 — reading 0 from `x`, a field no
+// constructor ever assigned. `checkNamedCtorComplete` proved `Derived` assigns its own `y` and said
+// nothing about the inherited `x`, so `Base` had no way to require that `x` was ever set.
+//
+// Now a derived ctor must install its base, and a base must offer a `ctor` to install. Both are missing
+// here, so the base's own rule fires first: a `virtual class` with no `ctor` can be neither instantiated
+// nor installed, which makes every type below it unconstructible too. That is the earlier and more useful
+// of the two answers — the fix belongs to `Base`, not to each subclass.
+//
+// A fixture that passes by COMPILING is how this hid; it is a rejection now.
+type virtual resource Base {
+    int32 x;
+    protected fn int32 getX() { return this.x; }
+    protected virtual fn int32 tag() { return 0; }
+    protected virtual fn int32 own() { return 0; }
+    public fn int32 sum() { return this.getX() + this.own(); }
+}
+type final resource Derived extends Base {
+    int32 y;
+    public ctor make(int32 y) { this.y = y; }   // never installs its base — and `Base` has no ctor either
+    protected override fn int32 tag() { return 1; }
+    protected override fn int32 own() { return this.y; }
+}
+fn int main() { Derived d = Derived.make(y: 12); return d.sum(); }

@@ -1,0 +1,14 @@
+// A derived ctor must install its base. Its own fields being complete is only half of construction —
+// `checkNamedCtorComplete` proves that half and stops at the class boundary.
+type virtual resource Base {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    protected virtual fn int32 tag() { return 0; }
+    public fn int32 rank() { return this.n + this.tag(); }
+}
+type final resource Leaf extends Base {
+    int32 own;
+    public ctor make(int32 own) { this.own = own; }   // no `this.base = …`
+    protected override fn int32 tag() { return this.own; }
+}
+fn int main() { Leaf l = Leaf.make(own: 1); return l.rank(); }

@@ -1461,7 +1461,9 @@ private:
     std::string emitMemberAccess(MemberAccessNode* ma);
     void             rejectBaseMember(MemberAccessNode* ma);
     bool             isThisBase(SharedExpression e);
+    bool             exprMentionsThis(SharedExpression e);
     SharedExpression baseInstallOf(SharedStatement st);
+    void             checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory

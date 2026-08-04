@@ -1,0 +1,14 @@
+// `this.base` may only be ASSIGNED. It is not a member you can read — to reach an inherited member the
+// spelling is `base.<member>`, which is a different thing with its own access rules.
+type virtual resource Base {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    protected virtual fn int32 tag() { return 0; }
+    public fn int32 rank() { return this.n + this.tag(); }
+}
+type final resource Leaf extends Base {
+    int32 own;
+    public ctor make(int32 own) { this.base = Base.make(n: 2); this.own = own; }
+    protected override fn int32 tag() { return this.base.n; }   // a READ of `this.base`
+}
+fn int main() { Leaf l = Leaf.make(own: 1); return l.rank(); }

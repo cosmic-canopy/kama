@@ -52,16 +52,16 @@ GATE='needs inheritance, and this kama was built without it'
 # 2. REJECTS — one program per surface. `extends` alone is not enough: a `virtual class` with no subclass
 #    still carries a vtable, which is exactly the machinery this build exists to remove.
 cat > "$tmp/ext.kama" <<'EOF'
-type virtual resource B { protected virtual fn int32 t() { return 0; } }
+type virtual resource B { public ctor make() { } protected virtual fn int32 t() { return 0; } }
 type final resource D extends B {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 t() { return 1; } }
 fn int main() { D d = D.make(); return 0; }
 EOF
 if "$NOINH" check "$tmp/ext.kama" >/dev/null 2>"$tmp/ext.err"; then
     echo "check-no-inheritance: FAIL — the KAMA_INHERITANCE=0 compiler accepted 'extends'" >&2; exit 1
 fi
-for want in '`extends`' 'virtual class' 'virtual` method'; do
+for want in '`extends`' 'virtual class' 'virtual` method' '`this.base`'; do
     if ! grep -qF "$want" "$tmp/ext.err"; then
         echo "check-no-inheritance: FAIL — no rejection naming \"$want\":" >&2
         sed 's/^/  /' "$tmp/ext.err" >&2; exit 1

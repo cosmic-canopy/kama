@@ -1,0 +1,10 @@
+// A `virtual`/`abstract class` with no `ctor` is unconstructible, and so is everything below it: there is
+// nothing for a derived type to install. Diagnosed at the BASE, because that is where the fix belongs —
+// and because a designer should learn it when writing the base, not from a subclass three files away.
+// No generator can stand in: `@generate(zero)`/`of` need a transparent `value`, and a `value` is sealed.
+type virtual resource Base {
+    int32 n;
+    protected virtual fn int32 tag() { return 0; }
+    public fn int32 rank() { return this.n + this.tag(); }
+}
+fn int main() { return 0; }

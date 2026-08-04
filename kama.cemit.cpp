@@ -3429,6 +3429,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // an expression. a give/copy marker on the RHS overrides the default,
     // uniformly with init / argument / return.
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+#if KAMA_INHERITANCE
+        // A base install that reached here is a MISPLACED one — the well-formed one is lifted into the
+        // ctor prologue and never becomes a statement. `checkBaseInstall` has already said what is wrong
+        // with it, so emit nothing: otherwise `this.base` would also trip the read guard and the fixture
+        // pinning the placement rule would report two errors, one of them beside the point.
+        if (isThisBase(as->unaryExpression)) return;
+#endif
         // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`, which is how a factory
         // builds a value) — FILLS the hole: it is a live value from here on, so its destructor comes back
         // and ordinary move tracking takes over. Done once here rather than in each of the assignment
@@ -4733,9 +4740,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // someone who wrote it because they wanted base delegation specifically.
                         if (cc->declarator && cc->declarator->initializer)
                             unsupported(("base-constructor delegation (`: base(...)`) is not supported — a "
-                                         "named `ctor` is a factory with no `self` to chain into. Initialize "
-                                         "inherited state through the base's `protected` accessors instead, "
-                                         "in a named constructor `ctor make(...)` on `" + tnm + "`").c_str(),
+                                         "named `ctor` is a factory with no `self` to chain into. Install the "
+                                         "base VALUE instead: `this.base = Base.<ctor>(...);` as the first "
+                                         "statement of a named constructor `ctor make(...)` on `"
+                                         + tnm + "`").c_str(),
                                         cc->line);
                         else
                             unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
@@ -4851,6 +4859,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (!hasOverridable)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
+            // ...and it must declare a CONSTRUCTOR, for the same reason: without one it can be neither
+            // instantiated nor installed as a base (`this.base = Base.<ctor>(…)` has nothing to call), so
+            // it is unconstructible and every type below it is too. Said HERE rather than at each derived
+            // ctor because the fix belongs to the base — and because a designer should learn it when
+            // writing the base, not from a subclass three files away. A generator cannot substitute:
+            // `@generate(zero)`/`of` need a transparent `value`, and a `value` is sealed.
+            if (ci.ctors.empty())
+                unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
+                             + ci.name + "' declares no `ctor`, so nothing can ever be built from it — "
+                             "neither the class itself nor a type that extends it (which must install its "
+                             "base with `this.base = Base.<ctor>(…);`)").c_str(), cd->line);
         }
         // `implements Copyable(bare: give|copy)` is the nominal opt-in. It obliges a resource to supply
         // BOTH the `copy` CTOR (`ctor copy(ref This source)`) AND the `bare:` contract parameter (the
@@ -9895,6 +9914,88 @@ bool CEmitter::isDefaultFillable(const std::string& c)
 // complete — it came through something that itself satisfies the guarantee. (There is no back door left:
 // a self-returning `static fn` is rejected outright as a disguised constructor, so `ctor` is the only way
 // a value of a type comes into being.)
+// A derived type's constructor must INSTALL its base: `this.base = Base.<ctor>(…);`, as the very first
+// statement. This is the other half of complete initialization — `checkNamedCtorComplete` proves every OWN
+// field is assigned and says nothing about inherited ones, which is why a base's invariants were
+// unenforceable for its subclasses.
+//
+// A sibling of that function rather than an extension of it: its machinery is per-FIELD, and it returns
+// early when the type has no field that must be assigned — which is most derived types in the corpus, so
+// a base obligation seeded into it would simply never be checked.
+void CEmitter::checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine)
+{
+#if KAMA_INHERITANCE
+    if (!owner.base || !body) return;
+    // An EMPTY body is the case that matters most, not one to skip: `public ctor make() { }` on a derived
+    // type is precisely the shape that used to leave a base zero-filled. `statements` is null, not an
+    // empty list, when a ctor body is empty.
+    const size_t n = body->statements ? body->statements->size() : 0;
+
+    // A ctor that hands off wholesale (`return Other.make(…);`) constructs nothing itself, so it owes no
+    // base — the ctor it delegates to owes one. Same doctrine as checkNamedCtorComplete's `classify`.
+    if (n == 1 && dynamic_cast<ReturnNode*>(body->statements->front().get()))
+        return;
+
+    SharedExpression rhs = n ? baseInstallOf(body->statements->front()) : SharedExpression();
+
+    // Anywhere BUT first is its own mistake, and deserves its own sentence.
+    for (size_t i = 1; i < n; ++i) {
+        if (!baseInstallOf((*body->statements)[i])) continue;
+        if (rhs)
+            unsupported(("the base of '" + owner.name + "' is installed exactly once — this second "
+                         "`this.base` would discard the '" + owner.baseName + "' already built").c_str(),
+                        (*body->statements)[i]->line);
+        else
+            unsupported(("`this.base` must be the FIRST statement of the constructor — until it runs, "
+                         "every inherited member of '" + owner.name + "' reads from a half-built '"
+                         + owner.baseName + "'").c_str(), (*body->statements)[i]->line);
+        return;
+    }
+
+    if (!rhs) {
+        if (owner.base->ctors.empty())
+            unsupported(("'" + owner.name + "' cannot be constructed: its base '" + owner.baseName
+                         + "' has no constructor, so there is nothing to install — give '" + owner.baseName
+                         + "' a `ctor`").c_str(), ctorLine);
+        else
+            unsupported(("the base '" + owner.baseName + "' is never constructed — install it as the first "
+                         "statement of this constructor: `this.base = Base.<ctor>(…);`").c_str(), ctorLine);
+        return;
+    }
+
+    // The right-hand side is a CONSTRUCTOR CALL on the base type, and nothing else. Not a general
+    // assignment: a base part is built by its own ctor or not at all, and base fields are private, so
+    // there would be nothing to adjust afterwards anyway.
+    auto* call = dynamic_cast<InvocationNode*>(rhs.get());
+    auto* recv = call ? dynamic_cast<MemberAccessNode*>(call->expression.get()) : nullptr;
+    if (!recv) {
+        unsupported(("`this.base` takes a constructor call on '" + owner.baseName
+                     + "' (`this.base = Base.<ctor>(…);`) — it is not a general assignment").c_str(),
+                    rhs->line);
+        return;
+    }
+    std::string recvType;
+    if (!isTypeReceiver(recv, recvType) || recvType != owner.baseName) {
+        unsupported(("`this.base` in '" + owner.name + "' installs a '" + owner.baseName + "', but this "
+                     "builds a '" + (recvType.empty() ? std::string("value of another kind") : recvType)
+                     + "'").c_str(), rhs->line);
+        return;
+    }
+    // `this` does not exist yet where the install is emitted — the arguments run before `self` is bound.
+    if (call->args) {
+        for (auto& a : *call->args)
+            if (a && a->expression && exprMentionsThis(a->expression)) {
+                unsupported(("the base install runs before `this` exists — `" + owner.baseName
+                             + "`'s constructor may read this constructor's parameters, not "
+                               "`this.<field>`").c_str(), rhs->line);
+                return;
+            }
+    }
+#else
+    (void)owner; (void)body; (void)ctorLine;
+#endif
+}
+
 void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 {
     std::set<std::string> owning;       // Owned/Shared fields — never-null (drives the sharper message)
@@ -13054,8 +13155,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // out of the body and into the fill, because that is where it has to happen: before the field
     // defaults, and before the vptr store that must overwrite whatever vtable the base wrote.
     SharedExpression baseInit;
+#if KAMA_INHERITANCE
     if (ctorBody && body && body->statements && !body->statements->empty())
         baseInit = baseInstallOf(body->statements->front());
+    // At KAMA_INHERITANCE=0 the statement is deliberately NOT consumed here: leaving it in the body lets it
+    // reach `rejectBaseMember`, so `this.base` answers with the build's own gate diagnostic like every
+    // other inheritance surface, rather than being silently dropped.
+#endif
 
     std::ostringstream ctorPrologue;
     if (ctorBody) {
@@ -13153,6 +13259,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Construction-model M3: a named `ctor` is a static factory — seal it so no returned object leaks a
         // null owning pointer. It is the only ctor shape there is, so this is the only such seal.
         if (mi.isCtor) checkNamedCtorComplete(ci, mi.node->body);
+        // ...and, for a derived type, that it installed its base — the inherited half of the same seal.
+        if (mi.isCtor) checkBaseInstall(ci, mi.node->body, mi.node->line);
         // ...and a view ctor may only hand back a borrow of its params (not a ctor-local) — see the fn-shaped
         // sibling at the ReturnNode, skipped for a ctor body (which is validated here instead).
         if (mi.isCtor && isViewCType(ret)) checkViewCtorEscape(ci, mi.node);
@@ -14567,6 +14675,29 @@ SharedExpression CEmitter::baseInstallOf(SharedStatement st)
     auto* as = dynamic_cast<AssignmentNode*>(st.get());
     if (!as || as->token != EQ || !isThisBase(as->unaryExpression)) return SharedExpression();
     return as->expression;
+}
+
+// Does `e` name `this` anywhere inside it? Used to reject `this.base = Base.make(x: this.y)`: the install
+// is emitted before `self` is bound, so `this` genuinely does not exist there yet. Only the shapes an
+// argument can realistically take are walked — anything unrecognised answers "no", which is safe because
+// the emitter would then produce a C error naming `self` rather than accepting bad code.
+bool CEmitter::exprMentionsThis(SharedExpression e)
+{
+    if (!e) return false;
+    if (dynamic_cast<ThisAccessNode*>(e.get())) return true;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get()))  return exprMentionsThis(ma->expression);
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) return exprMentionsThis(ea->expression);
+    if (auto* un = dynamic_cast<SimpleUnaryExpressionNode*>(e.get())) return exprMentionsThis(un->expression);
+    if (auto* ho = dynamic_cast<HandoffNode*>(e.get()))       return exprMentionsThis(ho->value);
+    if (auto* ca = dynamic_cast<CastNode*>(e.get()))          return exprMentionsThis(ca->unaryExpression);
+    if (auto* bn = dynamic_cast<BinaryExpressionNode*>(e.get()))
+        return exprMentionsThis(bn->LHS) || exprMentionsThis(bn->RHS);
+    if (auto* iv = dynamic_cast<InvocationNode*>(e.get())) {
+        if (exprMentionsThis(iv->expression)) return true;
+        if (iv->args)
+            for (auto& a : *iv->args) if (a && exprMentionsThis(a->expression)) return true;
+    }
+    return false;
 }
 
 // `<expr>.base` reached a position where it means nothing. Three distinct answers, because the three

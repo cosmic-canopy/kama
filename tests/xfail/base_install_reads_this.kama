@@ -1,0 +1,14 @@
+// The install runs BEFORE `this` exists — it is lowered ahead of the storage `self` points at, so an
+// argument naming `this` would emit `self->…` before `self` is declared. Parameters are fine.
+type virtual resource Base {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    protected virtual fn int32 tag() { return 0; }
+    public fn int32 rank() { return this.n + this.tag(); }
+}
+type final resource Leaf extends Base {
+    int32 own;
+    public ctor make(int32 own) { this.base = Base.make(n: this.own); this.own = own; }
+    protected override fn int32 tag() { return this.own; }
+}
+fn int main() { Leaf l = Leaf.make(own: 1); return l.rank(); }
