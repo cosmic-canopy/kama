@@ -1142,6 +1142,14 @@ member_access
        GENERIC code: `fn f<A: default>()` states the bound and, until now, had no way to use it — the
        election was reachable only by the compiler's own field-fill loop. */
   | qualified_identifier_no_generic DOT DEFAULT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+    /* `this.base = Base.<ctor>(…)` — a derived constructor installs its base part by building it with the
+       base's OWN constructor. `base` is a keyword for the same reason `default` is, so it needs the same
+       two extra productions. The SECOND one is not decoration: it makes `d.base` reduce, so the emitter
+       can answer a bad receiver with a sentence instead of `syntax error, unexpected BASE`.
+       Note the receiver is `primary_expression`, NOT `this_access` — the parser must reduce
+       `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
+  | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }

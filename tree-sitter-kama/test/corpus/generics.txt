@@ -127,13 +127,14 @@ fn void main()
           (identifier))))))
 
 ================================================================================
-Turbofish in all three positions
+Turbofish in all four positions
 ================================================================================
 
 fn void main()
 {
     f::<int32>();
     Map::<K,V>.empty();
+    Box::<int32>::tag();
     r.deserialize::<T>();
 }
 
@@ -162,6 +163,15 @@ fn void main()
                   (identifier))
                 (type_name
                   (identifier))))
+            (identifier))
+          (argument_list)))
+      (expression_statement
+        (call_expression
+          (turbofish_type_member
+            (turbofish_name
+              (identifier)
+              (type_arguments
+                (primitive_type)))
             (identifier))
           (argument_list)))
       (expression_statement

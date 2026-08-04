@@ -1456,6 +1456,7 @@ private:
     // a variant payload) and the pointer must therefore be dereferenced.
     bool ctorThisAsValue(SharedExpression e, const std::string& dstCType) const;
     std::string emitMemberAccess(MemberAccessNode* ma);
+    void        rejectBaseMember(MemberAccessNode* ma);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory

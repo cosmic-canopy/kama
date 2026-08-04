@@ -14478,6 +14478,32 @@ std::string CEmitter::operatorResultClass(int opToken, int arity, SharedExpressi
     return isClass(rt) ? rt : "";
 }
 
+// `<expr>.base` reached a position where it means nothing. Three distinct answers, because the three
+// mistakes are different: the type has no base at all, the receiver is not `this`, or it is a READ of a
+// thing that is only ever written. The grammar admits `d.base` deliberately (kama.y `member_access`) so
+// that this can be a sentence rather than `syntax error, unexpected BASE`.
+void CEmitter::rejectBaseMember(MemberAccessNode* ma)
+{
+#if !KAMA_INHERITANCE
+    rejectInheritance("`this.base`", ma->line);
+#else
+    bool isThis = dynamic_cast<ThisAccessNode*>(ma->expression.get()) != nullptr;
+    if (!_currentClass)
+        unsupported("`this.base` is only meaningful inside a constructor of a derived type", ma->line);
+    else if (!_currentClass->base)
+        unsupported(("'" + _currentClass->name + "' has no base class, so `this.base` names nothing "
+                     "(only a type declared `extends …` has one)").c_str(), ma->line);
+    else if (!isThis)
+        unsupported(("the base part of a '" + _currentClass->name + "' is reachable only from inside it — "
+                     "write `this.base = " + _currentClass->baseName + ".<ctor>(…);` as the first statement "
+                     "of its constructor").c_str(), ma->line);
+    else
+        unsupported(("`this.base` may only be ASSIGNED, as the first statement of a constructor "
+                     "(`this.base = " + _currentClass->baseName + ".<ctor>(…);`) — to reach an inherited "
+                     "member write `base.<member>`").c_str(), ma->line);
+#endif
+}
+
 // obj.field / this.field — splice the __base. chain to the declaring ancestor.
 std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
@@ -14486,6 +14512,11 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         unsupported("static member access", ma->line);
         return field;
     }
+    // `this.base` is not a member — it is the ONE place a derived constructor installs its base part, and
+    // it is consumed before the body is walked (emitMethodOrCtorBody). Reaching here means it was used
+    // somewhere it does not belong, so answer with which of the three it was. `base` is a keyword, so no
+    // field can ever be named `base` and this can never shadow a real member.
+    if (field == "base") { rejectBaseMember(ma); return "0"; }
     std::string cls = exprClass(ma->expression);
     // Auto-deref an Owned/Shared: `n.field` -> `(n).ptr->[base]field` (T*).
     // A Weak can't be dereffed — it must be upgraded with upgrade() first.

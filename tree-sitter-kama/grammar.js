@@ -834,8 +834,10 @@ module.exports = grammar({
       seq(field('name', $.identifier), '::', $.type_arguments),
 
     // `Map::<K,V>.empty()` — the on-type turbofish, the canonical generic-constructor spelling.
+    // `::` is the STATIC form of the same thing (`Box::<int32>::tag()`, kama.y:1200) — leaving it out is
+    // what the whole-corpus oracle caught on tests/generic_static.kama and tests/idioms_kama_way.kama.
     turbofish_type_member: ($) =>
-      seq($.turbofish_name, '.', field('member', $.identifier)),
+      seq($.turbofish_name, choice('.', '::'), field('member', $.identifier)),
 
     // `r.deserialize::<T>()` — a receiver turbofish. The `::` is what disambiguates from `<` as less-than.
     turbofish_member: ($) =>
