@@ -20,7 +20,7 @@ type virtual resource Base
 }
 type final resource Leaf extends Base
 {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected final override fn int32 tick() { return 5; }
     protected override fn int32 run() { return this.tick(); }   // `this` is a Leaf; tick is final -> direct
 }

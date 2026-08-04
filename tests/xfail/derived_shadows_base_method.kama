@@ -30,7 +30,7 @@ type virtual resource B {
     protected virtual fn int32 t() { return 1; }
 }
 type final resource D extends B {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     public fn int32 h() { return 2; }                 // ERROR: shadows B.h(), which is not overridable
     protected fn int32 g() { return 2; }              // ERROR: same, at protected
     protected override fn int32 t() { return 2; }

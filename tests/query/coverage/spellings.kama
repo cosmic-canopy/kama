@@ -25,7 +25,7 @@ type virtual resource Base {
 }
 
 type final resource Derived extends Base {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 kind() { return 2; }
     public fn int32 viaBase() { return base.kind(); }   // the non-virtual base call
     public fn int32 viaThis() { return this.kind(); }

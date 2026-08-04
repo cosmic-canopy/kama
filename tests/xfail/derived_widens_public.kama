@@ -15,7 +15,7 @@ type virtual resource Base
 }
 type final resource Exposer extends Base
 {
-    public ctor make() { }      // fine — ctors are exempt
+    public ctor make() { this.base = Base.make(); }   // fine — ctors are exempt
     protected override fn int32 secretHook() { return 2; }
     public fn int32 hook() { return this.secretHook(); }       // ERROR: republishes a protected seam
 }

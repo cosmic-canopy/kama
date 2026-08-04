@@ -23,6 +23,8 @@
 27:20 Derived decl:resource
 27:36 Base ref:resource
 28:16 make decl:ctor
+28:37 Base ref:resource
+28:42 make ref:ctor
 29:32 kind decl:method
 30:20 viaBase decl:method
 30:44 kind ref:method

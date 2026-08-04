@@ -11,7 +11,7 @@ type virtual resource Shape {
 }
 type final resource Square extends Shape {
     DynamicArray<int32> parts;
-    public ctor make(int32 s) { this.parts.add(item: s); }
+    public ctor make(int32 s) { this.base = Base.make(); this.parts.add(item: s); }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }

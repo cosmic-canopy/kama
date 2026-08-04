@@ -15,7 +15,7 @@ type virtual resource Animal
 }
 type final resource Cat extends Animal
 {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 noise() { return 7; }
     protected override fn int32 meowImpl() { return this.noise(); }   // `this` is a Cat -> direct Cat__noise
 }

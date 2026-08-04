@@ -24,12 +24,12 @@ type value PlainTick { public int32 n;
 
 // (B) a virtual base + final derived — the OOP shape
 type virtual resource BaseTick { int32 n;
-    protected fn void setN(int32 n) { this.n = n; }
+    public ctor make(int32 n) { this.n = n; }
     protected fn int32 getN() { return this.n; }
     protected virtual fn int32 tickImpl() { return this.n; }
     public fn int32 tick() { return this.tickImpl(); } }
 type final resource DerivedTick extends BaseTick {
-    public ctor make(int32 n) { this.setN(n: n); }
+    public ctor make(int32 n) { this.base = Base.make(n: n); }
     protected override fn int32 tickImpl() { return this.getN() + 1; } }
 
 fn int32 sumPlain(View<PlainTick> xs) {

@@ -2,13 +2,14 @@
 // sanctioned way to publish polymorphism from a class hierarchy (vs. an interface).
 type virtual resource Shape
 {
+    public ctor make() { }
     public fn int describe() { return this.area(); }
     protected virtual fn int area() { return 1; }
 }
 type final resource Circle extends Shape
 {
     int r;
-    public ctor make(int r) { this.r = r; }
+    public ctor make(int r) { this.base = Base.make(); this.r = r; }
     protected override fn int area() { return r * r; }
 }
 fn int main()

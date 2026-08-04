@@ -5,7 +5,7 @@ type virtual resource Base {
     protected virtual fn int32 hook() { return 0; }  // makes Base a valid virtual class
 }
 type final resource Derived extends Base {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 plain() { return 2; }   // ERROR: plain is not virtual
 }
 fn int main() { Derived d = Derived.make(); return 0; }

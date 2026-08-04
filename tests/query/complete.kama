@@ -32,7 +32,7 @@ type virtual resource Base {
 
 type final resource Derived extends Base {
     int32 own = 0;
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     public fn int32 total() { return this.own + this.baseOnly(); }
 }
 

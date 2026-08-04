@@ -3,13 +3,14 @@
 // free function may call. Dispatch still resolves to the most-derived override.
 type virtual resource Shape
 {
+    public ctor make() { }
     public fn int area() { return this.compute(); }
     protected virtual fn int compute() { return 1; }
 }
 type final resource Square extends Shape
 {
     int s;
-    public ctor make(int s) { this.s = s; }
+    public ctor make(int s) { this.base = Base.make(); this.s = s; }
     protected override fn int compute() { return s * s; }
 }
 fn int measure(ref Shape sh)

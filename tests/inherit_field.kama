@@ -1,14 +1,14 @@
 // Base-field embedding: a derived class reaches inherited base data.
-// M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via `protected`
-// accessors — read (`getX`) and, for construction, write (`setX`).
-// M8 Phase E: construction is a named factory (no `: base(...)` delegation — a factory builds a bare
-// local, it has no `self` to chain a base ctor). A derived factory initializes the inherited base part
-// through the base's `protected` setter, then sets its own fields; the bare local's `__vptr` is set by
-// the vtable-typed bare-local store.
+// M25b: fields are private (kind-decides), so the base exposes `x` to subclasses via a `protected`
+// reader (`getX`).
+// A derived factory installs the base part by calling the base's OWN constructor — so `x` is initialized
+// by the type that owns it, and `Base` can enforce whatever invariant it likes on the way in. This used
+// to be a `protected` SETTER called from the derived ctor, which was the workaround for the base ctor
+// never running: it left `Base` unable to require that `x` was ever set at all.
 type virtual resource Base
 {
     int x;                                       // private; embedded in the derived layout
-    protected fn void setX(int x) { this.x = x; }   // subclasses initialize base data through this
+    public ctor make(int x) { this.x = x; }      // the base's own ctor — the only way its data is set
     protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
     protected virtual fn int tag() { return 0; }
     public fn int sum() { return this.sumImpl(); }   // public surface is fixed at the ROOT (decision A)
@@ -19,7 +19,7 @@ type final resource Derived extends Base
     int y;
     public ctor make(int x, int y)
     {
-        this.setX(x: x);      // initialize the inherited base field
+        this.base = Base.make(x: x);   // FIRST — the inherited part is built by its own ctor
         this.y = y;
     }
     protected override fn int tag() { return 1; }

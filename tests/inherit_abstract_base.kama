@@ -16,10 +16,12 @@ extern fn int kama_trace_get();
 //   - `base.<protected>` and `base.<public>` upcalls — the visibilities `base.` may legitimately reach
 //   - an `Owned<Abstract>` handle built from a leaf (upcast, offset-0)
 //   - virtual DESTRUCTION through that base handle: the most-derived dtor chain runs, no slicing
+//   - an ABSTRACT base's constructor called from a derived base install — legal there and nowhere else,
+//     since the value is embedded at offset 0 and the derived vtable is stamped over it in the same fill
 type abstract resource Codec
 {
     int32 tag;
-    protected fn void setTag(int32 v) { this.tag = v; }
+    public ctor make(int32 tag) { this.tag = tag; }   // callable ONLY as a base install
     protected fn int32 getTag() { return this.tag; }
 
     public fn int32 encode() { return this.body() + this.salt() + this.extra(); }   // surface at the root
@@ -32,7 +34,7 @@ type abstract resource Codec
 
 type final resource Doubler extends Codec
 {
-    public ctor make(int32 seed) { this.setTag(v: seed); }
+    public ctor make(int32 seed) { this.base = Base.make(tag: seed); }
     protected override fn int32 body() { return this.getTag() * 2; }
     // `base.salt()` reaches the base's PROTECTED default and ADDS to it — the upcall `virtual` exists
     // for, and the thing a pure contract cannot express without every implementor restating the default.

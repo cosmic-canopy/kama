@@ -13,7 +13,7 @@ type virtual resource Animal {
 }
 
 type final resource Dog extends Animal {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
 
     // `Base` in TYPE position. Private, so the no-public-widening rule does not apply.
     private fn int32 legsOf(ref Base b) { return b.legs(); }

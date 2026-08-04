@@ -1,7 +1,7 @@
 // A subclass cannot reach a base class's PRIVATE field (only protected/public).
 type virtual resource Base { int32 secret; public ctor make(int32 s){ this.secret = s; } }
 type final resource Derived extends Base {
-    public ctor make(int32 s){ this.secret = s; }       // ERROR: secret is private in Base
+    public ctor make(int32 s){ this.base = Base.make(s: s); this.secret = s; }   // ERROR: secret is private in Base
     public fn int32 leak() { return this.secret; }
 }
 fn int main() { return 0; }

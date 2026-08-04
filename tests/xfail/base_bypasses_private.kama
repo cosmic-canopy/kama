@@ -14,13 +14,14 @@
 // resource-only, so there are no protected FIELDS to reach — this is entirely about methods.
 // tests/vtable_depth2 covers the legal `base.<protected>` direction.
 type virtual resource B {
+    public ctor make() { }
     fn int32 secret() { return 42; }                  // no modifier -> private to B
     public fn int32 peek() { return this.peekImpl(); }
     protected virtual fn int32 peekImpl() { return 0; }
     protected virtual fn int32 t() { return 1; }
 }
 type final resource D extends B {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 t() { return 2; }
     protected override fn int32 peekImpl() { return base.secret(); }   // ERROR: 'secret' is private in 'B'
 }

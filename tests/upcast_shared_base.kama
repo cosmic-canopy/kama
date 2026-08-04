@@ -13,7 +13,7 @@ type virtual resource Shape {
 type final resource Square extends Shape {
     int32 s;
     DynamicArray<int32> parts;                                 // DERIVED owns heap — a sliced Base__dtor would leak it
-    public ctor make(int32 s) { this.s = s; this.parts.add(item: s); }
+    public ctor make(int32 s) { this.base = Base.make(); this.s = s; this.parts.add(item: s); }
     ~Square() { }
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }

@@ -17,7 +17,7 @@ type virtual resource Base {
 }
 type final resource Leaf extends Base {
     int32 n;
-    public ctor make() { this.n = 3; }
+    public ctor make() { this.base = Base.make(); this.n = 3; }
     protected override fn int32 derivedSide() {
         base.n = 7;                      // ERROR: 'n' is private in 'Base'
         return base.n;                   // ERROR: likewise

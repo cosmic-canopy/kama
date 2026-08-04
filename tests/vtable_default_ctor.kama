@@ -5,6 +5,7 @@
 // for the removed synth-ctor vptr init). M25b: polymorphism is opt-in — `virtual`/`protected virtual` hook
 // behind a public method; the sealed leaf is a `final` class.
 type virtual resource Shape {
+    public ctor make() { }
     protected virtual fn int32 val() { return 0; }
     protected virtual fn void put(int32 v) { }           // the seam the leaf fills; public entry below
     public fn int32 plus1() { return this.val() + 1; }   // public surface dispatches virtually
@@ -13,7 +14,7 @@ type virtual resource Shape {
 type final resource Box extends Shape {
     int32 n = 0;                                      // private (kind-decides); the field default IS the
                                                       // stated empty state — `make()` need not repeat it
-    public ctor make() { }      // bare local -> __vptr set by the vtable-typed store
+    public ctor make() { this.base = Base.make(); }   // the fill's vptr store stamps Box's vtable, not Shape's
     protected override fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }
 }

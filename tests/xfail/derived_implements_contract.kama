@@ -16,7 +16,7 @@ type virtual resource Widget
 }
 type final resource Icon extends Widget implements Clickable
 {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return 2; }
     public fn int32 click() { return 3; }
 }

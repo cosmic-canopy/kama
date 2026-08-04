@@ -11,7 +11,7 @@ type virtual resource Base
 }
 type final resource Derived extends Base
 {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     ~Derived() { kama_trace(code: 2); }
     protected override fn int kind() { return 1; }
 }

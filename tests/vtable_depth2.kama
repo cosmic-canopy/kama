@@ -15,7 +15,7 @@ type virtual resource Base
 }
 type final resource Leaf extends Base
 {
-    public ctor make() { }
+    public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return base.step() + 10; }
 }
 fn int32 measure(ref Base b) { return b.rank(); }
