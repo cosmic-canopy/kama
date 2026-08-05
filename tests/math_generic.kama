@@ -1,0 +1,42 @@
+// M2a: ONE name per `std::math` operation, at BOTH float widths — the width is inferred from the
+// argument, through a module-private `Real` contract with a retro-impl per type. This matters because a
+// bare `1.0` literal in kama is a float64, so a float32-only module made `sin(x: 1.0)` a type error for
+// the most obvious thing to write; and kama has no overloading, so C's `sqrt`/`sqrtf` split would have
+// been the alternative.
+import std::math::{sqrt, pow, floor, ceil, round, trunc, abs, exp, log, log2, log10,
+                   sin, cos, atan2, hypot, fmod, cbrt};
+
+fn int main() {
+    int32 t = 0;
+    if (sqrt(x: 144.0) == 12.0) { t = t + 1; }
+    if (pow(x: 2.0, y: 10.0) == 1024.0) { t = t + 1; }
+    if (floor(x: 3.9) == 3.0 && ceil(x: 3.1) == 4.0) { t = t + 1; }
+    if (round(x: 2.5) == 3.0 && trunc(x: -2.7) == -2.0) { t = t + 1; }
+    if (abs(x: -5.0) == 5.0) { t = t + 1; }
+    if (log2(x: 8.0) == 3.0 && log10(x: 1000.0) == 3.0) { t = t + 1; }
+    if (hypot(x: 3.0, y: 4.0) == 5.0) { t = t + 1; }
+    if (fmod(x: 7.0, y: 3.0) == 1.0) { t = t + 1; }
+    if (abs(x: cbrt(x: 27.0) - 3.0) < 0.000001) { t = t + 1; }   // glibc's cbrt is not correctly rounded
+
+    // transcendentals compared with a tolerance, not for exact bits
+    float64 s = sin(x: 0.0);
+    float64 c = cos(x: 0.0);
+    if (abs(x: s) < 0.000001 && abs(x: c - 1.0) < 0.000001) { t = t + 1; }
+    // a NESTED GENERIC call cannot infer — the callee's return type is the very `T` being resolved — so
+    // the inner result takes a name, which is kama's "bind it to a local" rule.
+    float64 e1 = exp(x: 1.0);
+    float64 lg = log(x: e1);
+    if (abs(x: lg - 1.0) < 0.000001) { t = t + 1; }
+    // atan2 keeps C's (y, x) order, but the argument is NAMED, so the classic mix-up cannot happen quietly
+    float64 q = atan2(y: 1.0, x: 1.0);
+    if (abs(x: q - 0.785398) < 0.0001) { t = t + 1; }
+
+    // the float32 half — THE SAME NAMES, the width inferred from the argument
+    if (sqrt(x: 25.0f32) == 5.0f32) { t = t + 1; }
+    if (pow(x: 3.0f32, y: 2.0f32) == 9.0f32) { t = t + 1; }
+    if (floor(x: 2.7f32) == 2.0f32 && abs(x: -1.0f32) == 1.0f32) { t = t + 1; }
+    float32 s0 = sin(x: 0.0f32);
+    if (abs(x: s0) < 0.000001f32) { t = t + 1; }
+
+    return t;   // 16
+}

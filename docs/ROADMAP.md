@@ -58,8 +58,25 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
-   [design/stdlib-parity.md](design/stdlib-parity.md) (cold-start ready; delete that file when it ships).
+2. **The CONTRACT MODEL — four sequenced campaigns**, briefed in
+   [design/contract-model.md](design/contract-model.md) (cold-start ready; delete when the last ships).
+   A design review during M2a found that **`enum` and `intrinsic` are hidden kinds** — GOALS #3c says
+   every declaration is `type <kind> Name`, yet `enum` has its own grammar production with no
+   `class_base_opt` and `intrinsic` has no kama spelling at all. Retro-impl exists only to paper over
+   those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing one.
+   Run in order, each its own session, **before M2b**:
+   1. **Contract model** — `type enum X implements C` + `type intrinsic <…> implements C`; a contract is
+      a *scope*, so a contract-supplied method is not part of the intrinsic's API; the orphan rule falls
+      out of ownership. Retires retro-impl, the nominal-recording special case, the enum tagged-union
+      promotion, and the missing primitive→contract path.
+   2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
+      disjoint; no specificity lattice). Polymorphism for generic *functions*.
+   3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
+      a runtime value (silent bad C today). Unblocks `Fixed16_16` → `Fixed<intBits, fracBits>`.
+   4. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
+
+3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
+   [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
    regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager. No new language
    surface; pure library/codegen. Split M2a (parse · sort · math completion · `char` classification) /
@@ -92,7 +109,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
        timeout being waited out rather than a test running, so it is likely one root cause across a dozen
        fixtures, not a dozen bugs.
      Promote to **required** once green, so a Windows regression blocks a merge.
-3. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
+4. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
    ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
    flash pass — detail in §5 (embedded "Toolchain / build" row).
 
@@ -118,6 +135,32 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
+
+- **`Fixed16_16` does not implement `Real`.** A contract requires *every* method, so conformance means
+  writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q16.16 — CORDIC and
+  polynomial-approximation work, a numerical-methods project rather than a library chore. It is the
+  obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of a future
+  generic `Fixed<intBits, fracBits>` (§1).
+
+- **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
+  (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
+  callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
+  ([kama.y](../kama.y), the `FNPTR` rule has no type-param slot). **Deliberately deferred, not overlooked**
+  — for the case it would serve, a generic **contract** is the better tool anyway: it monomorphizes to a
+  direct inlinable call where an `fnptr` is an indirect one, and a comparator object can carry state,
+  which matters because kama has no capturing closures. `std::collections`' `Order<T>` is the worked
+  example. Additive and non-breaking, so it costs nothing to wait. **Revisit alongside the full
+  specialization campaign** (§1) — a concrete-args specialization covers the per-type-body case a generic
+  `fnptr` would otherwise be reached for.
+
+- **`--no-heap` does not gate container allocation.** The flag rejects `new`, string interpolation,
+  `spawn`, `parallel_for` and error boxing (`rejectIfNoHeap`), but a `DynamicArray`/`Map`/`string` growing
+  through `GlobalAllocator` reaches `malloc` unchallenged — so the flag under-delivers on what its name
+  promises. M2a worked around this for the one case it introduced (`sort`/`sortWith` are
+  `@compileFor(!NOHEAP)`, so they vanish from a no-heap build), but that is a spot fix, not the rule.
+  The real change is to make `GlobalAllocator` growth an error under the flag, leaving containers usable
+  only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
+  container use in a no-heap build), so it is its own campaign.
 
 - **The unsafe seam — `Ptr<T>` -> `UnsafePtr<T>`, and no `null` in safe kama.** Its own campaign, agreed
   while the `slot` work was in flight (which is where its customers came from: eight buffer-realloc sites

@@ -1,0 +1,239 @@
+namespace std::fmt;
+import std::num::{int64Min};
+export { ParseError, FromStr, parse, FromStrRadix, parseRadix };
+
+// Text -> number, the exact inverse of this module's `intStr`/`f64Str` side, which is why it lives here
+// rather than in a module of its own (`std.fmt.parseInt` is Zig's placement too, and `kama_fmt.h` was
+// already the parse seam).
+//
+// A parse FAILS, it does not come up absent, so the result is `Result<T, ParseError>` and not
+// `Optional<T>` — GOALS #3d draws exactly that line. The three peers closest to kama all agree and all
+// separate a malformed string from one that is out of range: Rust's `ParseIntError`, Zig's
+// `error.Overflow`/`error.InvalidCharacter`, Go's `ErrSyntax`/`ErrRange`. Only the boolean and optional
+// shapes throw that away.
+//
+// Reached generically — `parse::<int32>(s: t)` — so there is no `parseI32`/`parseI64`/… ladder of
+// suffixed spellings. The mechanism is the one the serde path already uses (`json::decode<T: Deserialize>`
+// calling `T.deserialize(...)`): a MARKER contract plus a per-type retro-impl supplying a fallible ctor.
+// The contract stays method-less on purpose — a contract signature naming `This` in return position
+// cannot be resolved outside a type (see the note on `Deserialize` in the prelude).
+//
+// Strict by design, like Rust's: no surrounding whitespace is trimmed and no trailing byte is ignored, so
+// `" 7"` and `"7x"` are both `InvalidDigit`. Trim first if you want otherwise.
+
+enum ParseError { Empty, InvalidDigit, OutOfRange }
+
+implements Error for ParseError {
+    public fn string message() {
+        return match (this) {
+            case Empty:        "cannot parse an empty string";
+            case InvalidDigit: "invalid digit";
+            case OutOfRange:   "number out of range for this type";
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Integers. The magnitude accumulates in `uint64` and is range-checked BEFORE each multiply — kama traps
+// on signed overflow in debug, so detecting it after the fact is not an option. Accumulating unsigned is
+// also what lets a signed minimum parse: |int64Min| is one past int64Max and has no signed counterpart.
+// ---------------------------------------------------------------------------------------------------
+
+fn Result<uint64, ParseError> parseDigits(ref string s, int32 from, uint64 limit, uint64 radix) {
+    int32 n = s.length();
+    if (from >= n) { return Result::Err(error: ParseError::InvalidDigit); }
+    uint64 acc = 0ui64;
+    int32 i = from;
+    while (i < n) {
+        uint8 c = s[i];
+        uint64 d = 0ui64;
+        if (c >= 48ui8 && c <= 57ui8)        { d = cast<uint64>(c - 48ui8); }        // 0-9
+        else if (c >= 97ui8 && c <= 122ui8)  { d = cast<uint64>(c - 97ui8) + 10ui64; } // a-z
+        else if (c >= 65ui8 && c <= 90ui8)   { d = cast<uint64>(c - 65ui8) + 10ui64; } // A-Z
+        else { return Result::Err(error: ParseError::InvalidDigit); }
+        if (d >= radix) { return Result::Err(error: ParseError::InvalidDigit); }
+        if (acc > limit / radix) { return Result::Err(error: ParseError::OutOfRange); }
+        if (acc == limit / radix && d > limit % radix) { return Result::Err(error: ParseError::OutOfRange); }
+        acc = acc * radix + d;
+        i = i + 1;
+    }
+    return Result::Ok(value: acc);
+}
+
+// `negLimit`/`posLimit` are MAGNITUDE bounds: for int32 they are 2147483648 and 2147483647.
+fn Result<int64, ParseError> parseSigned(ref string s, uint64 negLimit, uint64 posLimit, uint64 radix) {
+    if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
+    uint8 c0 = s[0];
+    bool neg = c0 == 45ui8;
+    int32 from = (neg || c0 == 43ui8) ? 1 : 0;
+    uint64 limit = neg ? negLimit : posLimit;
+    Result<uint64, ParseError> r = parseDigits(s: s, from: from, limit: limit, radix: radix);
+    uint64 acc = match (r) {
+        case Ok(value: v):  { := v; }
+        case Err(error: e): { return Result::Err(error: e); }
+    };
+    if (!neg) { return Result::Ok(value: cast<int64>(acc)); }
+    // |int64Min| has no positive int64 counterpart, so it cannot be negated — name it directly.
+    if (acc == 9223372036854775808ui64) { return Result::Ok(value: int64Min()); }
+    return Result::Ok(value: 0i64 - cast<int64>(acc));
+}
+
+fn Result<uint64, ParseError> parseUnsigned(ref string s, uint64 posLimit, uint64 radix) {
+    if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
+    uint8 c0 = s[0];
+    if (c0 == 45ui8) { return Result::Err(error: ParseError::InvalidDigit); }   // no sign on an unsigned
+    int32 from = c0 == 43ui8 ? 1 : 0;
+    return parseDigits(s: s, from: from, limit: posLimit, radix: radix);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// `parse` — decimal, every numeric primitive plus `bool`.
+// ---------------------------------------------------------------------------------------------------
+
+type contract FromStr for both { }
+
+implements FromStr for int8 {
+    public ctor Result<int8, ParseError> fromStr(ref string s) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 128ui64, posLimit: 127ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int8>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for int16 {
+    public ctor Result<int16, ParseError> fromStr(ref string s) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 32768ui64, posLimit: 32767ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int16>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for int32 {
+    public ctor Result<int32, ParseError> fromStr(ref string s) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 2147483648ui64, posLimit: 2147483647ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int32>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for int64 {
+    public ctor Result<int64, ParseError> fromStr(ref string s) {
+        return parseSigned(s: s, negLimit: 9223372036854775808ui64, posLimit: 9223372036854775807ui64, radix: 10ui64);
+    }
+}
+implements FromStr for uint8 {
+    public ctor Result<uint8, ParseError> fromStr(ref string s) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 255ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint8>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for uint16 {
+    public ctor Result<uint16, ParseError> fromStr(ref string s) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 65535ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint16>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for uint32 {
+    public ctor Result<uint32, ParseError> fromStr(ref string s) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 4294967295ui64, radix: 10ui64);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint32>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStr for uint64 {
+    public ctor Result<uint64, ParseError> fromStr(ref string s) {
+        return parseUnsigned(s: s, posLimit: 18446744073709551615ui64, radix: 10ui64);
+    }
+}
+
+// Floats go through `strtod` — reimplementing correctly-rounded decimal-to-binary conversion would be a
+// large, subtle job for no gain, and libc is already linked. The seam reports WHICH failure so the two
+// stay distinguishable, unlike the lenient reader the JSON path uses.
+extern "kama_fmt.h";
+extern fn int32 kama_parse_f64_ck(ref string s, out float64 v);
+
+fn Result<float64, ParseError> parseF64(ref string s) {
+    slot float64 v;
+    int32 st = kama_parse_f64_ck(s: s, v: out v);
+    if (st == 1) { return Result::Err(error: ParseError::Empty); }
+    if (st == 2) { return Result::Err(error: ParseError::InvalidDigit); }
+    if (st == 3) { return Result::Err(error: ParseError::OutOfRange); }
+    return Result::Ok(value: v);
+}
+
+implements FromStr for float64 {
+    public ctor Result<float64, ParseError> fromStr(ref string s) { return parseF64(s: s); }
+}
+implements FromStr for float32 {
+    public ctor Result<float32, ParseError> fromStr(ref string s) {
+        Result<float64, ParseError> r = parseF64(s: s);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<float32>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+
+// Exactly `"true"`/`"false"`, as in Rust — a parser is not the place to invent truthiness.
+implements FromStr for bool {
+    public ctor Result<bool, ParseError> fromStr(ref string s) {
+        if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
+        if (s.equals(other: "true"))  { return Result::Ok(value: true); }
+        if (s.equals(other: "false")) { return Result::Ok(value: false); }
+        return Result::Err(error: ParseError::InvalidDigit);
+    }
+}
+
+// Parse the WHOLE string as a `T`. `parse::<int32>(s: text)` — the turbofish is required because nothing
+// in the arguments mentions `T`.
+fn Result<T, ParseError> parse<T: FromStr>(ref string s) { return T.fromStr(s: s); }
+
+// ---------------------------------------------------------------------------------------------------
+// `parseRadix` — bases 2..36, integers only (a radix is meaningless for a float). Digits are 0-9 then
+// a-z, case-insensitive. No `0x`/`0b` prefix is recognised: the base is the argument, so accepting a
+// prefix too would be a second way to say the same thing.
+// ---------------------------------------------------------------------------------------------------
+
+type contract FromStrRadix for both { }
+
+implements FromStrRadix for int8 {
+    public ctor Result<int8, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 128ui64, posLimit: 127ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int8>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for int16 {
+    public ctor Result<int16, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 32768ui64, posLimit: 32767ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int16>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for int32 {
+    public ctor Result<int32, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<int64, ParseError> r = parseSigned(s: s, negLimit: 2147483648ui64, posLimit: 2147483647ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<int32>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for int64 {
+    public ctor Result<int64, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        return parseSigned(s: s, negLimit: 9223372036854775808ui64, posLimit: 9223372036854775807ui64, radix: radix);
+    }
+}
+implements FromStrRadix for uint8 {
+    public ctor Result<uint8, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 255ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint8>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for uint16 {
+    public ctor Result<uint16, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 65535ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint16>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for uint32 {
+    public ctor Result<uint32, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        Result<uint64, ParseError> r = parseUnsigned(s: s, posLimit: 4294967295ui64, radix: radix);
+        return match (r) { case Ok(value: v): Result::Ok(value: cast<uint32>(v)); case Err(error: e): Result::Err(error: e); };
+    }
+}
+implements FromStrRadix for uint64 {
+    public ctor Result<uint64, ParseError> fromStrRadix(ref string s, uint64 radix) {
+        return parseUnsigned(s: s, posLimit: 18446744073709551615ui64, radix: radix);
+    }
+}
+
+fn Result<T, ParseError> parseRadix<T: FromStrRadix>(ref string s, uint64 radix) {
+    if (radix < 2ui64 || radix > 36ui64) { panic(msg: "parseRadix: radix must be 2..36"); }
+    return T.fromStrRadix(s: s, radix: radix);
+}

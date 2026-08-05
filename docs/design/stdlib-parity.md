@@ -3,25 +3,61 @@
 *In-flight campaign doc. **Delete this file when M2 ships**, once SPEC + the module docs carry the
 record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
-> ### ►► Re-verified against the tree 2026-08-04 — read this first
+> ### ►► M2a is SHIPPED. M2b and M2c remain — read this first
 >
-> Every campaign brief in this repo has been wrong somewhere load-bearing, so the claims below were
-> re-checked rather than trusted. **The gap table still holds in full** — `parse`, `sort`, `char`
-> classification and the exported trig are all still absent; `std::log` still has zero fixtures and
-> `std::time` two. What changed:
+> **M2a (parse · sort · `std::math` completion · `char` classification) landed 2026-08-04.** The record is
+> in SPEC (§ *Sorting & searching*, § *Parsing*, § *ASCII*, § *Math*); the three spikes below are resolved
+> and their answers are summarised here so M2b/M2c inherit them. Baseline is now **native 927** (was 915).
 >
-> - **Baseline is now `native 915 / ASan 879 / wasm 853`** (was 867/832/806). The inheritance and
->   slot-scope campaigns landed in between and both are CLOSED; their design docs are deleted. Neither
->   touches this campaign — `lib/` and `prelude/` contain **zero** `extends`.
-> - **Spike B's premise was re-run, not assumed**: a generic free fn allocating a
->   `DynamicArray<T>` scratch buffer of its own type param still compiles and runs. Stability remains a
->   free trade-off.
-> - **One question the sort spikes no longer have to answer.** Float `Comparable` now gives a TOTAL order
->   (`prelude/global.kama:157-161`, Rust's `f64::total_cmp` semantics: NaN sorts after every number and
->   equals itself). That was a live bug — a bare three-way fold returned `Equal` for a NaN operand, so NaN
->   compared equal to everything and silently corrupted sorted containers. **A `Comparable`-driven sort is
->   therefore already NaN-safe**; do not re-derive this, and do not "simplify" the float impl back.
-> - `DynamicArray.swap` is at `dynamic_array.kama:212` (the brief said 213-222; the body moved).
+> **The spikes, as decided:**
+> - **A — sort API.** Free functions over `View<T>` in `std::collections`, never per-container methods, so
+>   one implementation covers `DynamicArray`/`FixedArray`/sub-ranges. `View<T>` gained `swap`+`reverse`;
+>   that was the right call, not a hack around, because a view is second-class in *escape*, not in
+>   mutability. Ordering comes from `Comparable` or an `Order<T>` **contract** — an `fnptr` could not
+>   express it (no generic fn-pointer types, now ROADMAP §2) and would have been the worse tool regardless:
+>   an indirect uninlinable call, and stateless in a language with no closures.
+> - **B — stability.** Both, and the stable one sorts an **index permutation** rather than a scratch buffer
+>   of `T` — that keeps it O(n log n) *and* free of a `Copyable` bound. `sort`/`sortWith` are
+>   `@compileFor(!NOHEAP)` so a no-heap build cannot silently allocate.
+> - **C — parse.** `Result<T, ParseError>` with `Empty`/`InvalidDigit`/`OutOfRange`, reached generically as
+>   `parse::<int32>(s:)` via a marker contract + fallible-ctor retro-impls (the serde pattern). No suffixed
+>   `parseI32` ladder, so M3's naming reconcile is unaffected.
+> - **D (unplanned) — float64 math.** `std::math`'s scalar surface became **one generic function per
+>   operation over a `Real` contract**, so `sqrt(x: 1.0)` and `sqrt(x: 1.0f32)` are the same name with the
+>   width inferred. **Not breaking** — an earlier draft took C's `sqrt`/`sqrtf` split and was reverted. 21
+>   names instead of 42, and `Real` is exported so a user type can join in. The only removal is `absf`,
+>   which was exported but never called anywhere; generic `abs` replaces it.
+>
+> **Five compiler defects surfaced and were fixed** — four of them pre-existing on `dev`, none specific to
+> this campaign:
+> 1. **A generic free function calling another with a forwarded type parameter CRASHED the compiler.**
+>    Turbofish type args were stored without substitution, so `T` bound to itself and `mangleElem` recursed
+>    until the stack died. No code in the tree used the shape, so it had never been hit. Fixed by
+>    substituting + deferring an unbound arg, and by re-walking generic *function* bodies once per
+>    instantiation (generic *types* already had that pass). Regression fixture: `tests/generic_fn_forward`.
+> 2. **Generic inference could not bind `T` from a `View<T>` argument** — only a *bare* `T x` parameter was
+>    inferable, which is why `tickAll::<Timer>` in the ECS fixture carried a turbofish. Now unifies type
+>    arguments positionally.
+> 3. **A generic's contract bounds resolved in the CALLER's namespace**, so `parse<T: FromStr>` demanded
+>    every caller import a marker contract they never name. Bounds now resolve in the template's home scope.
+> 4. **`exprTypeNode` could not type a negated literal or a non-generic call result**, so `abs(x: -5.0)`
+>    and `log(x: exp(x: 1.0))` failed to infer once math went generic. Unary-minus and non-generic call
+>    returns now resolve; a nested *generic* call still needs a bound local (its return type is the `T`
+>    being inferred).
+> 5. **Release packaging staged only two of ten seam headers** — `kama_fmt/time/log/app/ctrl/channel/
+>    isolate/atomic.h` were all missing from the payload. Now globbed.
+>
+> ⚠️ **A broken file anywhere in a directory module breaks every program importing that module** — while
+> `sort.kama` was mid-development it took down every `std::collections` importer. Expect that when adding a
+> file to an existing module directory.
+>
+> ⚠️ **`Order<Owned<T>>` is not instantiable**: a `ref` parameter may not name a smart pointer. Sort a
+> container of the resources themselves.
+>
+> ⚠️ **The conformance mechanism M2a leaned on is itself under review.** `Real`, `FromStr` and
+> `FromStrRadix` exist as contracts only because an intrinsic has no way to declare conformance. The
+> design that replaces retro-impl — and may fold these away — is
+> [contract-model.md](contract-model.md), scheduled ahead of M2b.
 
 ## Why this campaign exists
 
@@ -44,10 +80,10 @@ ships three things Rust `std` does not: JSON + binary serialization, `std::log`,
 
 | Rust `std` | kama today | Lands in |
 |---|---|---|
-| `str::parse::<T>()` | ✗ nothing anywhere | M2a |
-| `slice::sort`, `binary_search` | ✗ nothing | M2a |
-| `f32`/`f64` math: trig, `powf`, `floor`, `ceil`, `round`, `exp`, `ln` | partial — float32 only; **trig is `extern`-declared but not exported** | M2a |
-| `char::is_alphabetic` / `is_numeric` / … | ✗ nothing | M2a |
+| `str::parse::<T>()` | ✅ **shipped** — `std::fmt::parse::<T>` | M2a |
+| `slice::sort`, `binary_search` | ✅ **shipped** — `std::collections` free fns over `View<T>` | M2a |
+| `f32`/`f64` math: trig, `powf`, `floor`, `ceil`, `round`, `exp`, `ln` | ✅ **shipped** — both widths, C's names | M2a |
+| `char::is_alphabetic` / `is_numeric` / … | ✅ **shipped** — `std::ascii` | M2a |
 | `thread::sleep` | ✗ — `kama_sleep_ms` exists in `kama_os.h`, reachable only from a test helper | M2b |
 | `SystemTime` (wall clock / UNIX epoch) | ✗ — `std::time` is monotonic-only | M2b |
 | `std::path` + `fs::create_dir` / `rename` / `metadata` | ✗ no path helpers, no `mkdir`; `Metadata` is `{size, isDir}` | M2b |
@@ -78,92 +114,12 @@ Each of the three below is one session ending at a commit. Order otherwise matte
   `std::time` sleep + wall clock · DNS.
 - **M2c — the two new modules.** `std::random` · `std::encoding`.
 
-## Open questions — THREE SPIKES + ONE BUG FIX, before any M2a code
+## Open questions
 
-None of these is a default to proceed on. Each is a real design decision that freezes at 1.0, and the user
-has asked for the *professional-grade* answer, not the expedient one. **Run the spikes first; they are
-research + a written recommendation, not implementation.**
+**Spikes A, B and C are RESOLVED and M2a is shipped** — see the banner at the top of this file for what was
+decided and why, and SPEC for the surface itself. What follows is what M2b/M2c still have to answer.
 
-### Spike A — the `sort` API (blocks M2a)
-
-Two entangled questions: **where it lives**, and **what it can sort**.
-
-*Survey properly, don't guess.* At minimum: Rust (`slice::sort` / `sort_unstable` / `sort_by_key`, reached
-through deref so `v.sort()` works), Go (`sort.Slice` / `slices.Sort` — note the generics rewrite in 1.21),
-C++ (`std::sort` / `ranges::sort` over iterators), Zig (`std.mem.sort` — closest peer, takes a slice + a
-comparator fn), Swift (`Array.sorted()` / `sort()` on `MutableCollection`), C#/Java. The question to answer
-is not "what is popular" but **what shape fits a language with `View<T>` as a first-class stack-only borrow
-and `Comparable` as a contract**.
-
-Specific things the spike must resolve:
-
-- **Free function over `View<T>`, method on the containers, or both?** A free `sort(items: View<T>)` gets
-  `DynamicArray`, `FixedArray` and sub-ranges (`slice`) from ONE implementation; `xs.sort()` reads better
-  but is per-container and cannot sort a sub-range or a `View` obtained from elsewhere. "Both" is what Rust
-  effectively has, at the cost of two spellings (GOALS #4).
-- **⚠️ `View<T>` cannot swap elements today.** `DynamicArray.swap` needs a private `takeAt` plus raw
-  `Ptr<T>` aliasing, because the move tracker rejects `this.data[i] = …`
-  ([dynamic_array.kama:212](../../lib/std/collections/dynamic_array.kama#L212)). `View` has a
-  place-returning `operator[]` but no `swap`. So a View-based sort either restricts to a copyable element
-  or needs a new `View.swap` with the same unsafe internals. **Decide this deliberately — it is the part
-  most likely to be hacked around.** *(The recipe transfers cleanly: a `View<T>` holds its own
-  `Ptr<T> data`, so the take-out / relocate / `give`-back dance works verbatim. What needs deciding is
-  whether a second-class borrow SHOULD be able to permute its buffer, not whether it can.)*
-- **How is the ordering supplied?** `T: Comparable` (kama's contract, prelude retro-impls on every
-  primitive) is the obvious default. Do we also want a `sortBy(items:, less:)` taking an `fnptr`, given
-  kama has no capturing closures (WEB_FRAMEWORK_READINESS Tier-1)? Without it, sorting by a computed key
-  means a wrapper type.
-- **Stability.** See below — it is a free choice, not a forced one.
-
-### Spike B — stability, and what `sort` guarantees
-
-**Correction, and it changes this question.** This brief previously said a stable merge sort was
-*unimplementable* because a generic free function could not allocate a `DynamicArray<T>` scratch buffer of
-its own type param. **That is false, and was verified false:**
-
-```kama
-fn int32 mergeScratch<T>(View<T> items) {
-    DynamicArray<T> scratch = DynamicArray.withCapacity(capacity: items.length());   // builds and runs
-    return scratch.length();
-}
-```
-
-The ROADMAP §2 entry claiming otherwise was stale and has been corrected. (The other gap this paragraph
-used to name — a `static fn` on a GENERIC type having no spelling — has since SHIPPED as
-`Type::<args>::name()`; see SPEC § *Types*.) So stability is a genuine trade-off with both options
-available, not a capability limit:
-
-| | allocation-free (heapsort / introsort) | stable (merge / timsort) |
-|---|---|---|
-| works under `@noheap` / `--no-heap`, MCU | ✅ | ✗ |
-| multi-key sorting is correct | ✗ | ✅ |
-| peers | Rust `sort_unstable`, Go `sort.Slice`, C++ `std::sort` | Rust `sort`, Go `SliceStable`, C++ `stable_sort` |
-
-Every peer ships **both**. The spike should say whether kama does too, and if only one, which — bearing in
-mind that "sorting a fixed buffer with no heap" is exactly the MCU/audio use case kama courts, and that a
-silently-unstable sort produces wrong multi-key results without any error.
-
-### Spike C — what `parseInt`/`parseFloat` return
-
-*Survey what peers do AND argue what kama should do.* Rust: `Result<T, ParseIntError>` with
-Empty/InvalidDigit/PosOverflow/NegOverflow. Go: `strconv.Atoi` → `(int, error)` with `ErrSyntax`/`ErrRange`.
-C#: both `Parse` (throws) and `TryParse` (bool + out). Python: raises `ValueError`. JS: `parseInt` returns
-`NaN` (widely considered a mistake). Zig: `std.fmt.parseInt` → `!i32` with `error.Overflow` /
-`error.InvalidCharacter`.
-
-**Note that the two languages closest to kama in philosophy — Rust and Zig — both distinguish OVERFLOW from
-MALFORMED.** And kama's own doctrine (GOALS #3d) says `Optional<T>` is *absence* and `Result<T, E>` is
-*failure*; a parse failure is a failure. The counter-argument is that `Optional` matches `string.find`, is
-one obvious spelling, and most callers print a generic message anyway. Resolve it on the merits, not on
-which is less typing.
-
-### Bug fix — `substring` — SHIPPED
-
-`substring` traps on an offset that splits a character, and `floorCharBoundary(at:)` /
-`truncate(maxBytes:)` are the total operations that make an arithmetic offset safe. Recorded in
-SPEC § *Strings*; grapheme segmentation is tracked as a package concern in ROADMAP §2.
-
-### Still open, unchanged (leans only)
+### Still open — M2b / M2c (leans only)
 
 4. **Path helpers: free functions on `string`, or a `Path` type?** *Lean: free functions*
    (`join`/`dirname`/`basename`/`extension`) — a `Path` type means two string-ish types, against GOALS #4.

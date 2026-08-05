@@ -1,0 +1,41 @@
+// M2a: `std::ascii` — character classification, ASCII-only and named so (Zig's `std.ascii` line). Free
+// functions rather than methods on `char`, because `char` and `uint32` share one C type and the
+// conformance registry cannot hold a separate entry for `char`.
+import std::ascii::{isDigit, isHexDigit, isAlpha, isAlnum, isSpace, isUpper, isLower, isPunct,
+                    isControl, isAscii, toLower, toUpper, digitValue};
+
+fn int main() {
+    char a  = 'a';
+    char Z  = 'Z';
+    char n7 = '7';
+    char sp = ' ';
+    char bang = '!';
+    char tabc = '\t';
+
+    int32 t = 0;
+    if (isAlpha(c: a) && isLower(c: a) && !isUpper(c: a)) { t = t + 1; }
+    if (isAlpha(c: Z) && isUpper(c: Z) && !isLower(c: Z)) { t = t + 1; }
+    if (isDigit(c: n7) && isAlnum(c: n7) && !isAlpha(c: n7)) { t = t + 1; }
+    if (isHexDigit(c: a) && isHexDigit(c: n7) && !isHexDigit(c: Z)) { t = t + 1; }
+    if (isSpace(c: sp) && isSpace(c: tabc) && !isSpace(c: a)) { t = t + 1; }
+    if (isPunct(c: bang) && !isPunct(c: a) && !isPunct(c: sp)) { t = t + 1; }
+    if (isControl(c: tabc) && !isControl(c: a)) { t = t + 1; }
+    if (isAscii(c: a)) { t = t + 1; }
+
+    // case mapping leaves a non-letter alone, and is total
+    char up = toUpper(c: a);      // 'A'
+    char lo = toLower(c: Z);      // 'z'
+    char kept = toUpper(c: n7);   // '7' — unchanged
+    if (cast<int32>(up) == 65 && cast<int32>(lo) == 122 && cast<int32>(kept) == 55) { t = t + 1; }
+
+    // a non-ASCII codepoint is never reclassified and never mangled
+    char pound = '\u{00A3}';
+    if (!isAscii(c: pound) && !isAlpha(c: pound) && cast<int32>(toUpper(c: pound)) == 163) { t = t + 1; }
+
+    Optional<int32> d16 = digitValue(c: a, radix: 16);    // 10
+    Optional<int32> d10 = digitValue(c: a, radix: 10);    // None — 'a' is not a decimal digit
+    int32 v16 = match (d16) { case Some(value: v): v; case None: 0; };
+    int32 v10 = match (d10) { case Some(value: v): v; case None: 2; };
+
+    return t * 3 + v16 + v10;   // 10*3 + 10 + 2 = 42
+}

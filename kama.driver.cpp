@@ -2201,6 +2201,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     for (const auto& f : derivedTargetFlags(g_target, builtinTargets().count(g_target.name) != 0))
         g_activeFlags.insert(f);
 
+    // `--no-heap` is a build-configuration fact like `--release`, so it also contributes a flag. That lets
+    // the STDLIB opt a declaration out of a no-heap build (`@compileFor(!NOHEAP)` on the allocating
+    // `sort`), which is the only way today to make "this needs the heap" a compile error rather than a
+    // silent malloc: the `rejectIfNoHeap` gate covers `new`/interpolation/`spawn`, not container growth.
+    if (g_noHeap) g_activeFlags.insert("NOHEAP");
+
     // Single-select groups. `--release`/`--debug` are sugar for `--select BUILD_TYPE=…`, and lose to an
     // explicit `--select` on the same group so there is exactly one answer to "who won".
     {

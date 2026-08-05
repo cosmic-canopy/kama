@@ -1,4 +1,5 @@
 namespace std::collections;
+import std::ptr::{relocate};
 export { View };
 
 // A by-value iterator (the `foreach (T x in view)` protocol): yields each element by value. A view is a
@@ -47,6 +48,34 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
     // (Move-only elements borrow instead: `foreach (ref T x in view)`.)
     public fn ViewIter<T>    iterator() when [T: Copyable] { return ViewIter::<T>.make(data: this.data, len: this.len); }
     public fn ViewIterMut<T> iterMut() { return ViewIterMut::<T>.make(data: this.data, len: this.len); }
+
+    // Exchange the elements at `i` and `j` IN PLACE (O(1), no copy, no drop) — the primitive every
+    // in-place permutation needs (sort, shuffle, reverse), and the reason `sort` can be ONE free
+    // function over a `View<T>` instead of a method per container. A view is second-class in ESCAPE,
+    // not in mutability: it already writes through the place-returning `operator[]` and `iterMut()`,
+    // so permuting its buffer is no new capability — it is those same stores, made safe for a
+    // move-only `T`. Keeping it here is also what stops the unsafe internals from leaking into every
+    // algorithm that wants to swap. Mechanically identical to `DynamicArray.swap`: move `d[i]` out to
+    // a local, relocate `d[j]` into slot `i`, then `give` the local into slot `j` — and the two raw
+    // stores go through a LOCAL `Ptr<T>` alias, because a `this.data[i] = …` would route the element
+    // through the move tracker and be rejected.
+    public fn void swap(int32 i, int32 j) {
+        if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "View.swap index out of bounds"); }
+        if (i == j) { return; }
+        slot T tmp;
+        relocate(from: this.data, at: i, into: out tmp);   // move d[i] OUT (slot i now stale)
+        Ptr<T> d = this.data;
+        unsafe { d[i] = d[j]; }                            // relocate d[j] into slot i via a local alias
+        unsafe { this.data[j] = give tmp; }                // tracked hand-off of tmp into slot j
+    }
+
+    // Reverse the borrowed range in place. `sort` + `reverse` is how a descending order is spelled, so
+    // the sort API needs no second comparator just to flip a direction.
+    public fn void reverse() {
+        int32 i = 0;
+        int32 j = this.len - 1;
+        while (i < j) { this.swap(i: i, j: j); i = i + 1; j = j - 1; }
+    }
 
     // A sub-view `[from, from+count)` of this view — bounds-checked, zero copy. Returning it borrows
     // `this` (the view), which itself borrows the underlying buffer, so it's escape-safe.

@@ -1,0 +1,39 @@
+// M2a: permuting a buffer of MOVE-ONLY elements. `View.swap` moves the element out, relocates its
+// partner, then gives the local back — the same dance `DynamicArray.swap` does — so a `resource` is
+// never copied and never dropped twice. `sortUnstable` permutes with `swap` alone, which is why it works
+// here (and under `--no-heap`) while the stable `sort` allocates index buffers.
+//
+// Note the element is a bare `resource`, not an `Owned<Tag>`: a `ref` parameter may not name a smart
+// pointer (borrow the object, not the handle), so `Order<Owned<T>>` is not a instantiable — sort a
+// container of the resources themselves.
+import std::collections::{DynamicArray, View, sortUnstableWith, isSortedWith, Order};
+
+type resource Tag {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 value() { return this.n; }
+}
+
+type value ByValue implements Order<Tag> {
+    public ctor make() { }
+    public fn Ordering compare(ref Tag a, ref Tag b) {
+        int32 l = a.value();
+        int32 r = b.value();
+        return l.compareTo(other: r);
+    }
+}
+
+fn int main() {
+    DynamicArray<Tag> ts = DynamicArray::<Tag>.empty();
+    ts.add(item: Tag.make(n: 4));
+    ts.add(item: Tag.make(n: 1));
+    ts.add(item: Tag.make(n: 3));
+    ts.add(item: Tag.make(n: 2));
+    View<Tag> v = ts.view();
+
+    ByValue by = ByValue.make();
+    sortUnstableWith(items: v, by: by);
+    int32 ok = isSortedWith(items: v, by: by) ? 1 : 0;
+
+    return v[0].value() * 1000 + v[1].value() * 100 + v[2].value() * 10 + v[3].value() + ok - 1195;   // 1234 + 1 - 1195 = 40
+}

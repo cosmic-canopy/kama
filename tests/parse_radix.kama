@@ -1,0 +1,28 @@
+// M2a: `parseRadix` for bases 2..36 — hex and binary are first-afternoon needs (colours, flags, config).
+// No `0x`/`0b` prefix is recognised: the base is already an argument, and accepting a prefix as well
+// would be a second way to say the same thing.
+import std::fmt::{parseRadix, ParseError};
+
+fn int main() {
+    string hex  = "ff";
+    string HEX  = "FF";        // case-insensitive
+    string bin  = "1011";
+    string b36  = "z";
+    string bad  = "2";         // not a binary digit
+
+    Result<int32, ParseError>  a = parseRadix::<int32>(s: hex, radix: 16ui64);
+    Result<int32, ParseError>  b = parseRadix::<int32>(s: HEX, radix: 16ui64);
+    Result<int32, ParseError>  c = parseRadix::<int32>(s: bin, radix: 2ui64);
+    Result<int32, ParseError>  d = parseRadix::<int32>(s: b36, radix: 36ui64);
+    Result<int32, ParseError>  e = parseRadix::<int32>(s: bad, radix: 2ui64);
+    Result<uint8, ParseError>  f = parseRadix::<uint8>(s: hex, radix: 16ui64);
+
+    int32 va = match (a) { case Ok(value: v): v; case Err(error: x): 0; };   // 255
+    int32 vb = match (b) { case Ok(value: v): v; case Err(error: x): 0; };   // 255
+    int32 vc = match (c) { case Ok(value: v): v; case Err(error: x): 0; };   // 11
+    int32 vd = match (d) { case Ok(value: v): v; case Err(error: x): 0; };   // 35
+    int32 ve = match (e) { case Ok(value: v): 0; case Err(error: x): 1; };   // InvalidDigit
+    int32 vf = match (f) { case Ok(value: v): cast<int32>(v); case Err(error: x): 0; };  // 255
+
+    return (va - 255) + (vb - 255) + vc + vd + ve + (vf - 255) - 5;   // 11 + 35 + 1 - 5 = 42
+}

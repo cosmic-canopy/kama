@@ -48,4 +48,42 @@ if ! grep -qF "heap allocation (new) is forbidden" "$tmp/emb.err"; then
     sed 's/^/  /' "$tmp/emb.err" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded)"
+# 4. STDLIB OPT-OUT — `--no-heap` contributes a `NOHEAP` flag, which the stdlib uses to DROP the
+#    declarations that need an allocator. The stable `sort` builds index buffers, so it must vanish in a
+#    no-heap build (with a diagnostic that says why, not "unknown function"), while the in-place
+#    `sortUnstable` must still be there: sorting a fixed buffer with no heap is the MCU/audio case.
+sortsrc="$tmp/nhsort.kama"
+cat > "$sortsrc" <<'EOF'
+import std::collections::{FixedArray, View, sortUnstable};
+fn int main() {
+    FixedArray<int32> fa = FixedArray::<int32>.make(size: 3);
+    fa[0] = 3; fa[1] = 1; fa[2] = 2;
+    View<int32> v = fa.view();
+    sortUnstable(items: v);
+    return v[0] * 100 + v[1] * 10 + v[2];
+}
+EOF
+if ! "$KAMA" build --no-heap "$sortsrc" -o "$tmp/d.out" >/dev/null 2>"$tmp/su.err"; then
+    echo "check-noheap: FAIL — 'sortUnstable' must build under '--no-heap' (it permutes in place):" >&2
+    sed 's/^/  /' "$tmp/su.err" >&2; exit 1
+fi
+rc=0
+"$tmp/d.out" >/dev/null 2>&1 || rc=$?   # `|| ` so the intentional non-zero exit survives `set -e`
+if [ "$rc" != "123" ]; then
+    echo "check-noheap: FAIL — 'sortUnstable' under '--no-heap' did not sort (expected exit 123, got $rc)" >&2; exit 1
+fi
+badsrc="$tmp/nhsortbad.kama"
+sed 's/sortUnstable/sort/g' "$sortsrc" > "$badsrc"
+if "$KAMA" build --no-heap "$badsrc" -o "$tmp/e.out" >/dev/null 2>"$tmp/st.err"; then
+    echo "check-noheap: FAIL — '--no-heap' accepted the allocating 'sort'" >&2; exit 1
+fi
+if ! grep -qF "is not available in this build configuration" "$tmp/st.err"; then
+    echo "check-noheap: FAIL — 'sort' was rejected under '--no-heap', but not with the build-config diagnostic:" >&2
+    sed 's/^/  /' "$tmp/st.err" >&2; exit 1
+fi
+if ! "$KAMA" build "$badsrc" -o "$tmp/f.out" >/dev/null 2>"$tmp/stc.err"; then
+    echo "check-noheap: FAIL — 'sort' does not build even WITHOUT '--no-heap':" >&2
+    sed 's/^/  /' "$tmp/stc.err" >&2; exit 1
+fi
+
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort)"

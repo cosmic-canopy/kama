@@ -27,7 +27,7 @@ type value Vec2 implements Equatable {
 
     public fn float32 dot(Vec2 r)     { return this.x * r.x + this.y * r.y; }
     public fn float32 lengthSq()      { return this.dot(r: this); }
-    public fn float32 length()        { return sqrt(x: this.lengthSq()); }
+    public fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
     public fn Vec2 normalized()       { float32 k = 1.0f32 / this.length(); return Vec2.of(x: this.x * k, y: this.y * k); }
     public fn Vec2 hadamard(Vec2 r)   { return Vec2.of(x: this.x * r.x, y: this.y * r.y); }
     public fn float32 distance(Vec2 r){ float32 dx = this.x - r.x; float32 dy = this.y - r.y; return sqrt(x: dx*dx + dy*dy); }
@@ -58,7 +58,7 @@ type value Vec3 implements Equatable {
 
     public fn float32 dot(Vec3 r)     { return this.x*r.x + this.y*r.y + this.z*r.z; }
     public fn float32 lengthSq()      { return this.dot(r: this); }
-    public fn float32 length()        { return sqrt(x: this.lengthSq()); }
+    public fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
     public fn Vec3 normalized()       { float32 k = 1.0f32 / this.length(); return Vec3.of(x: this.x*k, y: this.y*k, z: this.z*k); }
     public fn Vec3 hadamard(Vec3 r)   { return Vec3.of(x: this.x*r.x, y: this.y*r.y, z: this.z*r.z); }
     public fn Vec3 cross(Vec3 r)      { return Vec3.of(x: this.y*r.z - this.z*r.y, y: this.z*r.x - this.x*r.z, z: this.x*r.y - this.y*r.x); }
@@ -88,7 +88,7 @@ type value Vec4 implements Equatable {
 
     public fn float32 dot(Vec4 r)  { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
     public fn float32 lengthSq()   { return this.dot(r: this); }
-    public fn float32 length()     { return sqrt(x: this.lengthSq()); }
+    public fn float32 length()     { float32 q = this.lengthSq(); return sqrt(x: q); }
     public fn Vec4 normalized()    { float32 k = 1.0f32 / this.length(); return Vec4.of(x: this.x*k, y: this.y*k, z: this.z*k, w: this.w*k); }
     public fn Vec3 xyz()           { return Vec3.of(x: this.x, y: this.y, z: this.z); }
 }

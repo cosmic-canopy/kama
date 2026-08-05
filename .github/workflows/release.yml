@@ -65,8 +65,10 @@ jobs:
           # extract + PATH works; the installer does exactly that.
           rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
           cp kama payload/bin/kama
-          cp kama_runtime.h payload/include/
-          cp kama_os.h payload/include/           # std::io/fs/net bindings header (beside kama_runtime.h)
+          # EVERY seam header, not a hand-kept pair: a module's `extern "kama_*.h"` is resolved against
+          # this directory, so a missing one breaks that module in the released toolchain only. Naming
+          # them individually had already dropped kama_fmt/time/log/app/ctrl/channel/isolate/atomic.
+          cp kama_*.h payload/include/
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
           cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
@@ -131,8 +133,10 @@ jobs:
         run: |
           rm -rf payload && mkdir -p payload/bin payload/include payload/lib/kama
           cp kama.exe payload/bin/kama.exe 2>/dev/null || cp kama payload/bin/kama.exe
-          cp kama_runtime.h payload/include/
-          cp kama_os.h payload/include/           # std::io/fs/net bindings header (beside kama_runtime.h)
+          # EVERY seam header, not a hand-kept pair: a module's `extern "kama_*.h"` is resolved against
+          # this directory, so a missing one breaks that module in the released toolchain only. Naming
+          # them individually had already dropped kama_fmt/time/log/app/ctrl/channel/isolate/atomic.
+          cp kama_*.h payload/include/
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
           cp GETTING_STARTED.md payload/README.md 2>/dev/null || true

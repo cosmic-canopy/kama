@@ -1,0 +1,38 @@
+// REGRESSION: a generic free function calling ANOTHER generic free function with its own type parameter
+// forwarded — `outer<T>` calling `inner::<T>`, and the harder form where the forwarded argument is a
+// generic type built on that parameter (`Wrap<T>`).
+//
+// This used to CRASH the compiler. The turbofish arguments were stored without being run through the
+// active substitution, so `T` was bound to itself and `mangleElem` recursed on its own result until the
+// stack died; nothing in lib/, prelude/ or tests/ used the shape, so it went unnoticed. The fix defers an
+// argument that is still unbound and re-walks each generic function body once per instantiation.
+type contract Show<T> for both { fn int32 show(ref T x); }
+
+type value Doubler<T: Comparable> implements Show<T> {
+    public ctor make() { }
+    public fn int32 show(ref T x) { Ordering o = x.compareTo(other: x); return match (o) { case Equal: 2; case Less: 0; case Greater: 0; }; }
+}
+
+fn int32 inner<T: Comparable>(ref T a, ref T b) {
+    Ordering o = a.compareTo(other: b);
+    return match (o) { case Less: 1; case Equal: 0; case Greater: 2; };
+}
+
+// forwards a bare type parameter
+fn int32 middle<T: Comparable>(ref T a, ref T b) { return inner::<T>(a: a, b: b); }
+
+// forwards a GENERIC TYPE built on the parameter — the shape `sort<T>` uses to reach `sortWith<T, Natural<T>>`
+fn int32 outer<T, S: Show<T>>(ref T a, ref S by) { return by.show(x: a); }
+
+fn int32 top<T: Comparable>(ref T a, ref T b) {
+    Doubler<T> d = Doubler::<T>.make();
+    return middle::<T>(a: a, b: b) + outer::<T, Doubler<T>>(a: a, by: d);
+}
+
+fn int main() {
+    int32 x = 3;
+    int32 y = 9;
+    string p = "aa";
+    string q = "bb";
+    return top(a: x, b: y) * 10 + top(a: p, b: q);   // (1+2)*10 + (1+2) = 33
+}

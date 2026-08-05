@@ -1,19 +1,147 @@
 namespace std::math;
 
-// Scalar helpers + the libm bindings shared by the vector/matrix/quaternion types. Constants are zero-arg
-// functions (`pi()`), not consts, so the module needs no module-level-const feature. All float32.
-export { pi, tau, halfPi, epsilon, radians, degrees, lerp, clampf, minf, maxf, absf, signf, sqrt };
+// Scalar helpers + the libm bindings shared by the vector/matrix/quaternion types.
+//
+// **One name per operation, at both float widths.** `sqrt(x: 1.0)` is a float64 call and
+// `sqrt(x: 1.0f32)` is a float32 one — same spelling, the width inferred from the argument. That matters
+// because a bare `1.0` literal in kama is a **float64**, so a float32-only math module made `sin(x: 1.0)`
+// a type error for the most obvious thing a reader would write.
+//
+// kama has no overloading, so the usual answers are unavailable: C suffixes every float32 entry point
+// (`sqrtf`), Go and Java ship one width and make you convert, C# adds a whole second class (`MathF`).
+// kama's own mechanism for "this fixed set of types, each with its own body" is a CONTRACT with a
+// retro-impl per type — the same way `Comparable` reaches every primitive. So each operation is one
+// generic free function over `Real`, and the per-width libm call lives in the retro-impls below.
+// (A bound cannot be a list of primitives, and there is no in-body type branching by design — see
+// SPEC § *Conditional compilation*. The contract is what supplies a per-type body.)
+//
+// `Real` IS exported, so a user type can join in — `implements Real for MyFixed { … }` and every function
+// here works on it. That costs nothing: a retro-impl's methods are reachable program-wide whether or not
+// the contract name is exported (kama has no equivalent of Rust's `use Trait` visibility gate), so
+// exporting adds the ability to IMPLEMENT without adding any exposure. The methods therefore carry the
+// same names as the free functions — Rust's `Float::sqrt` and Swift's `squareRoot()` do the same — so an
+// implementer writes `public fn MyFixed sqrt()`, not a prefixed hook. Callers need not import `Real` for
+// the bound to resolve: a generic's bounds resolve in the module where the generic was WRITTEN.
+//
+// The engine helpers (`pi`/`lerp`/`clampf`/`minf`/`maxf`/`signf`/`radians`/`degrees`) stay float32 under
+// their kama names — they have no libm counterpart, and their genericization belongs with the
+// `minI32`/`minf` reconcile, not here. Constants are zero-arg functions (`pi()`) because a zero-argument
+// generic would have nothing to infer from and would force `pi::<float64>()` at every use.
+export { Real,
+         pi, tau, halfPi, epsilon, radians, degrees, lerp, clampf, minf, maxf, signf,
+         sqrt, cbrt, sin, cos, tan, asin, acos, atan, exp, log, log2, log10,
+         floor, ceil, round, trunc, abs, pow, fmod, atan2, hypot };
 
 extern "<math.h>";
-extern fn float32 sqrtf(float32 x);
-extern fn float32 sinf(float32 x);
-extern fn float32 cosf(float32 x);
-extern fn float32 tanf(float32 x);
-extern fn float32 acosf(float32 x);
-extern fn float32 asinf(float32 x);
-extern fn float32 atan2f(float32 y, float32 x);
-extern fn float32 fabsf(float32 x);
+extern "kama_math.h";
 
+extern fn float64 kama_sqrt(float64 x);    extern fn float32 kama_sqrtf(float32 x);
+extern fn float64 kama_cbrt(float64 x);    extern fn float32 kama_cbrtf(float32 x);
+extern fn float64 kama_sin(float64 x);     extern fn float32 kama_sinf(float32 x);
+extern fn float64 kama_cos(float64 x);     extern fn float32 kama_cosf(float32 x);
+extern fn float64 kama_tan(float64 x);     extern fn float32 kama_tanf(float32 x);
+extern fn float64 kama_asin(float64 x);    extern fn float32 kama_asinf(float32 x);
+extern fn float64 kama_acos(float64 x);    extern fn float32 kama_acosf(float32 x);
+extern fn float64 kama_atan(float64 x);    extern fn float32 kama_atanf(float32 x);
+extern fn float64 kama_exp(float64 x);     extern fn float32 kama_expf(float32 x);
+extern fn float64 kama_log(float64 x);     extern fn float32 kama_logf(float32 x);
+extern fn float64 kama_log2(float64 x);    extern fn float32 kama_log2f(float32 x);
+extern fn float64 kama_log10(float64 x);   extern fn float32 kama_log10f(float32 x);
+extern fn float64 kama_floor(float64 x);   extern fn float32 kama_floorf(float32 x);
+extern fn float64 kama_ceil(float64 x);    extern fn float32 kama_ceilf(float32 x);
+extern fn float64 kama_round(float64 x);   extern fn float32 kama_roundf(float32 x);
+extern fn float64 kama_trunc(float64 x);   extern fn float32 kama_truncf(float32 x);
+extern fn float64 kama_fabs(float64 x);    extern fn float32 kama_fabsf(float32 x);
+extern fn float64 kama_pow(float64 x, float64 y);     extern fn float32 kama_powf(float32 x, float32 y);
+extern fn float64 kama_fmod(float64 x, float64 y);    extern fn float32 kama_fmodf(float32 x, float32 y);
+extern fn float64 kama_atan2(float64 x, float64 y);   extern fn float32 kama_atan2f(float32 x, float32 y);
+extern fn float64 kama_hypot(float64 x, float64 y);   extern fn float32 kama_hypotf(float32 x, float32 y);
+
+// The per-width dispatch seam, and the extension point: one method per operation, because that method
+// IS the per-type body. `implements Real for MyType { … }` and every function below works on it.
+type contract Real for value {
+    fn This sqrt();  fn This cbrt();  fn This sin();   fn This cos();   fn This tan();
+    fn This asin();  fn This acos();  fn This atan();  fn This exp();   fn This log();
+    fn This log2();  fn This log10(); fn This floor(); fn This ceil();  fn This round();
+    fn This trunc(); fn This abs();
+    fn This pow(This y);  fn This fmod(This y);  fn This atan2(This x);  fn This hypot(This y);
+}
+
+implements Real for float64 {
+    public fn float64 sqrt()  { return kama_sqrt(x: this); }
+    public fn float64 cbrt()  { return kama_cbrt(x: this); }
+    public fn float64 sin()   { return kama_sin(x: this); }
+    public fn float64 cos()   { return kama_cos(x: this); }
+    public fn float64 tan()   { return kama_tan(x: this); }
+    public fn float64 asin()  { return kama_asin(x: this); }
+    public fn float64 acos()  { return kama_acos(x: this); }
+    public fn float64 atan()  { return kama_atan(x: this); }
+    public fn float64 exp()   { return kama_exp(x: this); }
+    public fn float64 log()   { return kama_log(x: this); }
+    public fn float64 log2()  { return kama_log2(x: this); }
+    public fn float64 log10() { return kama_log10(x: this); }
+    public fn float64 floor() { return kama_floor(x: this); }
+    public fn float64 ceil()  { return kama_ceil(x: this); }
+    public fn float64 round() { return kama_round(x: this); }
+    public fn float64 trunc() { return kama_trunc(x: this); }
+    public fn float64 abs()   { return kama_fabs(x: this); }
+    public fn float64 pow(float64 y)   { return kama_pow(x: this, y: y); }
+    public fn float64 fmod(float64 y)  { return kama_fmod(x: this, y: y); }
+    public fn float64 atan2(float64 x) { return kama_atan2(x: this, y: x); }
+    public fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
+}
+
+implements Real for float32 {
+    public fn float32 sqrt()  { return kama_sqrtf(x: this); }
+    public fn float32 cbrt()  { return kama_cbrtf(x: this); }
+    public fn float32 sin()   { return kama_sinf(x: this); }
+    public fn float32 cos()   { return kama_cosf(x: this); }
+    public fn float32 tan()   { return kama_tanf(x: this); }
+    public fn float32 asin()  { return kama_asinf(x: this); }
+    public fn float32 acos()  { return kama_acosf(x: this); }
+    public fn float32 atan()  { return kama_atanf(x: this); }
+    public fn float32 exp()   { return kama_expf(x: this); }
+    public fn float32 log()   { return kama_logf(x: this); }
+    public fn float32 log2()  { return kama_log2f(x: this); }
+    public fn float32 log10() { return kama_log10f(x: this); }
+    public fn float32 floor() { return kama_floorf(x: this); }
+    public fn float32 ceil()  { return kama_ceilf(x: this); }
+    public fn float32 round() { return kama_roundf(x: this); }
+    public fn float32 trunc() { return kama_truncf(x: this); }
+    public fn float32 abs()   { return kama_fabsf(x: this); }
+    public fn float32 pow(float32 y)   { return kama_powf(x: this, y: y); }
+    public fn float32 fmod(float32 y)  { return kama_fmodf(x: this, y: y); }
+    public fn float32 atan2(float32 x) { return kama_atan2f(x: this, y: x); }
+    public fn float32 hypot(float32 y) { return kama_hypotf(x: this, y: y); }
+}
+
+// --- the public surface: one name, either width, inferred from the argument ----------------------
+fn T sqrt<T: Real>(T x)  { return x.sqrt(); }
+fn T cbrt<T: Real>(T x)  { return x.cbrt(); }
+fn T sin<T: Real>(T x)   { return x.sin(); }
+fn T cos<T: Real>(T x)   { return x.cos(); }
+fn T tan<T: Real>(T x)   { return x.tan(); }
+fn T asin<T: Real>(T x)  { return x.asin(); }
+fn T acos<T: Real>(T x)  { return x.acos(); }
+fn T atan<T: Real>(T x)  { return x.atan(); }
+fn T exp<T: Real>(T x)   { return x.exp(); }
+fn T log<T: Real>(T x)   { return x.log(); }
+fn T log2<T: Real>(T x)  { return x.log2(); }
+fn T log10<T: Real>(T x) { return x.log10(); }
+fn T floor<T: Real>(T x) { return x.floor(); }
+fn T ceil<T: Real>(T x)  { return x.ceil(); }
+fn T round<T: Real>(T x) { return x.round(); }
+fn T trunc<T: Real>(T x) { return x.trunc(); }
+fn T abs<T: Real>(T x)   { return x.abs(); }
+
+fn T pow<T: Real>(T x, T y)   { return x.pow(y: y); }
+fn T fmod<T: Real>(T x, T y)  { return x.fmod(y: y); }
+fn T hypot<T: Real>(T x, T y) { return x.hypot(y: y); }
+// `atan2` keeps C's (y, x) meaning, but the arguments are NAMED, so the classic mix-up cannot happen
+// silently the way a positional `atan2(a, b)` allows.
+fn T atan2<T: Real>(T y, T x) { return y.atan2(x: x); }
+
+// --- engine helpers (float32, no libm counterpart) ----------------------------------------------
 fn float32 pi()      { return 3.14159265f32; }
 fn float32 tau()     { return 6.28318531f32; }
 fn float32 halfPi()  { return 1.57079633f32; }
@@ -25,6 +153,4 @@ fn float32 lerp(float32 a, float32 b, float32 t) { return a + (b - a) * t; }
 fn float32 clampf(float32 x, float32 lo, float32 hi) { return x < lo ? lo : (x > hi ? hi : x); }
 fn float32 minf(float32 a, float32 b) { return a < b ? a : b; }
 fn float32 maxf(float32 a, float32 b) { return a > b ? a : b; }
-fn float32 absf(float32 x) { return fabsf(x: x); }
 fn float32 signf(float32 x) { return x > 0.0f32 ? 1.0f32 : (x < 0.0f32 ? -1.0f32 : 0.0f32); }
-fn float32 sqrt(float32 x) { return sqrtf(x: x); }

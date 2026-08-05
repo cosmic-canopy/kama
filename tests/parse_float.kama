@@ -1,0 +1,29 @@
+// M2a: floats go through `strtod` — the seam reports WHICH failure, so the overflow/malformed split
+// survives at both widths (unlike the lenient reader the JSON path uses, which folds everything to 0.0).
+import std::fmt::{parse, ParseError};
+
+fn int main() {
+    string a = "3.5";
+    string b = "-0.25";
+    string c = "1e3";
+    string d = "1e400";     // overflows a float64 -> ERANGE -> OutOfRange, not a silent inf
+    string e = "4.2.1";     // malformed
+    string f = "2.5";
+
+    Result<float64, ParseError> ra = parse::<float64>(s: a);
+    Result<float64, ParseError> rb = parse::<float64>(s: b);
+    Result<float64, ParseError> rc = parse::<float64>(s: c);
+    Result<float64, ParseError> rd = parse::<float64>(s: d);
+    Result<float64, ParseError> re = parse::<float64>(s: e);
+    Result<float32, ParseError> rf = parse::<float32>(s: f);
+
+    float64 va = match (ra) { case Ok(value: v): v; case Err(error: x): 0.0; };      // 3.5
+    float64 vb = match (rb) { case Ok(value: v): v; case Err(error: x): 0.0; };      // -0.25
+    float64 vc = match (rc) { case Ok(value: v): v; case Err(error: x): 0.0; };      // 1000
+    int32   vd = match (rd) { case Ok(value: v): 0; case Err(error: x): match (x) { case OutOfRange: 5; case Empty: 0; case InvalidDigit: 0; }; };
+    int32   ve = match (re) { case Ok(value: v): 0; case Err(error: x): match (x) { case InvalidDigit: 6; case Empty: 0; case OutOfRange: 0; }; };
+    float32 vf = match (rf) { case Ok(value: v): v; case Err(error: x): 0.0f32; };   // 2.5
+
+    int32 m = cast<int32>(va * 2.0) + cast<int32>(vb * 4.0) + cast<int32>(vc / 100.0) + cast<int32>(vf * 2.0f32);
+    return m + vd + ve;   // (7 - 1 + 10 + 5) + 5 + 6 = 32
+}

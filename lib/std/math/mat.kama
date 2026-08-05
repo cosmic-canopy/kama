@@ -161,7 +161,7 @@ type value Mat4 {
 
     // ---- rotations (right-handed, column-major) ----
     public ctor fromRotationX(float32 rad) {
-        float32 c = cosf(x: rad); float32 s = sinf(x: rad);
+        float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: 1.0f32, y: 0.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4.of(x: 0.0f32, y: c,      z: s,      w: 0.0f32);
         Vec4 c2 = Vec4.of(x: 0.0f32, y: -s,     z: c,      w: 0.0f32);
@@ -169,7 +169,7 @@ type value Mat4 {
         return Mat4.fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor fromRotationY(float32 rad) {
-        float32 c = cosf(x: rad); float32 s = sinf(x: rad);
+        float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: c,      y: 0.0f32, z: -s,     w: 0.0f32);
         Vec4 c1 = Vec4.of(x: 0.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
         Vec4 c2 = Vec4.of(x: s,      y: 0.0f32, z: c,      w: 0.0f32);
@@ -177,7 +177,7 @@ type value Mat4 {
         return Mat4.fromCols(c0: c0, c1: c1, c2: c2, c3: c3);
     }
     public ctor fromRotationZ(float32 rad) {
-        float32 c = cosf(x: rad); float32 s = sinf(x: rad);
+        float32 c = cos(x: rad); float32 s = sin(x: rad);
         Vec4 c0 = Vec4.of(x: c,      y: s,      z: 0.0f32, w: 0.0f32);
         Vec4 c1 = Vec4.of(x: -s,     y: c,      z: 0.0f32, w: 0.0f32);
         Vec4 c2 = Vec4.of(x: 0.0f32, y: 0.0f32, z: 1.0f32, w: 0.0f32);
@@ -187,7 +187,7 @@ type value Mat4 {
 
     // ---- projections / view (WebGPU 0..1 depth, right-handed) ----
     public ctor perspective(float32 fovyRad, float32 aspect, float32 near, float32 far) {
-        float32 f = 1.0f32 / tanf(x: fovyRad * 0.5f32);
+        float32 f = 1.0f32 / tan(x: fovyRad * 0.5f32);
         float32 nf = 1.0f32 / (near - far);
         Vec4 c0 = Vec4.of(x: f / aspect, y: 0.0f32, z: 0.0f32,          w: 0.0f32);
         Vec4 c1 = Vec4.of(x: 0.0f32,     y: f,      z: 0.0f32,          w: 0.0f32);

@@ -1,0 +1,74 @@
+namespace std::ascii;
+export { isDigit, isHexDigit, isAlpha, isAlnum, isSpace, isUpper, isLower, isPunct, isControl,
+         isAscii, toLower, toUpper, digitValue };
+
+// Character classification, ASCII-only and named so. `std::char` is not available as a module path —
+// `char` is a keyword — but the honest name is better anyway: these answer questions about ASCII, and
+// calling the module `ascii` puts that in every import line rather than in a footnote. Zig, the closest
+// peer, draws the same boundary with `std.ascii`, and full Unicode character properties belong in a
+// package (see the Unicode stance in SPEC).
+//
+// These are FREE FUNCTIONS rather than methods on `char`, and not by preference: `char` and `uint32`
+// share one C type, so the conformance registry cannot hold a separate entry for `char` (the same reason
+// `char` has no `Format`/`Serialize` conformance).
+//
+// Every predicate is FALSE for a non-ASCII codepoint rather than guessing, and `toLower`/`toUpper`
+// return such a codepoint unchanged — so they can never corrupt one, which is what makes them safe to
+// run over decoded text.
+
+fn bool isAscii(char c) { return cast<uint32>(c) < 128ui32; }
+
+fn bool isDigit(char c) { uint32 v = cast<uint32>(c); return v >= 48ui32 && v <= 57ui32; }
+
+fn bool isHexDigit(char c) {
+    uint32 v = cast<uint32>(c);
+    if (v >= 48ui32 && v <= 57ui32)  { return true; }    // 0-9
+    if (v >= 97ui32 && v <= 102ui32) { return true; }    // a-f
+    return v >= 65ui32 && v <= 70ui32;                   // A-F
+}
+
+fn bool isUpper(char c) { uint32 v = cast<uint32>(c); return v >= 65ui32 && v <= 90ui32; }
+fn bool isLower(char c) { uint32 v = cast<uint32>(c); return v >= 97ui32 && v <= 122ui32; }
+
+fn bool isAlpha(char c) { return isUpper(c: c) || isLower(c: c); }
+fn bool isAlnum(char c) { return isAlpha(c: c) || isDigit(c: c); }
+
+// Space, tab, newline, carriage return, vertical tab, form feed — the same set `trim` uses, all of which
+// are single-byte and so can never appear inside a multibyte sequence.
+fn bool isSpace(char c) {
+    uint32 v = cast<uint32>(c);
+    return v == 32ui32 || (v >= 9ui32 && v <= 13ui32);
+}
+
+// Printable, not alphanumeric, not the space itself — `!`..`/`, `:`..`@`, `[`..`` ` ``, `{`..`~`.
+fn bool isPunct(char c) {
+    uint32 v = cast<uint32>(c);
+    if (v <= 32ui32 || v >= 127ui32) { return false; }
+    return !isAlnum(c: c);
+}
+
+fn bool isControl(char c) { uint32 v = cast<uint32>(c); return v < 32ui32 || v == 127ui32; }
+
+fn char toLower(char c) {
+    if (!isUpper(c: c)) { return c; }
+    return cast<char>(cast<uint32>(c) + 32ui32);
+}
+
+fn char toUpper(char c) {
+    if (!isLower(c: c)) { return c; }
+    return cast<char>(cast<uint32>(c) - 32ui32);
+}
+
+// The numeric value of a digit in `radix`, or `None` — the classification half of `std::fmt::parseRadix`,
+// useful when scanning a format by hand. `radix` is 2..36; letters are case-insensitive.
+fn Optional<int32> digitValue(char c, int32 radix) {
+    if (radix < 2 || radix > 36) { panic(msg: "digitValue: radix must be 2..36"); }
+    uint32 v = cast<uint32>(c);
+    int32 d = 0;
+    if (v >= 48ui32 && v <= 57ui32)        { d = cast<int32>(v - 48ui32); }
+    else if (v >= 97ui32 && v <= 122ui32)  { d = cast<int32>(v - 97ui32) + 10; }
+    else if (v >= 65ui32 && v <= 90ui32)   { d = cast<int32>(v - 65ui32) + 10; }
+    else { return Optional::None; }
+    if (d >= radix) { return Optional::None; }
+    return Optional::Some(value: d);
+}

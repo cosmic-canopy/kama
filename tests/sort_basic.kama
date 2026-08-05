@@ -1,0 +1,31 @@
+// M2a: `sort` over a `View<T>` — one free function serving every container. The natural order comes
+// from `Comparable`, and `T` is inferred from the view, so no turbofish is needed.
+import std::collections::{DynamicArray, FixedArray, View, sort, sortUnstable, isSorted};
+
+fn int main() {
+    DynamicArray<int32> xs = DynamicArray::<int32>.empty();
+    xs.add(item: 5); xs.add(item: 1); xs.add(item: 4); xs.add(item: 1); xs.add(item: 3);
+    View<int32> v = xs.view();
+    sort(items: v);                                  // 1 1 3 4 5
+    int32 a = (isSorted(items: v) ? 1 : 0) + v[0] + v[4];        // 1 + 1 + 5 = 7
+
+    // the same function sorts a FixedArray, which has no sort of its own
+    FixedArray<int32> fa = FixedArray::<int32>.make(size: 4);
+    fa[0] = 9; fa[1] = 2; fa[2] = 8; fa[3] = 4;
+    View<int32> fv = fa.view();
+    sortUnstable(items: fv);                         // 2 4 8 9
+    int32 b = fv[0] * 10 + fv[3];                    // 29
+
+    // descending needs no second API — sort, then reverse
+    fv.reverse();                                    // 9 8 4 2
+    int32 c = fv[0];                                 // 9
+
+    // strings sort lexicographically through the same path
+    DynamicArray<string> ws = DynamicArray::<string>.empty();
+    ws.add(item: "pear"); ws.add(item: "apple"); ws.add(item: "fig");
+    View<string> wv = ws.view();
+    sort(items: wv);
+    int32 d = wv[0].equals(other: "apple") ? 5 : 0;
+
+    return a + b + c + d;                            // 7 + 29 + 9 + 5 = 50
+}

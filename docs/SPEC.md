@@ -724,8 +724,33 @@ missing include is a plain C error, never a silent guess.
 
 ### Math (`std::math`) ✅
 
-Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus scalar
-helpers (`radians`/`degrees`/`lerp`/`clampf`/`pi()`/… over libm). `import std::math::{Vec3, Mat4, Quat, …}`.
+Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus a
+full scalar surface over libm. `import std::math::{Vec3, Mat4, sqrt, sin, …}`.
+
+**One name per scalar operation, at BOTH float widths** — the width is inferred from the argument, so
+`sqrt(x: 1.0)` is a float64 call and `sqrt(x: 1.0f32)` a float32 one. That matters because a bare `1.0`
+literal in kama is a **float64**, so a float32-only module made `sin(x: 1.0)` a type error for the most
+obvious thing a reader would write. kama has no overloading, so the usual answers were unavailable (C
+suffixes every float32 entry point, Go and Java ship one width and make you convert, C# adds a second
+class `MathF`); the mechanism used instead is kama's own — a **contract with a retro-impl per type**,
+exactly how `Comparable` reaches every primitive. Each operation is one generic free function over
+`Real`, and the per-width libm call lives in the impls: `sqrt cbrt sin cos tan asin acos atan exp log
+log2 log10 floor ceil round trunc abs` (one argument) and `pow fmod atan2 hypot` (two).
+
+`Real` is **exported**, so a user type can join in — `implements Real for MyFixed { … }` and every
+function above works on it. Its methods carry the same names as the free functions (as Rust's
+`Float::sqrt` and Swift's `squareRoot()` do), so an implementer writes `public fn MyFixed sqrt()`.
+`atan2` keeps C's `(y, x)` meaning, but the arguments are **named**, so the classic mix-up cannot happen
+silently. The engine helpers that have no libm counterpart stay float32 under their kama names:
+`pi`/`tau`/`halfPi`/`epsilon`/`radians`/`degrees`/`lerp`/`clampf`/`minf`/`maxf`/`signf` — constants are
+zero-arg functions because a zero-argument generic has nothing to infer from. The seam is `kama_math.h`:
+a kama function cannot share a name with the **extern** it calls, so the binding is renamed rather than
+the API.
+
+Two limits worth knowing. A **nested generic call cannot infer** — `log(x: exp(x: 1.0))` fails because
+the inner call's return type is the very `T` being resolved; bind it to a local (kama's usual "bind it to
+a local" rule). And a `ref` parameter may not name a smart pointer, so a contract instantiated at
+`Owned<T>` — e.g. `Order<Owned<T>>` — is not expressible; sort or compare the resources themselves.
 Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
 (`result = M * v`, GPU/WebGPU-native); `perspective`/`orthographic`/`lookAt` target **WebGPU 0..1 depth**,
@@ -751,7 +776,79 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 — `fn Ordering compareTo(ref This other)` with retro-impls for every int/float/string — the bound for
 `PriorityQueue` + the sorted containers.)
 
-**Fixed-point — `Q16_16`.** A signed 16.16 `type value` in the same module, for FPU-less targets and for
+### Sorting & searching (`std::collections`) ✅
+
+`import std::collections::{sort, sortUnstable, binarySearch, lowerBound, isSorted, Order, …}`.
+
+**Free functions over a `View<T>`, not methods on each container.** One implementation therefore serves
+`DynamicArray`, `FixedArray` and any **sub-range** — `sort(items: xs.slice(from: 1, count: 4))` orders a
+window and leaves everything outside it untouched, which a per-container `xs.sort()` could not express.
+`View<T>` gained `swap`/`reverse` to support this: a view is second-class in *escape*, not in mutability
+(it already writes through its place-returning `operator[]`), and putting the raw move there keeps every
+algorithm above it safe. Descending order needs no API — `sort`, then `reverse`.
+
+**Two guarantees, deliberately both.** `sort` is **stable** and `sortUnstable` is an in-place introsort
+(median-of-3 quicksort, insertion-sort cutoff, heapsort depth fallback, so the worst case stays
+O(n log n)). Stability is what makes sorting by a minor key and then a major key produce the intended
+answer; an in-place sort is what an MCU or an audio callback can afford. The stable form sorts an **index
+permutation** and applies it with swaps, which keeps it O(n log n) *and* free of a `Copyable` bound, so
+move-only elements sort stably too — the cost is the `int32` buffers, and therefore the heap.
+**`sort`/`sortWith` are `@compileFor(!NOHEAP)`**, so a `--no-heap` build does not silently reach the
+allocator: they simply do not exist there, and the diagnostic says so.
+
+**Ordering comes from a contract, never a function pointer.** `Comparable` gives the natural order;
+`Order<T>` supplies any other, through `sortWith`/`sortUnstableWith`/`binarySearchWith`/`lowerBoundWith`.
+A comparator is an *object*, so it may carry state (a key index, a direction, a collation table) — which
+is what stands in for a capturing closure, since kama has none. It is also the faster choice: a
+`C: Order<T>` bound monomorphizes to a direct, inlinable call, where an `fnptr` is an indirect call the C
+compiler cannot inline (the reason `qsort` trails `std::sort`). `fnptr` could not express it in any case —
+a function-pointer type takes no type parameters (ROADMAP §2).
+
+Because a `ref` parameter may not name a smart pointer, `Order<Owned<T>>` is not instantiable: sort a
+container of the resources themselves. Searching splits what Rust folds into `Result<usize, usize>` —
+kama's `Result<T, E>` constrains `E` to `Error`, so `binarySearch` returns `Optional<int32>` (the **first**
+index of an equal run) and `lowerBound` returns the total insertion point.
+
+`sync::{Mutex, RwLock, Once}` has no counterpart here and that is a **stance, not a gap** — the
+shared-nothing isolate model means `Atomic<T>` is the one shared-mutable seam (see *Concurrency*).
+
+### Parsing (`std::fmt`) ✅
+
+`import std::fmt::{parse, parseRadix, ParseError};` — the exact inverse of this module's `intStr`/`f64Str`
+side (`std.fmt.parseInt` is Zig's placement too).
+
+```kama
+Result<int32, ParseError> r = parse::<int32>(s: text);
+```
+
+**A parse fails, it does not come up absent**, so the result is `Result`, not `Optional` — GOALS #3d draws
+exactly that line — and `ParseError` separates `Empty` / `InvalidDigit` / `OutOfRange`, because "not a
+number" and "too big for this type" want different messages. Rust, Zig and Go all keep that distinction;
+only the boolean and optional shapes discard it.
+
+**One generic spelling, no `parseI32`/`parseI64` ladder.** The mechanism is the serde one — a marker
+contract (`FromStr`) plus a per-type retro-impl supplying a fallible `ctor`, reached as `T.fromStr(...)`.
+The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
+`uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
+2..36 for the integer widths, case-insensitive, with **no** `0x`/`0b` prefix — the base is already an
+argument. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so
+`" 7"` and `"7x"` both fail. Floats go through `strtod` behind `kama_fmt.h`, whose checked entry point
+reports `ERANGE` as `OutOfRange` rather than folding it to an infinity.
+
+### ASCII (`std::ascii`) ✅
+
+`import std::ascii::{isDigit, isAlpha, isSpace, toLower, …}` — `isDigit`, `isHexDigit`, `isAlpha`,
+`isAlnum`, `isSpace`, `isUpper`, `isLower`, `isPunct`, `isControl`, `isAscii`, `toLower`, `toUpper`,
+`digitValue`, all over `char`.
+
+Named `ascii` rather than `char` for two reasons: `char` is a keyword, so `std::char` cannot be a module
+path; and the name states the limit in every import line instead of a footnote. This is the same boundary
+Zig draws with `std.ascii`, and full Unicode character properties belong in a package (see the Unicode
+stance below). Every predicate is **false** for a non-ASCII codepoint rather than guessing, and
+`toLower`/`toUpper` return one unchanged — so they can never corrupt one. Free functions rather than
+methods because `char` and `uint32` share a C type and the conformance registry cannot hold both.
+
+**Fixed-point — `Fixed16_16`.** A signed 16.16 `type value` in the same module, for FPU-less targets and for
 exact fractional arithmetic: `+ - * /` through operator overloading (multiply and divide widen through
 `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating `satAdd`/`satSub`/`satMul`.
 The base operators trap on overflow like every other integer op above; the `sat*` forms clamp. Pure

@@ -14,8 +14,8 @@ type value Quat {
     // axis assumed normalized; angle in radians
     public ctor fromAxisAngle(Vec3 axis, float32 rad) {
         float32 h = rad * 0.5f32;
-        float32 s = sinf(x: h);
-        return Quat.of(x: axis.x*s, y: axis.y*s, z: axis.z*s, w: cosf(x: h));
+        float32 s = sin(x: h);
+        return Quat.of(x: axis.x*s, y: axis.y*s, z: axis.z*s, w: cos(x: h));
     }
     // Euler compose (YXZ / yaw-pitch-roll), radians
     public ctor fromEuler(float32 pitch, float32 yaw, float32 roll) {
@@ -38,7 +38,7 @@ type value Quat {
     public fn Quat conjugate()       { return Quat.of(x: 0.0f32-this.x, y: 0.0f32-this.y, z: 0.0f32-this.z, w: this.w); }
     public fn float32 dot(Quat r)    { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
     public fn float32 lengthSq()     { return this.dot(r: this); }
-    public fn float32 length()       { return sqrt(x: this.lengthSq()); }
+    public fn float32 length()       { float32 q = this.lengthSq(); return sqrt(x: q); }
     public fn Quat normalized()      { return this.scale(s: 1.0f32 / this.length()); }
     public fn Quat inverse()         { return this.conjugate().scale(s: 1.0f32 / this.lengthSq()); }
 
@@ -61,10 +61,10 @@ type value Quat {
         float32 ac = c < 0.0f32 ? 0.0f32 - c : c;
         if (ac > 0.9995f32) { return Quat.nlerp(a: a, b: b, t: t); }   // near-parallel: linear
         Quat bb = c < 0.0f32 ? b.scale(s: 0.0f32 - 1.0f32) : b;         // shortest arc
-        float32 th = acosf(x: ac);
-        float32 s = sinf(x: th);
-        float32 wa = sinf(x: (1.0f32 - t) * th) / s;
-        float32 wb = sinf(x: t * th) / s;
+        float32 th = acos(x: ac);
+        float32 s = sin(x: th);
+        float32 wa = sin(x: (1.0f32 - t) * th) / s;
+        float32 wb = sin(x: t * th) / s;
         return a.scale(s: wa) + bb.scale(s: wb);
     }
 

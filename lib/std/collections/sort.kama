@@ -1,0 +1,290 @@
+namespace std::collections;
+import std::collections::{View, DynamicArray};
+export { Order, sort, sortUnstable, sortWith, sortUnstableWith,
+         binarySearch, binarySearchWith, lowerBound, lowerBoundWith, isSorted, isSortedWith };
+
+// Sorting and searching are FREE FUNCTIONS over a `View<T>`, not methods on each container. One
+// implementation therefore covers `DynamicArray`, `FixedArray` and any sub-range (`slice`), which a
+// per-container `xs.sort()` could not — it cannot sort part of a buffer, nor a view obtained from
+// elsewhere. Ordering comes from a contract, never a function pointer: kama has no capturing closures,
+// so an `fnptr` comparator could only ever look at its two arguments, while a comparator OBJECT carries
+// state (a key index, a direction, a collation table). It is also faster — a `C: Order<T>` bound
+// monomorphizes to a direct, inlinable call, where an `fnptr` is an indirect call the C compiler cannot
+// inline (the reason `qsort` trails `std::sort`).
+
+// The ordering seam. `Comparable` gives a type its ONE natural order; `Order<T>` supplies any other,
+// and a comparator may hold fields — that is what replaces a capturing closure here.
+type contract Order<T> for both { fn Ordering compare(ref T a, ref T b); }
+
+// The natural order as an `Order<T>`, so every algorithm below is written ONCE against the contract and
+// the `Comparable` entry points are two-line delegations.
+type value Natural<T: Comparable> implements Order<T> {
+    public ctor make() { }
+    public fn Ordering compare(ref T a, ref T b) { return a.compareTo(other: b); }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Comparison helpers. Every comparison funnels through these because the receiver must be a nameable
+// `ref T` identifier: a PRIMITIVE element resolves `compareTo` only through a named parameter, never
+// through a buffer element (see DynamicArray.indexOf for the same rule).
+// ---------------------------------------------------------------------------------------------------
+
+fn bool lessAt<T, C: Order<T>>(View<T> items, ref C by, int32 i, int32 j) {
+    Ordering o = by.compare(a: items[i], b: items[j]);
+    bool r = match (o) { case Less: true; case Equal: false; case Greater: false; };
+    return r;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// sortUnstable — introsort: median-of-3 quicksort, insertion sort under a small cutoff, and a depth
+// limit that falls back to heapsort so the worst case stays O(n log n). Permutes with `swap` alone, so
+// it needs NO allocation and works for a move-only `T`, under `@noheap`/`--no-heap`, and on an MCU.
+// ---------------------------------------------------------------------------------------------------
+
+// Stable in its own right (it only swaps on a STRICT inversion), which is what lets the merge sort
+// below use it as a base case.
+fn void insertionSort<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 n = items.length();
+    int32 i = 1;
+    while (i < n) {
+        int32 j = i;
+        while (j > 0 && lessAt::<T, C>(items: items, by: by, i: j, j: j - 1)) {
+            items.swap(i: j - 1, j: j);
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+fn void siftDown<T, C: Order<T>>(View<T> items, ref C by, int32 root, int32 end) {
+    int32 r = root;
+    while (r * 2 + 1 < end) {
+        int32 child = r * 2 + 1;
+        if (child + 1 < end && lessAt::<T, C>(items: items, by: by, i: child, j: child + 1)) { child = child + 1; }
+        if (!lessAt::<T, C>(items: items, by: by, i: r, j: child)) { return; }
+        items.swap(i: r, j: child);
+        r = child;
+    }
+}
+
+fn void heapSort<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 n = items.length();
+    int32 start = n / 2;
+    while (start > 0) {
+        start = start - 1;
+        siftDown::<T, C>(items: items, by: by, root: start, end: n);
+    }
+    int32 end = n;
+    while (end > 1) {
+        end = end - 1;
+        items.swap(i: 0, j: end);
+        siftDown::<T, C>(items: items, by: by, root: 0, end: end);
+    }
+}
+
+// Order items[0], items[mid] and items[n-1], then park the median at n-1 as the partition pivot. Using
+// a pivot POSITION rather than a pivot value is what keeps this usable for a move-only `T` — nothing is
+// ever copied out of the buffer.
+fn void medianOfThree<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 n = items.length();
+    int32 mid = n / 2;
+    if (lessAt::<T, C>(items: items, by: by, i: mid, j: 0))      { items.swap(i: 0, j: mid); }
+    if (lessAt::<T, C>(items: items, by: by, i: n - 1, j: 0))    { items.swap(i: 0, j: n - 1); }
+    if (lessAt::<T, C>(items: items, by: by, i: n - 1, j: mid))  { items.swap(i: mid, j: n - 1); }
+    items.swap(i: mid, j: n - 1);
+}
+
+fn void intro<T, C: Order<T>>(View<T> items, ref C by, int32 depth) {
+    int32 n = items.length();
+    if (n < 16) { insertionSort::<T, C>(items: items, by: by); return; }
+    if (depth == 0) { heapSort::<T, C>(items: items, by: by); return; }
+    medianOfThree::<T, C>(items: items, by: by);
+    // Lomuto partition against the pivot parked at n-1. A run of equal elements all land on the "not
+    // less" side, which is the classic Lomuto weakness — it costs depth, and the depth limit above
+    // converts that into a heapsort rather than into quadratic time.
+    int32 store = 0;
+    int32 i = 0;
+    while (i < n - 1) {
+        if (lessAt::<T, C>(items: items, by: by, i: i, j: n - 1)) {
+            items.swap(i: i, j: store);
+            store = store + 1;
+        }
+        i = i + 1;
+    }
+    items.swap(i: store, j: n - 1);
+    View<T> left = items.slice(from: 0, count: store);
+    intro::<T, C>(items: left, by: by, depth: depth - 1);
+    View<T> right = items.slice(from: store + 1, count: n - store - 1);
+    intro::<T, C>(items: right, by: by, depth: depth - 1);
+}
+
+// Sort by a supplied ordering, NOT stable, NO allocation.
+fn void sortUnstableWith<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 n = items.length();
+    if (n < 2) { return; }
+    int32 depth = 0;
+    int32 m = n;
+    while (m > 0) { depth = depth + 2; m = m / 2; }   // ~2*log2(n), the standard introsort limit
+    intro::<T, C>(items: items, by: by, depth: depth);
+}
+
+// Sort by the natural order, NOT stable, NO allocation — the form that works under `--no-heap`.
+fn void sortUnstable<T: Comparable>(View<T> items) {
+    Natural<T> nat = Natural::<T>.make();
+    sortUnstableWith::<T, Natural<T>>(items: items, by: nat);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// sort — STABLE. Equal elements keep their original relative order, which is what makes sorting by one
+// key and then another produce the answer you meant.
+//
+// A stable merge needs somewhere to stage elements, and a `View<T>` cannot hand its elements out (it
+// borrows them; only `swap` permutes). So the merge runs over an INDEX PERMUTATION — a `DynamicArray<
+// int32>` sorted by (element, original index) — and the permutation is then applied to the buffer with
+// swaps alone. That buys two things a scratch-buffer-of-`T` merge could not: it is O(n log n) rather
+// than the O(n log² n) of an in-place rotating merge, and it imposes NO `Copyable` bound, so move-only
+// elements sort stably too. The cost is the `int32` buffers, which is exactly why this form allocates —
+// and why `--no-heap` rejects it and points at `sortUnstable`.
+// ---------------------------------------------------------------------------------------------------
+
+@compileFor(!NOHEAP)
+fn void sortWith<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 n = items.length();
+    if (n < 2) { return; }
+
+    DynamicArray<int32> idx = DynamicArray::<int32>.withCapacity(capacity: n);
+    DynamicArray<int32> buf = DynamicArray::<int32>.withCapacity(capacity: n);
+    int32 f = 0;
+    while (f < n) { idx.add(item: f); buf.add(item: 0); f = f + 1; }
+
+    // Bottom-up merge of the index array, ping-ponging between the two buffers. A tie takes from the
+    // LEFT run, and the left run always holds the smaller original indices — that is the stability.
+    int32 width = 1;
+    bool inIdx = true;
+    while (width < n) {
+        int32 lo = 0;
+        while (lo < n) {
+            int32 mid = lo + width;
+            if (mid > n) { mid = n; }
+            int32 hi = lo + width + width;
+            if (hi > n) { hi = n; }
+            int32 i = lo;
+            int32 j = mid;
+            int32 k = lo;
+            while (k < hi) {
+                bool takeLeft = true;
+                if (i >= mid) {
+                    takeLeft = false;
+                } else if (j < hi) {
+                    int32 si = inIdx ? idx[i] : buf[i];
+                    int32 sj = inIdx ? idx[j] : buf[j];
+                    // `right < left` decides; equal falls through to the left run, keeping it stable.
+                    takeLeft = !lessAt::<T, C>(items: items, by: by, i: sj, j: si);
+                }
+                if (takeLeft) {
+                    int32 v = inIdx ? idx[i] : buf[i];
+                    if (inIdx) { buf[k] = v; } else { idx[k] = v; }
+                    i = i + 1;
+                } else {
+                    int32 v = inIdx ? idx[j] : buf[j];
+                    if (inIdx) { buf[k] = v; } else { idx[k] = v; }
+                    j = j + 1;
+                }
+                k = k + 1;
+            }
+            lo = hi;
+        }
+        inIdx = !inIdx;
+        width = width + width;
+    }
+    if (!inIdx) {
+        int32 c = 0;
+        while (c < n) { idx[c] = buf[c]; c = c + 1; }
+    }
+
+    // Apply the permutation with swaps. `at[p]` is the original index of whatever currently sits at
+    // position p, and `pos` is its inverse; keeping both makes this a single O(n) pass rather than a
+    // cycle chase that can degrade.
+    DynamicArray<int32> at  = DynamicArray::<int32>.withCapacity(capacity: n);
+    DynamicArray<int32> pos = DynamicArray::<int32>.withCapacity(capacity: n);
+    int32 g = 0;
+    while (g < n) { at.add(item: g); pos.add(item: g); g = g + 1; }
+    int32 k2 = 0;
+    while (k2 < n) {
+        int32 want = idx[k2];
+        int32 cur  = pos[want];
+        if (cur != k2) {
+            items.swap(i: k2, j: cur);
+            int32 a = at[k2];
+            int32 b = at[cur];
+            at[k2] = b;   at[cur] = a;
+            pos[b] = k2;  pos[a] = cur;
+        }
+        k2 = k2 + 1;
+    }
+}
+
+// Sort by the natural order, STABLE. Allocates, so it is DROPPED from a `--no-heap` build rather than
+// silently reaching the allocator there — a program built that way must say `sortUnstable`.
+@compileFor(!NOHEAP)
+fn void sort<T: Comparable>(View<T> items) {
+    Natural<T> nat = Natural::<T>.make();
+    sortWith::<T, Natural<T>>(items: items, by: nat);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Searching a sorted range. Rust folds "found" and "where it would go" into one `Result<usize, usize>`;
+// kama's `Result<T, E>` constrains `E` to `Error`, so that spelling is unavailable — and the two honest
+// total functions it forces are clearer anyway.
+// ---------------------------------------------------------------------------------------------------
+
+// The first position at which `target` could be inserted with the range staying sorted — i.e. the count
+// of elements ordered strictly before it. Total: it always answers, found or not.
+fn int32 lowerBoundWith<T, C: Order<T>>(View<T> items, ref T target, ref C by) {
+    int32 lo = 0;
+    int32 hi = items.length();
+    while (lo < hi) {
+        int32 mid = lo + (hi - lo) / 2;
+        Ordering o = by.compare(a: items[mid], b: target);
+        bool before = match (o) { case Less: true; case Equal: false; case Greater: false; };
+        if (before) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+fn int32 lowerBound<T: Comparable>(View<T> items, ref T target) {
+    Natural<T> nat = Natural::<T>.make();
+    return lowerBoundWith::<T, Natural<T>>(items: items, target: target, by: nat);
+}
+
+// The index of an element equal to `target`, or `None`. With duplicates it reports the FIRST, which is
+// the only answer that composes with `lowerBound`.
+fn Optional<int32> binarySearchWith<T, C: Order<T>>(View<T> items, ref T target, ref C by) {
+    int32 i = lowerBoundWith::<T, C>(items: items, target: target, by: by);
+    if (i >= items.length()) { return Optional::None; }
+    Ordering o = by.compare(a: items[i], b: target);
+    bool hit = match (o) { case Equal: true; case Less: false; case Greater: false; };
+    if (hit) { return Optional::Some(value: i); }
+    return Optional::None;
+}
+
+fn Optional<int32> binarySearch<T: Comparable>(View<T> items, ref T target) {
+    Natural<T> nat = Natural::<T>.make();
+    return binarySearchWith::<T, Natural<T>>(items: items, target: target, by: nat);
+}
+
+// ---------------------------------------------------------------------------------------------------
+
+fn bool isSortedWith<T, C: Order<T>>(View<T> items, ref C by) {
+    int32 i = 1;
+    while (i < items.length()) {
+        if (lessAt::<T, C>(items: items, by: by, i: i, j: i - 1)) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn bool isSorted<T: Comparable>(View<T> items) {
+    Natural<T> nat = Natural::<T>.make();
+    return isSortedWith::<T, Natural<T>>(items: items, by: nat);
+}

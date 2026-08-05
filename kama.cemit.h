@@ -910,6 +910,9 @@ private:
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
+    std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an
+                                                                         // export manifest / import naming one says "not in this
+                                                                         // configuration" instead of "no such declaration".
     bool                                      _strictFlags   = false;    // a manifest was loaded -> validate `@compileFor`/`--define` names
     std::string                               _logDefault;               // baked `KAMA_LOG` project default (M5), seeded in main
     // std::log v2 (M7): the compile-time strip floor — the lowest level ORDINAL physically dropped at emit
@@ -1376,7 +1379,14 @@ private:
     bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);
     // Verify a concrete type arg satisfies each contract bound on a type parameter (else diagnose).
     void checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
-                     SharedIdentifierList bounds, int line);
+                     SharedIdentifierList bounds, int line, const std::string& templateKey);
+    // Resolve a generic's BOUNDS under the template's home namespace rather than the call site's, so a
+    // bound need not be imported by every caller. RAII — restores `_nsCtx` on scope exit.
+    struct BoundCtxScope {
+        BoundCtxScope(CEmitter* e, const std::string& templateKey);
+        ~BoundCtxScope();
+        CEmitter* _e; NsCtx _saved;
+    };
     std::string basePathTo(ClassInfo* from, ClassInfo* to);   // "__base." chain from `from` down to `to`
     std::string vptrPrefix(ClassInfo* ci);                    // "__base." * (hops to vtableRoot)
     void checkDerivedPublicSurface();                         // decision A: no widening, no `implements`

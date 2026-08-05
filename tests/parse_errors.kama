@@ -1,0 +1,36 @@
+// M2a: a parse FAILS, so it returns `Result`, not `Optional` — and the failure says WHICH kind, because
+// "not a number at all" and "a number too big for this type" want different messages. Rust, Zig and Go
+// all draw that same distinction; only the boolean/optional shapes throw it away.
+import std::fmt::{parse, ParseError};
+
+fn int32 kindOf(ref string s) {
+    Result<int32, ParseError> r = parse::<int32>(s: s);
+    return match (r) {
+        case Ok(value: v):  0;
+        case Err(error: e): match (e) { case Empty: 1; case InvalidDigit: 2; case OutOfRange: 3; };
+    };
+}
+
+fn int main() {
+    string empty   = "";
+    string garbage = "abc";
+    string partial = "12x";          // strict: a trailing byte is an error, not a prefix parse
+    string spaced  = " 7";           // strict: no whitespace is trimmed
+    string over    = "2147483648";   // one past int32Max
+    string under   = "-2147483649";
+    string ok      = "-2147483648";  // exactly int32Min — must NOT be OutOfRange
+
+    int32 a = kindOf(s: empty);      // 1
+    int32 b = kindOf(s: garbage);    // 2
+    int32 c = kindOf(s: partial);    // 2
+    int32 d = kindOf(s: spaced);     // 2
+    int32 e = kindOf(s: over);       // 3
+    int32 f = kindOf(s: under);      // 3
+    int32 g = kindOf(s: ok);         // 0
+
+    // the message() of each variant is distinct, so a caller can report without a match
+    Result<int32, ParseError> ro = parse::<int32>(s: over);
+    int32 msg = match (ro) { case Ok(value: v): 0; case Err(error: x): x.message().length() > 0 ? 30 : 0; };
+
+    return a + b + c + d + e + f + g + msg;   // 1+2+2+2+3+3+0+30 = 43
+}

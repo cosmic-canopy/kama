@@ -1,0 +1,31 @@
+// M2a: `parse::<T>` — one generic spelling for every numeric primitive, no `parseI32`/`parseI64` ladder.
+// The turbofish is required because nothing in the arguments mentions `T`.
+import std::fmt::{parse, ParseError};
+
+fn int main() {
+    string a = "41";
+    string b = "-7";
+    string c = "+12";
+    string d = "255";
+    string e = "9223372036854775807";
+    string f = "-9223372036854775808";   // the signed minimum: no positive counterpart to negate
+
+    Result<int32, ParseError>  ra = parse::<int32>(s: a);
+    Result<int32, ParseError>  rb = parse::<int32>(s: b);
+    Result<int32, ParseError>  rc = parse::<int32>(s: c);
+    Result<uint8, ParseError>  rd = parse::<uint8>(s: d);
+    Result<int64, ParseError>  re = parse::<int64>(s: e);
+    Result<int64, ParseError>  rf = parse::<int64>(s: f);
+
+    int32 va = match (ra) { case Ok(value: v): v;            case Err(error: x): 0; };   // 41
+    int32 vb = match (rb) { case Ok(value: v): v;            case Err(error: x): 0; };   // -7
+    int32 vc = match (rc) { case Ok(value: v): v;            case Err(error: x): 0; };   // 12
+    int32 vd = match (rd) { case Ok(value: v): cast<int32>(v); case Err(error: x): 0; }; // 255
+    int64 ve = match (re) { case Ok(value: v): v;            case Err(error: x): 0i64; };
+    int64 vf = match (rf) { case Ok(value: v): v;            case Err(error: x): 0i64; };
+
+    int32 big = (ve == 9223372036854775807i64) ? 1 : 0;
+    int32 min = (vf < 0i64 && vf + 1i64 == 0i64 - 9223372036854775807i64) ? 1 : 0;
+
+    return va + vb + vc + (vd - 255) + big + min;   // 41 - 7 + 12 + 0 + 1 + 1 = 48
+}

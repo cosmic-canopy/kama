@@ -11,12 +11,30 @@
 
 #include "kama_runtime.h"
 #include <stdlib.h>   // strtod (float parsing)
+#include <errno.h>    // ERANGE — the checked parse distinguishes overflow from malformed
 
 // Parse a leading float from a (NUL-terminated) kama_string — for JSON number deserialization. strtod stops
 // at the first non-numeric byte, so a trailing `}`/`,`/`]` is fine. Empty/garbage yields 0.0 (the caller's
 // reader sets its own error flag on a malformed token).
 static inline double kama_parse_f64(kama_string* s) {
     return strtod((s && s->data) ? s->data : "", (char**)0);
+}
+
+// The CHECKED float parse behind `std::fmt::parse::<float64>` — the same `strtod`, but reporting WHY it
+// failed rather than folding everything to 0.0. Unlike the lenient reader above, a trailing byte is an
+// error here: `parse` is given a whole string and "12abc" is not a number. Status: 0 ok, 1 empty,
+// 2 malformed, 3 out of range — mirroring `ParseError`'s variants so the kama side is a plain map.
+static inline int32_t kama_parse_f64_ck(kama_string* s, double* out) {
+    const char* p = (s && s->data) ? s->data : "";
+    *out = 0.0;
+    if (*p == '\0') return 1;
+    errno = 0;
+    char* end = (char*)0;
+    double v = strtod(p, &end);
+    if (end == p || *end != '\0') return 2;   // no digits consumed, or trailing garbage
+    if (errno == ERANGE) return 3;            // overflow to +/-HUGE_VAL, or underflow to a subnormal/0
+    *out = v;
+    return 0;
 }
 
 #endif // KAMA_FMT_H

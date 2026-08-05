@@ -5903,7 +5903,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         auto bctx = _genericTypeCtx.find(tmpl);
         if (bctx != _genericTypeCtx.end()) _nsCtx = bctx->second;
         for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
-            checkBounds(params[i], concrete[i], (*bounds)[i], line);   // `line` is null-args-safe (bare all-defaulted use)
+            checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl);   // `line` is null-args-safe (bare all-defaulted use)
         _nsCtx = savedBoundCtx;
     }
 
@@ -6324,6 +6324,24 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
         SharedIdentifier l = exprTypeNode(b->LHS, localTys);
         return l ? l : exprTypeNode(b->RHS, localTys);
     }
+    // `-5.0` is a unary minus over a literal, not a literal, so without this a NEGATED constant could not
+    // bind a type parameter — `abs(x: -5.0)` failed to infer while `abs(x: 5.0)` succeeded. The operand
+    // carries the type for every prefix operator kama has (`-`, `+`, `!`, `~`).
+    if (auto* u  = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return exprTypeNode(u->expression, localTys);
+    // A call's type is its callee's declared return type, which makes a NESTED call inferable
+    // (`log(x: exp(x: 1.0))`). Only for a non-generic callee: a generic one returns its own `T`, which is
+    // exactly the thing not yet known here, so it is left to the "bind it to a local" rule.
+    if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
+        if (iv->identifier && iv->identifier->value && !iv->expression) {
+            std::string k = resolveFunc(*iv->identifier->value, iv->identifier->qualifier);
+            if (!_generics.count(k)) {
+                auto fit = _funcs.find(k);
+                if (fit != _funcs.end() && fit->second.node && fit->second.node->returnType)
+                    return fit->second.node->returnType;
+            }
+        }
+        return nullptr;
+    }
     return nullptr;
 }
 
@@ -6463,6 +6481,36 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     };
 
     std::map<std::string, SharedIdentifier> bind;
+
+    // Structurally unify a parameter's declared type against the argument's concrete type, binding
+    // every type parameter that appears anywhere inside it — `View<T>`, `DynamicArray<T>`,
+    // `Optional<T>`, `Pair<K, V>`, and nestings of those. Without this only a BARE `T x` parameter
+    // was inferable, so every call that passed a container had to carry a turbofish.
+    // BEST-EFFORT by design: a shape that doesn't line up (different type, different arity) binds
+    // nothing and falls through to the "pass it explicitly with turbofish" diagnostic below, so this
+    // only ever WIDENS what compiles — it never invents a new hard error. The one thing it does
+    // reject is a genuine conflict: one parameter unified against two different types.
+    std::function<bool(const SharedIdentifier&, const SharedIdentifier&)> unify =
+        [&](const SharedIdentifier& pt, const SharedIdentifier& at) -> bool {
+        if (!pt || !pt->value || !at || !at->value) return true;
+        if (!pt->genericArg && tps.count(*pt->value)) {          // a bare type-param position — bind it
+            if (!isConcreteTypeArg(at)) return true;
+            auto b = bind.find(*pt->value);
+            if (b != bind.end() && mangleElem(b->second) != mangleElem(at)) {
+                unsupported(("cannot unify type parameter '" + *pt->value + "' (" + mangleElem(b->second) +
+                             " vs " + mangleElem(at) + ")").c_str(), line);
+                return false;
+            }
+            bind[*pt->value] = at;
+            return true;
+        }
+        if (*pt->value != *at->value || !pt->genericArgs || !at->genericArgs
+            || pt->genericArgs->size() != at->genericArgs->size()) return true;   // shapes differ — bind nothing
+        for (size_t i = 0; i < pt->genericArgs->size(); ++i)
+            if (!unify((*pt->genericArgs)[i], (*at->genericArgs)[i])) return false;
+        return true;
+    };
+
     if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
         if (!p || !p->type || !p->type->value) continue;
         const std::string& pty = *p->type->value;
@@ -6510,7 +6558,16 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             }
             continue;
         }
-        if (p->type->genericArg || !tps.count(pty)) continue;   // not a bare type-param (List<T> etc. is a generic type)
+        // `View<T>` / `DynamicArray<T>` / … — a generic type whose ARGUMENTS mention a type param.
+        // (`InlineArray<T, N>` never reaches here; its branch above binds the const size too.)
+        if (p->type->genericArg) {
+            std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
+            auto ai = byName.find(pname);
+            if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
+            if (!unify(p->type, deepSubstType(exprTypeNode(ai->second, localTys)))) return false;
+            continue;
+        }
+        if (!tps.count(pty)) continue;                          // a concrete type — nothing to bind
         std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
         auto ai = byName.find(pname);
         if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
@@ -6544,7 +6601,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     if (tmpl->typeBounds)
         for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line);
+                checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key);
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -6570,22 +6627,38 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
                      + std::to_string(na) + " were given in `::<…>`").c_str(), line);
         return false;
     }
+    // Resolve each arg through the ACTIVE substitution first, then absolutize it to its use-site mangled
+    // name so it resolves context-free when the instance is later emitted under the TEMPLATE's home
+    // namespace (a `tryParse::<Point>` in module A must carry `Point`'s home mangle, not resolve `Point`
+    // against json's scope). `_callInst` + `_genericInsts` both key off that name.
+    //
+    // The deepSubstType is what registerGenericTypeInst has always done and this path was missing. A
+    // turbofish written INSIDE another generic — `lessAt::<T, Natural<T>>` in a `<T>` function — stored
+    // the raw `T` as the instance's type argument; zipping that back into `_typeSubst` bound `T` to
+    // itself, and `mangleElem` then recursed on its own result until the stack died. A compiler crash,
+    // not a diagnostic.
+    std::vector<SharedIdentifier> concrete;
+    for (size_t i = 0; i < np; ++i) concrete.push_back(absolutizeType(deepSubstType((*typeArgs)[i])));
+
+    // Defer while any argument still carries an unbound parameter: that means this is the scan of a
+    // generic function's body BEFORE instantiation, where the enclosing `T` has no binding yet. The real
+    // instance registers at monomorphization, with concrete args. Both callers treat `false` as "nothing
+    // to register" rather than an error, which is exactly the intent. Mirrors the same skip in
+    // registerGenericTypeInst.
+    for (auto& c : concrete) if (argCarriesUnboundParam(c)) return false;
+
+    // Bounds are checked against the SUBSTITUTED argument, so the diagnostic names the real type.
     if (tmpl->typeBounds)
         for (size_t i = 0; i < np && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                checkBounds(*(*tmpl->typeParams)[i], (*typeArgs)[i], (*tmpl->typeBounds)[i], line);
+                checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key);
 
     out.templateKey = key;
     out.typeArgs.clear();
     std::string mangled = key;
     for (size_t i = 0; i < np; ++i) {
-        // Absolutize the arg to its use-site (call-site) mangled name, so it resolves context-free when the
-        // instance is later emitted under the TEMPLATE's home namespace (a `tryParse::<Point>` in module A
-        // must carry `Point`'s home mangle, not resolve `Point` against json's scope). Mirrors
-        // registerGenericTypeInst's `absolutizeType`; `_callInst`+`_genericInsts` both key off this name.
-        SharedIdentifier a = absolutizeType((*typeArgs)[i]);
-        out.typeArgs.push_back(a);
-        mangled += "__" + mangleElem(a);
+        out.typeArgs.push_back(concrete[i]);
+        mangled += "__" + mangleElem(concrete[i]);
     }
     out.mangledName = mangled;
     return true;
@@ -6910,10 +6983,46 @@ void CEmitter::registerInstGenerics()
             if (p && p->identifier && p->identifier->value && p->type) lt[*p->identifier->value] = p->type;
     };
     std::set<std::string> done;
+    std::set<std::string> doneFns;
     for (;;) {
         std::vector<std::string> todo;
         for (auto& kv : _genericTypeInsts) if (!done.count(kv.first)) todo.push_back(kv.first);
-        if (todo.empty()) break;
+        std::vector<std::string> todoFns;
+        for (auto& kv : _genericInsts) if (!doneFns.count(kv.first)) todoFns.push_back(kv.first);
+        if (todo.empty() && todoFns.empty()) break;
+
+        // A generic FREE FUNCTION calling ANOTHER one with a forwarded type parameter — `sort<T>` calling
+        // `sortWith::<T, Natural<T>>`, or plain `outer<T>` calling `inner::<T>`. The template body is walked
+        // once with `_typeSubst` empty, so that turbofish names the enclosing `T` and no concrete instance is
+        // ever registered; the call then had nothing to route to. (Before `explicitGenericInst` learned to
+        // defer an unbound argument, it registered `T` bound to itself instead, and `mangleElem` recursed on
+        // its own result until the compiler died — this pass is the other half of that fix.) The answer is
+        // the one the generic-TYPE case above already uses: re-walk the body ONCE PER INSTANTIATION with the
+        // substitution bound. Both kinds share this fixpoint because either can discover the other.
+        for (auto& mangled : todoFns) {
+            doneFns.insert(mangled);
+            auto iit = _genericInsts.find(mangled);
+            if (iit == _genericInsts.end()) continue;
+            const GenericInst gi = iit->second;      // COPY — the scan below may rehash the map
+            auto tit = _generics.find(gi.templateKey);
+            if (tit == _generics.end() || !tit->second) continue;
+            FunctionDeclarationNode* tmpl = tit->second;
+            if (!tmpl->block || !tmpl->typeParams) continue;
+            auto cit = _genericCtx.find(gi.templateKey);
+            _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
+            std::set<std::string> cps;
+            if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
+            _typeSubst.clear();
+            for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
+                if (!(*tmpl->typeParams)[i]) continue;
+                const std::string& pn = *(*tmpl->typeParams)[i];
+                if (cps.count(pn)) continue;             // a const param is a value, not a type binding
+                if (gi.typeArgs[i]) _typeSubst[pn] = gi.typeArgs[i];
+            }
+            std::map<std::string, SharedIdentifier> lt; seed(tmpl->parameters, lt);
+            scanStmtForGenerics(tmpl->block, lt);
+        }
+
         for (auto& mangled : todo) {
             done.insert(mangled);
             auto iit = _genericTypeInsts.find(mangled);
@@ -9083,18 +9192,51 @@ std::string CEmitter::heapOwnerTarget(const std::string& cls)
     return "";
 }
 
+// A bound names a contract in the scope where the TEMPLATE was written, not where it is called. Checking
+// it under the call site's namespace made a bound resolvable only if the caller had also imported the
+// contract — so `std::fmt`'s `parse<T: FromStr>` forced every user to `import` a marker contract they
+// never name, and the only reason `decode<T: Deserialize>` never showed this is that `Deserialize` lives
+// in the always-visible prelude. Restores the caller's context on the way out.
+// Only the CONTRACT name moves scope. The concrete type argument still has to resolve at the call site
+// (it is the caller's `Point`), which is why this wraps the contract lookup alone and not all of
+// checkBounds. Generic functions and generic types keep their home context in different maps.
+CEmitter::BoundCtxScope::BoundCtxScope(CEmitter* e, const std::string& templateKey) : _e(e), _saved(e->_nsCtx)
+{
+    auto it = e->_genericCtx.find(templateKey);
+    if (it != e->_genericCtx.end()) { e->_nsCtx = it->second; return; }
+    auto tt = e->_genericTypeCtx.find(templateKey);
+    if (tt != e->_genericTypeCtx.end()) e->_nsCtx = tt->second;
+}
+CEmitter::BoundCtxScope::~BoundCtxScope() { _e->_nsCtx = _saved; }
+
 // at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
 // every contract on it (`+` = AND); a clean diagnostic instead of a downstream "class missing method".
 void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
-                           SharedIdentifierList bounds, int line)
+                           SharedIdentifierList bounds, int line, const std::string& templateKey)
 {
     if (!bounds || bounds->empty()) return;
+
+    // The argument may not be concrete yet: one generic function forwarding its own parameters into
+    // another (`sortWith::<T, C>` calling `lessAt::<T, C>`) passes `C` itself, and a generic type
+    // spelled at a parameter (`Natural<T>`) mentions one. Neither can be looked up — the enclosing
+    // template has not been monomorphized, so there is no type to check. Defer instead of rejecting:
+    // the per-instantiation re-walk runs this again with the real argument, which is both where the
+    // answer exists and where a user wants the diagnostic pointed.
+    std::function<bool(const SharedIdentifier&)> mentionsParam = [&](const SharedIdentifier& t) -> bool {
+        if (!t || !t->value) return false;
+        if (!t->genericArg && isTypeParamName(*t->value)) return true;
+        if (t->genericArgs) for (auto& a : *t->genericArgs) if (mentionsParam(a)) return true;
+        return false;
+    };
+    if (mentionsParam(concreteArg)) return;
+
     std::string cls = cType(concreteArg);                 // concrete class key (or a primitive C type)
     std::string clsName = (concreteArg && concreteArg->value) ? *concreteArg->value : cls;   // source-level
     ClassInfo* ci = _classes.count(cls) ? &_classes[cls] : nullptr;
     for (auto& b : *bounds) {
         if (!b || !b->value) continue;
-        std::string contract = resolveUserName(*b->value, b->qualifier);
+        std::string contract;
+        { BoundCtxScope bc(this, templateKey); contract = resolveUserName(*b->value, b->qualifier); }
         if (!contractMethods(contract)) {   // a plain contract OR a generic-contract template (`Iterator<T>`)
             unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
                          + paramName + "`").c_str(), line);
@@ -15982,7 +16124,7 @@ void CEmitter::checkNamelessNewBanned(ObjectCreationNode* oc, int line)
 // `@compileFor(OS_MACOS)`, which is the fact rather than the spelling.
 bool kamaIsBuildConfigFlag(const std::string& n)
 {
-    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED") return true;
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP") return true;
     return n.compare(0, 3, "OS_")   == 0
         || n.compare(0, 5, "ARCH_") == 0
         || n.compare(0, 4, "ABI_")  == 0;
@@ -16044,6 +16186,22 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
 
     // The `attributes` member lives on each concrete top-level decl kind; return a pointer so the
     // gate can be read and `@compileFor` stripped in place from a kept decl.
+    // A pruned decl's NAME is remembered so the export-manifest check below can tell "dropped by this
+    // build's flags" from "typo" — a module lists its full surface in one `export`, and gating a
+    // declaration must not force the author to gate the export line too. Unqualified, so in principle a
+    // name pruned in one module could suppress a genuine "no such declaration" in another; that only ever
+    // loses a diagnostic, never accepts bad code, and qualifying is not possible here (pruning runs before
+    // any namespace context is established).
+    auto nameOf = [](ASTNode* d) -> std::string {
+        if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d))
+            return (f->name && f->name->value) ? *f->name->value : std::string();
+        if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))
+            return (c->name && c->name->value) ? *c->name->value : std::string();
+        if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))
+            return (e->identifier && e->identifier->value) ? *e->identifier->value : std::string();
+        return std::string();
+    };
+
     auto attrsOf = [](ASTNode* d) -> SharedAttributeList* {
         if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d))   return &f->attributes;
         if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))      return &c->attributes;
@@ -16057,7 +16215,11 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         SharedAttributeList* ap = decl ? attrsOf(decl.get()) : nullptr;
         if (!ap || !*ap) { kept.push_back(decl); continue; }
-        if (!compileForActive(*ap, decl->line)) continue;   // gate inactive -> decl never exists
+        if (!compileForActive(*ap, decl->line)) {           // gate inactive -> decl never exists
+            std::string n = nameOf(decl.get());
+            if (!n.empty()) _prunedNames.insert(n);
+            continue;
+        }
         // KEEP: rebuild the attribute list without any `@compileFor` entry.
         SharedAttributeList filtered;
         for (auto& at : **ap) {
@@ -16406,7 +16568,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             std::string q = qualify(*name);
             bool exists = _classes.count(q) || _enums.count(q) || _interfaces.count(q) || _funcs.count(q)
                        || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
-            if (!exists)
+            if (!exists && !_prunedNames.count(*name))
                 unsupported(("export list names `" + *name + "` but there is no such top-level declaration in this module").c_str(),
                             u->nameSpace && u->nameSpace->name ? u->nameSpace->name->line : 0);
         }
@@ -16428,7 +16590,16 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             RefUnitScope refScope(this, u.get());
             for (auto& sym : *imp->symbols) {
                 if (!sym || !sym->identifier || !sym->identifier->value) continue;
-                if (!_exported.count(mod + "__" + *sym->identifier->value))
+                // A name this build DROPPED is not a typo, and it is still in the module's export list, so
+                // the plain "does not export" check below would wave it through and leave the reader with a
+                // bare "call to unknown function" at the use site. Name the real reason instead.
+                const std::string q = mod + "__" + *sym->identifier->value;
+                bool live = _funcs.count(q) || _classes.count(q) || _enums.count(q) || _interfaces.count(q)
+                         || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
+                if (!live && _prunedNames.count(*sym->identifier->value))
+                    unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
+                                 " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
+                else if (!_exported.count(q))
                     unsupported(("module `" + path + "` does not export `" + *sym->identifier->value + "`").c_str(), imp->line);
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
