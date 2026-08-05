@@ -1,0 +1,6 @@
+// Completeness: declaring `implements Error` obliges the enum to supply `message()`.
+type enum Bad implements Error {
+    A, B;
+    public fn int32 unrelated() { return 1; }
+}
+fn int32 main() { return 0; }

@@ -469,3 +469,42 @@ type abstract(maxDepth: 1) resource Mid extends Root { public ctor make() { } }
           (identifier))
         (parameter_list)
         (block)))))
+
+================================================================================
+An enum declares conformance inline and carries members after the `;`
+================================================================================
+
+type enum IoError : uint8 implements Error
+{
+    NotFound,
+    Denied;
+
+    public fn string message() { return "x"; }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (enum_declaration
+    (type_declaration_head
+      (identifier))
+    (primitive_type)
+    (class_base
+      (implements_entry
+        (type_name
+          (identifier))))
+    (enum_body
+      (enum_member
+        (identifier))
+      (enum_member
+        (identifier))
+      (method_declaration
+        (modifier)
+        (primitive_type)
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (string_literal
+              (string_content))))))))

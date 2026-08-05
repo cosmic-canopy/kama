@@ -2679,7 +2679,35 @@
       "required": false,
       "types": [
         {
+          "type": "constant_declaration",
+          "named": true
+        },
+        {
+          "type": "constructor_declaration",
+          "named": true
+        },
+        {
+          "type": "destructor_declaration",
+          "named": true
+        },
+        {
           "type": "enum_member",
+          "named": true
+        },
+        {
+          "type": "field_declaration",
+          "named": true
+        },
+        {
+          "type": "friend_declaration",
+          "named": true
+        },
+        {
+          "type": "method_declaration",
+          "named": true
+        },
+        {
+          "type": "operator_declaration",
           "named": true
         }
       ]
@@ -2689,6 +2717,16 @@
     "type": "enum_declaration",
     "named": true,
     "fields": {
+      "base": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "class_base",
+            "named": true
+          }
+        ]
+      },
       "body": {
         "multiple": false,
         "required": true,

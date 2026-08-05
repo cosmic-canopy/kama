@@ -1,0 +1,8 @@
+// Regression: an unknown contract on an enum used to DEREFERENCE NULL in emitClassInterfaceVtables — a
+// promoted enum's ClassInfo has no ClassDeclarationNode, and the diagnostic read `ci.node->line`.
+// It must report the unknown contract, not crash.
+type enum Bad implements Nonexistent {
+    A, B;
+    public fn int32 f() { return 1; }
+}
+fn int32 main() { return 0; }

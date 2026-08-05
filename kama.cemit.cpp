@@ -4203,11 +4203,17 @@ static bool enumIsTagged(EnumDeclarationNode* ed)
 // per-variant payloads. Reuses ClassInfo so monomorphization, RAII, and move analysis all apply.
 // A variant is flagged `isVariant`; its move-only-ness follows destructibility (owns a resource →
 // moves), not the `kind` (which stays the neutral `Intrinsic`).
+// The line of whichever declaration produced this ClassInfo. A promoted enum has an `enumNode` and a NULL
+// `node` (that one is a ClassDeclarationNode), so anything reporting a diagnostic against a type must come
+// through here rather than dereferencing `node`.
+int ClassInfo::declLine() const { return node ? node->line : (enumNode ? enumNode->line : 0); }
+
 ClassInfo CEmitter::buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name)
 {
     ClassInfo ci;
     ci.name      = name;
-    ci.kind      = TypeKind::Intrinsic;   // neutral; move-only-ness is driven by isVariant + destructible
+    ci.kind      = TypeKind::Neutral;   // move-only-ness is driven by isVariant + destructible
+    ci.enumNode  = ed;                  // its decl site; `ci.node` stays null (that is a ClassDeclarationNode)
     ci.scope     = _nsCtx.scope;
     ci.usings    = _nsCtx.usings;
     ci.symbolAliases = _nsCtx.symbolAliases;
@@ -4374,7 +4380,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 
         // `type <kind> Name` — map the kind word. `contract` is registered as an interface
         // (collectInterfaces), so skip it here; a bad kind word is a clear error.
-        TypeKind kind = TypeKind::Intrinsic;
+        TypeKind kind = TypeKind::Neutral;
         if (cd->typeKind) {
             if      (*cd->typeKind == "value")    kind = TypeKind::Value;
             else if (*cd->typeKind == "resource") kind = TypeKind::Resource;
@@ -8188,6 +8194,21 @@ void CEmitter::linkContracts()
     for (auto& kv : _interfaces) merge(kv.first);
 }
 
+// Resolve a parallel (names, nodes) interface list IN PLACE. `names` is the plain string list a ClassInfo
+// keeps; `nodes` is the AST list it was built from, which is the only place the generic args survive — a
+// `implements Iterator<int32>` has to become `Iterator_int32`, and `names` alone dropped the `<int32>`.
+// `nodes` may be null or shorter than `names` (a conformance recorded without a declaration site).
+void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIdentifierList nodes)
+{
+    for (size_t i = 0; i < names.size(); ++i) {
+        std::string base = resolveUserName(names[i], nullptr);
+        SharedIdentifier itfNode = (nodes && i < nodes->size()) ? (*nodes)[i] : nullptr;
+        if (itfNode && itfNode->genericArg && _genericContracts.count(base))
+            base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
+        names[i] = base;
+    }
+}
+
 void CEmitter::linkBases()
 {
     _basesLinked = true;   // from here on, an empty `baseName` means "no base", not "not resolved yet"
@@ -8211,13 +8232,7 @@ void CEmitter::linkBases()
         // ci.interfaces (a plain name list) dropped, so read them back in parallel.
         SharedIdentifierList ifaceNodes = (ci.node && ci.node->baseTypes) ? ci.node->baseTypes->interfaces
                                                                           : SharedIdentifierList();
-        for (size_t i = 0; i < ci.interfaces.size(); ++i) {
-            std::string base = resolveUserName(ci.interfaces[i], nullptr);
-            SharedIdentifier itfNode = (ifaceNodes && i < ifaceNodes->size()) ? (*ifaceNodes)[i] : nullptr;
-            if (itfNode && itfNode->genericArg && _genericContracts.count(base))
-                base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
-            ci.interfaces[i] = base;
-        }
+        resolveInterfaceNames(ci.interfaces, ifaceNodes);
     }
 #if KAMA_INHERITANCE
     for (auto& kv : _classes) {
@@ -8956,6 +8971,173 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
     return nullptr;
 }
 
+// Inject a contract-impl block's methods into the target's ClassInfo and record the conformance. The
+// caller has already resolved `tci` and rejected a duplicate impl of `contract` on it.
+//
+// `retro` marks the conformance STATIC-dispatch-only (recorded in `retroInterfaces`, so no fat-pointer
+// vtable is emitted for it). `isPrimitive` gates the serde-return scan: a primitive's
+// `Result<scalar, Owned<Error>>` monomorph only matters when the program actually uses serde.
+void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
+                                 const std::string& contract, const std::string& tkey,
+                                 bool retro, bool isPrimitive)
+{
+    if (members)
+        for (auto& m : *members) {
+            auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+            if (!md || !md->name || !md->name->value) continue;
+            std::string mname = *md->name->value;
+            if (tci.methods.count(mname)) {
+                unsupported(("`implements " + contract + " for " + tkey + "`: method `" + mname
+                             + "` conflicts with an existing method on the type").c_str(), md->line);
+                continue;
+            }
+            MethodInfo mi;
+            mi.cName        = tkey + "__" + mname;
+            mi.returnType   = md->returnType;
+            mi.params       = paramSigsOf(md->params);
+            mi.node         = md;
+            mi.isConst      = md->isConst;
+            mi.isPlaceReturn = md->isRef;
+            // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
+            // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
+            mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
+            mi.isCtor       = md->isCtor;
+            mi.visibility   = Visibility::Public;   // a contract's methods are public
+            mi.isRetro      = retro;                // emitted static-inline in the header
+            mi.fromContract = contract;             // an injected method, not part of the type's own API
+            // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
+            // only matters when the program uses serde — skip registering it otherwise (the impl itself
+            // is likewise gated off in emitHeaderContent). Every other return scans normally.
+            if (!((contract == "Serialize" || contract == "Deserialize") && isPrimitive && !_usesSerde))
+                scanTypeForCollections(mi.returnType);  // a monomorph named only in an impl sig
+            tci.methods[mname] = mi;
+        }
+    // An EMPTY contract name means "these are the type's OWN methods, declared in its own body" — the
+    // `type enum E implements C { A, B; …methods… }` path, where the members belong to E's API and the
+    // conformance is recorded separately, once per declared contract. Nothing to record here.
+    if (contract.empty()) return;
+    tci.interfaces.push_back(contract);
+    if (retro) tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
+    // Model C: an ENUM implementing a contract (only possible via retro today) needs DYNAMIC dispatch —
+    // mark the contract poly-dispatch so `emitClassInterfaceVtables` emits `<Enum>__as_<C>` despite the
+    // retro skip, enabling `C e = enumVal; e.method()` through a fat pointer + (P2) boxing.
+    if (tci.isVariant) _polyDispatchContracts.insert(contract);
+}
+
+// `type enum E : U implements C, D { A, B; …members… }` — an enum declares conformance inline, like every
+// other kind. Runs AFTER linkContracts() (so `contractMethods` is populated and completeness is checkable)
+// and BEFORE buildVtables(), which is what lets the `<E>__as_<C>` vtbl be emitted from the declaration
+// instead of retrofitted afterwards the way the retroactive path had to.
+//
+// A payload-less enum is a bare C integer with nowhere to hang a method, so declaring members (or a
+// method-carrying contract) PROMOTES it to a variant ClassInfo — an all-payload-less variant emits
+// `struct { Tag tag; }`, no union, so the cost is just the tag.
+void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        _nsCtx = _unitCtx[u.get()];
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
+            if (!ed || !ed->identifier || !ed->identifier->value) continue;
+            bool hasMembers = ed->members && !ed->members->empty();
+            SharedIdentifierList ifaceNodes = ed->baseTypes ? ed->baseTypes->interfaces : SharedIdentifierList();
+            bool hasIfaces = ifaceNodes && !ifaceNodes->empty();
+            if (!hasMembers && !hasIfaces) continue;   // an ordinary enum — the lightweight path, untouched
+
+            const std::string& bare = *ed->identifier->value;
+            if (ed->baseTypes && ed->baseTypes->base)
+                unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
+                             "a contract is declared with `implements`").c_str(), ed->line);
+            if (ed->typeParams && !ed->typeParams->empty()) {
+                unsupported(("`type enum " + bare + "<…>` cannot declare members or contracts yet — a "
+                             "generic enum is a monomorphization template, so each instance would need its "
+                             "own conformance").c_str(), ed->line);
+                continue;
+            }
+            std::string name = qualify(bare);
+
+            // Resolve the declared contracts under the ENUM's own ns context (already active).
+            std::vector<std::string> ifaces;
+            if (hasIfaces) for (auto& i : *ifaceNodes) if (i && i->value) ifaces.push_back(*i->value);
+            resolveInterfaceNames(ifaces, ifaceNodes);
+
+            // Promote a still-plain enum. A tagged/payload enum already has its `_classes` entry.
+            auto ci = _classes.find(name);
+            if (ci == _classes.end()) {
+                if (!_enums.count(name)) continue;   // unknown/errored earlier — already diagnosed
+                _classes[name] = buildVariantClassInfo(ed, name);
+                _enums.erase(name);   // now a tagged class: match/construction take the variant path
+                ci = _classes.find(name);
+            }
+            ClassInfo& eci = ci->second;
+
+            // An enum's layout is its tag plus its variant payloads — there is no struct to add a field
+            // to, and nothing else it could own, so a field or a destructor is a mistake worth naming
+            // rather than dropping silently (injectImplMethods only looks at methods).
+            if (ed->members)
+                for (auto& m : *ed->members) {
+                    if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
+                        unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
+                                     "its tag and its variant payloads; put the data in a variant payload")
+                                    .c_str(), m->line);
+                    else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
+                        unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
+                                     "nothing beyond its payloads, which drop themselves").c_str(), m->line);
+                }
+
+            // The members are the enum's OWN API (empty `contract` — they are declared in its own body),
+            // unlike a retroactive block's, which belong to the contract that carried them in.
+            injectImplMethods(eci, ed->members, /*contract=*/"", name,
+                              /*retro=*/false, /*isPrimitive=*/false);
+            for (auto& c : ifaces) {
+                bool dup = false;
+                for (auto& ex : eci.interfaces) if (ex == c) { dup = true; break; }
+                if (dup) { unsupported(("`" + bare + "` already implements `" + c + "`").c_str(), ed->line); continue; }
+                eci.interfaces.push_back(c);
+                // Dynamic dispatch through a fat pointer + (P2) boxing into `Owned<C>`.
+                if (eci.isVariant) _polyDispatchContracts.insert(c);
+                checkImplCompleteness(eci, c, bare, ed->line);
+            }
+        }
+    }
+}
+
+// The BODIES of the methods a `type enum` declares in its own body. `emitClassDefinitions` is driven by a
+// `ClassDeclarationNode` and an enum has none (classOf skips enums), so its bodies are emitted here — from
+// the enum's own declaration site, alongside its dtor and vtbls. Prototypes come from `emitClassPrototypes`
+// the ordinary way, because these methods are NOT `isRetro` (that flag's whole job is to route a method to
+// the separate retroactive passes instead).
+void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
+{
+    if (!ed || !ed->members) return;
+    ScopedStr _ts(_thisType, eci.name);
+    for (auto& m : *ed->members) {
+        auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
+        if (!md || !md->name || !md->name->value || !md->body) continue;
+        std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
+        line(md->line);
+        _returnIsPlace = md->isRef;
+        emitMethodOrCtorBody(eci.name + "__" + *md->name->value, ret.c_str(),
+                             md->params, md->body, eci, md->isConst,
+                             modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
+        _returnIsPlace = false;
+    }
+}
+
+// Completeness: the impl must supply every method the contract requires.
+void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
+                                     const std::string& tkey, int line)
+{
+    // Phrased over the (type, contract) pair rather than one spelling of the impl, so it reads correctly
+    // whether the conformance was declared on the type or supplied by a retroactive block.
+    if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
+        for (auto& nm : *need)
+            if (!tci.methods.count(nm.name))
+                unsupported(("`" + tkey + "` implements `" + contract + "` but is missing method `"
+                             + nm.name + "` required by the contract").c_str(), line);
+}
+
 // a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
 // public (structural — this is exactly what makes the monomorphized call resolve to a static
 // `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
@@ -8971,8 +9153,7 @@ ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
     // here, but an `EnumDeclarationNode` never reaches that path, so an `implements Serialize for MyEnum`
     // body would otherwise be declared-but-undefined.
     if (ti != _classes.end() && (ti->second.isIntrinsicColl || ti->second.isVariant)) return &ti->second;
-    auto pi = _primConformances.find(tkey);
-    if (pi != _primConformances.end()) return &pi->second;
+    if (ClassInfo* pci = primConformance(tkey)) return pci;
     return nullptr;
 }
 
@@ -12374,11 +12555,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // The concrete type may be a PRIMITIVE whose static conformance lives in `_primConformances`
         // (`int32::deserialize` -> `r.readI32()`), so consider both tables.
         // A bound type-parameter head substitutes to its monomorphized concrete type.
-        if (!_classes.count(typeName) && !_primConformances.count(typeName)) {
+        if (!_classes.count(typeName) && !primConformance(typeName)) {
             auto sit = _typeSubst.find(*qual->back());
             if (sit != _typeSubst.end() && sit->second) {
                 std::string concrete = cType(sit->second);
-                if (_classes.count(concrete) || _primConformances.count(concrete)) typeName = concrete;
+                if (_classes.count(concrete) || primConformance(concrete)) typeName = concrete;
             }
         }
         // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a retro-impl
@@ -12488,7 +12669,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
     bool first = true;
     // A retroactively-conformed PRIMITIVE (`implements Hashable for int32`) takes `this` (= `self`) as the
     // SCALAR by value — `int32_t self`, not `int32_t* self`.
-    if (selfType) { s += std::string(selfType) + (_primConformances.count(selfType) ? " self" : "* self"); first = false; }
+    if (selfType) { s += std::string(selfType) + (primConformance(selfType) ? " self" : "* self"); first = false; }
     if (params) {
         for (auto& p : *params) {
             if (!first) s += ", ";
@@ -13010,7 +13191,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         for (auto& r : ci.retroInterfaces) if (r == ifn) { retro = true; break; }
         if (retro && !isPolyDispatchContract(ifn)) continue;
         auto it = _interfaces.find(ifn);
-        if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.node->line); continue; }
+        if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.declLine()); continue; }
         InterfaceInfo& ii = it->second;
         // the slot casts must MATCH the vtbl struct's slot types EXACTLY, so render the contract's method
         // sigs under the CONTRACT's own name-resolution scope (its imports) — not the implementing unit's.
@@ -13042,16 +13223,16 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                     auto ti = _genericTypes.find(_genericTypeInsts[ci.name].templateKey);
                     present = ti != _genericTypes.end() && ti->second.methods.count(m.name);
                 }
-                if (!present) unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.node->line);
+                if (!present) unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.declLine());
                 continue;
             }
-            if (!mi) { unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.node->line); continue; }
+            if (!mi) { unsupported(("class missing contract method '" + m.name + "'").c_str(), ci.declLine()); continue; }
             // an interface is a PUBLIC contract — a method that satisfies it must be
             // public too (else it's reachable through the interface but not by name: a leak).
             if (mi->visibility != Visibility::Public)
                 unsupported(("method '" + m.name + "' implements contract '" + ii.name
                              + "' and must be declared `public`").c_str(),
-                            mi->node ? mi->node->line : ci.node->line);
+                            mi->node ? mi->node->line : ci.declLine());
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
                  << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";
@@ -15554,7 +15735,7 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
                     // int32/float64/… (`implements Deserialize for int32 { public ctor … deserialize(…) }`),
                     // and they live in `_primConformances`, not `_classes`. The `::` resolver consulted both;
                     // this one only ever needed `_classes` because no other path reached a primitive ctor.
-                    if (_classes.count(ct) || _primConformances.count(ct)) { outType = ct; return true; }
+                    if (_classes.count(ct) || primConformance(ct)) { outType = ct; return true; }
                 }
             }
         }
@@ -15950,10 +16131,9 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // primitive conformance (`format`/`hash`/…) dispatches on any primitive receiver, not just a local.
         std::string primTy = cls;
         if (primTy.empty()) primTy = receiverScalarCType(receiver);
-        auto pit = _primConformances.find(primTy);
-        if (pit != _primConformances.end()) {
+        if (ClassInfo* pci = primConformance(primTy)) {
             ClassInfo* powner = nullptr;
-            MethodInfo* pmi = findMethod(&pit->second, method, &powner);
+            MethodInfo* pmi = findMethod(pci, method, &powner);
             if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call->line); return "0"; }
             return emitReorderedCall(pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
         }
@@ -16396,6 +16576,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     }
     linkBases();
     linkContracts();    // merge refined-parent methods into each contract before vtables are built
+    // `type enum E implements C` — after linkContracts (completeness needs the merged contract methods),
+    // before buildVtables, so a promoted enum's conformance is in place when vtables are built rather than
+    // retrofitted afterwards the way the retroactive path had to be.
+    collectEnumConformances(units);
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
@@ -16433,19 +16617,21 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             if (!ri || !ri->contract || !ri->contract->value || !ri->target || !ri->target->value) continue;
             std::string contract = *ri->contract->value;
             std::string tkey = cType(ri->target);   // string→kama_string, a user type→its mangled name
+            ClassInfo* tcip = nullptr;
             auto ti = _classes.find(tkey);
-            if (ti == _classes.end()) {
+            if (ti != _classes.end()) tcip = &ti->second;
+            else {
                 // A PRIMITIVE target (`int32`, …): it has NO ClassInfo, and it must NOT get one — every
                 // "is this a user type?" test keys on `_classes`, so an entry there would break int
                 // operators/ownership. Hang the injected methods on a SEPARATE `_primConformances` registry
                 // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
                 const std::vector<InterfaceMethod>* cmeths = contractMethods(contract);
                 if (ri->target->builtInVal != 0) {
-                    ClassInfo& pci = _primConformances[tkey];
+                    ClassInfo& pci = primConformanceFor(tkey);
                     pci.name = tkey;
                     pci.kind = TypeKind::Value;
                     pci.isScalarRecv = true;
-                    ti = _primConformances.find(tkey);
+                    tcip = &pci;
                 } else if (_enums.count(tkey) && _enumDeclNodes.count(tkey) && cmeths && !cmeths->empty()) {
                     // Model C: a PLAIN enum retro-implementing a METHOD-CARRYING contract (e.g. `Error`) is
                     // PROMOTED to a tagged-union ClassInfo so it can carry the method, a `<Enum>__as_C` vtbl,
@@ -16457,59 +16643,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     _classes[tkey] = buildVariantClassInfo(_enumDeclNodes[tkey], tkey);
                     _nsCtx = savedNs;
                     _enums.erase(tkey);          // now a tagged class: match/construction use the variant path
-                    ti = _classes.find(tkey);
+                    tcip = &_classes[tkey];
                 } else {
                     unsupported(("`implements " + contract + " for " + *ri->target->value +
                                  "` — unknown target type").c_str(), ri->line);
                     continue;
                 }
             }
-            ClassInfo& tci = ti->second;
+            ClassInfo& tci = *tcip;
             for (auto& ex : tci.interfaces)
                 if (ex == contract) { unsupported(("`" + tkey + "` already implements `" + contract
                                                    + "`").c_str(), ri->line); break; }
-            if (ri->members)
-                for (auto& m : *ri->members) {
-                    auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
-                    if (!md || !md->name || !md->name->value) continue;
-                    std::string mname = *md->name->value;
-                    if (tci.methods.count(mname)) {
-                        unsupported(("retroactive `implements " + contract + " for " + tkey + "`: method `"
-                                     + mname + "` conflicts with an existing method on the type").c_str(), md->line);
-                        continue;
-                    }
-                    MethodInfo mi;
-                    mi.cName        = tkey + "__" + mname;
-                    mi.returnType   = md->returnType;
-                    mi.params       = paramSigsOf(md->params);
-                    mi.node         = md;
-                    mi.isConst      = md->isConst;
-                    mi.isPlaceReturn = md->isRef;
-                    // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
-                    // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
-                    mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
-                    mi.isCtor       = md->isCtor;
-                    mi.visibility   = Visibility::Public;   // a contract's methods are public
-                    mi.isRetro      = true;                 // emitted static-inline in the header (below)
-                    // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
-                    // only matters when the program uses serde — skip registering it otherwise (the impl itself
-                    // is likewise gated off in emitHeaderContent). Every other retro return scans normally.
-                    if (!((contract == "Serialize" || contract == "Deserialize") && ri->target->builtInVal != 0 && !_usesSerde))
-                        scanTypeForCollections(mi.returnType);  // register a monomorph named only in a retro sig (e.g. `Result<T, Owned<Error>>`)
-                    tci.methods[mname] = mi;
-                }
-            tci.interfaces.push_back(contract);
-            tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
-            // Model C: an ENUM implementing a contract (only possible via retro) needs DYNAMIC dispatch —
-            // mark the contract poly-dispatch so `emitClassInterfaceVtables` emits `<Enum>__as_<C>` despite
-            // the retro skip below, enabling `C e = enumVal; e.method()` through a fat pointer + (P2) boxing.
-            if (tci.isVariant) _polyDispatchContracts.insert(contract);
-            // Completeness: the impl must supply every method the contract requires.
-            if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
-                for (auto& nm : *need)
-                    if (!tci.methods.count(nm.name))
-                        unsupported(("`implements " + contract + " for " + tkey + "` is missing method `"
-                                     + nm.name + "` required by the contract").c_str(), ri->line);
+            injectImplMethods(tci, ri->members, contract, tkey,
+                              /*retro=*/true, /*isPrimitive=*/ri->target->builtInVal != 0);
+            checkImplCompleteness(tci, contract, tkey, ri->line);
         }
     }
     // discover generic-function instantiations after collections (a specialization may use
@@ -16922,6 +17069,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             scopeOf(eci.scope, eci.usings, eci.symbolAliases);
             if (eci.destructible) emitDtorDefinition(eci);
             emitClassInterfaceVtables(eci);
+            emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
             if (eci.methods.count("serialize")   && eci.methods["serialize"].isSynthSer)   emitEnumSerializeDefinition(eci);
             if (eci.methods.count("deserialize") && eci.methods["deserialize"].isSynthDe)   emitEnumDeserializeDefinition(eci);
         }
@@ -17144,6 +17292,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                     // enum retro-implements (classOf skips enums, so the class-vtbl loop above missed it). The
                     // header carries the matching `extern` decl. Enables dynamic dispatch + (P2) boxing.
                     emitClassInterfaceVtables(eci);
+                    // The bodies of the methods this enum declares in its own body (`type enum E
+                    // implements C { A, B; … }`). Same reason as the serde bodies below: classOf skips
+                    // enums, so the per-class definition loop never reaches them.
+                    emitEnumMemberBodies(eci, ed);
                     // `@generate` enum serde — bodies land in the home module (protos are in the header via
                     // emitClassPrototypes; classOf skips enums, so emit here alongside the dtor). The unit's
                     // scope is already active (_nsCtx = _unitCtx above), so payload types resolve.

@@ -122,10 +122,14 @@ struct VariantCase {
 
 // A type's ownership kind. `Value` owns nothing (copies); `Resource` owns/has identity (moves,
 // RAII-dropped); `Contract` is the interface path (handled via InterfaceInfo) — these three come
-// from a user `type <kind> Name` marker. `Intrinsic` is the neutral kind for compiler-built types
-// with no marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their
-// own machinery (isIntrinsicColl/isSmartPtr/isVariant + destructibility), not the kind.
-enum class TypeKind { Value, Resource, Contract, Intrinsic };
+// from a user `type <kind> Name` marker. `Neutral` is the kind for compiler-built types with no
+// marker (collections, smart-ptrs, tagged-union enums); their ownership is driven by their own
+// machinery (isIntrinsicColl/isSmartPtr/isVariant + destructibility), not the kind.
+//
+// NOTE `Neutral` is unrelated to the `type intrinsic <…> implements C` SURFACE syntax, which confers
+// a contract on a primitive and creates no ClassInfo in `_classes` at all. It was spelled `Intrinsic`
+// until that syntax existed; the two never named the same concept.
+enum class TypeKind { Value, Resource, Contract, Neutral };
 
 struct MethodInfo {
     std::string                  cName;   // Class__method (declaring class)
@@ -147,6 +151,10 @@ struct MethodInfo {
     bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
                                                       // emitted static-inline in the header, skipped by the
                                                       // per-class proto/body loops (avoids a dup for a user target)
+    // The contract this method came from, empty for a method declared in the type's OWN body. It is what
+    // separates an injected method from a native one sharing a ClassInfo — `string` carries an injected
+    // `compareTo` beside its built-in `equals` — which is the discriminator the contract-scope rule needs.
+    std::string                  fromContract;
     // Compiler-synthesized by-value serialization (a `@generate` tree struct with no hand impl). `node` is
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
     bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
@@ -219,7 +227,7 @@ struct CtorInfo {
 
 struct ClassInfo {
     std::string                       name;       // struct name (== kama class name)
-    TypeKind                          kind = TypeKind::Intrinsic;   // set to value/resource for user types
+    TypeKind                          kind = TypeKind::Neutral;   // set to value/resource for user types
     // `type view` — a non-escaping, stack-only borrow (C# `ref struct`): codegens like a `value`
     // (inline, owns nothing, no dtor) but the escape checker forbids it as a return/field/collection
     // element (like a `contract`). It borrows raw `Ptr<T>` it does not own; see isNonEscapingBorrow.
@@ -255,6 +263,12 @@ struct ClassInfo {
     CtorInfo*       ctorByName(const std::string& n)       { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
     const CtorInfo* ctorByName(const std::string& n) const { auto it = ctors.find(n); return it == ctors.end() ? nullptr : &it->second; }
     ClassDeclarationNode*             node    = nullptr;
+    // An enum promoted to a variant ClassInfo has NO `ClassDeclarationNode` — its declaration site is an
+    // `EnumDeclarationNode`. Anything reaching for a line number or a member list must consult this when
+    // `node` is null, or it dereferences null (which `emitClassInterfaceVtables` did for an unknown
+    // contract on an enum).
+    EnumDeclarationNode*              enumNode = nullptr;
+    int  declLine() const;   // out-of-line: both node types are only forward-declared here
 
     // RAII
     bool                              hasDtor = false;   // declares its own ~dtor
@@ -844,6 +858,15 @@ private:
     // (an entry there would make every "user type?" test treat the primitive as a struct). Keyed by the
     // primitive cType (int32_t); the ClassInfo holds only the injected methods + `isScalarRecv`.
     std::map<std::string, ClassInfo>     _primConformances;
+    // The ONE way in. Every read/write of `_primConformances` goes through these three, so the key's
+    // identity lives in exactly one place — re-keying it (cType -> kama type name, which is what lets
+    // `char` and `uint32` hold distinct conformances instead of colliding on `uint32_t`) becomes a change
+    // here rather than a sweep of eight call sites.
+    ClassInfo*       primConformance(const std::string& key)
+                     { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
+    const ClassInfo* primConformance(const std::string& key) const
+                     { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
+    ClassInfo&       primConformanceFor(const std::string& key) { return _primConformances[key]; }   // creates
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
     // Pre-scanned retroactive conformances: target cType -> the contracts a top-level `implements C for T`
     // grants it. Populated before the collection pass so a generic-type-arg bound check that fires during
@@ -1036,6 +1059,29 @@ private:
     void emitEnum(EnumInfo& ei);
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     void collectClasses(SharedCompilationUnit unit);
+
+    // Contract-conformance plumbing, shared by every path that grants a type a contract. Today only the
+    // retroactive `implements C for T` block calls these; `type enum X implements C` and
+    // `type intrinsic <…> implements C` join them as those spellings land, which is the whole reason
+    // they are functions rather than an inline loop in `collectProgram`.
+    //
+    // `retro` = the conformance dispatches STATICALLY (recorded in `retroInterfaces`, so no fat-pointer
+    // vtable is emitted for it). `isPrimitive` gates the serde-return collection scan the way the retro
+    // path did: a primitive's `Result<scalar, Owned<Error>>` monomorph only matters when serde is used.
+    // `type enum E implements C { A, B; …members… }` — promote, inject, record, check. Between
+    // linkContracts() (needs contractMethods) and buildVtables().
+    void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
+    void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
+    void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
+                           const std::string& contract, const std::string& tkey,
+                           bool retro, bool isPrimitive);
+    // The impl must supply every method the contract requires.
+    void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
+                               const std::string& tkey, int line);
+    // Resolve a parallel (names, AST nodes) interface list in place: qualify each name against the
+    // current ns context, and mangle a generic contract to its specialized instance (Iterator ->
+    // Iterator_int32) using the generic args that only survive on the node.
+    void resolveInterfaceNames(std::vector<std::string>& names, SharedIdentifierList nodes);
 
     // Collections: discover used Coll<T> instantiations, register a synthetic
     // ClassInfo + CollectionInfo for each, and emit the C-template macro lines.

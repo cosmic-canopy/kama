@@ -1046,6 +1046,12 @@ public:
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default
     SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)
+    // `type enum E : uint8 implements C, D { A, B; …methods… }` — the conformance clause and the members
+    // that satisfy it. An enum is a full type kind, so it declares conformance inline like every other
+    // kind; before this it had no `class_base_opt` at all and needed a retroactive `implements C for E`.
+    // `extends` is rejected by the emitter (an enum has no base), as are fields and a destructor.
+    SharedClassBaseDeclaration baseTypes;
+    SharedClassMemberDeclarationList members;   // methods/consts after the `;`; null when the body has none
     EnumDeclarationNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifier identifier, SharedEnumMemberDeclarationList body)
         : ASTNode(context),  StatementNode(context)
         , modifiers(modifiers)

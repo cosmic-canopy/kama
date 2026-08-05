@@ -268,20 +268,39 @@ module.exports = grammar({
       ),
 
     // ── Enums ───────────────────────────────────────────────────────────────────────────────────────
+    // `type enum Name<T> : IntType implements C { A, B(payload…); …members… }`. An enum is a type kind
+    // like any other, so it takes the `type` marker and a `class_base` — before that it had neither and
+    // needed a retroactive `implements C for E` to gain a contract. `type` is optional here only while
+    // the tree migrates; the bare form goes away with the last `enum X` in the repo.
     enum_declaration: ($) =>
       seq(
         optional($.attribute_list),
+        optional('type'),
         repeat($.modifier),
         'enum',
         field('name', $.type_declaration_head),
         optional(seq(':', field('underlying', $.primitive_type))),
+        optional(field('base', $.class_base)),
         field('body', $.enum_body),
         optional(';'),
       ),
 
-    // A trailing comma is allowed (kama.y:1088).
+    // A trailing comma is allowed. A `;` after the variants opens an ordinary class-member list — the
+    // methods that satisfy the declared contract. The separator is MANDATORY: without it a bare `Foo`
+    // variant and a `Foo bar;` field are indistinguishable at one token of lookahead (kama.y says the
+    // same, which is why the four alternatives there are spelled out rather than folded into an `_opt`).
     enum_body: ($) =>
-      seq('{', optional(seq(commaSep1($.enum_member), optional(','))), '}'),
+      seq(
+        '{',
+        optional(
+          seq(
+            commaSep1($.enum_member),
+            optional(','),
+            optional(seq(';', repeat($._class_member))),
+          ),
+        ),
+        '}',
+      ),
 
     enum_member: ($) =>
       seq(

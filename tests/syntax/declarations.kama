@@ -33,6 +33,15 @@ enum Color {
     Green
 }
 
+// An enum under the `type` marker, declaring conformance inline and carrying the method that satisfies
+// it after the `;`. Both keywords must scope as keywords, and the member must scope like a class member.
+type enum Level implements Error {
+    Warn,
+    Fatal;
+
+    public fn string message() { return "lvl"; }
+}
+
 // `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 @compileFor(HOSTED)
 fn int32 twice(int32 n) { return n + n; }

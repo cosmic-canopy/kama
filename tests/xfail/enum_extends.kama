@@ -1,0 +1,7 @@
+// An enum has no base type; `implements` is the only base-clause form it accepts.
+type value Thing { public fn int32 f() { return 1; } }
+type enum Bad extends Thing {
+    A, B;
+    public fn int32 g() { return 2; }
+}
+fn int32 main() { return 0; }

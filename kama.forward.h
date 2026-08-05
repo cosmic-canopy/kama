@@ -130,6 +130,17 @@ typedef std::shared_ptr<EnumMemberDeclarationList> SharedEnumMemberDeclarationLi
 typedef std::shared_ptr<FunctionDeclarationList> SharedFunctionDeclarationList;
 typedef std::shared_ptr<ClassMemberDeclarationList> SharedClassMemberDeclarationList;
 
+// An enum's body carries TWO lists: its variants, and — after the mandatory `;` separator — ordinary
+// class members, the methods a `type enum X implements C` needs to satisfy C. A small holder rather
+// than a node because the parser's `%union` is a struct of shared_ptrs and one production has to yield
+// both lists at once. The `;` is what makes the body LALR(1): without it a bare `Foo` variant and a
+// `Foo bar;` field are indistinguishable at one token of lookahead.
+struct EnumBody {
+    SharedEnumMemberDeclarationList  variants;
+    SharedClassMemberDeclarationList members;
+};
+typedef std::shared_ptr<EnumBody> SharedEnumBody;
+
 typedef std::shared_ptr<CompilationUnit> SharedCompilationUnit;
 typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
 

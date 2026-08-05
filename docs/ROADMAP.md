@@ -248,6 +248,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   CHARACTER through a compiler fast path, but a `char` reaching those contracts through a GENERIC bound
   renders (and serializes) as its numeric scalar. Fix = key the registry by kama type rather than cType, or
   give `char` a distinct C typedef. The JSON backend now reads and writes `char` correctly either way.
+- **A value-producing `match` over an `enum X : IntType` does not compile (small, self-contained).** The
+  explicit underlying type makes the tag a plain `uint8_t`/`int16_t`/… rather than a C `enum`, so the C
+  compiler cannot prove the emitted `switch` exhaustive and rejects the uninitialized match temp
+  (`kama_string __match1;` — `emitValueMatch`, [kama.cemit.cpp](../kama.cemit.cpp), the temp declared just
+  before `emitMatchSwitch`). Reproduces on a bare `enum Color : uint8 { Red, Green, Blue }` with no
+  contract and no `type` marker; a statement-form `match` is unaffected, and so is the same enum without
+  the `: IntType`. Fix = emit a `default:` arm for a plain-integer tag (kama has already checked
+  exhaustiveness), rather than zero-initializing every match temp — which would cost every match in every
+  program. Found while building the contract-model campaign's enum fixtures; `tests/enum_implements.kama`
+  works around it with a statement match and says so.
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.

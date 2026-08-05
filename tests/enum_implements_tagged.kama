@@ -1,0 +1,43 @@
+// The payload-carrying half of enum_implements.kama, plus the plainer capability the same grammar opens:
+// an enum is a type kind, so it may simply HAVE methods, whether or not they satisfy a contract.
+//
+//   - `Reading` declares members and NO contract  — methods are just methods.
+//   - `DiskError` declares a contract over payload variants — the impl reads its own payload, and the
+//     enum is still boxed and dispatched through `Error` dynamically.
+
+type enum Reading {
+    Ok(int32 value), Failed(int32 code);
+
+    public fn int32 magnitude() {
+        return match (this) { case Ok(value: v): v; case Failed(code: c): 0 - c; };
+    }
+    // A second method, to prove members are an ordinary list rather than a single special slot.
+    public fn bool isOk() { return match (this) { case Ok(value: v): true; case Failed(code: c): false; }; }
+}
+
+type enum DiskError implements Error {
+    Full(int32 bytes), Missing;
+
+    public fn string message() {
+        return match (this) {
+            case Full(bytes: b): "full";   // 4
+            case Missing:        "gone";   // 4
+        };
+    }
+}
+
+fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }
+
+fn int32 main() {
+    Reading a = Reading::Ok(value: 7);
+    Reading b = Reading::Failed(code: 3);
+    int32 r = a.magnitude();            // 7
+    r = r + b.magnitude();              // 7 + (-3) = 4
+    if (a.isOk())  { r = r + 10; }      // 14
+    if (b.isOk())  { r = r + 100; }     // not taken
+    DiskError d = DiskError::Full(bytes: 512);
+    r = r + describe(e: d);             // 14 + 4 = 18
+    DiskError m = DiskError::Missing;
+    r = r + describe(e: m);             // 18 + 4 = 22
+    return r;
+}

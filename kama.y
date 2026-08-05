@@ -35,6 +35,9 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
     SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
     SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
+SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList attributes,
+    SharedModifierList modifiers, SharedIdentifier head, SharedIdentifier underlying,
+    SharedClassBaseDeclaration base, SharedEnumBody body);
 
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
 
@@ -153,6 +156,7 @@ struct kamayystype {
   SharedAttributeList attributelist;
   SharedExpressionList expressionlist;
   SharedEnumMemberDeclarationList enummemberdecllist;
+  SharedEnumBody enumbody;   // an enum body's two lists (variants + post-`;` class members)
   SharedFunctionDeclarationList functiondecllist;
   SharedClassMemberDeclarationList classmemberdecllist;
   
@@ -303,7 +307,8 @@ struct kamayystype {
 %type <attribute> attribute
 %type <attributelist> attribute_list
 %type <enummemberdecl> enum_member_declaration
-%type <enummemberdecllist> enum_body enum_member_declarations_opt enum_member_declarations
+%type <enummemberdecllist> enum_member_declarations_opt enum_member_declarations
+%type <enumbody> enum_class_body
 %type <classbasedecl> class_base_opt class_base
 %type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
@@ -1621,57 +1626,46 @@ destructor_declaration
                               Enum 
 ------------------------------------------------------------------------------*/
 
-/* `enum Name<T> : IntType { A, B(payload…) }`. The head reuses `type_decl_head` (so
-   generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
-   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
+/* `type enum Name<T> : IntType implements C { A, B(payload…); …methods… }`. The head reuses
+   `type_decl_head` (so generic enums parse exactly like generic types); an optional `: IntType` pins the
+   underlying integer / tag width; members may carry a named payload (below) making the enum a tagged
+   union. Like every other kind an enum takes `class_base_opt`, so it declares its conformance inline —
+   and the methods satisfying that contract follow the variants after a `;`.
+
+   `enum` is a RESERVED token (unlike the contextual kind words `value`/`resource`/`view`/`contract`),
+   so `TYPE ENUM …` is its own production rather than another arm of `marked_type_declaration`; that is
+   also what keeps the two apart with no conflict. All four alternatives (attributed × `type`-marked)
+   delegate to `makeEnumDeclaration`. */
 enum_declaration
-  : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
-    { auto n = std::make_shared<EnumDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $5);
-      n->underlyingType = $4;
-      /* Same param/bounds capture as marked_type_declaration: strip the head's genericArgs so the
-         enum NAME stays bare `Optional`, keeping names + bounds on the node. */
-      if ($3->genericArgs && !$3->genericArgs->empty()) {
-          n->typeParams = std::make_shared<StringList>();
-          n->typeBounds = std::make_shared<BoundsList>();
-          n->constParams = std::make_shared<StringList>();
-          n->typeDefaults = std::make_shared<IdentifierList>();
-          for (auto& a : *$3->genericArgs) if (a && a->value) {
-              n->typeParams->push_back(a->value);
-              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
-              n->typeDefaults->push_back(a->defaultArg);
-              if (a->isConstParam) n->constParams->push_back(a->value);
-          }
-          $3->genericArgs = SharedIdentifierList();
-          $3->genericArg  = SharedIdentifier();
-      }
-      $$ = n; }
-  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
-    { auto n = std::make_shared<EnumDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $4, $6);
-      n->underlyingType = $5;
-      n->attributes = $1;   /* `@generate(Serialize, Deserialize) enum …` */
-      if ($4->genericArgs && !$4->genericArgs->empty()) {
-          n->typeParams = std::make_shared<StringList>();
-          n->typeBounds = std::make_shared<BoundsList>();
-          n->constParams = std::make_shared<StringList>();
-          n->typeDefaults = std::make_shared<IdentifierList>();
-          for (auto& a : *$4->genericArgs) if (a && a->value) {
-              n->typeParams->push_back(a->value);
-              n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
-              n->typeDefaults->push_back(a->defaultArg);
-              if (a->isConstParam) n->constParams->push_back(a->value);
-          }
-          $4->genericArgs = SharedIdentifierList();
-          $4->genericArg  = SharedIdentifier();
-      }
-      $$ = n; }
+  : modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $1, $3, $4, $5, $6); }
+  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $2, $4, $5, $6, $7); }   /* `@generate(...) enum …` */
+  | TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $4, $5, $6, $7); }
+  | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }
   ;
 enum_underlying_opt
   : /* Nothing */        { $$ = SharedIdentifier(); }
   | COLON integral_type  { $$ = $2; }
   ;
-enum_body
-  : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE   { $$ = $2; }
-  | LEFT_BRACE enum_member_declarations COMMA RIGHT_BRACE   { $$ = $2; }
+/* Four explicit alternatives rather than an `_opt` tail, for two reasons, both LALR(1):
+   - the `;` separator is MANDATORY before class members. Without it `{ Foo bar; }` is ambiguous at one
+     token of lookahead — `Foo` reduces as a variant, or begins a `Foo bar;` field. With it, class
+     members are reachable only after SEMICOLON and no state admits both.
+   - spelling the trailing comma out (rather than a `comma_opt` nonterminal) keeps the "is this comma a
+     list separator or the body terminator?" decision inside one production, exactly as the original
+     `enum_body` did. */
+enum_class_body
+  : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE
+    { $$ = std::make_shared<EnumBody>(); $$->variants = $2; }
+  | LEFT_BRACE enum_member_declarations COMMA RIGHT_BRACE
+    { $$ = std::make_shared<EnumBody>(); $$->variants = $2; }
+  | LEFT_BRACE enum_member_declarations SEMICOLON class_member_declarations_opt RIGHT_BRACE
+    { $$ = std::make_shared<EnumBody>(); $$->variants = $2; $$->members = $4; }
+  | LEFT_BRACE enum_member_declarations COMMA SEMICOLON class_member_declarations_opt RIGHT_BRACE
+    { $$ = std::make_shared<EnumBody>(); $$->variants = $2; $$->members = $5; }
   ;
 enum_member_declarations_opt
   : /* Nothing */   { $$ = std::make_shared<EnumMemberDeclarationList>(); }
@@ -1713,6 +1707,37 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
             n->typeParams->push_back(a->value);
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
             n->typeDefaults->push_back(a->defaultArg);   // null when this param has no `= Default`
+            if (a->isConstParam) n->constParams->push_back(a->value);
+        }
+        head->genericArgs = SharedIdentifierList();
+        head->genericArg  = SharedIdentifier();
+    }
+    return n;
+}
+
+// Build an `EnumDeclarationNode` from the shared parts of every enum spelling (attributed or not,
+// `type`-marked or not). Captures generic params/bounds off the head and strips them so the enum NAME
+// stays bare (`Optional`/`Result`) — the same contract `makeTypeDeclaration` honors, and previously
+// copy-pasted into each enum alternative.
+SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList attributes,
+    SharedModifierList modifiers, SharedIdentifier head, SharedIdentifier underlying,
+    SharedClassBaseDeclaration base, SharedEnumBody body)
+{
+    auto n = std::make_shared<EnumDeclarationNode>(context, modifiers, head,
+                 body ? body->variants : SharedEnumMemberDeclarationList());
+    n->underlyingType = underlying;
+    n->attributes     = attributes;
+    n->baseTypes      = base;
+    n->members        = body ? body->members : SharedClassMemberDeclarationList();
+    if (head->genericArgs && !head->genericArgs->empty()) {
+        n->typeParams   = std::make_shared<StringList>();
+        n->typeBounds   = std::make_shared<BoundsList>();
+        n->constParams  = std::make_shared<StringList>();
+        n->typeDefaults = std::make_shared<IdentifierList>();
+        for (auto& a : *head->genericArgs) if (a && a->value) {
+            n->typeParams->push_back(a->value);
+            n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
+            n->typeDefaults->push_back(a->defaultArg);
             if (a->isConstParam) n->constParams->push_back(a->value);
         }
         head->genericArgs = SharedIdentifierList();

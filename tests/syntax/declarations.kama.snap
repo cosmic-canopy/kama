@@ -133,6 +133,49 @@
 >}
 #^^ source.kama
 >
+>// An enum under the `type` marker, declaring conformance inline and carrying the method that satisfies
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// it after the `;`. Both keywords must scope as keywords, and the member must scope like a class member.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>type enum Level implements Error {
+#^^^^ source.kama keyword.other.kama
+#    ^ source.kama
+#     ^^^^ source.kama storage.type.kama
+#         ^ source.kama
+#          ^^^^^ source.kama entity.name.type.kama
+#               ^ source.kama
+#                ^^^^^^^^^^ source.kama keyword.other.kama
+#                          ^ source.kama
+#                           ^^^^^ source.kama entity.name.type.kama
+#                                ^^^ source.kama
+>    Warn,
+#^^^^ source.kama
+#    ^^^^ source.kama entity.name.type.kama
+#        ^^ source.kama
+>    Fatal;
+#^^^^ source.kama
+#    ^^^^^ source.kama entity.name.type.kama
+#         ^^ source.kama
+>
+>    public fn string message() { return "lvl"; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^ source.kama keyword.other.kama
+#             ^ source.kama
+#              ^^^^^^ source.kama storage.type.primitive.kama
+#                    ^ source.kama
+#                     ^^^^^^^ source.kama entity.name.function.kama
+#                            ^^^^^ source.kama
+#                                 ^^^^^^ source.kama keyword.control.kama
+#                                       ^ source.kama
+#                                        ^ source.kama string.quoted.double.kama
+#                                         ^^^ source.kama string.quoted.double.kama
+#                                            ^ source.kama string.quoted.double.kama
+#                                             ^^^^ source.kama
+>}
+#^^ source.kama
+>
 >// `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >@compileFor(HOSTED)

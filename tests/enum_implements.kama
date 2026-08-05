@@ -1,0 +1,49 @@
+// An enum declares its conformance INLINE — `type enum E implements C { variants; methods }` — instead of
+// through a retroactive `implements C for E` block. An enum is a full type kind, so it takes the same
+// `implements` clause every other kind takes; before this it had no such clause at all, which is the only
+// reason retro-impl was mandatory for it.
+//
+// Covers both halves that used to need the lazy "Model C" promotion: a payload-less enum gains a real
+// ClassInfo so it can carry a method, and it gains an `<E>__as_Error` vtbl so ONE `Error`-typed call site
+// dispatches to the right impl at runtime. Distinct message lengths prove the dispatch is dynamic rather
+// than a static collapse. Kept < 256 so the exit code isn't truncated.
+//
+// The counterpart with payload variants is enum_implements_tagged.kama.
+
+type enum IoError implements Error {
+    NotFound, Denied;
+
+    public fn string message() {
+        return match (this) {
+            case NotFound: "nf";      // 2
+            case Denied:   "denied";  // 6
+        };
+    }
+}
+
+// Also pins the tag width. NOTE the statement-match-with-returns rather than a value-producing match: a
+// value match over an enum with an explicit `: IntType` hits a PRE-EXISTING codegen bug (the match temp is
+// left uninitialized and clang cannot prove a plain-integer switch exhaustive). Unrelated to conformance —
+// it reproduces on a bare `enum X : uint8` with no contract and no `type` marker at all.
+type enum ParseError : uint8 implements Error {
+    BadToken, Eof;
+
+    public fn string message() {
+        match (this) {
+            case BadToken: { return "bad"; }   // 3
+            case Eof:      { return "eof"; }   // 3
+        };
+        return "?";
+    }
+}
+
+// One monomorphic function over the base contract — the vtbl is what makes `.message()` dynamic.
+fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }
+
+fn int32 main() {
+    IoError a    = IoError::NotFound;
+    ParseError b = ParseError::BadToken;
+    IoError c    = IoError::Denied;
+    // 2*100 + 3*10 + 6 = 236 — only correct if each dispatched to its own impl.
+    return describe(e: a) * 100 + describe(e: b) * 10 + describe(e: c);
+}

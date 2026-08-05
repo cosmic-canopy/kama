@@ -1,0 +1,7 @@
+// An enum's layout is its tag plus its variant payloads — there is no struct to add a field to.
+type enum Bad implements Error {
+    A, B;
+    int32 count;
+    public fn string message() { return "x"; }
+}
+fn int32 main() { return 0; }
