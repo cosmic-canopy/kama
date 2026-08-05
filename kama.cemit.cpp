@@ -5188,6 +5188,10 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         case IDENTIFIER_BOOL_VAL:    return "bool";
         case IDENTIFIER_FLOAT32_VAL: return "float32";
         case IDENTIFIER_FLOAT64_VAL: return "float64";
+        // A source-spelled `char` used to survive on the `default:` arm (resolveUserName("char") finds no
+        // user type and hands the spelling back), but a char LITERAL argument synthesizes its type node
+        // (primTypeNode) with an empty `value` — which mangled to "" and gave one type two monomorphs.
+        case IDENTIFIER_CHAR_VAL:    return "char";
         default: {  // class / generic element — resolve to its mangled name (the suffix)
             if (!elem->value) return "void";
             // M6 B3h: pass the SITE. A generic ARGUMENT (`Sp` in `Owned<Sp>`, `Circle` in
@@ -9279,6 +9283,15 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
     return out;
 }
 
+// The C symbol of an impl-injected method. `injectImplMethods` already minted it, so the three emission
+// passes read it back instead of each re-deriving `<target>__<method>` — the target's `name` is its C type,
+// which is NOT what the symbol is prefixed with once two kama types share one C type (`char`/`uint32`).
+std::string CEmitter::implMethodCName(ClassInfo& tci, const std::string& method)
+{
+    auto it = tci.methods.find(method);
+    return it != tci.methods.end() ? it->second.cName : tci.name + "__" + method;
+}
+
 // Completeness: the impl must supply every method the contract requires.
 void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                      const std::string& tkey, int line)
@@ -12817,13 +12830,14 @@ bool CEmitter::paramIsOut(FunctionParameterNode* p)
 // C parameter list. ref/out parameters become pointers. When selfType is set,
 // a leading `selfType* self` is prepended (for methods/constructors).
 std::string CEmitter::paramListC(SharedParameterList params, const char* selfType,
-                                 const char* ownerCType)
+                                 const char* ownerCType, bool selfByValue)
 {
     std::string s;
     bool first = true;
-    // A retroactively-conformed PRIMITIVE (`implements Hashable for int32`) takes `this` (= `self`) as the
-    // SCALAR by value — `int32_t self`, not `int32_t* self`.
-    if (selfType) { s += std::string(selfType) + (primConformance(selfType) ? " self" : "* self"); first = false; }
+    // A conformed PRIMITIVE (`type intrinsic <int32> implements Hashable`) takes `this` (= `self`) as the
+    // SCALAR by value — `int32_t self`, not `int32_t* self`. The caller reads that off the target's
+    // `isScalarRecv`; `selfType` is a C type and can no longer answer the question by itself.
+    if (selfType) { s += std::string(selfType) + (selfByValue ? " self" : "* self"); first = false; }
     if (params) {
         for (auto& p : *params) {
             if (!first) s += ", ";
@@ -13494,7 +13508,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         // a place-returning `ref T operator[]` returns a `T*` (the place); everything else by value.
         std::string retC = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
         *_out << stat << retC << " " << mi.cName << "("
-             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str()) << ");\n";   // static/free: no self
+             << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
+                           ci.isScalarRecv) << ");\n";   // static/free: no self
     }
     if (ci.isGraphNode)
         emitGraphNodeHelperProtos(ci);   // graph node-helper prototypes (Phase D)
@@ -13632,7 +13647,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     }
 
     *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
-          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str()) << ")\n{\n";   // static: no self
+          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
+                               owner.isScalarRecv) << ")\n{\n";   // static: no self
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
 
@@ -16086,26 +16102,35 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     return "";
 }
 
-// True iff `e`'s kama type is `char` — a char literal, an identifier/param/foreach binding, or a struct field.
-// `char` and `uint32` share the C type `uint32_t`, so `_primConformances` (cType-keyed) can't hold a distinct
-// char `Format`; this consults the KAMA type node so an interpolation hole `${c}` renders its CHARACTER (via
-// `writeChar`) rather than `uint32`'s numeric conformance.
-bool CEmitter::exprIsChar(SharedExpression e)
+// The exact KAMA type node behind a place expression — an identifier (local/param/foreach binding) or a
+// field reached through an instance. This is the only channel that keeps `char` distinct from `uint32`,
+// which share the C type `uint32_t`: `_localCTypes` and `receiverScalarCType` have already erased it.
+// Null when the expression is neither shape, or when nothing recorded a type node for it.
+SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
 {
-    if (!e) return false;
+    if (!e) return SharedIdentifier();
     ASTNode* n = e.get();
-    if (dynamic_cast<CharNode*>(n)) return true;
-    SharedIdentifier ty;
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) ty = it->second; }
+        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
     } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner) for (auto& f : owner->fields)
-                if (f.name == *ma->identifier->value) { ty = f.type; break; }
+                if (f.name == *ma->identifier->value) return f.type;
         }
     }
+    return SharedIdentifier();
+}
+
+// True iff `e`'s kama type is `char` — a char literal, an identifier/param/foreach binding, or a struct field.
+// Consults the KAMA type node so an interpolation hole `${c}` renders its CHARACTER (via `writeChar`) rather
+// than going through the numeric formatting path.
+bool CEmitter::exprIsChar(SharedExpression e)
+{
+    if (!e) return false;
+    if (dynamic_cast<CharNode*>(e.get())) return true;
+    SharedIdentifier ty = receiverTypeNode(e);
     return ty && !ty->genericArg && ty->builtInVal == IDENTIFIER_CHAR_VAL;
 }
 
@@ -16116,18 +16141,7 @@ bool CEmitter::exprIsChar(SharedExpression e)
 int CEmitter::holeBuiltinType(SharedExpression e)
 {
     if (!e) return 0;
-    SharedIdentifier ty;
-    ASTNode* n = e.get();
-    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) ty = it->second; }
-    } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
-        std::string recv = exprClass(ma->expression);
-        if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
-            ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
-            if (owner) for (auto& f : owner->fields)
-                if (f.name == *ma->identifier->value) { ty = f.type; break; }
-        }
-    }
+    SharedIdentifier ty = receiverTypeNode(e);
     if (ty && !ty->genericArg && ty->builtInVal) return ty->builtInVal;
     std::string ct = receiverScalarCType(e);
     if (ct == "int8_t")   return IDENTIFIER_INT8_VAL;
@@ -17100,10 +17114,6 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // retro-impls (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
     // Skip an ungated serde retro-impl: the prelude's primitive `Serialize`/`Deserialize` conformances are
     // emitted only when `_usesSerde` (see the collect-time gate). All other retro-impls always emit.
-    auto skipUngatedSerde = [&](RetroactiveImplNode* ri) {
-        return !_usesSerde && ri->contract && ri->contract->value &&
-               (*ri->contract->value == "Serialize" || *ri->contract->value == "Deserialize");
-    };
     auto emitRetroProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
         for (auto& u : us) {
             if (!u || !u->codeDeclarationList) continue;
@@ -17117,8 +17127,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                     // a `static` impl method (or a `ctor` — always static) has no implicit `self` receiver
                     const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr
                                                                                        : e.target->name.c_str();
-                    *_out << stat << ret << " " << e.target->name << "__" << *md->name->value << "("
-                          << paramListC(md->params, recv) << ");\n";
+                    *_out << stat << ret << " " << implMethodCName(*e.target, *md->name->value) << "("
+                          << paramListC(md->params, recv, nullptr, e.target->isScalarRecv) << ");\n";
                 }
             }
         }
@@ -17254,7 +17264,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
                 line(md->line);
                 _returnIsPlace = md->isRef;
-                emitMethodOrCtorBody(e.target->name + "__" + *md->name->value, ret.c_str(),
+                emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
                 _returnIsPlace = false;
@@ -17419,7 +17429,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
             line(md->line);
             _returnIsPlace = md->isRef;
-            emitMethodOrCtorBody(e.target->name + "__" + *md->name->value, ret.c_str(),
+            emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
             _returnIsPlace = false;

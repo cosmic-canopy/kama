@@ -1077,6 +1077,7 @@ private:
     // names this target overriding them method-for-method.
     SharedClassMemberDeclarationList intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target);
     void applyIntrinsicImpl(IntrinsicImplNode* n);   // validate + inject, once per target
+    std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
     // One (target, members) pair per thing an impl block contributes — a retroactive block gives one, a
     // `type intrinsic` set gives one per target. The three emission passes (prototypes, prelude bodies,
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
@@ -1479,8 +1480,11 @@ private:
     bool paramIsOut(FunctionParameterNode* p);   // `out` — the write-only half of the by-pointer pair
     // `ownerCType` names the enclosing type when emitting a class member, so a `ref This`
     // SELF-borrow can be told apart from borrowing someone else's smart-pointer handle.
+    // `selfByValue` is the target's `ClassInfo::isScalarRecv` — a PRIMITIVE conformance takes `this` as the
+    // scalar itself (`int32_t self`), not a pointer. It is passed in rather than derived from `selfType`
+    // because the conformance registry is keyed by the KAMA type name while `selfType` is the C one.
     std::string paramListC(SharedParameterList params, const char* selfType,
-                           const char* ownerCType = nullptr);
+                           const char* ownerCType = nullptr, bool selfByValue = false);
     // `nameOverride`: emit under a supplied mangled name instead of the declared one
     // (used for generic instantiations, whose C name carries the concrete type args).
     void emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride = nullptr);
@@ -1504,6 +1508,9 @@ private:
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     std::string receiverScalarCType(SharedExpression e); // C scalar type of a primitive receiver place (`p.x`, `arr[i]`), "" if none
+    // The exact KAMA type node behind a place expression (local/param/foreach binding, or a field through an
+    // instance) — the only channel that keeps `char` apart from `uint32`, which share the C type `uint32_t`.
+    SharedIdentifier receiverTypeNode(SharedExpression e);
     bool exprIsChar(SharedExpression e);                // true iff `e`'s kama type is `char` (a char literal, local/param/foreach binding, or a char field)
     int holeBuiltinType(SharedExpression e);            // IDENTIFIER_*_VAL of an interp hole's numeric kama type (local/param/field/literal), 0 if unknown
     void emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec);  // format-specifier fast-path for `${x:spec}`
