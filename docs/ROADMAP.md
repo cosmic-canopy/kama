@@ -59,16 +59,20 @@ Everything else here is library or toolchain work that does **not** gate the tag
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
 2. **The CONTRACT MODEL — four sequenced campaigns**, briefed in
-   [design/contract-model.md](design/contract-model.md) (cold-start ready; delete when the last ships).
-   A design review during M2a found that **`enum` and `intrinsic` are hidden kinds** — GOALS #3c says
-   every declaration is `type <kind> Name`, yet `enum` has its own grammar production with no
-   `class_base_opt` and `intrinsic` has no kama spelling at all. Retro-impl exists only to paper over
-   those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing one.
-   Run in order, each its own session, **before M2b**:
-   1. **Contract model** — `type enum X implements C` + `type intrinsic <…> implements C`; a contract is
-      a *scope*, so a contract-supplied method is not part of the intrinsic's API; the orphan rule falls
-      out of ownership. Retires retro-impl, the nominal-recording special case, the enum tagged-union
-      promotion, and the missing primitive→contract path.
+   [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — campaign 1
+   is part-built and two of its design points were revised once the code existed; delete the file when the
+   last campaign ships). A design review during M2a found that **`enum` and `intrinsic` are hidden kinds**
+   — GOALS #3c says every declaration is `type <kind> Name`, yet `enum` had its own grammar production
+   with no `class_base_opt` and `intrinsic` had no kama spelling at all. Retro-impl exists only to paper
+   over those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing
+   one. Run in order, each its own session, **before M2b**:
+   1. **Contract model** — *both spellings now ship* (`type enum X implements C`, `type intrinsic <…>
+      implements C`), and two of the four pieces of machinery are gone (retro-impl on enums, the enum
+      tagged-union promotion). What is LEFT: the package-identity seam + re-keying the conformance
+      registry off cType (which closes the `char`/`uint32` collision below) and the scoping fixtures that
+      depend on it; migrating the prelude's 66 primitive impls and lib's 21; the contract-as-scope rule
+      plus primitive→contract widening; then deleting retro-impl and the `string`-`Equatable` nominal
+      special case. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
    3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
@@ -247,7 +251,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `prelude/global.kama` records the `uint32` ones. String interpolation still renders a `char` AS A
   CHARACTER through a compiler fast path, but a `char` reaching those contracts through a GENERIC bound
   renders (and serializes) as its numeric scalar. Fix = key the registry by kama type rather than cType, or
-  give `char` a distinct C typedef. The JSON backend now reads and writes `char` correctly either way.
+  give `char` a distinct C typedef. The JSON backend now reads and writes `char` correctly either way. **Scheduled** — the contract-model campaign (§1) re-keys that registry as part of its M3 residual.
 - **A value-producing `match` over an `enum X : IntType` does not compile (small, self-contained).** The
   explicit underlying type makes the tag a plain `uint8_t`/`int16_t`/… rather than a C `enum`, so the C
   compiler cannot prove the emitted `switch` exhaustive and rejects the uninitialized match temp

@@ -7,10 +7,91 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 >
 > A design review held during M2a (2026-08-04) that started as "is retro-impl dangerous?" and ended with
 > a coherent model for how *every* kind declares conformance. It schedules **four campaigns**, each its
-> own session, in the order given. Nothing here is built yet.
+> own session, in the order given.
 >
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
-> checked against the tree and turned out to be false.
+> checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
+> before starting anything**; two of its design points were revised once the code was written.
+
+## Status — campaign 1, as of 2026-08-05
+
+**Shipped to `dev`.** Baseline before the campaign was native 927 / ASan 891.
+
+| commit | what | native / ASan |
+|---|---|---|
+| `5f0d42d` | M0 chokepoints + **M1 `type enum X implements C { A, B; …methods… }`** | 933 / 897 |
+| `f8ed0ec` | **M2** — bare `enum X` is a parse error (breaking); 99 sites migrated; 29 enum conformances folded off retro-impl; **Model C promotion deleted** | 934 / 898 |
+| `81b62ce` | **M3 grammar** — `type intrinsic <…> implements C` + nested `<…> { }` sections | 934 / — |
+| `bfedd9f` | **M3 emitter** — collect / validate / emit; 8 guard-rail xfails; 2 positive fixtures; tree-sitter | **944 / 908** |
+
+M0 was verified behaviour-neutral by **byte-identical generated C across all 585 fixtures**, and M1 by the
+same diff over the 585 pre-existing ones — the promotion-timing move that was flagged as the campaign's
+highest regression risk turned out to cost nothing.
+
+**Two of the four pieces of machinery have retired**: retro-impl on enums, and the Model C promotion.
+
+### Remaining, in order
+
+1. **M3 residual** — the *package-identity seam* (`owningPackageDir`, [kama.driver.cpp](../../kama.driver.cpp),
+   already written and cached, into `CEmitter` as a per-unit value) and the **registry re-key** from cType
+   to `[kamaType][contractKey]`. Until that lands `char` and `uint32` still collide on `uint32_t` (§2), and
+   the **conformance-scoping fixtures** — one for the namespace axis, one for the package axis — have
+   nothing meaningful to assert. Both are specified in the plan.
+2. **M4** — migrate the prelude's 66 primitive impls and lib's 21 (`FromStr`×11, `FromStrRadix`×8,
+   `Real`×2) onto `type intrinsic`, and retire the `string`-`Equatable` nominal special case. That last is
+   **one atomic commit**: delete the `interfaces`/`retroInterfaces` push in `registerCollection` *and* add
+   the prelude declaration together, or the duplicate check fires in between. Keep the serde migration
+   mechanical — those 24 bodies differ only because `writeI32` names a width today, and collapse once the
+   writer goes generic.
+3. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
+   primitive→contract widening. Note the ABI seam: an intrinsic's method takes `self` **by value**
+   (`isScalarRecv`) while a vtbl slot passes `void*`, so each widened method needs a deref thunk — emitted
+   only for a contract actually widened to.
+4. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
+
+### Design points revised once the code existed
+
+- **There is no orphan rule, and there will not be one.** It is a workaround for separate compilation;
+  kama runs one `CEmitter` per build with every unit visible, so a duplicate claim on a (type, contract)
+  pair is *detectable* — and the check that detects it already exists. What was missing is only that the
+  message should name **both declaring packages**. The designed-for relaxation is *scoped conformances*
+  (a conformance scoped to its declaring namespace, resolved at the instantiation site), which is sound
+  **only if the resolved conformance enters the monomorphization key** — otherwise a container built under
+  one package's ordering and mutated under another's is one C struct and corrupts silently. Zero consumers
+  today, so it waits for a real case. The paragraph below claiming the rule "falls out of ownership" is
+  superseded.
+- **Contract identity is `(owning package, namespace, name)`** — scope is implied by the import origin, so
+  the *same* library imported from two origins yields two distinct contracts. Namespace is explicit sugar
+  on top, not a publishing precondition.
+- **Per-target specialization is a nested `<…> { … }` section**, which is what lets one block mix a shared
+  body with per-target ones. The claim below that the prelude's 68 impls "collapse to roughly 8–10" holds
+  for the *mechanism* count, not the line count: bodies naming a different C function (`writeI32`,
+  `sqrtf`) never collapse.
+- **`TypeKind::Intrinsic` was renamed `TypeKind::Neutral`.** It is the neutral kind for compiler-built
+  types and has nothing to do with the `type intrinsic` surface syntax; leaving the names colliding would
+  have guaranteed a wrong-fix.
+
+### Traps this campaign has already sprung
+
+- **`tools/check-*.sh` run the HOST binary** (`build/<os>-<arch>/kama`). `tools/cdev make` updates only the
+  container one, so a guard can pass against **stale** code. Run `make` on the host before believing one.
+- **`_enumDeclNodes` is the LSP def-site table's only unified index over enums** — plain enums land in
+  `_enums`, tagged concrete ones in `_classes`, generic ones in `_genericTypes`, and no single map holds
+  all three. It reads like Model-C machinery (its comment used to say so) but deleting it breaks
+  `kama.query.cpp`. Only `_enumNsCtx` was promotion-only.
+- **A prelude enum's prototypes must be `static`** to match its static-inline bodies (`preludeStatic`), and
+  the class-shaped prelude-definitions loop must skip variants. This is what the old
+  `isRetro && isVariant` proto skip was really preventing.
+- **Fixtures encode buffer coordinates.** Adding `type ` shifted `check-query`'s `spellings.kama`
+  assertions, `check-lsp`'s two inline buffers (both the expectations *and* the request positions), and the
+  TextMate snapshot. Regenerating a `.coverage` file must not capture stderr.
+- The mandatory `;` in an enum body and `simple_type` in the intrinsic target list are each load-bearing
+  for LALR(1). Zero new conflicts under `%expect 1`; the reasoning is in each production's comment.
+
+### Found while building this, not fixed, tracked in [ROADMAP §2](../ROADMAP.md)
+
+A value-producing `match` over an `enum X : IntType` does not compile — pre-existing, reproduces on a bare
+`enum Color : uint8` with no contract and no `type` marker.
 
 ## Why this exists
 
