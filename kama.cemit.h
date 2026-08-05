@@ -1070,6 +1070,19 @@ private:
     // `type enum E implements C { A, B; …members… }` — promote, inject, record, check. Between
     // linkContracts() (needs contractMethods) and buildVtables().
     void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
+
+    // `type intrinsic <…> implements C { … }` — contract conformance for a PRIMITIVE.
+    SharedIdentifier intrinsicContract(IntrinsicImplNode* n) const;   // the one declared contract, or null
+    // The members that serve ONE target: the block's shared bodies, with any `<…> { … }` section that
+    // names this target overriding them method-for-method.
+    SharedClassMemberDeclarationList intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target);
+    void applyIntrinsicImpl(IntrinsicImplNode* n);   // validate + inject, once per target
+    // One (target, members) pair per thing an impl block contributes — a retroactive block gives one, a
+    // `type intrinsic` set gives one per target. The three emission passes (prototypes, prelude bodies,
+    // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
+    struct ImplEmit { ClassInfo* target; SharedClassMemberDeclarationList members; };
+    std::vector<ImplEmit> implEmitsOf(SharedCompilationUnit u);
+    bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serialize/Deserialize
     void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                            const std::string& contract, const std::string& tkey,

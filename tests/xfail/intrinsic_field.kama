@@ -1,0 +1,7 @@
+// A primitive is its own storage — there is no struct to add a field to.
+type contract C for value { fn int32 f(); }
+type intrinsic <int32> implements C {
+    int32 extra;
+    public fn int32 f() { return 1; }
+}
+fn int32 main() { return 0; }

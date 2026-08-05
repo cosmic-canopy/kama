@@ -647,6 +647,21 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 bindTypeParams(ed->typeParams);
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
+            } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+                tp.clear();   // a `type intrinsic` block declares no type params of its own
+                if (ii->members) for (auto& m : *ii->members)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        check(md->returnType, "a return type");
+                        checkParams(md->params, "a parameter");
+                        checkNoSelfParam(md->params);
+                    }
+                if (ii->sections) for (auto& sec : *ii->sections)
+                    if (sec && sec->members) for (auto& m : *sec->members)
+                        if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                            check(md->returnType, "a return type");
+                            checkParams(md->params, "a parameter");
+                            checkNoSelfParam(md->params);
+                        }
             } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
                 tp.clear();   // a retro impl declares no type params of its own
                 if (ri->members) for (auto& m : *ri->members)
@@ -9128,6 +9143,142 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
     }
 }
 
+SharedIdentifier CEmitter::intrinsicContract(IntrinsicImplNode* n) const
+{
+    if (!n || !n->baseTypes || !n->baseTypes->interfaces || n->baseTypes->interfaces->empty())
+        return SharedIdentifier();
+    return (*n->baseTypes->interfaces)[0];
+}
+
+// A primitive's `Serialize`/`Deserialize` conformance is only worth emitting when the program actually
+// serializes something — otherwise every binary carries the ~24 prelude monomorphs. Same gate for both
+// impl spellings.
+bool CEmitter::serdeGatedOff(SharedIdentifier contract) const
+{
+    return !_usesSerde && contract && contract->value &&
+           (*contract->value == "Serialize" || *contract->value == "Deserialize");
+}
+
+// The effective member list for ONE target of a `type intrinsic` set: the block's shared bodies, with any
+// `<…>` section naming this target overriding them method-for-method. Order is deterministic (shared
+// first, in declaration order), which matters because the prototype pass and the body pass must agree.
+SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target)
+{
+    auto out = std::make_shared<ClassMemberDeclarationList>();
+    if (!n) return out;
+    std::string tk = cType(target);
+    if (n->members) for (auto& m : *n->members) out->push_back(m);
+    if (n->sections) for (auto& sec : *n->sections) {
+        if (!sec || !sec->targets || !sec->members) continue;
+        bool serves = false;
+        for (auto& st : *sec->targets) if (cType(st) == tk) { serves = true; break; }
+        if (!serves) continue;
+        for (auto& sm : *sec->members) {
+            auto* smd = dynamic_cast<ClassMethodDeclarationNode*>(sm.get());
+            if (smd && smd->name && smd->name->value) {           // override the shared body, if any
+                bool replaced = false;
+                for (auto& ex : *out) {
+                    auto* emd = dynamic_cast<ClassMethodDeclarationNode*>(ex.get());
+                    if (emd && emd->name && emd->name->value && *emd->name->value == *smd->name->value) {
+                        ex = sm; replaced = true; break;
+                    }
+                }
+                if (replaced) continue;
+            }
+            out->push_back(sm);
+        }
+    }
+    return out;
+}
+
+// Validate a `type intrinsic` block and inject its methods — once per target in the set. A primitive gets
+// NO `_classes` entry (every "is this a user type?" test keys on that map), so the conformance is hung on
+// the separate primitive registry, with `this` passed by value.
+void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
+{
+    if (!n->kindWord || *n->kindWord != "intrinsic") {
+        unsupported(("`type " + (n->kindWord ? *n->kindWord : std::string("?")) + " <…>` — only "
+                     "`type intrinsic` may name primitive types").c_str(), n->line);
+        return;
+    }
+    if (n->baseTypes && n->baseTypes->base)
+        unsupported("`type intrinsic` cannot `extends` — a primitive has no base type", n->line);
+    SharedIdentifierList ifaces = n->baseTypes ? n->baseTypes->interfaces : SharedIdentifierList();
+    if (!ifaces || ifaces->empty()) {
+        unsupported("`type intrinsic <…>` must declare a contract — a block with no `implements` gives the "
+                    "primitives in it nothing", n->line);
+        return;
+    }
+    if (ifaces->size() > 1) {
+        unsupported("`type intrinsic <…>` declares ONE contract per block — a method's contract has to be "
+                    "unambiguous; write a second block for the other one", n->line);
+        return;
+    }
+    std::vector<std::string> names(1, *(*ifaces)[0]->value);
+    resolveInterfaceNames(names, ifaces);
+    const std::string& contract = names[0];
+    if (!n->targets) return;
+
+    for (auto& tgt : *n->targets) {
+        std::string tkey = cType(tgt);                    // int32 -> int32_t, string -> kama_string
+        ClassInfo* tcip = nullptr;
+        auto ti = _classes.find(tkey);
+        if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
+        else {
+            ClassInfo& pci = primConformanceFor(tkey);
+            pci.name = tkey;
+            pci.kind = TypeKind::Value;
+            pci.isScalarRecv = true;                      // `this` is the scalar itself, not a pointer
+            tcip = &pci;
+        }
+        ClassInfo& tci = *tcip;
+        for (auto& ex : tci.interfaces)
+            if (ex == contract) {
+                unsupported(("`" + *tgt->value + "` already implements `" + contract + "`").c_str(), n->line);
+                break;
+            }
+        SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);
+        // A primitive has no storage of its own to add to, and nothing to destroy.
+        for (auto& m : *members) {
+            if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
+                unsupported("`type intrinsic` cannot declare a field — a primitive is its own storage",
+                            m->line);
+            else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
+                unsupported("`type intrinsic` cannot declare a destructor — a primitive owns nothing",
+                            m->line);
+        }
+        // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
+        // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
+        ScopedStr _ts(_thisType, tkey);
+        injectImplMethods(tci, members, contract, tkey,
+                          /*retro=*/true, /*isPrimitive=*/tgt->builtInVal != 0 && ti == _classes.end());
+        checkImplCompleteness(tci, contract, *tgt->value, n->line);
+    }
+}
+
+// Every (target ClassInfo, member list) this unit's impl blocks contribute: a retroactive block yields
+// one, a `type intrinsic` set yields one per target. The prototype pass and both body passes walk exactly
+// this, so the three agree by construction rather than by three copies staying in step.
+std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
+{
+    std::vector<ImplEmit> out;
+    if (!u || !u->codeDeclarationList) return out;
+    for (auto& decl : *u->codeDeclarationList) {
+        if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
+            if (!ri->target || !ri->target->value || !ri->members) continue;
+            if (serdeGatedOff(ri->contract)) continue;
+            if (ClassInfo* t = retroTargetInfo(cType(ri->target))) out.push_back(ImplEmit{t, ri->members});
+        } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+            SharedIdentifier c = intrinsicContract(ii);
+            if (!c || !ii->targets || serdeGatedOff(c)) continue;
+            for (auto& tgt : *ii->targets)
+                if (ClassInfo* t = retroTargetInfo(cType(tgt)))
+                    out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt)});
+        }
+    }
+    return out;
+}
+
 // Completeness: the impl must supply every method the contract requires.
 void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                      const std::string& tkey, int line)
@@ -16564,6 +16715,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
                 if (ri->contract && ri->contract->value &&
                     (*ri->contract->value == "Serializer" || *ri->contract->value == "Deserializer")) _usesSerde = true;
+            } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+                SharedIdentifier c = intrinsicContract(ii);
+                if (c && c->value && (*c->value == "Serializer" || *c->value == "Deserializer")) _usesSerde = true;
             }
             if (_usesSerde) break;
         }
@@ -16597,6 +16751,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (ri && ri->contract && ri->contract->value && ri->target && ri->target->value)
                 _retroConformances[cType(ri->target)].insert(*ri->contract->value);
+            // Same reason for `type intrinsic <…>`: a `<T: Comparable>` bound on int32 is checked during
+            // collection, which is earlier than the methods below are injected.
+            auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get());
+            if (ii && ii->targets) {
+                SharedIdentifier c = intrinsicContract(ii);
+                if (c && c->value)
+                    for (auto& tgt : *ii->targets) _retroConformances[cType(tgt)].insert(*c->value);
+            }
         }
     }
     // register collections BEFORE the destructibility fixpoint, so a class whose only
@@ -16616,6 +16778,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList) {
+            if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) { applyIntrinsicImpl(ii); continue; }
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (!ri || !ri->contract || !ri->contract->value || !ri->target || !ri->target->value) continue;
             std::string contract = *ri->contract->value;
@@ -16945,20 +17108,16 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& u : us) {
             if (!u || !u->codeDeclarationList) continue;
             _nsCtx = _unitCtx[u.get()];
-            for (auto& decl : *u->codeDeclarationList) {
-                auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-                if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
-                if (skipUngatedSerde(ri)) continue;   // prelude primitive serde retro-impls, when serde is unused
-                ClassInfo* tcip = retroTargetInfo(cType(ri->target));   // collection ClassInfo OR primitive conformance
-                if (!tcip) continue;
-                ScopedStr _ts(_thisType, tcip->name);
-                for (auto& m : *ri->members) {
+            for (auto& e : implEmitsOf(u)) {
+                ScopedStr _ts(_thisType, e.target->name);
+                for (auto& m : *e.members) {
                     auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                     if (!md || !md->name || !md->name->value) continue;
                     std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
-                    // a `static` retro method (or a `ctor` — always static) has no implicit `self` receiver param
-                    const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr : tcip->name.c_str();
-                    *_out << stat << ret << " " << tcip->name << "__" << *md->name->value << "("
+                    // a `static` impl method (or a `ctor` — always static) has no implicit `self` receiver
+                    const char* recv = (modHas(md->modifiers, "static") || md->isCtor) ? nullptr
+                                                                                       : e.target->name.c_str();
+                    *_out << stat << ret << " " << e.target->name << "__" << *md->name->value << "("
                           << paramListC(md->params, recv) << ");\n";
                 }
             }
@@ -17087,21 +17246,16 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     if (_preludeUnit && _preludeUnit->codeDeclarationList) {
         _nsCtx = _unitCtx[_preludeUnit.get()];
         _emitStaticClass = true;
-        for (auto& decl : *_preludeUnit->codeDeclarationList) {
-            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-            if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
-            if (skipUngatedSerde(ri)) continue;   // prelude primitive serde retro-impls, when serde is unused
-            ClassInfo* tcip = retroTargetInfo(cType(ri->target));
-            if (!tcip) continue;
-            ScopedStr _ts(_thisType, tcip->name);
-            for (auto& m : *ri->members) {
+        for (auto& e : implEmitsOf(_preludeUnit)) {
+            ScopedStr _ts(_thisType, e.target->name);
+            for (auto& m : *e.members) {
                 auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
                 if (!md || !md->name || !md->name->value) continue;
                 std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
                 line(md->line);
                 _returnIsPlace = md->isRef;
-                emitMethodOrCtorBody(tcip->name + "__" + *md->name->value, ret.c_str(),
-                                     md->params, md->body, *tcip, md->isConst,
+                emitMethodOrCtorBody(e.target->name + "__" + *md->name->value, ret.c_str(),
+                                     md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
                 _returnIsPlace = false;
             }
@@ -17257,22 +17411,16 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // Retroactive-impl method BODIES for a collection/primitive target (`string` → `kama_string`): the
     // normal class machinery early-outs for a collection, so the body lands here, non-static (its prototype
     // is in the shared header). A user-type target already emitted through emitClassDefinitions above.
-    for (auto& decl : *unit->codeDeclarationList) {
-        auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-        if (!ri || !ri->target || !ri->target->value || !ri->members) continue;
-        std::string tkey = cType(ri->target);
-        ClassInfo* tcip = retroTargetInfo(tkey);   // collection ClassInfo OR primitive conformance
-        if (!tcip) continue;
-        ClassInfo& tci = *tcip;
-        ScopedStr _ts(_thisType, tci.name);
-        for (auto& m : *ri->members) {
+    for (auto& e : implEmitsOf(unit)) {
+        ScopedStr _ts(_thisType, e.target->name);
+        for (auto& m : *e.members) {
             auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get());
             if (!md || !md->name || !md->name->value) continue;
             std::string ret = cType(md->returnType) + (md->isRef ? "*" : "");
             line(md->line);
             _returnIsPlace = md->isRef;
-            emitMethodOrCtorBody(tci.name + "__" + *md->name->value, ret.c_str(),
-                                 md->params, md->body, tci, md->isConst,
+            emitMethodOrCtorBody(e.target->name + "__" + *md->name->value, ret.c_str(),
+                                 md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
             _returnIsPlace = false;
         }
@@ -17309,6 +17457,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             }
         } else if (dynamic_cast<IncludeNode*>(decl.get())) {
             // FFI #include — emitted in the header by emitIncludes
+        } else if (dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+            // `type intrinsic <…> implements C { … }` — its methods were injected into each target's
+            // conformance registry and their bodies emitted just above; nothing at this top-level site.
         } else if (dynamic_cast<RetroactiveImplNode*>(decl.get())) {
             // `implements C for T { … }` — its methods were injected into T's ClassInfo (applyRetroactive
             // pass) and emit with T's other methods; nothing to emit at this top-level site.

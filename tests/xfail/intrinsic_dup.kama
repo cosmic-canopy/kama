@@ -1,0 +1,6 @@
+// One block per (contract, target) pair. Two claims on the same pair is the collision the duplicate check
+// exists to catch — and catching it HERE, at the claimant's own build, is why kama needs no orphan rule.
+type contract C for value { fn int32 f(); }
+type intrinsic <int32> implements C { public fn int32 f() { return 1; } }
+type intrinsic <int16, int32> implements C { public fn int32 f() { return 2; } }
+fn int32 main() { return 0; }

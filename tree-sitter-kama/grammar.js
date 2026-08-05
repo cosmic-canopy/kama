@@ -166,6 +166,7 @@ module.exports = grammar({
         $.extern_declaration,
         $.fnptr_declaration,
         $.type_declaration,
+        $.intrinsic_declaration,
         $.enum_declaration,
         $.retroactive_impl_declaration,
         $.module_variable_declaration,
@@ -187,8 +188,34 @@ module.exports = grammar({
         optional(';'),
       ),
 
-    // `value` / `resource` / `view` / `contract` — contextual, never reserved.
+    // `value` / `resource` / `view` / `contract` / `intrinsic` — contextual, never reserved.
     type_kind: ($) => $.identifier,
+
+    // `type intrinsic <int8, int16, …> implements C { … <int8> { … } }` — contract conformance for a
+    // PRIMITIVE. It diverges from `type_declaration` one token after the kind word: `<` rather than a
+    // NAME. The target list is primitives only, which is why it uses `primitive_type` and not `type_name`
+    // — the same reason kama.y uses `simple_type` there.
+    intrinsic_declaration: ($) =>
+      seq(
+        optional($.attribute_list),
+        'type',
+        repeat($.modifier),
+        field('kind', $.type_kind),
+        field('targets', $.intrinsic_targets),
+        optional($.class_base),
+        field('body', $.intrinsic_body),
+        optional(';'),
+      ),
+
+    intrinsic_targets: ($) => seq('<', commaSep1($.primitive_type), '>'),
+
+    // A member is either shared by every target, or inside a `<…> { … }` SECTION overriding it for the
+    // targets it names. A section can only begin with `<`, which no class member can.
+    intrinsic_body: ($) =>
+      seq('{', repeat(choice($._class_member, $.intrinsic_section)), '}'),
+
+    intrinsic_section: ($) =>
+      seq(field('targets', $.intrinsic_targets), '{', repeat($._class_member), '}'),
 
     // kama.y:267 — `for value | resource | both` on a contract. Kind words again, contextual.
     for_kinds: ($) => seq('for', commaSep1($.kind_name)),

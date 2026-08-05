@@ -508,3 +508,50 @@ type enum IoError : uint8 implements Error
           (return_statement
             (string_literal
               (string_content))))))))
+
+================================================================================
+A `type intrinsic` set, with a shared body and a per-target section
+================================================================================
+
+type intrinsic <int8, int16> implements Tagged
+{
+    public fn int32 scale() { return 2; }
+
+    <int8> { public fn int32 tag() { return 1; } }
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (intrinsic_declaration
+    (type_kind
+      (identifier))
+    (intrinsic_targets
+      (primitive_type)
+      (primitive_type))
+    (class_base
+      (implements_entry
+        (type_name
+          (identifier))))
+    (intrinsic_body
+      (method_declaration
+        (modifier)
+        (primitive_type)
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (integer_literal))))
+      (intrinsic_section
+        (intrinsic_targets
+          (primitive_type))
+        (method_declaration
+          (modifier)
+          (primitive_type)
+          (method_name
+            (identifier))
+          (parameter_list)
+          (block
+            (return_statement
+              (integer_literal))))))))

@@ -1,0 +1,8 @@
+// Sections cover int8 and int16 but not int32, and there is no shared body — so int32 is left without the
+// contract's method. The completeness check names the target that is short.
+type contract C for value { fn int32 f(); }
+type intrinsic <int8, int16, int32> implements C {
+    <int8>  { public fn int32 f() { return 1; } }
+    <int16> { public fn int32 f() { return 2; } }
+}
+fn int32 main() { return 0; }

@@ -1,0 +1,5 @@
+// A block with no `implements` gives the primitives in it nothing.
+type intrinsic <int32> {
+    public fn int32 f() { return 1; }
+}
+fn int32 main() { return 0; }

@@ -1,0 +1,42 @@
+// `type intrinsic <…> implements C` — contract conformance for a PRIMITIVE, the kind that had no kama
+// spelling at all. Before this the only way to give `int32` a contract was a retroactive `implements C for
+// int32` block, one per width; the prelude carries 68 of them for exactly that reason.
+//
+// The SET form is what makes it worth having: one body serves every target whose implementation is
+// genuinely identical. `ref This` is what lets that body be written once — it resolves to each target in
+// turn, so the eight integer widths share a single `compareTo`-shaped method here.
+//
+// The per-target override is intrinsic_specialized.kama; the scoping guarantees are
+// intrinsic_scope_namespace.d / intrinsic_scope_package.d.
+
+type contract Weighable for value { fn int32 weight(); }
+type contract Near for value { fn bool close(ref This other); }
+
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Weighable {
+    public fn int32 weight() { return cast<int32>(this); }
+}
+
+// A second contract over an overlapping set — a primitive carries as many conformances as it is given.
+type intrinsic <int8, int16, int32> implements Near {
+    public fn bool close(ref This other) { return this == other; }
+}
+
+// Both reached the only way a contract-supplied method is reached: through a generic bound.
+fn int32 total<T: Weighable>(T a, T b) { return a.weight() + b.weight(); }
+fn int32 same<T: Near>(T a, T b) { if (a.close(other: b)) { return 1; } return 0; }
+
+fn int32 main() {
+    int32 r = 0;
+    r = r + total(a: 10, b: 7);              // 17  — int32, the shared body
+    int8 s = 4; int8 t = 1;
+    r = r + total(a: s, b: t);               // + 5  = 22
+    uint16 m = 100; uint16 n = 3;
+    r = r + total(a: m, b: n);               // + 103 = 125
+    int64 p = 20; int64 q = 5;
+    r = r + total(a: p, b: q);               // + 25 = 150
+
+    if (same(a: 6, b: 6) == 1) { r = r + 25; }        // 175 — `ref This` = int32
+    int16 u = 9; int16 v = 8;
+    if (same(a: u, b: v) == 0) { r = r + 25; }        // 200 — `ref This` = int16
+    return r;
+}

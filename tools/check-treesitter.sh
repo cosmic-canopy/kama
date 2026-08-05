@@ -76,7 +76,7 @@ if [ -f "$G/src/grammar.json" ]; then
     # `resource` ever becomes a grammar TERMINAL, `word:` promotes it to a keyword and `int32 value = 1;`
     # stops parsing. A plain drift grep can only ever ask whether something is present; this asks whether
     # something is absent, which is what this design needs.
-    for kw in value resource view contract both; do
+    for kw in value resource view contract intrinsic both; do
         if grep -qE "\"value\": *\"$kw\"" "$G/src/grammar.json"; then
             note "'$kw' is a grammar TERMINAL, but it is a contextual IDENTIFIER in kama.l — promoting it to a keyword breaks 'int32 $kw = 1;'. It must stay a (type_kind)/(kind_name) node over an identifier."
         fi

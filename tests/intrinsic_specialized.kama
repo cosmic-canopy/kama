@@ -1,0 +1,40 @@
+// A `<…> { … }` SECTION overrides the block's shared bodies for the targets it names. This is the escape
+// hatch for a contract whose implementation genuinely cannot be shared across the set — `sqrt` needs
+// `sqrtf` for float32 and `sqrt` for float64, and kama has no in-body type branching by design.
+//
+// The point of the SECTION rather than separate blocks is MIXING: `scale` below is identical for all four
+// targets and is written once, while `tag` differs per target and is written per target. Splitting the set
+// into four blocks would force `scale` to be copied four times.
+
+type contract Tagged for value {
+    fn int32 tag();
+    fn int32 scale();
+}
+
+type intrinsic <int8, int16, int32, int64> implements Tagged {
+    // Shared by every target in the set.
+    public fn int32 scale() { return 2; }
+
+    // Overridden per target. A section replaces the shared body method-for-method, so `scale` above still
+    // serves all four while `tag` is supplied four times.
+    <int8>  { public fn int32 tag() { return 1; } }
+    <int16> { public fn int32 tag() { return 2; } }
+    <int32> { public fn int32 tag() { return 3; } }
+    <int64> { public fn int32 tag() { return 4; } }
+}
+
+// A section may name SEVERAL targets at once when they share a body but the set does not.
+type intrinsic <float32, float64> implements Tagged {
+    <float32, float64> { public fn int32 tag() { return 9; } }
+    public fn int32 scale() { return 10; }
+}
+
+fn int32 rate<T: Tagged>(T v) { return v.tag() * v.scale(); }
+
+fn int32 main() {
+    int8 a = 0; int16 b = 0; int32 c = 0; int64 d = 0;
+    int32 r = rate(v: a) + rate(v: b) + rate(v: c) + rate(v: d);   // (1+2+3+4)*2 = 20
+    float32 e = 0.0; float64 f = 0.0;
+    r = r + rate(v: e) + rate(v: f);                                // + 90 + 90 = 200
+    return r;
+}
