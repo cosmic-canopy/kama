@@ -6,7 +6,7 @@ type resource Probe
     ~Probe() { }
     public fn int32 val() { return this.id; }
 }
-enum Box { Full(Shared<Probe> p), Empty }
+type enum Box { Full(Shared<Probe> p), Empty }
 fn int main()
 {
     Shared<Probe> s = new Probe.make(id: 42);

@@ -68,7 +68,9 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    `Shared`/`Weak`), a `Copyable` resource declares its bare default at opt-in (`Copyable(bare: give|copy)`),
    and `give`/`copy` override it. The kind words `value`/`resource`/`view`/`contract` are
    **contextual** (they name a kind only right after `type`), so they stay ordinary identifiers
-   everywhere else. *(Full model in `docs/TYPE_MODEL.md`.)*
+   everywhere else. **`type enum`** is the fifth kind — a plain variant set or a tagged union — and takes
+   the same `implements` clause as the rest; `enum` is the one kind word that is a reserved keyword,
+   because it predates the marker. *(Full model in `docs/TYPE_MODEL.md`.)*
 
 3d. **No exceptions — fallibility is a value.** There is no `throw`/`try`/`catch` and no stack unwinding.
    A operation that can fail returns its outcome as a value: **`Optional<T>`** (absence) or **`Result<T, E>`**

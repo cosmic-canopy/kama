@@ -21,7 +21,7 @@ extern fn void kama_set_log_sink(LogSink s);
 
 // Ordered by severity: Error is the most severe, Trace the most verbose. The ordinals ARE the filter scale
 // (a call at level L prints when L <= the configured threshold), so their order is load-bearing.
-enum LogLevel { Error, Warn, Info, Debug, Trace }
+type enum LogLevel { Error, Warn, Info, Debug, Trace }
 
 // A custom sink: `fn void mySink(int32 level, string tag, string msg) { … }` then `setLogSink(s: mySink)`.
 // `level` is the LogLevel ordinal (0 = Error .. 4 = Trace — see `levelBits`); a plain int32, not the enum, so

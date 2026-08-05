@@ -2,8 +2,8 @@
 // prelude ones. Previously only `Optional`/`Result` worked (their concrete instance was inferred and
 // stashed at discovery); a user enum — even a payload-less one, which is just a constant — fell through
 // to "requires an enum subject", so it had to be bound to a local first. Returns 42.
-enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Empty }
-enum Level { Low, High }
+type enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Empty }
+type enum Level { Low, High }
 
 fn int main()
 {

@@ -1,4 +1,4 @@
-enum Shape { Circle(float64 r), Empty }
+type enum Shape { Circle(float64 r), Empty }
 fn int main()
 {
     Shape s = Shape::Empty;

@@ -6,7 +6,7 @@ export { IpAddr, SocketAddr, RecvFrom };
 
 // An IP address. IPv4 today; the `enum` tag leaves room for a `V6(...)` arm later without reshaping any
 // existing match site (they already bind by variant). Octets are stored in logical order (a.b.c.d).
-enum IpAddr {
+type enum IpAddr {
     V4(uint8 a, uint8 b, uint8 c, uint8 d)
 }
 

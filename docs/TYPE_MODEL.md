@@ -11,7 +11,8 @@ parallel to `fn` on every function. This makes declarations greppable and self-d
 '^type '`). The kind words `value` / `resource` / `view` / `contract` (and the qualifiers `virtual` /
 `abstract` / `final`) appear *only* right after `type`, so they are **contextual, not reserved** — they
 stay ordinary identifiers everywhere else (`int32 value = 5;`, a field or method named `resource`, etc.).
-Only `type` itself is a keyword.
+The one exception is `enum`, which is a reserved keyword because it predates the `type` marker — nothing
+else can be spelled in that position, so reserving it costs nothing. Only `type` and `enum` are keywords.
 
 ```kama
 type value Name    { … }   // owns nothing — copies
@@ -36,6 +37,7 @@ kama makes ownership the **declared nature** of a type, so the designer picks th
 | **`resource`** | something, or identity | **move** | contracts *and* internal vtable |
 | **`view`** | nothing — *borrows* a range | **copy** (a borrow; stack-only, can't escape) | contracts only |
 | **`contract`** | — (a public-only guarantee, no state) | — | *is* the polymorphism / substitutability lever |
+| **`enum`** | nothing, beyond its variant payloads | **copy** (or move, if a payload owns) | contracts, via a tag-dispatched vtable |
 
 These are the *nature* nouns. `virtual` / `abstract` / `final` are **qualifiers** (below), not kinds.
 

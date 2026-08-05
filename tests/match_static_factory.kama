@@ -1,8 +1,11 @@
 // A fallible `ctor` result (called via the `::` bridge — inline dot-on-type ctor calls as a match subject
 // are the A1 residual) can be a `match` subject inline (no typed-binding first), even when the Ok payload
 // is a move-only resource. Returns 6.
-enum WidgetErr { Negative }
-implements Error for WidgetErr { public fn string message() { return "negative"; } }
+type enum WidgetErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 type resource Widget {
     int32 id;
     private ctor fromId(int32 id) { this.id = id; }

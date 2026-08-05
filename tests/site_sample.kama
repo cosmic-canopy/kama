@@ -18,12 +18,12 @@ type value Steel
     }
 }
 
-enum ForgeError { TooFewFolds }
+type enum ForgeError implements Error {
+    TooFewFolds;
 
-implements Error for ForgeError
-{
     public fn string message() { return "a blade needs at least 8 folds"; }
 }
+
 
 // A `resource` owns something, so it moves instead of copying and its destructor
 // runs at the end of the scope that owns it. No garbage collector, no pauses.

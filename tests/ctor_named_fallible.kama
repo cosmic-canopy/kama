@@ -1,8 +1,11 @@
 // Construction-model M2: a NAMED fallible constructor `ctor Result<T,E> name(…)` returning Result — the
 // factory idiom (see fallible_factory) promoted to a `ctor`. On failure it returns `Err` before the object
 // exists. Called via `::` (the M2 bridge; M4 adds `Percent.of`).
-enum PercentErr { OutOfRange }
-implements Error for PercentErr { public fn string message() { return "out of range"; } }
+type enum PercentErr implements Error {
+    OutOfRange;
+
+    public fn string message() { return "out of range"; }
+}
 type value Percent {
     public int32 v;
     public ctor make(int32 v) { this.v = v; }

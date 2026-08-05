@@ -37,7 +37,7 @@ extern fn void  kama_channel_free(Ptr ch);                     // called by the 
 // gone, so nothing was enqueued. Modeled on Rust's `mpsc::SendError<T>`: an ownership language must
 // return the value on failure rather than destroy it. (A no-payload `Sent` + a value-carrying
 // `Undelivered` — the same shape as `Optional<T>`'s `None`/`Some`, but named so a match reads clearly.)
-enum SendResult<T> { Sent, Undelivered(T item) }
+type enum SendResult<T> { Sent, Undelivered(T item) }
 
 // The send endpoint. Move-only; SPSC in M3 (multi-producer `clone()` is a follow-up). Dropping it
 // closes the sender side and wakes a blocked receiver, so `recv` returns `None` once drained.

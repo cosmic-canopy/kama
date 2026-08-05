@@ -14,6 +14,7 @@
 # one pass, diffs against this list, and only asks the compiler about files where the two DISAGREE — so a
 # stale manifest and a wrong grammar are told apart, by name, at no steady-state cost.
 tests/syntax/bad.kama
+tests/xfail/enum_bare_spelling.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/float_bare_dot.kama
 tests/xfail/interp_hole_operator.kama

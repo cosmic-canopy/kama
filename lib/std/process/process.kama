@@ -54,7 +54,7 @@ extern fn int32 kama_EINTR();
 
 // How a child's stdin/stdout/stderr is wired. Inherit = share the parent's fd; Piped = a pipe the parent
 // keeps an end of (Process.stdin()/stdout()/stderr() become a readable/writable File); Null = /dev/null.
-enum Stdio { Inherit, Piped, Null }
+type enum Stdio { Inherit, Piped, Null }
 
 // A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly
 // one): `code` is -1 when signalled, `signal` is 0 when it exited normally.

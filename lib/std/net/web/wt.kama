@@ -15,7 +15,7 @@ extern fn int32 kama_wt_send(int32 h, Ptr<uint8> buf, usize n);
 extern fn int32 kama_wt_recv(int32 h, Ptr<uint8> buf, usize n);
 extern fn void  kama_wt_close(int32 h);
 
-enum WtState { Connecting, Connected, Closed }
+type enum WtState { Connecting, Connected, Closed }
 
 // A WebTransport session's DATAGRAM channel — unreliable, unordered: the UDP-equivalent on the web, and the
 // primary web transport (WebSocket is the reliable fallback). It is a CONNECTED datagram endpoint (one peer,

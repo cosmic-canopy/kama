@@ -10,7 +10,7 @@ type resource Probe {
     public fn int32 value() { return this.v; }
 }
 
-enum Holder {
+type enum Holder {
     Plain,
     Boxed(Shared<Probe> p)
 }

@@ -1,0 +1,6 @@
+// GOALS #3c: every declaration is `type <kind> Name`. `enum` was the exception — its own grammar
+// production, with no `type` marker and no `implements` clause. The marker is now mandatory, so the
+// bare form is a parse error. Write `type enum Color { Red, Green, Blue }`.
+enum Color { Red, Green, Blue }
+
+fn int32 main() { return 0; }

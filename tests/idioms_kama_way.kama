@@ -33,7 +33,7 @@ type value Leaf implements Shown {
 // (4) `out` fills an uninitialized `slot`; `ref` borrows something already live.
 fn void split(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
 
-enum Code { Ok, Bad }
+type enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 
 // (8) `.` constructs, `::` resolves scope — including on a GENERIC type, where a static's turbofish is

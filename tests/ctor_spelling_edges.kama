@@ -4,10 +4,13 @@
 // (a static fn via `.`). Returns 42.
 type contract Spawnable for both { }
 
-enum Tag { Red, Blue }
+type enum Tag { Red, Blue }
 
-enum MakeErr { TooBig }
-implements Error for MakeErr { public fn string message() { return "too big"; } }
+type enum MakeErr implements Error {
+    TooBig;
+
+    public fn string message() { return "too big"; }
+}
 
 type value Cell implements Spawnable {
     public int32 v;

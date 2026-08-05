@@ -270,12 +270,12 @@ module.exports = grammar({
     // ── Enums ───────────────────────────────────────────────────────────────────────────────────────
     // `type enum Name<T> : IntType implements C { A, B(payload…); …members… }`. An enum is a type kind
     // like any other, so it takes the `type` marker and a `class_base` — before that it had neither and
-    // needed a retroactive `implements C for E` to gain a contract. `type` is optional here only while
-    // the tree migrates; the bare form goes away with the last `enum X` in the repo.
+    // needed a retroactive `implements C for E` to gain a contract. The marker is MANDATORY (GOALS #3c:
+    // every declaration is `type <kind> Name`); bare `enum X` is a parse error in kama.y too.
     enum_declaration: ($) =>
       seq(
         optional($.attribute_list),
-        optional('type'),
+        'type',
         repeat($.modifier),
         'enum',
         field('name', $.type_declaration_head),

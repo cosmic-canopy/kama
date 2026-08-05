@@ -316,6 +316,13 @@ modifier
   | STATIC
   | DEFAULT      /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL
+    /* `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — how many levels may still be added BELOW this
+       type. Reuses `argument_list` so the spelling is kama's ordinary named-argument one; the emitter
+       checks the name and the value, per the usual permissive-grammar/diagnosing-emitter split. The
+       modifier list is shared with methods, so `virtual(maxDepth: 1) fn` parses too and is rejected
+       there — the same way a class-named ctor still parses so it can be answered with a sentence. */
+  | VIRTUAL LPAREN argument_list RPAREN
+  | ABSTRACT LPAREN argument_list RPAREN
   | IMMUTABLE      /* `immutable value T` — deeply-immutable, shareable across isolates (M6.2) */
   ;
 
@@ -724,6 +731,20 @@ member_access
   : primary_expression DOT IDENTIFIER
   | qualified_identifier_no_generic DOT IDENTIFIER
   | class_type DOT IDENTIFIER
+    /* `T.default()` — call the ctor the type ELECTED with `default ctor …()` (M8b), without having to
+       know the name it chose (`empty`/`zero`/…). `default` is a keyword, so it cannot arrive as the
+       IDENTIFIER the rules above expect; this is the only extra production it needs. It matters most in
+       GENERIC code: `fn f<A: default>()` states the bound and, until now, had no way to use it — the
+       election was reachable only by the compiler's own field-fill loop. */
+  | qualified_identifier_no_generic DOT DEFAULT
+    /* `this.base = Base.<ctor>(…)` — a derived constructor installs its base part by building it with the
+       base's OWN constructor. `base` is a keyword for the same reason `default` is, so it needs the same
+       two extra productions. The SECOND one is not decoration: it makes `d.base` reduce, so the emitter
+       can answer a bad receiver with a sentence instead of `syntax error, unexpected BASE`.
+       Note the receiver is `primary_expression`, NOT `this_access` — the parser must reduce
+       `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
+  | primary_expression DOT BASE
+  | qualified_identifier_no_generic DOT BASE
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
@@ -749,6 +770,15 @@ invocation_expression
        `generic_turbofish_name` prefix; differs from the free-fn form only in the trailing `DOT IDENTIFIER`.
        The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
   | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+
+    /* On-type turbofish through `::` — `Box::<int32>::tag()`, a STATIC on a generic type. The sibling of
+       the ctor form above, and the one that makes the spelling rule uniform: after a type, `.` is
+       construction and `::` is scope resolution, generic or not. The turbofish is MANDATORY here (unlike
+       for a ctor, which can infer from its arguments): a static has no receiver and its parameters need
+       not mention `T`, so there is nothing to infer the monomorph from. Builds the SAME shape the plain
+       `Type::name(...)` resolver already consumes — a qualified IdentifierNode with a null `expression` —
+       with the type args parked in `qualifierGenericArgs`, since `qualifier` is a bare StringList. */
+  | generic_turbofish_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN
 
   ;
 /* Shared `IDENTIFIER::<type_args>` prefix — a type name (or generic free-fn name) carrying explicit type
@@ -1135,22 +1165,42 @@ destructor_declaration
                               Enum
 ------------------------------------------------------------------------------*/
 
-/* `enum Name<T> : IntType `. The head reuses `type_decl_head` (so
-   generic enums parse exactly like generic types); an optional `: IntType` pins the underlying
-   integer / tag width; members may carry a named payload (below) making the enum a tagged union. */
+/* `type enum Name<T> : IntType implements C `. The head reuses
+   `type_decl_head` (so generic enums parse exactly like generic types); an optional `: IntType` pins the
+   underlying integer / tag width; members may carry a named payload (below) making the enum a tagged
+   union. Like every other kind an enum takes `class_base_opt`, so it declares its conformance inline —
+   and the methods satisfying that contract follow the variants after a `;`.
+
+   The `type` marker is MANDATORY — GOALS #3c says every declaration is `type <kind> Name`, and an enum
+   is a kind like any other. `enum` is a RESERVED token (unlike the contextual kind words
+   `value`/`resource`/`view`/`contract`), so `TYPE ENUM …` is its own production rather than another arm
+   of `marked_type_declaration`; that is also what keeps the two apart with no conflict. */
 enum_declaration
-  : modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
+  : TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
 
-  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body semicolon_opt
-
+  | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+       /* `@generate(...) type enum …` */
   ;
 enum_underlying_opt
   : /* Nothing */
   | COLON integral_type
   ;
-enum_body
+/* Four explicit alternatives rather than an `_opt` tail, for two reasons, both LALR(1):
+   - the `;` separator is MANDATORY before class members. Without it `` is ambiguous at one
+     token of lookahead — `Foo` reduces as a variant, or begins a `Foo bar;` field. With it, class
+     members are reachable only after SEMICOLON and no state admits both.
+   - spelling the trailing comma out (rather than a `comma_opt` nonterminal) keeps the "is this comma a
+     list separator or the body terminator?" decision inside one production, exactly as the original
+     `enum_body` did. */
+enum_class_body
   : LEFT_BRACE enum_member_declarations_opt RIGHT_BRACE
+
   | LEFT_BRACE enum_member_declarations COMMA RIGHT_BRACE
+
+  | LEFT_BRACE enum_member_declarations SEMICOLON class_member_declarations_opt RIGHT_BRACE
+
+  | LEFT_BRACE enum_member_declarations COMMA SEMICOLON class_member_declarations_opt RIGHT_BRACE
+
   ;
 enum_member_declarations_opt
   : /* Nothing */

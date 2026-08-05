@@ -1,7 +1,7 @@
 // A payload pattern NAMES its fields, so binding is order-independent and a swap is impossible. The two
 // arms below bind the same variant in opposite orders and must agree — under the old positional form the
 // second one would silently have returned the other field. Returns 42.
-enum Shape { Rect(int32 w, int32 h), Circle(int32 radius), Empty }
+type enum Shape { Rect(int32 w, int32 h), Circle(int32 radius), Empty }
 
 fn int32 areaInOrder(Shape s) {
     return match (s) {

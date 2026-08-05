@@ -42,7 +42,7 @@ export { Atomic, MemoryOrder };
 // enum, bridged by `orderBits`. `Consume` is deliberately omitted (every compiler treats it as `Acquire`;
 // even C++ discourages it). A load takes Relaxed/Acquire/SeqCst; a store Relaxed/Release/SeqCst; a
 // read-modify-write any of them — passing an ordering an op can't honor is a programmer error (as in C11).
-enum MemoryOrder { Relaxed, Acquire, Release, AcqRel, SeqCst }
+type enum MemoryOrder { Relaxed, Acquire, Release, AcqRel, SeqCst }
 
 // Bridge a `MemoryOrder` to the `__ATOMIC_*` int the seam layer expects. Private to the module.
 fn int32 orderBits(MemoryOrder o) {

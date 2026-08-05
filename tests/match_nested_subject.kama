@@ -2,7 +2,7 @@
 // match yields an `Optional<int32>` (built with inline variant ctors); the outer matches on it. Previously
 // this hard-errored ("`match` requires an enum subject") and forced binding to a typed local first — the
 // discovery pre-scan now infers the inline instance through the nested match, and the workaround still compiles.
-enum Dir { Left, Right }
+type enum Dir { Left, Right }
 
 fn int32 route(Dir d, int32 x) {
     return match (match (d) { case Left: Optional::Some(value: x); case Right: Optional::None; }) {

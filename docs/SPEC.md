@@ -1404,7 +1404,7 @@ scripting-host interface — is future work; the keyword is live today for the C
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
 is done with `if` / `else if`. There is no `switch` statement.
 
-## Type declarations — `value` / `resource` / `view` / `contract` ✅
+## Type declarations — `value` / `resource` / `view` / `contract` / `enum` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on
 every function, so declarations are greppable and self-describing:
@@ -1427,10 +1427,14 @@ every function, so declarations are greppable and self-describing:
   fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another with `implements` too
   (`type contract Animated for both implements Drawable { … }` — a conformer must supply Drawable's methods
   as well, and dispatch through `Animated` reaches them).
+- **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
+  takes the same `implements` clause as every other kind.
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
 `view` / `contract` are **contextual, not reserved** — because they appear only right after `type`, they
-remain ordinary identifiers everywhere else (`int32 value = 5;`). Only `type` is a keyword.
+remain ordinary identifiers everywhere else (`int32 value = 5;`). `enum` is the one kind word that IS a
+reserved keyword, for the historical reason that it predates the `type` marker; that costs nothing, since
+nothing else could be spelled there. Only `type` and `enum` are keywords.
 
 ```kama
 type value Counter {
@@ -1594,7 +1598,7 @@ hand-written member always wins over the synthesized body, and the nominal confo
 `Equatable`/`Hashable` walk each field through *its own* `equals`/`hash` — never a bitwise compare, which
 would read padding and be wrong for any type whose equality is not its representation — so every field must
 itself conform, and `@skip` is honored by both (which is what keeps "equal values hash equal" true). A
-payload-less `enum` has no struct to walk: use a retroactive `implements`, which it supports.
+payload-less `enum` has no struct to walk: declare the contract on the enum and write the method.
 
 ### Deliberately not in the model
 
@@ -1659,7 +1663,7 @@ the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` —
 `Ok`.
 
 ```kama
-enum SizeError { TooSmall }
+type enum SizeError { TooSmall }
 implements Error for SizeError { public fn string message() { return "size must be positive"; } }
 type resource Buffer {
     int32 size;
@@ -2284,15 +2288,35 @@ See `docs/KEYWORDS.md` for the full kind × visibility table.
 
 ## Enums & `match` ✅
 
-An `enum` declares either a plain (payload-less) set of variants or a **tagged union** (variants carry
-payloads, and the enum may be generic):
+A **`type enum`** declares either a plain (payload-less) set of variants or a **tagged union** (variants
+carry payloads, and the enum may be generic):
 
 ```kama
-enum Color { Red, Green = 5, Blue }          // plain: Red=0, Green=5, Blue=6
+type enum Color { Red, Green = 5, Blue }     // plain: Red=0, Green=5, Blue=6
 Color c = Color::Blue;                        // variants are scope-resolved with ::
 
-enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (payloads)
+type enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (payloads)
 ```
+
+An enum is a type kind like any other, so it **declares its contracts inline** and carries the methods that
+satisfy them — the variants come first, then a `;`, then ordinary members:
+
+```kama
+type enum IoError : uint8 implements Error {
+    NotFound, Denied(int32 code);
+
+    public fn string message() {
+        return match (this) { case NotFound: "not found"; case Denied(code: c): "denied"; };
+    }
+}
+```
+
+The `;` separating variants from members is **mandatory**, and it is what makes the body unambiguous: a
+bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
+methods with or without a contract, but **not a field or a destructor** — its layout is its tag plus its
+variant payloads, and it owns nothing beyond them. Declaring a method-carrying contract gives a
+payload-less enum a tagged representation so it can hold the method and a dispatch vtable; that is
+transparent to its by-value uses.
 
 A plain enum lowers to a C `enum`; a tagged union lowers to a tag + payload union. Enum variants are
 scope-resolved with `::` and constructed with named args (`Shape::Rect(w: 3.0, h: 4.0)`). A variant is

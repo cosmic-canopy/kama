@@ -1,6 +1,9 @@
 import std::memory::{Shared};
-enum ProbeErr { Failed }
-implements Error for ProbeErr { public fn string message() { return "failed"; } }
+type enum ProbeErr implements Error {
+    Failed;
+
+    public fn string message() { return "failed"; }
+}
 type resource Probe { int32 id; public ctor make(int32 id){ this.id=id; } ~Probe(){} public fn int32 val(){return this.id;} }
 fn int main()
 {

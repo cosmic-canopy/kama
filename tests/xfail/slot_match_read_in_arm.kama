@@ -1,6 +1,6 @@
 // Reading a destination INSIDE an arm, before that arm assigns it, is still a read-before-assign. Each arm
 // starts from the pre-match state, so an assignment in a SIBLING arm must not make this look filled.
-enum Code { Ok, Bad }
+type enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 fn void pickInto(int32 x, out int32 a) {
     match (classify(x: x)) {

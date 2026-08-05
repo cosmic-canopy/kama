@@ -1,4 +1,4 @@
-enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
+type enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
 fn int score(Msg m)
 {
     return match (m) {

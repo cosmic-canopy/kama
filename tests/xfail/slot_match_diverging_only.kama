@@ -1,7 +1,7 @@
 // An arm that DIVERGES contributes nothing to the join — but it must not be mistaken for an arm that
 // ASSIGNS. Here the only non-diverging arm leaves the destination a hole, so the join must still see it
 // as unassigned when the function returns.
-enum Code { Ok, Bad }
+type enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 fn void pickInto(int32 x, out int32 a) {
     match (classify(x: x)) {

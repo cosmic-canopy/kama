@@ -23,7 +23,9 @@ extern fn int32 kama_EPIPE();
 // logical error (a read returned 0 where more was required) — it has no errno, so callers raise it directly.
 // The datagram/non-blocking kinds (`InProgress`/`TimedOut`/`HostUnreachable`/`MessageTooLong`/`BrokenPipe`)
 // serve std::net: a non-blocking connect in flight, a datagram over MTU, a send to a dropped peer.
-enum IoError {
+// `IoError` is a first-class `Error`: a fallible ctor/fn may return it directly as
+// `Result<T, IoError>` (matchable), or box it into `Owned<Error>` for a polymorphic error channel.
+type enum IoError implements Error {
     NotFound,
     PermissionDenied,
     WouldBlock,
@@ -36,12 +38,8 @@ enum IoError {
     HostUnreachable,
     MessageTooLong,
     BrokenPipe,
-    Other(int32 code)
-}
+    Other(int32 code);
 
-// `IoError` is a first-class `Error` (Model C): a fallible ctor/fn may return it directly as
-// `Result<T, IoError>` (matchable), or box it into `Owned<Error>` for a polymorphic error channel.
-implements Error for IoError {
     public fn string message() {
         return match (this) {
             case NotFound:          "not found";

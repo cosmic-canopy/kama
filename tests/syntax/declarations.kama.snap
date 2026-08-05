@@ -118,11 +118,13 @@
 >}
 #^^ source.kama
 >
->enum Color {
-#^^^^ source.kama storage.type.kama
+>type enum Color {
+#^^^^ source.kama keyword.other.kama
 #    ^ source.kama
-#     ^^^^^ source.kama entity.name.type.kama
-#          ^^^ source.kama
+#     ^^^^ source.kama storage.type.kama
+#         ^ source.kama
+#          ^^^^^ source.kama entity.name.type.kama
+#               ^^^ source.kama
 >    Red,
 #^^^^ source.kama
 #    ^^^ source.kama entity.name.type.kama

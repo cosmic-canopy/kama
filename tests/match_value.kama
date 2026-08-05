@@ -1,4 +1,4 @@
-enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
+type enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
 fn int main()
 {
     Shape s = Shape::Rect(w: 3.0, h: 4.0);

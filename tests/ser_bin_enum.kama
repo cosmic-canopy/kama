@@ -5,7 +5,7 @@ import std::serialization::binary::{encode, decode};
 import std::collections::{DynamicArray};
 
 @generate(Serialize, Deserialize)
-enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
+type enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }
 
 @generate(Serialize, Deserialize)
 @generate(of)

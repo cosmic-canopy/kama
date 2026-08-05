@@ -1632,19 +1632,15 @@ destructor_declaration
    union. Like every other kind an enum takes `class_base_opt`, so it declares its conformance inline —
    and the methods satisfying that contract follow the variants after a `;`.
 
-   `enum` is a RESERVED token (unlike the contextual kind words `value`/`resource`/`view`/`contract`),
-   so `TYPE ENUM …` is its own production rather than another arm of `marked_type_declaration`; that is
-   also what keeps the two apart with no conflict. All four alternatives (attributed × `type`-marked)
-   delegate to `makeEnumDeclaration`. */
+   The `type` marker is MANDATORY — GOALS #3c says every declaration is `type <kind> Name`, and an enum
+   is a kind like any other. `enum` is a RESERVED token (unlike the contextual kind words
+   `value`/`resource`/`view`/`contract`), so `TYPE ENUM …` is its own production rather than another arm
+   of `marked_type_declaration`; that is also what keeps the two apart with no conflict. */
 enum_declaration
-  : modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
-    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $1, $3, $4, $5, $6); }
-  | attribute_list modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
-    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $2, $4, $5, $6, $7); }   /* `@generate(...) enum …` */
-  | TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
+  : TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
     { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $4, $5, $6, $7); }
   | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
-    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }
+    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }   /* `@generate(...) type enum …` */
   ;
 enum_underlying_opt
   : /* Nothing */        { $$ = SharedIdentifier(); }

@@ -874,13 +874,12 @@ private:
     // themselves are injected later in applyRetroactive, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _retroConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
-    // Model C: a PLAIN (payload-less) enum's decl node + its declaring-unit ns context, captured at
-    // collectEnums. If such an enum later retro-implements a METHOD-CARRYING contract (e.g. base `Error`),
-    // it is PROMOTED to a tagged-union ClassInfo (an all-payload-less variant emits `struct{tag}`, no union)
-    // so it can carry a `<Enum>__as_C` vtbl + be boxed — reusing the tagged-enum machinery. Keyed by
-    // qualified name.
+    // Every enum's decl node, keyed by qualified name. Its remaining consumer is the LSP/query def-site
+    // table (kama.query.cpp), which is the ONLY place either kind of enum gets a def-site: a tagged enum
+    // is lowered to a variant ClassInfo and never reaches `_enums`, and the `_classes` loop skips variant
+    // backings. (It also fed the lazy Model-C promotion, which is gone — an enum now declares its
+    // conformance, so it is promoted at its declaration and needs no rebuild.)
     std::map<std::string, EnumDeclarationNode*> _enumDeclNodes;
-    std::map<std::string, NsCtx>                _enumNsCtx;
     std::set<std::string>                       _preludeEnums;   // enums declared in the prelude (a promoted one's vtbl/serde is header-static, no home module)
     std::map<std::string, CollectionInfo> _collections;      // cName -> info
     std::vector<std::string>              _collectionOrder;  // registration order (inner-first; a

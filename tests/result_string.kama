@@ -1,5 +1,8 @@
-enum DescribeErr { Fail }
-implements Error for DescribeErr { public fn string message() { return "fail"; } }
+type enum DescribeErr implements Error {
+    Fail;
+
+    public fn string message() { return "fail"; }
+}
 fn int describe(int32 code)
 {
     Result<int32, DescribeErr> r = code == 0 ? Result::Ok(value: 200) : Result::Err(error: DescribeErr::Fail);

@@ -11,9 +11,9 @@
 // and read the diff: a line that flips to `-` is a regression, a line that flips off `-` is a fix.
 namespace spellings;
 
-enum Color { Red, Green, Blue }
+type enum Color { Red, Green, Blue }
 
-enum Shape { Circle(int32 r), Empty }
+type enum Shape { Circle(int32 r), Empty }
 
 type contract Area for both { fn int32 area(); }
 

@@ -1,5 +1,8 @@
-enum DivErr { DivByZero }
-implements Error for DivErr { public fn string message() { return "div by zero"; } }
+type enum DivErr implements Error {
+    DivByZero;
+
+    public fn string message() { return "div by zero"; }
+}
 fn int divide(int32 a, int32 b)
 {
     Result<int32, DivErr> r = b == 0 ? Result::Err(error: DivErr::DivByZero) : Result::Ok(value: a / b);

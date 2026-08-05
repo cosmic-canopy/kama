@@ -1,4 +1,4 @@
-enum E { A(int32 n), B }
+type enum E { A(int32 n), B }
 fn int main()
 {
     E e = E::A(n: 3);

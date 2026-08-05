@@ -28,7 +28,7 @@ type final resource Handle {
     public fn int32 raw() { return this.fd; }
 }
 
-enum Color {
+type enum Color {
     Red,
     Green
 }

@@ -8,7 +8,7 @@
 // `tests/match_on_freecall.kama` looks like it already covered this — it does not. Its enum carries a
 // payload, so it is a tagged union and resolves through a different table. Payload-less is the gap.
 
-enum Code { Ok, Bad }
+type enum Code { Ok, Bad }
 
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 

@@ -47,7 +47,7 @@ type resource Node {
     public fn int32 read() { return this.tag; }
 }
 
-enum Level { Low, High }
+type enum Level { Low, High }
 
 fn int32 measure<T: Sized>(T item) {
     return item.size();

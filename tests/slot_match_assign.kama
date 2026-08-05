@@ -6,7 +6,7 @@
 // its own unconditional path, so the caller's side is always one straight-line `out` argument.
 // `tests/xfail/slot_match_*.kama` pin the other direction.
 
-enum Code { Ok, Bad }
+type enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
 
 fn void fill(int32 v, out int32 dst) { dst = v; }

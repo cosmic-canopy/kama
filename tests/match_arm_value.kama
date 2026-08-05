@@ -1,7 +1,7 @@
 // `:= expr;` names the value a match arm's block produces: single-exit (must be the block's LAST
 // statement), and it accepts ANY expression — arithmetic, ternary, an owned value — unlike the old
 // "a block arm must end in a call" rule. Returns 42.
-enum Band { Low, Mid, High }
+type enum Band { Low, Mid, High }
 
 // int result, in a local-variable initializer
 fn int32 score(Band b, int32 n) {

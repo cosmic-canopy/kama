@@ -524,15 +524,15 @@ FIXTURE="$ROOT/tests/query/coverage/spellings.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo 'check-query: M6 B3f :: qualifier positions'
-expect --def 59:14 -- "spellings.kama:14:5"     # `Color` in `Color::Green` -> the enum declaration
-expect --def 62:15 -- "spellings.kama:16:5"     # `Shape` in `Shape::Circle(r: 7)`
+expect --def 59:14 -- "spellings.kama:14:10"     # `Color` in `Color::Green` -> the enum declaration
+expect --def 62:15 -- "spellings.kama:16:10"     # `Shape` in `Shape::Circle(r: 7)`
 expect --def 56:14 -- "spellings.kama:34:11"    # `Point` in `Point::origin()` — a static call's TYPE
 expect --type 59:14 -- "enum Color"
 # The qualifier is a USE of the type, so it must be in the type's reference set — that is what makes
 # renaming the enum rewrite it. The member `Green` keeps its own separate symbol.
-expect --refs 14:5 -- "spellings.kama:59:14"
-expect --refs 14:5 -- "spellings.kama:59:4"     # the type ANNOTATION, indexed since M0
-reject --refs 14:5 -- "spellings.kama:59:21"    # `Green` belongs to the enum MEMBER, not the enum
+expect --refs 14:10 -- "spellings.kama:59:14"
+expect --refs 14:10 -- "spellings.kama:59:4"     # the type ANNOTATION, indexed since M0
+reject --refs 14:10 -- "spellings.kama:59:21"    # `Green` belongs to the enum MEMBER, not the enum
 
 # ---------------------------------------------------------------------------------------------------
 # M6 B3f — a MODULE path is a navigation target, never a rename target.

@@ -16,7 +16,7 @@ extern fn int32 kama_ws_recv(int32 h, Ptr<uint8> buf, usize n);
 extern fn void  kama_ws_close(int32 h);
 
 // WebSocket connection state (poll after connect until Open, or to detect Closed).
-enum WsState { Connecting, Open, Closing, Closed }
+type enum WsState { Connecting, Open, Closing, Closed }
 
 // A reliable, ordered WebSocket connection — the web fallback for ReliableStream (Safari/iOS, Node, older
 // browsers) where WebTransport isn't available. Message-framed: `write` sends ONE binary message; `read`

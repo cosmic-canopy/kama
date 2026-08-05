@@ -1,4 +1,4 @@
-enum Signal { Red, Yellow, Green }
+type enum Signal { Red, Yellow, Green }
 
 fn int32 duration(Signal s)
 {

@@ -10,8 +10,9 @@ type resource Probe {
     ~Probe() { unsafe { free(p: this.p); } }
     public fn int32 live() { return 1; }
 }
-enum LoadError { Missing, Wrapped(Shared<Probe> probe) }
-implements Error for LoadError {
+type enum LoadError implements Error {
+    Missing, Wrapped(Shared<Probe> probe);
+
     public fn string message() { return match (this) { case Missing: "m"; case Wrapped(probe: p): "w"; }; }
 }
 fn Result<int32, Owned<Error>> load(bool ok) {

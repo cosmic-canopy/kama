@@ -2,8 +2,11 @@
 // as a bare `Owned<T>` (dropping the fallibility) is a compile error. The diagnostic points at the correct
 // `Result<Owned<T>, E>` shape.
 import std::memory::{Owned};
-enum BoxErr { Negative }
-implements Error for BoxErr { public fn string message() { return "negative"; } }
+type enum BoxErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 type value Box {
     int32 v;
     public ctor Result<Box, BoxErr> tryMake(int32 v) {

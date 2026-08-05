@@ -202,7 +202,7 @@ type resource Buffer implements Copyable(bare: give)
 Enum members carry a typed named payload and allow a trailing comma
 ================================================================================
 
-enum Shape : int32
+type enum Shape : int32
 {
     Empty,
     Circle(float64 r),

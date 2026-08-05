@@ -21,9 +21,9 @@ export { ParseError, FromStr, parse, FromStrRadix, parseRadix };
 // Strict by design, like Rust's: no surrounding whitespace is trimmed and no trailing byte is ignored, so
 // `" 7"` and `"7x"` are both `InvalidDigit`. Trim first if you want otherwise.
 
-enum ParseError { Empty, InvalidDigit, OutOfRange }
+type enum ParseError implements Error {
+    Empty, InvalidDigit, OutOfRange;
 
-implements Error for ParseError {
     public fn string message() {
         return match (this) {
             case Empty:        "cannot parse an empty string";
@@ -32,6 +32,7 @@ implements Error for ParseError {
         };
     }
 }
+
 
 // ---------------------------------------------------------------------------------------------------
 // Integers. The magnitude accumulates in `uint64` and is range-checked BEFORE each multiply — kama traps

@@ -5,8 +5,11 @@
 // `Result`'s dtor; Err allocates nothing).
 import std::memory::{Owned, Shared};
 
-enum ShapeErr { Negative }
-implements Error for ShapeErr { public fn string message() { return "negative"; } }
+type enum ShapeErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 
 type contract Shape for both { fn int32 area(); }
 

@@ -105,10 +105,10 @@ MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }
 # declaration, its type annotations and its `case` arms, and left every `Color::` spelling behind. Both
 # spellings are in this buffer on purpose, since a fixture with only the annotation passes while broken.
 # Layout (LSP 0-based lines, 0-based chars):
-#   L0 `enum Color { Red, Green, Blue }`                       -> `Color` decl at 5..10
+#   L0 `type enum Color { Red, Green, Blue }`                  -> `Color` decl at 10..15
 #   L1 `fn int32 main() { Color c = Color::Green; ...`         -> annotation at 18..23, QUALIFIER at 28..33
 QRURI="file:///qualrename.kama"
-QREN='enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
+QREN='type enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
 
 TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
@@ -137,14 +137,14 @@ SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 # The prepareRename ranges below are the DATA-LOSS GUARD — rename replaces the range it is given, so a
 # range that ran past the name would rewrite `seeded = 7` (or `Code::Ok`, or `Bad = 2`) as the new name.
 # LSP 0-based lines/chars:
-#   L1 `enum Code { Ok, Bad = 2 }`                     -> `Bad` 16..19  (NOT 16..23)
+#   L1 `type enum Code { Ok, Bad = 2 }`                -> `Bad` 21..24  (NOT 21..28)
 #   L3 `    public int32 scale = 3;`                   -> `scale` 17..22 (NOT 17..26)
 #   L4 `    public fn int32 twice(int32 bias) { … }`   -> `bias` 32..36 (NOT 26..36, which starts at the type)
 #      ... its body `this.scale` -> `scale` at 52..57 (NOT 47.., which starts at the receiver)
 #   L7 `    int32 seeded = 7;`                         -> `seeded` 10..16 (NOT 10..20)
 #   L8 `    Code c = Code::Ok;`                        -> `Ok` 19..21 (NOT 13..21, which eats `Code::`)
 MURI="file:///bindings.kama"
-M34='namespace m34;\nenum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
+M34='namespace m34;\ntype enum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
 
 # M6 A2 fixture: a named-argument LABEL, single-file so it is renameable under the open-file rule. The
 # span is the whole point — rename REPLACES the range it is handed, so a span running past the label would
@@ -311,7 +311,7 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":20,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12}}}'
 frame '{"jsonrpc":"2.0","id":21,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":4,"character":33}}}'
 frame '{"jsonrpc":"2.0","id":22,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18}}}'
-frame '{"jsonrpc":"2.0","id":23,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":1,"character":17}}}'
+frame '{"jsonrpc":"2.0","id":23,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":1,"character":22}}}'
 frame '{"jsonrpc":"2.0","id":24,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":8,"character":20}}}'
 frame '{"jsonrpc":"2.0","id":25,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18},"context":{"includeDeclaration":false}}}'
 frame '{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12},"newName":"total"}}'
@@ -411,7 +411,7 @@ frame '{"jsonrpc":"2.0","id":59,"method":"textDocument/rename","params":{"textDo
 # --- M6 B3f: rename the enum from its DECLARATION and require the `Color::` qualifier among the edits;
 #     then go-to-definition and hover FROM the qualifier, which had no position to click on at all.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$QRURI"'","languageId":"kama","version":1,"text":"'"$QREN"'"}}}'
-frame '{"jsonrpc":"2.0","id":60,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":0,"character":5},"newName":"Hue"}}'
+frame '{"jsonrpc":"2.0","id":60,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":0,"character":10},"newName":"Hue"}}'
 frame '{"jsonrpc":"2.0","id":61,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
 frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
 # --- M6 B3f: a module PATH segment. `$IURI` was opened above with the COMPACT $IMP buffer (three lines),
@@ -499,7 +499,7 @@ expect '"id":21,"result":{"start":{"line":4,"character":32},"end":{"line":4,"cha
                                           "prepareRename: param 'bias' starts at the name, not at its type"
 expect '"id":22,"result":{"start":{"line":3,"character":17},"end":{"line":3,"character":22}}' \
                                           "prepareRename: field 'scale' spans the NAME, not 'scale = 3'"
-expect '"id":23,"result":{"start":{"line":1,"character":16},"end":{"line":1,"character":19}}' \
+expect '"id":23,"result":{"start":{"line":1,"character":21},"end":{"line":1,"character":24}}' \
                                           "prepareRename: enum member 'Bad' spans the NAME, not 'Bad = 2'"
 expect '"id":24,"result":{"start":{"line":8,"character":19},"end":{"line":8,"character":21}}' \
                                           "prepareRename: a 'Code::Ok' use spans 'Ok', not the qualifier too"
@@ -620,9 +620,9 @@ expect '"id":59,"result":{"changes":{"file:///genrename.kama":[{"range":{"start"
 echo "check-lsp: M6 B3f the :: qualifier of a name"
 # The whole edit set, asserted EXACTLY: the declaration, the type annotation, and — new in B3f — the
 # `Color::` qualifier. The `Green` after it is the enum MEMBER, a separate symbol, and must not be touched.
-expect '"id":60,"result":{"changes":{"file:///qualrename.kama":[{"range":{"start":{"line":0,"character":5},"end":{"line":0,"character":10}},"newText":"Hue"},{"range":{"start":{"line":1,"character":18},"end":{"line":1,"character":23}},"newText":"Hue"},{"range":{"start":{"line":1,"character":28},"end":{"line":1,"character":33}},"newText":"Hue"}]}}' \
+expect '"id":60,"result":{"changes":{"file:///qualrename.kama":[{"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":15}},"newText":"Hue"},{"range":{"start":{"line":1,"character":18},"end":{"line":1,"character":23}},"newText":"Hue"},{"range":{"start":{"line":1,"character":28},"end":{"line":1,"character":33}},"newText":"Hue"}]}}' \
        "renaming an enum rewrites the `Color::` qualifier, and only the qualifier (M6 B3f)"
-expect '"id":61,"result":{"uri":"file:///qualrename.kama","range":{"start":{"line":0,"character":5},"end":{"line":0,"character":10}}}' \
+expect '"id":61,"result":{"uri":"file:///qualrename.kama","range":{"start":{"line":0,"character":10},"end":{"line":0,"character":15}}}' \
        "go-to-definition FROM a qualifier lands on the enum declaration"
 expect '"id":62,"result":{"contents":{"kind":"plaintext","value":"enum Color"}}' \
        "hover on a qualifier names the enum"

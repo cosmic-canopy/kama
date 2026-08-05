@@ -1,4 +1,4 @@
-enum Tree { Node(Tree left), Leaf }
+type enum Tree { Node(Tree left), Leaf }
 fn int main()
 {
     Tree t = Tree::Leaf;

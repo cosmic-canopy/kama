@@ -4245,9 +4245,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
         std::string name = qualify(*ed->identifier->value);
-        // Remember the decl + declaring context for a possible Model-C promotion (see _enumDeclNodes).
-        _enumDeclNodes[name] = ed;
-        _enumNsCtx[name]     = _nsCtx;
+        _enumDeclNodes[name] = ed;   // the LSP def-site table's only source for enums
         if (unit == _preludeUnit) _preludeEnums.insert(name);
 
         if (enumIsTagged(ed)) {
@@ -4315,14 +4313,15 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         // A plain C-style enum is a bare integer with no ClassInfo, so there is nothing for `@generate` to
         // synthesize into — and it used to be SILENTLY IGNORED, which is the worst answer: the attribute
         // reads as if it worked and the missing conformance only surfaces somewhere far away. Say so, and
-        // point at the retroactive `implements`, which does work on a plain enum today.
+        // point at the enum's own `implements` clause, which is where a conformance is declared.
         if (ed->attributes)
             for (auto& at : *ed->attributes)
                 if (at && at->name && *at->name == "generate")
                     unsupported(("`@generate(...)` has nothing to synthesize on the payload-less enum `"
-                                 + *ed->identifier->value + "` (it is a bare integer, not a struct) — write "
-                                 "`implements <Contract> for " + *ed->identifier->value + " { … }`, which a "
-                                 "plain enum supports").c_str(), ed->line);
+                                 + *ed->identifier->value + "` (it is a bare integer, not a struct) — declare "
+                                 "the conformance on the enum itself and write the method: `type enum "
+                                 + *ed->identifier->value + " implements <Contract> { …variants…; …methods… }`")
+                                .c_str(), ed->line);
         // Plain C-style enum — the existing lightweight path (bare integer, zero regression).
         EnumInfo ei;
         ei.name  = name;
@@ -9071,6 +9070,10 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 ci = _classes.find(name);
             }
             ClassInfo& eci = ci->second;
+            // A prelude enum has no home module, so its method bodies are emitted `static inline` into the
+            // header — which means its PROTOTYPES must be static too, or the C compiler sees a static
+            // declaration following a non-static one. `preludeStatic` is what drives that linkage.
+            if (_preludeEnums.count(name)) eci.preludeStatic = true;
 
             // An enum's layout is its tag plus its variant payloads — there is no struct to add a field
             // to, and nothing else it could own, so a field or a destructor is a mistake worth naming
@@ -16625,25 +16628,22 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // "is this a user type?" test keys on `_classes`, so an entry there would break int
                 // operators/ownership. Hang the injected methods on a SEPARATE `_primConformances` registry
                 // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
-                const std::vector<InterfaceMethod>* cmeths = contractMethods(contract);
                 if (ri->target->builtInVal != 0) {
                     ClassInfo& pci = primConformanceFor(tkey);
                     pci.name = tkey;
                     pci.kind = TypeKind::Value;
                     pci.isScalarRecv = true;
                     tcip = &pci;
-                } else if (_enums.count(tkey) && _enumDeclNodes.count(tkey) && cmeths && !cmeths->empty()) {
-                    // Model C: a PLAIN enum retro-implementing a METHOD-CARRYING contract (e.g. `Error`) is
-                    // PROMOTED to a tagged-union ClassInfo so it can carry the method, a `<Enum>__as_C` vtbl,
-                    // and be boxed — reusing the tagged machinery. A payload-less variant emits no union, so
-                    // the cost is just the tag. Build it under the ENUM's own ns context (not this retro-impl
-                    // unit's). A marker contract carries no methods → not promoted (stays a plain enum).
-                    NsCtx savedNs = _nsCtx;
-                    _nsCtx = _enumNsCtx[tkey];
-                    _classes[tkey] = buildVariantClassInfo(_enumDeclNodes[tkey], tkey);
-                    _nsCtx = savedNs;
-                    _enums.erase(tkey);          // now a tagged class: match/construction use the variant path
-                    tcip = &_classes[tkey];
+                } else if (_enums.count(tkey)) {
+                    // An ENUM declares its conformance inline (`type enum E implements C`), which is what
+                    // retired the lazy "Model C" rebuild that used to happen right here: the enum was still
+                    // a bare integer at this point and had to be reconstructed into a tagged ClassInfo to
+                    // hold the method. A conforming enum now arrives already promoted, from its declaration.
+                    unsupported(("`implements " + contract + " for " + *ri->target->value +
+                                 "` — an enum declares its contracts on its own declaration: write "
+                                 "`type enum " + *ri->target->value + " implements " + contract +
+                                 " { …variants…; …methods… }`").c_str(), ri->line);
+                    continue;
                 } else {
                     unsupported(("`implements " + contract + " for " + *ri->target->value +
                                  "` — unknown target type").c_str(), ri->line);
@@ -17049,6 +17049,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // bodies — emit prototype + definition static-inline here (struct went out above with the others).
     for (auto& kv : _classes) {
         if (!kv.second.preludeStatic || kv.second.methods.empty()) continue;
+        // A promoted prelude ENUM is `preludeStatic` too — for the PROTOTYPE linkage, which must match its
+        // static-inline bodies — but its definitions are class-shaped here (ctors, fields, a vtbl loop) and
+        // an enum has none of that. The dedicated block just below emits its bodies instead.
+        if (kv.second.isVariant) continue;
         scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases);
         _emitStaticClass = true;
         emitClassPrototypes(kv.second);

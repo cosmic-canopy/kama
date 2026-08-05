@@ -17,7 +17,7 @@ extern fn int32 kama_poller_ready(Ptr p, isize fd);
 extern fn void  kama_poller_free(Ptr p);
 
 // What to watch a socket for. Feed a socket's rawHandle() to add().
-enum Interest { Read, Write, ReadWrite }
+type enum Interest { Read, Write, ReadWrite }
 
 // A socket's readiness after wait(). `readable` also covers hangup/error (so a follow-up read sees EOF/err);
 // `writable` on a connecting socket means the non-blocking connect resolved (then call checkConnected()).

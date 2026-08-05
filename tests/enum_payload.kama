@@ -1,10 +1,10 @@
-enum Shape
+type enum Shape
 {
     Circle(float64 radius),
     Rect(float64 w, float64 h),
     Empty
 }
-enum Tag : uint8 { A, B, C }
+type enum Tag : uint8 { A, B, C }
 fn int main()
 {
     Shape a = Shape::Circle(radius: 2.0);

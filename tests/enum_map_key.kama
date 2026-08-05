@@ -3,11 +3,11 @@
 // counterpart to xfail/generate_on_plain_enum, which points here.
 import std::collections::{Map};
 
-enum Color { Red, Green, Blue }
-implements Hashable for Color {
+type enum Color implements Hashable, Equatable {
+    Red, Green, Blue;
+
     public fn uint64 hash() { return match (this) { case Red: 0ui64; case Green: 1ui64; case Blue: 2ui64; }; }
-}
-implements Equatable for Color {
+
     public fn bool equals(ref Color other) { return this.hash() == other.hash(); }
 }
 

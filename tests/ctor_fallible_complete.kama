@@ -2,8 +2,11 @@ import std::memory::{Owned};
 // Construction-model M3: complete-init is enforced on FALLIBLE ctors too. `make` returns `Result<Holder,E>`:
 // `Err` before the object exists (no completeness obligation), or `Ok(value: h)` where `h` must be fully
 // built — the checker unwraps the `Ok` and verifies the wrapped object's owning fields are all set.
-enum HolderErr { Negative }
-implements Error for HolderErr { public fn string message() { return "negative"; } }
+type enum HolderErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 type value Box {
     int32 v;
     public ctor make(int32 v) { this.v = v; }

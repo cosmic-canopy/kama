@@ -1,6 +1,6 @@
 // A pattern label must name a field the variant actually has. Positional binding could not catch this:
 // any name was accepted in any slot, which is exactly how a swap stayed silent.
-enum Shape { Rect(int32 w, int32 h) }
+type enum Shape { Rect(int32 w, int32 h) }
 fn int32 main() {
     Shape s = Shape::Rect(w: 2, h: 3);
     return match (s) { case Rect(w: a, depth: b): a; };   // ERROR: `depth` is not a field of Rect

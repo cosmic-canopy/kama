@@ -4,8 +4,11 @@ import std::memory::{Owned};
 // `Result<T, E>`. On failure it returns `Err` BEFORE the resource exists — so no half-built object can
 // escape, and `match` forces the caller to handle the error. No new feature: M31a static methods +
 // M28e Result + Owned + RAII.
-enum BufferErr { BadSize }
-implements Error for BufferErr { public fn string message() { return "bad size"; } }
+type enum BufferErr implements Error {
+    BadSize;
+
+    public fn string message() { return "bad size"; }
+}
 type resource Buffer {
     int32 size;
     private ctor make(int32 size) { this.size = size; }             // trivial, infallible, private

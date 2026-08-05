@@ -111,7 +111,7 @@ When construction can fail, the constructor itself returns a `Result` — it is 
 with a declared return type. It fails *before* the object exists, so a half-built value never escapes:
 
 ```kama
-enum BufferErr { BadSize }
+type enum BufferErr { BadSize }
 implements Error for BufferErr { public fn string message() { return "bad size"; } }
 
 type resource Buffer
@@ -186,8 +186,8 @@ keep, you own, and a borrow (`ref`, or a `view`) is scope-local by construction.
 Fallible operations return a value you have to look at.
 
 ```kama
-enum Optional<T> { Some(T value), None }
-enum Result<T, E: Error> { Ok(T value), Err(E error) }
+type enum Optional<T> { Some(T value), None }
+type enum Result<T, E: Error> { Ok(T value), Err(E error) }
 ```
 
 Both live in the prelude. `Optional<T>` replaces null; `Result<T, E>` replaces exceptions, and its
@@ -210,7 +210,7 @@ An enum variant can carry payload fields, which makes it a full sum type. `match
 to take one apart, it is exhaustive, and it produces a value:
 
 ```kama
-enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
+type enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
 
 fn int main()
 {

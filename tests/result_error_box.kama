@@ -1,8 +1,9 @@
 // P2 (Model C): a fallible fn returns `Result<int32, Owned<Error>>`; `Result::Err(error: <enum>)` BOXES the
 // enum into the fat handle and upcasts to `Error`; the caller dispatches `.message()` and the box is
 // RAII-dropped when the Result is. Both a plain-message variant and a payload variant are boxed.
-enum IoError { NotFound, Other(int32 code) }
-implements Error for IoError {
+type enum IoError implements Error {
+    NotFound, Other(int32 code);
+
     public fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "oth"; }; }
 }
 fn Result<int32, Owned<Error>> f(int32 which) {

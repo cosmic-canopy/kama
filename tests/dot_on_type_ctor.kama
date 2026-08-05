@@ -3,8 +3,11 @@
 // Covers both fallibility modes through the dot spelling: an infallible ctor returns `T`, a fallible one
 // returns `Result<T,E>`. Distinct from `Type::staticFn()` (a static fn stays `::` — see
 // dot_vs_static_greppable) and `Enum::Variant` (stays `::`).
-enum PointErr { NegativeX }
-implements Error for PointErr { public fn string message() { return "negative x"; } }
+type enum PointErr implements Error {
+    NegativeX;
+
+    public fn string message() { return "negative x"; }
+}
 type value Point {
     int32 x;
     int32 y;

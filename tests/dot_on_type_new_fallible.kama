@@ -5,8 +5,11 @@
 // nothing is allocated).
 import std::memory::{Owned, Shared};
 
-enum GaugeErr { Negative }
-implements Error for GaugeErr { public fn string message() { return "negative"; } }
+type enum GaugeErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 
 type resource Gauge {
     int32 v;

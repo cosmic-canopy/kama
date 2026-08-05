@@ -5,7 +5,7 @@ type resource Probe
     public ctor make(int32 id) { this.id = id; }
     ~Probe() { }
 }
-enum Box
+type enum Box
 {
     Full(Shared<Probe> p),
     Empty

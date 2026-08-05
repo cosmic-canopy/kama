@@ -5,10 +5,9 @@
 // (The result is kept < 256 so the process exit code isn't truncated; the interface-call result is
 // bound to a local because chaining `.length()` directly on it hits a separate exprClass limitation.)
 
-enum IoError { NotFound, Other(int32 code) }
-enum ParseError { BadToken, Eof }
+type enum IoError implements Error {
+    NotFound, Other(int32 code);
 
-implements Error for IoError {
     public fn string message() {
         return match (this) {
             case NotFound: "nf";       // 2
@@ -16,7 +15,9 @@ implements Error for IoError {
         };
     }
 }
-implements Error for ParseError {
+type enum ParseError implements Error {
+    BadToken, Eof;
+
     public fn string message() {
         return match (this) {
             case BadToken: "bad";      // 3
@@ -24,6 +25,7 @@ implements Error for ParseError {
         };
     }
 }
+
 
 // A single monomorphic C function over the base contract — the vtbl makes `.message()` dynamic.
 fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }

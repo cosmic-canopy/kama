@@ -1,6 +1,6 @@
 @generate(of)
 type value Vec2 { public float64 x; public float64 y; }
-enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
+type enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
 fn int area(Event e)
 {
     return match (e) {

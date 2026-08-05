@@ -6,8 +6,11 @@
 import std::memory::{Owned};
 import std::collections::{Arena, BumpAllocator};
 
-enum OpenErr { Negative }
-implements Error for OpenErr { public fn string message() { return "negative"; } }
+type enum OpenErr implements Error {
+    Negative;
+
+    public fn string message() { return "negative"; }
+}
 
 type value Gauge {
     int32 v;

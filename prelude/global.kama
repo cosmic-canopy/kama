@@ -5,16 +5,16 @@
 // This file was the `PRELUDE_SRC` C string literal in kama.driver.cpp; keep its declaration ORDER
 // (contracts before the retro-impls that satisfy them).
 
-enum Optional<T> { Some(T value), None }
-enum Result<T, E: Error> { Ok(T value), Err(E error) }
+type enum Optional<T> { Some(T value), None }
+type enum Result<T, E: Error> { Ok(T value), Err(E error) }
 // The empty value — the payload for a fallible op that succeeds with nothing to return
 // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
 // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant
 // enum (like `None`) so it lives in the prelude without needing value-type ctor emission.
-enum Unit { Unit }
+type enum Unit { Unit }
 // The result of a three-way comparison (`Comparable.compareTo`). A single enum (not a signed int) keeps
 // ordering explicit and matchable — the ordering protocol for sorted containers + `PriorityQueue`.
-enum Ordering { Less, Equal, Greater }
+type enum Ordering { Less, Equal, Greater }
 // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
 // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
 // pointers become ordinary kama types over this instead of compiler intrinsics.
@@ -236,8 +236,9 @@ type contract Serializer for resource {
 }
 // SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
 // fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
-enum SerError { NotRepresentable, IoError }
-implements Error for SerError {
+type enum SerError implements Error {
+    NotRepresentable, IoError;
+
     public fn string message() {
         return match (this) {
             case NotRepresentable:  "value not representable in this format";
@@ -252,11 +253,12 @@ type contract Serialize for both { fn Result<Unit, std::memory::Owned<Error>> se
 // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
 // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
-enum DeError { Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId }
-// DeError is a first-class `Error`: it BOXES into `Owned<Error>` at a fallible-`deserialize` boundary and
-// is recovered with `err.as<DeError>()`. (Retro-implementing a method-carrying contract promotes this plain
-// enum to a tagged repr — transparent to its by-value uses.)
-implements Error for DeError {
+// DeError is a first-class `Error`: it BOXES into `Owned<Error>` at a fallible-`deserialize` boundary
+// and is recovered with `err.as<DeError>()`. (Declaring a method-carrying contract gives this
+// payload-less enum a tagged repr — transparent to its by-value uses.)
+type enum DeError implements Error {
+    Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId;
+
     public fn string message() {
         return match (this) {
             case Malformed:            "malformed input";

@@ -22,7 +22,7 @@ extern fn int32  kama_dirclose(Ptr dirp);
 extern fn int32  kama_last_error();
 extern fn int32  kama_EINTR();
 
-enum OpenMode { Read, Write }
+type enum OpenMode { Read, Write }
 
 // File metadata (extensible — mtime/permissions later).
 @generate(of)

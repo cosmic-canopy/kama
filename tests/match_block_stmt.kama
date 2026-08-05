@@ -1,4 +1,4 @@
-enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
+type enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
 fn int main()
 {
     Msg a = Msg::Move(dx: 3, dy: 4);
