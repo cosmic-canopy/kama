@@ -68,8 +68,9 @@ Everything else here is library or toolchain work that does **not** gate the tag
    one. Run in order, each its own session, **before M2b**:
    1. **Contract model** — *both spellings now ship* (`type enum X implements C`, `type intrinsic <…>
       implements C`), and two of the four pieces of machinery are gone (retro-impl on enums, the enum
-      tagged-union promotion). What is LEFT: the package-identity seam + re-keying the conformance
-      registry off cType (which closes the `char`/`uint32` collision below) and the scoping fixtures that
+      tagged-union promotion). The conformance registry is now keyed by kama type rather than cType, which
+      closed the `char`/`uint32` collision — `char` has real `Format`/`Serialize`/`Deserialize`
+      conformances. What is LEFT: the package-identity seam and the scoping fixtures that
       depend on it; migrating the prelude's 66 primitive impls and lib's 21; the contract-as-scope rule
       plus primitive→contract widening; then deleting retro-impl and the `string`-`Equatable` nominal
       special case. Per-milestone detail in the brief.
@@ -246,12 +247,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
   Both are ordinary socket-option work on the shipped seam.
-- **`char` has no `Format` / `Serialize` / `Deserialize` conformance (small, structural).** `char` and
-  `uint32` share a C type, and the retro-conformance registry is keyed by cType, so it cannot hold both —
-  `prelude/global.kama` records the `uint32` ones. String interpolation still renders a `char` AS A
-  CHARACTER through a compiler fast path, but a `char` reaching those contracts through a GENERIC bound
-  renders (and serializes) as its numeric scalar. Fix = key the registry by kama type rather than cType, or
-  give `char` a distinct C typedef. The JSON backend now reads and writes `char` correctly either way. **Scheduled** — the contract-model campaign (§1) re-keys that registry as part of its M3 residual.
 - **A value-producing `match` over an `enum X : IntType` does not compile (small, self-contained).** The
   explicit underlying type makes the tag a plain `uint8_t`/`int16_t`/… rather than a C `enum`, so the C
   compiler cannot prove the emitted `switch` exhaustive and rejects the uninitialized match temp

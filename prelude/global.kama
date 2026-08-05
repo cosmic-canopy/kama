@@ -309,9 +309,7 @@ implements Serialize for uint64  { public fn Result<Unit, std::memory::Owned<Err
 implements Serialize for float32 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 implements Serialize for float64 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 implements Serialize for bool    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-// NOTE: no `char` conformance — `char` and `uint32` share the C type `uint32_t`, so the cType-keyed
-// primitive-conformance registry can't hold both. A `char` FIELD still serializes via the compiler's
-// `writeChar`/`readChar` fast path; a `char` in a collection rides `uint32`'s numeric conformance.
+implements Serialize for char    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeChar(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 implements Serialize for string  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
 // `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
@@ -326,6 +324,7 @@ implements Deserialize for uint64  { public ctor Result<uint64, std::memory::Own
 implements Deserialize for float32 { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
 implements Deserialize for float64 { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
 implements Deserialize for bool    { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+implements Deserialize for char    { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
 implements Deserialize for string  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
 // Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
 // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
@@ -590,10 +589,9 @@ type resource Formatter {
 }
 // Primitive conformances (pure-kama retro-impls, like the Hashable/Comparable ones above) — every scalar and
 // `string` renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an
-// import. Narrow integers widen into the widest write (JSON-style: one conversion per signedness). NO `char`
-// conformance: `char` and `uint32` share the C type `uint32_t`, so the cType-keyed conformance registry can't
-// hold both (the same limitation `Serialize` notes) — a `char` interpolated as `${c}` renders as its CHARACTER
-// via the compiler's `writeChar` fast path, while a `char` reached through a generic bound rides `uint32`.
+// import. Narrow integers widen into the widest write (JSON-style: one conversion per signedness). `char`
+// renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an interpolation
+// hole, so the two agree whether the value arrives directly or through a `<T: Format>` bound.
 implements Format for int8    { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
 implements Format for int16   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
 implements Format for int32   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
@@ -605,6 +603,7 @@ implements Format for uint64  { public fn void format(ref Formatter f) { f.write
 implements Format for float32 { public fn void format(ref Formatter f) { f.writeF32(v: this); } }
 implements Format for float64 { public fn void format(ref Formatter f) { f.writeF64(v: this); } }
 implements Format for bool    { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
+implements Format for char    { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
 implements Format for string  { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
 // The convenience wrapper: build a Formatter, format into it, finish — ONE allocation for the whole value.
 // A generic bound method call (like the `__kamaDeserialize` trampoline), monomorphized per `T`.
