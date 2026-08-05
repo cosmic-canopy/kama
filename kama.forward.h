@@ -45,6 +45,7 @@ class AsDowncastNode;
 class BitcastNode;
 class EnumMemberDeclarationNode;
 class EnumDeclarationNode;
+class IntrinsicImplNode;
 class MatchNode;
 class MatchArmNode;
 class ClassDeclarationNode;
@@ -140,6 +141,25 @@ struct EnumBody {
     SharedClassMemberDeclarationList members;
 };
 typedef std::shared_ptr<EnumBody> SharedEnumBody;
+
+// One `<int8, int16> { … }` SPECIALIZATION SECTION inside a `type intrinsic` block: the members it
+// carries replace the block's shared bodies, for those targets only. What it serves is a contract whose
+// body genuinely cannot be shared across the set — `sqrt` needs `sqrtf` for float32 and `sqrt` for
+// float64, and kama has no in-body type branching by design.
+struct IntrinsicSection {
+    SharedIdentifierList             targets;
+    SharedClassMemberDeclarationList members;
+};
+typedef std::shared_ptr<IntrinsicSection> SharedIntrinsicSection;
+typedef std::vector<SharedIntrinsicSection> IntrinsicSectionList;
+typedef std::shared_ptr<IntrinsicSectionList> SharedIntrinsicSectionList;
+
+// A `type intrinsic` body: bodies shared by every target in the set, plus any per-target sections.
+struct IntrinsicBody {
+    SharedClassMemberDeclarationList members;
+    SharedIntrinsicSectionList      sections;
+};
+typedef std::shared_ptr<IntrinsicBody> SharedIntrinsicBody;
 
 typedef std::shared_ptr<CompilationUnit> SharedCompilationUnit;
 typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;

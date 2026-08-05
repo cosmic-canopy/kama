@@ -1059,6 +1059,31 @@ public:
         , body(body) { }
 };
 
+// `type intrinsic <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
+// PRIMITIVE, the kind that had no kama spelling at all (it existed only as a compiler-internal notion, so
+// the prelude had to retro-implement onto it 68 times).
+//
+// The set form is load-bearing: one body serves every target whose implementation is genuinely identical,
+// and a `<…>` SECTION overrides it for the targets where it is not. A primitive never gets a `_classes`
+// entry — its conformance lives in a separate registry — so this is not a `ClassDeclarationNode`.
+class IntrinsicImplNode : public StatementNode {
+public:
+    SharedModifierList               modifiers;
+    SharedString                     kindWord;   // the positional kind word — must be `intrinsic`
+    SharedIdentifierList             targets;    // the set, in declaration order
+    SharedClassBaseDeclaration       baseTypes;  // `implements C` — exactly one contract per block
+    SharedClassMemberDeclarationList members;    // bodies shared by every target
+    SharedIntrinsicSectionList       sections;   // per-target overrides
+    IntrinsicImplNode(CodeGenContext& context, SharedModifierList modifiers, SharedIdentifierList targets,
+                      SharedClassBaseDeclaration baseTypes, SharedIntrinsicBody body)
+        : ASTNode(context), StatementNode(context)
+        , modifiers(modifiers)
+        , targets(targets)
+        , baseTypes(baseTypes)
+        , members(body ? body->members : SharedClassMemberDeclarationList())
+        , sections(body ? body->sections : SharedIntrinsicSectionList()) { }
+};
+
 class EnumMemberDeclarationNode : public StatementNode {
 public:
     SharedIdentifier identifier;
