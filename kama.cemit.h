@@ -854,22 +854,23 @@ private:
     std::map<std::string, std::vector<VSlot>> _rootVtables;   // root class name -> slots
     std::set<std::pair<std::string,std::string>> _overriddenSlots;  // (vtableRoot, slot) overridden somewhere -> keep dynamic
 
-    // Retroactive conformances of a PRIMITIVE (`implements Hashable for int32`). Kept OUT of `_classes`
-    // (an entry there would make every "user type?" test treat the primitive as a struct). Keyed by the
-    // primitive cType (int32_t); the ClassInfo holds only the injected methods + `isScalarRecv`.
+    // Contract conformances of a PRIMITIVE (`type intrinsic <int32> implements Hashable`). Kept OUT of
+    // `_classes` (an entry there would make every "user type?" test treat the primitive as a struct).
+    // Keyed by `primKey` — the KAMA type name (`int32`, `char`), NOT the cType: `cType` is not injective,
+    // and `char` and `uint32` both emit `uint32_t`. The ClassInfo's `name` is still the C type, because it
+    // is what `This` resolves to and how the `self` parameter is spelled; the key and the name differ, and
+    // the two char/uint32 entries deliberately share a name while holding different method cNames.
     std::map<std::string, ClassInfo>     _primConformances;
     // The ONE way in. Every read/write of `_primConformances` goes through these three, so the key's
-    // identity lives in exactly one place — re-keying it (cType -> kama type name, which is what lets
-    // `char` and `uint32` hold distinct conformances instead of colliding on `uint32_t`) becomes a change
-    // here rather than a sweep of eight call sites.
+    // identity lives in exactly one place.
     ClassInfo*       primConformance(const std::string& key)
                      { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
     const ClassInfo* primConformance(const std::string& key) const
                      { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
     ClassInfo&       primConformanceFor(const std::string& key) { return _primConformances[key]; }   // creates
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
-    // Pre-scanned retroactive conformances: target cType -> the contracts a top-level `implements C for T`
-    // grants it. Populated before the collection pass so a generic-type-arg bound check that fires during
+    // Pre-scanned conformances: target `primKey` -> the contracts an impl block grants it (both spellings).
+    // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
     // themselves are injected later in applyRetroactive, which also validates completeness/coherence.
     std::map<std::string, std::set<std::string>> _retroConformances;
@@ -1781,6 +1782,11 @@ private:
 
     // Helpers
     std::string cType(SharedIdentifier type);
+    // The conformance-registry key: the KAMA spelling for a scalar primitive, `cType` for everything else.
+    // `cType` is not injective (`char` and `uint32` both emit `uint32_t`), and a conformance must be.
+    std::string primKey(SharedIdentifier type);
+    std::string primKeyOfCType(const std::string& ct);   // the same, recovered from a C type (`uint32_t` -> `uint32`)
+    static bool isScalarPrimKey(const std::string& k);   // true iff `k` names a scalar primitive, not a C type
     std::string cFunctionName(const std::string& kamaName);   // main -> kama_main
     std::string mangledFunctionName(FunctionDeclarationNode* fn, bool& isEntryPoint);
     std::string binaryOperator(int token);

@@ -829,6 +829,70 @@ std::string CEmitter::cType(SharedIdentifier type)
     }
 }
 
+// The key a type's contract conformances are filed under: the KAMA spelling for a scalar primitive, the C
+// name for everything else (`string` -> `kama_string`, a user type -> its mangle). The distinction exists
+// because `cType` is not injective — `char` and `uint32` both emit `uint32_t`, so a cType-keyed registry
+// could hold a `Format` for one of them and not the other. Nothing else in the compiler collides.
+//
+// The `_typeSubst` hop comes FIRST, exactly as in `cType` and `mangleElem`: inside a monomorph a parameter's
+// recorded type node is still the unsubstituted `T`, and reading `builtInVal` off that would fall through to
+// the C type and quietly file `char` under `uint32`.
+std::string CEmitter::primKey(SharedIdentifier type)
+{
+    if (!type) return "void";
+    if (!_typeSubst.empty() && type->value && !type->genericArg) {
+        auto s = _typeSubst.find(*type->value);
+        if (s != _typeSubst.end()) return primKey(s->second);
+    }
+    if (!type->genericArg) switch (type->builtInVal) {
+        case IDENTIFIER_INT8_VAL:    return "int8";
+        case IDENTIFIER_INT16_VAL:   return "int16";
+        case IDENTIFIER_INT32_VAL:   return "int32";
+        case IDENTIFIER_INT64_VAL:   return "int64";
+        case IDENTIFIER_UINT8_VAL:   return "uint8";
+        case IDENTIFIER_UINT16_VAL:  return "uint16";
+        case IDENTIFIER_UINT32_VAL:  return "uint32";
+        case IDENTIFIER_UINT64_VAL:  return "uint64";
+        case IDENTIFIER_BOOL_VAL:    return "bool";
+        case IDENTIFIER_FLOAT32_VAL: return "float32";
+        case IDENTIFIER_FLOAT64_VAL: return "float64";
+        case IDENTIFIER_CHAR_VAL:    return "char";
+        default: break;
+    }
+    return cType(type);
+}
+
+// True for the twelve keys the switch above can produce — i.e. "this key names a scalar primitive", as
+// opposed to the C name `primKey` hands back for everything else. A caller that resolved a key from a kama
+// type node uses this to decide whether that key is authoritative or whether to fall back to the C type.
+bool CEmitter::isScalarPrimKey(const std::string& k)
+{
+    static const std::set<std::string> kScalars = {
+        "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+        "bool", "float32", "float64", "char" };
+    return kScalars.count(k) != 0;
+}
+
+// The same key recovered from a C type, for the places that have already lost the kama type node (an
+// element of a collection, a field of a generic instance). `uint32_t` is the one ambiguous input; it
+// answers `uint32`, so a `char` that reaches a contract only through such a place still rides `uint32`'s
+// conformance. Callers that CAN produce the type node must use `primKey` instead.
+std::string CEmitter::primKeyOfCType(const std::string& ct)
+{
+    if (ct == "int8_t")   return "int8";
+    if (ct == "int16_t")  return "int16";
+    if (ct == "int32_t")  return "int32";
+    if (ct == "int64_t")  return "int64";
+    if (ct == "uint8_t")  return "uint8";
+    if (ct == "uint16_t") return "uint16";
+    if (ct == "uint32_t") return "uint32";
+    if (ct == "uint64_t") return "uint64";
+    if (ct == "bool")     return "bool";
+    if (ct == "float")    return "float32";
+    if (ct == "double")   return "float64";
+    return ct;
+}
+
 // ---------------------------------------------------------------------------
 // Operators
 // ---------------------------------------------------------------------------
@@ -9170,12 +9234,12 @@ SharedClassMemberDeclarationList CEmitter::intrinsicMembersFor(IntrinsicImplNode
 {
     auto out = std::make_shared<ClassMemberDeclarationList>();
     if (!n) return out;
-    std::string tk = cType(target);
+    std::string tk = primKey(target);   // NOT cType: a `<char>` section must not also serve `uint32`
     if (n->members) for (auto& m : *n->members) out->push_back(m);
     if (n->sections) for (auto& sec : *n->sections) {
         if (!sec || !sec->targets || !sec->members) continue;
         bool serves = false;
-        for (auto& st : *sec->targets) if (cType(st) == tk) { serves = true; break; }
+        for (auto& st : *sec->targets) if (primKey(st) == tk) { serves = true; break; }
         if (!serves) continue;
         for (auto& sm : *sec->members) {
             auto* smd = dynamic_cast<ClassMethodDeclarationNode*>(sm.get());
@@ -9224,13 +9288,17 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
     if (!n->targets) return;
 
     for (auto& tgt : *n->targets) {
-        std::string tkey = cType(tgt);                    // int32 -> int32_t, string -> kama_string
+        // TWO keys, deliberately: `_classes` is C-named (`string` -> kama_string), the conformance registry
+        // is kama-named (so `char` and `uint32` don't share `uint32_t`). A prim ClassInfo's `name` stays the
+        // C type — it is what `This` resolves to and what the receiver parameter is spelled as.
+        std::string ctKey = cType(tgt);
+        std::string tkey  = primKey(tgt);
         ClassInfo* tcip = nullptr;
-        auto ti = _classes.find(tkey);
+        auto ti = _classes.find(ctKey);
         if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
         else {
             ClassInfo& pci = primConformanceFor(tkey);
-            pci.name = tkey;
+            pci.name = ctKey;
             pci.kind = TypeKind::Value;
             pci.isScalarRecv = true;                      // `this` is the scalar itself, not a pointer
             tcip = &pci;
@@ -9253,7 +9321,8 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         }
         // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
         // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
-        ScopedStr _ts(_thisType, tkey);
+        // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
+        ScopedStr _ts(_thisType, ctKey);
         injectImplMethods(tci, members, contract, tkey,
                           /*retro=*/true, /*isPrimitive=*/tgt->builtInVal != 0 && ti == _classes.end());
         checkImplCompleteness(tci, contract, *tgt->value, n->line);
@@ -9271,12 +9340,12 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
         if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
             if (!ri->target || !ri->target->value || !ri->members) continue;
             if (serdeGatedOff(ri->contract)) continue;
-            if (ClassInfo* t = retroTargetInfo(cType(ri->target))) out.push_back(ImplEmit{t, ri->members});
+            if (ClassInfo* t = retroTargetInfo(primKey(ri->target))) out.push_back(ImplEmit{t, ri->members});
         } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
             SharedIdentifier c = intrinsicContract(ii);
             if (!c || !ii->targets || serdeGatedOff(c)) continue;
             for (auto& tgt : *ii->targets)
-                if (ClassInfo* t = retroTargetInfo(cType(tgt)))
+                if (ClassInfo* t = retroTargetInfo(primKey(tgt)))
                     out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt)});
         }
     }
@@ -9308,7 +9377,8 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
 // a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
 // public (structural — this is exactly what makes the monomorphized call resolve to a static
 // `Concrete__m(&x)`; nominal `implements` is not required, matching the codegen reality).
-// The ClassInfo carrying a retroactive impl's injected methods for target C-type `tkey`: a collection's
+// The ClassInfo carrying an impl block's injected methods for `tkey` — a `primKey`, which is the C name for
+// anything that has a `_classes` entry and the KAMA name for a scalar primitive. Either a collection's
 // `_classes` entry (`kama_string`), or a primitive's `_primConformances` entry (scalar receiver). nullptr
 // for a user-type target (which emits through the normal class machinery, not the retro emission path).
 ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
@@ -9348,7 +9418,7 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                 // without a `default` ctor (closes the M8c zero-allocator hole; killing the force-emit too).
                 held = (whenBounds[c] == "default")
                      ? isDefaultFillable(cType(concrete[i]))
-                     : satisfiesBound(cType(concrete[i]), whenBounds[c]);
+                     : satisfiesBound(primKey(concrete[i]), whenBounds[c]);
                 break;
             }
         if (!held) return false;
@@ -9579,6 +9649,7 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
     if (mentionsParam(concreteArg)) return;
 
     std::string cls = cType(concreteArg);                 // concrete class key (or a primitive C type)
+    std::string rkey = primKey(concreteArg);              // the CONFORMANCE key — `cls` still feeds _classes
     std::string clsName = (concreteArg && concreteArg->value) ? *concreteArg->value : cls;   // source-level
     ClassInfo* ci = _classes.count(cls) ? &_classes[cls] : nullptr;
     for (auto& b : *bounds) {
@@ -9593,7 +9664,7 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // A retroactive `implements <bound> for <this type>` also satisfies it. Consult the pre-scan so a
         // bound check that runs during collection (before applyRetroactive injects the methods) still sees
         // it — matched on the raw source name, the same key both the pre-scan and applyRetroactive use.
-        bool retro = _retroConformances.count(cls) && _retroConformances[cls].count(*b->value);
+        bool retro = _retroConformances.count(rkey) && _retroConformances[rkey].count(*b->value);
         // A boxed polymorphic contract handle satisfies the contract bound: `Owned<C>`/`Shared<C>`/
         // `Weak<C>` (and `Owned<X>` where `X` implements `C`) dynamic-dispatches `C`'s methods, so a
         // boxed `Error` IS an `Error` (Model C). This lets `Result<T, Owned<Error>>` — the uniform serde
@@ -12725,7 +12796,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (!_classes.count(typeName) && !primConformance(typeName)) {
             auto sit = _typeSubst.find(*qual->back());
             if (sit != _typeSubst.end() && sit->second) {
-                std::string concrete = cType(sit->second);
+                std::string concrete = primKey(sit->second);   // the conformance key, not the C type
                 if (_classes.count(concrete) || primConformance(concrete)) typeName = concrete;
             }
         }
@@ -15900,9 +15971,9 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
             if (!_typeSubst.empty()) {
                 auto s = _typeSubst.find(*id->value);
                 if (s != _typeSubst.end()) {
-                    std::string ct = cType(s->second);
-                    // A PRIMITIVE is a legitimate receiver here: retroactive conformance puts real `ctor`s on
-                    // int32/float64/… (`implements Deserialize for int32 { public ctor … deserialize(…) }`),
+                    std::string ct = primKey(s->second);   // the conformance key, not the C type
+                    // A PRIMITIVE is a legitimate receiver here: conformance puts real `ctor`s on
+                    // int32/float64/… (`type intrinsic <int32> implements Deserialize { public ctor … }`),
                     // and they live in `_primConformances`, not `_classes`. The `::` resolver consulted both;
                     // this one only ever needed `_classes` because no other path reached a primitive ctor.
                     if (_classes.count(ct) || primConformance(ct)) { outType = ct; return true; }
@@ -16290,15 +16361,20 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line, "",
                                      recv->identifier.get());
-    // A PRIMITIVE receiver with a retroactive conformance (`implements Hashable for int32`): the method's
+    // A PRIMITIVE receiver with a conformance (`type intrinsic <int32> implements Hashable`): the method's
     // `this` is the SCALAR itself, passed BY VALUE. `exprClass` is "" for a primitive, so recover the
-    // receiver's C type from `_localCTypes` (params/locals record it there). Resolve on `_primConformances`;
-    // the call is a plain free function `int32_t__hash(k)` (no pointer, no vtable).
+    // receiver's type separately. Resolve on `_primConformances`; the call is a plain free function
+    // `int32__hash(k)` (no pointer, no vtable).
     {
-        // Recover the scalar C type for a bare identifier OR a member/index place (`p.x`, `arr[i]`), so a
-        // primitive conformance (`format`/`hash`/…) dispatches on any primitive receiver, not just a local.
         std::string primTy = cls;
-        if (primTy.empty()) primTy = receiverScalarCType(receiver);
+        if (primTy.empty()) {
+            // Prefer the KAMA type node — the only channel that tells `char` from `uint32`, which share the
+            // C type `uint32_t`. A place with no recorded node (a collection element, an index into an
+            // array) falls back to its C type, which answers `uint32` for both.
+            SharedIdentifier tn = receiverTypeNode(receiver);
+            std::string k = tn ? primKey(tn) : std::string();
+            primTy = isScalarPrimKey(k) ? k : primKeyOfCType(receiverScalarCType(receiver));
+        }
         if (ClassInfo* pci = primConformance(primTy)) {
             ClassInfo* powner = nullptr;
             MethodInfo* pmi = findMethod(pci, method, &powner);
@@ -16754,7 +16830,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
-    // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target cType -> contracts)
+    // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target primKey -> contracts)
     // BEFORE collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING
     // collection, which is earlier than applyRetroactive injects `hash` into `string`; without this the
     // check would falsely reject `string: Hashable`. The real methods + coherence are still handled below.
@@ -16764,14 +16840,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         for (auto& decl : *u->codeDeclarationList) {
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (ri && ri->contract && ri->contract->value && ri->target && ri->target->value)
-                _retroConformances[cType(ri->target)].insert(*ri->contract->value);
+                _retroConformances[primKey(ri->target)].insert(*ri->contract->value);
             // Same reason for `type intrinsic <…>`: a `<T: Comparable>` bound on int32 is checked during
             // collection, which is earlier than the methods below are injected.
             auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get());
             if (ii && ii->targets) {
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value)
-                    for (auto& tgt : *ii->targets) _retroConformances[cType(tgt)].insert(*c->value);
+                    for (auto& tgt : *ii->targets) _retroConformances[primKey(tgt)].insert(*c->value);
             }
         }
     }
@@ -16796,9 +16872,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (!ri || !ri->contract || !ri->contract->value || !ri->target || !ri->target->value) continue;
             std::string contract = *ri->contract->value;
-            std::string tkey = cType(ri->target);   // string→kama_string, a user type→its mangled name
+            // TWO keys, as in applyIntrinsicImpl: `_classes` is C-named (string→kama_string, a user type→its
+            // mangle), the conformance registry is kama-named so `char` and `uint32` stay apart.
+            std::string ctKey = cType(ri->target);
+            std::string tkey  = primKey(ri->target);
             ClassInfo* tcip = nullptr;
-            auto ti = _classes.find(tkey);
+            auto ti = _classes.find(ctKey);
             if (ti != _classes.end()) tcip = &ti->second;
             else {
                 // A PRIMITIVE target (`int32`, …): it has NO ClassInfo, and it must NOT get one — every
@@ -16807,7 +16886,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
                 if (ri->target->builtInVal != 0) {
                     ClassInfo& pci = primConformanceFor(tkey);
-                    pci.name = tkey;
+                    pci.name = ctKey;   // the C type — what `This` resolves to and how `self` is spelled
                     pci.kind = TypeKind::Value;
                     pci.isScalarRecv = true;
                     tcip = &pci;
