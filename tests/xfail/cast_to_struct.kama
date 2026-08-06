@@ -1,0 +1,16 @@
+// A cast lowers to a C cast, which converts between scalars and pointers only. A struct target used to
+// emit `((Pair)(x))` and die in the C compiler naming a mangled type the user never wrote.
+//
+// The check is deliberately not a whitelist of scalars: an FFI type is opaque to kama
+// (`cast<CompareFn>(c)` in tests/callback_qsort.d is a C function-pointer typedef reached through
+// `extern`), and a plain enum is a C enum. Both stay legal.
+type value Pair {
+    public int32 a; public int32 b;
+    public ctor make(int32 a, int32 b) { this.a = a; this.b = b; }
+}
+
+fn int32 main() {
+    int64 bits = 7i64;
+    Pair p = cast<Pair>(bits);
+    return p.a;
+}

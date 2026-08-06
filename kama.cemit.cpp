@@ -1833,15 +1833,27 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
-        // A contract is not a conversion target. A contract value is a fat pointer that BORROWS its object,
-        // so it is produced by binding or by passing to a contract parameter — never by a C-style cast,
-        // which would emit `((Shape)(c))` and be rejected by the C compiler with no kama diagnostic at all.
-        // (The other direction, contract value -> concrete, is `expr.as<T>()`.)
+        std::string nm = (v->type && v->type->value) ? *v->type->value : target;
+        // A cast lowers to a C cast, and C casts only between SCALARS and POINTERS. Anything that lowers to
+        // an aggregate produces `((Pair)(x))`, which the C compiler rejects — and used to reject with no
+        // kama diagnostic at all, naming a mangled type the user never wrote.
+        //
+        // The test is "is this a kama type with a struct body", i.e. anything in `_classes` (a value/resource/
+        // view, a collection, a smart pointer, `string` -> kama_string, a tagged enum) or a contract. It is
+        // deliberately NOT a whitelist of scalars: an FFI type is opaque to kama (`cast<CompareFn>(c)` in
+        // tests/callback_qsort.d, a C function-pointer typedef reached through `extern`), and a plain enum
+        // is a C enum. Both must stay legal, and neither is something kama can prove scalar.
         if (isInterface(target)) {
-            std::string nm = (v->type && v->type->value) ? *v->type->value : target;
+            // A contract value is a fat pointer that BORROWS its object; a cast has no object to borrow.
             unsupported(("`cast<" + nm + ">(…)` — a contract is not a conversion target: a contract value "
                          "borrows its object, so you get one by binding it (`" + nm + " x = obj;`) or by "
                          "passing the object where a `" + nm + "` is expected").c_str(), v->line);
+            return "0";
+        }
+        if (_classes.count(target)) {
+            unsupported(("`cast<" + nm + ">(…)` — a cast converts between scalars and pointers, and `" + nm
+                         + "` is neither. To reinterpret a scalar's bits use `bitcast`; to narrow a contract "
+                           "value to a concrete type use `expr.as<T>()`").c_str(), v->line);
             return "0";
         }
         return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";

@@ -30,7 +30,11 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 | `da44c54` | **resolved contract names** in the conformance pre-scan (a real miscompile, not just a diagnostic) | 947 / — |
 | `5c6f429` | **package identity** — a duplicate conformance names both packages; both scoping fixtures | **948 / 912** |
 
-M3 residual closes at **native 948 / ASan 912 / wasm 886**, 0 failed, with every `tools/check-*.sh` green.
+| `cd81231` | a contract is not a cast target; **M5's `::` dropped** | 949 / — |
+| `<this commit>` | a cast rejects every aggregate target, not just a contract | **950 / 914** |
+
+M3 residual closes at **native 950 / ASan 914 / wasm 888**, 0 failed, with every `tools/check-*.sh` green.
+**M4 is next**; its migration surface is measured under *Remaining*.
 
 M0 was verified behaviour-neutral by **byte-identical generated C across all 585 fixtures**, and M1 by the
 same diff over the 585 pre-existing ones — the promotion-timing move that was flagged as the campaign's
@@ -66,12 +70,29 @@ Two things the brief did not anticipate:
 
 ### Remaining, in order
 
-1. **M4** — migrate the prelude's 64 primitive impls (plus 5 on `string`) and lib's 21 (`FromStr`×11, `FromStrRadix`×8,
-   `Real`×2) onto `type intrinsic`, and retire the `string`-`Equatable` nominal special case. That last is
-   **one atomic commit**: delete the `interfaces`/`retroInterfaces` push in `registerCollection` *and* add
-   the prelude declaration together, or the duplicate check fires in between. Keep the serde migration
-   mechanical — those 24 bodies differ only because `writeI32` names a width today, and collapse once the
-   writer goes generic.
+1. **M4** — migrate the prelude's 64 primitive impls (plus 5 on `string`) and lib's 21 (`FromStr`×11,
+   `FromStrRadix`×8, `Real`×2) onto `type intrinsic`, and retire the `string`-`Equatable` nominal special
+   case. That last is **one atomic commit**: delete the `interfaces`/`retroInterfaces` push in
+   `registerCollection` ([kama.cemit.cpp:5506](../../kama.cemit.cpp#L5506)) *and* add the prelude
+   declaration together, or the duplicate check fires in between.
+
+   **Measured, so the estimate is not a guess.** Rewriting each body's `ref <target> other` as `ref This
+   other` and counting distinct bodies per contract:
+
+   | contract | impls | distinct bodies under `This` |
+   |---|---|---|
+   | `Hashable` | 9 | **1** |
+   | `Equatable` | 10 | **2** |
+   | `Comparable` | 11 | **4** |
+   | `Format` | 13 | 9 |
+   | `Serialize` | 13 | 13 |
+   | `Deserialize` | 13 | 13 |
+
+   So the collapse is real but **concentrated**: `Hashable`/`Equatable`/`Comparable` go 30 → ~7 blocks,
+   and that is most of the win. `Format`/`Serialize`/`Deserialize` barely collapse, because each body names
+   a width-specific writer (`writeI32`, `writeU64`, `readF32`) — the set form cannot merge bodies that call
+   different functions, exactly as *Design points revised* says. Migrate them as one-target blocks and let
+   them collapse later, when the writer goes generic; do not contort them to fit a set.
 2. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
    primitive→contract widening, and **no new syntax** (`::` is dropped — see *M5 has no new syntax*). The
    gate is the hard half, because bound-generic dispatch goes through the same injected methods it must
