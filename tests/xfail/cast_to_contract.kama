@@ -1,0 +1,20 @@
+// A contract is not a conversion target. A contract value is a fat pointer that BORROWS its object, so it
+// comes from binding it or from passing the object where the contract is expected — never from a cast.
+//
+// This used to emit `((Shape)(c))` and reach the C compiler, which rejected it as "used type 'struct Shape'
+// where arithmetic or pointer type is required". Silent bad codegen: kama said nothing, and the error named
+// a mangled C type the user never wrote.
+type contract Shape for both { fn int64 area(); }
+
+type value Circle implements Shape {
+    int64 r;
+    public ctor make(int64 r) { this.r = r; }
+    public fn int64 area() { return this.r * this.r; }
+}
+
+fn int64 measure(Shape s) { return s.area(); }
+
+fn int32 main() {
+    Circle c = Circle.make(r: 6);
+    return cast<int32>(measure(s: cast<Shape>(c)));   // write `Shape s = c;` or just `measure(s: c)`
+}

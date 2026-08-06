@@ -1832,7 +1832,19 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<CastNode*>(n)) {
-        return "((" + cType(v->type) + ")(" + emitExpression(v->unaryExpression) + "))";
+        std::string target = cType(v->type);
+        // A contract is not a conversion target. A contract value is a fat pointer that BORROWS its object,
+        // so it is produced by binding or by passing to a contract parameter — never by a C-style cast,
+        // which would emit `((Shape)(c))` and be rejected by the C compiler with no kama diagnostic at all.
+        // (The other direction, contract value -> concrete, is `expr.as<T>()`.)
+        if (isInterface(target)) {
+            std::string nm = (v->type && v->type->value) ? *v->type->value : target;
+            unsupported(("`cast<" + nm + ">(…)` — a contract is not a conversion target: a contract value "
+                         "borrows its object, so you get one by binding it (`" + nm + " x = obj;`) or by "
+                         "passing the object where a `" + nm + "` is expected").c_str(), v->line);
+            return "0";
+        }
+        return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
     if (auto* v = dynamic_cast<BitcastNode*>(n)) return emitBitcast(v);

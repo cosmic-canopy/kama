@@ -73,11 +73,12 @@ Two things the brief did not anticipate:
    mechanical — those 24 bodies differ only because `writeI32` names a width today, and collapse once the
    writer goes generic.
 2. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
-   primitive→contract widening. Note the ABI seam: an intrinsic's method takes `self` **by value**
+   primitive→contract widening, and **no new syntax** (`::` is dropped — see *M5 has no new syntax*). The
+   gate is the hard half, because bound-generic dispatch goes through the same injected methods it must
+   reject on a concrete receiver. The ABI seam for widening: an intrinsic's method takes `self` **by value**
    (`isScalarRecv`, which M3 residual gave its first reader) while a vtbl slot passes `void*`, so each
-   widened method needs a deref thunk — emitted only for a contract actually widened to. **This is also
-   where a primitive's methods stop being one flat map**: two contracts supplying the same method name to
-   one type is the case `Contract::method` exists to disambiguate, and it is blocked until then.
+   widened method needs a deref thunk — emitted only for a contract actually widened to. The flat method
+   map stays flat; two contracts supplying one type the same method name stays a clean error.
 3. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
 
 ### Design points revised once the code existed
@@ -190,14 +191,46 @@ contract-supplied method is not part of the intrinsic's own API:
 - `a < b` — **unaffected**; all-primitive comparisons stay raw C operators
 - `string.equals` / `string.length` — **unaffected**; those are the type's *native* API
 
-Disambiguation, when two contracts supply the same method name for one type, uses `::` — which already
-means scope resolution in kama, and the contract *is* the scope:
+~~Disambiguation … uses `::`.~~ **Dropped 2026-08-05 — see *M5 has no new syntax*, below.**
+
+#### M5 has no new syntax
+
+`Comparable::compareTo(self: x, other: y)` is not built and will not be. The one way to reach a
+contract-scoped method is to **have a contract value**, which is the idiom user types already use:
 
 ```kama
-Ordering o = Comparable::compareTo(self: x, other: y);   // static, zero cost
+Comparable c = x;                        // a BORROW — no move, no copy of `x`
+Ordering o = c.compareTo(other: y);
 ```
 
-Same shape as Rust's `<i32 as Ord>::cmp`, reached from kama's own syntax rules rather than borrowed.
+Three things settle it:
+
+- **The zero-cost path already exists, and it is the generic bound.** `fn f<T: Comparable>(…)` monomorphizes
+  to a direct `int32__compareTo(x, &y)` — no indirection at all. That is how every call in `lib/` reaches a
+  contract method, and `::` would have added a second spelling for something already free. A fat-pointer
+  call costs one indirect jump, which is inherent to erasing the type and is the only case `::` was faster
+  than; direct calls on concrete primitives are test-only (see *Measured cost*).
+- **Name collisions are an import problem, and `import` already solves them.** Two contracts named `Marker`
+  from different libraries are disambiguated by `import a::{Marker as AMarker}` (per-symbol aliasing,
+  [kama.y:391](../../kama.y#L391)) — at the point the ambiguity is introduced, not at every call site.
+- **`::` would need machinery nothing else uses**: a contract can never appear in the `::` resolver today
+  (contracts live in `_interfaces`, and the resolver only consults `_classes` / `retroTargetInfo`), and the
+  `self:` argument convention exists nowhere else in the language.
+
+What that leaves unsupported is **one type carrying two same-named methods from two contracts** — the flat
+`ClassInfo::methods` map still rejects it at injection, and aliasing the *contract* names does not help
+because the collision is on the *method* name. Zero occurrences in the tree; it stays a clean error, and
+the flat map stays flat. Revisit only if a real case appears.
+
+So **M5 is the gate plus widening, and nothing else**. The gate is the expensive half: it cannot simply
+reject a call whose method has a non-empty `fromContract`, because bound-generic dispatch — the pervasive
+idiom — goes through exactly those injected methods. It has to tell "receiver is a concrete type spelled
+directly" from "receiver's type came from a substituted type parameter".
+
+`cast<Contract>(x)` is **not** the escape hatch either: a cast produces a value, and a contract value
+borrows storage a cast expression does not have. It is rejected outright ([kama.cemit.cpp](../../kama.cemit.cpp),
+`CastNode`; fixture `tests/xfail/cast_to_contract.kama`) — it used to emit `((Shape)(c))` and die in the C
+compiler with no kama diagnostic. The opposite direction, contract value → concrete, is `expr.as<T>()`.
 
 **The declaration IS the anchor.** Nothing widens a primitive to a contract value today (`Comparable c =
 3;` appears nowhere in `lib/`, `prelude/` or `tests/`) and the reason is now clear: a `__as_<Contract>`
