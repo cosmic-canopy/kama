@@ -10,13 +10,15 @@ namespace std::math;
 // kama has no overloading, so the usual answers are unavailable: C suffixes every float32 entry point
 // (`sqrtf`), Go and Java ship one width and make you convert, C# adds a whole second class (`MathF`).
 // kama's own mechanism for "this fixed set of types, each with its own body" is a CONTRACT with a
-// retro-impl per type — the same way `Comparable` reaches every primitive. So each operation is one
-// generic free function over `Real`, and the per-width libm call lives in the retro-impls below.
+// `type intrinsic` conformance per type — the same way `Comparable` reaches every primitive. So each
+// operation is one generic free function over `Real`, and the per-width libm call lives in the blocks
+// below. They stay ONE TARGET EACH: `sqrt` needs `kama_sqrtf` for float32 and `kama_sqrt` for float64, and
+// a shared body cannot call a different function per target — which is exactly the un-shareable case.
 // (A bound cannot be a list of primitives, and there is no in-body type branching by design — see
 // SPEC § *Conditional compilation*. The contract is what supplies a per-type body.)
 //
-// `Real` IS exported, so a user type can join in — `implements Real for MyFixed { … }` and every function
-// here works on it. That costs nothing: a retro-impl's methods are reachable program-wide whether or not
+// `Real` IS exported, so a user type can join in — `type value MyFixed implements Real { … }` and every
+// function here works on it. That costs nothing: a conformance's methods are reachable program-wide whether or not
 // the contract name is exported (kama has no equivalent of Rust's `use Trait` visibility gate), so
 // exporting adds the ability to IMPLEMENT without adding any exposure. The methods therefore carry the
 // same names as the free functions — Rust's `Float::sqrt` and Swift's `squareRoot()` do the same — so an
@@ -67,7 +69,7 @@ type contract Real for value {
     fn This pow(This y);  fn This fmod(This y);  fn This atan2(This x);  fn This hypot(This y);
 }
 
-implements Real for float64 {
+type intrinsic <float64> implements Real {
     public fn float64 sqrt()  { return kama_sqrt(x: this); }
     public fn float64 cbrt()  { return kama_cbrt(x: this); }
     public fn float64 sin()   { return kama_sin(x: this); }
@@ -91,7 +93,7 @@ implements Real for float64 {
     public fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
 }
 
-implements Real for float32 {
+type intrinsic <float32> implements Real {
     public fn float32 sqrt()  { return kama_sqrtf(x: this); }
     public fn float32 cbrt()  { return kama_cbrtf(x: this); }
     public fn float32 sin()   { return kama_sinf(x: this); }
