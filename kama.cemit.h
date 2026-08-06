@@ -12,6 +12,7 @@
 #include <map>
 #include <set>
 #include <algorithm>   // std::find (contract-implementor lookups in the graph-node closure)
+#include <functional>  // the package resolver the driver installs (setPackageResolver)
 #include <cstdint>     // fixed-width ints — not transitive on all libcs (e.g. Windows UCRT)
 #include "kama.forward.h"
 #include "kama.diagnostic.h"   // structured Diagnostic accumulated by unsupported() (query surface)
@@ -490,6 +491,10 @@ public:
     // std::log, `main` seeds it into the process env (overwrite=0), so a shipped binary carries its project
     // default log filter while `--log`/`KAMA_LOG` still override it (M5).
     void setLogDefault(const std::string& spec) { _logDefault = spec; }
+    // Maps a unit's source path to the manifest of the package that owns it ("" when nothing does, and
+    // for the synthetic prelude units). Supplied by the driver — resolving it is filesystem work, and it
+    // is consulted only when a diagnostic has to say which package a conformance came from.
+    void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
 
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
@@ -869,6 +874,13 @@ private:
                      { auto it = _primConformances.find(key); return it == _primConformances.end() ? nullptr : &it->second; }
     ClassInfo&       primConformanceFor(const std::string& key) { return _primConformances[key]; }   // creates
     std::map<std::string, InterfaceInfo> _interfaces;        // contract name -> info
+    // Who first claimed a (type, contract) pair, as the declaring file's path. Read only when a SECOND
+    // claim arrives: a duplicate that crosses a package boundary is the one kind neither the user nor
+    // either author can fix from one side, so that message has to name both packages. Two packages that
+    // have never heard of each other can each conform `int32` to a contract one of them owns.
+    std::map<std::pair<std::string, std::string>, std::string> _conformanceOrigin;
+    std::string _collectingUnitPath;    // the unit whose declarations are being collected right now
+    std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
     // Pre-scanned conformances: target `primKey` -> the contracts an impl block grants it (both spellings).
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
@@ -1079,6 +1091,9 @@ private:
     SharedClassMemberDeclarationList intrinsicMembersFor(IntrinsicImplNode* n, SharedIdentifier target);
     void applyIntrinsicImpl(IntrinsicImplNode* n);   // validate + inject, once per target
     std::string implMethodCName(ClassInfo& tci, const std::string& method);   // the minted symbol, not a re-derivation
+    // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
+    // genuinely come from different packages.
+    std::string duplicateOriginNote(const std::string& tkey, const std::string& contract);
     // One (target, members) pair per thing an impl block contributes — a retroactive block gives one, a
     // `type intrinsic` set gives one per target. The three emission passes (prototypes, prelude bodies,
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.

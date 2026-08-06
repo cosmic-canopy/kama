@@ -1183,6 +1183,17 @@ static void configureEmitter(CEmitter& e)
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
+    // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
+    // packages claim the same conformance, so it is a callback rather than a precomputed per-unit table:
+    // the walk is filesystem work the emitter has no business doing, and it runs at most once per error.
+    // A synthetic unit (`<prelude>`, `<prelude-module>`) has no path — `dirName` would hand back "." and
+    // the walk would climb into whatever project happens to be the working directory, attributing the
+    // prelude's conformances to the user.
+    e.setPackageResolver([](const std::string& unitPath) -> std::string {
+        if (unitPath.empty() || unitPath[0] == '<') return std::string();
+        std::string dir = owningPackageDir(dirName(unitPath));
+        return dir.empty() ? std::string() : dir + "/kama.json";
+    });
     for (auto& m : preludeModuleUnits()) e.addPreludeModule(m);       // the always-in-scope triad
 }
 

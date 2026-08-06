@@ -9098,6 +9098,9 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
     // `type enum E implements C { A, B; …methods… }` path, where the members belong to E's API and the
     // conformance is recorded separately, once per declared contract. Nothing to record here.
     if (contract.empty()) return;
+    // First claim wins the record; a second one is a duplicate, and this is what lets its message name the
+    // package the first came from. `emplace` so a re-claim never overwrites the original claimant.
+    _conformanceOrigin.emplace(std::make_pair(tkey, contract), _collectingUnitPath);
     tci.interfaces.push_back(contract);
     if (retro) tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
     // Model C: an ENUM implementing a contract (only possible via retro today) needs DYNAMIC dispatch —
@@ -9306,7 +9309,8 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         ClassInfo& tci = *tcip;
         for (auto& ex : tci.interfaces)
             if (ex == contract) {
-                unsupported(("`" + *tgt->value + "` already implements `" + contract + "`").c_str(), n->line);
+                unsupported(("`" + *tgt->value + "` already implements `" + contract + "`"
+                             + duplicateOriginNote(tkey, contract)).c_str(), n->line);
                 break;
             }
         SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);
@@ -9350,6 +9354,27 @@ std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
         }
     }
     return out;
+}
+
+// The clause a duplicate-conformance message gains when the two claims come from DIFFERENT packages —
+// the case neither the user nor either author can fix from one side, and the only one worth the extra
+// words. Empty when both claims are in one package, or when either side has no manifest above it (a
+// scratch file, the prelude), so the message reads exactly as it always did.
+//
+// Recorded lazily and resolved here rather than per unit up front: this runs at most once per error.
+std::string CEmitter::duplicateOriginNote(const std::string& tkey, const std::string& contract)
+{
+    if (!_packageResolver) return std::string();
+    auto it = _conformanceOrigin.find(std::make_pair(tkey, contract));
+    if (it == _conformanceOrigin.end()) return std::string();
+    std::string first = _packageResolver(it->second);
+    std::string second = _packageResolver(_collectingUnitPath);
+    if (first.empty() || second.empty() || first == second) return std::string();
+    // Deliberately order-neutral. Which claim the collection pass happens to reach first says nothing
+    // about which one is wrong, and phrasing it as "A already declares it, B claims it too" reads as an
+    // accusation that lands on whichever package sorted second.
+    return " — claimed by package `" + first + "` and by package `" + second +
+           "`; only one package may own a (type, contract) pair, so one of them has to drop it";
 }
 
 // The C symbol of an impl-injected method. `injectImplMethods` already minted it, so the three emission
@@ -16876,6 +16901,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
+        // Which file is claiming these conformances — resolved to a package only if one turns out to be a
+        // duplicate (see duplicateOriginNote).
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) { applyIntrinsicImpl(ii); continue; }
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
@@ -16917,8 +16945,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
             ClassInfo& tci = *tcip;
             for (auto& ex : tci.interfaces)
-                if (ex == contract) { unsupported(("`" + tkey + "` already implements `" + contract
-                                                   + "`").c_str(), ri->line); break; }
+                if (ex == contract) { unsupported(("`" + tkey + "` already implements `" + contract + "`"
+                                                   + duplicateOriginNote(tkey, contract)).c_str(),
+                                                  ri->line); break; }
             injectImplMethods(tci, ri->members, contract, tkey,
                               /*retro=*/true, /*isPrimitive=*/ri->target->builtInVal != 0);
             checkImplCompleteness(tci, contract, tkey, ri->line);

@@ -1,0 +1,18 @@
+// Cross-package conformance: `int32` conforms to a contract owned by the `weights` DEPENDENCY and, at the
+// same time, to one owned by this package. Two packages that have never heard of each other can each
+// decorate a primitive, as long as they claim different (type, contract) pairs — the duplicate case, where
+// they claim the SAME pair, is rejected with a message naming both (tools/check-packages.sh).
+import weights::{heaviness};
+
+type contract Tagged for value { fn int32 tag(); }
+
+type intrinsic <int32> implements Tagged { public fn int32 tag() { return 30; } }
+
+fn int32 tagOf<T: Tagged>(ref T v) { return v.tag(); }
+
+fn int32 main() {
+    int32 x = 5;
+    if (heaviness(v: ref x) != 12) { return 1; }   // the dependency's conformance
+    if (tagOf(v: ref x) != 30) { return 2; }       // this package's conformance
+    return 42;
+}

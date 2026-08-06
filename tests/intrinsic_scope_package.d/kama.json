@@ -1,0 +1,7 @@
+{
+  "name": "intrinsic-scope-package",
+  "version": "0.1.0",
+  "dependencies": {
+    "weights": { "path": "./vendor/weights" }
+  }
+}

@@ -853,4 +853,54 @@ for member in "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"; do
     done
 done
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; ACCEPTANCE every member builds standalone; $SIGNOTE)"
+# 37. two packages claiming the SAME (type, contract) conformance. A conformance is program-wide, so a
+#     duplicate is visible under the whole-program view and already rejected — but the message named only
+#     the type and the contract, which is useless here: neither package's author can see the other, and
+#     the user cannot fix either from one side. It must name BOTH packages. (This is the reason kama needs
+#     no orphan rule: the hazard an orphan rule prevents is detectable directly.)
+dc="$tmp/dupconf"; mkdir -p "$dc/lib" "$dc/app"
+cat > "$dc/lib/kama.json" <<'JSON'
+{ "name": "marklib", "version": "1.0.0" }
+JSON
+cat > "$dc/lib/marklib.kama" <<'EOF'
+namespace marklib;
+export { Marker, viaMarker };
+type contract Marker for value { fn int32 mark(); }
+type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } }
+fn int32 viaMarker<T: Marker>(ref T v) { return v.mark(); }
+EOF
+cat > "$dc/app/kama.json" <<JSON
+{ "name": "dupapp", "version": "0.1.0", "main": "main.kama",
+  "dependencies": { "marklib": { "path": "../lib" } } }
+JSON
+cat > "$dc/app/main.kama" <<'EOF'
+import marklib::{Marker, viaMarker};
+type intrinsic <int32> implements Marker { public fn int32 mark() { return 2; } }
+fn int32 main() { int32 x = 5; return viaMarker(v: ref x); }
+EOF
+"$KAMA" pkg install "$dc/app" >/dev/null 2>&1
+if "$KAMA" run "$dc/app/main.kama" >"$tmp/dup.out" 2>&1; then
+    echo "check-packages: FAIL — two packages claimed one conformance and it still built:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; fi
+grep -q "already implements" "$tmp/dup.out" \
+    || { echo "check-packages: FAIL — no duplicate-conformance error:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
+grep -q "$dc/lib/kama.json" "$tmp/dup.out" \
+    || { echo "check-packages: FAIL — duplicate-conformance error did not name the FIRST package:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
+grep -q "$dc/app/kama.json" "$tmp/dup.out" \
+    || { echo "check-packages: FAIL — duplicate-conformance error did not name the SECOND package:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
+
+# 37b. the same duplicate WITHIN one package keeps the plain message — there is no second package to name,
+#      and the author can see both declarations.
+cat > "$dc/app/main.kama" <<'EOF'
+type contract Solo for value { fn int32 solo(); }
+type intrinsic <int32> implements Solo { public fn int32 solo() { return 1; } }
+type intrinsic <int32> implements Solo { public fn int32 solo() { return 2; } }
+fn int32 main() { return 0; }
+EOF
+if "$KAMA" run "$dc/app/main.kama" >"$tmp/dup2.out" 2>&1; then
+    echo "check-packages: FAIL — a duplicate conformance in one package still built:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
+grep -q "already implements" "$tmp/dup2.out" \
+    || { echo "check-packages: FAIL — no duplicate-conformance error within one package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; }
+if grep -q "and by package" "$tmp/dup2.out"; then
+    echo "check-packages: FAIL — named two packages for a duplicate inside ONE package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; ACCEPTANCE every member builds standalone; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
