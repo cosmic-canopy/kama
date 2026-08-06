@@ -79,15 +79,19 @@ type contract Allocator for value {
 // dynamically-dispatched description; branch on the specific kind by recovering the concrete enum with
 // `error.as<ConcreteError>()`. Language-level, so it lives in the prelude and survives `--no-std`.
 type contract Error for both { fn string message(); }
-// Primitive conformances (pure-kama retro-impls, NO compiler blessing) — hosted here so `string`/`int32`
-// satisfy the standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
+// Primitive conformances (pure-kama, NO compiler blessing) — hosted here so `string`/`int32` satisfy the
+// standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,
 // FNV-1a for strings); the AVALANCHE/mixer is a separate, pluggable step the `Map`/`Set` apply via their
 // `Hasher::finish` (default `DefaultHasher` = splitmix64, in std::collections). Splitting the two lets a
 // caller swap a cheaper mixer for trusted keys. `string` Hashable = FNV-1a over its UTF-8 bytes (already a
 // distributed accumulator — a string has no meaningful un-mixed scalar; the Map's finalizer re-mixes it
 // harmlessly, splitmix being a bijection); its `Equatable` comes free from the built-in `equals`.
-implements Hashable for string {
+//
+// A primitive declares conformance the same way every other kind does: `type intrinsic <targets>
+// implements C`. The set form is what makes these ONE declaration each — `ref This other` is the target
+// being decorated, so a body that is genuinely identical across widths is written once.
+type intrinsic <string> implements Hashable {
     public fn uint64 hash() {
         uint64 h = 2166136261ui64;
         int32 i = 0;
@@ -98,62 +102,34 @@ implements Hashable for string {
         return h;
     }
 }
-implements Hashable for int32 {
+// Every integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend, which is
+// fine: equal values still hash equal; on uint64 the cast is the identity) + scalar `equals` — so every
+// integer type is a universal `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import.
+// The `Map`'s `Hasher::finish` supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to
+// consecutive slots, which open addressing handles fine, and `FastHasher` can be selected to skip
+// splitmix entirely for such keys.
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Hashable {
     public fn uint64 hash() { return cast<uint64>(this); }
 }
-implements Equatable for int32 {
-    public fn bool equals(ref int32 other) { return this == other; }
+// Floats join the `Equatable` set (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
+// `DynamicArray<float*>.contains` work — but they are NOT `Hashable`: float hash keys are a footgun
+// (NaN != NaN, ±0.0), and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add
+// on demand if ever needed via a bit-cast helper. `string` is absent for the opposite reason — its
+// `Equatable` comes free from the built-in `equals`.
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64>
+    implements Equatable {
+    public fn bool equals(ref This other) { return this == other; }
 }
-// Every remaining integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend,
-// which is fine: equal values still hash equal) + scalar `equals` — so every integer type is a universal
-// `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import. The `Map`'s `Hasher::finish`
-// supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to consecutive slots, which open
-// addressing handles fine, and `FastHasher` can be selected to skip splitmix entirely for such keys.
-implements Hashable for int8 {
-    public fn uint64 hash() { return cast<uint64>(this); }
+// `Comparable` (pure-kama, NO compiler blessing) — every int/float is totally ordered via a three-way
+// `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes (unsigned
+// `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Comparable {
+    public fn Ordering compareTo(ref This other) {
+        if (this < other) { return Ordering::Less; }
+        if (this > other) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
 }
-implements Equatable for int8 { public fn bool equals(ref int8 other) { return this == other; } }
-implements Hashable for int16 {
-    public fn uint64 hash() { return cast<uint64>(this); }
-}
-implements Equatable for int16 { public fn bool equals(ref int16 other) { return this == other; } }
-implements Hashable for int64 {
-    public fn uint64 hash() { return cast<uint64>(this); }
-}
-implements Equatable for int64 { public fn bool equals(ref int64 other) { return this == other; } }
-implements Hashable for uint8 {
-    public fn uint64 hash() { return cast<uint64>(this); }
-}
-implements Equatable for uint8 { public fn bool equals(ref uint8 other) { return this == other; } }
-implements Hashable for uint16 {
-    public fn uint64 hash() { return cast<uint64>(this); }
-}
-implements Equatable for uint16 { public fn bool equals(ref uint16 other) { return this == other; } }
-implements Hashable for uint32 {
-    public fn uint64 hash() { return cast<uint64>(this); }
-}
-implements Equatable for uint32 { public fn bool equals(ref uint32 other) { return this == other; } }
-implements Hashable for uint64 {
-    public fn uint64 hash() { return this; }
-}
-implements Equatable for uint64 { public fn bool equals(ref uint64 other) { return this == other; } }
-// Floats get `Equatable` (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
-// `DynamicArray<float*>.contains` work — but NOT `Hashable`: float hash keys are a footgun (NaN != NaN, ±0.0),
-// and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add on demand if ever
-// needed via a bit-cast helper.
-implements Equatable for float32 { public fn bool equals(ref float32 other) { return this == other; } }
-implements Equatable for float64 { public fn bool equals(ref float64 other) { return this == other; } }
-// `Comparable` retro-impls (pure-kama, NO compiler blessing) — every int/float is totally ordered via a
-// three-way `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes
-// (unsigned `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
-implements Comparable for int8    { public fn Ordering compareTo(ref int8 other)    { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for int16   { public fn Ordering compareTo(ref int16 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for int32   { public fn Ordering compareTo(ref int32 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for int64   { public fn Ordering compareTo(ref int64 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for uint8   { public fn Ordering compareTo(ref uint8 other)   { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for uint16  { public fn Ordering compareTo(ref uint16 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for uint32  { public fn Ordering compareTo(ref uint32 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
-implements Comparable for uint64  { public fn Ordering compareTo(ref uint64 other)  { if (this < other) { return Ordering::Less; } if (this > other) { return Ordering::Greater; } return Ordering::Equal; } }
 // Floats need a TOTAL order here, which IEEE `<`/`>` alone cannot give: with a NaN operand both are false,
 // so a bare three-way fold returns `Equal` and NaN compares equal to EVERYTHING — silently corrupting the
 // `SortedMap`/`SortedSet` B-tree and the `PriorityQueue` heap (lookups become insertion-order dependent).
@@ -162,8 +138,8 @@ implements Comparable for uint64  { public fn Ordering compareTo(ref uint64 othe
 // meet: a float is deliberately NOT `Hashable`, so the sorted containers (compareTo) and the hashed ones
 // (hash + equals) never see the same key type. Raw `a < b` on two floats is untouched — an all-primitive
 // comparison keeps the built-in C operator and never routes through `compareTo`.
-implements Comparable for float32 {
-    public fn Ordering compareTo(ref float32 other) {
+type intrinsic <float32, float64> implements Comparable {
+    public fn Ordering compareTo(ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
         if (this != this) { if (other != other) { return Ordering::Equal; } return Ordering::Greater; }
@@ -171,17 +147,8 @@ implements Comparable for float32 {
         return Ordering::Equal;
     }
 }
-implements Comparable for float64 {
-    public fn Ordering compareTo(ref float64 other) {
-        if (this < other) { return Ordering::Less; }
-        if (this > other) { return Ordering::Greater; }
-        if (this != this) { if (other != other) { return Ordering::Equal; } return Ordering::Greater; }
-        if (other != other) { return Ordering::Less; }
-        return Ordering::Equal;
-    }
-}
-implements Comparable for string {
-    public fn Ordering compareTo(ref string other) {
+type intrinsic <string> implements Comparable {
+    public fn Ordering compareTo(ref This other) {
         int32 n = cast<int32>(this.length());
         int32 m = cast<int32>(other.length());
         int32 lim = n; if (m < n) { lim = m; }
