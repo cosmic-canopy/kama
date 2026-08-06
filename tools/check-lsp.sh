@@ -50,6 +50,19 @@ NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { re
 SPURI="file:///span.kama"
 SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntype resource R { public ctor make() { } ~R() { } }\n'
 
+# Contract-model M4 fixture: `type intrinsic <…> implements C`. The enclosing type of a method here has no
+# ClassDeclarationNode at all — same shape as the retroactive block, and `enclosingCallable` had an arm for
+# that one and none for this, so everything downstream of it (completion, signature help, the in-scope
+# bindings) went dead inside these bodies. That cost nothing while the spelling lived only in tests/;
+# it costs real files the moment lib/std/fmt/parse.kama and lib/std/math/scalar.kama migrate onto it.
+# TWO member lists, deliberately: the block's SHARED body and a per-target `<…>` section. A member lives in
+# exactly one of them, so a fixture that only probed the shared body would pass with the section arm absent.
+#   LSP L3 = the shared body, local `wshared`;  LSP L6 = the `<float32>` section, local `wsection`.
+# The names are deliberately unique across the whole session, because `expect` matches the transcript as
+# one string and cannot scope a substring to the response that produced it.
+IIURI="file:///intrinsic.kama"
+IIB='namespace ib;\ntype contract Weighable { fn int32 weight(ref This wpeer); }\ntype intrinsic <int8, int16> implements Weighable {\n    public fn int32 weight(ref This wpeer) { int32 wshared = 1; return wshared + cast<int32>(wp); }\n}\ntype intrinsic <float32, float64> implements Weighable {\n    <float32> { public fn int32 weight(ref This wpeer) { int32 wsection = 2; return wsection + cast<int32>(wp); } }\n    <float64> { public fn int32 weight(ref This wpeer) { return 4; } }\n}\n'
+
 # M5.3/M5.4 fixture: THREE independent syntax errors at three grains — a malformed class member (LSP
 # line 2), and a missing semicolon in each of two DIFFERENT functions (LSP lines 6 and 10). Before error
 # recovery this file produced exactly ONE diagnostic and no index at all; the whole milestone is that it
@@ -427,6 +440,13 @@ frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CIURI"'","languageId":"kama","version":1,"text":"'"$CISRC"'"}}}'
 frame '{"jsonrpc":"2.0","id":66,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"context":{"includeDeclaration":true}}}'
 frame '{"jsonrpc":"2.0","id":67,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"newName":"emit"}}'
+# --- contract model M4: completion inside a `type intrinsic` body, in BOTH member lists. Character
+#     positions are the cursor sitting just after the `pe` in `cast<int32>(pe` on each line.
+#     69: the shared body -> its param `wpeer` and its local `wshared`.  70: the `<float32>` SECTION ->
+#     `wsection`, which exists in no other body, so it can only come from the section's own member list.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IIURI"'","languageId":"kama","version":1,"text":"'"$IIB"'"}}}'
+frame '{"jsonrpc":"2.0","id":69,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":3,"character":95}}}'
+frame '{"jsonrpc":"2.0","id":70,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":6,"character":109}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -646,6 +666,11 @@ expect '/lib/std/io/streams.kama","range":{"start":{"line":90,"character":37}' \
 expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
 expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"
 expect '/lib/std/io/streams.kama'                        "...and it names the file it cannot rewrite"
+
+echo "check-lsp: contract model M4 — a type intrinsic body is a callable the queries can see into"
+expect '"label":"wpeer"'    "completion inside a type intrinsic body offers the method's parameter"
+expect '"label":"wshared"'  "...and a local from the block's SHARED body"
+expect '"label":"wsection"' "...and a local from a per-target <…> SECTION's own member list"
 
 echo "check-lsp: M4 completion + signature help"
 # The list is complete as sent: `isIncomplete:false` tells the client to filter it itself as the user

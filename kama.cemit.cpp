@@ -9351,8 +9351,14 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
         // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
         ScopedStr _ts(_thisType, ctKey);
+        // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
+        // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
+        // eligible as `int32`, and the retroactive path has always passed `builtInVal != 0` for it
+        // (see the same call below); keying off `_classes` instead would make a migrated
+        // `type intrinsic <string> implements Serialize` register monomorphs whose bodies `implEmitsOf`
+        // then refuses to emit.
         injectImplMethods(tci, members, contract, tkey,
-                          /*retro=*/true, /*isPrimitive=*/tgt->builtInVal != 0 && ti == _classes.end());
+                          /*retro=*/true, /*isPrimitive=*/tgt->builtInVal != 0);
         checkImplCompleteness(tci, contract, *tgt->value, n->line);
     }
 }

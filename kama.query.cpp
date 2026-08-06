@@ -1395,6 +1395,21 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
             // ClassDeclarationNode here at all.
             qc.typeKey = classKeyOfName(ri->target);
             members = ri->members.get();
+        } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(d.get())) {
+            // `type intrinsic <T1, T2> implements C { … <T1> { … } … }`. Like the retro block above, the
+            // enclosing type has no ClassDeclarationNode; unlike it, the block has N targets but only ONE
+            // source span, so the key is the FIRST target by definition — there is no cursor position that
+            // could pick between them. (Every scalar target keys to "", exactly as the retro path does.)
+            if (ii->targets && !ii->targets->empty()) qc.typeKey = classKeyOfName((*ii->targets)[0]);
+            members = ii->members.get();
+            // A member lives EITHER in the shared body or in a specialization section, so find the list
+            // that actually holds the cursor before the member loop below walks it.
+            if (ii->sections)
+                for (auto& sec : *ii->sections) {
+                    if (!sec || !sec->members) continue;
+                    for (auto& m : *sec->members)
+                        if (m && holds(m.get())) { members = sec->members.get(); break; }
+                }
         }
         if (!members) return qc;
         for (auto& m : *members) {
