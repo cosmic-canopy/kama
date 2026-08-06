@@ -11,7 +11,8 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 >
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
-> before starting anything**; two of its design points were revised once the code was written.
+> before starting anything**; several of its design points were revised once the code was written, and
+> *What M3 residual actually was* records where the brief and the build disagreed. **M4 is next.**
 
 ## Status — campaign 1, as of 2026-08-05
 
@@ -23,38 +24,68 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 | `f8ed0ec` | **M2** — bare `enum X` is a parse error (breaking); 99 sites migrated; 29 enum conformances folded off retro-impl; **Model C promotion deleted** | 934 / 898 |
 | `81b62ce` | **M3 grammar** — `type intrinsic <…> implements C` + nested `<…> { }` sections | 934 / — |
 | `bfedd9f` | **M3 emitter** — collect / validate / emit; 8 guard-rail xfails; 2 positive fixtures; tree-sitter | **944 / 908** |
+| `7d4a343` | **M3 residual** prep — decouple the key from the C type (`paramListC` takes the receiver convention; emission reads the minted `cName`; `receiverTypeNode` extracted; `mangleElem` gains `char`) | 944 / — |
+| `ba0bbe1` | **the re-key** — `primKey`: kama name for a scalar, cType for everything else | 944 / — |
+| `e326344` | **`char` conformances** — `Format`/`Serialize`/`Deserialize`; ROADMAP §2 closed | 945 / — |
+| `da44c54` | **resolved contract names** in the conformance pre-scan (a real miscompile, not just a diagnostic) | 947 / — |
+| `5c6f429` | **package identity** — a duplicate conformance names both packages; both scoping fixtures | **948 / 912** |
+
+M3 residual closes at **native 948 / ASan 912 / wasm 886**, 0 failed, with every `tools/check-*.sh` green.
 
 M0 was verified behaviour-neutral by **byte-identical generated C across all 585 fixtures**, and M1 by the
 same diff over the 585 pre-existing ones — the promotion-timing move that was flagged as the campaign's
-highest regression risk turned out to cost nothing.
+highest regression risk turned out to cost nothing. M3-residual's prep commit used the same gate (589
+fixtures by then), and the re-key itself was verified by applying the inverse symbol rename and diffing to
+zero — a stronger check than reading the diff, and it caught nothing, which was the point.
 
 **Two of the four pieces of machinery have retired**: retro-impl on enums, and the Model C promotion.
 
+### What M3 residual actually was
+
+The brief specified re-keying to `[kamaType][contractKey]`. Only the first half was built, and the second
+half turned out to be **M5's job, not M3's**. A primitive's methods live in one flat `ClassInfo::methods`
+map, so a second key would let two same-named contracts *record* two conformances but not let either
+supply a method the other already named — `injectImplMethods` still rejects that, and rightly, until there
+is a way to *say* which one you mean. That way is `Contract::method`, the contract-as-scope rule, M5.
+Building the storage first would have created data with no reader.
+
+What the package axis needed was smaller than a second key and different in kind: not a way to hold two
+claims, but a way to **name both claimants** when a duplicate arrives. That is `_conformanceOrigin` plus a
+resolver the driver installs, and it is lazy — nothing is computed unless an error fires.
+
+Two things the brief did not anticipate:
+
+- **`primKey` must substitute before it reads `builtInVal`.** Inside a monomorph a parameter's recorded
+  type node is still the unsubstituted `T`; without the `_typeSubst` hop that `cType` and `mangleElem`
+  already do, every bounded-generic call falls through to the C type and files `char` under `uint32` — so
+  the fixture written to catch exactly that would have passed while being wrong.
+- **The pre-scan stored BARE contract names**, which conflated two same-named contracts in different
+  namespaces. Where their methods also share a name this was not a bad diagnostic but a **wrong program**:
+  `tests/xfail/scoped_bound_wrong_contract.kama` compiled and ran before the fix, dispatching to the other
+  namespace's method. Found by writing the namespace-axis fixture, which is the argument for writing it.
+
 ### Remaining, in order
 
-1. **M3 residual** — the *package-identity seam* (`owningPackageDir`, [kama.driver.cpp](../../kama.driver.cpp),
-   already written and cached, into `CEmitter` as a per-unit value) and the **registry re-key** from cType
-   to `[kamaType][contractKey]`. Until that lands `char` and `uint32` still collide on `uint32_t` (§2), and
-   the **conformance-scoping fixtures** — one for the namespace axis, one for the package axis — have
-   nothing meaningful to assert. Both are specified in the plan.
-2. **M4** — migrate the prelude's 66 primitive impls and lib's 21 (`FromStr`×11, `FromStrRadix`×8,
+1. **M4** — migrate the prelude's 64 primitive impls (plus 5 on `string`) and lib's 21 (`FromStr`×11, `FromStrRadix`×8,
    `Real`×2) onto `type intrinsic`, and retire the `string`-`Equatable` nominal special case. That last is
    **one atomic commit**: delete the `interfaces`/`retroInterfaces` push in `registerCollection` *and* add
    the prelude declaration together, or the duplicate check fires in between. Keep the serde migration
    mechanical — those 24 bodies differ only because `writeI32` names a width today, and collapse once the
    writer goes generic.
-3. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
+2. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
    primitive→contract widening. Note the ABI seam: an intrinsic's method takes `self` **by value**
-   (`isScalarRecv`) while a vtbl slot passes `void*`, so each widened method needs a deref thunk — emitted
-   only for a contract actually widened to.
-4. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
+   (`isScalarRecv`, which M3 residual gave its first reader) while a vtbl slot passes `void*`, so each
+   widened method needs a deref thunk — emitted only for a contract actually widened to. **This is also
+   where a primitive's methods stop being one flat map**: two contracts supplying the same method name to
+   one type is the case `Contract::method` exists to disambiguate, and it is blocked until then.
+3. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
 
 ### Design points revised once the code existed
 
 - **There is no orphan rule, and there will not be one.** It is a workaround for separate compilation;
   kama runs one `CEmitter` per build with every unit visible, so a duplicate claim on a (type, contract)
   pair is *detectable* — and the check that detects it already exists. What was missing is only that the
-  message should name **both declaring packages**. The designed-for relaxation is *scoped conformances*
+  message should name **both declaring packages**, which it now does (`5c6f429`). The designed-for relaxation is *scoped conformances*
   (a conformance scoped to its declaring namespace, resolved at the instantiation site), which is sound
   **only if the resolved conformance enters the monomorphization key** — otherwise a container built under
   one package's ordering and mutated under another's is one C struct and corrupts silently. Zero consumers
@@ -64,7 +95,7 @@ highest regression risk turned out to cost nothing.
   the *same* library imported from two origins yields two distinct contracts. Namespace is explicit sugar
   on top, not a publishing precondition.
 - **Per-target specialization is a nested `<…> { … }` section**, which is what lets one block mix a shared
-  body with per-target ones. The claim below that the prelude's 68 impls "collapse to roughly 8–10" holds
+  body with per-target ones. The claim below that the prelude's 64 primitive impls "collapse to roughly 8–10" holds
   for the *mechanism* count, not the line count: bodies naming a different C function (`writeI32`,
   `sqrtf`) never collapse.
 - **`TypeKind::Intrinsic` was renamed `TypeKind::Neutral`.** It is the neutral kind for compiler-built
@@ -87,6 +118,21 @@ highest regression risk turned out to cost nothing.
   TextMate snapshot. Regenerating a `.coverage` file must not capture stderr.
 - The mandatory `;` in an enum body and `simple_type` in the intrinsic target list are each load-bearing
   for LALR(1). Zero new conflicts under `%expect 1`; the reasoning is in each production's comment.
+- **The prelude is baked into the binary.** Editing `prelude/global.kama` and then running `./kama`
+  compiles against the OLD prelude — `KAMA_PRELUDE_SRC` is regenerated by `make`. A prelude change that
+  "does nothing" has almost certainly not been rebuilt.
+- **A prim conformance's `ClassInfo::name` is its C type, and always was.** It is what `This` resolves to
+  (`ScopedStr _ts(_thisType, e.target->name)`) and how the `self` parameter is spelled. So the registry key
+  and the `name` deliberately differ, and `char`'s and `uint32`'s entries share a `name`. Anything that
+  wants the key must not read `name`, and anything that wants a C type must not read the key.
+- **Generic inference does not see through a member access or a foreach binding**, for any type — it wants
+  a literal or a locally-typed value. Pre-existing and unrelated to conformances, but it shapes any fixture
+  that exercises those receiver shapes: use the turbofish (`toString::<char>(x: ref m.at)`).
+- **A round-trip is not a serde assertion.** Encode and decode agree whichever conformance they share, so a
+  `DynamicArray<char>` round-tripped fine while writing `uint32`'s bytes. The KBIN *tag* is what
+  discriminates (14 for char, 7 for uint32).
+- **A `.d/` fixture with a path dependency needs its `.kama/deps/<name>` symlink committed** — the harness
+  runs `kama build`, never `kama pkg install`. `tests/pkg_path_dep.d/` is the template.
 
 ### Found while building this, not fixed, tracked in [ROADMAP §2](../ROADMAP.md)
 
@@ -111,7 +157,7 @@ spelling**, and giving them one removes the mechanism rather than fencing it.
 | kind | how it is spelled | consequence |
 |---|---|---|
 | `enum` | its **own grammar production** (`modifiers_opt ENUM type_decl_head enum_underlying_opt enum_body`) — not part of `type`, and **no `class_base_opt`** | an enum cannot declare conformance inline, so `implements Error for MyError` is *mandatory*, not stylistic |
-| `intrinsic` | **no kama spelling at all** — `TypeKind::Intrinsic` exists only inside the compiler | a primitive cannot declare conformance either, so the prelude retro-implements onto it 68 times |
+| `intrinsic` | **no kama spelling at all** — `TypeKind::Intrinsic` exists only inside the compiler | a primitive cannot declare conformance either, so the prelude retro-implements onto it 64 times |
 
 Everything retro-impl is used for traces back to one of those two gaps. Give both a spelling and the
 mechanism has no remaining job.
@@ -133,7 +179,7 @@ type intrinsic string implements Equatable { }              // the NATIVE `equal
 serve `sqrt` — that needs a *different C function* per width (`sqrtf` vs `sqrt`) and kama has no in-body
 type branching by design. It works here because these bodies are **genuinely identical** across the set:
 they use raw `<` / `==`, which stay raw C operators for all-primitive operands and never recurse. The
-prelude's 68 near-identical impls collapse to roughly 8–10.
+prelude's 64 near-identical primitive impls collapse to roughly 8–10.
 
 **A contract is a SCOPE.** An intrinsic is decorated with methods *within the scope of a contract*, so a
 contract-supplied method is not part of the intrinsic's own API:
@@ -159,11 +205,13 @@ vtable is emitted **from a declaration site**, and an intrinsic has none. That s
 "Model C" promotion — a plain enum is rebuilt into a tagged-union `ClassInfo` on the fly so it can carry
 a method and a vtable. Give both kinds a spelling and the machinery has somewhere to attach.
 
-**The orphan rule falls out of ownership** instead of being bolted on. Nobody owns `int32` but the
-prelude, so `type intrinsic int32 implements Real` is legal for `std::math` (which owns `Real`) and
-rejected for a third party owning neither side. That closes the real hazard: two dependencies that have
-never heard of each other both claiming the same (contract, type) pair and breaking a build neither
-their user nor either author can fix.
+~~**The orphan rule falls out of ownership** instead of being bolted on.~~ **Superseded — there is no
+orphan rule** (see *Design points revised*). The hazard it names is real: two dependencies that have never
+heard of each other both claiming the same (contract, type) pair, breaking a build neither their user nor
+either author can fix. But under the whole-program view that duplicate is *directly detectable*, and the
+check that detects it already existed — it only had to learn to name both packages, which it now does
+(`5c6f429`). A rule restricting who may declare a conformance would forbid legal, useful cases to prevent
+one the compiler can simply see.
 
 ### Four pieces of machinery retire together
 
@@ -214,7 +262,7 @@ Build the design above. Open questions:
    common.
 3. **Guard rails** — a `type intrinsic` block must not declare fields; one block per (contract,
    intrinsic). The existing duplicate/clobber checks already have the right shape.
-4. **Migration** — the prelude's 68 impls, `lib/std/io`'s one, and ~26 in `tests/`.
+4. **Migration** — the prelude's 64 primitive impls (plus 5 on `string`), `lib/std/io`'s one, and ~26 in `tests/`.
 
 ### 2 · Full generic specialization
 

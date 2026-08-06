@@ -60,18 +60,19 @@ Everything else here is library or toolchain work that does **not** gate the tag
    output today; streaming a running child's stdout as it arrives is the piece left.
 2. **The CONTRACT MODEL — four sequenced campaigns**, briefed in
    [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — campaign 1
-   is part-built and two of its design points were revised once the code existed; delete the file when the
-   last campaign ships). A design review during M2a found that **`enum` and `intrinsic` are hidden kinds**
+   is part-built and several of its design points were revised once the code existed; delete the file when
+   the last campaign ships). A design review during M2a found that **`enum` and `intrinsic` are hidden kinds**
    — GOALS #3c says every declaration is `type <kind> Name`, yet `enum` had its own grammar production
    with no `class_base_opt` and `intrinsic` had no kama spelling at all. Retro-impl exists only to paper
    over those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing
    one. Run in order, each its own session, **before M2b**:
    1. **Contract model** — *both spellings now ship* (`type enum X implements C`, `type intrinsic <…>
       implements C`), and two of the four pieces of machinery are gone (retro-impl on enums, the enum
-      tagged-union promotion). The conformance registry is now keyed by kama type rather than cType, which
-      closed the `char`/`uint32` collision — `char` has real `Format`/`Serialize`/`Deserialize`
-      conformances. What is LEFT: the package-identity seam and the scoping fixtures that
-      depend on it; migrating the prelude's 66 primitive impls and lib's 21; the contract-as-scope rule
+      tagged-union promotion). **M3 residual has shipped**: the conformance registry is keyed by kama type
+      rather than cType (closing the `char`/`uint32` collision — `char` has real
+      `Format`/`Serialize`/`Deserialize` now), conformances are pre-scanned under their RESOLVED contract
+      name, a duplicate claim names both packages, and both scoping fixtures exist. What is LEFT:
+      migrating the prelude's 64 primitive impls and lib's 21; the contract-as-scope rule
       plus primitive→contract widening; then deleting retro-impl and the `string`-`Equatable` nominal
       special case. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
