@@ -3,7 +3,7 @@
 // resolve unqualified everywhere (like the builtin collections). Embedded into the compiler binary at
 // build time (see tools/embed_prelude.sh), so a `--no-std` install still carries the language core.
 // This file was the `PRELUDE_SRC` C string literal in kama.driver.cpp; keep its declaration ORDER
-// (contracts before the retro-impls that satisfy them).
+// (contracts before the conformances that satisfy them).
 
 type enum Optional<T> { Some(T value), None }
 type enum Result<T, E: Error> { Ok(T value), Err(E error) }
@@ -54,7 +54,7 @@ type contract Equatable for both { fn bool equals(ref This other); }
 // Total ordering opt-in (nominal, like Equatable) — the bound for sorted containers (`SortedMap`/`SortedSet`,
 // B-tree) and `PriorityQueue` (binary heap). `compareTo` returns `Ordering`, three-way in ONE call (no
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
-// key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive retro-impls
+// key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive conformances
 // below make every int/float/string universally comparable.
 type contract Comparable for both { fn Ordering compareTo(ref This other); }
 // The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
@@ -73,8 +73,8 @@ type contract Allocator for value {
     fn void deallocate(Ptr pointer, usize bytes);
 }
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
-// every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `enum` that retro-
-// `implements Error` and is BOXED into an `Owned<Error>` fat handle at the boundary (Swift's `enum X: Error`
+// every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `type enum` that
+// declares `implements Error` and is BOXED into an `Owned<Error>` fat handle at the boundary (Swift's `enum X: Error`
 // model). `for both` — an error may be a value/enum or a resource. `message()` gives every error a uniform,
 // dynamically-dispatched description; branch on the specific kind by recovering the concrete enum with
 // `error.as<ConcreteError>()`. Language-level, so it lives in the prelude and survives `--no-std`.
@@ -254,45 +254,50 @@ type contract Deserializer for resource {
     fn void endGraph(); fn void failWith(DeError e); fn DeError errorCode();
 }
 // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
-// `deserialize(ref Deserializer) -> Result<This, DeError>` via a retro impl, and `tryParse<T: Deserialize>`
+// `deserialize(ref Deserializer) -> Result<This, DeError>` as an injected conformance, and `tryParse<T: Deserialize>`
 // calls `T.deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
 // return position (which the generic-instance machinery can't resolve outside a type).
 type contract Deserialize for both { }
-// Primitive Serialize/Deserialize conformances (pure-kama retro-impls, like the Hashable/Equatable ones
-// above) — so EVERY type is a uniform serialization participant and a collection's generic element write
+// Primitive Serialize/Deserialize conformances (pure-kama, like the Hashable/Equatable ones above) — so
+// EVERY type is a uniform serialization participant and a collection's generic element write
 // (`this[i].serialize(w)`) / read (`T.deserialize(r)`) composes for a scalar element with no compiler
 // special-casing. `serialize` writes the width-appropriate scalar; the static `deserialize` factory reads
-// it back (the retro-impl static path — see the `_primConformances` branch in the `Type::method` resolver).
+// it back (the impl static path — see the `_primConformances` branch in the `Type::method` resolver).
+//
+// ONE TARGET PER BLOCK, unlike the contracts above: every body names a width-specific writer/reader
+// (`writeI8` vs `writeI16`), and a shared body cannot call a different function per target — kama has no
+// in-body type branching by design. Nothing is gained by wrapping thirteen distinct bodies in one block's
+// specialization sections. They collapse for real once the writer itself goes generic.
 // Each primitive `serialize` is fallible: write (sticky), then wrap — a sink/format failure surfaces as
 // `Err(SerError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
-implements Serialize for int8    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for int16   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for int32   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for int64   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for uint8   { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for uint16  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for uint32  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for uint64  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for float32 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for float64 { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for bool    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for char    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeChar(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
-implements Serialize for string  { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <int8>    implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <int16>   implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <int32>   implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <int64>   implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <uint8>   implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <uint16>  implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <uint32>  implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <uint64>  implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeU64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <float32> implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <float64> implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeF64(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <bool>    implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeBool(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <char>    implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeChar(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
+type intrinsic <string>  implements Serialize    { public fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
 // `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
-implements Deserialize for int8    { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for int16   { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for int32   { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for int64   { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for uint8   { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for uint16  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for uint32  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for uint64  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for float32 { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for float64 { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for bool    { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for char    { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-implements Deserialize for string  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
+type intrinsic <int8>    implements Deserialize  { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <int16>   implements Deserialize  { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <int32>   implements Deserialize  { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <int64>   implements Deserialize  { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <uint8>   implements Deserialize  { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <uint16>  implements Deserialize  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <uint32>  implements Deserialize  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <uint64>  implements Deserialize  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <float32> implements Deserialize  { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <float64> implements Deserialize  { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <bool>    implements Deserialize  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <char>    implements Deserialize  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
+type intrinsic <string>  implements Deserialize  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
 // Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
 // static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
 // (`__kamaDeserialize::<DynamicArray<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
@@ -554,24 +559,24 @@ type resource Formatter {
     // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).
     public fn string finish() { unsafe { return kama_str_take(buf: addr(of: this.buf)); } }
 }
-// Primitive conformances (pure-kama retro-impls, like the Hashable/Comparable ones above) — every scalar and
-// `string` renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an
-// import. Narrow integers widen into the widest write (JSON-style: one conversion per signedness). `char`
-// renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an interpolation
-// hole, so the two agree whether the value arrives directly or through a `<T: Format>` bound.
-implements Format for int8    { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
-implements Format for int16   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
-implements Format for int32   { public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); } }
-implements Format for int64   { public fn void format(ref Formatter f) { f.writeI64(v: this); } }
-implements Format for uint8   { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
-implements Format for uint16  { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
-implements Format for uint32  { public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); } }
-implements Format for uint64  { public fn void format(ref Formatter f) { f.writeU64(v: this); } }
-implements Format for float32 { public fn void format(ref Formatter f) { f.writeF32(v: this); } }
-implements Format for float64 { public fn void format(ref Formatter f) { f.writeF64(v: this); } }
-implements Format for bool    { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
-implements Format for char    { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
-implements Format for string  { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
+// Primitive conformances (pure-kama, like the Hashable/Comparable ones above) — every scalar and `string`
+// renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an import.
+// Narrow integers widen into the widest write (JSON-style: one conversion per signedness), which is what
+// lets each signedness share ONE body across its four widths — on the widest the cast is the identity.
+// Every other target names a different writer, so it is its own block; see the Serialize note below.
+// `char` renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an
+// interpolation hole, so the two agree whether the value arrives directly or through a `<T: Format>` bound.
+type intrinsic <int8, int16, int32, int64> implements Format {
+    public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); }
+}
+type intrinsic <uint8, uint16, uint32, uint64> implements Format {
+    public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); }
+}
+type intrinsic <float32> implements Format { public fn void format(ref Formatter f) { f.writeF32(v: this); } }
+type intrinsic <float64> implements Format { public fn void format(ref Formatter f) { f.writeF64(v: this); } }
+type intrinsic <bool>    implements Format { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
+type intrinsic <char>    implements Format { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
+type intrinsic <string>  implements Format { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
 // The convenience wrapper: build a Formatter, format into it, finish — ONE allocation for the whole value.
 // A generic bound method call (like the `__kamaDeserialize` trampoline), monomorphized per `T`.
 fn string toString<T: Format>(ref T x) {
