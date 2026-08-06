@@ -73,7 +73,8 @@ Everything else here is library or toolchain work that does **not** gate the tag
       `Format`/`Serialize`/`Deserialize` now), conformances are pre-scanned under their RESOLVED contract
       name, a duplicate claim names both packages, and both scoping fixtures exist. What is LEFT:
       migrating the prelude's 64 primitive impls and lib's 21; the contract-as-scope rule
-      plus primitive→contract widening; then deleting retro-impl and the `string`-`Equatable` nominal
+      plus primitive→contract widening (**no new syntax** — `Contract::method` was dropped; you reach a
+      contract method by having a contract value); then deleting retro-impl and the `string`-`Equatable` nominal
       special case. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
