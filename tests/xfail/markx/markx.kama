@@ -1,0 +1,5 @@
+namespace markx;
+export { Marker };
+// One of two contracts named `Marker`. `int32` conforms to THIS one.
+type contract Marker for value { fn int32 mark(); }
+type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } }

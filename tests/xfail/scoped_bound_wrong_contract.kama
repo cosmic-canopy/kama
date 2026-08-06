@@ -1,0 +1,13 @@
+// A contract's identity is (namespace, name). `int32` conforms to `markx::Marker`; this bound is on
+// `marky::Marker`, a different contract that happens to share the bare name — and share a method name too,
+// so nothing downstream would catch the mistake.
+//
+// Conformances used to be pre-scanned under the BARE contract name, so the two were conflated and this
+// compiled. It then produced a wrong-but-plausible program: the call resolved to markx's `mark`.
+import markx::{Marker};
+import marky::{needsMarker};
+
+fn int32 main() {
+    int32 x = 5;
+    return needsMarker(v: ref x);
+}

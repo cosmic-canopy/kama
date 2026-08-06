@@ -1,0 +1,5 @@
+namespace marky;
+export { Marker, needsMarker };
+// The other `Marker` — same bare name, different namespace, and nothing conforms to it.
+type contract Marker for value { fn int32 mark(); }
+fn int32 needsMarker<T: Marker>(ref T v) { return v.mark(); }

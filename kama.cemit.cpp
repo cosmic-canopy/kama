@@ -9661,10 +9661,11 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
                          + paramName + "`").c_str(), line);
             continue;
         }
-        // A retroactive `implements <bound> for <this type>` also satisfies it. Consult the pre-scan so a
-        // bound check that runs during collection (before applyRetroactive injects the methods) still sees
-        // it — matched on the raw source name, the same key both the pre-scan and applyRetroactive use.
-        bool retro = _retroConformances.count(rkey) && _retroConformances[rkey].count(*b->value);
+        // A declared conformance to <bound> also satisfies it. Consult the pre-scan so a bound check that
+        // runs during collection (before the methods are injected) still sees it. Matched on the RESOLVED
+        // name, which the pre-scan also stores: two same-named contracts in different namespaces are two
+        // contracts, and a conformance to one must not satisfy a bound on the other.
+        bool retro = _retroConformances.count(rkey) && _retroConformances[rkey].count(contract);
         // A boxed polymorphic contract handle satisfies the contract bound: `Owned<C>`/`Shared<C>`/
         // `Weak<C>` (and `Owned<X>` where `X` implements `C`) dynamic-dispatches `C`'s methods, so a
         // boxed `Error` IS an `Error` (Model C). This lets `Result<T, Owned<Error>>` — the uniform serde
@@ -16830,24 +16831,32 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
-    // Pre-scan retroactive `implements C for T` blocks into _retroConformances (target primKey -> contracts)
-    // BEFORE collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING
-    // collection, which is earlier than applyRetroactive injects `hash` into `string`; without this the
-    // check would falsely reject `string: Hashable`. The real methods + coherence are still handled below.
+    // Pre-scan impl blocks into _retroConformances (target primKey -> contracts) BEFORE collectCollections.
+    // A `Map<string, V>` local drives a generic-type-arg bound check DURING collection, which is earlier
+    // than the methods are injected; without this the check would falsely reject `string: Hashable`. The
+    // real methods + coherence are still handled below.
+    //
+    // The contract is stored RESOLVED, under the declaring file's namespace — a bare name would conflate
+    // two same-named contracts in different namespaces, so a bound on one would be satisfied by a
+    // conformance to the other and the mistake would surface much later, as an unknown method inside the
+    // callee's body. The bound check resolves its side the same way.
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList) {
             auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
             if (ri && ri->contract && ri->contract->value && ri->target && ri->target->value)
-                _retroConformances[primKey(ri->target)].insert(*ri->contract->value);
+                _retroConformances[primKey(ri->target)]
+                    .insert(resolveUserName(*ri->contract->value, ri->contract->qualifier));
             // Same reason for `type intrinsic <…>`: a `<T: Comparable>` bound on int32 is checked during
             // collection, which is earlier than the methods below are injected.
             auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get());
             if (ii && ii->targets) {
                 SharedIdentifier c = intrinsicContract(ii);
-                if (c && c->value)
-                    for (auto& tgt : *ii->targets) _retroConformances[primKey(tgt)].insert(*c->value);
+                if (c && c->value) {
+                    std::string contract = resolveUserName(*c->value, c->qualifier);
+                    for (auto& tgt : *ii->targets) _retroConformances[primKey(tgt)].insert(contract);
+                }
             }
         }
     }
