@@ -5502,10 +5502,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     ci.copyable = isStr;                        // `string` is deep-copyable (kama_string__copy) -> satisfies
                                                // `Copyable` as a type arg, so `List<string>` gets its
                                                // `when T: Copyable` methods (copy / by-value foreach).
-    if (isStr) {                                // `string` IS `Equatable` — it has a real `equals`. Record it
-        ci.interfaces.push_back("Equatable");   // NOMINALLY so `when T: Equatable` gating (satisfiesBound, which
-        ci.retroInterfaces.push_back("Equatable"); // reads `interfaces`) keeps `List<string>.contains` etc.;
-    }                                           // retroInterfaces => static dispatch only, no fat-pointer vtable.
+    // `string`'s `Equatable` used to be recorded HERE, nominally, because an intrinsic had no way to say
+    // `implements` — the one conformance in the language that the compiler asserted on a type's behalf.
+    // It is now declared like every other, by `type intrinsic <string> implements Equatable { }` in the
+    // prelude; the empty body is not a stub, it is the point — the completeness check reads the type's
+    // method map, and `string`'s NATIVE `equals` (registered just below) is already in it.
     auto addMethod =[&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
         MethodInfo mi;
         mi.cName = cName + "__" + mname;

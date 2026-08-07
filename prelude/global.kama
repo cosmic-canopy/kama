@@ -91,6 +91,12 @@ type contract Error for both { fn string message(); }
 // A primitive declares conformance the same way every other kind does: `type intrinsic <targets>
 // implements C`. The set form is what makes these ONE declaration each — `ref This other` is the target
 // being decorated, so a body that is genuinely identical across widths is written once.
+// `string`'s `equals` is NATIVE — the compiler supplies it — so the conformance is a declaration and
+// nothing more, and the empty body is the point rather than a stub: completeness is checked against the
+// type's method map, which already holds `equals`. Until this line existed the compiler had to assert this
+// conformance on `string`'s behalf inside `registerCollection`, because an intrinsic had no way to say
+// `implements`. That was the last conformance in the language a type did not declare for itself.
+type intrinsic <string> implements Equatable { }
 type intrinsic <string> implements Hashable {
     public fn uint64 hash() {
         uint64 h = 2166136261ui64;
