@@ -67,15 +67,14 @@ Everything else here is library or toolchain work that does **not** gate the tag
    over those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing
    one. Run in order, each its own session, **before M2b**:
    1. **Contract model** — *both spellings now ship* (`type enum X implements C`, `type intrinsic <…>
-      implements C`), and two of the four pieces of machinery are gone (retro-impl on enums, the enum
-      tagged-union promotion). **M3 residual has shipped**: the conformance registry is keyed by kama type
-      rather than cType (closing the `char`/`uint32` collision — `char` has real
-      `Format`/`Serialize`/`Deserialize` now), conformances are pre-scanned under their RESOLVED contract
-      name, a duplicate claim names both packages, and both scoping fixtures exist. What is LEFT:
-      migrating the prelude's 64 primitive impls and lib's 21; the contract-as-scope rule
-      plus primitive→contract widening (**no new syntax** — `Contract::method` was dropped; you reach a
-      contract method by having a contract value); then deleting retro-impl and the `string`-`Equatable` nominal
-      special case. Per-milestone detail in the brief.
+      implements C`), the conformance registry is keyed by kama type rather than cType (closing the
+      `char`/`uint32` collision), a duplicate claim names both packages, and **M4 has shipped**: the
+      prelude and lib declare every one of their 90 primitive conformances, so `implements C for T`
+      survives at three sites in `tests/` and nowhere else. **Three of the four pieces of machinery are
+      gone** — retro-impl on enums, the enum tagged-union promotion, and the `string`-`Equatable` nominal
+      special case. What is LEFT: **M5**, the contract-as-scope rule plus primitive→contract widening
+      (**no new syntax** — `Contract::method` was dropped; you reach a contract method by having a
+      contract value); then **M6**, deleting retro-impl itself. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
    3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be

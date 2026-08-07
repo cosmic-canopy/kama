@@ -37,9 +37,9 @@ type contract Movable for resource { }
 type contract Copyable for resource { ctor copy(ref This source); }
 // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
 // Equatable>` is NOMINAL — the type must DECLARE `implements` (a coincidental method set isn't enough).
-// `string` gets a nominal `Equatable` recorded from its built-in `equals` (registerCollection pushes it
-// onto kama_string's interfaces) + `Hashable` from the pure-kama `implements` below. Both contracts live
-// in the prelude because they are language-level bounds.
+// `string` declares both below, like every other type: `Equatable` with an empty body (its `equals` is the
+// built-in one) and `Hashable` with a pure-kama FNV-1a. Both contracts live in the prelude because they
+// are language-level bounds.
 //
 // COMPARISON IS THESE CONTRACTS — there is no `operator==`. `a == b` / `a != b` lower to `equals`, and
 // `a < b` / `>` / `<=` / `>=` lower to `compareTo`; declaring those six as operator members is a compile

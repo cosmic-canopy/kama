@@ -12,9 +12,9 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
 > before starting anything**; several of its design points were revised once the code was written, and
-> *What M3 residual actually was* records where the brief and the build disagreed. **M4 is next.**
+> *What M3 residual actually was* records where the brief and the build disagreed. **M5 is next.**
 
-## Status — campaign 1, as of 2026-08-05
+## Status — campaign 1, as of 2026-08-06
 
 **Shipped to `dev`.** Baseline before the campaign was native 927 / ASan 891.
 
@@ -31,10 +31,9 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 | `5c6f429` | **package identity** — a duplicate conformance names both packages; both scoping fixtures | **948 / 912** |
 
 | `cd81231` | a contract is not a cast target; **M5's `::` dropped** | 949 / — |
-| `<this commit>` | a cast rejects every aggregate target, not just a contract | **950 / 914** |
+| `f58231a` | a cast rejects every aggregate target, not just a contract | **950 / 914** |
 
 M3 residual closes at **native 950 / ASan 914 / wasm 888**, 0 failed, with every `tools/check-*.sh` green.
-**M4 is next**; its migration surface is measured under *Remaining*.
 
 M0 was verified behaviour-neutral by **byte-identical generated C across all 585 fixtures**, and M1 by the
 same diff over the 585 pre-existing ones — the promotion-timing move that was flagged as the campaign's
@@ -42,7 +41,39 @@ highest regression risk turned out to cost nothing. M3-residual's prep commit us
 fixtures by then), and the re-key itself was verified by applying the inverse symbol rename and diffing to
 zero — a stronger check than reading the diff, and it caught nothing, which was the point.
 
-**Two of the four pieces of machinery have retired**: retro-impl on enums, and the Model C promotion.
+### M4 — shipped 2026-08-06
+
+| commit | what |
+|---|---|
+| `4d365f1` | **prep** — the LSP's `enclosingCallable` gains an `IntrinsicImplNode` arm (it had one for the retroactive block and none for this, so completion/signature-help went dead inside these bodies); `isPrimitive` parity for `string`. Byte-identical C. |
+| `ed3435d` | **prelude collapse** — `Hashable` 9→2, `Equatable` 10→1, `Comparable` 11→3 |
+| `7341f1b` | **prelude Format + serde** — `Format` 13→7; `Serialize`/`Deserialize` 26 one-target blocks. `prelude/global.kama` now has **zero** `implements C for T`. |
+| `90add48` | **lib** — `FromStr`×11, `FromStrRadix`×8, `Real`×2. Generated C identical, with nothing to explain away. |
+| `4ad6513` | **the `string`/`Equatable` special case retires** — one atomic commit |
+
+M4 closes at **native 950 / ASan 914 / wasm 888**, 0 failed, every `tools/check-*.sh` green. Counts are
+unchanged throughout because M4 adds no behaviour: it is a change of spelling, gated on codegen.
+
+**Three of the four pieces of machinery have now retired** — retro-impl on enums, the Model C promotion,
+and the `string`-`Equatable` nominal special case. The fourth (retro-impl itself) is M6's.
+
+**The gate that made this safe** was an order-insensitive **C function-set diff** over all 590 flat
+fixtures (`kama transpile --no-line`, split into top-level definitions, sorted, compared), not a byte
+diff — consolidating blocks reorders emission. Run per commit, it left exactly three deltas across the
+whole milestone, each a deliberate no-op identity cast from folding the widest width into its set's
+shared body: `uint64__hash`, `int64__format`, `uint64__format`. Nothing else moved. Two collateral
+findings worth keeping:
+
+- **A prelude-inlined `kama_panic_at` bakes the PRELUDE's line number into the call**, and records either
+  an empty path or — in a single-unit transpile — the main file's path, so the path cannot discriminate.
+  Editing the prelude shifts every one of them by exactly the number of lines added or removed. Normalize
+  that before reading a codegen diff or the real signal is buried under hundreds of records.
+- **`satisfiesBound` is structural first**, so most `string` code never depended on the nominal
+  `Equatable` record at all. What did depend on it is the `when T: Equatable` gate —
+  `DynamicArray<string>::contains`/`::indexOf` vanish without it. Verified by deleting both halves and
+  diffing, which is the only way that would have been found.
+
+**M5 is next.**
 
 ### What M3 residual actually was
 
@@ -70,37 +101,35 @@ Two things the brief did not anticipate:
 
 ### Remaining, in order
 
-1. **M4** — migrate the prelude's 64 primitive impls (plus 5 on `string`) and lib's 21 (`FromStr`×11,
-   `FromStrRadix`×8, `Real`×2) onto `type intrinsic`, and retire the `string`-`Equatable` nominal special
-   case. That last is **one atomic commit**: delete the `interfaces`/`retroInterfaces` push in
-   `registerCollection` ([kama.cemit.cpp:5506](../../kama.cemit.cpp#L5506)) *and* add the prelude
-   declaration together, or the duplicate check fires in between.
+**M4 is done** (see *Status*). What it actually cost, against the estimate, since the shape of the
+collapse is the thing most likely to be misremembered:
 
-   **Measured, so the estimate is not a guess.** Rewriting each body's `ref <target> other` as `ref This
-   other` and counting distinct bodies per contract:
+| contract | impls | blocks after |
+|---|---|---|
+| `Hashable` | 9 | **2** |
+| `Equatable` | 10 | **1** |
+| `Comparable` | 11 | **3** |
+| `Format` | 13 | 7 |
+| `Serialize` | 13 | 13 |
+| `Deserialize` | 13 | 13 |
+| `FromStr` / `FromStrRadix` / `Real` | 21 | 21 |
 
-   | contract | impls | distinct bodies under `This` |
-   |---|---|---|
-   | `Hashable` | 9 | **1** |
-   | `Equatable` | 10 | **2** |
-   | `Comparable` | 11 | **4** |
-   | `Format` | 13 | 9 |
-   | `Serialize` | 13 | 13 |
-   | `Deserialize` | 13 | 13 |
+The collapse is real but **concentrated**: 30 blocks become 6, and that is the whole win.
+`Serialize`/`Deserialize`/`FromStr`/`Real` do not collapse at all, because each body names a
+width-specific function (`writeI32`, `readF32`, `kama_sqrtf`) or a width-specific literal (a range limit),
+and the set form cannot merge bodies that call different functions. They are one-target blocks and each
+file now says so in prose. `Format` is the interesting middle: it collapses 13 → 7 not because its bodies
+are identical but because narrow integers already widen into the widest write, so the cast on the widest
+target is the identity.
 
-   So the collapse is real but **concentrated**: `Hashable`/`Equatable`/`Comparable` go 30 → ~7 blocks,
-   and that is most of the win. `Format`/`Serialize`/`Deserialize` barely collapse, because each body names
-   a width-specific writer (`writeI32`, `writeU64`, `readF32`) — the set form cannot merge bodies that call
-   different functions, exactly as *Design points revised* says. Migrate them as one-target blocks and let
-   them collapse later, when the writer goes generic; do not contort them to fit a set.
-2. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
+1. **M5** — the contract-as-scope gate (on `MethodInfo::fromContract`, added in M0 for this) plus
    primitive→contract widening, and **no new syntax** (`::` is dropped — see *M5 has no new syntax*). The
    gate is the hard half, because bound-generic dispatch goes through the same injected methods it must
    reject on a concrete receiver. The ABI seam for widening: an intrinsic's method takes `self` **by value**
    (`isScalarRecv`, which M3 residual gave its first reader) while a vtbl slot passes `void*`, so each
    widened method needs a deref thunk — emitted only for a contract actually widened to. The flat method
    map stays flat; two contracts supplying one type the same method name stays a clean error.
-3. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
+2. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
 
 ### Design points revised once the code existed
 
@@ -269,11 +298,13 @@ one the compiler can simply see.
 
 ### Four pieces of machinery retire together
 
-1. **retro-impl** — no remaining job
-2. **the nominal-recording special case** — `string`'s `Equatable` is currently "recorded from its
-   built-in `equals` via `registerCollection`" *only because* an intrinsic could not say `implements`
-3. **the enum tagged-union promotion** ("Model C") — a full type gets a real `ClassInfo` from the start
-4. **the missing primitive→contract path** — now expressible for the first time
+1. **retro-impl** — no remaining job. **The only one left; M6.**
+2. ~~**the nominal-recording special case**~~ — **retired (M4, `4ad6513`)**. `string`'s `Equatable` was
+   "recorded from its built-in `equals` via `registerCollection`" *only because* an intrinsic could not
+   say `implements`; it now says it, with an empty body.
+3. ~~**the enum tagged-union promotion**~~ ("Model C") — **retired (M2, `f8ed0ec`)**; a full type gets a
+   real `ClassInfo` from the start
+4. **the missing primitive→contract path** — expressible for the first time; the *widening* half is M5
 
 ### Measured cost: one test file
 
@@ -316,7 +347,7 @@ Build the design above. Open questions:
    common.
 3. **Guard rails** — a `type intrinsic` block must not declare fields; one block per (contract,
    intrinsic). The existing duplicate/clobber checks already have the right shape.
-4. **Migration** — the prelude's 64 primitive impls (plus 5 on `string`), `lib/std/io`'s one, and ~26 in `tests/`.
+4. ~~**Migration**~~ — **done (M4)**; the measured outcome is under *Remaining*.
 
 ### 2 · Full generic specialization
 
