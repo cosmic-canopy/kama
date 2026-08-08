@@ -1,0 +1,28 @@
+// `type contract C<T is This>` — the self-type declared as an ordinary type parameter and PINNED to the
+// implementing type. This is what lets a self-typed contract be held as a VALUE: `This` is a substitution
+// with nothing to substitute into once a type is erased, while a pinned parameter is a real type argument
+// that resolves the same way in the vtbl slot and in the concrete function behind it.
+//
+// Covers all four positions in one file: the declaration, a conformance (`<This>`), a bound (`<T: C<T>>`),
+// and a use as a type (`C<Widget>` as a local and as a parameter). Returns 42.
+type contract Weighable<T is This> for both { fn int32 weigh(ref T other); }
+
+type value Widget implements Weighable<This> {
+    public int32 w;
+    public ctor make(int32 w) { this.w = w; }
+    public fn int32 weigh(ref Widget other) { return this.w + other.w; }
+}
+
+// the BOUND — monomorphized, a direct call, no vtable
+fn int32 viaBound<T: Weighable<T>>(T a, T b) { return a.weigh(other: b); }
+// the contract VALUE in parameter position — a fat pointer, one indirect call
+fn int32 viaValue(Weighable<Widget> w, ref Widget other) { return w.weigh(other: other); }
+
+fn int32 main() {
+    Widget a = Widget.make(w: 20);
+    Widget b = Widget.make(w: 22);
+    if (viaBound::<Widget>(a: a, b: b) != 42) { return 1; }
+    Weighable<Widget> h = a;                       // a contract value over a self-typed contract
+    if (h.weigh(other: b) != 42) { return 2; }
+    return viaValue(w: a, other: b);
+}

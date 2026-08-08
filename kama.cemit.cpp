@@ -4518,7 +4518,19 @@ void CEmitter::emitEnum(EnumInfo& ei)
 // returns / loop `continue`s). Used across signature collection and class/interface emission.
 namespace { struct ScopedStr { std::string& s; std::string prev;
     ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
-    ~ScopedStr() { s = prev; } }; }
+    ~ScopedStr() { s = prev; } };
+// Bind `This` as an ordinary entry in `_typeSubst` for a scope. That is the whole claim this campaign
+// rests on: `This` IS a type parameter, so binding it where a conformance is resolved makes every existing
+// substitution path — cType, mangleElem, deepSubstType — resolve it with no new special case. Needed
+// because a pinned conformance writes its argument as `This` (`implements C<This>`), and the instance it
+// mints has to record the IMPLEMENTING type; recording the literal word files the vtable under
+// `C__as_C_This` while every use site asks for `C__as_C_<Type>`.
+struct ScopedThis { std::map<std::string, SharedIdentifier>& m; bool had; SharedIdentifier prev;
+    ScopedThis(std::map<std::string, SharedIdentifier>& m_, SharedIdentifier v) : m(m_) {
+        auto it = m.find("This"); had = it != m.end(); if (had) prev = it->second;
+        if (v) m["This"] = v; else if (had) m.erase("This");
+    }
+    ~ScopedThis() { if (had) m["This"] = prev; else m.erase("This"); } }; }
 
 // Build the class table: ordered fields, methods, and the (single) constructor.
 void CEmitter::collectClasses(SharedCompilationUnit unit)
@@ -6398,8 +6410,15 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             if (cd->typeParams && !cd->typeParams->empty()) continue;
             // `class C implements Iterator<int32>` — register the specialized contract instance so its
             // vtable emits (a value/dynamic use of C needs `C__as_Iterator_int32`).
-            if (cd->baseTypes && cd->baseTypes->interfaces)
+            // `This` is bound to the declaring type first: a PINNED contract writes its argument as `This`
+            // (`implements Comparable<This>`), and this is where that instance is MINTED. Registering it
+            // unbound files it under the literal word, so the vtable is defined as `C__as_Comparable_This`
+            // while every use site asks for `C__as_Comparable_C` — a link error, not a diagnostic.
+            if (cd->baseTypes && cd->baseTypes->interfaces) {
+                ScopedStr  _ts(_thisType, qualify(*cd->name->value));
+                ScopedThis _tt(_typeSubst, synthId(qualify(*cd->name->value)));
                 for (auto& itf : *cd->baseTypes->interfaces) scanTypeForGenericContracts(itf);
+            }
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
@@ -8364,6 +8383,21 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
     for (size_t i = 0; i < names.size(); ++i) {
         std::string base = resolveUserName(names[i], nullptr);
         SharedIdentifier itfNode = (nodes && i < nodes->size()) ? (*nodes)[i] : nullptr;
+        // A PINNED contract's argument is DETERMINED — it can only be the implementing type — so there is
+        // exactly one always-correct spelling, `This`, and it is also the only one the intrinsic SET form
+        // can write (`<int8, …, uint64>` is eight types sharing one block). Naming the type concretely is
+        // rejected rather than accepted-when-equal, so a conformance reads the same everywhere.
+        auto gc = _genericContracts.find(base);
+        if (itfNode && gc != _genericContracts.end() && gc->second.pinnedParam >= 0) {
+            size_t p = (size_t)gc->second.pinnedParam;
+            SharedIdentifier arg = (itfNode->genericArgs && p < itfNode->genericArgs->size())
+                                 ? (*itfNode->genericArgs)[p] : SharedIdentifier();
+            if (!arg || !arg->value || *arg->value != "This")
+                unsupported(("`" + base + "` pins its type parameter to the implementing type, so the "
+                             "conformance names it `This` — write `implements " + base + "<This"
+                             + (itfNode->genericArgs && itfNode->genericArgs->size() > 1 ? ", …" : "")
+                             + ">`").c_str(), itfNode->line);
+        }
         if (itfNode && itfNode->genericArg && _genericContracts.count(base))
             base = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
         names[i] = base;
@@ -8393,6 +8427,11 @@ void CEmitter::linkBases()
         // ci.interfaces (a plain name list) dropped, so read them back in parallel.
         SharedIdentifierList ifaceNodes = (ci.node && ci.node->baseTypes) ? ci.node->baseTypes->interfaces
                                                                           : SharedIdentifierList();
+        // A PINNED contract's argument is `This`, and it has to mangle to THIS class — `Comparable<This>`
+        // on `Fixed16_16` names `Comparable_Fixed16_16`. Without the binding it mangles the literal word
+        // and the conformance is filed under a key nothing can ever look up.
+        ScopedStr  _ts(_thisType, ci.name);
+        ScopedThis _tt(_typeSubst, synthId(ci.name));
         resolveInterfaceNames(ci.interfaces, ifaceNodes);
     }
 #if KAMA_INHERITANCE
@@ -9221,10 +9260,12 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             }
             std::string name = qualify(bare);
 
-            // Resolve the declared contracts under the ENUM's own ns context (already active).
+            // Resolve the declared contracts under the ENUM's own ns context (already active), with
+            // `This` bound so a PINNED contract mangles to this enum (`Comparable<This>` -> `Comparable_Color`).
             std::vector<std::string> ifaces;
             if (hasIfaces) for (auto& i : *ifaceNodes) if (i && i->value) ifaces.push_back(*i->value);
-            resolveInterfaceNames(ifaces, ifaceNodes);
+            { ScopedStr _ts(_thisType, name); ScopedThis _tt(_typeSubst, synthId(name));
+              resolveInterfaceNames(ifaces, ifaceNodes); }
 
             // Promote a still-plain enum. A tagged/payload enum already has its `_classes` entry.
             auto ci = _classes.find(name);
@@ -9364,9 +9405,6 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
                     "unambiguous; write a second block for the other one", n->line);
         return;
     }
-    std::vector<std::string> names(1, *(*ifaces)[0]->value);
-    resolveInterfaceNames(names, ifaces);
-    const std::string& contract = names[0];
     if (!n->targets) return;
 
     for (auto& tgt : *n->targets) {
@@ -9375,6 +9413,18 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         // C type — it is what `This` resolves to and what the receiver parameter is spelled as.
         std::string ctKey = cType(tgt);
         std::string tkey  = primKey(tgt);
+        // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
+        // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
+        // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
+        ScopedStr  _ts(_thisType, ctKey);
+        ScopedThis _tt(_typeSubst, tgt);   // the real kama node: `int32`, not the C spelling `int32_t`
+        // The contract resolves PER TARGET, not once for the block: a PINNED contract names a different
+        // instance for each type in the set (`Weighable<This>` over `<int8, int16>` is `Weighable_int8`
+        // and `Weighable_int16`, two contracts with two vtbls). An unpinned one resolves the same every
+        // time, so this costs nothing there.
+        std::vector<std::string> names(1, *(*ifaces)[0]->value);
+        resolveInterfaceNames(names, ifaces);
+        const std::string& contract = names[0];
         ClassInfo* tcip = nullptr;
         auto ti = _classes.find(ctKey);
         if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
@@ -9402,10 +9452,6 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
                 unsupported("`type intrinsic` cannot declare a destructor — a primitive owns nothing",
                             m->line);
         }
-        // `ref This other` is the whole point of the set form, so `This` must be BOUND here — the collect
-        // pass runs outside any type, and paramSigsOf/scanTypeForCollections would otherwise reject it.
-        // `This` is a C TYPE, so it binds to `ctKey`, not to the registry key.
-        ScopedStr _ts(_thisType, ctKey);
         // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
         // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
         // eligible as `int32`, and the retroactive path has always passed `builtInVal != 0` for it
