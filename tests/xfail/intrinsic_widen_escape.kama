@@ -1,0 +1,11 @@
+// A widened primitive is a BORROW, exactly like a widened class: the fat pointer points at a compound
+// literal with the enclosing block's storage duration. Returning it would hand back a pointer into a dead
+// frame, so the escape check that already governs contract values governs this too — the new capability
+// needed no new safety machinery, and this fixture is what says so.
+fn Hashable leak() {
+    int32 n = 1;
+    Hashable h = n;
+    return h;
+}
+
+fn int32 main() { return 0; }

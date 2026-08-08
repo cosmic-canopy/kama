@@ -1,0 +1,23 @@
+// M5b — a PRIMITIVE widened to a contract value. Until now a contract value could only borrow a class:
+// a primitive has no `_classes` entry, and its methods take `self` BY VALUE while a vtbl slot passes
+// `void* self`, so each slot needs a deref THUNK rather than the cast a class gets.
+//
+// Both positions the language offers: a local declaration and a parameter. The fat pointer borrows a C99
+// compound literal, which has the enclosing block's storage duration — the lifetime a borrow wants.
+// Returns 42.
+fn uint64 hashVia(Hashable h) { return h.hash(); }
+
+fn int32 main() {
+    int32 n = 20;
+    Hashable h = n;                                  // local declaration
+    if (h.hash() != 20ui64) { return 1; }
+
+    if (hashVia(h: n) != 20ui64) { return 2; }       // parameter position, from a named value
+    if (hashVia(h: 22) != 22ui64) { return 3; }      // parameter position, from a literal
+
+    // A widened primitive is an ordinary contract value: it can be rebound and passed on.
+    Hashable again = h;
+    if (hashVia(h: n) + again.hash() != 40ui64) { return 4; }
+
+    return 42;
+}

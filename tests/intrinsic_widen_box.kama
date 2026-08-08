@@ -1,0 +1,27 @@
+// M5b (owning form) — a PRIMITIVE boxed into an `Owned<C>` / `Shared<C>` contract handle.
+//
+// The borrow form cannot serve this: its fat pointer borrows a block-scoped compound literal, so the
+// escape check forbids storing or returning it (tests/xfail/intrinsic_widen_escape.kama). An owned box is
+// the form that outlives its scope, which is what lets a widened primitive be a field, a collection
+// element, or a return value.
+//
+// Run under ASan: the box is a malloc a primitive's own drop knows nothing about, so a leak here would be
+// invisible to every other fixture. Returns 42.
+import std::memory::{Owned, Shared};
+
+fn uint64 sumOf(Owned<Hashable> a, Owned<Hashable> b) { return a.hash() + b.hash(); }
+
+fn int32 main() {
+    Owned<Hashable> boxed = 20;
+    if (boxed.hash() != 20ui64) { return 1; }
+
+    // a Shared box refcounts like any other Shared handle
+    Shared<Hashable> shared = 22;
+    if (shared.hash() != 22ui64) { return 2; }
+
+    Owned<Hashable> x = 20;
+    Owned<Hashable> y = 22;
+    if (sumOf(a: give x, b: give y) != 42ui64) { return 3; }
+
+    return 42;
+}
