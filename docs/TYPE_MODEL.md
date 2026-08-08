@@ -151,7 +151,7 @@ effect*. Inheritance is overused because it **bundles** two goals. kama unbundle
 - (**ownership** → `value` / `resource`, orthogonal to both.)
 
 A contract alone gives no reuse (it's a pure guarantee); reuse comes from a **generic** — optionally
-*bounded* by a contract (`fn sort<T: Comparable>(...)`). Together, generics + contracts give `value`
+*bounded* by a contract (`fn sort<T: Comparable<T>>(...)`). Together, generics + contracts give `value`
 types everything inheritance did — reuse *and* is-a — without inheritance's coupling.
 
 ### Two dispatch mechanisms (differ by where the vtable lives)

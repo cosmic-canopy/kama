@@ -132,8 +132,8 @@ type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
 // borrow the key (`ref K`); `put` consumes the key + value it stores (by value). `foreach (K k in m)`
 // iterates the keys, and `copy m` deep-copies — each present only when its keys (and, for `copy`, values)
 // are `Copyable` (multi-`when`). `entries()` yields each `Entry<K,V>` key-value pair by value.
-type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
-        implements Copyable(bare: give) when [K: Copyable, V: Copyable], Iterable<K> when [K: Copyable],
+type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
+        implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
                    Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
     Ptr<K> keys = null; Ptr<V> vals = null; Ptr<uint8> state = null;
     int32 len = 0; int32 cap = 0; int32 tombs = 0; int32 mods = 0; A alloc;
@@ -168,7 +168,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
 
     // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
     // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
-    public fn MapKeyIter<K> iterator() when [K: Copyable] {
+    public fn MapKeyIter<K> iterator() when [K: Copyable<K>] {
         return MapKeyIter::<K>.make(keys: this.keys, state: this.state, cap: this.cap,
                                modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -204,12 +204,12 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // an owning element: `this.vals` is a raw `Ptr<V>`, whose index has no known element class, so the `copy`
     // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
     // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
-    fn V cloneVal(ref V v) when [V: Copyable] { return copy v; }
-    fn K cloneKey(ref K k) when [K: Copyable] { return copy k; }   // same trick for an owning key
+    fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
+    fn K cloneKey(ref K k) when [K: Copyable<K>] { return copy k; }   // same trick for an owning key
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
-    public ctor copy(ref Map<K,V,H,A> source) when [K: Copyable, V: Copyable] {
+    public ctor copy(ref Map<K,V,H,A> source) when [K: Copyable<K>, V: Copyable<V>] {
         this.alloc = source.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < source.cap) {
@@ -222,7 +222,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
         return this;
     }
 
-    public fn Optional<V> get(ref K key) when [V: Copyable] {
+    public fn Optional<V> get(ref K key) when [V: Copyable<V>] {
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }   // hand back a copy; map keeps its own
@@ -242,7 +242,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
 
     // `foreach (V v in map.values())` — a by-value value iterator (present only for a Copyable value), the
     // value analogue of `iterator()`. `valuesMut()` borrows instead, for any value type.
-    public fn MapValueIter<V> values() when [V: Copyable] {
+    public fn MapValueIter<V> values() when [V: Copyable<V>] {
         return MapValueIter::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -255,7 +255,7 @@ type resource Map<K: Hashable + Equatable, V, H: Hasher = DefaultHasher, A: Allo
     // key and value are Copyable (it hands out an owned copy of each pair). The pair analogue of `iterator()`
     // (keys) and `values()`. Keys are never mutated in place, so there is no `entriesMut()`; mutate values via
     // `valuesMut()` / `getRef`.
-    public fn MapEntryIter<K,V> entries() when [K: Copyable, V: Copyable] {
+    public fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
         return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.state, cap: this.cap,
                                         modsp: addr(of: this.mods), modsAt: this.mods);
     }

@@ -290,7 +290,7 @@ allocator — see "Custom allocators" below). These two key contracts are in the
 
 ```kama
 type contract Hashable  for both { fn uint64 hash(); }
-type contract Equatable for both { fn bool equals(This other); }
+type contract Equatable<T is This> for both { fn bool equals(ref T other); }
 ```
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
@@ -305,7 +305,7 @@ cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` c
 in `std::collections`). `string`'s `Equatable` is recorded nominally from its built-in `equals`; each
 integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
-`type contract Comparable for both { fn Ordering compareTo(ref This other); }` (returning the prelude enum
+`type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order via the same pure-kama
 retro-impl mechanism — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
@@ -365,7 +365,7 @@ counter (odd while occupied, bumped on every insert/remove), so a handle can saf
 and a dangling handle is caught, not a use-after-free. `contains(handle:)`, `length`/`isEmpty`, `clear`, and
 `values()`/`valuesMut()` (iterate the live values, copy or borrow) round it out.
 
-**`SortedMap<K: Comparable, V>` / `SortedSet<K: Comparable>`** are the **ordered** map/set — a **B-tree**
+**`SortedMap<K: Comparable<K>, V>` / `SortedSet<K: Comparable<K>>`** are the **ordered** map/set — a **B-tree**
 (min-degree 6; peer: Rust `BTreeMap`, C++ `std::map`) keyed by `Comparable.compareTo`, not a hash. They mirror
 `Map`/`Set` (`put`/`get`(copy)/`getRef`(in-place borrow, panics absent)/`remove -> Optional<V>`/`contains`/
 `length`/`isEmpty`/`clear`/deep `copy`/JSON serde), but keys stay **sorted**, so they add the ordered queries a
@@ -547,7 +547,7 @@ memberwise, a `Copyable`-resource element is deep-copied via its own `copy` ctor
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
 `give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy**
-**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable { ctor copy(ref This source); }`)
+**nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable<T is This> { ctor copy(ref T source); }`)
 plus a **public `copy` constructor** (a lone `copy` ctor without the `implements` does *not* make a type
 copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
 is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes
@@ -737,7 +737,7 @@ exactly how `Comparable` reaches every primitive. Each operation is one generic 
 `Real`, and the per-width libm call lives in the impls: `sqrt cbrt sin cos tan asin acos atan exp log
 log2 log10 floor ceil round trunc abs` (one argument) and `pow fmod atan2 hypot` (two).
 
-`Real` is **exported**, so a user type can join in — `implements Real for MyFixed { … }` and every
+`Real` is **exported**, so a user type can join in — `type value MyFixed implements Real<This> { … }` and every
 function above works on it. Its methods carry the same names as the free functions (as Rust's
 `Float::sqrt` and Swift's `squareRoot()` do), so an implementer writes `public fn MyFixed sqrt()`.
 `atan2` keeps C's `(y, x)` meaning, but the arguments are **named**, so the classic mix-up cannot happen
@@ -773,7 +773,7 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 `minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
 `wrappingNegI32` (+ `I64`) for intentional overflow. `import std::num::{int32Max, minI32, wrappingAddI32,
 …}`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
-— `fn Ordering compareTo(ref This other)` with retro-impls for every int/float/string — the bound for
+— `fn Ordering compareTo(ref T other)` with `type intrinsic` conformances for every int/float/string — the bound for
 `PriorityQueue` + the sorted containers.)
 
 ### Sorting & searching (`std::collections`) ✅
@@ -1429,6 +1429,9 @@ every function, so declarations are greppable and self-describing:
   as well, and dispatch through `Animated` reaches them).
 - **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
   takes the same `implements` clause as every other kind.
+- **`type intrinsic <targets> implements C { … }`** — the kind a **primitive** is. It declares nothing new;
+  it decorates existing built-in types with a contract's methods, one block for a whole **set** of widths.
+  See *`type intrinsic`* below.
 
 The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words `value` / `resource` /
 `view` / `contract` are **contextual, not reserved** — because they appear only right after `type`, they
@@ -1663,8 +1666,7 @@ the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` —
 `Ok`.
 
 ```kama
-type enum SizeError { TooSmall }
-implements Error for SizeError { public fn string message() { return "size must be positive"; } }
+type enum SizeError implements Error { TooSmall; public fn string message() { return "size must be positive"; } }
 type resource Buffer {
     int32 size;
     private ctor make(int32 size) { Buffer r; r.size = size; return give r; }        // trivial, infallible
@@ -1923,38 +1925,49 @@ fn Owned<Shape> make(int64 s) { Owned<Shape> o = new Square.make(s: s); return g
 
 A `DynamicArray<Shared<Shape>>` (the engine's scene) works — polymorphic elements stored and dropped in RAII order.
 
-### Retroactive conformance — `implements C for T` ✅
+### `type intrinsic` — a primitive declares its conformances ✅
 
-A type can be given a contract **after the fact**, from outside its declaration — including a **primitive**
-(`string`, …) or a type from another module — with a top-level `implements C for T { … }` block. The methods
-lower exactly like ordinary methods on `T` (mangled `T__method`), so they dispatch with zero overhead through
-a generic bound `<K: C>`; there is **no method overloading and no "extension method" call-syntax** — the block
-adds real conformance, not sugar. This is how std gives primitives their behavioral contracts *in kama* (e.g.
-`Hashable`/`Equatable` for `string`, so `Map<string, V>` keys hash) rather than hard-coding them in the
-compiler.
+A **primitive** is a type kind like any other, and it declares conformance the same way: `type intrinsic
+<targets> implements C { … }`. The `<…>` is a **set**, because one body usually serves many widths — the
+prelude's per-primitive impls collapse from 64 blocks to roughly 8. Inside the block `This` is the target
+being decorated, resolved per member of the set.
 
 ```kama
 type contract Hashable for both { fn uint64 hash(); }
 
-implements Hashable for string {                    // a primitive gains a contract, in pure kama
+type intrinsic <string> implements Hashable {        // a primitive gains a contract, in pure kama
     public fn uint64 hash() {
-        uint64 h = 2166136261ui64;                  // FNV-1a
+        uint64 h = 2166136261ui64;                   // FNV-1a
         int32 i = 0;
         while (i < cast<int32>(this.length())) { h = (h ^ cast<uint64>(this[i])) * 16777619ui64; i = i + 1; }
         return h;
     }
 }
+
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64>
+    implements Comparable<This> { … }                // ONE body for eight widths
+
 fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }   // `string` now satisfies the bound
 ```
 
-**Coherence (orphan rule).** A retroactive impl is permitted only when the compilation declares **either** the
-contract **or** the target type — so third parties can't give conflicting conformances. kama's whole-program
-view makes this a direct duplicate check (a conflicting or duplicated impl is a compile error), which is *also*
-the future package-manager guard. A retroactively-conformed contract dispatches **statically** (through
-generic bounds); it does not add a fat-pointer interface vtable. A **scalar primitive** target (`int32`)
-works too: its `this` is the value itself, so a method takes `T self` by value and the call is a plain
-`int32_t__hash(k)` — this is how `Map<int32, V>` / `Set<int32>` get their keys. (Other primitive widths are
-one-line std `implements` blocks, added on demand.)
+The set form works because the bodies are **genuinely identical** across it — they use raw `<` / `==`,
+which stay raw C operators for all-primitive operands. It is not a substitute for per-type dispatch: a
+type list cannot serve `sqrt`, which needs a different C function per width (`sqrtf` vs `sqrt`), and kama
+has no in-body type branching by design.
+
+A primitive gets **no `_classes` entry** — every "is this a user type?" test keys on that — so the
+conformance hangs on a separate registry, and a **scalar** target's `this` is the value itself: the method
+takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `Map<int32, V>` /
+`Set<int32>` get their keys.
+
+**Why a kind rather than a mechanism.** Before this, a primitive had no kama spelling at all, so the only
+way to give it a contract was `implements C for T` — a *retroactive* block reaching into a type from
+outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing
+it. See *The contract model* for the full argument.
+
+**Coherence.** Two declarations of the same (contract, type) pair are a compile error that names **both
+packages** — kama's whole-program view makes the conflict directly visible, so no orphan rule is needed to
+forbid legal-but-unusual cases in order to prevent one the compiler can simply see.
 
 ## Static methods & operator overloading ✅
 
@@ -2226,16 +2239,36 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param value;
   because it's monomorphized, those calls are **static direct calls** (zero cost, no vtable). Each concrete
   type argument is checked to satisfy its bounds, else a clean compile error.
-- **`This`** — the self-type, inside a `type contract` or a type's own methods: `fn bool equals(This other)`,
-  `fn This clone()`. Resolves to the implementing/concrete type; used as a bound (`<T: Equatable>`), the
-  dispatch is static. Chosen over `Self` to pair with the `this` value and the PascalCase-types convention.
+- **`This`** — the self-type. Inside a type's **own** body it is that type (`fn This clone()`,
+  `implements Comparable<This>`) and needs no declaration, because nothing is erased there. A **contract**
+  may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
+
+  ```kama
+  type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }
+
+  type value Fixed16_16 implements Comparable<This> { … }   // conformance: always `This`
+  fn T maxOf<T: Comparable<T>>(T a, T b) { … }              // bound: the bound's own parameter
+  Comparable<int32> c = 3;                                  // use as a type: a concrete name
+  ```
+
+  The reason is erasure. `This` is a substitution, and a substitution needs something to substitute into:
+  a generic bound monomorphizes and has that, a contract **value** has thrown the type away. A vtable slot
+  must give `This` one concrete type, so it bound the contract while the function behind the slot had
+  bound the implementing type — two bindings for one function pointer, and the cast between them was a lie
+  the C compiler could not see. A pinned parameter is a real type argument that resolves identically on
+  both sides, which is what lets `Comparable`, `Equatable` and `Real` be contract values at all.
+
+  `is` is an **identity** constraint and gets its own slot rather than joining the `:` bound list, which
+  holds contracts. At most one parameter may be pinned, it must come first, and the operand is `This` —
+  `<T is Widget>` (a subtype bound) is not a thing kama has. Chosen over `Self` to pair with the `this`
+  value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
   arithmetic over any conforming type at zero cost:
   ```kama
-  type contract Arithmetic { This operator+(This rhs); }
-  fn T sum<T: Arithmetic>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
+  type contract Arithmetic<T is This> for both { T operator+(T rhs); }
+  fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
   ```
-  The concrete type declares `implements Arithmetic` (bounds are nominal), and `a + b` in the monomorphized
+  The concrete type declares `implements Arithmetic<This>` (bounds are nominal), and `a + b` in the monomorphized
   body lowers to a direct call — no vtable, no boxing.
 - **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is
   **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator_int32`).

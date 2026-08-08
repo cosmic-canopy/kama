@@ -6,8 +6,8 @@ export { SortedSet };
 // `Unit`), exactly as `Set` wraps `Map<K, Unit>`. Members iterate in ascending order and it answers the same
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
-type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [K: Copyable],
-        Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
+type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [K: Copyable<K>],
+        Serialize when [K: Serialize, K: Copyable<K>], Deserialize when [K: Deserialize] {
     SortedMap<K, Unit, A> m;
 
     // A bare `SortedSet<K, A> r;` default-fills the inner `m` (`SortedMap.empty()` — a non-zero default that
@@ -31,19 +31,19 @@ type resource SortedSet<K: Comparable, A: Allocator = GlobalAllocator> implement
     public fn void clear() { this.m.clear(); }
 
     // Ordered queries + iteration forward to the backing map's key views.
-    public fn Optional<K> first() when [K: Copyable] { return this.m.first(); }
-    public fn Optional<K> last() when [K: Copyable] { return this.m.last(); }
-    public fn Optional<K> floor(ref K key) when [K: Copyable] { return this.m.floor(key: key); }
-    public fn Optional<K> ceil(ref K key) when [K: Copyable] { return this.m.ceil(key: key); }
+    public fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
+    public fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
+    public fn Optional<K> floor(ref K key) when [K: Copyable<K>] { return this.m.floor(key: key); }
+    public fn Optional<K> ceil(ref K key) when [K: Copyable<K>] { return this.m.ceil(key: key); }
     // `foreach (K k in set.elements())` — ascending members (key copies).
-    public fn DynamicArray<K> elements() when [K: Copyable] { return this.m.keys(); }
-    public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable] { return this.m.range(from: from, to: to); }
-    public ctor copy(ref SortedSet<K, A> source) when [K: Copyable] { this.m = copy source.m; }
+    public fn DynamicArray<K> elements() when [K: Copyable<K>] { return this.m.keys(); }
+    public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
+    public ctor copy(ref SortedSet<K, A> source) when [K: Copyable<K>] { this.m = copy source.m; }
 
     // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
     fn Result<Unit, Owned<Error>> serElem(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable] {
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
         DynamicArray<K> es = this.m.keys();
         w.beginArray(count: cast<usize>(es.length()));
         int32 i = 0;

@@ -72,9 +72,13 @@ Everything else here is library or toolchain work that does **not** gate the tag
       prelude and lib declare every one of their 90 primitive conformances, so `implements C for T`
       survives at three sites in `tests/` and nowhere else. **Three of the four pieces of machinery are
       gone** — retro-impl on enums, the enum tagged-union promotion, and the `string`-`Equatable` nominal
-      special case. What is LEFT: **M5**, the contract-as-scope rule plus primitive→contract widening
-      (**no new syntax** — `Contract::method` was dropped; you reach a contract method by having a
-      contract value); then **M6**, deleting retro-impl itself. Per-milestone detail in the brief.
+      special case. **M5a has shipped**: a contract declares the self-type as a **pinned type parameter**
+      (`type contract Comparable<T is This>`) instead of naming `This` in a signature, which is what
+      removed the unsound vtbl slot — the slot bound `This` to the contract while the function behind it
+      bound the implementing type, and every program in the tree emitted that cast. What is LEFT:
+      **M5b**, primitive→contract widening (`Hashable h = 3;` as a borrow, then an `Owned<C>` heap box);
+      **M5c**, the contract-as-scope gate, so a primitive does not absorb an API it does not own; then
+      **M6**, deleting retro-impl itself. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
    3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
@@ -513,6 +517,16 @@ rather than here, so there is one number to keep current. Forward work:
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
 ## 10. Tooling / distribution (deferred)
+
+- **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** Two separate
+  irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,
+  `kama.cemit.*`, `kama.driver.cpp`, `kama_runtime.h`) with everything else; they belong under `src/`, with
+  build output staying outside it so nothing generated lands beside a hand-written file. (b) There is
+  nowhere sanctioned to **prototype in kama** — trying a language feature means writing a `.kama` somewhere,
+  and the only choices today are the repo root (pollution) or a path outside the tree (invisible to the next
+  session). A gitignored scratch directory (`.scratch/`, or similar) gives that work one home, so a
+  throwaway `type contract Foo<T is This>` never risks being committed and never has to be re-derived.
+  Neither is urgent; both get cheaper to do the sooner they happen, since every path reference is a cost.
 
 - **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
   done ([targets.md](targets.md), [SPEC.md](SPEC.md)). What is left:

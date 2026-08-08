@@ -21,7 +21,7 @@ extern fn int32 kama_ctrl_release_weak(Ptr c, int32 atomic);
 // weak == 0` frees the ctrl block through an `A` equal to the one that allocated it. Constructs by
 // returning a FRESH ctor rvalue (never a named local, which would re-fire the `copy()` marker); the ctor
 // is also how it rebuilds a `Shared` (cross-type — field-poke can't reach the sibling's private fields).
-type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable(bare: copy) {
+type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
     A alloc;

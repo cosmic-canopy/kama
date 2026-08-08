@@ -12,7 +12,7 @@ namespace std::num;
 export { Fixed16_16 };
 
 @generate(of)
-type value Fixed16_16 implements Equatable, Comparable {
+type value Fixed16_16 implements Equatable<This>, Comparable<This> {
     public int32 raw;   // real value * 65536
 
     public ctor fromInt(int32 n)       { return Fixed16_16.of(raw: n * 65536i32); }   // traps if |n| >= 32768 (out of range)

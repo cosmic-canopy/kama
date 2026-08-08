@@ -61,15 +61,15 @@ extern fn float64 kama_hypot(float64 x, float64 y);   extern fn float32 kama_hyp
 
 // The per-width dispatch seam, and the extension point: one method per operation, because that method
 // IS the per-type body. `implements Real for MyType { … }` and every function below works on it.
-type contract Real for value {
-    fn This sqrt();  fn This cbrt();  fn This sin();   fn This cos();   fn This tan();
-    fn This asin();  fn This acos();  fn This atan();  fn This exp();   fn This log();
-    fn This log2();  fn This log10(); fn This floor(); fn This ceil();  fn This round();
-    fn This trunc(); fn This abs();
-    fn This pow(This y);  fn This fmod(This y);  fn This atan2(This x);  fn This hypot(This y);
+type contract Real<T is This> for value {
+    fn T sqrt();  fn T cbrt();  fn T sin();   fn T cos();   fn T tan();
+    fn T asin();  fn T acos();  fn T atan();  fn T exp();   fn T log();
+    fn T log2();  fn T log10(); fn T floor(); fn T ceil();  fn T round();
+    fn T trunc(); fn T abs();
+    fn T pow(T y);  fn T fmod(T y);  fn T atan2(T x);  fn T hypot(T y);
 }
 
-type intrinsic <float64> implements Real {
+type intrinsic <float64> implements Real<This> {
     public fn float64 sqrt()  { return kama_sqrt(x: this); }
     public fn float64 cbrt()  { return kama_cbrt(x: this); }
     public fn float64 sin()   { return kama_sin(x: this); }
@@ -93,7 +93,7 @@ type intrinsic <float64> implements Real {
     public fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
 }
 
-type intrinsic <float32> implements Real {
+type intrinsic <float32> implements Real<This> {
     public fn float32 sqrt()  { return kama_sqrtf(x: this); }
     public fn float32 cbrt()  { return kama_cbrtf(x: this); }
     public fn float32 sin()   { return kama_sinf(x: this); }
@@ -118,30 +118,30 @@ type intrinsic <float32> implements Real {
 }
 
 // --- the public surface: one name, either width, inferred from the argument ----------------------
-fn T sqrt<T: Real>(T x)  { return x.sqrt(); }
-fn T cbrt<T: Real>(T x)  { return x.cbrt(); }
-fn T sin<T: Real>(T x)   { return x.sin(); }
-fn T cos<T: Real>(T x)   { return x.cos(); }
-fn T tan<T: Real>(T x)   { return x.tan(); }
-fn T asin<T: Real>(T x)  { return x.asin(); }
-fn T acos<T: Real>(T x)  { return x.acos(); }
-fn T atan<T: Real>(T x)  { return x.atan(); }
-fn T exp<T: Real>(T x)   { return x.exp(); }
-fn T log<T: Real>(T x)   { return x.log(); }
-fn T log2<T: Real>(T x)  { return x.log2(); }
-fn T log10<T: Real>(T x) { return x.log10(); }
-fn T floor<T: Real>(T x) { return x.floor(); }
-fn T ceil<T: Real>(T x)  { return x.ceil(); }
-fn T round<T: Real>(T x) { return x.round(); }
-fn T trunc<T: Real>(T x) { return x.trunc(); }
-fn T abs<T: Real>(T x)   { return x.abs(); }
+fn T sqrt<T: Real<T>>(T x)  { return x.sqrt(); }
+fn T cbrt<T: Real<T>>(T x)  { return x.cbrt(); }
+fn T sin<T: Real<T>>(T x)   { return x.sin(); }
+fn T cos<T: Real<T>>(T x)   { return x.cos(); }
+fn T tan<T: Real<T>>(T x)   { return x.tan(); }
+fn T asin<T: Real<T>>(T x)  { return x.asin(); }
+fn T acos<T: Real<T>>(T x)  { return x.acos(); }
+fn T atan<T: Real<T>>(T x)  { return x.atan(); }
+fn T exp<T: Real<T>>(T x)   { return x.exp(); }
+fn T log<T: Real<T>>(T x)   { return x.log(); }
+fn T log2<T: Real<T>>(T x)  { return x.log2(); }
+fn T log10<T: Real<T>>(T x) { return x.log10(); }
+fn T floor<T: Real<T>>(T x) { return x.floor(); }
+fn T ceil<T: Real<T>>(T x)  { return x.ceil(); }
+fn T round<T: Real<T>>(T x) { return x.round(); }
+fn T trunc<T: Real<T>>(T x) { return x.trunc(); }
+fn T abs<T: Real<T>>(T x)   { return x.abs(); }
 
-fn T pow<T: Real>(T x, T y)   { return x.pow(y: y); }
-fn T fmod<T: Real>(T x, T y)  { return x.fmod(y: y); }
-fn T hypot<T: Real>(T x, T y) { return x.hypot(y: y); }
+fn T pow<T: Real<T>>(T x, T y)   { return x.pow(y: y); }
+fn T fmod<T: Real<T>>(T x, T y)  { return x.fmod(y: y); }
+fn T hypot<T: Real<T>>(T x, T y) { return x.hypot(y: y); }
 // `atan2` keeps C's (y, x) meaning, but the arguments are NAMED, so the classic mix-up cannot happen
 // silently the way a positional `atan2(a, b)` allows.
-fn T atan2<T: Real>(T y, T x) { return y.atan2(x: x); }
+fn T atan2<T: Real<T>>(T y, T x) { return y.atan2(x: x); }
 
 // --- engine helpers (float32, no libm counterpart) ----------------------------------------------
 fn float32 pi()      { return 3.14159265f32; }

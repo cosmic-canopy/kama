@@ -6,7 +6,7 @@ import std::collections::{SortedSet, Map};
 import std::time::{Duration};
 
 // A user type mirroring the same shape: one `implements`, six operators, plus sorted/keyed containers.
-type value Cents implements Equatable, Comparable, Hashable {
+type value Cents implements Equatable<This>, Comparable<This>, Hashable {
     public int32 v;
     public ctor of(int32 v) { this.v = v; }
     public fn uint64 hash() { return cast<uint64>(this.v); }

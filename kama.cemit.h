@@ -1331,6 +1331,7 @@ private:
     // own type). Its presence makes the give/copy marker mandatory: bare hand-off = error, `copy`
     // deep-copies via copy(), `give` moves.
     bool isCopyable(const std::string& cls) const;
+    std::string pinnedInstanceName(const std::string& bare, const std::string& t) const;
     bool satisfiesBound(const std::string& t, const std::string& bound) const;   // does concrete C-type `t` satisfy contract `bound`? (Copyable: value/primitive yes, resource iff it implements it)
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local

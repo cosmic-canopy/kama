@@ -1,6 +1,6 @@
 // `implements Copyable` is the nominal opt-in, but the copy IS a `copy()` method — declaring the
 // contract without providing a public nullary `copy()` is a compile error.
-type resource R implements Copyable(bare: give) {
+type resource R implements Copyable<This>(bare: give) {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
     ~R() { }

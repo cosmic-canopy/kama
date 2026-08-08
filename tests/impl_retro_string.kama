@@ -8,7 +8,7 @@
 
 fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }    // string satisfies the bound via the prelude
 
-fn bool sameKey<K: Hashable + Equatable>(K a, K b) {
+fn bool sameKey<K: Hashable + Equatable<K>>(K a, K b) {
     return a.hash() == b.hash() && a.equals(other: b);
 }
 

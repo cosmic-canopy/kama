@@ -1,6 +1,6 @@
 // A Copyable resource whose bare-hand-off default is `copy` (retain): `implements Copyable(bare: copy)`.
 // A bare hand-off retains via copy(); `give` moves. Exercises init, argument, return, and reassignment.
-type resource H implements Copyable(bare: copy) {
+type resource H implements Copyable<This>(bare: copy) {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
     public ctor copy(ref H source) { return H.make(id: source.id); }

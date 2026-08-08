@@ -77,3 +77,17 @@ fn int32 main() {
 
     return a + s + o + f + cv + sv + g + k + dd + total;
 }
+
+// A PINNED type parameter (`<T is This>`) — the self-type declared as an ordinary parameter, which is
+// what lets a self-typed contract be held as a value. Three spellings to index: the parameter's
+// declaration, its uses in the signature, and the `This` operand at both the pin and the conformance.
+//
+// APPENDED, not inserted: tools/check-query.sh asserts hardcoded line:column coordinates into this
+// buffer, so adding a construct anywhere above shifts every one of them.
+type contract Sizable<T is This> for both { fn int32 cmp(ref T other); }
+
+type value Coin implements Sizable<This> {
+    public int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public fn int32 cmp(ref Coin other) { return this.v - other.v; }
+}

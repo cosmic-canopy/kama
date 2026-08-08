@@ -31,7 +31,7 @@ type value ViewIterMut<T> implements IteratorMut<T> {
 // never dangle without a borrow checker. Get one from a container's `.view()` / `.slice(...)`; read-only
 // intent is expressed at call sites with a `const View<T>` parameter. Mutating through `operator[]` /
 // `iterMut()` writes back to the borrowed buffer (the view IS the buffer, windowed).
-type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
+type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
     Ptr<T> data; int32 len;
 
     public ctor make(Ptr<T> data, int32 len) { this.data = data; this.len = len; }
@@ -46,7 +46,7 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable] {
 
     // The by-value `foreach (T x in view)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in view)`.)
-    public fn ViewIter<T>    iterator() when [T: Copyable] { return ViewIter::<T>.make(data: this.data, len: this.len); }
+    public fn ViewIter<T>    iterator() when [T: Copyable<T>] { return ViewIter::<T>.make(data: this.data, len: this.len); }
     public fn ViewIterMut<T> iterMut() { return ViewIterMut::<T>.make(data: this.data, len: this.len); }
 
     // Exchange the elements at `i` and `j` IN PLACE (O(1), no copy, no drop) — the primitive every

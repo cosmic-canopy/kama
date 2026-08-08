@@ -12,7 +12,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
 > before starting anything**; several of its design points were revised once the code was written, and
-> *What M3 residual actually was* records where the brief and the build disagreed. **M5 is next.**
+> *What M3 residual actually was* records where the brief and the build disagreed. **M5a has shipped; M5b/M5c are next.**
 
 ## Status — campaign 1, as of 2026-08-06
 
@@ -73,7 +73,53 @@ findings worth keeping:
   `DynamicArray<string>::contains`/`::indexOf` vanish without it. Verified by deleting both halves and
   diffing, which is the only way that would have been found.
 
-**M5 is next.**
+### M5a — shipped 2026-08-08
+
+The brief's M5 was "the scope gate plus widening, and nothing else", and it justified the gate with a
+fallback that does not exist: *"the one way to reach a contract-scoped method is to have a contract value —
+`Comparable c = x;`"*. That has never worked and could not, and finding out why replaced the first half of
+M5 with something better.
+
+`This` is a type parameter — the compiler resolves it in the branch next to generic substitution in
+`cType` — but it was the only one never DECLARED. A substitution needs something to substitute into:
+monomorphization has that, erasure does not. So `emitInterfaceTypes` bound `This` to the CONTRACT for the
+vtbl slot while the concrete function behind it had bound the implementing type, and the cast between them
+shipped in every program in the tree. Its own comment admitted it: *"the vtbl slot is dead for that use but
+must be valid C."*
+
+The fix is to declare it: `type contract Comparable<T is This>`. `T` is a real type argument, so it
+resolves identically on both sides. Four contracts migrated (`Equatable`, `Comparable`, `Real`,
+`Copyable`), ~31 conformances and ~76 bounds with them, and a bare `This` in a contract signature — method
+OR operator — is now an error naming the pinned form. `is` got its own syntactic slot rather than joining
+`bound_list`, because a bound holds a CONTRACT and a non-contract there is already a hard error; admitting
+`This` would have cost an exception plus a hand-rejection of `T: This + Contract`.
+
+**The codegen gate is the record.** Every added and removed line across all 590 fixtures names one of the
+four migrated contracts and nothing else, and the shape is always the same:
+
+```c
+- .compareTo = (Ordering(*)(void* self, Comparable*  other))&Cents__compareTo         // a lie
++ .compareTo = (Ordering(*)(void* self, _F4__Cents* other))&_F4__Cents__compareTo     // identity
+```
+
+plus `struct Comparable_vtbl` / `Equatable_vtbl` / `Copyable_vtbl` — the dead slots — no longer emitted
+into all 590 programs at all.
+
+Five places had to learn to resolve `This`, and every one was found by a failing fixture rather than by
+reading: the instance mint in `collectCollections`, `linkBases`, the enum pre-scan (enums had never needed
+their `implements` list scanned before), `applyIntrinsicImpl` — which now resolves its contract PER TARGET,
+because a pinned contract over `<int8, int16>` is two contracts with two vtables — and
+`registerGenericTypeInst`, without which every instance of a generic type registered the literal
+`Copyable_This` and they all collided.
+
+Two more classes of by-name lookup broke, both flagged in the plan: `satisfiesBound` and the type-argument
+bound check consult a BARE contract name, which after the pin matches no recorded conformance
+(`pinnedInstanceName` resolves it); and `@generate(Equatable)` declares a conformance with no source node,
+so its instance had to be minted by hand.
+
+native 959 / ASan 923 / wasm 897, all 0 failed; every `tools/check-*.sh` green.
+
+**M5b (widening) and M5c (the gate) are next.**
 
 ### What M3 residual actually was
 

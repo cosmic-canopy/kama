@@ -4,7 +4,7 @@
 // The six COMPARISON operators are the exception: they are contract-driven, so `Num` implements
 // `Equatable`/`Comparable` and `==`/`!=`/`<`/`>`/`<=`/`>=` lower to `equals`/`compareTo`.
 @generate(of)
-type value Num implements Equatable, Comparable {
+type value Num implements Equatable<This>, Comparable<This> {
     public int32 v;
 
     // arithmetic (method form: `this` + rhs)

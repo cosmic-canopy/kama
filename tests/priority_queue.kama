@@ -4,7 +4,7 @@
 import std::collections::{PriorityQueue};
 
 // A move-only (resource) element that is Comparable — proves the heap relocates owned elements correctly.
-type resource Task implements Comparable {
+type resource Task implements Comparable<This> {
     int32 prio;
     public ctor make(int32 prio) { this.prio = prio; }
     public fn int32 priority() { return this.prio; }

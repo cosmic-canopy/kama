@@ -42,7 +42,7 @@ type value DequeIterMut<T> implements IteratorMut<T> {
 // buffer); Copyable EXACTLY when its element is (a deep, element-by-element copy). `head` is the physical
 // slot of the front element; the `len` live elements occupy `data[(head + i) % cap]` for i in 0..len, so the
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
-type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
                             Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
     Ptr<T> data = null; int32 head = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
@@ -135,7 +135,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     }
 
     // The by-value `foreach (T x in deque)` yields COPIES, so it exists only for a Copyable element.
-    public fn DequeIter<T> iterator() when [T: Copyable] {
+    public fn DequeIter<T> iterator() when [T: Copyable<T>] {
         return DequeIter::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                    modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -166,8 +166,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable(bare:
     // Membership + first logical index, by ELEMENT equality — present only when the element is `Equatable`.
     // Like DynamicArray, the element method is called through a nameable `ref T` so a PRIMITIVE element's
     // scalar retro-impl resolves (a wrapped buffer element isn't a nameable receiver).
-    public fn bool contains(ref T item) when [T: Equatable] { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when [T: Equatable] {
+    public fn bool contains(ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when [T: Equatable<T>] {
         int32 i = 0;
         while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
         return 0 - 1;

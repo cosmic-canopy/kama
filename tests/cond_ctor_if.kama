@@ -2,7 +2,7 @@
 // method-form `==` needs `&self` for an rvalue, and the inline ctor needs a statement slot to materialize
 // — so the `if` is wrapped in a block and the ctor temp is flushed before it.
 @generate(of)
-type value V implements Equatable {
+type value V implements Equatable<This> {
     public int32 x;
     public fn bool equals(ref V other) { return this.x == other.x; }
 }

@@ -6,8 +6,8 @@ export { Set };
 // information, so `Unit` is the zero-size payload). Move-only: it owns the backing map, which owns every
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
-type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable],
-        Serialize when [K: Serialize, K: Copyable], Deserialize when [K: Deserialize] {
+type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable<K>],
+        Serialize when [K: Serialize, K: Copyable<K>], Deserialize when [K: Deserialize] {
     Map<K, Unit, H, A> m;
 
     // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
@@ -47,13 +47,13 @@ type resource Set<K: Hashable + Equatable, H: Hasher = DefaultHasher, A: Allocat
     }
     public fn int32 length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
-    public fn MapKeyIter<K> iterator() when [K: Copyable] { return this.m.iterator(); }
+    public fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 
     // Serialize as a JSON array of the members. Serialize needs a `Copyable` key (the key iterator yields
     // copies); deserialize just `add`s each key (no copy). A yielded `k` is a nameable local, so `k.serialize`
     // resolves for a primitive key directly.
     fn Result<Unit, Owned<Error>> serElem(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable] {
+    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
         w.beginArray(count: cast<usize>(this.m.length()));
         foreach (K k in this.m) {
             Result<Unit, Owned<Error>> __sr = this.serElem(k: k, w: w);

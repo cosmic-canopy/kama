@@ -8,23 +8,23 @@
 // argument that is still unbound and re-walks each generic function body once per instantiation.
 type contract Show<T> for both { fn int32 show(ref T x); }
 
-type value Doubler<T: Comparable> implements Show<T> {
+type value Doubler<T: Comparable<T>> implements Show<T> {
     public ctor make() { }
     public fn int32 show(ref T x) { Ordering o = x.compareTo(other: x); return match (o) { case Equal: 2; case Less: 0; case Greater: 0; }; }
 }
 
-fn int32 inner<T: Comparable>(ref T a, ref T b) {
+fn int32 inner<T: Comparable<T>>(ref T a, ref T b) {
     Ordering o = a.compareTo(other: b);
     return match (o) { case Less: 1; case Equal: 0; case Greater: 2; };
 }
 
 // forwards a bare type parameter
-fn int32 middle<T: Comparable>(ref T a, ref T b) { return inner::<T>(a: a, b: b); }
+fn int32 middle<T: Comparable<T>>(ref T a, ref T b) { return inner::<T>(a: a, b: b); }
 
 // forwards a GENERIC TYPE built on the parameter — the shape `sort<T>` uses to reach `sortWith<T, Natural<T>>`
 fn int32 outer<T, S: Show<T>>(ref T a, ref S by) { return by.show(x: a); }
 
-fn int32 top<T: Comparable>(ref T a, ref T b) {
+fn int32 top<T: Comparable<T>>(ref T a, ref T b) {
     Doubler<T> d = Doubler::<T>.make();
     return middle::<T>(a: a, b: b) + outer::<T, Doubler<T>>(a: a, by: d);
 }

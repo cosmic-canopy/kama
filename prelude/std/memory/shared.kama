@@ -35,7 +35,7 @@ type value Ctrl { public usize strong; public usize weak; }
 // local — a bare `return <local>` re-invokes `copy()` and recurses); the ctor is also how a `Weak` builds a
 // `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
 // alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
-type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy),
+type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy),
                                     Deserialize when [T: Deserialize] {
     Ptr<T> p;
     Ptr<Ctrl> c;

@@ -18,7 +18,7 @@ type contract Order<T> for both { fn Ordering compare(ref T a, ref T b); }
 
 // The natural order as an `Order<T>`, so every algorithm below is written ONCE against the contract and
 // the `Comparable` entry points are two-line delegations.
-type value Natural<T: Comparable> implements Order<T> {
+type value Natural<T: Comparable<T>> implements Order<T> {
     public ctor make() { }
     public fn Ordering compare(ref T a, ref T b) { return a.compareTo(other: b); }
 }
@@ -129,7 +129,7 @@ fn void sortUnstableWith<T, C: Order<T>>(View<T> items, ref C by) {
 }
 
 // Sort by the natural order, NOT stable, NO allocation — the form that works under `--no-heap`.
-fn void sortUnstable<T: Comparable>(View<T> items) {
+fn void sortUnstable<T: Comparable<T>>(View<T> items) {
     Natural<T> nat = Natural::<T>.make();
     sortUnstableWith::<T, Natural<T>>(items: items, by: nat);
 }
@@ -227,7 +227,7 @@ fn void sortWith<T, C: Order<T>>(View<T> items, ref C by) {
 // Sort by the natural order, STABLE. Allocates, so it is DROPPED from a `--no-heap` build rather than
 // silently reaching the allocator there — a program built that way must say `sortUnstable`.
 @compileFor(!NOHEAP)
-fn void sort<T: Comparable>(View<T> items) {
+fn void sort<T: Comparable<T>>(View<T> items) {
     Natural<T> nat = Natural::<T>.make();
     sortWith::<T, Natural<T>>(items: items, by: nat);
 }
@@ -252,7 +252,7 @@ fn int32 lowerBoundWith<T, C: Order<T>>(View<T> items, ref T target, ref C by) {
     return lo;
 }
 
-fn int32 lowerBound<T: Comparable>(View<T> items, ref T target) {
+fn int32 lowerBound<T: Comparable<T>>(View<T> items, ref T target) {
     Natural<T> nat = Natural::<T>.make();
     return lowerBoundWith::<T, Natural<T>>(items: items, target: target, by: nat);
 }
@@ -268,7 +268,7 @@ fn Optional<int32> binarySearchWith<T, C: Order<T>>(View<T> items, ref T target,
     return Optional::None;
 }
 
-fn Optional<int32> binarySearch<T: Comparable>(View<T> items, ref T target) {
+fn Optional<int32> binarySearch<T: Comparable<T>>(View<T> items, ref T target) {
     Natural<T> nat = Natural::<T>.make();
     return binarySearchWith::<T, Natural<T>>(items: items, target: target, by: nat);
 }
@@ -284,7 +284,7 @@ fn bool isSortedWith<T, C: Order<T>>(View<T> items, ref C by) {
     return true;
 }
 
-fn bool isSorted<T: Comparable>(View<T> items) {
+fn bool isSorted<T: Comparable<T>>(View<T> items) {
     Natural<T> nat = Natural::<T>.make();
     return isSortedWith::<T, Natural<T>>(items: items, by: nat);
 }

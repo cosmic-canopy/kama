@@ -4,7 +4,7 @@
 
 // Generic max via the bound: proves `<T: Comparable>` lowers `a.compareTo(other: b)` to a static direct call.
 // (`compareTo` borrows its operand, so `a`/`b` stay live; instantiated here for the value type `int32`.)
-fn T maxOf<T: Comparable>(T a, T b) {
+fn T maxOf<T: Comparable<T>>(T a, T b) {
     Ordering o = a.compareTo(other: b);
     return match (o) { case Less: b; case Equal: a; case Greater: a; };
 }

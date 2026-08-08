@@ -1,7 +1,7 @@
 // M31 — value-producing constructs in a loop condition use a loop-and-a-half transform so they
 // re-evaluate each iteration (a compute-once bug would loop forever, since the ctor uses the counter).
 @generate(of)
-type value V implements Comparable {
+type value V implements Comparable<This> {
     public int32 x;
     public fn Ordering compareTo(ref V other) {
         if (this.x < other.x) { return Ordering::Less; }

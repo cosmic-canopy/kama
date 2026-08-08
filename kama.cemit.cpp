@@ -4241,6 +4241,16 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (!ii.allowsValue && !ii.allowsResource)
             unsupported(("contract `" + *cd->name->value + "` must declare which kinds may implement it: "
                          "`type contract " + *cd->name->value + " for value|resource|both { … }`").c_str(), cd->line);
+        // A contract signature may not name `This` — see the method arm below for why. Shared by the
+        // method and operator arms, since `This operator+(This rhs)` is the same shape as a method.
+        auto namesThis = [](SharedIdentifier t) {
+            return t && t->value && *t->value == "This" && !t->genericArg;
+        };
+        auto rejectThis = [&](const std::string& what, int line) {
+            unsupported(("contract `" + ii.name + "` names `This` in `" + what + "` — a contract value "
+                         "erases the self-type, so declare it as a pinned parameter instead: `type contract "
+                         + *cd->name->value + "<T is This>` and write `T` in the signature").c_str(), line);
+        };
         if (cd->members)
             for (auto& m : *cd->members) {
                 // a `contract` is a public guarantee: methods only, no bodies, no fields, no
@@ -4249,8 +4259,18 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     if (md->body)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
-                    if (md->name && md->name->value)
+                    // A contract signature may not name `This`. It is the erasure hazard in one line: a
+                    // vtbl slot has to give `This` ONE type, so it binds the contract, while the concrete
+                    // function behind the slot bound the implementing type — two bindings for one function
+                    // pointer, and the cast between them is a lie the C compiler cannot see. Declaring the
+                    // self-type as a pinned parameter makes it a real type argument that resolves the same
+                    // way on both sides. `This` stays legal in a type's OWN body, where it is not erased.
+                    if (md->name && md->name->value) {
+                        bool bad = namesThis(md->returnType);
+                        if (md->params) for (auto& pp : *md->params) if (pp && namesThis(pp->type)) bad = true;
+                        if (bad) rejectThis(*md->name->value, md->line);
                         ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->name});
+                    }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
                     // declares `This operator+(This rhs)`. Register it under the SAME synthetic name
@@ -4266,6 +4286,8 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
                                      + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
+                    if (namesThis(d->returnType) || namesThis(d->param1Type) || namesThis(d->param2Type))
+                        rejectThis(std::string("operator") + binaryOperator(d->opToken), od->line);
                     ii.methods.push_back({opName, d->returnType, operatorParamList(d)});
                 } else if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()) || dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
                     unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m->line);
@@ -5076,7 +5098,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
             // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
             // the type must still satisfy the `Serialize`/`Deserialize` bound (`decode::<T>` checks it).
-            auto hasItf = [&](const char* n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
+            auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
             if (ci.genSerialize) {
                 if (!hasItf("Serialize")) ci.interfaces.push_back("Serialize");
                 if (!ci.methods.count("serialize")) {
@@ -5159,7 +5181,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // (body only — the conformance is still registered). Per-field conformance is checked at emit,
             // like `@generate(Format)`, because retro-impls are not all collected yet at this point.
             if (ci.genEquatable) {
-                if (!hasItf("Equatable")) ci.interfaces.push_back("Equatable");
+                // `Equatable` PINS its parameter, so the conformance is recorded as `Equatable_<Type>`.
+                // There is no source node here to carry `<This>` — the attribute is the whole declaration —
+                // so the instance name is formed directly. registerGeneratedContractInsts mints it.
+                std::string eqName = pinnedInstanceName(resolveUserName("Equatable", nullptr), ci.name);
+                if (!hasItf(eqName)) ci.interfaces.push_back(eqName);
                 if (!ci.methods.count("equals")) {
                     MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
                     mi.isSynthCmp = true;
@@ -6134,6 +6160,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // concrete instance (`Deref_Point`) and that instance is registered; plain contracts just resolve.
     if (ci.node && ci.node->baseTypes && ci.node->baseTypes->interfaces) {
         ci.interfaces.clear();
+        // `This` is bound to THIS instance, not the template: a pinned conformance on a generic type
+        // (`DynamicArray<T,A> implements Copyable<This>`) has to name `Copyable_DynamicArray_int32...`,
+        // one per instance. linkBases skips generic instances, so this is the only place it can happen —
+        // without it every instance registers the literal `Copyable_This` and they all collide.
+        ScopedStr  _ts(_thisType, mangled);
+        ScopedThis _tt(_typeSubst, synthId(mangled));
         for (auto& itf : *ci.node->baseTypes->interfaces) {
             if (!itf || !itf->value) continue;
             // A conditional interface (`Copyable(bare:) when […]`, `Iterable<T> when […]`) is present only
@@ -6419,6 +6451,18 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
                 ScopedThis _tt(_typeSubst, synthId(qualify(*cd->name->value)));
                 for (auto& itf : *cd->baseTypes->interfaces) scanTypeForGenericContracts(itf);
             }
+            // `@generate(Equatable)` declares a conformance with no source node for the scan above to
+            // walk, so its pinned instance would name a contract that is never minted — the vtable emit
+            // then reports "unknown contract in implements". Mint it here, beside the source-written ones.
+            {
+                auto gci = _classes.find(qualify(*cd->name->value));
+                if (gci != _classes.end() && gci->second.genEquatable) {
+                    std::string eq = resolveUserName("Equatable", nullptr);
+                    if (pinnedInstanceName(eq, gci->second.name) != eq)
+                        registerGenericContractInst(eq, std::make_shared<IdentifierList>(
+                            IdentifierList{ synthId(gci->second.name) }));
+                }
+            }
             if (cd->members) for (auto& m : *cd->members) {
                 ASTNode* mn = m.get();
                 if (auto* fd = dynamic_cast<ClassFieldDeclarationNode*>(mn)) {
@@ -6452,6 +6496,15 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // type params (`Optional<T>` would register a bogus `Shared_T`). Each concrete instance
             // re-scans its substituted payloads in registerGenericTypeInst.
             if (ed->typeParams && !ed->typeParams->empty()) continue;
+            // An enum's `implements` list needs the same treatment as a class's: a generic-contract
+            // conformance has to mint its instance. Nothing scanned it before because no enum had one —
+            // an enum could not carry a generic contract until `type enum E implements C` (M1) and could
+            // not carry a PINNED one until now, where `implements Equatable<This>` is the ordinary form.
+            if (ed->baseTypes && ed->baseTypes->interfaces && ed->identifier && ed->identifier->value) {
+                ScopedStr  _ts(_thisType, qualify(*ed->identifier->value));
+                ScopedThis _tt(_typeSubst, synthId(qualify(*ed->identifier->value)));
+                for (auto& itf : *ed->baseTypes->interfaces) scanTypeForGenericContracts(itf);
+            }
             if (ed->body) for (auto& m : *ed->body)
                 if (m && m->payload)
                     for (auto& p : *m->payload) if (p) scanTypeForCollections(p->type);
@@ -7995,10 +8048,28 @@ bool CEmitter::isCopyable(const std::string& cls) const
 // Does concrete C-type `t` satisfy the contract `bound`? For `Copyable` (the conditional-implements
 // container case): a primitive or a `value` is copyable (bitwise), a `resource` only if it implements
 // Copyable. For any other contract: the concrete class must nominally implement it.
-bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound) const
+// The name a bare contract is RECORDED under for type `t` once that contract pins its parameter:
+// `Equatable` on `Fixed16_16` is `Equatable_Fixed16_16`. The compiler names these contracts bare in
+// several places that have no source AST to hang a `<This>` on — operator lowering (`==` -> `equals`),
+// `@generate(Equatable, Hashable)`, the `when [T: Equatable]` gate — and after the pin a bare name
+// matches no recorded conformance. Unpinned contracts (`Hashable`, `Format`, `Iterator`) come back
+// unchanged, so every caller can ask unconditionally.
+std::string CEmitter::pinnedInstanceName(const std::string& bare, const std::string& t) const
 {
+    auto g = _genericContracts.find(bare);
+    // Single-parameter only: a multi-parameter pinned contract has arguments the compiler cannot invent,
+    // and nothing names one bare.
+    if (g == _genericContracts.end() || g->second.pinnedParam != 0) return bare;
+    auto ps = _genericContractParams.find(bare);
+    if (ps == _genericContractParams.end() || ps->second.size() != 1) return bare;
+    return bare + "_" + t;
+}
+
+bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) const
+{
+    const std::string bound = pinnedInstanceName(bound_, t);
     auto it = _classes.find(t);
-    if (bound == "Copyable") {
+    if (bound_ == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         return it->second.copyable;                            // a resource → only if `implements Copyable`
@@ -8007,7 +8078,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound) co
     // whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a `when
     // [T: Equatable]` gate on `List<int32>` sees int32's retro `Equatable` (matched on the raw source name).
     auto rc = _retroConformances.find(t);
-    if (rc != _retroConformances.end() && rc->second.count(bound)) return true;
+    if (rc != _retroConformances.end() && (rc->second.count(bound) || rc->second.count(bound_))) return true;
     if (it == _classes.end()) return false;
     for (auto& itf : it->second.interfaces) if (itf == bound) return true;
     return false;
@@ -8433,6 +8504,12 @@ void CEmitter::linkBases()
         ScopedStr  _ts(_thisType, ci.name);
         ScopedThis _tt(_typeSubst, synthId(ci.name));
         resolveInterfaceNames(ci.interfaces, ifaceNodes);
+        // Mint each generic-contract instance HERE, not only in collectCollections. A bound check
+        // (`SortedSet<Duration>` needing `K: Comparable`) matches a conformance through the instance's
+        // `templateKey`, so the instance must exist in `_interfaces` before ANY unit is scanned — and
+        // collectCollections walks units in order, so a type declared in a later-scanned unit would not
+        // satisfy a bound checked in an earlier one. Registration dedups, so the later scan is free.
+        if (ifaceNodes) for (auto& itf : *ifaceNodes) scanTypeForGenericContracts(itf);
     }
 #if KAMA_INHERITANCE
     for (auto& kv : _classes) {
@@ -13556,9 +13633,11 @@ CEmitter::ContractSubst::~ContractSubst()
 
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
-    // in the type-erased vtbl slot, `This` is the interface type itself (a contract's `This`-typed
-    // method is dispatched STATICALLY via a bound; the vtbl slot is dead for that use but must be valid C).
-    ScopedStr _ts(_thisType, ii.name);
+    // No `This` binding here, deliberately: a contract signature can no longer name `This` (it declares a
+    // pinned parameter instead), so there is nothing to bind. The binding that used to sit here gave the
+    // slot ONE self-type — the contract — while the concrete function behind it had bound the implementing
+    // type, and the cast between the two was the unsoundness this campaign removed. Its own comment called
+    // the slot "dead for that use but must be valid C"; it is now neither dead nor a cast.
     ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
@@ -13595,8 +13674,8 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         // bound) from ContractSubst below, so only reseat here for the non-generic case.
         NsCtx _savedNs = _nsCtx;
         if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
-        // the slot casts must match the vtbl struct's erased signature -> `This` = the interface.
-        ScopedStr _ts(_thisType, ii.name);
+        // (No `This` binding — see emitInterfaceTypes. The slot signature and the concrete function now
+        //  agree because a pinned parameter substitutes identically on both sides.)
         ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
         // EXTERNAL linkage (not `static`) + a forward decl in the shared header, so a value can be bound to
         // this contract across module boundaries (e.g. a generic `json::parse<T>`/`toString<T>` in one unit

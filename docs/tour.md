@@ -111,8 +111,7 @@ When construction can fail, the constructor itself returns a `Result` — it is 
 with a declared return type. It fails *before* the object exists, so a half-built value never escapes:
 
 ```kama
-type enum BufferErr { BadSize }
-implements Error for BufferErr { public fn string message() { return "bad size"; } }
+type enum BufferErr implements Error { BadSize; public fn string message() { return "bad size"; } }
 
 type resource Buffer
 {
@@ -258,11 +257,22 @@ type value Circle implements Shape
 fn int64 measure(Shape sh) { return sh.area(); }   // dynamic dispatch through a fat pointer
 ```
 
-Contracts can also be added to a type *after the fact*, including to types you did not write:
+Every kind declares conformance the same way, including the two that are easy to forget are kinds. An
+`enum` takes the clause inline, and a **primitive** declares its own — one block can serve a whole set of
+widths, which is how the standard library gives `int32` and `string` their behavioral contracts in kama
+rather than hard-coding them in the compiler:
 
 ```kama
-implements Error for BufferErr { public fn string message() { return "bad size"; } }
+type enum BufferErr implements Error { BadSize; public fn string message() { return "bad size"; } }
+
+type intrinsic <int8, int16, int32, int64> implements Comparable<This> {
+    public fn Ordering compareTo(ref This other) { … }     // ONE body for four widths
+}
 ```
+
+A contract that mentions its own implementing type declares it as a **pinned parameter** — `type contract
+Comparable<T is This>` — and writes `T` in the signature. That is what lets such a contract be held as a
+value and not only used as a bound; [the specification](SPEC.md) has the reasoning.
 
 Classic single inheritance with `virtual` / `override` / `final` / `abstract` is there too, for the
 cases where an implementation — not just an interface — is the thing being shared. kama keeps

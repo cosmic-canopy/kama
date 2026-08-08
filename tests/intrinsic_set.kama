@@ -10,14 +10,14 @@
 // intrinsic_scope_namespace.d / intrinsic_scope_package.d.
 
 type contract Weighable for value { fn int32 weight(); }
-type contract Near for value { fn bool close(ref This other); }
+type contract Near<T is This> for value { fn bool close(ref T other); }
 
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Weighable {
     public fn int32 weight() { return cast<int32>(this); }
 }
 
 // A second contract over an overlapping set — a primitive carries as many conformances as it is given.
-type intrinsic <int8, int16, int32> implements Near {
+type intrinsic <int8, int16, int32> implements Near<This> {
     public fn bool close(ref This other) { return this == other; }
 }
 

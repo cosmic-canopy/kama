@@ -3,7 +3,7 @@
 // as `string`, no special-casing. Lookups borrow the key (`ref K`), so the keys are bound to locals here.
 import std::collections::{Map};
 
-type value Point implements Hashable, Equatable {
+type value Point implements Hashable, Equatable<This> {
     int32 x; int32 y;
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn uint64 hash() { return cast<uint64>(this.x) * 2654435761ui64 + cast<uint64>(this.y); }

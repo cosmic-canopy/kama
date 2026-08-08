@@ -27,7 +27,7 @@ type value FixedArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable], IterableMut<T>, Iterable<T> when [T: Copyable],
+type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
                                   Serialize when [T: Serialize] {
     Ptr<T> data = null; int32 size = 0; A alloc;
 
@@ -82,13 +82,13 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable(
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
-    public fn FixedArrayIter<T> iterator() when [T: Copyable] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
+    public fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
     public fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
-    public fn bool contains(ref T item) when [T: Equatable] { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when [T: Equatable] {
+    public fn bool contains(ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public fn int32 indexOf(ref T item) when [T: Equatable<T>] {
         int32 i = 0;
         // `item.equals(other: this[i])` (receiver is the `ref T` identifier) so a primitive element resolves
         // — see DynamicArray.indexOf. `equals` is symmetric.

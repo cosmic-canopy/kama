@@ -5,7 +5,7 @@
 // Note: no overloading (a stated non-goal) — a type has ONE `operator*`. `Mat3 * Vec3` is the operator
 // (the hot transform path); matrix composition would be a named `static` method (not needed here).
 @generate(of)
-type value Vec3 implements Equatable {
+type value Vec3 implements Equatable<This> {
     public int32 x;
     public int32 y;
     public int32 z;

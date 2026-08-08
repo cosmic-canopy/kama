@@ -2,7 +2,7 @@
 // `a + b`) is wrapped in a C99 compound-literal array so `&` is legal with no statement slot — it works
 // in an `if`/`while` condition and is correctly re-evaluated each pass (no once-only hoisting bug).
 @generate(of)
-type value V implements Equatable {
+type value V implements Equatable<This> {
     public int32 x;
     public V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
     public V operator-() { return V.of(x: -this.x); }

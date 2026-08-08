@@ -11,7 +11,7 @@ type resource Circle implements Shape {
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
     ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }
 }
-type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
+type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
     Ptr<T> p; Ptr<Ctrl> c;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }
     public ctor adopt(Ptr<T> raw) { Ptr<Ctrl> k = null; unsafe { k = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }

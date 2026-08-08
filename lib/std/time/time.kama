@@ -11,7 +11,7 @@ extern fn uint64 kama_now_mono_ns();
 // A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
 // Instants, or a countdown, may be negative.
 @generate(of)
-type value Duration implements Equatable, Comparable {
+type value Duration implements Equatable<This>, Comparable<This> {
     public int64 nanos;
 
     public ctor zero()               { return Duration.of(nanos: 0i64); }
@@ -42,7 +42,7 @@ type value Duration implements Equatable, Comparable {
 
 // A monotonic timestamp — an opaque counter, meaningful only relative to another Instant. A `value`.
 @generate(of)
-type value Instant implements Equatable, Comparable {
+type value Instant implements Equatable<This>, Comparable<This> {
     public uint64 rawNanos;
 
     // Time elapsed from an earlier Instant to this one (non-negative when `earlier` truly precedes this).

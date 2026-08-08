@@ -6,7 +6,7 @@ import std::collections::{DynamicArray};
 // Independence is proved by keeping every copy live to scope exit: a shallow copy would double-free
 // (ASan traps), a deep copy frees N distinct heap buffers cleanly.
 
-type resource Res implements Copyable(bare: give) {
+type resource Res implements Copyable<This>(bare: give) {
     DynamicArray<int32> items;                                      // owns a heap buffer
     public ctor make(int32 v) { this.items.add(item: v); }
     ~Res() { }                                              // resource (move-only); frees `items` too

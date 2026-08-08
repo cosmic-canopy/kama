@@ -3,7 +3,7 @@
 // without binding a local first (a `string` literal already did). The temp is a read-only borrow here.
 import std::collections::{Map};
 
-type value Point implements Hashable, Equatable {
+type value Point implements Hashable, Equatable<This> {
     int32 x; int32 y;
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn uint64 hash() { return cast<uint64>(this.x) * 31ui64 + cast<uint64>(this.y); }

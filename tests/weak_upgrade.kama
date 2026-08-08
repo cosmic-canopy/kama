@@ -26,7 +26,7 @@ type resource RcWeak<T> {
     }
 }
 
-type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable(bare: copy) {
+type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
     Ptr<T> p;
     Ptr<Ctrl> c;
     public ctor make(Ptr<T> p, Ptr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl

@@ -3,10 +3,10 @@
 // half-copy. Guards the multi-condition gate's AND semantics.
 type resource Owned { int32 x; public ctor make(int32 x) { this.x = x; } }
 
-type resource Box2<A, B> implements Copyable(bare: give) when [A: Copyable, B: Copyable] {
+type resource Box2<A, B> implements Copyable<This>(bare: give) when [A: Copyable<A>, B: Copyable<B>] {
     A a; B b;
     public ctor make(A a, B b) { this.a = give a; this.b = give b; }
-    public ctor copy(ref Box2<A,B> source) when [A: Copyable, B: Copyable] { return Box2::<A,B>.make(a: copy source.a, b: copy source.b); }
+    public ctor copy(ref Box2<A,B> source) when [A: Copyable<A>, B: Copyable<B>] { return Box2::<A,B>.make(a: copy source.a, b: copy source.b); }
 }
 
 fn int main() {

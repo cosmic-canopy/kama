@@ -16,7 +16,7 @@ export { PriorityQueue };
 // scheduling). `maxHeap()` inverts it (largest first). One implementation, one type; a single `maxOrder`
 // flag flips every comparison. Iteration order isn't meaningful for a heap, so it isn't `Iterable`; drain
 // it with repeated `pop`.
-type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> implements Copyable(bare: give) when [T: Copyable] {
+type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
     bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
 
@@ -115,7 +115,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
 
     // Look at the root WITHOUT removing it — a copy (present only for a Copyable element), the value analogue
     // of `pop`. For a move-only element borrow it instead via `peekRef`.
-    public fn Optional<T> peek() when [T: Copyable] {
+    public fn Optional<T> peek() when [T: Copyable<T>] {
         if (this.data.length() == 0) { return Optional::None; }
         return Optional::Some(value: copy this.data[0]);
     }
@@ -133,7 +133,7 @@ type resource PriorityQueue<T: Comparable, A: Allocator = GlobalAllocator> imple
 
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
     // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
-    public ctor copy(ref PriorityQueue<T, A> source) when [T: Copyable] {
+    public ctor copy(ref PriorityQueue<T, A> source) when [T: Copyable<T>] {
         this.data = copy source.data;   // DynamicArray.copy carries the allocator handle over — same arena
         this.maxOrder = source.maxOrder;
     }
