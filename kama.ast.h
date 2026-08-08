@@ -262,6 +262,11 @@ public:
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
     bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
+    // `<T is This>` on a `type contract` — the parameter is PINNED to the implementing type. `is` is an
+    // identity constraint, which is why it is not a `bounds` entry: a bound list holds contracts, and
+    // admitting a non-contract there would need an exception plus a hand-rejection of `This + Contract`.
+    // `pin` is the operand as written (only `This` is accepted today; the slot leaves room for more).
+    SharedIdentifier pin;
     int  bareDefault = 0;              // `implements Copyable(bare: give|copy)` — the contract-parameter token (GIVE/COPY), 0=unset
     // `implements C when [P1: B1, P2: B2, …]` — the gate's per-condition type-param names + required
     // contracts (index-aligned). Empty = unconditional. Multiple = AND (the impl holds only when all do).
@@ -316,6 +321,7 @@ public:
     SharedBlock block;
     SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
+    SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
     bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
@@ -829,6 +835,7 @@ public:
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
     SharedIdentifierList typeDefaults; // per-param default type (`= DefaultHasher`) parallel to typeParams; null entry = no default
+    SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
     SharedAttributeList attributes;  // `@generate(...)` etc. (null when none); serialization metadata
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
@@ -1044,6 +1051,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default
     SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)
     // `type enum E : uint8 implements C, D { A, B; …methods… }` — the conformance clause and the members

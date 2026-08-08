@@ -1,0 +1,5 @@
+// A pin forces its parameter equal to the implementing type, so a SECOND pin forces the same thing again
+// and says nothing. One pin per contract.
+type contract Pairable<T is This, U is This> for both { fn int32 mix(ref T a, ref U b); }
+
+fn int32 main() { return 0; }

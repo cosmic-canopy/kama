@@ -598,9 +598,9 @@ type_declaration
    kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
   : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
-    { $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7); }
+    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7); }
   | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
-    { $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8); }   /* `@generate(...) type …` */
+    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8); }   /* `@generate(...) type …` */
   ;
 
 /* `type intrinsic <int8, int16, …> implements C { …methods… <int8> { …methods… } }` — conformance for a
@@ -764,10 +764,12 @@ function_declaration
       if ($5 && !$5->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
+          fn->typePins  = std::make_shared<IdentifierList>();
           fn->constParams = std::make_shared<StringList>();
           for (auto& p : *$5) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
               if (p->isConstParam) fn->constParams->push_back(p->value);
           }
       }
@@ -781,10 +783,12 @@ function_declaration
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
+          fn->typePins  = std::make_shared<IdentifierList>();
           fn->constParams = std::make_shared<StringList>();
           for (auto& p : *$6) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
               if (p->isConstParam) fn->constParams->push_back(p->value);
           }
       }
@@ -800,10 +804,12 @@ function_declaration
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
+          fn->typePins  = std::make_shared<IdentifierList>();
           fn->constParams = std::make_shared<StringList>();
           for (auto& p : *$6) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
               if (p->isConstParam) fn->constParams->push_back(p->value);
           }
       }
@@ -830,6 +836,16 @@ type_param_list
   ;
 type_param
   : IDENTIFIER type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->defaultArg = $2; STAMP_LOC(id, @1); $$ = id; }
+    /* `<T is This>` — an IDENTITY constraint, pinning the parameter to the implementing type. Deliberately
+       NOT a `bound_list` entry: a bound holds a CONTRACT (a non-contract there is already a hard error),
+       so admitting `This` would cost an exception plus a hand-rejection of `T: This + Contract`. Its own
+       slot keeps that rule intact and makes `T is This + Contract` ungrammatical rather than diagnosed.
+       `is` is a CONTEXTUAL identifier, like the `for value|resource|both` kind words — it reserves nothing.
+       Two IDENTIFIERs in a row are unambiguous here: every other arm takes `:`, `=`, `,` or `>` next. */
+  | IDENTIFIER IDENTIFIER type_name
+      { if (*$2 != "is") yyerror(&@2, scanner, "expected `is` or `:` after a type parameter name");
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->pin = $3;
+        STAMP_LOC(id, @1); $$ = id; }
   | IDENTIFIER COLON bound_list type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; id->defaultArg = $4; STAMP_LOC(id, @1); $$ = id; }
   | CONST IDENTIFIER COLON integral_type type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isConstParam = true; id->defaultArg = $5; STAMP_LOC(id, @2); $$ = id; }   /* `const N: int` — a compile-time value param */
   ;
@@ -1695,9 +1711,9 @@ destructor_declaration
    of `marked_type_declaration`; that is also what keeps the two apart with no conflict. */
 enum_declaration
   : TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
-    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $4, $5, $6, $7); }
+    {      $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $4, $5, $6, $7); }
   | attribute_list TYPE modifiers_opt ENUM type_decl_head enum_underlying_opt class_base_opt enum_class_body semicolon_opt
-    { $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }   /* `@generate(...) type enum …` */
+    {      $$ = makeEnumDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $5, $6, $7, $8); }   /* `@generate(...) type enum …` */
   ;
 enum_underlying_opt
   : /* Nothing */        { $$ = SharedIdentifier(); }
@@ -1756,10 +1772,12 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
         n->typeBounds   = std::make_shared<BoundsList>();
         n->constParams  = std::make_shared<StringList>();
         n->typeDefaults = std::make_shared<IdentifierList>();
+        n->typePins     = std::make_shared<IdentifierList>();
         for (auto& a : *head->genericArgs) if (a && a->value) {
             n->typeParams->push_back(a->value);
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
             n->typeDefaults->push_back(a->defaultArg);   // null when this param has no `= Default`
+            n->typePins->push_back(a->pin);              // null when this param has no `is <T>`
             if (a->isConstParam) n->constParams->push_back(a->value);
         }
         head->genericArgs = SharedIdentifierList();
@@ -1787,10 +1805,12 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
         n->typeBounds   = std::make_shared<BoundsList>();
         n->constParams  = std::make_shared<StringList>();
         n->typeDefaults = std::make_shared<IdentifierList>();
+        n->typePins     = std::make_shared<IdentifierList>();
         for (auto& a : *head->genericArgs) if (a && a->value) {
             n->typeParams->push_back(a->value);
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
             n->typeDefaults->push_back(a->defaultArg);
+            n->typePins->push_back(a->pin);   // `<T is This>` — only a contract has an implementer
             if (a->isConstParam) n->constParams->push_back(a->value);
         }
         head->genericArgs = SharedIdentifierList();

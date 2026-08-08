@@ -685,6 +685,31 @@
               }
             },
             {
+              "type": "STRING",
+              "value": "is"
+            },
+            {
+              "type": "FIELD",
+              "name": "pin",
+              "content": {
+                "type": "SYMBOL",
+                "name": "type_name"
+              }
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "name",
+              "content": {
+                "type": "SYMBOL",
+                "name": "identifier"
+              }
+            },
+            {
               "type": "CHOICE",
               "members": [
                 {

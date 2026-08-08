@@ -7225,6 +7225,16 @@
           }
         ]
       },
+      "pin": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_name",
+            "named": true
+          }
+        ]
+      },
       "type": {
         "multiple": false,
         "required": false,
@@ -8502,6 +8512,10 @@
   {
     "type": "integer_literal",
     "named": true
+  },
+  {
+    "type": "is",
+    "named": false
   },
   {
     "type": "line_comment",

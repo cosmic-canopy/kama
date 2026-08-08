@@ -230,6 +230,16 @@ module.exports = grammar({
 
     type_parameter: ($) =>
       choice(
+        // `T is This` — an IDENTITY constraint pinning the parameter to the implementing type. Kept out
+        // of `bound_list` because a bound holds a CONTRACT. `is` is anonymous here rather than an
+        // `$.identifier`: the compiler rejects any other word in this slot as a PARSE error, so a
+        // permissive rule would make tree-sitter accept what the compiler will not. Listed first so
+        // `T is …` cannot reduce as name-then-default.
+        seq(
+          field('name', $.identifier),
+          'is',
+          field('pin', $.type_name),
+        ),
         seq(
           field('name', $.identifier),
           optional(seq(':', field('bounds', $.bound_list))),

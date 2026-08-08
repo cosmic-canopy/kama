@@ -1,0 +1,5 @@
+// The pinned parameter IS the contract's subject, so it reads first — and that is what keeps every
+// conformance site spelled uniformly `implements C<This, …>`.
+type contract Weighable<U, T is This> for both { fn int32 weigh(ref T other, U scale); }
+
+fn int32 main() { return 0; }

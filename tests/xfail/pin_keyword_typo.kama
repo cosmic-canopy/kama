@@ -1,0 +1,5 @@
+// `is` is a CONTEXTUAL identifier (like the `for value|resource|both` kind words), so it reserves nothing —
+// which means a typo in that position has to be caught rather than silently reduced as some other form.
+type contract Weighable<T iss This> for both { fn int32 weigh(ref T other); }
+
+fn int32 main() { return 0; }

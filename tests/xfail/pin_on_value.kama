@@ -1,0 +1,6 @@
+// `<T is This>` pins a parameter to the IMPLEMENTING type, so it means something only where an implementer
+// exists — a `type contract`. A `type value` has no implementer, so the construct has no referent; accepting
+// it silently would let a declaration say nothing at all.
+type value Holder<T is This> { public int32 x; }
+
+fn int32 main() { return 0; }

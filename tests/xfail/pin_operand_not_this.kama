@@ -1,0 +1,9 @@
+// `is` names an IDENTITY constraint, and the only identity a contract can name is its implementer. A
+// concrete operand (`T is Widget`) would be a SUBTYPE bound — a different feature, and one that makes
+// inheritance the extension seam for generic code. kama points the other way (`virtual(maxDepth: N)` is an
+// opt-in budget), so the slot accepts `This` and nothing else.
+type value Widget { public int32 w; }
+
+type contract Weighable<T is Widget> for both { fn int32 weigh(ref T other); }
+
+fn int32 main() { return 0; }

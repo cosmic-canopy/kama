@@ -4144,6 +4144,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         }
         auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get());
         if (!fn || !fn->name || !fn->name->value) continue;
+        rejectPinOutsideContract(fn->typePins, fn->typeParams, "a function", fn->line);
 
         // const-eval 6b-3: a `comptime fn` is a compile-time-only function. Register it for the
         // interpreter (NOT in _funcs — it is never emitted as a C symbol) and reject an impure body
@@ -4197,6 +4198,20 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             _generics[sig.cName]   = fn;
             _genericCtx[sig.cName] = _nsCtx;   // resolve the body's type refs in its home scope
         }
+    }
+}
+
+// `<T is This>` outside a `type contract` — see the header for why this is semantic and not a parse error.
+void CEmitter::rejectPinOutsideContract(SharedIdentifierList pins, SharedStringList params,
+                                        const char* what, int line)
+{
+    if (!pins) return;
+    for (size_t i = 0; i < pins->size(); ++i) {
+        if (!(*pins)[i]) continue;
+        SharedString nm = (params && i < params->size()) ? (*params)[i] : SharedString();
+        unsupported(("`" + (nm ? *nm : std::string("?")) + " is …` pins a type parameter to the implementing "
+                     "type, and " + what + " has no implementer — the pin is valid only on a `type contract`")
+                    .c_str(), line);
     }
 }
 
@@ -4276,6 +4291,38 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (cd->baseTypes && cd->baseTypes->interfaces)
             for (auto& p : *cd->baseTypes->interfaces)
                 if (p && p->value) ii.refines.push_back(resolveUserName(*p->value, p->qualifier));
+        // `<T is This>` — the identity pin. Validated here, at the declaration, because every rejection
+        // below is a property of the contract alone; a use site would report it too late and too often.
+        if (cd->typePins)
+            for (size_t i = 0; i < cd->typePins->size(); ++i) {
+                SharedIdentifier pin = (*cd->typePins)[i];
+                if (!pin) continue;
+                std::string pname = (i < cd->typeParams->size() && (*cd->typeParams)[i])
+                                  ? *(*cd->typeParams)[i] : std::string("?");
+                // `is` names an IDENTITY, and the only identity a contract can name is its implementer.
+                // A concrete type here (`<T is Widget>`) would be a subtype bound — a different feature,
+                // and one that makes inheritance the extension seam for generic code. Not this slot.
+                if (!pin->value || *pin->value != "This")
+                    unsupported(("`is` constrains a type parameter to the implementing type, so its "
+                                 "operand must be `This` — `" + pname + " is "
+                                 + (pin->value ? *pin->value : std::string("?")) + "`").c_str(), cd->line);
+                else if (!pin->bounds || pin->bounds->empty()) {
+                    if (ii.pinnedParam >= 0) {
+                        // Both would be forced equal to the implementer, so the second says nothing.
+                        SharedString first = (*cd->typeParams)[ii.pinnedParam];
+                        unsupported(("a contract pins at most one type parameter to `This` — `" + ii.name
+                                     + "` already pins `" + (first ? *first : std::string("?")) + "`, so `"
+                                     + pname + "` is redundant").c_str(), cd->line);
+                    }
+                    else if (i != 0)
+                        // The pinned parameter IS the contract's subject, so it reads first — and that
+                        // keeps `implements C<This, …>` uniform at every conformance site.
+                        unsupported(("the `This`-pinned type parameter must come first — move `" + pname
+                                     + " is This` to the front of `" + ii.name + "`'s parameter list").c_str(),
+                                    cd->line);
+                    else ii.pinnedParam = (int)i;
+                }
+            }
         if (cd->typeParams && !cd->typeParams->empty()) {
             std::vector<std::string> ps;
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);
@@ -4347,6 +4394,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get());
         if (!ed || !ed->identifier || !ed->identifier->value) continue;
+        rejectPinOutsideContract(ed->typePins, ed->typeParams, "an enum", ed->line);
         std::string name = qualify(*ed->identifier->value);
         _enumDeclNodes[name] = ed;   // the LSP def-site table's only source for enums
         if (unit == _preludeUnit) _preludeEnums.insert(name);
@@ -4479,6 +4527,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
         if (!cd || !cd->name || !cd->name->value) continue;
+        // A `contract`'s pin is legal and is validated in collectInterfaces; every other kind has no
+        // implementer for it to name.
+        if (!cd->typeKind || *cd->typeKind != "contract")
+            rejectPinOutsideContract(cd->typePins, cd->typeParams,
+                                     ("a `type " + (cd->typeKind ? *cd->typeKind : std::string("?")) + "`").c_str(),
+                                     cd->line);
 
         // `type <kind> Name` — map the kind word. `contract` is registered as an interface
         // (collectInterfaces), so skip it here; a bad kind word is a clear error.

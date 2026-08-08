@@ -437,6 +437,11 @@ struct InterfaceInfo {
     // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
     // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
     bool                         isGenericInst = false;
+    // `type contract C<T is This>` — the parameter PINNED to the implementing type, or -1 for none. It is
+    // what lets a self-typed contract be a contract VALUE at all: `This` is a substitution with nothing to
+    // substitute into under erasure, while a pinned parameter is a real type argument that resolves the
+    // same way in the vtbl slot and in the concrete function. At most one, and it must come first.
+    int                          pinnedParam = -1;
     std::string                  templateKey;   // the generic contract this specializes (e.g. "Iterator")
     std::vector<SharedIdentifier> typeArgs;      // the concrete args (e.g. [int32])
     ClassDeclarationNode*        node = nullptr;  // decl site (`type contract` node; LSP def-site table, unused by emission)
@@ -1066,6 +1071,12 @@ private:
     bool compileForActive(const SharedAttributeList& attrs, int line);   // eval the gate (true = keep)
     void collectSignatures(SharedCompilationUnit unit);
     void collectInterfaces(SharedCompilationUnit unit);
+    // `<T is This>` pins a parameter to the IMPLEMENTING type, so it means something only where an
+    // implementer exists — a `type contract`. This is SEMANTIC, not syntactic: a grammar cannot see which
+    // kind it is attached to, and making it a parse error would put tree-sitter permanently out of step
+    // with the compiler (tools/check-treesitter.sh partitions on exactly that split).
+    void rejectPinOutsideContract(SharedIdentifierList pins, SharedStringList params,
+                                  const char* what, int line);
     void collectEnums(SharedCompilationUnit unit);
     ClassInfo buildVariantClassInfo(EnumDeclarationNode* ed, const std::string& name);   // tagged-union ClassInfo
     void emitEnum(EnumInfo& ei);

@@ -24,4 +24,5 @@ tests/xfail/lex_string_badchar.kama
 tests/xfail/lex_string_unterminated.kama
 tests/xfail/lex_verbatim_unterminated.kama
 tests/xfail/module_static_volatile.kama
+tests/xfail/pin_keyword_typo.kama
 tests/xfail/recover_multi_error.kama
