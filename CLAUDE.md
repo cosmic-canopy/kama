@@ -11,22 +11,27 @@ This repo vendors two guidance skills under `.claude/skills/` — apply them:
 
 ## Build & test
 
-The toolchain is containerized (podman/docker). Don't install host toolchains; use the wrapper:
+**Use `./dev` — not `make` or `tools/cdev` directly.** Run `./dev help` for the full list. Every
+test task builds the binary it is about to test, which is the one thing you cannot get right by
+hand reliably (see the trap below).
 
 ```sh
-tools/cdev make      # build the kama compiler (into build/<os>-<arch>/)
-tools/cdev test      # run the end-to-end fixtures (tests/*.kama + .expect, exit-code asserted)
-tools/cdev exec ./kama build tests/arith.kama            # native
-tools/cdev exec ./kama build tests/arith.kama --target wasm   # -> .html + .js + .wasm
+./dev build          # build the compiler for this host
+./dev test           # native fixture suite
+./dev test san       # ASan/UBSan  (container — macOS has no LeakSanitizer)
+./dev test wasm      # wasm/node   (container)
+./dev matrix         # test all + every tools/check-*.sh guard — the pre-commit gate
 ```
 
 Notes:
-- All build artifacts (objects + generated parser/lexer + the binary) go in `build/<os>-<arch>/`,
-  so a host build and a container build coexist — switching between `make` and `tools/cdev make`
-  needs NO `make clean`. The repo root holds only hand-written sources plus `./kama`, a symlink to
-  whichever platform built last. Anything that must get the *native* binary regardless (the test
-  harness, the `tools/check-*.sh` guards, the VS Code extension) resolves `build/<os>-<arch>/kama`
-  directly — in a shell script, source `tools/kama-bin.sh` rather than hardcoding a path.
+- **The stale-binary trap.** Build artifacts are platform-scoped (`build/<os>-<arch>/`), so a host
+  build and a container build coexist — switching needs no `make clean`. The cost is that building
+  one and testing the other passes *silently* against an old compiler. `./dev` exists to make that
+  unrepresentable; if you bypass it, rebuild for the platform you are about to test on.
+- The repo root holds only hand-written sources plus `./kama`, a symlink to whichever platform built
+  last. Anything that must get the *native* binary regardless (the test harness, the
+  `tools/check-*.sh` guards, the VS Code extension) resolves `build/<os>-<arch>/kama` directly — in a
+  shell script, source `tools/kama-bin.sh` rather than hardcoding a path.
 - The grammar needs bison ≥ 2.7 (the container has 3.8; macOS host needs `brew install bison`).
 - The compiler is a tree-walking C emitter (`kama.cemit.*`) over the Flex/Bison/AST front end
   (`kama.l`, `kama.y`, `kama.ast.h`). (An early LLVM backend was removed; C emission is the only backend.)

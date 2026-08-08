@@ -1,25 +1,85 @@
 #!/bin/sh
 # dev — everyday contributor tasks (no secrets). Run `./dev` for help.
+#
+# The one rule this script exists to enforce: EVERY TEST TASK BUILDS THE BINARY IT IS ABOUT TO TEST.
+# Build artifacts are platform-scoped (`build/<os>-<arch>/`), so a host build and a container build
+# coexist — which is convenient right up until you edit the compiler, rebuild one, and test the other.
+# That failure is silent: the suite runs and passes against last week's compiler.
 set -eu
+
 usage() { cat <<'EOF'
 kama dev — usage: ./dev <task>
 
-  build        build the native kama compiler (host `make`; container: `tools/cdev make`)
-  test         run the fixture suite
-  assets       regenerate icon + favicons from assets/logo.png
-  site         build the static site into _site/ and print the preview command
-  serve [port] [dir]  build + serve the site over examples/httpd (Kama's own server; default :8080, _site/)
-  ext-package  package the VS Code extension (.vsix), no publish
-  clean        make clean
-  help         this help
+Build
+  build             build the compiler for this host (make)
+  build container   build the compiler inside the container
+  clean             make clean
+
+Test — each task builds first, so it can never run against a stale compiler
+  test              native fixture suite            (host)
+  test san          ASan/UBSan fixture suite        (container — see below)
+  test wasm         wasm/node fixture suite         (container)
+  test all          native + san + wasm
+  check             the tools/check-*.sh guard scripts (host)
+  matrix            test all + check — the full pre-commit gate
+
+Site & packaging
+  assets            regenerate icon + favicons from assets/logo.png
+  site              build the static site into _site/
+  serve [port] [dir]  build + serve the site over examples/httpd (default :8080, _site/)
+  ext-package       package the VS Code extension (.vsix), no publish
+  help              this help
+
+Why `san` and `wasm` are container-only:
+  - macOS has no LeakSanitizer, so a host KAMA_SAN run reports "detect_leaks is not supported on
+    this platform" for every fixture and tells you nothing.
+  - `tools/cdev` does not forward host env, hence the `env KAMA_SAN=1` form used below.
 
 Deploy / publish / provision live in ./ops (they need secrets from .env).
 EOF
 }
+
+build_host()      { make; }
+build_container() { tools/cdev make; }
+
 task="${1:-help}"; [ $# -gt 0 ] && shift || true
 case "$task" in
-  build)          make ;;
-  test)           ./run_tests.sh ;;
+  build)
+    case "${1:-host}" in
+      host)      build_host ;;
+      container) build_container ;;
+      *) echo "dev build: expected 'host' or 'container'" >&2; exit 2 ;;
+    esac ;;
+
+  test)
+    case "${1:-native}" in
+      native) build_host;      ./run_tests.sh ;;
+      san)    build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh ;;
+      wasm)   build_container; tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
+      all)
+        build_host;      ./run_tests.sh
+        build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh
+                         tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
+      *) echo "dev test: expected native|san|wasm|all" >&2; exit 2 ;;
+    esac ;;
+
+  check)
+    # The guard scripts resolve build/<os>-<arch>/kama directly (tools/kama-bin.sh), so they need the
+    # HOST binary current — a container-only rebuild leaves them testing stale code while sitting green.
+    build_host
+    rc=0
+    for s in tools/check-*.sh; do
+      printf '%s: ' "$s"
+      if sh "$s" >/tmp/kama-check.$$ 2>&1; then tail -1 /tmp/kama-check.$$
+      else rc=1; echo "FAILED"; cat /tmp/kama-check.$$; fi
+    done
+    rm -f /tmp/kama-check.$$
+    exit $rc ;;
+
+  matrix)
+    "$0" test all
+    "$0" check ;;
+
   assets)         sh tools/gen-assets ;;
   site)           sh tools/build-site; echo "preview: ./dev serve   (dogfoods examples/httpd; or: python3 -m http.server -d _site)" ;;
   serve)
