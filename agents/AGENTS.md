@@ -66,6 +66,11 @@ feature.
 - **`@generate` requires every field to be marked** `@field` or `@skip`. An unmarked field is an
   error, so adding one can never silently start serializing it.
 - **Integer overflow traps** in debug rather than wrapping; `std::num`'s `wrapping*` are the opt-in.
+- **A namespace must match the file's path** under the source root: `namespace acme::geo;` lives in
+  `<src>/acme/geo.kama` or `<src>/acme/geo/`. Get this wrong and the import fails with
+  `cannot resolve module`, which reads like a missing dependency and is not one.
+- **`export { A, B };` is its own declaration**, near the top of the file — not a modifier you put in
+  front of `type`. Without it a namespaced type is invisible to importers even though it compiles.
 - **One way to do a thing.** Before adding a helper, `--search` for an existing one.
 
 ## Conventions
