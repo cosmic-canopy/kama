@@ -12,9 +12,9 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
 > before starting anything**; several of its design points were revised once the code was written, and
-> *What M3 residual actually was* records where the brief and the build disagreed. **M0–M5 have shipped; only M6 (delete retro-impl) remains.**
+> *What M3 residual actually was* records where the brief and the build disagreed. **Campaign 1 is COMPLETE — M0 through M6 have all shipped.**
 
-## Status — campaign 1, as of 2026-08-06
+## Status — campaign 1, COMPLETE as of 2026-08-09
 
 **Shipped to `dev`.** Baseline before the campaign was native 927 / ASan 891.
 
@@ -54,8 +54,8 @@ zero — a stronger check than reading the diff, and it caught nothing, which wa
 M4 closes at **native 950 / ASan 914 / wasm 888**, 0 failed, every `tools/check-*.sh` green. Counts are
 unchanged throughout because M4 adds no behaviour: it is a change of spelling, gated on codegen.
 
-**Three of the four pieces of machinery have now retired** — retro-impl on enums, the Model C promotion,
-and the `string`-`Equatable` nominal special case. The fourth (retro-impl itself) is M6's.
+**Three of the four pieces of machinery had retired by M4** — retro-impl on enums, the Model C promotion,
+and the `string`-`Equatable` nominal special case. The fourth, retro-impl itself, went in M6.
 
 **The gate that made this safe** was an order-insensitive **C function-set diff** over all 590 flat
 fixtures (`kama transpile --no-line`, split into top-level definitions, sorted, compared), not a byte
@@ -171,7 +171,40 @@ M5b made a primitive widenable, `Comparable<int32> c = l; c.compareTo(other: r);
 
 native 964 / ASan 928 / wasm 902, all 0 failed.
 
-**M6 — deleting retro-impl — is what remains of the campaign.**
+### M6 — shipped 2026-08-09, and the campaign closes
+
+`implements C for T { … }` is **gone** — grammar production, `RetroactiveImplNode`, and every emitter and
+query arm that dispatched on it. By M4 its only consumers left in the tree were two fixtures kept alive to
+exercise the path, so the deletion cost no coverage; the codegen gate confirms it, byte-identical
+(order-insensitive) across all 597 surviving fixtures.
+
+What the deletion made truthful, and what it did NOT:
+
+- **Renamed:** `ClassInfo::retroInterfaces` → `staticOnlyInterfaces` (what it always meant: no fat-pointer
+  vtable), `retroTargetInfo` → `implTargetInfo`, `_retroConformances` → `_intrinsicConformances`.
+- **Deleted:** `MethodInfo::isRetro`, which was true exactly when `fromContract` was non-empty. That is a
+  better discriminator anyway — it is the one M5c's contract-scope gate keys on — so the flag was a second
+  spelling of a fact already recorded. Its `bool retro` parameter went with it.
+- **Also deleted, but only after being proved dead twice:** the `isVariant` arm of `implTargetInfo`, the
+  `_polyDispatchContracts` insert in `injectImplMethods`, and the injected-method skip in
+  `emitClassPrototypes`. Each existed for an ENUM target, which only `implements C for MyEnum` could
+  produce. The obvious-looking objection — that `intrinsic_target_list` is a `simple_type` list, so a named
+  type could take retro-impl's place — is wrong: **`simple_type` is `primitive_type | class_type`, and
+  `class_type` is only `STRING`**. `type intrinsic <SomeEnum>` is a parse error. Confirmed twice before
+  deleting, because the first reading of that production went the other way: by trying it, and by
+  instrumenting all three sites and running the suite (zero hits across 968 fixtures).
+- **Added, because the deletion exposed it:** a class's `implements` list was never checked for a
+  duplicate. `type value W implements C, C` compiled and recorded the conformance twice, while the enum and
+  intrinsic paths had both checked it since M2/M3. The check lives in `linkBases`, after
+  `resolveInterfaceNames`, because the duplicate can be spelled two ways (`C` and `ns::C`) and only the
+  resolved names can tell. `tests/xfail/impl_conflict.kama` — which used to pin coherence through
+  retro-impl — now pins this.
+
+One diagnostic died with the mechanism: the M2 migration aid that caught `implements C for E` on an enum
+and named the `type enum E implements C` replacement. That spelling is now a plain syntax error, which is
+the ordinary cost of removing a form.
+
+native 968 / ASan 932 / wasm 906, all 0 failed, every `tools/check-*.sh` green.
 
 ### What M3 residual actually was
 
@@ -227,7 +260,7 @@ target is the identity.
    (`isScalarRecv`, which M3 residual gave its first reader) while a vtbl slot passes `void*`, so each
    widened method needs a deref thunk — emitted only for a contract actually widened to. The flat method
    map stays flat; two contracts supplying one type the same method name stays a clean error.
-2. **M6** — delete retro-impl entirely, rename what it leaves behind, close out the docs.
+2. ~~**M6**~~ — **shipped**; see *Status*.
 
 ### Design points revised once the code existed
 
@@ -363,7 +396,7 @@ Three things settle it:
   from different libraries are disambiguated by `import a::{Marker as AMarker}` (per-symbol aliasing,
   [kama.y:391](../../kama.y#L391)) — at the point the ambiguity is introduced, not at every call site.
 - **`::` would need machinery nothing else uses**: a contract can never appear in the `::` resolver today
-  (contracts live in `_interfaces`, and the resolver only consults `_classes` / `retroTargetInfo`), and the
+  (contracts live in `_interfaces`, and the resolver only consults `_classes` / `implTargetInfo`), and the
   `self:` argument convention exists nowhere else in the language.
 
 What that leaves unsupported is **one type carrying two same-named methods from two contracts** — the flat
@@ -397,7 +430,7 @@ one the compiler can simply see.
 
 ### Four pieces of machinery retire together
 
-1. **retro-impl** — no remaining job. **The only one left; M6.**
+1. ~~**retro-impl**~~ — **retired (M6)**; it had no remaining job once the two hidden kinds gained a spelling.
 2. ~~**the nominal-recording special case**~~ — **retired (M4, `4ad6513`)**. `string`'s `Equatable` was
    "recorded from its built-in `equals` via `registerCollection`" *only because* an intrinsic could not
    say `implements`; it now says it, with an empty body.
@@ -419,7 +452,7 @@ Three claims that sounded right and are **false**:
 
 - **"Retro-impl coherence is not enforced."** It is. `applyRetroactive` rejects a duplicate impl
   (``"`float64` already implements `Real`"``), a method clobbering an existing one, and an incomplete
-  impl. What looks like a hole — `_retroConformances` being a `std::set` that silently dedups — is only
+  impl. What looks like a hole — the pre-scan map being a `std::set` that silently dedups — is only
   the *pre-scan*, whose own comment says the real coherence check happens later.
 - **"The contract `for` clause is stale now that `view` exists."** It is not. The clause expresses the
   *ownership* axis, and a view owns nothing, so grouping views with values is accurate. Moreover **there

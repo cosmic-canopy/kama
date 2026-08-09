@@ -608,8 +608,8 @@ void CEmitter::buildDefSites()
 // `speak`, the name genuinely has to move in all three places at once.
 //
 // Derived from the tables rather than from the conformance loops in collectProgram, so the emission path
-// is untouched and both the direct `implements` and the retroactive `implements C for T` forms are covered
-// at once (a retro conformance pushes onto `ci.interfaces` too).
+// is untouched and both a type's own `implements` clause and a `type intrinsic` block's conformance are
+// covered at once (an injected conformance pushes onto `ci.interfaces` too).
 void CEmitter::buildRenameGroups()
 {
     _renameGroup.clear();
@@ -1390,16 +1390,11 @@ CEmitter::QueryCtx CEmitter::enclosingCallable(const CompilationUnit* unit, int 
             qc.typeKey = classKeyOfName(cd->name);
             takeBounds(cd->typeParams, cd->typeBounds);
             members = cd->members.get();
-        } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(d.get())) {
-            // `implements C for T { … }` — the enclosing type is the retro TARGET, which has no
-            // ClassDeclarationNode here at all.
-            qc.typeKey = classKeyOfName(ri->target);
-            members = ri->members.get();
         } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(d.get())) {
-            // `type intrinsic <T1, T2> implements C { … <T1> { … } … }`. Like the retro block above, the
-            // enclosing type has no ClassDeclarationNode; unlike it, the block has N targets but only ONE
-            // source span, so the key is the FIRST target by definition — there is no cursor position that
-            // could pick between them. (Every scalar target keys to "", exactly as the retro path does.)
+            // `type intrinsic <T1, T2> implements C { … <T1> { … } … }`. The enclosing type has no
+            // ClassDeclarationNode here at all, and the block has N targets but only ONE source span, so
+            // the key is the FIRST target by definition — there is no cursor position that could pick
+            // between them. (Every scalar target keys to "".)
             if (ii->targets && !ii->targets->empty()) qc.typeKey = classKeyOfName((*ii->targets)[0]);
             members = ii->members.get();
             // A member lives EITHER in the shared body or in a specialization section, so find the list
@@ -1983,9 +1978,9 @@ void CEmitter::addScopeMembers(const std::string& key, const QueryCtx& qc, std::
         out.push_back(CompletionItem{ nm, CompletionKind::Constant, spellTypeIn(key, kv.second.type), key });
     }
     // Static methods and named constructors. A primitive or intrinsic-collection head carries its statics
-    // through a retro-impl conformance, which lives in a different table.
+    // through a `type intrinsic` conformance, which lives in a different table.
     if (_classes.count(key)) addMembers(key, /*wantStatic*/ true, qc, out);
-    else if (ClassInfo* rt = retroTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
+    else if (ClassInfo* rt = implTargetInfo(key)) addMembers(rt->name, /*wantStatic*/ true, qc, out);
 }
 
 void CEmitter::addNamespaceSymbols(const std::string& path, const QueryCtx& qc,

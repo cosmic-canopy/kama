@@ -5694,46 +5694,6 @@
     }
   },
   {
-    "type": "retroactive_impl_declaration",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "class_body",
-            "named": true
-          }
-        ]
-      },
-      "contract": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "type_name",
-            "named": true
-          }
-        ]
-      },
-      "type": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "primitive_type",
-            "named": true
-          },
-          {
-            "type": "type_name",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "return_statement",
     "named": true,
     "fields": {},
@@ -5969,10 +5929,6 @@
         },
         {
           "type": "namespace_declaration",
-          "named": true
-        },
-        {
-          "type": "retroactive_impl_declaration",
           "named": true
         },
         {

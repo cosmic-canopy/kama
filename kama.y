@@ -272,7 +272,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement parallel_for_statement arm_value_statement retroactive_impl_declaration asm_statement
+%type <statement> marked_type_declaration unsafe_statement spawn_statement scope_statement parallel_for_statement arm_value_statement asm_statement
 %type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
@@ -413,12 +413,11 @@ code_declarations
 code_declaration
   : function_declaration
   | type_declaration
-  | retroactive_impl_declaration
   | module_variable_declaration
   ;
 
 /* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
-   (fn/type/retro-impl don't start with it), so no conflict. Reuses `variable_declarators`;
+   (fn/type don't start with it), so no conflict. Reuses `variable_declarators`;
    const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
@@ -652,16 +651,6 @@ intrinsic_members
   | intrinsic_members LT intrinsic_target_list GT LEFT_BRACE class_member_declarations_opt RIGHT_BRACE
     { auto sec = std::make_shared<IntrinsicSection>(); sec->targets = $3; sec->members = $6;
       $1->sections->push_back(sec); $$ = $1; }
-  ;
-
-/* `implements C for T { …methods… }` — RETROACTIVE contract conformance: an external top-level block that
-   gives an existing type T (a primitive/stdlib/foreign type) the methods of contract C. Distinct from the
-   `implements` CLAUSE inside a type declaration (which lists contracts a type opts into on its own line).
-   Unambiguous at top level — nothing else here begins with IMPLEMENTS. Coherence (orphan rule) is enforced
-   by the emitter. */
-retroactive_impl_declaration
-  : IMPLEMENTS type_name FOR type class_body semicolon_opt   /* target is `type` so a primitive (string/int32) is accepted */
-    { $$ = std::make_shared<RetroactiveImplNode>(SCANNER_CODEGENCONTEXT, $2, $4, $5); }
   ;
 
 /* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a

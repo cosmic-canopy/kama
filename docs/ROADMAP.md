@@ -41,20 +41,21 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| 1 | **M6 — delete retro-impl** | §1.2.1 | closes contract-model campaign 1; the path has three remaining consumers, all in `tests/` |
-| 2 | **AI/agent tooling** | §10 | ↓ |
+| 1 | **AI/agent tooling** | §10 | ↓ |
+| 2 | **`kama seed`** — the project seed | §10 | ↓ |
 | 3 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
 | 4 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 5 | Campaign 2 — full generic specialization | §1.2.2 | |
-| 6 | Campaign 3 — const generics on types | §1.2.3 | |
-| 7 | Campaign 4 — derived view-escape check | §1.2.4 | |
+| 5 | Campaign 2 — full generic specialization | §1.2.1 | |
+| 6 | Campaign 3 — const generics on types | §1.2.2 | |
+| 7 | Campaign 4 — derived view-escape check | §1.2.3 | |
 | 8 | stdlib parity M2b / M2c | §3 | |
 
-**Why 2–4 come before the remaining language campaigns:** they are the work that makes every campaign after
-them cheaper and less error-prone. Close the in-flight campaign first (1), then invest in the tools — agent
-support that answers with what the compiler resolved rather than what a grep guessed, a repo layout where
-scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real changes.
-Items 5–8 are language work that will be done *through* those tools.
+**Why 1–4 come before the remaining language campaigns:** they are the work that makes every campaign after
+them cheaper and less error-prone — agent support that answers with what the compiler resolved rather than
+what a grep guessed, one command that seeds a project with all of it wired up, a repo layout where scratch
+work cannot pollute the tree, and one canonical formatting so a diff carries only real changes. Items 5–8
+are language work that will be done *through* those tools. **1 and 2 are one arc:** the tooling has to
+exist before a seed can install it.
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -96,33 +97,16 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **The CONTRACT MODEL — four sequenced campaigns**, briefed in
-   [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — campaign 1
-   is part-built and several of its design points were revised once the code existed; delete the file when
-   the last campaign ships). A design review during M2a found that **`enum` and `intrinsic` are hidden kinds**
-   — GOALS #3c says every declaration is `type <kind> Name`, yet `enum` had its own grammar production
-   with no `class_base_opt` and `intrinsic` had no kama spelling at all. Retro-impl exists only to paper
-   over those two gaps; giving them spellings **retires four pieces of machinery** rather than fencing
-   one. Run in order, each its own session, **before M2b**:
-   1. **Contract model** — *both spellings now ship* (`type enum X implements C`, `type intrinsic <…>
-      implements C`), the conformance registry is keyed by kama type rather than cType (closing the
-      `char`/`uint32` collision), a duplicate claim names both packages, and **M4 has shipped**: the
-      prelude and lib declare every one of their 90 primitive conformances, so `implements C for T`
-      survives at three sites in `tests/` and nowhere else. **Three of the four pieces of machinery are
-      gone** — retro-impl on enums, the enum tagged-union promotion, and the `string`-`Equatable` nominal
-      special case. **M5 has shipped in full** (2026-08-08): a contract declares the self-type as a
-      **pinned type parameter** (`type contract Comparable<T is This>`) rather than naming `This` in a
-      signature — which removed an unsound vtbl cast every program in the tree was emitting; a primitive
-      can be **widened** to a contract value, as a borrow or an owning box; and a contract-supplied method
-      is reached **through the contract**, so a primitive does not absorb an API it does not own. What is
-      LEFT: **M6** — delete retro-impl (its only consumers are `tests/impl_retro_user.kama` and
-      `tests/xfail/impl_conflict.kama` ×2, which exist to keep the path exercised until then), the renames
-      it unblocks, and the SPEC closeout. Per-milestone detail in the brief.
-   2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
+2. **The CONTRACT MODEL — three campaigns left of four**, briefed in
+   [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — several
+   design points were revised once the code existed; delete the file when the last campaign ships).
+   Campaign 1 **shipped** — what the language now *is* lives in [SPEC.md](SPEC.md). Run the rest in order,
+   each its own session, **before M2b**:
+   1. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
-   3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
+   2. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
       a runtime value (silent bad C today). Unblocks `Fixed16_16` → `Fixed<intBits, fracBits>`.
-   4. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
+   3. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
 
 3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
    [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
@@ -268,7 +252,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
   open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
   `@generate(Format)` draws — both error rather than half-deriving), and on a payload-less **enum**, which
-  has no struct to walk and today takes a retroactive `implements` instead. A `Copyable` derive is a
+  has no struct to walk and today declares `implements` on its own `type enum` line instead. A `Copyable` derive is a
   **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
   walk can make (a memberwise copy of a raw handle double-frees).
 - **Unresolved type names — one residual: GENERIC ARGUMENTS.** Declared type names are now checked
@@ -557,7 +541,7 @@ rather than here, so there is one number to keep current. Forward work:
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
 ## 10. Tooling / distribution (deferred)
 
-- **AI/agent tooling, shipped WITH the language.** ► **NEXT AFTER M6** (see *Working order*). Design in
+- **AI/agent tooling, shipped WITH the language.** ► **NEXT** (see *Working order*). Design in
   its own session. The goal is the **bare-bones native support a kama project would want** — not
   this repo's own working preferences. kama ships what only kama can provide (the language's own
   facts, verified); a user adds `ponytail` or anything else to their project themselves if they want it.
@@ -588,6 +572,36 @@ rather than here, so there is one number to keep current. Forward work:
 
   Reference: <https://github.com/DietrichGebert/ponytail>. It should pay for itself immediately — developing
   kama in this repo is exactly the workload.
+
+- **`kama seed` — the project seed.** ► **Scheduled, right after the AI tooling** (see *Working order*), because
+  the seed's job is to install what that work produces. In the spirit of `npm init`: one command that turns an
+  empty directory into a working kama project instead of a hunt through the docs for what `kama.json` has to
+  contain. Interactive by default — prompt for the fields, with a sensible default on every one — and fully
+  bypassable by flag for scripts and for the impatient (`--yes`, plus a flag per prompt), which is the shape
+  every seeding tool that people actually keep using has converged on.
+
+  What it writes:
+  - **`kama.json`** — the manifest is already the project's single source of truth (name, version, the flag
+    universe, the toolchain pin, dependencies, targets/build types, `sources`), and today it is hand-written
+    from the docs. This is where most of the value is.
+  - **The project shape**, chosen at the prompt: **executable** (a `main` and a runnable `kama build`),
+    **library** (no `main`, an exported surface), and — since workspaces ship — a **workspace** with a
+    `projects/` tree. The kind decides the manifest fields *and* the seed source file.
+  - **The AI/agent tooling**, opt-in at the prompt: the `CLAUDE.md` snippet the item above ships, so a new
+    project starts with `kama query` already advertised to whatever agent works on it. This is the reason the
+    two are sequenced together.
+  - The ordinary hygiene a new repo wants — a `.gitignore` that knows about generated `.c` and
+    `build/<os>-<arch>/`, and a README stub.
+
+  **Named `seed`, not `init`**, because the name should say what it does: `init` is the ambiguous one — it
+  reads as "initialize the toolchain" or "initialize a repo" as easily as "write me a project", and kama has
+  a toolchain and a package store it could plausibly be initializing. `seed` says the intent.
+
+  Worth settling early: whether it refuses to run in a non-empty directory (npm does not; cargo does), and
+  whether seeding in place and seeding into a new `<name>/` directory are one command or two — one optional
+  positional argument is probably enough. It is a driver-level command with no language surface, so it can be built in kama once the
+  toolchain hosts it, and its guard is a `tools/check-*.sh` that seeds each project kind into a temp dir and
+  asserts the result builds — which is the only check that keeps a template honest.
 
 - **`kama fmt` — a native formatter, not an external tool.** ► **Scheduled, WITH mandatory braces**
   (see *Working order*; the brace rule is §1, and this is its migration tool). The language should print itself: one
@@ -727,7 +741,7 @@ rather than here, so there is one number to keep current. Forward work:
   on the shipped debug flow.
 - **Browser-debug ergonomics** — richer wasm source maps / a no-extension flow.
 - **Package manager (ecosystem foundation).** A first-class dependency manager + registry so libraries distribute
-  without vendoring — the point at which the **orphan rule** (§3, retroactive conformance) becomes load-bearing.
+  without vendoring — the point at which cross-package conformance coherence (SPEC § *`type intrinsic`*) becomes load-bearing.
   User docs (including the registry protocol a host must serve): [packages.md](packages.md). What remains is
   hosted-services and ops work:
   - **Both gated on hosted services / the repo being public + the website staged:**

@@ -149,12 +149,11 @@ struct MethodInfo {
                                                       // returning the enclosing type (or `Result<This,E>`)
     bool                         isDefaultCtor = false; // `default ctor …()` — the canonical zero-arg ctor (M8b);
                                                         // the field-fill target for complete-init (Part 2). Explicit only.
-    bool                         isRetro = false;     // injected by a retroactive `implements C for T` block —
-                                                      // emitted static-inline in the header, skipped by the
-                                                      // per-class proto/body loops (avoids a dup for a user target)
     // The contract this method came from, empty for a method declared in the type's OWN body. It is what
     // separates an injected method from a native one sharing a ClassInfo — `string` carries an injected
-    // `compareTo` beside its built-in `equals` — which is the discriminator the contract-scope rule needs.
+    // `compareTo` beside its built-in `equals` — which is the discriminator the contract-scope rule needs,
+    // and the one that says "supplied by a `type intrinsic` block", so the impl passes emit it rather than
+    // the per-class proto/body loops.
     std::string                  fromContract;
     // Compiler-synthesized by-value serialization (a `@generate` tree struct with no hand impl). `node` is
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
@@ -344,10 +343,10 @@ struct ClassInfo {
 
     // Contracts
     std::vector<std::string>          interfaces;            // implemented contract names
-    // Contracts satisfied via a retroactive `implements C for T { … }` block (a subset of `interfaces`).
+    // Contracts supplied by a `type intrinsic <…> implements C { … }` block (a subset of `interfaces`).
     // These dispatch statically/monomorphized through the injected methods, so they get NO fat-pointer
-    // interface vtable (a primitive/foreign target can't be boxed as one) — skipped in vtable emission.
-    std::vector<std::string>          retroInterfaces;
+    // interface vtable (a primitive target can't be boxed as one) — skipped in vtable emission.
+    std::vector<std::string>          staticOnlyInterfaces;
 
     // Collections: a monomorphized Coll<T> is a synthetic ClassInfo whose
     // method bodies come from a C-template macro (not kama AST).
@@ -355,7 +354,7 @@ struct ClassInfo {
     CollKind                          collKind = CollKind::String;   // arbitrary: only read when isIntrinsicColl
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)
-    // A synthetic ClassInfo for a PRIMITIVE target of a retroactive `implements C for int32` — it carries
+    // A synthetic ClassInfo for a PRIMITIVE target of `type intrinsic <int32> implements C` — it carries
     // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
     // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
     bool                              isScalarRecv = false;
@@ -791,7 +790,7 @@ private:
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
     // Does the program use serde at all? Set in collectProgram from a `@generate` type or a Serializer/
     // Deserializer backend — the only ways to (de)serialize anything. When false we emit NONE of the serde
-    // machinery: the prelude's primitive Serialize/Deserialize retro-impls are skipped, and a collection's
+    // machinery: the prelude's primitive Serialize/Deserialize conformances are skipped, and a collection's
     // conditional `when [T: Serialize]` serde (serialize/serKey/…) is dropped via whenConditionsHold. Purely a
     // compile-time saving — all of it is static-inline / dead-strippable.
     bool                             _usesSerde = false;
@@ -890,11 +889,11 @@ private:
     std::map<std::pair<std::string, std::string>, std::string> _conformanceOrigin;
     std::string _collectingUnitPath;    // the unit whose declarations are being collected right now
     std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
-    // Pre-scanned conformances: target `primKey` -> the contracts an impl block grants it (both spellings).
+    // Pre-scanned conformances: target `primKey` -> the contracts a `type intrinsic` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
-    // themselves are injected later in applyRetroactive, which also validates completeness/coherence.
-    std::map<std::string, std::set<std::string>> _retroConformances;
+    // themselves are injected later in applyIntrinsicImpl, which also validates completeness/coherence.
+    std::map<std::string, std::set<std::string>> _intrinsicConformances;
     std::map<std::string, EnumInfo>      _enums;             // enum name -> info
     // Every enum's decl node, keyed by qualified name. Its remaining consumer is the LSP/query def-site
     // table (kama.query.cpp), which is the ONLY place either kind of enum gets a def-site: a tagged enum
@@ -1093,14 +1092,13 @@ private:
     bool isEnum(const std::string& name) const { return _enums.count(name) != 0; }
     void collectClasses(SharedCompilationUnit unit);
 
-    // Contract-conformance plumbing, shared by every path that grants a type a contract. Today only the
-    // retroactive `implements C for T` block calls these; `type enum X implements C` and
-    // `type intrinsic <…> implements C` join them as those spellings land, which is the whole reason
+    // Contract-conformance plumbing, shared by every path that grants a type a contract —
+    // `type enum X implements C` and `type intrinsic <…> implements C`. That sharing is the whole reason
     // they are functions rather than an inline loop in `collectProgram`.
     //
-    // `retro` = the conformance dispatches STATICALLY (recorded in `retroInterfaces`, so no fat-pointer
-    // vtable is emitted for it). `isPrimitive` gates the serde-return collection scan the way the retro
-    // path did: a primitive's `Result<scalar, Owned<Error>>` monomorph only matters when serde is used.
+    // A recorded conformance dispatches STATICALLY (it lands in `staticOnlyInterfaces`, so no fat-pointer
+    // vtable is emitted for it). `isPrimitive` gates the serde-return collection scan: a primitive's
+    // `Result<scalar, Owned<Error>>` monomorph only matters when serde is used.
     // `type enum E implements C { A, B; …members… }` — promote, inject, record, check. Between
     // linkContracts() (needs contractMethods) and buildVtables().
     void collectEnumConformances(const std::vector<SharedCompilationUnit>& units);
@@ -1115,16 +1113,15 @@ private:
     // The "…and package B claims it too" clause on a duplicate conformance; "" unless the two claims
     // genuinely come from different packages.
     std::string duplicateOriginNote(const std::string& tkey, const std::string& contract);
-    // One (target, members) pair per thing an impl block contributes — a retroactive block gives one, a
-    // `type intrinsic` set gives one per target. The three emission passes (prototypes, prelude bodies,
+    // One (target, members) pair per thing an impl block contributes — a `type intrinsic` set gives one
+    // per target. The three emission passes (prototypes, prelude bodies,
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
     struct ImplEmit { ClassInfo* target; SharedClassMemberDeclarationList members; };
     std::vector<ImplEmit> implEmitsOf(SharedCompilationUnit u);
     bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serialize/Deserialize
     void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
-                           const std::string& contract, const std::string& tkey,
-                           bool retro, bool isPrimitive);
+                           const std::string& contract, const std::string& tkey, bool isPrimitive);
     // The impl must supply every method the contract requires.
     void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                const std::string& tkey, int line);
@@ -1441,10 +1438,10 @@ private:
     // Contracts used as a graph edge element (`Shared<Shape>`): each gets a runtime-dispatch resolver pair.
     std::set<std::string> _polyContracts;
     // Poly-DISPATCH contracts (Model C, base `Error`): a contract that must support DYNAMIC dispatch +
-    // boxing even for RETRO impls — the enum→interface capability. Set when an enum retro-implements a
-    // contract (an enum can only implement via retro), and (P2+) when a contract is a `Result` E-arg or an
-    // `Owned/Shared/Weak<C>` element. Distinct from `_polyContracts` (serialization graph edges). For such
-    // a contract, `emitClassInterfaceVtables` emits `<Impl>__as_<C>` even for a retro impl (so an enum
+    // boxing even for a STATIC-ONLY conformance — the enum→interface capability. Set when a variant target
+    // implements a contract, and (P2+) when a contract is a `Result` E-arg or an `Owned/Shared/Weak<C>`
+    // element. Distinct from `_polyContracts` (serialization graph edges). For such a contract,
+    // `emitClassInterfaceVtables` emits `<Impl>__as_<C>` even for a static-only conformance (so an enum
     // gets a fat-pointer vtbl), and `rejectStoredInterface` treats a bare `C` in an owning slot as sugar.
     std::set<std::string> _polyDispatchContracts;
     bool isPolyDispatchContract(const std::string& c) const { return _polyDispatchContracts.count(c) != 0; }
@@ -1473,7 +1470,7 @@ private:
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
     // Does `ci` structurally satisfy contract `contract` (have all its methods, public)?
     bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
-    ClassInfo* retroTargetInfo(const std::string& tkey);   // collection/primitive retro-conformance ClassInfo
+    ClassInfo* implTargetInfo(const std::string& tkey);   // collection/primitive impl-conformance ClassInfo
     // AND over a `when [P: B, …]` gate: every gated param's concrete arg must satisfy its bound. `params`
     // are the template's type-param names, `concrete` the instance's args (index-aligned).
     bool whenConditionsHold(const std::vector<std::string>& whenParams,

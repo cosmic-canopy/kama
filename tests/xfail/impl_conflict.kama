@@ -1,11 +1,12 @@
-// Coherence: a type may not be given the SAME contract twice (conflicting retroactive impls). Under the
-// whole-program view the duplicate is directly visible → a compile error (this is how the orphan rule is
-// enforced here).
+// Coherence: a type may not claim the SAME contract twice. Under the whole-program view the duplicate is
+// directly visible, so kama needs no orphan rule to forbid it in advance — the claim is simply rejected
+// where it is written. The same check guards the enum and `type intrinsic` spellings
+// (tests/xfail/intrinsic_dup.kama); this is the class arm.
 type contract Weighable for both { fn int32 weight(); }
-@generate(of)
-type value Widget { public int32 w; }
 
-implements Weighable for Widget { public fn int32 weight() { return this.w; } }
-implements Weighable for Widget { public fn int32 weight() { return 0; } }   // duplicate → rejected
+type value Widget implements Weighable, Weighable {
+    public int32 w;
+    public fn int32 weight() { return this.w; }
+}
 
 fn int main() { return 0; }

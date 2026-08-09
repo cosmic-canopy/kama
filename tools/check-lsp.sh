@@ -51,7 +51,7 @@ SPURI="file:///span.kama"
 SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntype resource R { public ctor make() { } ~R() { } }\n'
 
 # Contract-model M4 fixture: `type intrinsic <…> implements C`. The enclosing type of a method here has no
-# ClassDeclarationNode at all — same shape as the retroactive block, and `enclosingCallable` had an arm for
+# ClassDeclarationNode at all — the shape the retroactive block used to have, and `enclosingCallable` had an arm for
 # that one and none for this, so everything downstream of it (completion, signature help, the in-scope
 # bindings) went dead inside these bodies. That cost nothing while the spelling lived only in tests/;
 # it costs real files the moment lib/std/fmt/parse.kama and lib/std/math/scalar.kama migrate onto it.

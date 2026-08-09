@@ -6,7 +6,6 @@
 
 (type_declaration body: (class_body) @class.inside) @class.around
 (enum_declaration body: (enum_body) @class.inside) @class.around
-(retroactive_impl_declaration body: (class_body) @class.inside) @class.around
 
 (parameter_list ((parameter) @parameter.inside . ","? @parameter.around)) @parameter.around
 (argument_list ((argument) @parameter.inside . ","? @parameter.around)) @parameter.around

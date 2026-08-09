@@ -10,7 +10,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
 // (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `DynamicArray<int32>.contains`
-// resolves without importing `std::collections`. They stay pure-kama retro-impls (no compiler blessing).
+// resolves without importing `std::collections`. They stay pure-kama `type intrinsic` blocks (no compiler blessing).
 
 // A by-value iterator over a map's KEYS (the `foreach (K k in map)` protocol; `Set` hands out the same).
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
@@ -175,7 +175,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // Key hashing/equality go through these `ref K` helpers so the receiver is always a plain borrow the
     // contract dispatch resolves — for a `string` OR user key (a class receiver) and for a PRIMITIVE key
-    // (`int32`, whose `hash`/`equals` are scalar-receiver retro impls). A raw-buffer element `this.keys[i]`
+    // (`int32`, whose `hash`/`equals` are scalar-receiver intrinsic conformances). A raw-buffer element `this.keys[i]`
     // is handed in by `ref`, never used as a receiver directly.
     // `k.hash()` is the CHEAP CONTENT hash (identity for an int, FNV for a string); the pluggable
     // `H::finish` avalanches it before it is masked to a slot. `H` defaults to `DefaultHasher`
@@ -377,7 +377,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // --- Serialization (present only when BOTH key and value are Serialize/Deserialize) ---
     // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
     // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
-    // (like `cloneKey`/`cloneVal`) so a primitive element's retro-impl `serialize` resolves.
+    // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
     fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
     fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
     public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {

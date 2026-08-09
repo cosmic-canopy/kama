@@ -7,7 +7,7 @@
 // tools/embed_prelude.sh. See prelude/global.kama (the implicit global-namespace prelude) and
 // prelude/std/memory/*.kama (the always-in-scope smart-pointer triad).
 
-// The global-namespace prelude source (Optional/Result, the contracts, the primitive retro-impls,
+// The global-namespace prelude source (Optional/Result, the contracts, the primitive conformances,
 // Chars/Split). Parsed once, collected before user code with an empty scope so its names resolve
 // unqualified everywhere.
 extern const char* KAMA_PRELUDE_SRC;

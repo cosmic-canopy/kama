@@ -295,19 +295,19 @@ type contract Equatable<T is This> for both { fn bool equals(ref T other); }
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
 construction) finds the stored entry. `string` and every **integer width** satisfy both out of the box, via
-**pure-kama** `implements` blocks that ship in the **prelude** (universal — no `std::collections` import;
-the retroactive-conformance mechanism, *no* compiler blessing). **`hash()` returns a cheap CONTENT hash**
+**pure-kama** `type intrinsic` blocks that ship in the **prelude** (universal — no `std::collections`
+import; *no* compiler blessing). **`hash()` returns a cheap CONTENT hash**
 — identity (`cast<uint64>(this)`) for an integer, FNV-1a over the UTF-8 bytes for a `string` — and the
 **avalanche/mixer is a separate, pluggable step** the `Map`/`Set` apply via their `H: Hasher` type
 parameter: `slot = H::finish(k.hash()) & (cap-1)`. `H` defaults to **`DefaultHasher`** (splitmix64, strong
 avalanche, DoS-*agnostic* — see below) so `Map<K, V>` is unchanged; `Map<K, V, FastHasher>` swaps in a
 cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` contract + both hashers live
-in `std::collections`). `string`'s `Equatable` is recorded nominally from its built-in `equals`; each
+in `std::collections`). `string` declares `Equatable` with an empty body, satisfied by its built-in `equals`; each
 integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
 `type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }` (returning the prelude enum
-`Ordering { Less, Equal, Greater }`), gives every int/float/string a total order via the same pure-kama
-retro-impl mechanism — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
+`Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
+`type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
 is not enough), the same rule as `foreach`.
 
@@ -499,7 +499,7 @@ RAII-over-GC *is* the language (every `new T.make(args)` already targets a `Heap
 special-cases the triad throughout: `HeapOwner`/`Deref`, never-null checks, drop insertion, ctrl-block layout),
 so the ownership triad is as fundamental as `int` or `Ptr` and shouldn't require an import. "Built-in" means
 **always-available, not rewritten in C**: they stay **kama-defined** (RAII `resource`s over `Deref`/`HeapOwner`,
-refcounting in kama), loaded as part of the prelude like the primitive `Hashable`/`Equatable` retro-impls.
+refcounting in kama), loaded as part of the prelude like the primitive `Hashable`/`Equatable` conformances.
 
 The compiler adds only what a library can't express: the type-erasure (fat pointer + vtable) that makes
 `Owned<Shape>`/`Shared<Shape>` over a **contract** work, `new T.make(args)` heap placement into any `HeapOwner<T>`,
@@ -732,8 +732,8 @@ full scalar surface over libm. `import std::math::{Vec3, Mat4, sqrt, sin, …}`.
 literal in kama is a **float64**, so a float32-only module made `sin(x: 1.0)` a type error for the most
 obvious thing a reader would write. kama has no overloading, so the usual answers were unavailable (C
 suffixes every float32 entry point, Go and Java ship one width and make you convert, C# adds a second
-class `MathF`); the mechanism used instead is kama's own — a **contract with a retro-impl per type**,
-exactly how `Comparable` reaches every primitive. Each operation is one generic free function over
+class `MathF`); the mechanism used instead is kama's own — a **contract with a `type intrinsic` impl per
+width**, exactly how `Comparable` reaches every primitive. Each operation is one generic free function over
 `Real`, and the per-width libm call lives in the impls: `sqrt cbrt sin cos tan asin acos atan exp log
 log2 log10 floor ceil round trunc abs` (one argument) and `pow fmod atan2 hypot` (two).
 
@@ -827,7 +827,8 @@ number" and "too big for this type" want different messages. Rust, Zig and Go al
 only the boolean and optional shapes discard it.
 
 **One generic spelling, no `parseI32`/`parseI64` ladder.** The mechanism is the serde one — a marker
-contract (`FromStr`) plus a per-type retro-impl supplying a fallible `ctor`, reached as `T.fromStr(...)`.
+contract (`FromStr`) plus a per-type `type intrinsic` impl supplying a fallible `ctor`, reached as
+`T.fromStr(...)`.
 The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
 `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
 2..36 for the integer widths, case-insensitive, with **no** `0x`/`0b` prefix — the base is already an
@@ -1976,7 +1977,7 @@ Comparable<int32> c = l;
 c.compareTo(other: r);                       // a CONTRACT VALUE — one indirect call
 ```
 
-Those two are the only spellings, and both are real. The rule covers a primitive and a retro-impl'd type;
+Those two are the only spellings, and both are real. The rule covers every type an impl block decorates;
 a type that declares `implements C` in its **own body** is untouched — its methods are its own. String
 interpolation is exempt: `"${x}"` is the compiler's own lowering to `Format`, not something an author
 wrote.
@@ -1996,11 +1997,13 @@ by value; a vtbl slot passes `void*`) are emitted only for the pairs a program a
 **Why a kind rather than a mechanism.** Before this, a primitive had no kama spelling at all, so the only
 way to give it a contract was `implements C for T` — a *retroactive* block reaching into a type from
 outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing
-it. See *The contract model* for the full argument.
+it, and the block itself is now **gone from the language**. See *The contract model* for the full argument.
 
-**Coherence.** Two declarations of the same (contract, type) pair are a compile error that names **both
-packages** — kama's whole-program view makes the conflict directly visible, so no orphan rule is needed to
-forbid legal-but-unusual cases in order to prevent one the compiler can simply see.
+**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind
+declares them — a class's or enum's own `implements` list, or a `type intrinsic` block. When the two
+claims come from different packages the message names **both** — kama's whole-program view makes the
+conflict directly visible, so no orphan rule is needed to forbid legal-but-unusual cases in order to
+prevent one the compiler can simply see.
 
 ## Static methods & operator overloading ✅
 
@@ -2533,7 +2536,7 @@ dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called wi
 (`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserialize` — and for a
-`ctor` added to a primitive by retroactive conformance. Every spelling is pinned by
+`ctor` added to a primitive by a `type intrinsic` block. Every spelling is pinned by
 `tests/ctor_spelling_edges.kama`.
 
 On a **generic type** both forms take a turbofish, and the same `.`-vs-`::` split applies:

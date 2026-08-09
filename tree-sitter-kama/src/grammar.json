@@ -298,10 +298,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "retroactive_impl_declaration"
-        },
-        {
-          "type": "SYMBOL",
           "name": "module_variable_declaration"
         }
       ]
@@ -826,55 +822,6 @@
               }
             ]
           }
-        }
-      ]
-    },
-    "retroactive_impl_declaration": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "implements"
-        },
-        {
-          "type": "FIELD",
-          "name": "contract",
-          "content": {
-            "type": "SYMBOL",
-            "name": "type_name"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "for"
-        },
-        {
-          "type": "FIELD",
-          "name": "type",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_type"
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "body",
-          "content": {
-            "type": "SYMBOL",
-            "name": "class_body"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": ";"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
         }
       ]
     },

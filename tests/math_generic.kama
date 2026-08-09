@@ -1,5 +1,5 @@
 // M2a: ONE name per `std::math` operation, at BOTH float widths — the width is inferred from the
-// argument, through a module-private `Real` contract with a retro-impl per type. This matters because a
+// argument, through a module-private `Real` contract with a `type intrinsic` impl per type. This matters because a
 // bare `1.0` literal in kama is a float64, so a float32-only module made `sin(x: 1.0)` a type error for
 // the most obvious thing to write; and kama has no overloading, so C's `sqrt`/`sqrtf` split would have
 // been the alternative.

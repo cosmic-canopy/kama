@@ -20,7 +20,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 >   of `T` — that keeps it O(n log n) *and* free of a `Copyable` bound. `sort`/`sortWith` are
 >   `@compileFor(!NOHEAP)` so a no-heap build cannot silently allocate.
 > - **C — parse.** `Result<T, ParseError>` with `Empty`/`InvalidDigit`/`OutOfRange`, reached generically as
->   `parse::<int32>(s:)` via a marker contract + fallible-ctor retro-impls (the serde pattern). No suffixed
+>   `parse::<int32>(s:)` via a marker contract + fallible-ctor `type intrinsic` impls (the serde pattern). No suffixed
 >   `parseI32` ladder, so M3's naming reconcile is unaffected.
 > - **D (unplanned) — float64 math.** `std::math`'s scalar surface became **one generic function per
 >   operation over a `Real` contract**, so `sqrt(x: 1.0)` and `sqrt(x: 1.0f32)` are the same name with the
@@ -54,10 +54,10 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > ⚠️ **`Order<Owned<T>>` is not instantiable**: a `ref` parameter may not name a smart pointer. Sort a
 > container of the resources themselves.
 >
-> ⚠️ **The conformance mechanism M2a leaned on is itself under review.** `Real`, `FromStr` and
-> `FromStrRadix` exist as contracts only because an intrinsic has no way to declare conformance. The
-> design that replaces retro-impl — and may fold these away — is
-> [contract-model.md](contract-model.md), scheduled ahead of M2b.
+> ✅ **The conformance mechanism M2a leaned on has since been replaced.** `Real`, `FromStr` and
+> `FromStrRadix` exist as contracts only because an intrinsic had no way to declare conformance; it now
+> has one (`type intrinsic <…> implements C`), and the retroactive block is gone —
+> [contract-model.md](contract-model.md), campaign 1, complete.
 
 ## Why this campaign exists
 

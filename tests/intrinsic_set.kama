@@ -1,6 +1,7 @@
 // `type intrinsic <…> implements C` — contract conformance for a PRIMITIVE, the kind that had no kama
 // spelling at all. Before this the only way to give `int32` a contract was a retroactive `implements C for
-// int32` block, one per width; the prelude carries 68 of them for exactly that reason.
+// int32` block, one per width — the prelude carried 68 of them for exactly that reason. That block is gone;
+// this is the one spelling.
 //
 // The SET form is what makes it worth having: one body serves every target whose implementation is
 // genuinely identical. `ref This` is what lets that body be written once — it resolves to each target in

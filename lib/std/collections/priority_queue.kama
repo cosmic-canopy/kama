@@ -59,7 +59,7 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
 
     // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
     // max-heap the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
-    // receiver is a nameable ref that resolves `compareTo` for a primitive retro-impl AND a user element (like
+    // receiver is a nameable ref that resolves `compareTo` for a primitive's intrinsic conformance AND a user element (like
     // `DynamicArray.indexOf`'s `equals`); a raw `data[i]` isn't a nameable receiver.
     fn bool higher(ref T a, ref T b) {
         Ordering o = a.compareTo(other: b);

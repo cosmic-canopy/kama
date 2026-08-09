@@ -1,7 +1,7 @@
-// An enum declares its conformance INLINE — `type enum E implements C { variants; methods }` — instead of
-// through a retroactive `implements C for E` block. An enum is a full type kind, so it takes the same
-// `implements` clause every other kind takes; before this it had no such clause at all, which is the only
-// reason retro-impl was mandatory for it.
+// An enum declares its conformance INLINE — `type enum E implements C { variants; methods }`. An enum is a
+// full type kind, so it takes the same `implements` clause every other kind takes; before this it had no
+// such clause at all, which is the only reason the retroactive `implements C for E` block existed. That
+// block is gone; this is the one spelling.
 //
 // Covers both halves that used to need the lazy "Model C" promotion: a payload-less enum gains a real
 // ClassInfo so it can carry a method, and it gains an `<E>__as_Error` vtbl so ONE `Error`-typed call site

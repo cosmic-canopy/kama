@@ -1,0 +1,1 @@
+already implements `Weighable`

@@ -168,7 +168,6 @@ module.exports = grammar({
         $.type_declaration,
         $.intrinsic_declaration,
         $.enum_declaration,
-        $.retroactive_impl_declaration,
         $.module_variable_declaration,
       ),
 
@@ -259,17 +258,6 @@ module.exports = grammar({
 
     bound_list: ($) => seq($.type_name, repeat(seq('+', $.type_name))),
 
-    // kama.y:260 — retroactive conformance, `implements C for T { ... }` at top level.
-    retroactive_impl_declaration: ($) =>
-      seq(
-        'implements',
-        field('contract', $.type_name),
-        'for',
-        field('type', $._type),
-        field('body', $.class_body),
-        optional(';'),
-      ),
-
     class_base: ($) =>
       choice(
         seq('extends', field('superclass', $.type_name)),
@@ -306,8 +294,7 @@ module.exports = grammar({
 
     // ── Enums ───────────────────────────────────────────────────────────────────────────────────────
     // `type enum Name<T> : IntType implements C { A, B(payload…); …members… }`. An enum is a type kind
-    // like any other, so it takes the `type` marker and a `class_base` — before that it had neither and
-    // needed a retroactive `implements C for E` to gain a contract. The marker is MANDATORY (GOALS #3c:
+    // like any other, so it takes the `type` marker and a `class_base`. The marker is MANDATORY (GOALS #3c:
     // every declaration is `type <kind> Name`); bare `enum X` is a parse error in kama.y too.
     enum_declaration: ($) =>
       seq(

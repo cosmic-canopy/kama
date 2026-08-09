@@ -29,6 +29,3 @@
 
 (enum_member name: (identifier) @name) @item
 
-(retroactive_impl_declaration
-  "implements" @context
-  contract: (type_name name: (identifier) @name)) @item

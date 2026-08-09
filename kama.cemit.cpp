@@ -662,14 +662,6 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             checkParams(md->params, "a parameter");
                             checkNoSelfParam(md->params);
                         }
-            } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
-                tp.clear();   // a retro impl declares no type params of its own
-                if (ri->members) for (auto& m : *ri->members)
-                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
-                        check(md->returnType, "a return type");
-                        checkParams(md->params, "a parameter");
-                        checkNoSelfParam(md->params);
-                    }
             }
         }
     }
@@ -4477,7 +4469,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 // `@generate` serialization for a concrete tagged enum: register the Serialize/Deserialize
                 // conformance + synthesized methods so the emitter emits `E__serialize`/`E__deserialize` in C
                 // (externally-tagged `{"tag":…[,"value":{…}]}`). An enum can't carry a fat-pointer method, so
-                // the conformance is nominal-only (retroInterfaces → static dispatch, satisfies a `<T: Serialize>`
+                // the conformance is nominal-only (staticOnlyInterfaces → static dispatch, satisfies a `<T: Serialize>`
                 // bound + resolves `e.serialize()`); the body is emitted separately (emitEnumSerializeDefinition).
                 bool eser = false, ede = false;
                 if (ed->attributes)
@@ -4492,7 +4484,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     }
                 if (eser) {
                     ci.genSerialize = true;
-                    ci.interfaces.push_back("Serialize"); ci.retroInterfaces.push_back("Serialize");
+                    ci.interfaces.push_back("Serialize"); ci.staticOnlyInterfaces.push_back("Serialize");
                     MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
                     mi.isSynthSer = true; mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
                     scanTypeForCollections(mi.returnType);
@@ -4504,7 +4496,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 for (auto& v : ci.variants) if (v.payload.empty()) { hasUnit = true; break; }
                 if (ede && hasUnit) {
                     ci.genDeserialize = true;
-                    ci.interfaces.push_back("Deserialize"); ci.retroInterfaces.push_back("Deserialize");
+                    ci.interfaces.push_back("Deserialize"); ci.staticOnlyInterfaces.push_back("Deserialize");
                     MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
                     // A ctor, exactly like the value/resource synthesis below: `deserialize` CONSTRUCTS, so
                     // it is one across every type that has it. Registered as a static-only method here left
@@ -5218,7 +5210,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // hand-rolling an FNV loop. Structural equality remains OPT-IN — that is the whole stance; the
             // attribute is where you ask for it. A hand-written `equals`/`hash` wins via the `!count` guard
             // (body only — the conformance is still registered). Per-field conformance is checked at emit,
-            // like `@generate(Format)`, because retro-impls are not all collected yet at this point.
+            // like `@generate(Format)`, because impl blocks are not all collected yet at this point.
             if (ci.genEquatable) {
                 // `Equatable` PINS its parameter, so the conformance is recorded as `Equatable_<Type>`.
                 // There is no source node here to carry `<This>` — the attribute is the whole declaration —
@@ -7682,7 +7674,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     // (`m[i]` in `m[i][j]`) becomes `(*Outer__at(&m, i))` so `&recvExpr` is a real `T*`, not the
     // address of a by-value `__get` rvalue. This is what makes chained/field-write indexing valid C.
     recvExpr = emitPlace(recv);
-    // `this` inside a retro `implements C for <collection>` body is `self` — ALREADY a pointer, not a
+    // `this` inside a `type intrinsic <collection>` impl body is `self` — ALREADY a pointer, not a
     // by-value lvalue. Every caller takes `&(recvExpr)`, so hand back the place `(*self)` → `&(*self)` == self
     // (without this, `this[i]` emits `__get(&self, i)`, indexing the pointer's own address — a string-key
     // `hash`/`equals` would read struct bytes, not content, and Map lookups would miss).
@@ -8260,11 +8252,11 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         return it->second.copyable;                            // a resource → only if `implements Copyable`
     }
-    // A retroactive `implements <bound> for t` also satisfies it — including a PRIMITIVE target (`int32`),
-    // whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a `when
-    // [T: Equatable]` gate on `List<int32>` sees int32's retro `Equatable` (matched on the raw source name).
-    auto rc = _retroConformances.find(t);
-    if (rc != _retroConformances.end() && (rc->second.count(bound) || rc->second.count(bound_))) return true;
+    // A `type intrinsic <t> implements <bound>` block also satisfies it — including a PRIMITIVE target
+    // (`int32`), whose conformance lives in _primConformances (NOT _classes). Consult the pre-scan so a
+    // `when [T: Equatable]` gate on `List<int32>` sees int32's `Equatable` (matched on the raw source name).
+    auto rc = _intrinsicConformances.find(t);
+    if (rc != _intrinsicConformances.end() && (rc->second.count(bound) || rc->second.count(bound_))) return true;
     if (it == _classes.end()) return false;
     for (auto& itf : it->second.interfaces) if (itf == bound) return true;
     return false;
@@ -8690,6 +8682,20 @@ void CEmitter::linkBases()
         ScopedStr  _ts(_thisType, ci.name);
         ScopedThis _tt(_typeSubst, synthId(ci.name));
         resolveInterfaceNames(ci.interfaces, ifaceNodes);
+        // Coherence, the class arm: one claim per (type, contract). The enum and `type intrinsic` paths
+        // have always checked this; a class's `implements` list never did, so `implements C, C` was
+        // accepted and recorded twice. Checked HERE rather than at collect time because the duplicate can
+        // be spelled two ways (`C` and `ns::C`), and only the resolved names can tell.
+        //
+        // A generic INSTANCE is skipped above, so a duplicate on a generic template is reported once,
+        // from the template, instead of once per instantiation.
+        for (size_t i = 0; i < ci.interfaces.size(); ++i)
+            for (size_t j = 0; j < i; ++j)
+                if (ci.interfaces[i] == ci.interfaces[j]) {
+                    unsupported(("`" + ci.name + "` already implements `" + ci.interfaces[i] + "`").c_str(),
+                                ci.node ? ci.node->line : 0);
+                    break;
+                }
         // Mint each generic-contract instance HERE, not only in collectCollections. A bound check
         // (`SortedSet<Duration>` needing `K: Comparable`) matches a conformance through the instance's
         // `templateKey`, so the instance must exist in `_interfaces` before ANY unit is scanned — and
@@ -8964,7 +8970,7 @@ void CEmitter::buildVtables()
         for (auto& kv : ci->methods) {
             MethodInfo& mi = kv.second;
             const std::string& mname = kv.first;
-            if (!mi.isVirtual && !mi.isCtor && !mi.isStatic && !mi.isRetro && ci->base) {
+            if (!mi.isVirtual && !mi.isCtor && !mi.isStatic && mi.fromContract.empty() && ci->base) {
                 ClassInfo* bowner = nullptr;
                 MethodInfo* bmi = findMethod(ci->base, mname, &bowner);
                 if (bmi && bowner && bmi->visibility != Visibility::Private)
@@ -9437,12 +9443,12 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // Inject a contract-impl block's methods into the target's ClassInfo and record the conformance. The
 // caller has already resolved `tci` and rejected a duplicate impl of `contract` on it.
 //
-// `retro` marks the conformance STATIC-dispatch-only (recorded in `retroInterfaces`, so no fat-pointer
+// A recorded conformance is STATIC-dispatch-only (it lands in `staticOnlyInterfaces`, so no fat-pointer
 // vtable is emitted for it). `isPrimitive` gates the serde-return scan: a primitive's
 // `Result<scalar, Owned<Error>>` monomorph only matters when the program actually uses serde.
 void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                                  const std::string& contract, const std::string& tkey,
-                                 bool retro, bool isPrimitive)
+                                 bool isPrimitive)
 {
     if (members)
         for (auto& m : *members) {
@@ -9450,7 +9456,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             if (!md || !md->name || !md->name->value) continue;
             std::string mname = *md->name->value;
             if (tci.methods.count(mname)) {
-                unsupported(("`implements " + contract + " for " + tkey + "`: method `" + mname
+                unsupported(("`" + tkey + "` implements `" + contract + "`: method `" + mname
                              + "` conflicts with an existing method on the type").c_str(), md->line);
                 continue;
             }
@@ -9466,7 +9472,6 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             mi.isStatic     = modHas(md->modifiers, "static") || md->isCtor;
             mi.isCtor       = md->isCtor;
             mi.visibility   = Visibility::Public;   // a contract's methods are public
-            mi.isRetro      = retro;                // emitted static-inline in the header
             mi.fromContract = contract;             // an injected method, not part of the type's own API
             // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
             // only matters when the program uses serde — skip registering it otherwise (the impl itself
@@ -9483,17 +9488,13 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
     // package the first came from. `emplace` so a re-claim never overwrites the original claimant.
     _conformanceOrigin.emplace(std::make_pair(tkey, contract), _collectingUnitPath);
     tci.interfaces.push_back(contract);
-    if (retro) tci.retroInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
-    // Model C: an ENUM implementing a contract (only possible via retro today) needs DYNAMIC dispatch —
-    // mark the contract poly-dispatch so `emitClassInterfaceVtables` emits `<Enum>__as_<C>` despite the
-    // retro skip, enabling `C e = enumVal; e.method()` through a fat pointer + (P2) boxing.
-    if (tci.isVariant) _polyDispatchContracts.insert(contract);
+    tci.staticOnlyInterfaces.push_back(contract);   // static dispatch only — no fat-pointer vtable
 }
 
 // `type enum E : U implements C, D { A, B; …members… }` — an enum declares conformance inline, like every
 // other kind. Runs AFTER linkContracts() (so `contractMethods` is populated and completeness is checkable)
 // and BEFORE buildVtables(), which is what lets the `<E>__as_<C>` vtbl be emitted from the declaration
-// instead of retrofitted afterwards the way the retroactive path had to.
+// instead of retrofitted afterwards.
 //
 // A payload-less enum is a bare C integer with nowhere to hang a method, so declaring members (or a
 // method-carrying contract) PROMOTES it to a variant ClassInfo — an all-payload-less variant emits
@@ -9559,9 +9560,8 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 }
 
             // The members are the enum's OWN API (empty `contract` — they are declared in its own body),
-            // unlike a retroactive block's, which belong to the contract that carried them in.
-            injectImplMethods(eci, ed->members, /*contract=*/"", name,
-                              /*retro=*/false, /*isPrimitive=*/false);
+            // unlike a `type intrinsic` block's, which belong to the contract that carried them in.
+            injectImplMethods(eci, ed->members, /*contract=*/"", name, /*isPrimitive=*/false);
             for (auto& c : ifaces) {
                 bool dup = false;
                 for (auto& ex : eci.interfaces) if (ex == c) { dup = true; break; }
@@ -9578,8 +9578,8 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
 // The BODIES of the methods a `type enum` declares in its own body. `emitClassDefinitions` is driven by a
 // `ClassDeclarationNode` and an enum has none (classOf skips enums), so its bodies are emitted here — from
 // the enum's own declaration site, alongside its dtor and vtbls. Prototypes come from `emitClassPrototypes`
-// the ordinary way, because these methods are NOT `isRetro` (that flag's whole job is to route a method to
-// the separate retroactive passes instead).
+// the ordinary way, because these methods carry no `fromContract` (a non-empty one routes a method to the
+// separate impl passes instead).
 void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
 {
     if (!ed || !ed->members) return;
@@ -9717,33 +9717,26 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         }
         // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
         // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
-        // eligible as `int32`, and the retroactive path has always passed `builtInVal != 0` for it
-        // (see the same call below); keying off `_classes` instead would make a migrated
-        // `type intrinsic <string> implements Serialize` register monomorphs whose bodies `implEmitsOf`
-        // then refuses to emit.
-        injectImplMethods(tci, members, contract, tkey,
-                          /*retro=*/true, /*isPrimitive=*/tgt->builtInVal != 0);
+        // eligible as `int32`; keying off `_classes` instead would make `type intrinsic <string>
+        // implements Serialize` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
+        injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
         checkImplCompleteness(tci, contract, *tgt->value, n->line);
     }
 }
 
-// Every (target ClassInfo, member list) this unit's impl blocks contribute: a retroactive block yields
-// one, a `type intrinsic` set yields one per target. The prototype pass and both body passes walk exactly
-// this, so the three agree by construction rather than by three copies staying in step.
+// Every (target ClassInfo, member list) this unit's `type intrinsic` blocks contribute — one per target in
+// the set. The prototype pass and both body passes walk exactly this, so the three agree by construction
+// rather than by three copies staying in step.
 std::vector<CEmitter::ImplEmit> CEmitter::implEmitsOf(SharedCompilationUnit u)
 {
     std::vector<ImplEmit> out;
     if (!u || !u->codeDeclarationList) return out;
     for (auto& decl : *u->codeDeclarationList) {
-        if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
-            if (!ri->target || !ri->target->value || !ri->members) continue;
-            if (serdeGatedOff(ri->contract)) continue;
-            if (ClassInfo* t = retroTargetInfo(primKey(ri->target))) out.push_back(ImplEmit{t, ri->members});
-        } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+        if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
             SharedIdentifier c = intrinsicContract(ii);
             if (!c || !ii->targets || serdeGatedOff(c)) continue;
             for (auto& tgt : *ii->targets)
-                if (ClassInfo* t = retroTargetInfo(primKey(tgt)))
+                if (ClassInfo* t = implTargetInfo(primKey(tgt)))
                     out.push_back(ImplEmit{t, intrinsicMembersFor(ii, tgt)});
         }
     }
@@ -9785,7 +9778,7 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
                                      const std::string& tkey, int line)
 {
     // Phrased over the (type, contract) pair rather than one spelling of the impl, so it reads correctly
-    // whether the conformance was declared on the type or supplied by a retroactive block.
+    // whether the conformance was declared on the type or supplied by an impl block.
     if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
         for (auto& nm : *need)
             if (!tci.methods.count(nm.name))
@@ -9799,16 +9792,18 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
 // The ClassInfo carrying an impl block's injected methods for `tkey` — a `primKey`, which is the C name for
 // anything that has a `_classes` entry and the KAMA name for a scalar primitive. Either a collection's
 // `_classes` entry (`kama_string`), or a primitive's `_primConformances` entry (scalar receiver). nullptr
-// for a user-type target (which emits through the normal class machinery, not the retro emission path).
-ClassInfo* CEmitter::retroTargetInfo(const std::string& tkey)
+// for a user-type target (which emits through the normal class machinery, not the impl emission path).
+ClassInfo* CEmitter::implTargetInfo(const std::string& tkey)
 {
     auto ti = _classes.find(tkey);
-    // An intrinsic collection (`string`→`kama_string`) OR a tagged-union enum: both emit their retro-impl
-    // method bodies through the dedicated retro path (emitModuleContent / the prelude pass), NOT the normal
-    // per-class machinery — a `ClassDeclarationNode` class emits via emitClassDefinitions and returns nullptr
-    // here, but an `EnumDeclarationNode` never reaches that path, so an `implements Serialize for MyEnum`
-    // body would otherwise be declared-but-undefined.
-    if (ti != _classes.end() && (ti->second.isIntrinsicColl || ti->second.isVariant)) return &ti->second;
+    // An intrinsic collection (`string` → `kama_string`) emits its injected method bodies through the
+    // dedicated impl path (emitModuleContent / the prelude pass), NOT the normal per-class machinery — a
+    // `ClassDeclarationNode` class emits via emitClassDefinitions and returns nullptr here.
+    //
+    // There is no enum arm, because there can be no enum TARGET: `intrinsic_target_list` is a `simple_type`
+    // list, and `simple_type` is `primitive_type | class_type` where `class_type` is only `string`. It had
+    // one while `implements C for MyEnum` existed.
+    if (ti != _classes.end() && ti->second.isIntrinsicColl) return &ti->second;
     if (ClassInfo* pci = primConformance(tkey)) return pci;
     return nullptr;
 }
@@ -9853,7 +9848,7 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     // enough (explicit over implicit). `implementsContractTemplate` matches a plain contract by name AND a
     // generic-contract bound against its TEMPLATE (`Iterator<T>` — no instance needed to constrain a param).
     // `Copyable` keeps its one structural rule: a `value` is bitwise-copyable; a `resource` only by declaring
-    // it. (A primitive / retroactive `implements` target is handled by the caller before we're reached.)
+    // it. (A primitive / impl-block target is handled by the caller before we're reached.)
     if (contract == "Copyable") {
         if (ci->kind == TypeKind::Value) return true;
         return ci->copyable;
@@ -10084,18 +10079,18 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // runs during collection (before the methods are injected) still sees it. Matched on the RESOLVED
         // name, which the pre-scan also stores: two same-named contracts in different namespaces are two
         // contracts, and a conformance to one must not satisfy a bound on the other.
-        bool retro = _retroConformances.count(rkey) && _retroConformances[rkey].count(contract);
+        bool declared = _intrinsicConformances.count(rkey) && _intrinsicConformances[rkey].count(contract);
         // A boxed polymorphic contract handle satisfies the contract bound: `Owned<C>`/`Shared<C>`/
         // `Weak<C>` (and `Owned<X>` where `X` implements `C`) dynamic-dispatches `C`'s methods, so a
         // boxed `Error` IS an `Error` (Model C). This lets `Result<T, Owned<Error>>` — the uniform serde
         // error channel — satisfy the `E: Error` bound without `Owned` itself declaring `implements Error`.
         bool boxed = false;
-        if (!retro && isSmartPtrClass(cls)) {
+        if (!declared && isSmartPtrClass(cls)) {
             const std::string& elem = _classes[cls].collElemClass;
             if (elem == contract) boxed = true;
             else if (_classes.count(elem) && classSatisfiesBound(&_classes[elem], contract)) boxed = true;
         }
-        if (!retro && !boxed && (!ci || !classSatisfiesBound(ci, contract)))
+        if (!declared && !boxed && (!ci || !classSatisfiesBound(ci, contract)))
             unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                          + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
     }
@@ -10546,7 +10541,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
                 // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
                 // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
-                // a whole-`this` borrow (`w.writeString(v: this)` in a retro-impl on `string`) would read the
+                // a whole-`this` borrow (`w.writeString(v: this)` in an impl on `string`) would read the
                 // pointer's own bytes, not the value. (Cast for a `ref Base` upcast.)
                 s += (isClass(p.className) && argCls != p.className) ? ("(" + p.className + "*)" + val) : val;
             } else {
@@ -12225,8 +12220,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
         // `this` emits as `self`, which is ALREADY a `subjCls*` (the receiver pointer) — do NOT re-address
-        // it (`&self` would point at the parameter slot). Reachable only for `match (this)` in a retro-impl
-        // method on an enum (the only way `this` is a variant subject). (Model C: `enum … implements Error`.)
+        // it (`&self` would point at the parameter slot). Reachable only for `match (this)` in a method on
+        // an enum (the only way `this` is a variant subject). (Model C: `type enum … implements Error`.)
         indent(depth); *_out << subjCls << "* " << sp << " = " << subjExpr << ";\n";
     } else if (subjLvalue) {
         indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
@@ -13219,9 +13214,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 if (_classes.count(concrete) || primConformance(concrete)) typeName = concrete;
             }
         }
-        // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a retro-impl
-        // conformance) resolves via `retroTargetInfo` (`_primConformances`).
-        ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : retroTargetInfo(typeName);
+        // A user type resolves in `_classes`; a primitive/intrinsic-collection static (a `type intrinsic`
+        // conformance) resolves via `implTargetInfo` (`_primConformances`).
+        ClassInfo* stci = _classes.count(typeName) ? &_classes[typeName] : implTargetInfo(typeName);
         if (stci) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(stci, name, &owner);
@@ -13844,12 +13839,12 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 {
     for (auto& ifn : ci.interfaces) {
-        // A retroactively-implemented contract dispatches statically (monomorphized) — no fat-pointer vtable.
+        // An impl-block conformance dispatches statically (monomorphized) — no fat-pointer vtable.
         // EXCEPTION (Model C): a poly-DISPATCH contract (base `Error`, an enum-implemented contract) DOES
-        // get a `<Impl>__as_<C>` vtbl even for a retro impl, so an enum can be dispatched dynamically + boxed.
-        bool retro = false;
-        for (auto& r : ci.retroInterfaces) if (r == ifn) { retro = true; break; }
-        if (retro && !isPolyDispatchContract(ifn)) continue;
+        // get a `<Impl>__as_<C>` vtbl even then, so an enum can be dispatched dynamically + boxed.
+        bool staticOnly = false;
+        for (auto& r : ci.staticOnlyInterfaces) if (r == ifn) { staticOnly = true; break; }
+        if (staticOnly && !isPolyDispatchContract(ifn)) continue;
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.declLine()); continue; }
         InterfaceInfo& ii = it->second;
@@ -13979,10 +13974,6 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     for (auto& kv : ci.methods) {
         MethodInfo& mi = kv.second;
         if (mi.isAbstract) continue;   // pure: no definition, no prototype
-        // A retro-impl method on a VARIANT enum (e.g. `implements Error for DeError`) is emitted — proto AND
-        // body — by the dedicated retro passes (retroTargetInfo returns a variant enum), so skip it here.
-        // Otherwise a prelude enum gets a non-static proto that clashes with the static-inline retro body.
-        if (mi.isRetro && ci.isVariant) continue;
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
@@ -14879,12 +14870,12 @@ void CEmitter::computeGraphNodeTypes()
                 for (auto& kv2 : _classes) {
                     ClassInfo& c2 = kv2.second;
                     if (c2.isGraphNode) continue;
-                    // A NOMINAL implementor (`implements Shape`), not a retro `implements Shape for T` — a retro
-                    // impl targets a foreign/primitive type that can't be a fat-pointer `Shared<Shape>` value, so
+                    // A type that declares `implements Shape` in its own body, not one an impl block supplied
+                    // — such a block targets a primitive that can't be a fat-pointer `Shared<Shape>` value, so
                     // it's excluded from the poly dispatch tables (emitPolyContractResolvers) anyway.
                     bool impl  = std::find(c2.interfaces.begin(),      c2.interfaces.end(),      e.elemC) != c2.interfaces.end();
-                    bool retro = std::find(c2.retroInterfaces.begin(), c2.retroInterfaces.end(), e.elemC) != c2.retroInterfaces.end();
-                    if (!impl || retro) continue;
+                    bool staticOnly = std::find(c2.staticOnlyInterfaces.begin(), c2.staticOnlyInterfaces.end(), e.elemC) != c2.staticOnlyInterfaces.end();
+                    if (!impl || staticOnly) continue;
                     if (c2.genSerialize || c2.genDeserialize) { c2.isGraphNode = true; work.push_back(kv2.first); }
                     // A non-@generate implementor has no node writer — at runtime it would flow through the edge
                     // and be SILENTLY dropped from the wire. Reject at the edge field; the author must mark it
@@ -14944,8 +14935,8 @@ void CEmitter::emitPolyContractResolvers()
         for (auto& K : _graphNodeOrder) {
             ClassInfo& ci = _classes[K];
             bool impl  = std::find(ci.interfaces.begin(),      ci.interfaces.end(),      C) != ci.interfaces.end();
-            bool retro = std::find(ci.retroInterfaces.begin(), ci.retroInterfaces.end(), C) != ci.retroInterfaces.end();
-            if (impl && !retro) impls.push_back(K);
+            bool staticOnly = std::find(ci.staticOnlyInterfaces.begin(), ci.staticOnlyInterfaces.end(), C) != ci.staticOnlyInterfaces.end();
+            if (impl && !staticOnly) impls.push_back(K);
         }
         *_out << "static inline kama_node_writer " << C << "__nodeWriterFor(const struct " << C << "_vtbl* __vt)\n{\n";
         for (auto& K : impls) { indent(1); *_out << "if (__vt == &" << K << "__as_" << C << ") return " << K << "__serializeNode;\n"; }
@@ -16458,10 +16449,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 tn = _variantTargetType;
         }
     }
-    // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by retroactive conformance
-    // (`implements Deserialize for int32`) resolves through `retroTargetInfo` — the same two tables the
+    // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block
+    // (`type intrinsic <int32> implements Deserialize`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
-    ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : retroTargetInfo(tn);
+    ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : implTargetInfo(tn);
     // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
     // infer from). `Box` is a perfectly known type, so "unknown type" names the wrong problem — say which
     // instance is missing, and for a STATIC say that dot-on-type was never the spelling to begin with.
@@ -16929,7 +16920,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // The contract-scope gate, class path. `string` has a real `_classes` entry, so its INJECTED
     // `compareTo`/`hash` never reach the primitive branch above — and they sit on the same ClassInfo as its
     // NATIVE `equals`/`length`. `fromContract` is exactly what tells them apart: it is non-empty only for a
-    // method supplied from outside the type's own body (a `type intrinsic` block or a retro-impl), which is
+    // method supplied from outside the type's own body (a `type intrinsic` block), which is
     // the property the rule wants. A type that declares `implements C` in its own body is untouched.
     {
         ClassInfo* gowner = nullptr;
@@ -17260,7 +17251,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // `Serializer`/`Deserializer` BACKEND implementer (JsonWriter/JsonReader) is the ONLY way to serialize or
     // deserialize anything — you cannot even call a collection's `serialize` without a `Serializer` sink. When
     // NEITHER is present we emit NONE of the serde machinery: not the prelude's primitive Serialize/Deserialize
-    // retro-impls, and not the conditional serde a collection would carry (the `when [T: Serialize]` bound is
+    // conformances, and not the conditional serde a collection would carry (the `when [T: Serialize]` bound is
     // treated as unsatisfied under `!_usesSerde` in whenConditionsHold, so `serialize`/`serKey`/… all drop).
     // Compile-time only (all of it is static-inline / dead-strippable). Computed HERE — before collectClasses,
     // so every downstream decision (collection specialization included) sees the final flag. Both signals are
@@ -17283,9 +17274,6 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         if (itf && itf->value && (*itf->value == "Serializer" || *itf->value == "Deserializer")) _usesSerde = true;
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
                 if (attrHasSerde(ed->attributes)) _usesSerde = true;
-            } else if (auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get())) {
-                if (ri->contract && ri->contract->value &&
-                    (*ri->contract->value == "Serializer" || *ri->contract->value == "Deserializer")) _usesSerde = true;
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value && (*c->value == "Serializer" || *c->value == "Deserializer")) _usesSerde = true;
@@ -17305,16 +17293,15 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     linkBases();
     linkContracts();    // merge refined-parent methods into each contract before vtables are built
     // `type enum E implements C` — after linkContracts (completeness needs the merged contract methods),
-    // before buildVtables, so a promoted enum's conformance is in place when vtables are built rather than
-    // retrofitted afterwards the way the retroactive path had to be.
+    // before buildVtables, so a promoted enum's conformance is in place when vtables are built.
     collectEnumConformances(units);
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     resolveFriends();   // after all classes/functions are registered
-    // Pre-scan impl blocks into _retroConformances (target primKey -> contracts) BEFORE collectCollections.
-    // A `Map<string, V>` local drives a generic-type-arg bound check DURING collection, which is earlier
-    // than the methods are injected; without this the check would falsely reject `string: Hashable`. The
-    // real methods + coherence are still handled below.
+    // Pre-scan `type intrinsic` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE
+    // collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING collection,
+    // which is earlier than the methods are injected; without this the check would falsely reject
+    // `string: Hashable`. The real methods + coherence are still handled below.
     //
     // The contract is stored RESOLVED, under the declaring file's namespace — a bare name would conflate
     // two same-named contracts in different namespaces, so a bound on one would be satisfied by a
@@ -17324,18 +17311,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         for (auto& decl : *u->codeDeclarationList) {
-            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-            if (ri && ri->contract && ri->contract->value && ri->target && ri->target->value)
-                _retroConformances[primKey(ri->target)]
-                    .insert(resolveUserName(*ri->contract->value, ri->contract->qualifier));
-            // Same reason for `type intrinsic <…>`: a `<T: Comparable>` bound on int32 is checked during
-            // collection, which is earlier than the methods below are injected.
             auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get());
             if (ii && ii->targets) {
                 SharedIdentifier c = intrinsicContract(ii);
                 if (c && c->value) {
                     std::string contract = resolveUserName(*c->value, c->qualifier);
-                    for (auto& tgt : *ii->targets) _retroConformances[primKey(tgt)].insert(contract);
+                    for (auto& tgt : *ii->targets) _intrinsicConformances[primKey(tgt)].insert(contract);
                 }
             }
         }
@@ -17346,67 +17327,18 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // collection's elemDestructible from the final class destructibility.
     for (auto& u : units)
         if (u && u->codeDeclarationList) { _nsCtx = _unitCtx[u.get()]; collectCollections(u); }
-    // Retroactive contract conformance — `implements C for T { … }` blocks. Runs AFTER collectCollections
-    // so a primitive/collection target (`string` → `kama_string`) already has its ClassInfo. Inject each
-    // block's methods into the target's ClassInfo (mangled `Target__method`, so the existing dispatch +
-    // method emission pick them up unchanged) and record the conformance. Coherence: reject a duplicate
-    // impl of the same contract for the same type, and reject an impl method that clobbers an existing
-    // method — under the whole-program view a duplicate/conflict is directly visible, which is how the
-    // orphan rule (declare the contract or the type) is enforced here.
+    // `type intrinsic <…> implements C { … }` — inject each block's methods into every target's conformance
+    // registry. Runs AFTER collectCollections so a collection target (`string` → `kama_string`) already has
+    // its ClassInfo. Coherence lives in applyIntrinsicImpl: one claim per (type, contract), and no method
+    // clobbering one the type already has.
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
         // Which file is claiming these conformances — resolved to a package only if one turns out to be a
         // duplicate (see duplicateOriginNote).
         ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
-        for (auto& decl : *u->codeDeclarationList) {
-            if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) { applyIntrinsicImpl(ii); continue; }
-            auto* ri = dynamic_cast<RetroactiveImplNode*>(decl.get());
-            if (!ri || !ri->contract || !ri->contract->value || !ri->target || !ri->target->value) continue;
-            std::string contract = *ri->contract->value;
-            // TWO keys, as in applyIntrinsicImpl: `_classes` is C-named (string→kama_string, a user type→its
-            // mangle), the conformance registry is kama-named so `char` and `uint32` stay apart.
-            std::string ctKey = cType(ri->target);
-            std::string tkey  = primKey(ri->target);
-            ClassInfo* tcip = nullptr;
-            auto ti = _classes.find(ctKey);
-            if (ti != _classes.end()) tcip = &ti->second;
-            else {
-                // A PRIMITIVE target (`int32`, …): it has NO ClassInfo, and it must NOT get one — every
-                // "is this a user type?" test keys on `_classes`, so an entry there would break int
-                // operators/ownership. Hang the injected methods on a SEPARATE `_primConformances` registry
-                // (scalar-receiver: `this` is the value itself). Method calls + bound checks consult it.
-                if (ri->target->builtInVal != 0) {
-                    ClassInfo& pci = primConformanceFor(tkey);
-                    pci.name = ctKey;   // the C type — what `This` resolves to and how `self` is spelled
-                    pci.kind = TypeKind::Value;
-                    pci.isScalarRecv = true;
-                    tcip = &pci;
-                } else if (_enums.count(tkey)) {
-                    // An ENUM declares its conformance inline (`type enum E implements C`), which is what
-                    // retired the lazy "Model C" rebuild that used to happen right here: the enum was still
-                    // a bare integer at this point and had to be reconstructed into a tagged ClassInfo to
-                    // hold the method. A conforming enum now arrives already promoted, from its declaration.
-                    unsupported(("`implements " + contract + " for " + *ri->target->value +
-                                 "` — an enum declares its contracts on its own declaration: write "
-                                 "`type enum " + *ri->target->value + " implements " + contract +
-                                 " { …variants…; …methods… }`").c_str(), ri->line);
-                    continue;
-                } else {
-                    unsupported(("`implements " + contract + " for " + *ri->target->value +
-                                 "` — unknown target type").c_str(), ri->line);
-                    continue;
-                }
-            }
-            ClassInfo& tci = *tcip;
-            for (auto& ex : tci.interfaces)
-                if (ex == contract) { unsupported(("`" + tkey + "` already implements `" + contract + "`"
-                                                   + duplicateOriginNote(tkey, contract)).c_str(),
-                                                  ri->line); break; }
-            injectImplMethods(tci, ri->members, contract, tkey,
-                              /*retro=*/true, /*isPrimitive=*/ri->target->builtInVal != 0);
-            checkImplCompleteness(tci, contract, tkey, ri->line);
-        }
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) applyIntrinsicImpl(ii);
     }
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
@@ -17507,7 +17439,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
 
     // Every DECLARED type name resolves (params / returns / fields / variant payloads). Must be LAST: the
     // check consults `_sigs`, which `collectSignatures` fills in FILE order, so a parameter typed by a
-    // `sig` declared in a later file is not yet registered mid-collect; retroactive `implements` has
+    // `sig` declared in a later file is not yet registered mid-collect; enum conformance collection has
     // finished promoting enums into `_classes`; and `pruneInactiveDecls` has already rewritten the decl
     // lists, so `@compileFor`-dropped declarations are simply absent here rather than needing a guard.
     // Running inside `collectProgram` (rather than at emit) is also what makes `kama build`, `kama check`
@@ -17618,9 +17550,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (ci->isGenericInst) continue;   // a generic instance's vtables are emitted `static` inline (below), no extern decl
         if (_preludeEnums.count(ci->name)) continue;   // a promoted prelude enum's vtbl is header-static (emitted below), no extern
         for (auto& ifn : ci->interfaces) {
-            bool retro = false;
-            for (auto& r : ci->retroInterfaces) if (r == ifn) { retro = true; break; }
-            if (retro && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
+            bool staticOnly = false;
+            for (auto& r : ci->staticOnlyInterfaces) if (r == ifn) { staticOnly = true; break; }
+            if (staticOnly && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end()) continue;
             *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
@@ -17677,16 +17609,16 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (_collections.count(cName) && isIfaceAllocColl(_collections[cName]))
             emitIfaceAllocFuncs(_collections[cName]);
     emitPolyContractResolvers();   // Phase E: per-contract graph-edge dispatch (after node-helper protos + extern vtbl decls)
-    // Retroactive `implements C for T { … }` for a COLLECTION/primitive target (`string` → `kama_string`):
+    // `type intrinsic` impl methods for a COLLECTION/primitive target (`string` → `kama_string`):
     // the normal per-class emitters early-out for a collection, so emit a non-static PROTOTYPE here — BEFORE
     // the generic-function instances below, which may call it (e.g. a `<K: Hashable>` body calling
     // `k.hash()` monomorphized for `string`). The body lands once in the impl's module `.c`
     // (emitModuleContent). A USER-type target emits through the normal machinery (skipped here).
-    // User-unit retro-impls: non-static prototype here; body lands in that unit's `.c` (below). The PRELUDE's
-    // retro-impls (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
-    // Skip an ungated serde retro-impl: the prelude's primitive `Serialize`/`Deserialize` conformances are
-    // emitted only when `_usesSerde` (see the collect-time gate). All other retro-impls always emit.
-    auto emitRetroProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
+    // User-unit impl blocks: non-static prototype here; body lands in that unit's `.c` (below). The PRELUDE's
+    // blocks (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
+    // Skip an ungated serde block: the prelude's primitive `Serialize`/`Deserialize` conformances are
+    // emitted only when `_usesSerde` (see the collect-time gate). All other blocks always emit.
+    auto emitImplProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
         for (auto& u : us) {
             if (!u || !u->codeDeclarationList) continue;
             _nsCtx = _unitCtx[u.get()];
@@ -17705,8 +17637,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             }
         }
     };
-    emitRetroProtos(units, "");                                     // user units (`units` excludes the prelude)
-    if (_preludeUnit) emitRetroProtos({_preludeUnit}, "static inline ");
+    emitImplProtos(units, "");                                     // user units (`units` excludes the prelude)
+    if (_preludeUnit) emitImplProtos({_preludeUnit}, "static inline ");
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
@@ -17732,7 +17664,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     if (any) *_out << "\n";
 
     // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
-    // its types/retro-impls below — no module emits their bodies. Emit prototype + definition `static inline`
+    // its types/impl blocks below — no module emits their bodies. Emit prototype + definition `static inline`
     // in the header HERE (before the generic-fn/collection instances that call them), so a helper the
     // collections rely on (unwrap a fallible `Optional<Ptr>` → panic-on-OOM) resolves everywhere. Generic
     // prelude free fns ride `emitGenericInst`; extern/signature-only ones carry no body.
@@ -17802,9 +17734,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
 
     // A PROMOTED PRELUDE ENUM (e.g. `DeError implements Error`) has no home module, so — like the prelude
-    // types/retro-impls — emit its `<Enum>__as_C` vtbl (+ dtor / synth serde) `static inline` in the header
+    // types/impl blocks — emit its `<Enum>__as_C` vtbl (+ dtor / synth serde) `static inline` in the header
     // (the module-content enum pass only covers user units; its `extern` decl is skipped above). Placed
-    // BEFORE the retro-impl bodies below, which reference the vtbl when boxing an error into `Owned<Error>`.
+    // BEFORE the impl bodies below, which reference the vtbl when boxing an error into `Owned<Error>`.
     if (_preludeUnit) {
         _emitStaticClass = true;
         for (const std::string& name : _preludeEnums) {
@@ -17821,7 +17753,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = false;
     }
 
-    // Prelude retro-impl BODIES (e.g. `implements Hashable/Equatable for int32`): the prelude is collect-only,
+    // Prelude impl BODIES (e.g. `type intrinsic <int32> implements Hashable`): the prelude is collect-only,
     // so — like the prelude types above — emit their method bodies `static inline` in the header (prototype
     // already emitted above). This makes the primitive conformances UNIVERSAL: a `<T: Equatable>` bound,
     // `List<int32>.contains`, or an int-keyed `Map` resolves without importing `std::collections`.
@@ -17991,7 +17923,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     // class definitions, then free-function definitions.
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
-    // Retroactive-impl method BODIES for a collection/primitive target (`string` → `kama_string`): the
+    // Impl-block method BODIES for a collection/primitive target (`string` → `kama_string`): the
     // normal class machinery early-outs for a collection, so the body lands here, non-static (its prototype
     // is in the shared header). A user-type target already emitted through emitClassDefinitions above.
     for (auto& e : implEmitsOf(unit)) {
@@ -18024,7 +17956,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
                     ClassInfo& eci = it->second;
                     if (eci.destructible) emitDtorDefinition(eci);
                     // Model C: emit the `<Enum>__as_<C>` vtbl DEFINITION for any poly-dispatch contract the
-                    // enum retro-implements (classOf skips enums, so the class-vtbl loop above missed it). The
+                    // enum implements (classOf skips enums, so the class-vtbl loop above missed it). The
                     // header carries the matching `extern` decl. Enables dynamic dispatch + (P2) boxing.
                     emitClassInterfaceVtables(eci);
                     // The bodies of the methods this enum declares in its own body (`type enum E
@@ -18043,9 +17975,6 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         } else if (dynamic_cast<IntrinsicImplNode*>(decl.get())) {
             // `type intrinsic <…> implements C { … }` — its methods were injected into each target's
             // conformance registry and their bodies emitted just above; nothing at this top-level site.
-        } else if (dynamic_cast<RetroactiveImplNode*>(decl.get())) {
-            // `implements C for T { … }` — its methods were injected into T's ClassInfo (applyRetroactive
-            // pass) and emit with T's other methods; nothing to emit at this top-level site.
         } else if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             // MCU step 1: module-level `static` — already emitted into `moduleStatics` (flushed before bodies).
         } else if (decl) {

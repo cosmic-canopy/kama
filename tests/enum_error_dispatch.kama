@@ -1,4 +1,4 @@
-// P1 (Model C): an `enum` that retro-`implements` the base `Error` contract gains DYNAMIC dispatch.
+// P1 (Model C): an `enum` that implements the base `Error` contract gains DYNAMIC dispatch.
 // Two independent error enums are passed through ONE `Error`-typed call site (`describe`); each
 // `e.message()` dispatches to the RIGHT impl at runtime through the emitted `<Enum>__as_Error` vtbl.
 // Distinct message lengths make the returned code prove which impl ran (not a static collapse).

@@ -791,7 +791,7 @@ SharedCompilationUnit parseFile(const std::string& inputFile)
     return extra.compilationUnit;
 }
 
-// The implicit prelude (Optional/Result, the language-level contracts, the primitive retro-impls,
+// The implicit prelude (Optional/Result, the language-level contracts, the primitive conformances,
 // Chars/Split) is embedded from prelude/global.kama into KAMA_PRELUDE_SRC (see kama.prelude.h and
 // tools/embed_prelude.sh), so it ships inside bin/kama even for a --no-std install. The namespaced
 // built-in triad (prelude/std/memory/*.kama) is embedded as KAMA_PRELUDE_MODULES.

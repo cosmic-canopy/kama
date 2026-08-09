@@ -1,10 +1,10 @@
-// Universal `Hashable` for the PRIMITIVE `string`: the conformance is a pure-kama retro-impl hosted in the
-// PRELUDE (`kama.driver.cpp` PRELUDE_SRC — NO compiler blessing), so `string` satisfies the bound WITHOUT
+// Universal `Hashable` for the PRIMITIVE `string`: the conformance is a pure-kama `type intrinsic` block
+// hosted in the PRELUDE (NO compiler blessing), so `string` satisfies the bound WITHOUT
 // importing `std::collections`. Exercises a generic bound `<K: Hashable + Equatable>` with a primitive
 // `string` arg and `Equatable` satisfied STRUCTURALLY through string's built-in `equals`. The key invariant
 // (what `Map<string, V>` relies on): a DIFFERENTLY-sourced key — a concat with a distinct data pointer —
 // hashes AND compares equal to the literal (content-based, not pointer-based). Returns 42. (User code can no
-// longer `implements Hashable for string` — the prelude already provides it.)
+// longer declare `Hashable` for `string` — the prelude already provides it.)
 
 fn uint64 hashOf<K: Hashable>(K k) { return k.hash(); }    // string satisfies the bound via the prelude
 

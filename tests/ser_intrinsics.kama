@@ -1,4 +1,4 @@
-// The intrinsic Serialize/Deserialize retro-impls compose inside a collection for every scalar width.
+// The intrinsic Serialize/Deserialize conformances compose inside a collection for every scalar width.
 import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 fn int main() {

@@ -48,7 +48,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     public fn bool isLeaf() { return this.leaf; }
     public fn bool full() { return this.keys.length() >= 11; }      // 2B-1
 
-    // Three-way compare through a `ref K` receiver so a primitive key's scalar retro-impl resolves (a raw
+    // Three-way compare through a `ref K` receiver so a primitive key's scalar intrinsic conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
     fn Ordering cmpKeys(ref K a, ref K b) { return a.compareTo(other: b); }
     fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
@@ -429,7 +429,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     public fn void clearNode() { this.keys.clear(); this.vals.clear(); this.kids.clear(); this.leaf = true; }
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
-    // primitive element's retro-impl `serialize` resolves) — the map serializes to a SORTED pair array.
+    // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
     fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
     fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
     public fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
