@@ -155,5 +155,6 @@ see **[editor setup](docs/editors.md)**.
 - `site/`, `tools/site/` — kama-lang.org: static assets plus the generator that renders the
   docs above into the published site (`./dev site`, `./dev serve`)
 - `llms.txt`, `docs/GOALS.md` — LLM-discovery entry point and design philosophy
+- `docs/agents.md`, `agents/` — the AI-agent surface (`kama query`) and the `AGENTS.md` kama ships
 
 MIT licensed — see [LICENSE](LICENSE).

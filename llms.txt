@@ -46,7 +46,15 @@ examples read the test fixtures.
   compiler — one server, thin clients. Config for VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate,
   plus which editors get syntax colour from what.
 - [Runtime header](kama_runtime.h): the small C runtime included by generated code.
-- [Repo guide for AI assistants](CLAUDE.md): working conventions and build commands.
+- [Repo guide for AI assistants](AGENTS.md): working conventions and build commands.
+
+## For AI agents
+- [Agent guide](docs/agents.md): **start here if you are an agent.** `kama query` answers from what
+  the compiler RESOLVED rather than what a grep guessed — `--search NAME` finds a symbol by name
+  across a package, `--complete` gives real signatures with parameter names, and `--json` wraps every
+  mode in one envelope. Also: why `kama build`, not `kama check`, is the type check.
+- `kama agents install` writes an `AGENTS.md` into a project (plus `--claude` / `--all-tools`
+  pointers for tools that read something else). `kama agents print` emits it to stdout.
 
 ## Status
 The **language feature set is complete** (see `VERSION`; on the road to 1.0). Implemented:
