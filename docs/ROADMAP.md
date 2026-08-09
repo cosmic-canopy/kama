@@ -539,6 +539,45 @@ rather than here, so there is one number to keep current. Forward work:
   11 bench languages have stdlib JSON. **v1:** a by-value tree round-trip across the stdlib-JSON six —
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
+- **Cache the toolchain front end (prelude + `lib/`) — the largest single compile-time win available.**
+  Every `kama` invocation re-parses and re-analyzes the prelude *and every imported `std::` module tree*,
+  from source, from scratch. Measured on an M-series host, `kama transpile` wall-clock for a fixture whose
+  body is `fn int main() { return 0; }`:
+
+  | what it imports | wall |
+  |---|---|
+  | nothing (prelude only) | 0.05 s |
+  | `std::ascii` (74 lines) | 0.05 s |
+  | `std::collections::{Map}`, **unused** | 0.18 s |
+  | + `std::fmt` + `std::math`, all **unused** | 0.33 s |
+
+  So the floor is paid per process and the rest scales with the size of the module trees an import pulls
+  in — whether or not a single symbol from them is used. For calibration, `clang` compiling and linking
+  the *emitted C* for a heavy fixture is **0.08 s**: the front end, not the C toolchain, is the compile
+  cost. (The test harness's own comment claiming clang dominates is stale.)
+
+  **The shape is a precompiled-header / serialized-symbol-table snapshot, NOT a prebuilt object.** kama is
+  a whole-program monomorphizing compiler and `lib/` is overwhelmingly generic templates plus
+  `static inline` bodies, so there is almost nothing to compile ahead of time — `Map<string,int32>` does
+  not exist until a program instantiates it. What *is* invariant is the post-parse, post-collect
+  declaration state. Cache that, keyed by toolchain version + content hash + **the flag universe**, and
+  reload it instead of re-deriving it. Prior art: Clang PCH, Rust `rmeta`, Swift `.swiftmodule`.
+
+  It pays three ways at once, which is why it outranks the other perf items: **user projects** (a project
+  pins a toolchain and its `lib/` never changes during development), **the LSP** (this is the fixed
+  per-keystroke analysis floor, §10 — a pre-baked or forkable `CEmitter` is the in-process rung of the
+  same fix), and **this repo's own test suite** (~1,900 compiler processes per leg, each paying it).
+
+  Two things make it real work rather than a tweak. `pruneInactiveDecls` rewrites units **in place** per
+  flag configuration, so the cached state must be the pre-prune, pre-instantiation tables and the key must
+  carry the flag universe. And a stale cache must be impossible to hit, not merely unlikely — content-hash
+  the inputs rather than trusting an mtime.
+
+  A cheaper intermediate rung worth pricing first, because it needs the same "resettable emitter" work and
+  nothing else: a **batch mode** (`kama` compiling N independent programs in one process, reusing the
+  analyzed front end). That does nothing for user projects but would collapse the suite's process count by
+  two orders of magnitude.
+
 ## 10. Tooling / distribution (deferred)
 
 - **AI/agent tooling, shipped WITH the language.** ► **NEXT** (see *Working order*). Design in
@@ -717,9 +756,10 @@ rather than here, so there is one number to keep current. Forward work:
       linguist PR (`provisioning/linguist/languages.yml.snippet` still points at the TextMate grammar);
       and upstreaming the Helix `[[language]]`/`[[grammar]]` entries — the same class of work as the
       `nvim-lspconfig`/`eglot-server-programs` registrations below.
-  - **The ~10 ms fixed prelude-ANALYSIS floor per keystroke.** M5 removed the prelude *parse* from every
-    keystroke; analyzing it again on every buffer change is what remains, and it is a floor no file can get
-    under. The fix is a pre-baked or forkable `CEmitter` — a real piece of work, not a tweak.
+  - **The fixed prelude-ANALYSIS floor per keystroke** — see *Cache the toolchain front end* in §9, which
+    is the same defect measured on the build path and is where the fix belongs. M5 removed the prelude
+    *parse* from every keystroke; analyzing it again on every buffer change is what remains, and it is a
+    floor no file can get under.
   - **One build configuration per server process.** It is pinned by the first opened document that resolves
     a manifest, so in a monorepo whose packages declare *different* flag universes the unpinned packages get
     the pinned one's configuration. Softened, not fixed: the status bar says which is active and
