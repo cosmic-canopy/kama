@@ -98,6 +98,13 @@ fi
 [ "$WASM" = 1 ] && sleep 0.3
 trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 
+# The concurrency gate below counts `jobs -rp`, which includes the long-lived helper servers started just
+# above — they are background jobs that never exit. Without budgeting for them the wasm leg (the SLOWEST
+# one) silently runs at NCPU-1, and at NCPU-3 under KAMA_BROWSER=1. Cap on NCPU *plus* the helpers, so the
+# fan-out always gets NCPU fixture slots whichever leg is active.
+JOB_CAP="$NCPU"
+for _p in "$WS_ECHO_PID" "$WT_ECHO_PID" "$SIG_RELAY_PID"; do [ -n "$_p" ] && JOB_CAP=$((JOB_CAP+1)); done
+
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
 build_one() {
     local out="$1"; shift
@@ -379,7 +386,7 @@ for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     test_one "$src" &
     fixture_pids+=($!)
-    while [ "$(jobs -rp | wc -l)" -ge "$NCPU" ]; do wait -n 2>/dev/null || break; done
+    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
 done
 wait "${fixture_pids[@]}" 2>/dev/null
 # Tally in fixture order (stable output regardless of completion order).
@@ -427,26 +434,45 @@ done
 # rejection — this is how we guard "reject bad code" guarantees like const-correctness,
 # access control, and use-after-move). Optional tests/xfail/<name>.msg holds a substring
 # the compiler's error output must contain, so we assert the RIGHT error, not any failure.
-for src in "$TESTS_DIR"/xfail/*.kama; do
-    [ -e "$src" ] || continue
+#
+# Fanned out across NCPU like the single-file leg, and for the same reason: each fixture is an independent
+# `kama build` into its own $TMP files. Serial, this leg was ~325 compiler processes run one at a time.
+xfail_one() {
+    local src="$1" name out res err rc msg_file
     name="$(basename "$src" .kama)"
-    err="$TMP/xf_$name.err"
+    out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
     "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
     if [ "$rc" -eq 0 ]; then
-        echo "FAIL xfail/$name (compiled, but must be REJECTED)"; fail=$((fail+1)); continue
+        echo "FAIL xfail/$name (compiled, but must be REJECTED)" >"$out"; echo FAIL >"$res"; return
     fi
     # A rejection must be CLEAN. Death by signal (>=128) is a compiler crash, and without this arm it
     # scored a PASS here — "did not build" was indistinguishable from "segfaulted", which is exactly how
     # three diagnose-then-dereference bugs sat green in this suite.
     if [ "$rc" -ge 128 ]; then
-        echo "FAIL xfail/$name (compiler CRASHED, signal $((rc-128)) — a rejection must be clean, not a crash)"
-        head -2 "$err"; fail=$((fail+1)); continue
+        { echo "FAIL xfail/$name (compiler CRASHED, signal $((rc-128)) — a rejection must be clean, not a crash)"
+          head -2 "$err"; } >"$out"; echo FAIL >"$res"; return
     fi
     msg_file="$TESTS_DIR/xfail/$name.msg"
     if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$err"; then
-        echo "FAIL xfail/$name (rejected, but error missing \"$(cat "$msg_file")\")"; head -2 "$err"; fail=$((fail+1)); continue
+        { echo "FAIL xfail/$name (rejected, but error missing \"$(cat "$msg_file")\")"; head -2 "$err"; } >"$out"
+        echo FAIL >"$res"; return
     fi
-    echo "PASS xfail/$name (rejected)"; pass=$((pass+1))
+    echo "PASS xfail/$name (rejected)" >"$out"; echo PASS >"$res"
+}
+xfail_pids=()
+for src in "$TESTS_DIR"/xfail/*.kama; do
+    [ -e "$src" ] || continue
+    xfail_one "$src" &
+    xfail_pids+=($!)
+    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+done
+wait "${xfail_pids[@]}" 2>/dev/null
+# Tally in fixture order, so output is identical to the serial version regardless of completion order.
+for src in "$TESTS_DIR"/xfail/*.kama; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .kama)"
+    [ -f "$TMP/xf_$name.out" ] && cat "$TMP/xf_$name.out"
+    if [ "$(cat "$TMP/xf_$name.res" 2>/dev/null)" = "PASS" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
 
 # Trap fixtures: tests/trap/<name>.kama MUST build, then ABORT at runtime — a clean trap that guards the
@@ -504,32 +530,55 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build` �
 # counting each as a separate pass would double the headline number without doubling what is covered —
 # the corpus is the same, only the entry point differs. A mismatch names the fixture; the tally is a
 # single PASS/FAIL plus the sample size.
+#
+# Fanned out across NCPU, like both legs above. This is ~915 more compiler processes; run one at a time it
+# was the single most expensive phase in the suite, and every one of them is independent.
+check_pos_one() {
+    local src="$1" name
+    name="$(basename "$src" .kama)"
+    if ! "$KAMA" check "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
+        { echo "  MISMATCH $name: builds, but \`kama check\` rejects it (the editor would show a clean file as broken)"
+          head -3 "$TMP/ck_$name.err"; } >"$TMP/ck_$name.bad"
+    fi
+}
+check_neg_one() {
+    local src="$1" name ck_rc
+    name="$(basename "$src" .kama)"
+    "$KAMA" check "$src" >/dev/null 2>&1; ck_rc=$?
+    if [ "$ck_rc" -eq 0 ]; then
+        echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)" >"$TMP/ckx_$name.bad"
+    elif [ "$ck_rc" -ge 128 ]; then
+        # `kama lsp` runs this analysis in-process on every keystroke, so a crash here kills the editor's
+        # language server. Rejecting-by-crashing agreed with `build` and therefore used to pass silently.
+        echo "  MISMATCH xfail/$name: \`kama check\` CRASHED (signal $((ck_rc-128))) — the language server would die on this input" >"$TMP/ckx_$name.bad"
+    fi
+}
 ck_pos=0; ck_neg=0; ck_bad=0
+ck_pids=()
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
     [ -f "$TMP/$name.res" ] && [ "$(cat "$TMP/$name.res")" = "PASS" ] || continue   # only fixtures that built
     ck_pos=$((ck_pos+1))
-    if ! "$KAMA" check "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
-        echo "  MISMATCH $name: builds, but \`kama check\` rejects it (the editor would show a clean file as broken)"
-        head -3 "$TMP/ck_$name.err"; ck_bad=$((ck_bad+1))
-    fi
+    check_pos_one "$src" &
+    ck_pids+=($!)
+    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
 done
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1))
-    "$KAMA" check "$src" >/dev/null 2>&1; ck_rc=$?
-    if [ "$ck_rc" -eq 0 ]; then
-        echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)"
-        ck_bad=$((ck_bad+1))
-    elif [ "$ck_rc" -ge 128 ]; then
-        # `kama lsp` runs this analysis in-process on every keystroke, so a crash here kills the editor's
-        # language server. Rejecting-by-crashing agreed with `build` and therefore used to pass silently.
-        echo "  MISMATCH xfail/$name: \`kama check\` CRASHED (signal $((ck_rc-128))) — the language server would die on this input"
-        ck_bad=$((ck_bad+1))
-    fi
+    check_neg_one "$src" &
+    ck_pids+=($!)
+    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+done
+wait "${ck_pids[@]}" 2>/dev/null
+# Report mismatches in fixture order — a MISMATCH names the fixture, so stable ordering keeps a diff of two
+# runs meaningful.
+for f in "$TMP"/ck_*.bad "$TMP"/ckx_*.bad; do
+    [ -e "$f" ] || continue
+    cat "$f"; ck_bad=$((ck_bad+1))
 done
 if [ "$ck_bad" -eq 0 ]; then
     echo "PASS analysis agreement ($ck_pos accepted + $ck_neg rejected, kama check matches kama build)"
