@@ -245,6 +245,96 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
+# --json — ONE envelope for every mode.
+#
+# The text forms above are four different shapes (`L:C kind name`, `path:L:C`, `key=value`, tab-separated
+# rows) plus six magic empties. That is fine for a human with grep and hostile to a parser, so --json is
+# the machine format: same envelope every time, `results` always an array, `[]` where the text says "no
+# definition". Everything above this line is the regression proof that adding it changed no text output.
+echo "check-query: --json envelope"
+JQ_FIXTURE="$ROOT/tests/query/shapes.kama"
+# mode name : flags. Every mode must be here — a new one without a --json arm would emit no `results`.
+for spec in \
+    "symbols:--symbols" \
+    "search:--search Point" \
+    "def:--def 17:20" \
+    "type:--type 6:11" \
+    "refs:--refs 6:11" \
+    "complete:--complete 24:5" \
+    "sighelp:--sighelp 17:20" \
+    "coverage:--coverage" \
+    "diagnostics:--diagnostics" \
+; do
+    mode=${spec%%:*}
+    flags=${spec#*:}
+    # shellcheck disable=SC2086
+    out=$("$KAMA" query "$JQ_FIXTURE" $flags --json 2>/dev/null || true)
+    ok=1
+    printf '%s' "$out" | grep -qF '"schema":1'        || ok=0
+    printf '%s' "$out" | grep -qF "\"mode\":\"$mode\"" || ok=0
+    printf '%s' "$out" | grep -qF '"results":'        || ok=0
+    # Exactly one line: the envelope is a record, so a pipeline can read it line by line.
+    [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] || ok=0
+    if [ "$ok" = 1 ]; then
+        echo "  ok: --json $mode carries schema+mode+results on one line"
+    else
+        echo "  FAIL: --json $mode envelope wrong, got: $out" >&2
+        fail=1
+    fi
+done
+
+# A miss is an EMPTY ARRAY, never one of the text form's magic strings. This is the whole reason a caller
+# can skip a per-mode parser, so it is asserted rather than assumed.
+for spec in "def:--def 1:0" "type:--type 1:0" "sighelp:--sighelp 1:0" "search:--search Zzzz"; do
+    mode=${spec%%:*}; flags=${spec#*:}
+    # shellcheck disable=SC2086
+    out=$("$KAMA" query "$JQ_FIXTURE" $flags --json 2>/dev/null || true)
+    if printf '%s' "$out" | grep -qF '"results":[]' &&
+       ! printf '%s' "$out" | grep -qE 'no (definition|type|signature|symbols)'; then
+        echo "  ok: --json $mode reports a miss as [] (not a magic string)"
+    else
+        echo "  FAIL: --json $mode should report a miss as [], got: $out" >&2
+        fail=1
+    fi
+done
+
+# `check --json` puts the verdict in the document AND keeps the exit code, so neither a script reading
+# stdout nor one testing `$?` has to change when --json is added.
+cjbad="$tmp/checkjson.kama"
+printf 'fn int32 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$cjbad"
+out=$("$KAMA" check "$cjbad" --json 2>/dev/null || true)
+rc=0; "$KAMA" check "$cjbad" --json >/dev/null 2>&1 || rc=$?
+if printf '%s' "$out" | grep -qF '"ok":false' && [ "$rc" != 0 ]; then
+    echo "  ok: check --json reports ok:false AND still exits non-zero"
+else
+    echo "  FAIL: check --json verdict/exit wrong (rc=$rc): $out" >&2
+    fail=1
+fi
+out=$("$KAMA" check "$JQ_FIXTURE" --json 2>/dev/null || true)
+if printf '%s' "$out" | grep -qF '"ok":true'; then
+    echo "  ok: check --json reports ok:true on a clean file"
+else
+    echo "  FAIL: check --json should report ok:true, got: $out" >&2
+    fail=1
+fi
+
+# Real parseability, not just the shape. Skipped rather than failed where python3 is absent, so the guard
+# stays runnable on a bare box — the grep assertions above still hold the line there.
+if command -v python3 >/dev/null 2>&1; then
+    pfail=0
+    for spec in "--symbols" "--search Point" "--complete 24:5" "--coverage" "--diagnostics"; do
+        # shellcheck disable=SC2086
+        if ! "$KAMA" query "$JQ_FIXTURE" $spec --json 2>/dev/null | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+            echo "  FAIL: --json $spec is not valid JSON" >&2
+            pfail=1; fail=1
+        fi
+    done
+    [ "$pfail" = 0 ] && echo "  ok: every --json mode parses as valid JSON"
+else
+    echo "  skip: python3 absent — JSON parsed only by shape"
+fi
+
+# ---------------------------------------------------------------------------------------------------
 # M3.5 — DECLARED project scope (`sources` / `packages` in kama.json).
 #
 # tests/query/mono/ is a NESTED monorepo. The root declares `"projects": ["libs/*", "group"]`; `group`

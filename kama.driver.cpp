@@ -60,6 +60,7 @@
 #include "kama.cemit.h"
 #include "kama.prelude.h"   // KAMA_PRELUDE_SRC + KAMA_PRELUDE_MODULES (embedded built-in kama)
 #include "kama.lsp.h"       // ParseResult/parseForQuery + runLspServer (the `kama lsp` server)
+#include "kama.json.h"      // Json + serialize, for `--json` output (shared with the LSP's framing)
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -3920,6 +3921,73 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     return 0;
 }
 
+// ------------------------------------------------------------------------------------------------
+// `--json` output for `kama query` / `kama check`.
+//
+// The TEXT forms are deliberately unchanged and deliberately varied — `L:C kind name`, `path:L:C`,
+// `key=value`, tab-separated completion rows — because each suits its own question when a human greps
+// it, and 200+ assertions pin them. What a MACHINE needs is not those four shapes harmonized, but one
+// format it can parse without knowing which mode produced it. That is this.
+//
+// Every response is the same envelope, so a caller can dispatch on `mode` and read `results` without a
+// per-mode parser, and an empty result is `[]` rather than one of the magic strings the text form uses
+// ("no definition", "no type", "no references", "no signature", "no symbols", "no diagnostics"):
+//
+//   {"schema":1,"mode":"search","file":"src/app.kama","results":[…]}
+//
+// `schema` is a version, not decoration: it is the promise a consumer can pin to, so adding a field is
+// safe and changing the shape of one is not. Bump it when an existing field changes meaning.
+// `results` is deliberately NOT seeded here: members keep insertion order, so seeding it would push every
+// mode-specific key (`query`, `context`, `ok`) after the payload. Each arm sets it last. A mode that
+// forgot would emit no `results` at all, which is why check-query.sh asserts the key on every one.
+Json jsonEnvelope(const char* mode, const std::string& file)
+{
+    Json j = Json::object();
+    j.set("schema", 1);
+    j.set("mode", mode);
+    j.set("file", file);
+    return j;
+}
+
+// One printed line, so every `--json` exit goes through the same place. Trailing newline: the output is
+// a line-oriented record as far as a shell pipeline is concerned.
+int jsonPrint(const Json& j) { printf("%s\n", serialize(j).c_str()); return 0; }
+
+// A source position, in the coordinates the caller asked in: 1-based line, 0-based column (kama.query.h).
+// No LSP conversion here — `kama query` is not the LSP, and silently shifting a line by one between the
+// text and JSON forms of the same query would be indefensible.
+Json jsonPos(int line, int column)
+{
+    Json j = Json::object();
+    j.set("line", line);
+    j.set("column", column);
+    return j;
+}
+
+Json jsonSymbol(const SymbolInfo& s, bool withUri)
+{
+    Json j = jsonPos(s.selectionRange.line, s.selectionRange.column);
+    if (withUri) j.set("uri", s.uri);
+    j.set("kind", symKindName(s.kind));
+    j.set("name", s.name);
+    if (!s.container.empty()) j.set("container", s.container);
+    return j;
+}
+
+Json jsonDiagnostic(const Diagnostic& d)
+{
+    Json j = Json::object();
+    j.set("file", d.file);
+    j.set("line", d.line);
+    j.set("column", d.column);          // Diagnostic's own convention: 0 = whole line / unknown
+    if (d.endLine)   j.set("endLine", d.endLine);
+    if (d.endColumn) j.set("endColumn", d.endColumn);
+    j.set("severity", diagSeverityName(d.severity));
+    if (!d.code.empty()) j.set("code", d.code);
+    j.set("message", d.message);
+    return j;
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -3932,13 +4000,14 @@ void usage()
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
-        "  kama check     <in.kama>...         analyze without emitting C or invoking a C compiler\n"
+        "  kama check     <in.kama>... [--json]   analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis. NOT a full\n"
         "                   type check: an expression type mismatch is caught by `kama build`, not here)\n"
-        "  kama query     <file> <mode>        ask the compiler what it resolved — the agent/editor interface\n"
-        "                  (--symbols | --def L:C | --type L:C | --refs L:C | --complete L:C | --sighelp L:C\n"
-        "                   | --coverage; add --project to widen from <file>'s imports to the whole package.\n"
-        "                   Coordinates are 1-based LINE, 0-based COLUMN)\n"
+        "  kama query     <file> <mode> [--json]  ask the compiler what it resolved — the agent/editor interface\n"
+        "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
+        "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
+        "                   imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
+        "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
         "  kama pkg install [<dir>] [--verify] resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
         "                                      (--verify: require + check registry-package signatures)\n"
@@ -4890,6 +4959,7 @@ int main(int argc, char** argv)
     bool        querySearchSet = false;    // --search was passed (an EMPTY needle is legal: list everything)
     bool        queryDiags = false;        // `kama query --diagnostics`: this file's analysis diagnostics
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
+    bool        jsonOut = false;           // --json: structured output for `query` and `check`
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
 
@@ -4923,6 +4993,7 @@ int main(int argc, char** argv)
         else if (a == "--search" && i + 1 < argc) { querySearch = argv[++i]; querySearchSet = true; }  // by NAME
         else if (a == "--diagnostics")              queryDiags = true;               // `kama query` diagnostics
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
+        else if (a == "--json")                     jsonOut = true;                  // structured output
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
         }
@@ -5077,16 +5148,26 @@ int main(int argc, char** argv)
         { Stopwatch sw(&timing().analyze); idx.analyze(units); }
         timingDump("check", input);
         const auto& diags = idx.diagnostics();
-        for (const auto& d : diags) {
-            const char* sev = d.severity == DiagSeverity::Error ? "error"
-                            : d.severity == DiagSeverity::Warning ? "warning" : "note";
-            fprintf(stderr, "%s:%d:%d: %s: %s\n",
-                    d.file.c_str(), d.line, d.column, sev, d.message.c_str());
-        }
         // Only an ERROR fails the check. A warning is advice — reporting it is the point, but failing on
         // it would mean a deprecation notice breaks every `kama check` in the tree.
         size_t errs = 0;
         for (const auto& d : diags) if (d.severity == DiagSeverity::Error) ++errs;
+        if (jsonOut) {
+            // Everything on STDOUT and nothing on stderr, so a caller can read one stream. `ok` is the
+            // verdict the exit code carries, restated so a consumer that captured only stdout still has
+            // it. The exit code is unchanged — a wrapper script must keep working when --json is added.
+            Json j = jsonEnvelope("check", input);
+            j.set("ok", errs == 0);
+            j.set("units", (int)units.size());
+            Json rs = Json::array();
+            for (const auto& d : diags) rs.push(jsonDiagnostic(d));
+            j.set("results", rs);
+            jsonPrint(j);
+            return errs ? 1 : 0;
+        }
+        for (const auto& d : diags)
+            fprintf(stderr, "%s:%d:%d: %s: %s\n",
+                    d.file.c_str(), d.line, d.column, diagSeverityName(d.severity), d.message.c_str());
         if (errs) {
             fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
                     input.c_str(), errs, errs == 1 ? "" : "s");
@@ -5169,7 +5250,14 @@ int main(int argc, char** argv)
         };
 
         if (querySymbols) {
-            for (const auto& s : idx.documentSymbols(queryUri))
+            auto syms = idx.documentSymbols(queryUri);
+            if (jsonOut) {
+                Json j = jsonEnvelope("symbols", queryUri), rs = Json::array();
+                for (const auto& s : syms) rs.push(jsonSymbol(s, /*withUri*/ false));
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
+            for (const auto& s : syms)
                 printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
                        symKindName(s.kind), s.name.c_str());
             return 0;
@@ -5184,14 +5272,20 @@ int main(int argc, char** argv)
             // business owning. No result cap — an editor wants a screenful, a script wants all of them.
             std::set<std::string> own;
             for (const auto& f : queryInputs) own.insert(absolutePath(f));
-            size_t hits = 0;
-            for (const auto& s : idx.workspaceSymbols(querySearch)) {
-                if (!own.count(absolutePath(s.uri))) continue;    // std, a dependency, or otherwise not ours
+            std::vector<SymbolInfo> hits;
+            for (const auto& s : idx.workspaceSymbols(querySearch))
+                if (own.count(absolutePath(s.uri))) hits.push_back(s);   // else std, a dep, or not ours
+            if (jsonOut) {
+                Json j = jsonEnvelope("search", queryUri), rs = Json::array();
+                j.set("query", querySearch);
+                for (const auto& s : hits) rs.push(jsonSymbol(s, /*withUri*/ true));
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
+            for (const auto& s : hits)
                 printf("%s:%d:%d %s %s\n", s.uri.c_str(), s.selectionRange.line, s.selectionRange.column,
                        symKindName(s.kind), s.name.c_str());
-                ++hits;
-            }
-            if (!hits) printf("no symbols\n");
+            if (hits.empty()) printf("no symbols\n");
             return 0;
         }
         if (queryDiags) {
@@ -5203,6 +5297,12 @@ int main(int argc, char** argv)
             // the C compiler. See the `check` arm above. Positions follow Diagnostic's own convention
             // (kama.diagnostic.h), NOT SrcRange's: column 0 means "whole line / unknown".
             auto ds = idx.diagnosticsFor(queryUri);
+            if (jsonOut) {
+                Json j = jsonEnvelope("diagnostics", queryUri), rs = Json::array();
+                for (const auto& d : ds) rs.push(jsonDiagnostic(d));
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             if (ds.empty()) { printf("no diagnostics\n"); return 0; }
             for (const auto& d : ds)
                 printf("%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
@@ -5213,6 +5313,16 @@ int main(int argc, char** argv)
             int l, c;
             if (!parseLC(queryDef, l, c)) { fprintf(stderr, "kama query: --def wants L:C\n"); return 2; }
             Location loc = idx.definitionAt(queryUri, l, c);
+            if (jsonOut) {
+                Json j = jsonEnvelope("def", queryUri), rs = Json::array();
+                if (loc.range.line != 0) {
+                    Json e = jsonPos(loc.range.line, loc.range.column);
+                    e.set("uri", loc.uri);
+                    rs.push(e);
+                }
+                j.set("results", rs);       // 0 or 1 element — an array, so "not found" needs no special case
+                return jsonPrint(j);
+            }
             if (loc.range.line == 0) { printf("no definition\n"); return 0; }
             printf("%s:%d:%d\n", loc.uri.c_str(), loc.range.line, loc.range.column);
             return 0;
@@ -5221,6 +5331,15 @@ int main(int argc, char** argv)
             int l, c;
             if (!parseLC(queryType, l, c)) { fprintf(stderr, "kama query: --type wants L:C\n"); return 2; }
             std::string t = idx.typeAtPosition(queryUri, l, c);
+            if (jsonOut) {
+                // The facade hands back one rendered string ("value Point", "method Box.get"). It is NOT
+                // split into kind + name here: that would be this layer guessing at a boundary the facade
+                // did not draw, and a name can contain a space it would get wrong.
+                Json j = jsonEnvelope("type", queryUri), rs = Json::array();
+                if (!t.empty()) { Json e = Json::object(); e.set("text", t); rs.push(e); }
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             printf("%s\n", t.empty() ? "no type" : t.c_str());
             return 0;
         }
@@ -5228,6 +5347,16 @@ int main(int argc, char** argv)
             int l, c;
             if (!parseLC(queryRefs, l, c)) { fprintf(stderr, "kama query: --refs wants L:C\n"); return 2; }
             auto refs = idx.referencesAt(queryUri, l, c, /*includeDecl*/ true);
+            if (jsonOut) {
+                Json j = jsonEnvelope("refs", queryUri), rs = Json::array();
+                for (const auto& r : refs) {
+                    Json e = jsonPos(r.range.line, r.range.column);
+                    e.set("uri", r.uri);
+                    rs.push(e);
+                }
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             if (refs.empty()) { printf("no references\n"); return 0; }
             for (const auto& r : refs)
                 printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
@@ -5239,6 +5368,17 @@ int main(int argc, char** argv)
             std::ifstream in(input, std::ios::binary);
             if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (jsonOut) {
+                Json j = jsonEnvelope("coverage", queryUri), rs = Json::array();
+                for (const auto& id : sourceIdentifiers(text)) {
+                    Json e = jsonPos(id.line, id.column);
+                    e.set("name", id.name);
+                    e.set("status", idx.coverageAt(queryUri, id.line, id.column));
+                    rs.push(e);
+                }
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             for (const auto& id : sourceIdentifiers(text))
                 printf("%d:%d %s %s\n", id.line, id.column, id.name.c_str(),
                        idx.coverageAt(queryUri, id.line, id.column).c_str());
@@ -5254,23 +5394,53 @@ int main(int argc, char** argv)
             if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             CompletionContext cc = completionContextAt(text, l, c);
+            // The import triggers answer from the module resolver, not the index — a module the file does
+            // not import yet is by definition absent from it.
+            struct Row { const char* kind; std::string label, detail; };
+            std::vector<Row> rows;
+            if (cc.trigger == CompletionTrigger::ImportPath) {
+                for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
+                    rows.push_back({"module", m, ""});
+            } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
+                for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
+                    rows.push_back({"type", sym, cc.receiver});
+            } else {
+                for (const auto& it : idx.completionsAt(queryUri, cc))
+                    rows.push_back({completionKindName(it.kind), it.label, it.detail});
+            }
+            if (jsonOut) {
+                // The text form's `key=value` header becomes a `context` object: it is not a result, it is
+                // what the cursor was found to be IN, and a caller checking `trigger` should not have to
+                // parse a line above the rows. `filled` stays a list rather than the text form's CSV.
+                Json j = jsonEnvelope("complete", queryUri);
+                Json ctx = Json::object();
+                ctx.set("trigger", completionTriggerName(cc.trigger));
+                ctx.set("receiver", cc.receiver);
+                ctx.set("callee", cc.callee);
+                ctx.set("prefix", cc.prefix);
+                ctx.set("activeParam", cc.activeParam);
+                Json fl = Json::array();
+                for (const auto& f : cc.filled) fl.push(f);
+                ctx.set("filled", fl);
+                j.set("context", ctx);
+                Json rs = Json::array();
+                for (const auto& r : rows) {
+                    Json e = Json::object();
+                    e.set("kind", r.kind);
+                    e.set("label", r.label);
+                    e.set("detail", r.detail);
+                    rs.push(e);
+                }
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             std::string filled;
             for (size_t i = 0; i < cc.filled.size(); ++i) filled += (i ? "," : "") + cc.filled[i];
             printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
                    completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
                    cc.prefix.c_str(), cc.activeParam, filled.c_str());
-            // The import triggers answer from the module resolver, not the index — a module the file does
-            // not import yet is by definition absent from it.
-            if (cc.trigger == CompletionTrigger::ImportPath) {
-                for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
-                    printf("module\t%s\t\n", m.c_str());
-            } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
-                for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
-                    printf("type\t%s\t%s\n", sym.c_str(), cc.receiver.c_str());
-            } else {
-                for (const auto& it : idx.completionsAt(queryUri, cc))
-                    printf("%s\t%s\t%s\n", completionKindName(it.kind), it.label.c_str(), it.detail.c_str());
-            }
+            for (const auto& r : rows)
+                printf("%s\t%s\t%s\n", r.kind, r.label.c_str(), r.detail.c_str());
             return 0;
         }
         if (!querySigHelp.empty()) {
@@ -5280,6 +5450,17 @@ int main(int argc, char** argv)
             if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
             std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             SignatureHelp h = idx.signatureAt(queryUri, completionContextAt(text, l, c));
+            if (jsonOut) {
+                Json j = jsonEnvelope("sighelp", queryUri), rs = Json::array();
+                if (!h.label.empty()) {
+                    Json e = Json::object();
+                    e.set("label", h.label);
+                    e.set("activeParam", h.activeParam);
+                    rs.push(e);
+                }
+                j.set("results", rs);
+                return jsonPrint(j);
+            }
             if (h.label.empty()) { printf("no signature\n"); return 0; }
             printf("sig=%s active=%d\n", h.label.c_str(), h.activeParam);
             return 0;
