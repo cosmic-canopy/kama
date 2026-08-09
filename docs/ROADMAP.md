@@ -541,6 +541,16 @@ rather than here, so there is one number to keep current. Forward work:
   from; and `kama fmt --check` is one more guard script. It is also the migration tool for mandatory
   braces (§1) — the rewrite is mechanical, and a formatter that can insert a brace can perform it.
 
+- **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
+  costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,
+  and reduces the whole call to six instructions with no call at all. At `-O0` the indirection survives, so
+  a debug build pays for a fat pointer whose target the compiler knew when it wrote it one line earlier.
+  kama already does the analogous analysis for inheritance — `buildVtables` keeps a whole-program override
+  index so a never-overridden slot lowers to a direct call ([kama.cemit.cpp](../kama.cemit.cpp), guarded by
+  `tools/check-ecs-zero-dispatch.sh`). The contract-value case needs less: a local "this fat pointer's
+  `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
+  already optimal, and this only buys debug-build speed.
+
 - **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** Two separate
   irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,
   `kama.cemit.*`, `kama.driver.cpp`, `kama_runtime.h`) with everything else; they belong under `src/`, with
