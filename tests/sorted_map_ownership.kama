@@ -35,7 +35,7 @@ fn int32 main() {
     DynamicArray<string> ks = sm.keys();
     string prev = ""; bool sorted = true; int32 cnt = 0;
     foreach (string k in ks) {
-        Ordering o = cmp::<string>(a: k, b: prev);   // explicit: a foreach binding is not inferable
+        Ordering o = cmp(a: k, b: prev);
         bool gt = match (o) { case Greater: true; case Less: false; case Equal: false; };
         if (!gt) { sorted = false; }
         prev = give k; cnt = cnt + 1;

@@ -1,0 +1,38 @@
+// A foreach BINDING is a locally-typed value, so passing one to a generic function must infer its type
+// argument — exactly as passing a local does. It did not: the generics scan recorded a local declaration
+// and a parameter, but never the loop variable, so `toString(x: v)` inside a `foreach` demanded an
+// explicit `::<int32>` while the identical call one line outside the loop did not.
+//
+// `toString` is the prelude's own `fn string toString<T: Format>(ref T x)` — this is a general hole in
+// inference, not anything to do with contracts. It surfaced while rewriting a fixture for the
+// contract-scope rule, which is the only reason anyone noticed. Returns 42.
+import std::collections::{DynamicArray};
+
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray::<int32>.empty();
+    xs.add(item: 7); xs.add(item: 9);
+
+    int32 seen = 0;
+    foreach (int32 v in xs) {
+        if (!toString(x: v).equals(other: "7") && !toString(x: v).equals(other: "9")) { return 1; }
+        seen = seen + 1;
+    }
+    if (seen != 2) { return 2; }
+
+    // and the same for a bound whose argument is the loop variable
+    DynamicArray<string> ws = DynamicArray::<string>.empty();
+    ws.add(item: "a"); ws.add(item: "b");
+    string prev = "";
+    bool ordered = true;
+    foreach (string w in ws) {
+        Ordering o = cmp(a: w, b: prev);        // no turbofish
+        bool gt = match (o) { case Greater: true; case Less: false; case Equal: false; };
+        if (!gt) { ordered = false; }
+        prev = give w;
+    }
+    if (!ordered) { return 3; }
+
+    return 42;
+}

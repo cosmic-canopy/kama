@@ -17,6 +17,7 @@ Build
   clean             make clean
 
 Test — each task builds first, so it can never run against a stale compiler
+  fixture <name>…   build + run JUST these tests/<name>.kama against their .expect  ← ITERATE WITH THIS
   test              native fixture suite            (host)
   test san          ASan/UBSan fixture suite        (container — see below)
   test wasm         wasm/node fixture suite         (container)
@@ -30,6 +31,20 @@ Site & packaging
   serve [port] [dir]  build + serve the site over examples/httpd (default :8080, _site/)
   ext-package       package the VS Code extension (.vsix), no publish
   help              this help
+
+The full suite is the GATE, not the inner loop. It stays mandatory — nothing is believed or committed
+without it — but `./dev test` is minutes and `test san`/`test wasm` are longer still, so running one after
+every experiment is where a session's wall-clock goes. Match the rung to the question you are asking:
+
+  while iterating   `./dev fixture a b c`   seconds — "do the files I just touched still pass?"
+  before believing  `./dev test`            once per logical change, not per edit
+  before committing `./dev test san|wasm`   both, once — they catch what native cannot
+  when relevant     `./dev check`           grammar, LSP, docs, packaging
+  the whole gate    `./dev matrix`
+
+The trap this replaces: with no way to run three fixtures, the only honest answer to "did I break
+anything?" was the whole suite — so it got run dozens of times in one session, mostly to learn that one
+fixture still failed.
 
 If the compiler suddenly SEGFAULTS on fixtures that passed a moment ago, run `./dev rebuild`. Header
 dependencies are declared, but a `git stash`/`git checkout` cycle can restore sources without make
@@ -56,6 +71,32 @@ case "$task" in
       container) build_container ;;
       *) echo "dev build: expected 'host' or 'container'" >&2; exit 2 ;;
     esac ;;
+
+  fixture)
+    # The missing rung between "one build" and "the whole suite". Same .expect contract as run_tests.sh:
+    # the file's single line is the expected process exit code.
+    [ $# -gt 0 ] || { echo "dev fixture: name a fixture (e.g. ./dev fixture comparable sort_stable)" >&2; exit 2; }
+    build_host >/dev/null
+    ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)   # kama-bin.sh is SOURCED and needs $ROOT
+    . "$ROOT/tools/kama-bin.sh"
+    tmp=$(mktemp -d); rc=0
+    for n in "$@"; do
+      n=${n%.kama}; n=${n#tests/}
+      src="tests/$n.kama"; exp="tests/$n.expect"
+      [ -f "$src" ] || { echo "MISSING $n (no $src)"; rc=1; continue; }
+      if ! "$KAMA" build "$src" -o "$tmp/$n" >"$tmp/$n.err" 2>&1; then
+        echo "FAIL $n (build)"; sed 's/^/    /' "$tmp/$n.err" | head -5; rc=1; continue
+      fi
+      # a fixture's exit code IS its result, so it must not trip `set -e` — hence the `if`
+      if "$tmp/$n" >/dev/null 2>&1; then got=0; else got=$?; fi
+      if [ -f "$exp" ]; then
+        want=$(cat "$exp")
+        if [ "$got" = "$want" ]; then echo "PASS $n ($got)"; else echo "FAIL $n (got $got, want $want)"; rc=1; fi
+      else
+        echo "BUILT $n (no .expect; exit $got)"
+      fi
+    done
+    rm -rf "$tmp"; exit $rc ;;
 
   test)
     case "${1:-native}" in

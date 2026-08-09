@@ -7232,6 +7232,11 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanStmtForGenerics(fr->body, localTys);
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         scanExprForGenerics(fe->expression, localTys);
+        // A foreach BINDING is a locally-typed value exactly like the declaration arm above, and this is
+        // the table generic inference reads. Without it, passing a loop variable to ANY generic function
+        // fails to infer — `toString(x: v)` inside a `foreach` demanded an explicit `::<int32>`, while the
+        // identical call one line outside the loop did not.
+        if (fe->type && fe->name && fe->name->value) localTys[*fe->name->value] = fe->type;
         scanStmtForGenerics(fe->body, localTys);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
