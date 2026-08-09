@@ -566,44 +566,61 @@ rather than here, so there is one number to keep current. Forward work:
   11 bench languages have stdlib JSON. **v1:** a by-value tree round-trip across the stdlib-JSON six —
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
-- **Cache the toolchain front end (prelude + `lib/`) — the largest single compile-time win available.**
-  Every `kama` invocation re-parses and re-analyzes the prelude *and every imported `std::` module tree*,
-  from source, from scratch. Measured on an M-series host, `kama transpile` wall-clock for a fixture whose
-  body is `fn int main() { return 0; }`:
+- **Compile-time / suite-time — the measured breakdown.** ► **NEXT campaign** (design of record:
+  [design/build-perf.md](design/build-perf.md), delete it when the work ships). Re-measured 2026-08-09
+  on an M-series host, 10 cores, and it **corrected an earlier claim in this file** that "the front end,
+  not the C toolchain, is the compile cost" — that compared `kama transpile` (which folds to ONE C file)
+  against clang on that one file, which is not what `kama build` does.
 
-  | what it imports | wall |
-  |---|---|
-  | nothing (prelude only) | 0.05 s |
-  | `std::ascii` (74 lines) | 0.05 s |
-  | `std::collections::{Map}`, **unused** | 0.18 s |
-  | + `std::fmt` + `std::math`, all **unused** | 0.33 s |
+  The 187 s native leg:
 
-  So the floor is paid per process and the rest scales with the size of the module trees an import pulls
-  in — whether or not a single symbol from them is used. For calibration, `clang` compiling and linking
-  the *emitted C* for a heavy fixture is **0.08 s**: the front end, not the C toolchain, is the compile
-  cost. (The test harness's own comment claiming clang dominates is stale.)
+  | phase | wall | what dominates it |
+  |---|---|---|
+  | `tools/check-*.sh` guards, run **serially** before the fan-out | **~73 s** | `check-query.sh` 36 s, `check-packages.sh` 11 s |
+  | single-file fixtures (597, parallel) | 82 s | front end 36 % / clang 64 % |
+  | analysis agreement (915 `kama check`) | 20 s | pure front end |
+  | multi-file + xfail | 12 s | |
 
-  **The shape is a precompiled-header / serialized-symbol-table snapshot, NOT a prebuilt object.** kama is
-  a whole-program monomorphizing compiler and `lib/` is overwhelmingly generic templates plus
-  `static inline` bodies, so there is almost nothing to compile ahead of time — `Map<string,int32>` does
-  not exist until a program instantiates it. What *is* invariant is the post-parse, post-collect
-  declaration state. Cache that, keyed by toolchain version + content hash + **the flag universe**, and
-  reload it instead of re-deriving it. Prior art: Clang PCH, Rust `rmeta`, Swift `.swiftmodule`.
+  Four levers, cheapest first. The first two are harness work with no compiler change:
 
-  It pays three ways at once, which is why it outranks the other perf items: **user projects** (a project
-  pins a toolchain and its `lib/` never changes during development), **the LSP** (this is the fixed
-  per-keystroke analysis floor, §10 — a pre-baked or forkable `CEmitter` is the in-process rung of the
-  same fix), and **this repo's own test suite** (~1,900 compiler processes per leg, each paying it).
+  1. **The guards run TWICE in `./dev matrix`** — 23 of them inline in `run_tests.sh`, then all 24 again
+     via `./dev check`'s glob. ~73 s of pure duplication in the pre-commit gate.
+  2. **They run serially, on one core, while nine idle.** Parallelizing bounds the block at its slowest
+     member (`check-query.sh`) instead of their sum.
+  3. **Cache the front end** (prelude + `lib/`). Every invocation re-parses and re-analyzes the prelude
+     *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): for a `std`-heavy fixture, parse
+     ≈ 2/3, analyze ≈ 1/3. This is the broadest lever — it is ~100 % of the 20 s agreement phase, 36 % of
+     the 82 s fixture phase, and nearly all of `check-query.sh`'s 36 s, which is **233 sequential
+     analyses of the same one file**. It is also the only item here that helps the **LSP** (the fixed
+     per-keystroke floor, §10) and **user projects**.
 
-  Two things make it real work rather than a tweak. `pruneInactiveDecls` rewrites units **in place** per
-  flag configuration, so the cached state must be the pre-prune, pre-instantiation tables and the key must
-  carry the flag universe. And a stale cache must be impossible to hit, not merely unlikely — content-hash
-  the inputs rather than trusting an mtime.
+     Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
+     whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so
+     `Map<string,int32>` does not exist until a program instantiates it. Cache the post-parse,
+     post-collect declaration state, keyed by toolchain version + content hash + **the flag universe**.
+     Prior art: Clang PCH, Rust `rmeta`, Swift `.swiftmodule`. Two things make it real work:
+     `pruneInactiveDecls` rewrites units **in place** per flag configuration, so the cached state must be
+     the pre-prune, pre-instantiation tables; and a stale cache must be *impossible* to hit — content-hash
+     the inputs, never trust an mtime. The cheaper rung that needs the same "resettable emitter" work is a
+     **batch mode** (N programs in one process); it does nothing for user projects but would collapse the
+     suite's ~1,900 processes per leg.
 
-  A cheaper intermediate rung worth pricing first, because it needs the same "resettable emitter" work and
-  nothing else: a **batch mode** (`kama` compiling N independent programs in one process, reusing the
-  analyzed front end). That does nothing for user projects but would collapse the suite's process count by
-  two orders of magnitude.
+  4. **Object caching for the clang 64 %.** `kama build` emits **one `.c` per unit** and hands them all to
+     a single clang invocation with no `-c`, so no object files exist and nothing can be reused. Across 60
+     random fixtures: **455 emitted TUs, only 49 distinct — 89 % byte-identical duplicates** (each
+     `std::collections` module emitted identically 23 times). Compiling only the distinct ones is
+     **16.2 s → 3.3 s**. Unlocking it means compile-to-object-then-link (the machinery already exists in
+     the `outStatic` path) plus a content-addressed `.o` cache — which also gives **user projects
+     incremental rebuilds**, today impossible. ⚠️ Under `-g`, identical `.c` at different paths produce
+     *different* `.o` (debug info embeds the path); `-fdebug-prefix-map` makes them byte-identical again,
+     and as a bonus makes builds reproducible. Note per-TU compilation is *slower* cold (455 separate
+     compiles beat one big invocation only once the cache hits), so the cache is part of the change, not
+     a follow-on.
+
+  **Deliberately NOT taken: folding a build to a single TU.** It is the biggest raw number (24 TUs 0.52 s
+  → 1 TU 0.08 s, same binary) but it changes what kama *emits*, and multi-TU emission is load-bearing —
+  the logging campaign fixed a whole multi-TU `static` hazard class (`adfffce`) that a single-TU suite
+  would stop exercising.
 
 ## 10. Tooling / distribution (deferred)
 
