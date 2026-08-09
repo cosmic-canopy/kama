@@ -22,6 +22,26 @@ if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; f
 fail=0
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
+# runq <flags>: `kama query $FIXTURE <flags>`, ONCE per distinct (fixture, flags) pair.
+#
+# This guard is the most expensive one in the tree by a wide margin, and after the guards were
+# parallelized it IS the guard block — everything else finishes inside its runtime. The reason is that
+# every assertion below used to be its own process, and every process re-parses the fixture's entire
+# transitive `std` import closure before it can answer anything: ~210ms for the import-heavy fixtures,
+# against ~1ms to actually answer the question off the built index.
+#
+# The assertions ask far fewer questions than they make claims — 233 assertions, 131 distinct queries,
+# because several `expect`s (and the `reject`s paired with them) interrogate one output. So memoize it.
+# Keyed on fixture + flags; the cksum keeps the filename short and the sanitized prefix keeps it legible.
+# Failures are cached too, deliberately: the output IS the result, exit status was already discarded.
+qcache=$(mktemp -d); trap 'rm -rf "$tmp" "$qcache"' EXIT
+runq() {
+    _f="$qcache/$(printf '%s|%s' "$FIXTURE" "$1" | cksum | tr -cd '0-9')"
+    # shellcheck disable=SC2086
+    [ -f "$_f" ] || "$KAMA" query "$FIXTURE" $1 >"$_f" 2>&1 || true
+    cat "$_f"
+}
+
 # expect <flags...> -- <substring>: run `kama query $FIXTURE <flags>` and assert the output contains
 # <substring>. $FIXTURE is reassigned partway down for the M3.4 block — the helpers read it at call time.
 expect() {
@@ -32,8 +52,7 @@ expect() {
         if [ "$a" = "--" ]; then seen_sep=1; continue; fi
         if [ "$seen_sep" = 1 ]; then want="$a"; else args="$args $a"; fi
     done
-    # shellcheck disable=SC2086
-    out=$("$KAMA" query "$FIXTURE" $args 2>&1 || true)
+    out=$(runq "$args")
     if printf '%s\n' "$out" | grep -qF -- "$want"; then
         echo "  ok: query$args ~ '$want'"
     else
@@ -50,8 +69,7 @@ reject() {
         if [ "$a" = "--" ]; then seen_sep=1; continue; fi
         if [ "$seen_sep" = 1 ]; then want="$a"; else args="$args $a"; fi
     done
-    # shellcheck disable=SC2086
-    out=$("$KAMA" query "$FIXTURE" $args 2>&1 || true)
+    out=$(runq "$args")
     if printf '%s\n' "$out" | grep -qF -- "$want"; then
         echo "  FAIL: query$args must NOT contain '$want', got:" >&2
         printf '%s\n' "$out" | sed 's/^/      /' >&2
