@@ -177,6 +177,74 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
+# --search NAME — the BY-NAME entry point.
+#
+# Every other mode takes an L:C, which suits a caller holding a caret and nobody else. A script or an
+# agent knows what a thing is CALLED, so without this it has to run --symbols, parse it, and come back —
+# and across files it cannot get there at all. Scope is the files asked about, exactly as --refs: the one
+# named file, or the whole package under --project.
+FIXTURE="$ROOT/tests/query/ws/app.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+
+echo "check-query: --search (by name, no cursor)"
+# app.kama USES Widget but does not declare it, so the unscoped search must not reach the declaring file.
+reject --search Widget -- "widget.kama"
+# ... and with --project it does — the capability that has no L:C equivalent, since you cannot point a
+# cursor at a file you have not opened.
+expect --project --search Widget -- "widget.kama:12:11 value Widget"
+expect --project --search Widget -- "widget.kama:15:16 ctor Widget.of"
+# Matching is case-insensitive and on a SUBSTRING, so a half-remembered name still lands.
+expect --project --search widget -- "widget.kama:12:11 value Widget"
+expect --project --search Widg   -- "widget.kama:12:11 value Widget"
+# It reaches every kind, not just types.
+expect --project --search defaultSize -- "function defaultSize"
+# A miss says so rather than printing nothing, so a caller can tell "no match" from "command broke".
+expect --search Zzzz -- "no symbols"
+# The package boundary holds: std is loaded in the index and must never be offered as the user's own.
+reject --project --search string -- "lib/std"
+# An EMPTY needle lists everything in scope — the whole-package outline that --symbols cannot give.
+# (Tested directly: the expect helper word-splits its args, so an empty one cannot survive it.)
+if "$KAMA" query "$FIXTURE" --search "" --project 2>&1 | grep -qF "widget.kama:12:11 value Widget" &&
+   "$KAMA" query "$FIXTURE" --search "" --project 2>&1 | grep -qF "app.kama"; then
+    echo "  ok: --search '' lists every symbol in the package"
+else
+    echo "  FAIL: --search '' should list the whole package" >&2
+    fail=1
+fi
+
+echo "check-query: --diagnostics"
+# Same list `kama check` prints, on stdout, without a pass/fail exit.
+expect --diagnostics -- "no diagnostics"
+dbad="$tmp/diagbad.kama"
+printf 'fn int32 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$dbad"
+if "$KAMA" query "$dbad" --diagnostics 2>/dev/null | grep -q "error: call to unknown function"; then
+    echo "  ok: --diagnostics reports an analysis error on stdout"
+else
+    echo "  FAIL: --diagnostics missed the unknown-function error" >&2
+    fail=1
+fi
+# `query` reports, `check` judges: an error must NOT turn into a non-zero exit here.
+if "$KAMA" query "$dbad" --diagnostics >/dev/null 2>&1; then
+    echo "  ok: --diagnostics exits 0 even with errors (query reports, check judges)"
+else
+    echo "  FAIL: --diagnostics must not fail the process on a diagnostic" >&2
+    fail=1
+fi
+# THE CAVEAT GUARD. `kama check` runs name/argument/ownership analysis, NOT a full type check: an
+# expression type mismatch is caught by the C compiler during `kama build`, so `check` says OK. That is
+# documented in usage(), in docs/agents.md and in AGENTS.md. If this ever starts failing, the fix is to
+# DELETE the caveat from all three, not to weaken this assertion.
+tbad="$tmp/typebad.kama"
+printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$tbad"
+if "$KAMA" check "$tbad" >/dev/null 2>&1; then
+    echo "  ok: \`check\` still passes an expression type error (the documented caveat holds)"
+else
+    echo "  NOTE: \`check\` now catches expression type errors — remove the caveat from usage()," >&2
+    echo "        docs/agents.md and agents/AGENTS.md, then delete this assertion." >&2
+    fail=1
+fi
+
+# ---------------------------------------------------------------------------------------------------
 # M3.5 — DECLARED project scope (`sources` / `packages` in kama.json).
 #
 # tests/query/mono/ is a NESTED monorepo. The root declares `"projects": ["libs/*", "group"]`; `group`

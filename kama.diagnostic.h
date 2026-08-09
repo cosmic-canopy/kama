@@ -13,6 +13,19 @@
 
 enum class DiagSeverity { Error, Warning, Information, Hint };
 
+// Stable lowercase tag for text/JSON output, mirroring symKindName (kama.query.h). One spelling, so
+// `kama check`, `kama query --diagnostics` and the JSON encoder cannot drift apart.
+inline const char* diagSeverityName(DiagSeverity s)
+{
+    switch (s) {
+        case DiagSeverity::Error:       return "error";
+        case DiagSeverity::Warning:     return "warning";
+        case DiagSeverity::Information: return "note";
+        case DiagSeverity::Hint:        return "hint";
+    }
+    return "error";
+}
+
 struct Diagnostic {
     int          line      = 0;   // 1-based start line
     int          column    = 0;   // 1-based start column (0 = whole line / unknown)

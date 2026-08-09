@@ -4886,6 +4886,9 @@ int main(int argc, char** argv)
     std::string queryComplete;             // `kama query --complete L:C`: completion candidates at a cursor
     std::string querySigHelp;              // `kama query --sighelp L:C`: signature help at a cursor
     bool        queryCoverage = false;     // `kama query --coverage`: index coverage for every identifier
+    std::string querySearch;               // `kama query --search NAME`: find symbols by NAME, not by cursor
+    bool        querySearchSet = false;    // --search was passed (an EMPTY needle is legal: list everything)
+    bool        queryDiags = false;        // `kama query --diagnostics`: this file's analysis diagnostics
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
@@ -4917,6 +4920,8 @@ int main(int argc, char** argv)
         else if (a == "--complete" && i + 1 < argc) queryComplete = argv[++i];       // `kama query` completion L:C
         else if (a == "--sighelp" && i + 1 < argc)  querySigHelp = argv[++i];        // `kama query` signature help L:C
         else if (a == "--coverage")                 queryCoverage = true;            // `kama query` index coverage
+        else if (a == "--search" && i + 1 < argc) { querySearch = argv[++i]; querySearchSet = true; }  // by NAME
+        else if (a == "--diagnostics")              queryDiags = true;               // `kama query` diagnostics
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
@@ -5097,7 +5102,15 @@ int main(int argc, char** argv)
         // Debug harness for the LSP query index (M0 T4/T5): runs analyze() and dumps the requested query
         // over the resulting index, in deterministic text. Mirrors `check`'s front-end-as-library setup;
         // the `kama lsp` server (M1) will call the same CEmitter query methods and map them to protocol JSON.
+        // Coordinates in and out are 1-based LINE, 0-based COLUMN (kama.query.h).
         //   kama query <file> --symbols      document outline (one `L:C kind name` line per user decl)
+        //   kama query <file> --search NAME  find symbols whose name CONTAINS NAME, case-insensitively —
+        //                                    the by-name entry point, for a caller that has no cursor. One
+        //                                    `path:L:C kind name` line each; an empty NAME lists every
+        //                                    symbol in scope. Scope is the file, or the package under
+        //                                    --project.
+        //   kama query <file> --diagnostics  this file's analysis diagnostics, as `kama check` spells them
+        //                                    but on stdout and without a pass/fail exit
         //   kama query <file> --def  L:C     go-to-definition at 1-based line:col
         //   kama query <file> --type L:C     hover (kind + name) at 1-based line:col
         //   kama query <file> --refs L:C     find-references (decl + every use) at 1-based line:col
@@ -5159,6 +5172,41 @@ int main(int argc, char** argv)
             for (const auto& s : idx.documentSymbols(queryUri))
                 printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
                        symKindName(s.kind), s.name.c_str());
+            return 0;
+        }
+        if (querySearchSet) {
+            // Find a symbol by NAME rather than by cursor. Every other mode wants an L:C, which suits an
+            // editor (it has a caret) and not a caller that only knows what something is called — which
+            // otherwise has to run --symbols, parse it, and come back. Scope is the files asked about: the
+            // named file alone, or the whole package under --project. Same rule as the LSP's workspace
+            // picker (lspWorkspaceSymbols), and the reason the filter is here rather than in the facade is
+            // the same: deciding whether a path is ours needs real-path resolution the index has no
+            // business owning. No result cap — an editor wants a screenful, a script wants all of them.
+            std::set<std::string> own;
+            for (const auto& f : queryInputs) own.insert(absolutePath(f));
+            size_t hits = 0;
+            for (const auto& s : idx.workspaceSymbols(querySearch)) {
+                if (!own.count(absolutePath(s.uri))) continue;    // std, a dependency, or otherwise not ours
+                printf("%s:%d:%d %s %s\n", s.uri.c_str(), s.selectionRange.line, s.selectionRange.column,
+                       symKindName(s.kind), s.name.c_str());
+                ++hits;
+            }
+            if (!hits) printf("no symbols\n");
+            return 0;
+        }
+        if (queryDiags) {
+            // The same analysis diagnostics `kama check` prints, addressed per file and reusing check's
+            // spelling — but on STDOUT, like every other query mode, where check puts them on stderr; and
+            // exit 0 either way, because `query` reports and `check` judges. NOTE the shared blind spot,
+            // which this mode does not change: analysis resolves names and checks named arguments, but an
+            // expression TYPE mismatch produces no diagnostic here at all — `kama build` catches it, via
+            // the C compiler. See the `check` arm above. Positions follow Diagnostic's own convention
+            // (kama.diagnostic.h), NOT SrcRange's: column 0 means "whole line / unknown".
+            auto ds = idx.diagnosticsFor(queryUri);
+            if (ds.empty()) { printf("no diagnostics\n"); return 0; }
+            for (const auto& d : ds)
+                printf("%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
+                       diagSeverityName(d.severity), d.message.c_str());
             return 0;
         }
         if (!queryDef.empty()) {
@@ -5236,8 +5284,10 @@ int main(int argc, char** argv)
             printf("sig=%s active=%d\n", h.label.c_str(), h.activeParam);
             return 0;
         }
-        fprintf(stderr, "kama query: pass --symbols, --def L:C, --type L:C, --refs L:C, --complete L:C, "
-                        "--sighelp L:C, or --coverage\n");
+        fprintf(stderr, "kama query: pass --symbols, --search NAME, --def L:C, --type L:C, --refs L:C, "
+                        "--complete L:C, --sighelp L:C, --diagnostics, or --coverage\n"
+                        "            (L:C is 1-based line, 0-based column; add --project to widen the "
+                        "scope to the whole package)\n");
         return 2;
     }
 
