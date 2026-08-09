@@ -83,6 +83,16 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
+# Does this bash have `wait -n` (4.3+)? The gate below uses it to wake on the first completion instead of
+# polling. bash 3.2 (macOS) does not, and errors with status 2 — which is what the `-ne 2` distinguishes.
+#
+# ⚠️ PROBE HERE, and nowhere later. `wait -n` waits for the next job to finish, so with ANY live background
+# job it BLOCKS — and the wasm leg starts helper servers below that never exit. Probed after them, this line
+# hangs the whole leg forever, which is exactly what it did between 69c1123 and this fix: `./dev test wasm`
+# printed its banner and then sat there. With no jobs yet, bash 5 returns 127 immediately and bash 3.2
+# returns 2, so both answers are correct and neither waits.
+if wait -n >/dev/null 2>&1 || [ "$?" -ne 2 ]; then HAVE_WAIT_N=1; else HAVE_WAIT_N=0; fi
+
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
 # HTTP/3 WebTransport echo server; capture the self-signed cert's hash so the browser harness can trust it.
@@ -133,7 +143,7 @@ for _p in "$WS_ECHO_PID" "$WT_ECHO_PID" "$SIG_RELAY_PID"; do [ -n "$_p" ] && JOB
 # `wait -n` is still used where it exists, because it wakes on the first completion instead of polling;
 # the `|| :` swallows a job's exit status (results are collected from files, never from `wait`). Elsewhere
 # a short poll is correct, portable, and costs nothing next to a fixture that takes tens of milliseconds.
-if wait -n >/dev/null 2>&1 || [ "$?" -ne 2 ]; then HAVE_WAIT_N=1; else HAVE_WAIT_N=0; fi
+# (HAVE_WAIT_N is probed far above, before the helper servers start — see the warning there.)
 gate() {
     while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do
         if [ "$HAVE_WAIT_N" = 1 ]; then wait -n 2>/dev/null || :; else sleep 0.02; fi
