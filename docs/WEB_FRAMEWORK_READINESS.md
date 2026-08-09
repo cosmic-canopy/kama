@@ -31,7 +31,7 @@ and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundati
   `.chars()` codepoints), `DynamicArray<uint8>` as a growable buffer, and `View<T>` for non-owning slices — enough
   to hand-parse HTTP/1.1 (the `examples/httpd` static server proves the composition).
 - **Callables** — free `fnptr` + `BindableFunctionPtr<Sig>` (binds a receiver object) cover handler registration.
-- **String formatting + interpolation** — the `Format` contract + `Formatter` sink + `toString<T>`, and `${expr}`
+- **String formatting + interpolation** — the `Format` contract + `Formatter` sink, and `${expr}`
   interpolation (compile-time, statically checked). Covers logging + response text today; the planned **tagged
   strings** (`html"…"` auto-escaping holes, `sql"…"` parameterized queries) target exactly the web XSS/injection
   safety story, and the AST is already tag-ready. (See [SPEC.md](SPEC.md) "Formatting & string interpolation".)

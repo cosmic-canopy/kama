@@ -1,0 +1,41 @@
+// `${x}` on a NESTED value: a type whose `format` renders another `Format` type through the same sink.
+// This is the case that justifies `Format` returning void and taking the sink by `ref` — the inner value
+// writes into the OUTER's buffer, so the whole tree materializes in ONE allocation rather than building a
+// string per level and concatenating. Nothing else in the interpolation fixtures reaches two levels deep.
+//
+// Returns 42.
+type value Pt implements Format {
+    public int32 x; public int32 y;
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
+    public fn void format(ref Formatter f) {
+        f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
+        f.writeStr(s: ","); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");
+    }
+}
+
+type value Seg implements Format {
+    public Pt a; public Pt b;
+    public ctor make(Pt a, Pt b) { this.a = a; this.b = b; return this; }
+    // writes the INNER values into the caller's sink — no intermediate string anywhere
+    public fn void format(ref Formatter f) {
+        f.writeStr(s: "[");
+        this.a.format(f: ref f);
+        f.writeStr(s: "->");
+        this.b.format(f: ref f);
+        f.writeStr(s: "]");
+    }
+}
+
+fn int32 main() {
+    Seg s = Seg.make(a: Pt.make(x: 1, y: 2), b: Pt.make(x: 3, y: 4));
+
+    // two levels deep, through interpolation
+    string nested = "${s}";
+    if (!nested.equals(other: "[(1,2)->(3,4)]")) { return 1; }
+
+    // the same value woven into surrounding text, and beside a shallower hole
+    string mixed = "seg ${s} starts at ${s.a}";
+    if (!mixed.equals(other: "seg [(1,2)->(3,4)] starts at (1,2)")) { return 2; }
+
+    return 42;
+}

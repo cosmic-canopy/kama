@@ -35,7 +35,7 @@ type value SocketAddr implements Format {
         };
     }
 
-    // Render "a.b.c.d:port" into a Formatter (the `Format` contract). Free `toString(x: ref addr)` (prelude)
+    // Render "a.b.c.d:port" into a Formatter (the `Format` contract), so `"${addr}"` renders it
     // gives the owned-string convenience; `ipString()` supplies the host octets (host-order match).
     public fn void format(ref Formatter f) {
         string host = this.ipString();

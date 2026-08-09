@@ -110,7 +110,7 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 - **Core contracts:** `Deref<T>`, `HeapOwner<T>`, `Movable`, `Copyable`, `Hashable`, `Equatable`,
   `Comparable` (+ `Ordering`), `Error`, `Iterator<T>`/`IteratorMut<T>`/`Iterable<T>`, `Allocator`
   (+ `GlobalAllocator`), `Serialize`/`Deserialize`/`Serializer`/`Deserializer`.
-- **Text rendering (`std::fmt` core):** the `Format` contract + `Formatter` sink, and `toString<T: Format>()`
+- **Text rendering (`std::fmt` core):** the `Format` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
   `alignof(T)`, `bitcast<T>(x)`, `drop(value:)`, `addr(of:)`, and `unwrapPtr(Optional<Ptr>)` (infallible-alloc

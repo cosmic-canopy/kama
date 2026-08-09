@@ -41,7 +41,7 @@ fn int main() {
     if (d == "Named { name: orc, n: 7 }") { r = r + 8; }
 
     // the free `toString` gives the identical rendering
-    string e = toString(x: ref s);
+    string e = "${s}";
     if (e == "Stat { hp: 30, alive: true }") { r = r + 16; }
 
     // interpolated inline alongside other text

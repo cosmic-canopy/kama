@@ -516,8 +516,9 @@ fn Ptr unwrapPtr(Optional<Ptr> o) {
 // ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────
 // `Format` is the ONE to-text contract — the display twin of `Serialize`: a type writes its own pieces into
 // a caller-owned `Formatter` sink, so a whole nested value materializes in ONE allocation (no O(n²) concat).
-// `toString(x)` is the convenience wrapper on top. This lives in the prelude (survives `--no-std`) because
-// string interpolation (`"${x}"`) lowers to `format` calls and so must resolve everywhere. INFALLIBLE: an
+// This lives in the prelude (survives `--no-std`) because string interpolation (`"${x}"`) lowers to
+// `format` calls and so must resolve everywhere — and `"${x}"` is the ONE way to render a value, so there
+// is no free wrapper beside it. INFALLIBLE: an
 // in-memory buffer write cannot fail, so `format` returns `void` — a deliberate divergence from `serialize`
 // (which has a real I/O sink + non-representable floats and so is `Result`-returning). The scalar formatters
 // bind the stdio-free runtime helpers in kama_runtime.h ("Number / char -> string"), like `kama_string_from_raw`.
@@ -579,13 +580,6 @@ type intrinsic <float64> implements Format { public fn void format(ref Formatter
 type intrinsic <bool>    implements Format { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
 type intrinsic <char>    implements Format { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
 type intrinsic <string>  implements Format { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
-// The convenience wrapper: build a Formatter, format into it, finish — ONE allocation for the whole value.
-// A generic bound method call, monomorphized per `T` — no vtable, no boxing.
-fn string toString<T: Format>(ref T x) {
-    Formatter f = Formatter.make();
-    x.format(f: ref f);
-    return f.finish();
-}
 
 // A tagged string `html"…${x}…"` hands its trusted literal PARTS and its rendered HOLE values to a tag
 // function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts

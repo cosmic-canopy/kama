@@ -2,18 +2,18 @@
 // Two forms: `global::X` is the same symbol as bare `X` — the always-in-scope floor — and
 // `global::a::b::X` names a namespace absolutely, through neither this file's `using`s nor its aliases.
 // The point is that it still resolves where a LOCAL declaration shadows the spelling, which is what the
-// `shadowsFloor` namespace below sets up: its own `toString` hides the floor's for bare lookups.
+// `shadowsFloor` namespace below sets up: its own `envOr` hides the floor's for bare lookups.
 namespace shadowsFloor;
 
-fn string toString(int32 x) { return "shadowed"; }
+fn string envOr(string name, string dflt) { return "shadowed"; }
 
 fn int32 pick(int32 a, int32 b) { return a + b; }
 
 fn int32 main() {
-    // Bare `toString` finds this file's own — the file's scope wins over the floor.
-    string mine = toString(x: 1);
-    // `global::` skips the file's scope entirely and reaches the floor's generic `toString`.
-    string floor = global::toString(x: 7i32);
+    // Bare `envOr` finds this file's own — the file's scope wins over the floor.
+    string mine = envOr(name: "KAMA_NOT_SET", dflt: "1");
+    // `global::` skips the file's scope entirely and reaches the floor's `envOr`.
+    string floor = global::envOr(name: "KAMA_NOT_SET", dflt: "7");
     // An absolute namespace path names this file's `pick` without relying on the enclosing scope.
     int32 sum = global::shadowsFloor::pick(a: 20, b: 15);
     int32 r = sum;                                    // 35

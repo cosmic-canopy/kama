@@ -274,9 +274,10 @@ target is the identity.
   (`ScopedStr _ts(_thisType, e.target->name)`) and how the `self` parameter is spelled. So the registry key
   and the `name` deliberately differ, and `char`'s and `uint32`'s entries share a `name`. Anything that
   wants the key must not read `name`, and anything that wants a C type must not read the key.
-- **Generic inference does not see through a member access or a foreach binding**, for any type — it wants
-  a literal or a locally-typed value. Pre-existing and unrelated to conformances, but it shapes any fixture
-  that exercises those receiver shapes: use the turbofish (`toString::<char>(x: ref m.at)`).
+- **Generic inference does not see through a member access**, for any type — it wants a literal or a
+  locally-typed value, so a member-access argument needs an explicit turbofish (`f::<char>(x: ref m.at)`).
+  Pre-existing and unrelated to conformances. The *foreach-binding* half of this was a real bug and is
+  fixed (`tests/generic_infer_foreach.kama`); the member-access half stands.
 - **A round-trip is not a serde assertion.** Encode and decode agree whichever conformance they share, so a
   `DynamicArray<char>` round-tripped fine while writing `uint32`'s bytes. The KBIN *tag* is what
   discriminates (14 for char, 7 for uint32).

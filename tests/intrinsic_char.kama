@@ -5,9 +5,10 @@
 // a `char` reaching any contract through a generic bound rendered as its numeric scalar. The registry is
 // now keyed by the KAMA type (`primKey`), which is what lets both conformances exist at once.
 //
-// Every assertion here goes through a BOUND (`toString` is `<T: Format>`), because that is the path that
-// was broken: a `${c}` interpolation hole always rendered correctly, via a compiler fast path that exists
-// precisely to route around the collision. The point is that the two agree now.
+// Every assertion here goes through a BOUND (`render` below is `<T: Format>`), because that is the path
+// that was broken: a `${c}` interpolation hole always rendered correctly, via a compiler fast path that
+// exists precisely to route around the collision. The point is that the two agree now — so this fixture
+// must NOT use `${…}`, or it would only ever exercise the fast path.
 //
 // The known residual: a place whose kama type node was already erased — an element of a collection, an
 // index into an array — recovers its key from the C type, and `uint32_t` answers `uint32`. That is why
@@ -34,6 +35,14 @@ type value Marker {
     public ctor make(char at) { this.at = at; return this; }
 }
 
+// The Formatter build, behind a bound. The prelude carried this as `toString` until `"${x}"` made it
+// redundant everywhere EXCEPT here, where the whole point is to avoid the interpolation fast path.
+fn string render<T: Format>(ref T x) {
+    Formatter f = Formatter.make();
+    x.format(f: ref f);
+    return f.finish();
+}
+
 fn int32 main() {
     int32 score = 0;
 
@@ -41,8 +50,8 @@ fn int32 main() {
     // number. Before the re-key both produced "65".
     char c = 'A';
     uint32 u = 65ui32;
-    string cs = toString(x: ref c);
-    string us = toString(x: ref u);
+    string cs = render(x: ref c);
+    string us = render(x: ref u);
     assert(cond: cs.equals(other: "A"), msg: "char formats as its character through a bound");
     assert(cond: us.equals(other: "65"), msg: "uint32 still formats as its number");
     if (cs.equals(other: "A")) { score = score + 40; }
@@ -53,12 +62,12 @@ fn int32 main() {
     // not see through either shape, for ANY type (it wants a literal or a locally-typed value), which is a
     // pre-existing limitation and nothing to do with `char`.
     string built = "";
-    foreach (char ch in "hi".chars()) { built = built.concat(other: toString::<char>(x: ref ch)); }
+    foreach (char ch in "hi".chars()) { built = built.concat(other: render::<char>(x: ref ch)); }
     assert(cond: built.equals(other: "hi"), msg: "a decoded codepoint formats as its character");
     if (built.equals(other: "hi")) { score = score + 40; }
 
     Marker m = Marker.make(at: 'Z');
-    string ms = toString::<char>(x: ref m.at);
+    string ms = render::<char>(x: ref m.at);
     assert(cond: ms.equals(other: "Z"), msg: "a char field formats as its character");
     if (ms.equals(other: "Z")) { score = score + 40; }
 

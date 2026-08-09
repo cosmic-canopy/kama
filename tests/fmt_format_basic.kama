@@ -16,17 +16,17 @@ type value Point implements Format {
 fn int main() {
     int32 r = 0;
 
-    // primitive toString (generic bound, monomorphized per T)
+    // a primitive renders through its Format conformance
     int32 n = 42i32;
-    string a = toString(x: ref n);                 // "42"
+    string a = "${n}";                             // "42"
     if (a == "42") { r = r + 1; }
     bool t = true;
-    string b = toString(x: ref t);                 // "true"
+    string b = "${t}";                             // "true"
     if (b == "true") { r = r + 2; }
 
-    // user-type toString
+    // a user type renders through its own Format impl
     Point p = Point.make(x: 3i32, y: 4i32);
-    string ps = toString(x: ref p);                // "(3, 4)"
+    string ps = "${p}";                            // "(3, 4)"
     if (ps == "(3, 4)") { r = r + 4; }
 
     // Formatter directly: nested value + a negative int share ONE buffer

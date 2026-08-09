@@ -1,0 +1,28 @@
+// A program with generic TYPES but no generic FUNCTION at all.
+//
+// `collectGenericInsts` — the pass that registers a generic instance discovered at a CALL SITE — used to
+// bail on `_generics.empty()`, and `_generics` holds only generic functions. That was invisible for as
+// long as the prelude carried one (`toString`), because then it was never empty in any program. Removing
+// the prelude's last generic function exposed it: this shape skipped the pass entirely and the instance
+// never reached the emitter.
+//
+// So there is deliberately NO generic function here, and `Pair<int32, int32>` is named ONLY through the
+// static call — no annotation, no ctor, nothing else. Returns 42.
+type value Pair<A, B> {
+    public A a; public B b;
+    public ctor make(A a, B b) { this.a = a; this.b = b; return this; }
+    public static fn int32 arity() { return 2; }
+}
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { this.v = v; return this; }
+    public static fn int32 tag() { return 40; }
+}
+
+fn int32 main() {
+    // the only mention of either instance is the static call itself
+    int32 arity = Pair::<int32, int32>::arity();
+    int32 tag   = Box::<int32>::tag();
+    return tag + arity;   // 40 + 2 = 42
+}

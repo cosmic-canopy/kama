@@ -139,9 +139,9 @@ type contract Format for both { fn void format(ref Formatter f); }
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
 value materializes in **one** allocation — no O(n²) concat. `Formatter` has `writeStr` / `writeI64` /
 `writeU64` / `writeF64` / `writeF32` / `writeBool` / `writeChar` and a `finish() -> string`. Every primitive
-(`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms; a free `toString<T: Format>(ref T) -> string`
-wraps the build for convenience. `Format` is **infallible** (`void`, no `Result`) — an in-memory write can't
-fail, unlike `serialize` over an I/O sink.
+(`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms. **`"${x}"` is the one way to render a value** —
+it lowers to exactly this build, so there is no free wrapper beside it. `Format` is **infallible** (`void`,
+no `Result`) — an in-memory write can't fail, unlike `serialize` over an I/O sink.
 
 ```kama
 type value Point implements Format {
@@ -2553,8 +2553,8 @@ constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the e
 **`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
 `X` — the always-in-scope [floor](FLOOR.md) — and `global::a::b::X` names a namespace absolutely, through
 neither the file's imports nor its aliases. It exists for the case where a local declaration shadows the
-spelling you want: a module that defines its own `toString` still reaches the floor's with
-`global::toString(x: 7i32)` (`tests/global_alias.kama`).
+spelling you want: a module that defines its own `envOr` still reaches the floor's with
+`global::envOr(name: …, dflt: …)` (`tests/global_alias.kama`).
 
 ## Concurrency ✅
 

@@ -7246,7 +7246,12 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
 void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
 {
     if (!unit || !unit->codeDeclarationList) return;
-    if (_generics.empty()) return;   // nothing generic in the program
+    // Generic FUNCTIONS and generic TYPES both — this pass registers a `Pair::<int32,int32>::arity()`
+    // instance as well as a `f::<T>()` one, and `_generics` holds only the functions. The prelude used to
+    // carry `toString`/`__kamaDeserialize`, so `_generics` was never empty and this guard never fired;
+    // removing them exposed it, and a program with generic types but no generic functions skipped the
+    // whole pass — its type instances never reached the emitter.
+    if (_generics.empty() && _genericTypes.empty()) return;   // nothing generic in the program
     auto seed = [&](SharedParameterList params, std::map<std::string, SharedIdentifier>& lt) {
         if (params) for (auto& p : *params)
             if (p && p->identifier && p->identifier->value && p->type) lt[*p->identifier->value] = p->type;
