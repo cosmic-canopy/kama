@@ -529,6 +529,38 @@ rather than here, so there is one number to keep current. Forward work:
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
 ## 10. Tooling / distribution (deferred)
 
+- **AI/agent tooling, shipped WITH the language.** Design in its own session; scheduled after the four
+  contract-model campaigns. The goal is that an LLM or coding agent can work in kama — and on kama —
+  without the operator hand-assembling context first. Most of the substrate already exists and is
+  unadvertised:
+  - **`kama query` is already an agent interface.** `--symbols` (outline), `--def L:C` (go-to-definition),
+    `--type L:C` (hover), `--refs L:C` (find-references), `--complete L:C`, `--coverage`. One process, one
+    file, structured output, no editor and no LSP handshake. That is the piece a skill would drive, and it
+    is cheaper for an agent than speaking LSP over stdio.
+  - **`llms.txt`** (78 lines) is the discovery entry point and already points at the grammar as the source
+    of truth, the spec for semantics, and the fixtures for runnable examples.
+  - **`.claude/skills/`** already vendors two guidance skills (`karpathy-guidelines`, `ponytail`) that this
+    repo's own CLAUDE.md instructs an assistant to apply — so the "skills live in the repo" pattern is
+    established here, not novel.
+
+  What to design: which skill(s) ship (a *write-kama* skill driving `kama query` for real symbol
+  resolution rather than grep, and plausibly a *work-on-kama* skill encoding the campaign/codegen-gate
+  discipline); whether they live under `.claude/skills/` for Claude Code specifically or in a
+  tool-neutral location with a thin adapter; and what an agent gets that `llms.txt` alone does not —
+  the honest answer being **verified** answers (a symbol the compiler resolved) instead of plausible ones.
+  Reference: <https://github.com/DietrichGebert/ponytail>.
+
+  Two things worth settling early, because they shape everything else. **Does a skill invoke the compiler,
+  or only read?** A skill that can run `kama build`/`./dev fixture` closes the loop — an agent can check its
+  own work — and that is the difference between a documentation aid and a working tool. And **what
+  guarantees the tooling does not drift** the way docs do: the answer this repo reaches for elsewhere is a
+  `tools/check-*.sh` guard, and the same should apply here (`check-lsp.sh` already carries 150 assertions
+  against the query surface, so the pattern and much of the coverage exist).
+
+  It should also pay for itself immediately: developing kama in this repo is exactly the workload, and the
+  friction is known and recorded — stale build/platform traps, fixture coordinates, which suite rung to run.
+
+
 - **`kama fmt` — a native formatter, not an external tool.** The language should print itself: one
   canonical form, applied by the toolchain, so a project never argues about style and a diff never carries
   noise that is not a change. Driven by the project's `kama.json` (the same manifest that already carries
