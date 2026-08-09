@@ -1,1 +1,1 @@
-turbofish type arguments are only valid on `deserialize`
+a method takes no type arguments

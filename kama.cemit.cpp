@@ -7136,28 +7136,10 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                 }
             }
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
-            // Receiver turbofish `r.deserialize::<T>()` — the type args ride the method identifier's
-            // `genericArgs` (see kama.y). Lower it through the `__kamaDeserialize<T>` trampoline: register
-            // that generic instance here (reusing the free-fn path above) so emitInvocation routes the call
-            // to its specialized C name. Only `deserialize` is a generic member call today.
-            if (ma->identifier && ma->identifier->genericArgs && ma->identifier->value
-                && *ma->identifier->value == "deserialize") {
-                std::string k = resolveFunc("__kamaDeserialize", nullptr);
-                auto git = _generics.find(k);
-                if (git != _generics.end()) {
-                    SharedIdentifierList tfArgs = ma->identifier->genericArgs;
-                    for (auto& ta : *tfArgs) scanTypeForCollections(ta);   // monomorphize T + its deserialize
-                    GenericInst gi;
-                    if (explicitGenericInst(git->second, k, tfArgs, inv->line, gi)) {
-                        if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
-                        _callInst[inv][substSig()] = gi.mangledName;
-                    }
-                }
-            }
             // Dot-on-type ctor turbofish `Type.ctor::<T>(...)` on a GENERIC type — register the concrete
             // instance so its specialized struct + ctor body get emitted (the inferred form rides the LHS
             // annotation's scan instead; the turbofish is for sites where inference can't supply the args). #M7-E3
-            else if (ma->identifier && ma->identifier->genericArgs) {
+            if (ma->identifier && ma->identifier->genericArgs) {
                 if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get())) {
                     if (rid->value) {
                         std::string tn = resolveUserName(*rid->value, rid->qualifier);
@@ -12999,15 +12981,6 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (!call->identifier || !call->identifier->value) {
         if (call->expression) {
             if (auto* ma = dynamic_cast<MemberAccessNode*>(call->expression.get())) {
-                // Resolved receiver turbofish `r.deserialize::<T>()` -> the `__kamaDeserialize<T>` trampoline
-                // (registered in scanExprForGenerics), passing the receiver as its single `Deserializer` arg.
-                // Intercept BEFORE emitMethodCall: the receiver types as the `Deserializer` interface, so the
-                // method path would send it to emitInterfaceDispatch looking for a nonexistent `deserialize`.
-                std::string instKey = callInstOf(call);
-                if (!instKey.empty()) {
-                    const GenericInst& gi = _genericInsts[instKey];
-                    return gi.mangledName + "(" + emitExpression(ma->expression) + ")";
-                }
                 // `Type.name(...)` — dot-on-type constructor call: the receiver names a TYPE, not an
                 // instance. An in-scope binding wins (instance `.method` first), so this fires only when
                 // the receiver is a bare type name with no live binding. Distinct from `Type::staticFn()`
@@ -16772,11 +16745,13 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
 {
     std::string method = (recv->identifier && recv->identifier->value) ? *recv->identifier->value : "";
     SharedExpression receiver = recv->expression;
-    // A turbofish that reached here didn't resolve to a generic member call (only `r.deserialize::<T>()`
-    // does, and it is routed in emitInvocation before this point) — reject it, mirroring the free-fn
-    // turbofish reject in emitInvocation.
+    // A method takes NO turbofish. There is exactly one way to name a type argument on a call, and it is
+    // on the callee: a free fn (`decode::<T>(…)`) or a type (`Type::<Arg>.ctor(…)`). `r.deserialize::<T>()`
+    // used to be an exception, lowered through a `__kamaDeserialize<T>` trampoline; it was pure sugar for
+    // `T.deserialize(r: r)`, which the stdlib's own `decode<T>` already writes.
     if (recv->identifier && recv->identifier->genericArgs) {
-        unsupported(("`." + method + "::<…>` — turbofish type arguments are only valid on `deserialize`").c_str(),
+        unsupported(("`." + method + "::<…>` — a method takes no type arguments; name them on the callee "
+                     "instead (`T." + method + "(…)`, or `T::<Arg>." + method + "(…)` for a generic type)").c_str(),
                     call->line);
         return "0";
     }

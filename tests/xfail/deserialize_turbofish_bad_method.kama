@@ -1,6 +1,9 @@
-// P4 Landing B: the receiver-turbofish `recv.method::<T>()` is only valid for `deserialize` (the one
-// generic member call today). A turbofish on any other reader method is a compile error pointing at the
-// only supported form — mirroring the free-fn turbofish reject.
+// A METHOD takes no type arguments. There is one way to name a type argument on a call and it is on the
+// callee — a free fn (`decode::<T>(…)`) or a type (`T.deserialize(r:)`, `T::<Arg>.make(…)`).
+//
+// `r.deserialize::<T>()` used to be the single exception, lowered through a `__kamaDeserialize<T>`
+// trampoline. It was pure sugar for `T.deserialize(r: r)` — the spelling the stdlib's own `decode<T>`
+// already uses — so the exception, the trampoline, and the prelude name all went together.
 import std::serialization::json::{decode};
 
 @generate(Serialize, Deserialize)
@@ -11,7 +14,7 @@ type value Bad {
         r.beginObject();
         r.moreFields();
         string k = r.fieldName();
-        int32 v = r.readI32::<int32>();   // ERROR: turbofish only valid on `deserialize`
+        int32 v = r.readI32::<int32>();   // ERROR: a method takes no type arguments
         return Result::Ok(value: Bad.make(v: v));
     }
 }

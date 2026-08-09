@@ -304,10 +304,6 @@ type intrinsic <float64> implements Deserialize  { public ctor Result<float64, s
 type intrinsic <bool>    implements Deserialize  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
 type intrinsic <char>    implements Deserialize  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
 type intrinsic <string>  implements Deserialize  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
-// Generic deserialize trampoline: the `@generate` codegen can't spell `DynamicArray<int32>::deserialize(r)` (a
-// static on a generic instance has no surface syntax), but a turbofish on THIS free fn does
-// (`__kamaDeserialize::<DynamicArray<int32>>(r)`), and inside it `T::deserialize` resolves per instantiation.
-fn Result<T, std::memory::Owned<Error>> __kamaDeserialize<T: Deserialize>(Deserializer r) { return T.deserialize(r: r); }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
@@ -584,7 +580,7 @@ type intrinsic <bool>    implements Format { public fn void format(ref Formatter
 type intrinsic <char>    implements Format { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
 type intrinsic <string>  implements Format { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
 // The convenience wrapper: build a Formatter, format into it, finish — ONE allocation for the whole value.
-// A generic bound method call (like the `__kamaDeserialize` trampoline), monomorphized per `T`.
+// A generic bound method call, monomorphized per `T` — no vtable, no boxing.
 fn string toString<T: Format>(ref T x) {
     Formatter f = Formatter.make();
     x.format(f: ref f);
