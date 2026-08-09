@@ -541,6 +541,24 @@ rather than here, so there is one number to keep current. Forward work:
   from; and `kama fmt --check` is one more guard script. It is also the migration tool for mandatory
   braces (§1) — the rewrite is mechanical, and a formatter that can insert a brace can perform it.
 
+- **`toString` may be redundant with `"${x}"` — a deletion candidate.** Both render through the same
+  `Format` contract and produce identical output, verified side by side at a concrete site and inside a
+  `<T: Format>` bound. Interpolation is in fact the *better* of the two there: `"${x}"` needs nothing,
+  while `toString(x: x)` fails to infer inside a generic and requires `toString::<T>(x: x)`. It cannot be
+  held as a value either — a generic fn does not promote to a `BindableFunctionPtr` — so there is no use
+  `"${x}"` cannot serve. 14 call sites, essentially all in `fmt_*` fixtures testing `toString` itself.
+  Deleting it removes a global name and leaves one way to render a value. The counter-argument is that
+  `toString(x: v)` reads better than `"${v}"` when the result is not being embedded in text at all;
+  settle that before removing it, not after.
+
+- **A diagnostic raised inside an inlined prelude/lib body reports the USER's filename with the PRELUDE's
+  line.** `toString(x: p)` on a type without `Format` correctly reports the failed bound at the call site,
+  then emits a cascade against `<user file>:587` — a prelude line, in a file six lines long. Two defects in
+  one: the instantiation proceeds after its bound has already failed, and the diagnostic inherits the wrong
+  unit. The second is the same class of bug as the `kama_panic_at` line-baking the codegen gate has to
+  normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
+  but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
+
 - **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
   costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,
   and reduces the whole call to six instructions with no call at all. At `-O0` the indirection survives, so
