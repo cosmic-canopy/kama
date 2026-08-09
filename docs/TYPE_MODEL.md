@@ -2,7 +2,7 @@
 
 Every type declaration is introduced by a `type` marker (`type value` / `type resource` / `type view` /
 `type contract`); the vocabulary + access-control rules below are enforced by the compiler. This doc is the durable rationale
-— see also [GOALS.md §3c](../GOALS.md).
+— see also [GOALS.md §3c](GOALS.md).
 
 ## The `type` marker
 

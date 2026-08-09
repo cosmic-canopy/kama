@@ -300,7 +300,7 @@ spelling**, and giving them one removes the mechanism rather than fencing it.
 
 ## The core finding — two hidden kinds
 
-[GOALS.md](../../GOALS.md) #3c states the rule: *every declaration is `type <kind> Name`*, and lists
+[GOALS.md](../GOALS.md) #3c states the rule: *every declaration is `type <kind> Name`*, and lists
 `type value`, `type resource`, `type view`, `type contract`. Two kinds break it:
 
 | kind | how it is spelled | consequence |

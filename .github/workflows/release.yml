@@ -71,7 +71,7 @@ jobs:
           cp kama_*.h payload/include/
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
-          cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
+          cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
 
       - name: Package (slim)
         shell: bash
@@ -139,7 +139,7 @@ jobs:
           cp kama_*.h payload/include/
           cp -R lib/std payload/lib/kama/std
           cp LICENSE payload/ 2>/dev/null || true
-          cp GETTING_STARTED.md payload/README.md 2>/dev/null || true
+          cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
       - name: Package (slim)
         run: |
           PKG="kama-windows-x64-v${VERSION}"

@@ -84,7 +84,7 @@ node hello.js; echo $?              # -> 42  (browser: use the .html target)
 The compiler is its own language server, so you get live diagnostics, hover, go-to-definition,
 find-references, project-wide rename, completion and signature help in any editor with a generic LSP
 client — VS Code, Neovim, Vim, Emacs, Sublime Text, Helix and Kate. Each is a few lines pointing at
-`kama lsp`: see **[editor setup](docs/editors.md)**.
+`kama lsp`: see **[editor setup](editors.md)**.
 
 VS Code has a packaged extension that also brings syntax highlighting, a build-configuration picker, and
 the F5 debugging below.
@@ -101,7 +101,7 @@ real source-level debugging.
 3. Execution stops **in your `.kama` source**; the Variables panel shows your locals and the Call Stack
    shows kama frames.
 
-> Prefer to wire it yourself? The repo's [`.vscode/`](.vscode) has an equivalent `tasks.json` + `launch.json`.
+> Prefer to wire it yourself? The repo's [`.vscode/`](../.vscode) has an equivalent `tasks.json` + `launch.json`.
 
 ### Debug in the browser (WebAssembly)
 
@@ -124,7 +124,7 @@ kama build app.kama --target wasm -o app.html   # debug is the default; emits ap
 
 ## Next
 
-- Language reference: [docs/SPEC.md](docs/SPEC.md) · grammar: [docs/grammar.bnf](docs/grammar.bnf)
-- Editor setup: [docs/editors.md](docs/editors.md)
-- Examples: [tests/](tests/) (each `.kama` is a runnable program)
+- Language reference: [docs/SPEC.md](SPEC.md) · grammar: [docs/grammar.bnf](grammar.bnf)
+- Editor setup: [docs/editors.md](editors.md)
+- Examples: [tests/](../tests/) (each `.kama` is a runnable program)
 - Design goals: [GOALS.md](GOALS.md)

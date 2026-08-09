@@ -17,7 +17,7 @@ the browser as WebAssembly.
 > tools/cdev exec ./kama build hello.kama -o hello && ./hello   # native
 > tools/cdev exec ./kama build hello.kama --target wasm         # -> hello.html + .js + .wasm
 > ```
-> New here? Start with **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+> New here? Start with **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
 
 ## What makes kama kama
 
@@ -39,7 +39,7 @@ the browser as WebAssembly.
   tool, or an LLM.
 
 The full language reference lives in **[docs/SPEC.md](docs/SPEC.md)**; the design philosophy
-in **[GOALS.md](GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+in **[docs/GOALS.md](docs/GOALS.md)**; the forward plan in **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ## Why kama over…
 
@@ -154,6 +154,6 @@ see **[editor setup](docs/editors.md)**.
   notes — deleted once the work ships and its record lands in the docs above)
 - `site/`, `tools/site/` — kama-lang.org: static assets plus the generator that renders the
   docs above into the published site (`./dev site`, `./dev serve`)
-- `llms.txt`, `GOALS.md` — LLM-discovery entry point and design philosophy
+- `llms.txt`, `docs/GOALS.md` — LLM-discovery entry point and design philosophy
 
 MIT licensed — see [LICENSE](LICENSE).

@@ -1,6 +1,6 @@
 # kama — repo guide for AI assistants
 
-**Read [GOALS.md](GOALS.md) first** — the language's design philosophy. Honor it, especially:
+**Read [GOALS.md](docs/GOALS.md) first** — the language's design philosophy. Honor it, especially:
 *favor one way to do a thing, favor simplicity, favor explicit over implicit.*
 
 ## Working style

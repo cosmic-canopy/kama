@@ -3,7 +3,7 @@
 This is a semantics overview. The **grammar is authoritative** — see
 [grammar.bnf](grammar.bnf) (generated from `kama.y`). Executable examples live in
 [`../tests/`](../tests/) (`*.kama` with a `.expect` exit code). The design philosophy — *one way to do a
-thing, explicit over implicit, no GC / RAII* — lives in [../GOALS.md](../GOALS.md); this document is the
+thing, explicit over implicit, no GC / RAII* — lives in [GOALS.md](GOALS.md); this document is the
 semantics/feature reference. Status flags below: ✅ implemented, 🚧 reserved (not yet implemented).
 
 ## Model

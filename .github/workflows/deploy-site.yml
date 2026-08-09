@@ -6,7 +6,7 @@ on:
     # footer, llms.txt and the installers are published verbatim, and tests/site_sample.kama is
     # the home page's code block — all of them have to trigger a deploy.
     paths: ['site/**', 'tools/site/**', 'tools/build-site', 'assets/**',
-            'docs/**', 'GETTING_STARTED.md', 'VERSION', 'llms.txt',
+            'docs/**', 'VERSION', 'llms.txt',
             'install.sh', 'install.ps1', 'tests/site_sample.kama',
             'package.json', 'package-lock.json', '.github/workflows/deploy-site.yml']
   workflow_dispatch:

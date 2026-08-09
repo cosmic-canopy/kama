@@ -2,7 +2,7 @@
 
 The whole language in one read. Each section is a few minutes; every snippet is real code that
 compiles today. If you want the exhaustive reference instead, that is [SPEC.md](SPEC.md); if you
-want to install the toolchain first, start with [Getting started](../GETTING_STARTED.md).
+want to install the toolchain first, start with [Getting started](GETTING_STARTED.md).
 
 kama looks like C#, manages memory like C++ without the footguns, and compiles to portable C11.
 Three ideas carry most of the design: **ownership is written into the type**, **every call names
@@ -445,7 +445,7 @@ program became. It is ordinary, portable C11 with your original names intact.
 
 ## Next
 
-- [Getting started](../GETTING_STARTED.md) — install, build, and set up your editor.
+- [Getting started](GETTING_STARTED.md) — install, build, and set up your editor.
 - [The specification](SPEC.md) — the complete reference.
 - [The type model](TYPE_MODEL.md) — why `value` / `resource` / `view` / `contract`, in depth.
 - [Packages](packages.md) — projects, dependencies and publishing.

@@ -24,7 +24,7 @@ examples read the test fixtures.
   C#/Rust/Python and WHY — the rules an assistant trained on those languages will otherwise trip over
   (bind-to-a-local inference, private `resource` fields, `out` vs `ref`, `@generate` field marking,
   `.` constructs / `::` resolves scope). Every snippet is compiled by `tests/idioms_kama_way.kama`.
-- [Goals & design philosophy](GOALS.md): no-GC, one-way/simplicity, explicit>implicit,
+- [Goals & design philosophy](docs/GOALS.md): no-GC, one-way/simplicity, explicit>implicit,
   self-describing, LLM-discoverable.
 
 ## Examples

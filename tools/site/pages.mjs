@@ -13,7 +13,7 @@ export const ORIGIN = 'https://kama-lang.org';
 export const GROUPS = ['Start', 'Reference', 'Guides'];
 
 export const PAGES = [
-  { src: 'GETTING_STARTED.md',         url: '/docs/getting-started/', nav: 'Getting started',  group: 'Start',
+  { src: 'docs/GETTING_STARTED.md',    url: '/docs/getting-started/', nav: 'Getting started',  group: 'Start',
     blurb: 'Install the toolchain, write a first program, build it for native or the browser, and set up your editor.' },
   { src: 'docs/tour.md',               url: '/docs/tour/',            nav: 'Language tour',    group: 'Start',
     blurb: 'The whole language in one read — ownership, named parameters, match, generics, concurrency.' },

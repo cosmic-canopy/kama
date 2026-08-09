@@ -79,7 +79,7 @@ type value Point {
 
 Serde in most languages defaults to "all fields". kama makes you say, so that **adding a field can never
 silently start serializing it** — the failure mode where a cache, a token or a password joins your wire
-format because someone added a member. Explicit over implicit ([GOALS.md](../GOALS.md) #5).
+format because someone added a member. Explicit over implicit ([GOALS.md](GOALS.md) #5).
 
 ## Named arguments are not friction
 
