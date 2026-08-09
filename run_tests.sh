@@ -25,6 +25,19 @@ fail=0
 now_ms() { local e="${EPOCHREALTIME:-0.0}"; echo $(( ${e%.*} * 1000 + 10#${e#*.} / 1000 )); }
 suite_start=$(now_ms)
 
+# `$EPOCHREALTIME` is bash 5. macOS ships bash 3.2, where now_ms() returns 0 for everything — so
+# `suite_ms` was 0, the whole timing summary was skipped, and the host leg reported no timings at all
+# while the container leg reported them fine. That is the wrong way round: the host is where a developer
+# actually watches the clock.
+#
+# Phase timing needs only whole seconds, and `date +%s` has those everywhere, so phases are always
+# reported. Per-fixture slowest-N still needs sub-second resolution and stays bash-5-only, with a note
+# saying so rather than silently printing nothing.
+HAVE_MS=1; [ -z "${EPOCHREALTIME:-}" ] && HAVE_MS=0
+phase_start() { PHASE_T0=$(date +%s); PHASE_NAME="$1"; }
+phase_end() { printf 'phase: %-22s %4ds\n' "$PHASE_NAME" "$(( $(date +%s) - PHASE_T0 ))"; }
+suite_start_s=$(date +%s)
+
 # Parallelism: each single-file fixture builds+runs independently into its own $TMP/$name.* files, so the
 # main loop fans out across cores (the dominant cost is one clang invocation per fixture). Override with
 # KAMA_JOBS. Results are collected per fixture then tallied in fixture order for stable output.
@@ -104,6 +117,28 @@ trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_P
 # fan-out always gets NCPU fixture slots whichever leg is active.
 JOB_CAP="$NCPU"
 for _p in "$WS_ECHO_PID" "$WT_ECHO_PID" "$SIG_RELAY_PID"; do [ -n "$_p" ] && JOB_CAP=$((JOB_CAP+1)); done
+
+# The gate itself. Every fan-out below calls `gate` before spawning the next job.
+#
+# This used to be written inline as `while [ jobs -ge CAP ]; do wait -n || break; done`, which had two
+# defects that both FAILED OPEN — the suite still passed, it just stopped throttling:
+#
+#   1. `wait -n` is bash 4.3+. macOS ships bash 3.2, where it exits 2 immediately, `|| break` fires, and
+#      the gate lets the job through. Measured: spawning 8 jobs against a cap of 2 left 8 running. So the
+#      host leg forked ~1800 concurrent jobs onto 10 cores and spent its time thrashing rather than
+#      compiling.
+#   2. Even on bash 5, `wait -n` returns the FINISHED JOB'S exit status, so one failing fixture also
+#      tripped `|| break` and punched a hole in the cap for the rest of that phase.
+#
+# `wait -n` is still used where it exists, because it wakes on the first completion instead of polling;
+# the `|| :` swallows a job's exit status (results are collected from files, never from `wait`). Elsewhere
+# a short poll is correct, portable, and costs nothing next to a fixture that takes tens of milliseconds.
+if wait -n >/dev/null 2>&1 || [ "$?" -ne 2 ]; then HAVE_WAIT_N=1; else HAVE_WAIT_N=0; fi
+gate() {
+    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do
+        if [ "$HAVE_WAIT_N" = 1 ]; then wait -n 2>/dev/null || :; else sleep 0.02; fi
+    done
+}
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
 build_one() {
@@ -381,14 +416,16 @@ test_one() {
 # on those explicitly: a bare `wait` also blocks on the long-lived echo servers (ws_echo/wt_echo/sig_relay,
 # started with `&` for the wasm net::web tests), which never exit — that hung the whole wasm leg after the
 # single-file phase. `wait -n` in the gate is fine (it returns as soon as ANY fixture finishes).
+phase_start "single-file fixtures"
 fixture_pids=()
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     test_one "$src" &
     fixture_pids+=($!)
-    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+    gate
 done
 wait "${fixture_pids[@]}" 2>/dev/null
+phase_end
 # Tally in fixture order (stable output regardless of completion order).
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
@@ -403,6 +440,7 @@ for src in "$TESTS_DIR"/*.kama; do
 done
 
 # Multi-file fixtures: tests/<name>.d/ with several .kama built together.
+phase_start "multi-file fixtures"
 for dir in "$TESTS_DIR"/*.d; do
     [ -d "$dir" ] || continue
     name="$(basename "$dir" .d)"
@@ -459,14 +497,17 @@ xfail_one() {
     fi
     echo "PASS xfail/$name (rejected)" >"$out"; echo PASS >"$res"
 }
+phase_end
+phase_start "xfail fixtures"
 xfail_pids=()
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     xfail_one "$src" &
     xfail_pids+=($!)
-    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+    gate
 done
 wait "${xfail_pids[@]}" 2>/dev/null
+phase_end
 # Tally in fixture order, so output is identical to the serial version regardless of completion order.
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
@@ -554,6 +595,7 @@ check_neg_one() {
     fi
 }
 ck_pos=0; ck_neg=0; ck_bad=0
+phase_start "analysis agreement"
 ck_pids=()
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
@@ -562,7 +604,7 @@ for src in "$TESTS_DIR"/*.kama; do
     ck_pos=$((ck_pos+1))
     check_pos_one "$src" &
     ck_pids+=($!)
-    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+    gate
 done
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
@@ -571,9 +613,10 @@ for src in "$TESTS_DIR"/xfail/*.kama; do
     ck_neg=$((ck_neg+1))
     check_neg_one "$src" &
     ck_pids+=($!)
-    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do wait -n 2>/dev/null || break; done
+    gate
 done
 wait "${ck_pids[@]}" 2>/dev/null
+phase_end
 # Report mismatches in fixture order — a MISMATCH names the fixture, so stable ordering keeps a diff of two
 # runs meaningful.
 for f in "$TMP"/ck_*.bad "$TMP"/ckx_*.bad; do
