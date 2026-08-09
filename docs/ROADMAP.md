@@ -581,42 +581,48 @@ rather than here, so there is one number to keep current. Forward work:
   normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
   but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
 
-- **A file-private symbol's C name is POSITIONAL, so the emitted C is not reproducible.** README promises
-  *"the output IS readable C, so kama drops into an existing C codebase one file at a time"* — and for
-  NAMESPACED code it delivers: `namespace acme::geo;` gives `acme__geo__Point`, `acme__geo__Point__make`,
-  which is exactly the C you would have written. A file with **no namespace** gets a synthetic private
-  scope instead — `_F<index>`, where the index is the file's POSITION in the compilation:
+- **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** README promises
+  *"the output IS readable C, so kama drops into an existing C codebase one file at a time"*, and `--keep-c`
+  exists for exactly that. Two things stand between the promise and the output, and they want opposite
+  things from the naming rules — so they get decided together, not separately.
+
+  **(a) A file-private symbol's C name is POSITIONAL, so the output is not reproducible.** Namespaced code
+  already delivers on the promise: `namespace acme::geo;` gives `acme__geo__Point` /
+  `acme__geo__Point__make` — no arity encoding, no `_ZN`, just the namespace path with `::` → `__`, which
+  is what hand-written C looks like. A file with **no namespace** gets a synthetic scope instead,
+  `_F<index>`, where the index is the file's POSITION in the compilation:
 
       kama build app.kama extra.kama   ->  _F4__Holder
       kama build extra.kama app.kama   ->  _F5__Holder     # same type, same source, renamed
 
-  So it is not merely ugly: reorder the inputs, or add an unrelated file, and every file-private symbol in
-  the program renames. That defeats keeping the C — you cannot diff two builds, you cannot depend on a
-  symbol from hand-written C beside it, and a version-controlled `--keep-c` output churns for no reason.
-  Fix: derive the private scope from something STABLE about the file (its basename, or a short hash of its
-  repo-relative path) rather than its ordinal. Also worth asking whether a file-private symbol needs a
-  prefix at all — `static` already gives it internal linkage — and whether `--keep-c` should imply the
-  friendliest naming available, since that flag exists precisely for the hand-it-to-C use.
+  That is not ugliness, it is non-reproducibility: two builds cannot be diffed, hand-written C beside it
+  cannot depend on a symbol, and a version-controlled `--keep-c` output churns for nothing. Fix: derive the
+  private scope from something STABLE about the file — its basename, or a short hash of its repo-relative
+  path. Also ask whether a file-private symbol needs a prefix **at all** (`static` already gives it
+  internal linkage), and whether `--keep-c` should imply the friendliest naming available.
 
-- **A kama identifier that is a C keyword emits raw and breaks the C compiler.** `int32 switch = 3;` is a
-  legal kama declaration and lowers to `int32_t switch = 3;`, which clang rejects with an error pointing at
-  generated C the author never wrote. **25 of C11's 44 keywords are legal kama identifiers** — including
+  **(b) A kama identifier that is a C keyword emits raw and breaks the C compiler.** `int32 switch = 3;` is
+  a legal kama declaration and lowers to `int32_t switch = 3;`, which clang rejects with an error pointing
+  at generated C the author never wrote. **25 of C11's 44 keywords are legal kama identifiers** — including
   `switch`, `float`, `long`, `short`, `signed`, `unsigned`, `union`, `struct`, `auto`, `goto`, `register`,
   `inline`, `typedef` and `volatile` (which this project deliberately DE-reserved). `switch` and `float`
   are the ones to worry about: kama spells them `match` and `float32`/`float64`, so both are free — and
   `switch` is an entirely plausible variable name in the embedded code kama targets.
 
-  **Exposure is exactly locals, parameters, and struct FIELDS.** Types, functions and methods are already
-  namespace-mangled (`_F4__Holder`, `_F4__helper`) and cannot collide; the bare three can. A field named
-  `switch` breaks the struct definition, not just a statement.
+  Exposure is exactly **locals, parameters, and struct FIELDS**. Types, functions and methods are already
+  namespace-scoped (`acme__geo__Point`) and cannot collide; the bare three can, and a field named `switch`
+  breaks the struct definition, not just a statement. **Mangle rather than reserve** — reserving 25 more
+  words is worse for users than a rename the emitter does silently, and blanket-mangling every identifier
+  would cost the readability the promise depends on. So rename ONLY on collision, leaving every other name
+  exactly as written.
 
-  **Mangle rather than reserve.** Reserving 25 more words is worse for users than a rename the emitter does
-  silently, and blanket-mangling every identifier would cost the readability of the emitted C, which is a
-  real property of a transpiler. So: rename ONLY on collision (`switch` -> `switch_` or similar), leaving
-  every other name exactly as written. The work is not one line — there is no single chokepoint where a
-  kama name becomes a C name, and a USE must agree with its DECLARATION, so a partial fix is worse than
-  none (an undeclared-identifier error instead of a keyword error). Intern the renamed form once, where the
-  name enters the emitter's tables, so every downstream use reads it naturally.
+  **Why one campaign:** (a) wants names stable and as close to the source spelling as possible; (b) wants
+  the emitter free to rename on collision. Decide the whole naming rule once — which names are prefixed,
+  what a private scope is derived from, and what happens on a C-keyword collision — rather than letting two
+  fixes land opposite conventions. Neither is one line: there is no single chokepoint where a kama name
+  becomes a C name, and a USE must agree with its DECLARATION, so a partial fix trades a keyword error for
+  an undeclared-identifier error. Intern the final form once, where the name enters the emitter's tables,
+  so every downstream use reads it naturally.
 
 - **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
   costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,
