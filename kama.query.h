@@ -8,7 +8,11 @@
 // LSP / front-end-as-library query surface (M0 T4/T5). Framework-free, LSP-shaped value types that the
 // driver (and later the `kama lsp` server) map to protocol JSON — no editor/framework types leak in here,
 // so the same query index drives VS Code, Neovim, Emacs (eglot), and any other LSP client unchanged.
-// Positions are 1-based line / column, matching ASTNode's span fields and Diagnostic.
+// Positions are 1-based LINE and 0-based COLUMN, matching ASTNode's span fields and Diagnostic.
+// The two halves differ deliberately, so do not assume: LSP wants both 0-based, and `lspRange`
+// (kama.lsp.cpp) converts the LINE while passing the COLUMN straight through. `kama query` speaks
+// these coordinates raw, on input and output alike. The fixture that settles an argument: `Point`
+// on line 6 of tests/query/shapes.kama starts at 1-based column 12, and `--symbols` prints `6:11`.
 
 // A source span [ (line,column) .. (endLine,endColumn) ). end==0 means "unknown" -> treated as a point
 // at (line,column). Spans are APPROXIMATE at decl granularity (Bison lookahead skew); the NAME-identifier
