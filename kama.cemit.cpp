@@ -1405,6 +1405,19 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     auto ident = [&](const std::string& s) { return synthId(s); };
     if (spec) { emitHoleSpec(fv, hole, *spec); return; }
     if (exprIsChar(hole)) { _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(hole) + ");"); return; }
+    // `${x}` renders through the `Format` contract. Check that BEFORE synthesizing the call: the
+    // synthesized node carries the synth context's line (1), so letting it fail inside emitDispatch
+    // reported `unknown method` against line 1 of the user's file and never named `Format`, the type, or
+    // even the method — the one error a reader could act on, missing all four.
+    {
+        std::string hc = exprClass(hole);
+        if (!hc.empty() && _classes.count(hc) && !satisfiesBound(hc, "Format")) {
+            unsupported(("`" + hc + "` cannot be interpolated — `${…}` renders a value through the "
+                         "`Format` contract; add `implements Format` (or `@generate(Format)`), or call a "
+                         "method that returns a string").c_str(), hole->line);
+            return;   // reported; synthesizing the call would add a second error against the synth line
+        }
+    }
     // synthesize `<hole>.format(f: ref fv)` so the hole's static type picks the right `format`.
     auto args = std::make_shared<ArgumentList>();
     args->push_back(std::make_shared<ArgumentNode>(ctx, ident("f"),
@@ -15832,7 +15845,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
             return emitDispatch(tgt, derefed, method, args, srcLine, site);
         }
-        unsupported("unknown method", srcLine); return "0";
+        unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
     // M6 B3a: the spelling at `site` is a REFERENCE to the method just resolved — the single most common

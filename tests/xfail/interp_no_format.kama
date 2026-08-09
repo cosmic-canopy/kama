@@ -1,0 +1,13 @@
+// `${x}` renders a value through the `Format` contract, so a type that does not implement it cannot be
+// interpolated. The check has to run BEFORE the lowering synthesizes `x.format(f: ref …)`: a synthesized
+// node carries the synth context's line, so letting it fail downstream reported `unknown method` against
+// line 1 of this file and named neither the type, nor the method, nor `Format` — the four things a reader
+// needs, all missing. The message names the fix, and `@generate(Format)` really does resolve it.
+@generate(of)
+type value Point { public int32 x; public int32 y; }
+
+fn int32 main() {
+    Point p = Point.of(x: 3, y: 4);
+    string s = "point ${p} here";
+    return 0;
+}

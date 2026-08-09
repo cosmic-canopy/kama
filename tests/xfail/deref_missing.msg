@@ -1,1 +1,1 @@
-unknown method
+has no method `nonexistent`

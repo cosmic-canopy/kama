@@ -1,0 +1,14 @@
+// The counterpart to xfail/interp_no_format: the advice that diagnostic gives actually works. One
+// `@generate(Format)` makes a value interpolatable AND printable through `toString` — the same contract
+// reached two ways. Returns 42.
+@generate(of, Format)
+type value Point { public int32 x; public int32 y; }
+
+fn int32 main() {
+    Point p = Point.of(x: 3, y: 4);
+    string viaInterp = "point ${p}";
+    string viaToString = toString(x: p);
+    if (!viaInterp.equals(other: "point Point { x: 3, y: 4 }")) { return 1; }
+    if (!viaToString.equals(other: "Point { x: 3, y: 4 }"))     { return 2; }
+    return 42;
+}
