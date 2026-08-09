@@ -61,7 +61,8 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.query.o  \
             kama.lsp.o    \
             kama.driver.o \
-            kama.prelude.gen.o)
+            kama.prelude.gen.o \
+            kama.agents.gen.o)
 
 # The built-in kama sources embedded into the binary (prelude core + the always-in-scope smart-ptr
 # triad). tools/embed_prelude.sh wraps them in raw-string literals -> build/kama.prelude.gen.cpp.
@@ -73,6 +74,16 @@ $(BUILD):
 
 $(BUILD)/kama.prelude.gen.cpp: $(PRELUDE_GLOBAL) $(PRELUDE_MODULES) tools/embed_prelude.sh | $(BUILD)
 	sh tools/embed_prelude.sh $@ $(PRELUDE_GLOBAL) $(PRELUDE_MODULES)
+
+# The agent-guidance files `kama agents` writes, embedded for the same reason as the prelude: a
+# `--no-std` install ships only bin/kama. AGENTS.md is the content; every stub is a pointer to it,
+# and declares its own destination path on line 1 (see tools/embed_agents.sh).
+AGENTS_MD    = agents/AGENTS.md
+AGENTS_SKILL = agents/skill/SKILL.md
+AGENTS_STUBS = $(sort $(wildcard agents/stubs/*.md))
+
+$(BUILD)/kama.agents.gen.cpp: $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS) tools/embed_agents.sh | $(BUILD)
+	sh tools/embed_agents.sh $@ $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into build/.

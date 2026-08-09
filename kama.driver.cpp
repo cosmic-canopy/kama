@@ -61,6 +61,7 @@
 #include "kama.prelude.h"   // KAMA_PRELUDE_SRC + KAMA_PRELUDE_MODULES (embedded built-in kama)
 #include "kama.lsp.h"       // ParseResult/parseForQuery + runLspServer (the `kama lsp` server)
 #include "kama.json.h"      // Json + serialize, for `--json` output (shared with the LSP's framing)
+#include "kama.agents.h"    // KAMA_AGENTS_MD + stubs, embedded — the `kama agents` command
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -3988,6 +3989,77 @@ Json jsonDiagnostic(const Diagnostic& d)
     return j;
 }
 
+// ------------------------------------------------------------------------------------------------
+// `kama agents` — write the agent guidance into a project.
+//
+// The content is agents/AGENTS.md and nothing else; every other file is a POINTER to it (see
+// kama.agents.h). That is not a shortcut, it is the design: `AGENTS.md` is an open cross-tool
+// standard most agents read natively, so one file reaches them, and duplicating its text per tool
+// would create N things to keep in sync for no gain.
+//
+// Everything is embedded in the binary (tools/embed_agents.sh), so this works from a `--no-std`
+// install and needs no path resolution. User docs: docs/agents.md.
+
+// The embedded text starts with the newline that follows `R"KAMAGENTS(`. Drop it so a written file
+// does not open with a blank line.
+static const char* agentBody(const char* s) { return (s && *s == '\n') ? s + 1 : s; }
+
+void agentsUsage()
+{
+    fprintf(stderr,
+        "usage:\n"
+        "  kama agents install [<dir>] [--claude] [--tool <name>]... [--all-tools] [--skill] [--force]\n"
+        "                                      write AGENTS.md (+ pointers) into <dir> (default: .)\n"
+        "  kama agents print [--skill]         write the guidance to stdout instead\n"
+        "  kama agents list                    which tools are covered, and the file each one gets\n");
+}
+
+int cmdAgentsList()
+{
+    printf("AGENTS.md is read natively by most agent tools (Codex, Cursor, Windsurf, Gemini CLI,\n"
+           "Zed, Aider, Warp, VS Code/Copilot, Jules, Junie, Amp, RooCode, goose, opencode, Devin,\n"
+           "Kilo, Factory, Augment, ...). `kama agents install` writes it and nothing else is needed.\n\n"
+           "These tools read something else, so they get a POINTER to AGENTS.md — never a copy:\n\n");
+    printf("  %-12s %-34s %s\n", "--tool", "writes", "note");
+    printf("  %-12s %-34s %s\n", "------", "------", "----");
+    for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) {
+        const KamaAgentStub& s = KAMA_AGENT_STUBS[i];
+        const char* note = strcmp(s.name, "claude") == 0 ? "an `@AGENTS.md` import (--claude)"
+                                                         : "one line: read AGENTS.md";
+        printf("  %-12s %-34s %s\n", s.name, s.dest, note);
+    }
+    printf("\n  %-12s %-34s %s\n", "--skill", ".claude/skills/kama/SKILL.md",
+           "the richer on-demand cookbook");
+    printf("\n--all-tools writes every pointer above. Nothing is overwritten without --force.\n");
+    return 0;
+}
+
+// Write `body` to <dir>/<rel>, creating parent directories. Refuses an existing file unless forced,
+// because this writes into somebody's repository and an AGENTS.md they already wrote is the common
+// case, not the exception.
+static bool agentsWrite(const std::string& dir, const std::string& rel, const char* body,
+                        bool force, int& written)
+{
+    std::string path = dir.empty() || dir == "." ? rel : dir + "/" + rel;
+    if (fileExists(path) && !force) {
+        fprintf(stderr, "kama agents: %s exists — pass --force to overwrite, or use "
+                        "`kama agents print` and merge by hand\n", path.c_str());
+        return false;
+    }
+    std::string parent = dirName(path);
+    if (!parent.empty() && parent != path && !dirExists(parent) && !makeDirs(parent)) {
+        fprintf(stderr, "kama agents: cannot create %s\n", parent.c_str());
+        return false;
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out) { fprintf(stderr, "kama agents: cannot write %s\n", path.c_str()); return false; }
+    out << agentBody(body);
+    if (!out) { fprintf(stderr, "kama agents: failed writing %s\n", path.c_str()); return false; }
+    printf("kama agents: wrote %s\n", path.c_str());
+    ++written;
+    return true;
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -4009,6 +4081,9 @@ void usage()
         "                   imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
+        "  kama agents install [<dir>]         write AGENTS.md so an AI agent knows this project + `kama query`\n"
+        "                  ([--claude] [--tool <name>]... [--all-tools] [--skill] [--force];\n"
+        "                   `kama agents list` shows the tools, `kama agents print` writes to stdout)\n"
         "  kama pkg install [<dir>] [--verify] resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
         "                                      (--verify: require + check registry-package signatures)\n"
         "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
@@ -4837,6 +4912,72 @@ int main(int argc, char** argv)
         // front-end-as-library analysis path to publish live diagnostics. Takes no input file (it reads
         // buffers from the editor over the wire), so it returns here before the input/flag handling below.
         return runLspServer(argv[0]);   // argv[0] locates the stdlib for loading imported modules
+    }
+
+    if (subcommand == "agents") {
+        // An early-return command: it touches no .kama source, so it returns before the shared
+        // input/flag handling. It is deliberately NOT in maybeReExec's run-in-place list — the
+        // guidance is version-specific, so a pinned project should get its pinned toolchain's copy.
+        std::string verb = argc > 2 && argv[2][0] != '-' ? argv[2] : "";
+        bool wantClaude = false, allTools = false, skill = false, force = false;
+        std::string dir;
+        std::vector<std::string> tools;
+        for (int i = verb.empty() ? 2 : 3; i < argc; ++i) {
+            std::string a = argv[i];
+            if      (a == "--claude")                 wantClaude = true;
+            else if (a == "--all-tools")              allTools = true;
+            else if (a == "--skill")                  skill = true;
+            else if (a == "--force")                  force = true;
+            else if (a == "--tool" && i + 1 < argc)   tools.push_back(argv[++i]);
+            else if (!a.empty() && a[0] == '-') {
+                fprintf(stderr, "kama agents: unknown option '%s'\n", a.c_str()); agentsUsage(); return 2;
+            }
+            else if (dir.empty())                     dir = a;
+            else { fprintf(stderr, "kama agents: unexpected arg '%s'\n", a.c_str()); return 2; }
+        }
+        if (verb.empty() || verb == "list") {
+            if (verb.empty() && (wantClaude || allTools || skill || force || !tools.empty() || !dir.empty())) {
+                fprintf(stderr, "kama agents: say `install` or `print`\n"); agentsUsage(); return 2;
+            }
+            return verb == "list" ? cmdAgentsList() : (agentsUsage(), 2);
+        }
+        if (verb == "print") {
+            // The primitive the whole feature rests on: stdout, so it composes with anything —
+            // pasting into a file this command has never heard of, or diffing against one.
+            printf("%s", agentBody(skill ? KAMA_AGENTS_SKILL : KAMA_AGENTS_MD));
+            return 0;
+        }
+        if (verb != "install") {
+            fprintf(stderr, "kama agents: unknown command '%s'\n", verb.c_str()); agentsUsage(); return 2;
+        }
+        if (wantClaude) tools.push_back("claude");
+        if (allTools) {
+            tools.clear();
+            for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) tools.push_back(KAMA_AGENT_STUBS[i].name);
+        }
+        // Resolve every tool name BEFORE writing anything: a typo used to be caught halfway through,
+        // after AGENTS.md had already landed, leaving a half-installed project behind an exit 2.
+        std::vector<const KamaAgentStub*> chosen;
+        for (const auto& t : tools) {
+            const KamaAgentStub* found = nullptr;
+            for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i)
+                if (t == KAMA_AGENT_STUBS[i].name) { found = &KAMA_AGENT_STUBS[i]; break; }
+            if (!found) {
+                fprintf(stderr, "kama agents: unknown tool '%s' — `kama agents list` shows them all\n",
+                        t.c_str());
+                return 2;
+            }
+            chosen.push_back(found);
+        }
+        int written = 0;
+        if (!agentsWrite(dir, "AGENTS.md", KAMA_AGENTS_MD, force, written)) return 1;
+        for (const auto* s : chosen)
+            if (!agentsWrite(dir, s->dest, s->src, force, written)) return 1;
+        if (skill && !agentsWrite(dir, ".claude/skills/kama/SKILL.md", KAMA_AGENTS_SKILL, force, written))
+            return 1;
+        printf("kama agents: %d file%s written. AGENTS.md holds the content; the rest point at it.\n",
+               written, written == 1 ? "" : "s");
+        return 0;
     }
 
     if (subcommand == "update") {
