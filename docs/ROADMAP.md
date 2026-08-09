@@ -41,21 +41,22 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| 1 | **AI/agent tooling** | §10 | ↓ |
-| 2 | **`kama seed`** — the project seed | §10 | ↓ |
-| 3 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
-| 4 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 5 | Campaign 2 — full generic specialization | §1.2.1 | |
-| 6 | Campaign 3 — const generics on types | §1.2.2 | |
-| 7 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 8 | stdlib parity M2b / M2c | §3 | |
+| 1 | **`kama seed`** — the project seed | §10 | ↓ |
+| 2 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
+| 3 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
+| 4 | Campaign 2 — full generic specialization | §1.2.1 | |
+| 5 | Campaign 3 — const generics on types | §1.2.2 | |
+| 6 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 7 | stdlib parity M2b / M2c | §3 | |
 
-**Why 1–4 come before the remaining language campaigns:** they are the work that makes every campaign after
-them cheaper and less error-prone — agent support that answers with what the compiler resolved rather than
-what a grep guessed, one command that seeds a project with all of it wired up, a repo layout where scratch
-work cannot pollute the tree, and one canonical formatting so a diff carries only real changes. Items 5–8
-are language work that will be done *through* those tools. **1 and 2 are one arc:** the tooling has to
-exist before a seed can install it.
+**Why 1–3 come before the remaining language campaigns:** they are the work that makes every campaign after
+them cheaper and less error-prone — one command that seeds a project with the tooling wired up, a repo
+layout where scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real
+changes. Items 4–7 are language work that will be done *through* those tools.
+
+*(**AI/agent tooling shipped** — `kama query --search`/`--diagnostics`/`--json`, `kama agents`, and the
+`AGENTS.md` kama writes into a project. Record: [agents.md](agents.md), guarded by
+`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it is next.)*
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -202,6 +203,32 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
   compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
   **Source-breaking**, so before the tag or 2.0.
+
+- **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
+  `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler
+  (correctly located, since the emitted C carries `#line`). What `check` *does* catch is name
+  resolution, unknown functions/methods/types, named-argument mismatches, and ownership/move and
+  serde analysis — a useful fast subset, but not the verdict its name suggests. This matters most to
+  the two consumers that surface `check`-class diagnostics and nothing else: an **AI agent** told to
+  verify its work, and the **LSP**, which shows a clean buffer for a file that will fail to compile.
+  Documented rather than hidden ([agents.md](agents.md), `usage()`, `agents/AGENTS.md`) and pinned by
+  `tools/check-agents.sh`, which asserts the caveat still holds — so closing this gap will *fail* that
+  guard and force the claim out of all three. Real expression type checking in the front end is a
+  campaign, not a fix.
+
+- **A negative claim in the docs has no guard unless an `xfail` fixture proves it.**
+  `tests/idioms_kama_way.kama` compiles the docs' **positive** examples, which is why
+  [coming-from-other-languages.md](coming-from-other-languages.md) cannot rot — but a sentence of the
+  form *"X is a compile error"* is unverifiable that way, because you cannot put a rejected snippet in
+  a fixture that must compile. SPEC claimed `foreach (char c in s)` "is a type error — the
+  byte/codepoint distinction is enforced" and it was not enforced; the loop walked bytes and bound
+  each to a `char`, yielding mojibake. Nobody noticed because all 17 `foreach`-over-a-string sites in
+  the tree used one of the two *correct* spellings, so the mistake was never typed. Fixed
+  (`tests/xfail/foreach_char_over_string`, `tests/xfail/foreach_elem_type_mismatch`), and a spot-check
+  of 13 more negative claims found no others — but nothing *guarantees* the mapping. There are ~42
+  such claims across SPEC/TYPE_MODEL/coming-from-other-languages against 326 xfail fixtures. Wants a
+  guard that extracts the claims and requires each to name a fixture, which needs a machine-readable
+  link between the two (a `<!-- xfail: name -->` marker beside the claim is the cheap shape).
 
 - **A lib/prelude diagnostic is attributed to the file being checked.** `kama check app.kama` reports an
   error raised inside `lib/std/…` or the prelude as `app.kama:<the LIB file's line>` — the line number is
@@ -580,40 +607,18 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-- **AI/agent tooling, shipped WITH the language.** ► **NEXT** (see *Working order*). Design in
-  its own session. The goal is the **bare-bones native support a kama project would want** — not
-  this repo's own working preferences. kama ships what only kama can provide (the language's own
-  facts, verified); a user adds `ponytail` or anything else to their project themselves if they want it.
+- **AI/agent tooling — SHIPPED.** `kama query --search NAME` / `--diagnostics` / `--json`, the
+  `kama agents` command, and the `AGENTS.md` it writes into a project. Record: [agents.md](agents.md);
+  guarded by `tools/check-agents.sh`. Residuals, none blocking:
+  - **No name-based entry beyond `--search`.** There is no call hierarchy (`callers-of`) and no type
+    hierarchy (`implementors-of`), though the contract rename group already holds the data.
+  - **No stdin / unsaved-buffer mode.** Every query reads the file from disk, so an agent cannot ask
+    about an edit it has not written out. The LSP can; the CLI deliberately cannot.
+  - **One full `analyze()` per invocation** — the §9 front-end cache is the fix, and a batch mode the
+    cheaper rung.
 
-  **Not skill-only.** A skill is one delivery form, and a heavy one. The smaller and more portable form is a
-  snippet a user pastes into their own `CLAUDE.md` — which is exactly how `karpathy-guidelines` is applied
-  in this repo. Ship the snippet; offer the skill as the richer option, not the requirement.
-
-  Most of the substrate already exists and is unadvertised:
-  - **`kama query` is already an agent interface.** `--symbols` (outline), `--def L:C`, `--type L:C`
-    (hover), `--refs L:C`, `--complete L:C`, `--coverage`. One process, one file, structured output, no
-    editor and no LSP handshake — cheaper for an agent than speaking LSP over stdio, and it answers with
-    what the COMPILER resolved rather than what a grep guessed. That is the whole value proposition:
-    verified answers, not plausible ones.
-  - **`llms.txt`** (78 lines) already points at the grammar as the source of truth, the spec for
-    semantics, and the fixtures for runnable examples.
-
-  **It can be written in kama.** A skill is markdown — both skills vendored here are a single `SKILL.md`
-  with no scripts at all — so nothing forces node. Where a helper binary IS wanted, kama can compile it,
-  and the language authoring its own tooling is the right dogfooding. Note the strongest version may need
-  no new binary: `kama query` is the tool already.
-
-  Two things worth settling early, because they shape everything else. **May the tooling invoke the
-  compiler, or only read?** Being able to run `kama build` / `./dev fixture` closes the loop — an agent can
-  check its own work — and that is the difference between a documentation aid and a working tool. And
-  **what keeps it from drifting** the way docs do: the answer this repo reaches for elsewhere is a
-  `tools/check-*.sh` guard, and `check-lsp.sh` already carries 150 assertions against the query surface.
-
-  Reference: <https://github.com/DietrichGebert/ponytail>. It should pay for itself immediately — developing
-  kama in this repo is exactly the workload.
-
-- **`kama seed` — the project seed.** ► **Scheduled, right after the AI tooling** (see *Working order*), because
-  the seed's job is to install what that work produces. In the spirit of `npm init`: one command that turns an
+- **`kama seed` — the project seed.** ► **NEXT** (see *Working order*). The seed's job is to install what
+  the AI tooling above produces, which is why it follows it. In the spirit of `npm init`: one command that turns an
   empty directory into a working kama project instead of a hunt through the docs for what `kama.json` has to
   contain. Interactive by default — prompt for the fields, with a sensible default on every one — and fully
   bypassable by flag for scripts and for the impatient (`--yes`, plus a flag per prompt), which is the shape
@@ -626,9 +631,10 @@ rather than here, so there is one number to keep current. Forward work:
   - **The project shape**, chosen at the prompt: **executable** (a `main` and a runnable `kama build`),
     **library** (no `main`, an exported surface), and — since workspaces ship — a **workspace** with a
     `projects/` tree. The kind decides the manifest fields *and* the seed source file.
-  - **The AI/agent tooling**, opt-in at the prompt: the `CLAUDE.md` snippet the item above ships, so a new
-    project starts with `kama query` already advertised to whatever agent works on it. This is the reason the
-    two are sequenced together.
+  - **The AI/agent tooling**, opt-in at the prompt — which is now just calling the shipped
+    `kama agents install` (plus `--claude` / `--all-tools` / `--skill` from the answers), so a new project
+    starts with `kama query` already advertised to whatever agent works on it. Nothing to write here: the
+    content and the writer both exist, and `check-agents.sh` already guards them.
   - The ordinary hygiene a new repo wants — a `.gitignore` that knows about generated `.c` and
     `build/<os>-<arch>/`, and a README stub.
 

@@ -116,8 +116,10 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
 
 7. **Self-describing.** The grammar (`kama.y`) is the single source of truth — the compiler embodies
    the BNF. Generate machine-readable grammar/spec from it (`docs/grammar.bnf` via `tools/gen-grammar`)
-   so the language always describes itself. A future `kama describe --json` exposes the language surface
-   (keywords, types, builtins, grammar) for tools.
+   so the language always describes itself. `kama query --json` already exposes what the compiler
+   resolved **about a program** ([agents.md](agents.md)); a future `kama describe --json` is the other
+   half — the language surface itself (keywords, types, builtins, grammar), independent of any source
+   file.
 
 8. **MIT licensed.** Permissive and embeddable — see `LICENSE`.
 
