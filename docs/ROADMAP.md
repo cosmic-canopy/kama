@@ -581,6 +581,23 @@ rather than here, so there is one number to keep current. Forward work:
   normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
   but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
 
+- **A file-private symbol's C name is POSITIONAL, so the emitted C is not reproducible.** README promises
+  *"the output IS readable C, so kama drops into an existing C codebase one file at a time"* — and for
+  NAMESPACED code it delivers: `namespace acme::geo;` gives `acme__geo__Point`, `acme__geo__Point__make`,
+  which is exactly the C you would have written. A file with **no namespace** gets a synthetic private
+  scope instead — `_F<index>`, where the index is the file's POSITION in the compilation:
+
+      kama build app.kama extra.kama   ->  _F4__Holder
+      kama build extra.kama app.kama   ->  _F5__Holder     # same type, same source, renamed
+
+  So it is not merely ugly: reorder the inputs, or add an unrelated file, and every file-private symbol in
+  the program renames. That defeats keeping the C — you cannot diff two builds, you cannot depend on a
+  symbol from hand-written C beside it, and a version-controlled `--keep-c` output churns for no reason.
+  Fix: derive the private scope from something STABLE about the file (its basename, or a short hash of its
+  repo-relative path) rather than its ordinal. Also worth asking whether a file-private symbol needs a
+  prefix at all — `static` already gives it internal linkage — and whether `--keep-c` should imply the
+  friendliest naming available, since that flag exists precisely for the hand-it-to-C use.
+
 - **A kama identifier that is a C keyword emits raw and breaks the C compiler.** `int32 switch = 3;` is a
   legal kama declaration and lowers to `int32_t switch = 3;`, which clang rejects with an error pointing at
   generated C the author never wrote. **25 of C11's 44 keywords are legal kama identifiers** — including
