@@ -119,7 +119,59 @@ so its instance had to be minted by hand.
 
 native 959 / ASan 923 / wasm 897, all 0 failed; every `tools/check-*.sh` green.
 
-**M5b (widening) and M5c (the gate) are next.**
+### M5b — shipped 2026-08-08
+
+A primitive can now be a contract value, in both forms: a BORROW (`Hashable h = 3;`, a local or a
+parameter) and an OWNING box (`Owned<Hashable> h = 42;`).
+
+Two things made a primitive different from a class here. It has no `_classes` entry — every "is this a
+user type?" test keys on that map — so the vtable is emitted from `_primConformances`. And an intrinsic's
+method takes `self` BY VALUE while a vtbl slot passes `void* self`, so every slot needs a deref THUNK
+rather than the cast a class gets.
+
+The borrow points its fat pointer at `&(int32_t){ n }` — a C99 compound literal, whose storage duration is
+the enclosing block. That is the lifetime a borrow wants, and it needed no new safety machinery: the
+escape check that already governs contract values rejects storing or returning one.
+
+Pay-for-what-you-use, and the codegen gate proves it: ZERO change across all 592 pre-existing fixtures.
+Widenings are recorded in the SCAN pass (a vtable must precede the C naming it) and emitted only for the
+pairs a program actually widens — emitting every primitive conformance would have put ~100 vtables in
+every binary. The scan records optimistically, because `type intrinsic` blocks are applied AFTER it.
+
+### M5c — shipped 2026-08-08
+
+The contract-scope rule: a contract decorates a primitive **within the scope of that contract**, so the
+method is not part of the primitive's own API. Without it, any package declaring `type intrinsic <int32>
+implements Weighable` puts `.weight()` on every `int32` in the program.
+
+The discriminator is the one the brief identified, and it has to be read BEFORE `primKey`: `primKey`
+substitutes first, and that substitution is exactly what turns `K` into `int32`. A receiver whose recorded
+node still spells a bound type parameter is generic dispatch and stays legal; one that spells `int32` is
+concrete. A NULL node means "cannot tell" and is permissive, because treating it as concrete fires the
+gate on library code.
+
+It lands in TWO places, as the brief warned. `string` has a real `_classes` entry, so its injected
+`compareTo` never reaches the primitive branch — and it sits on the same ClassInfo as string's NATIVE
+`equals`. `fromContract` is what tells them apart.
+
+**What the brief did not anticipate: string interpolation.** `"${x}"` lowers to a compiler-synthesized
+`x.format(f:)` on a primitive — the exact shape the gate rejects. Five fixtures failed on it before the
+cause was obvious (their line numbers were all `:1`, the synthesized-node tell). The rule is about SOURCE,
+so the lowering is exempt via `_inSynthDispatch`.
+
+Six fixtures were genuine sites, exactly the six the plan predicted. Each now reaches its contract through
+one, and the codegen shows the cost is nothing: a comparator's `l.compareTo(other: r)` becomes
+`cmp(a: l, b: r)`, which monomorphizes to `cmp__int32` calling the same `int32__compareTo` — one
+inlinable static hop.
+
+**And the fallback the original brief promised now genuinely exists.** It justified the gate with
+`Comparable c = x;`, which could never have worked. After M5a made the self-type a pinned parameter and
+M5b made a primitive widenable, `Comparable<int32> c = l; c.compareTo(other: r);` compiles and runs —
+`tests/comparable.kama` exercises both spellings deliberately.
+
+native 964 / ASan 928 / wasm 902, all 0 failed.
+
+**M6 — deleting retro-impl — is what remains of the campaign.**
 
 ### What M3 residual actually was
 

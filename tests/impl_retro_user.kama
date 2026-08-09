@@ -11,10 +11,13 @@ implements Weighable for Widget {
 }
 
 fn int32 total<T: Weighable>(T a, T b) { return a.weight() + b.weight(); }
+// A retro-impl's method is contract-supplied too, so it is reached through the contract — the same rule
+// that governs a `type intrinsic` conformance, and one more reason retro-impl has no remaining job (M6).
+fn int32 weighOne<T: Weighable>(ref T x) { return x.weight(); }
 
 fn int main() {
     Widget x = Widget.of(w: 20);
     Widget y = Widget.of(w: 22);
-    if (x.weight() != 20) { return 1; }        // direct call on the retro method
+    if (weighOne::<Widget>(x: x) != 20) { return 1; }   // through the bound, not on the bare receiver
     return total::<Widget>(a: x, b: y);        // via the generic bound → 42
 }

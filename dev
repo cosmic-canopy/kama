@@ -13,6 +13,7 @@ kama dev — usage: ./dev <task>
 Build
   build             build the compiler for this host (make)
   build container   build the compiler inside the container
+  rebuild           clean + build — use after a git stash/checkout cycle (see below)
   clean             make clean
 
 Test — each task builds first, so it can never run against a stale compiler
@@ -29,6 +30,11 @@ Site & packaging
   serve [port] [dir]  build + serve the site over examples/httpd (default :8080, _site/)
   ext-package       package the VS Code extension (.vsix), no publish
   help              this help
+
+If the compiler suddenly SEGFAULTS on fixtures that passed a moment ago, run `./dev rebuild`. Header
+dependencies are declared, but a `git stash`/`git checkout` cycle can restore sources without make
+deciding to rebuild, and the result is objects compiled against two different class layouts — a corrupt
+compiler that builds cleanly. A clean rebuild is the fix; the symptom is never a real code bug.
 
 Why `san` and `wasm` are container-only:
   - macOS has no LeakSanitizer, so a host KAMA_SAN run reports "detect_leaks is not supported on
@@ -96,6 +102,7 @@ case "$task" in
     fi
     ;;
   ext-package)    cd editor/vscode && npx --yes @vscode/vsce package ;;
+  rebuild)        make clean && build_host ;;
   clean)          make clean ;;
   -h|--help|help) usage ;;
   *)              echo "unknown task: $task (deploy/publish live in ./ops)" >&2; usage; exit 2 ;;

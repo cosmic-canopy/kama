@@ -54,6 +54,16 @@ dissolves the chicken-and-egg — a content check against a *commit* pin would f
 changes the grammar. `tools/check-editors.sh` §2c today proves only that the rev resolves and carries a
 grammar, never that it is the current one.
 
+**Mandatory braces on every branch and loop body** — `if`/`else`/`while`/`for`/`foreach` would require
+`{ }`, never a bare statement. This is the "easy to use correctly, hard to use incorrectly" argument, and
+it is stronger in kama than in most languages precisely because there is no whitespace rule to fall back
+on: a bare branch body is where `goto fail;`-shaped bugs live, and where a later edit silently attaches a
+second statement to nothing. It is a **breaking source change**, so it lands before the tag or waits for
+2.0. Design questions worth settling first: whether `else if` chains stay exempt (they are the one case
+where the brace adds nothing and nests everything), and whether a single-line `if (x) { return; }` is
+still allowed on one line — the rule should be about the braces, not about line breaks. Pairs naturally
+with the formatter below, which can insert them mechanically for the migration.
+
 Everything else here is library or toolchain work that does **not** gate the tag:
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
@@ -517,6 +527,18 @@ rather than here, so there is one number to keep current. Forward work:
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
 ## 10. Tooling / distribution (deferred)
+
+- **`kama fmt` — a native formatter, not an external tool.** The language should print itself: one
+  canonical form, applied by the toolchain, so a project never argues about style and a diff never carries
+  noise that is not a change. Driven by the project's `kama.json` (the same manifest that already carries
+  the flag universe and the toolchain pin), with a small, deliberately non-negotiable set of knobs —
+  indent width, line width, brace style — rather than a style language. Baseline behaviour: normalize
+  redundant whitespace, enforce the house layout, and stabilize the shapes that produce spurious diffs
+  (argument lists that wrap, trailing commas, alignment). Two things make this cheaper here than
+  elsewhere: the tree-sitter grammar already parses every accepted file and is checked against the
+  compiler on every run (`tools/check-treesitter.sh`), so the formatter has a trustworthy CST to print
+  from; and `kama fmt --check` is one more guard script. It is also the migration tool for mandatory
+  braces (§1) — the rewrite is mechanical, and a formatter that can insert a brace can perform it.
 
 - **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** Two separate
   irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,

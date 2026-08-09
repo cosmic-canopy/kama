@@ -12,6 +12,10 @@ type resource Counter {
     public fn int32 get() { return this.n; }
 }
 
+// `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through
+// the contract — here a BOUND, which monomorphizes to the identical direct call.
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+
 fn int32 main() {
     int32 r = 0;
 
@@ -31,7 +35,7 @@ fn int32 main() {
     DynamicArray<string> ks = sm.keys();
     string prev = ""; bool sorted = true; int32 cnt = 0;
     foreach (string k in ks) {
-        Ordering o = k.compareTo(other: prev);
+        Ordering o = cmp::<string>(a: k, b: prev);   // explicit: a foreach binding is not inferable
         bool gt = match (o) { case Greater: true; case Less: false; case Equal: false; };
         if (!gt) { sorted = false; }
         prev = give k; cnt = cnt + 1;

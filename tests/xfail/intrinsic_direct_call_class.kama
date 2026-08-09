@@ -1,0 +1,11 @@
+// The gate's class path. `string` has a real `_classes` entry, so its INJECTED `compareTo` never reaches
+// the primitive branch — and it sits on the SAME ClassInfo as string's NATIVE `equals`/`length`.
+// `fromContract` is what tells them apart: non-empty only for a method supplied from outside the type's
+// own body. So `s.equals(other: t)` and `s.length()` stay legal while `s.compareTo(other: t)` does not.
+fn int32 main() {
+    string a = "app"; string b = "apple";
+    if (!a.equals(other: b)) { }              // NATIVE - legal
+    if (a.length() > 0ui64) { }               // NATIVE - legal
+    Ordering o = a.compareTo(other: b);       // from `Comparable` - not string's own
+    return match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
+}

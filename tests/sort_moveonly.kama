@@ -14,12 +14,16 @@ type resource Tag {
     public fn int32 value() { return this.n; }
 }
 
+// `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through
+// the contract — here a BOUND, which monomorphizes to the identical direct call.
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+
 type value ByValue implements Order<Tag> {
     public ctor make() { }
     public fn Ordering compare(ref Tag a, ref Tag b) {
         int32 l = a.value();
         int32 r = b.value();
-        return l.compareTo(other: r);
+        return cmp(a: l, b: r);
     }
 }
 

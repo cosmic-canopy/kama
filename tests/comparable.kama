@@ -1,8 +1,17 @@
-// M1 — the `Comparable`/`Ordering` prelude contract + primitive retro-impls. Every int/float/string is
+// M1 — the `Comparable`/`Ordering` prelude contract + the primitive conformances. Every int/float/string is
 // universally comparable (three-way `compareTo` -> `Ordering`) with NO import, matchable, and usable as a
-// generic bound `<T: Comparable>` (nominal, static-dispatched) — the prerequisite for heap + sorted containers.
+// generic bound — the prerequisite for heap + sorted containers.
+//
+// `compareTo` is supplied BY the contract, so it is not part of `int32`'s own API and is reached through
+// the contract. Both spellings are exercised here, and they are the only two:
+//   - a BOUND (`cmp` below), monomorphized to a direct call — the zero-cost path;
+//   - a CONTRACT VALUE (`Comparable<int32> c = x;`), one indirect call through a vtable, which is possible
+//     at all only because the self-type is a pinned parameter and a primitive can be widened.
 
-// Generic max via the bound: proves `<T: Comparable>` lowers `a.compareTo(other: b)` to a static direct call.
+// Reaching the contract method through a BOUND — the spelling every concrete comparison uses below.
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+
+// Generic max via the bound: proves `<T: Comparable<T>>` lowers `a.compareTo(other: b)` to a static direct call.
 // (`compareTo` borrows its operand, so `a`/`b` stay live; instantiated here for the value type `int32`.)
 fn T maxOf<T: Comparable<T>>(T a, T b) {
     Ordering o = a.compareTo(other: b);
@@ -19,25 +28,29 @@ fn int32 main() {
 
     // int32 three-way — less / equal / greater.
     int32 three = 3; int32 seven = 7; int32 nine = 9; int32 two = 2;
-    if (sign(o: three.compareTo(other: seven)) == 0 - 1) { r = r + 5; }
-    if (sign(o: seven.compareTo(other: seven)) == 0)     { r = r + 5; }
-    if (sign(o: nine.compareTo(other: two))    == 1)     { r = r + 5; }
+    if (sign(o: cmp(a: three, b: seven)) == 0 - 1) { r = r + 5; }
+    if (sign(o: cmp(a: seven, b: seven)) == 0)     { r = r + 5; }
+    if (sign(o: cmp(a: nine, b: two))    == 1)     { r = r + 5; }
 
     // float64 ordering.
     float64 lo = 1.5; float64 hi = 2.5;
-    if (sign(o: lo.compareTo(other: hi)) == 0 - 1) { r = r + 5; }
-    if (sign(o: hi.compareTo(other: hi)) == 0)     { r = r + 5; }
+    if (sign(o: cmp(a: lo, b: hi)) == 0 - 1) { r = r + 5; }
+    if (sign(o: cmp(a: hi, b: hi)) == 0)     { r = r + 5; }
 
     // string lexicographic — shorter prefix < longer, earlier byte < later byte.
     string apple = "apple"; string apply = "apply"; string app = "app";
-    if (sign(o: app.compareTo(other: apple))   == 0 - 1) { r = r + 5; }   // "app" < "apple" (prefix)
-    if (sign(o: apple.compareTo(other: apply)) == 0 - 1) { r = r + 5; }   // 'e' < 'y'
-    if (sign(o: apple.compareTo(other: apple)) == 0)     { r = r + 5; }
-    if (sign(o: apply.compareTo(other: apple)) == 1)     { r = r + 5; }
+    if (sign(o: cmp(a: app, b: apple))   == 0 - 1) { r = r + 5; }   // "app" < "apple" (prefix)
+    if (sign(o: cmp(a: apple, b: apply)) == 0 - 1) { r = r + 5; }   // 'e' < 'y'
+    if (sign(o: cmp(a: apple, b: apple)) == 0)     { r = r + 5; }
+    if (sign(o: cmp(a: apply, b: apple)) == 1)     { r = r + 5; }
+
+    // The other spelling: a contract VALUE over a widened primitive — one indirect call, not a bound.
+    Comparable<int32> cv = three;
+    if (sign(o: cv.compareTo(other: seven)) == 0 - 1) { r = r + 5; }
 
     // Generic bound, monomorphized for int32.
     if (maxOf(a: 4, b: 9) == 9) { r = r + 5; }
     if (maxOf(a: 8, b: 2) == 8) { r = r + 5; }
 
-    return r;   // 11 assertions * 5 = 55
+    return r;   // 12 assertions * 5 = 60
 }

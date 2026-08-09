@@ -1,0 +1,11 @@
+// A contract decorates a primitive WITHIN THE SCOPE OF THAT CONTRACT — the method is not part of the
+// primitive's own API. Without this rule, any package declaring `type intrinsic <int32> implements
+// Weighable { … }` would put `.weight()` on every `int32` in the program, including in code that has
+// never heard of that package.
+//
+// Both legal spellings are shown in tests/comparable.kama: a bound, and a contract value. A user type
+// that declares `implements C` in its OWN body is untouched by this — its methods are its own.
+fn int32 main() {
+    int32 n = 42;
+    return cast<int32>(n.hash());   // `hash` is Hashable's, not int32's
+}

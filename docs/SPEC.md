@@ -1960,6 +1960,39 @@ conformance hangs on a separate registry, and a **scalar** target's `this` is th
 takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `Map<int32, V>` /
 `Set<int32>` get their keys.
 
+**A contract is a SCOPE.** A conformance decorates a primitive *within the scope of that contract*, so a
+contract-supplied method is **not part of the primitive's own API** — it is reached through the contract,
+never off the bare value. Without this, any package declaring `type intrinsic <int32> implements
+Weighable` would put `.weight()` on every `int32` in the program, including code that never heard of it.
+
+```kama
+int32 l = 3; int32 r = 7;
+l.compareTo(other: r);                       // ERROR — `compareTo` is Comparable's, not int32's
+
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+cmp(a: l, b: r);                             // a BOUND — monomorphizes to a direct call, zero cost
+
+Comparable<int32> c = l;
+c.compareTo(other: r);                       // a CONTRACT VALUE — one indirect call
+```
+
+Those two are the only spellings, and both are real. The rule covers a primitive and a retro-impl'd type;
+a type that declares `implements C` in its **own body** is untouched — its methods are its own. String
+interpolation is exempt: `"${x}"` is the compiler's own lowering to `Format`, not something an author
+wrote.
+
+**Widening — a primitive as a contract value.** A primitive can be bound to a contract, as a borrow or as
+an owning box:
+
+```kama
+Hashable h = 3;                  // a BORROW — a fat pointer over block-scoped storage. Cannot escape:
+fn void f(Hashable h) { … }      // the same escape check that governs every contract value applies.
+Owned<Hashable> o = 42;          // an OWNING box — the form that can be a field, an element, a return.
+```
+
+The machinery is pay-for-what-you-use: the vtable and its deref thunks (an intrinsic's method takes `self`
+by value; a vtbl slot passes `void*`) are emitted only for the pairs a program actually widens.
+
 **Why a kind rather than a mechanism.** Before this, a primitive had no kama spelling at all, so the only
 way to give it a contract was `implements C for T` — a *retroactive* block reaching into a type from
 outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing

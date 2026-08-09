@@ -11,13 +11,17 @@ type value Rec {
 
 // A comparator OBJECT — the seam that replaces a capturing closure. `field` is state an `fnptr`
 // comparator could not carry.
+// `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through
+// the contract — here a BOUND, which monomorphizes to the identical direct call.
+fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+
 type value ByField implements Order<Rec> {
     int32 field;
     public ctor make(int32 field) { this.field = field; }
     public fn Ordering compare(ref Rec a, ref Rec b) {
         int32 l = this.field == 0 ? a.dept : a.id;
         int32 r = this.field == 0 ? b.dept : b.id;
-        return l.compareTo(other: r);
+        return cmp(a: l, b: r);
     }
 }
 

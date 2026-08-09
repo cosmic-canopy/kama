@@ -855,6 +855,10 @@ private:
     std::set<std::string> _borrowedMatchBindings;
     ClassInfo*                         _currentClass = nullptr;  // when emitting a method/ctor
     std::string                        _currentFunc;             // C-name of the function/method being emitted (friend match)
+    // Set while the emitter dispatches a call IT synthesized (string interpolation lowering `${x}` to
+    // `x.format(f:)`). The contract-scope gate is a rule about SOURCE — what a primitive'''s API looks
+    // like to an author — so a compiler lowering is exempt from it.
+    bool                               _inSynthDispatch = false;
     std::string                        _thisType;                // C name `This` resolves to (the class being emitted, or the contract type inside its vtbl slot)
     bool                               _basesLinked = false;     // linkBases() has run, so an empty ClassInfo::baseName means "no base" rather than "not resolved yet"
     bool                               _inBaseInstall = false;   // emitting the RHS of `this.base = …`: the one place an `abstract` type's ctor may be CALLED

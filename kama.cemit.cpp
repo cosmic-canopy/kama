@@ -1411,7 +1411,12 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
                       std::make_shared<ModifierNode>(ctx, std::make_shared<std::string>("ref")), ident(fv)));
     auto call = std::make_shared<InvocationNode>(ctx,
                   std::make_shared<MemberAccessNode>(ctx, ident("format"), hole), args);
+    // This call is the COMPILER's lowering of `${x}`, not something the author wrote, so the
+    // contract-scope gate does not apply to it: the rule is about what a primitive's API looks like in
+    // SOURCE, and interpolation is how the language itself reaches `Format`.
+    bool prevSynth = _inSynthDispatch; _inSynthDispatch = true;
     _hoisted.push_back(emitExpression(call) + ";");
+    _inSynthDispatch = prevSynth;
 }
 
 // A tagged string `<tag>"lit ${hole} lit"` lowers to: render each part + hole to an owned `kama_string`, pack
@@ -6380,6 +6385,11 @@ void CEmitter::scanPrimWidening(SharedIdentifier declType, SharedExpression init
         && (ct == "std::memory::Owned" || ct == "std::memory::Shared"
             || *declType->value == "Owned" || *declType->value == "Shared"))
         ct = resolveUserName(*declType->genericArg->value, declType->genericArg->qualifier);
+    // A generic-contract INSTANCE (`Comparable<int32>`, which every pinned contract now is) resolves by
+    // name to its TEMPLATE, which lives in `_genericContracts` and not `_interfaces`. Mangle it to the
+    // instance, the name the vtbl is actually filed under.
+    if (!isInterface(ct) && _genericContracts.count(ct) && declType->genericArgs)
+        ct = genericTypeMangle(ct, declType->genericArgs);
     if (!isInterface(ct)) return;
     std::string pk = scanPrimKeyOf(init);
     if (!pk.empty()) _primWidenings.insert({pk, ct});
@@ -6418,6 +6428,13 @@ void CEmitter::emitPrimWidenVtables()
         bool declares = false;
         for (auto& itf : pci->interfaces) if (itf == cn) { declares = true; break; }
         if (!declares) continue;              // the scan records optimistically; this is the check
+        // Render the slot signatures under the CONTRACT's own scope, with a generic-contract instance's
+        // type args bound — the same treatment emitInterfaceTypes gives them. Every pinned contract is such
+        // an instance, so without this a thunk's parameter comes out as the raw `T`.
+        NsCtx savedNs = _nsCtx;
+        if (!ii->second.isGenericInst) { _nsCtx.scope = ii->second.scope; _nsCtx.usings = ii->second.usings;
+                                        _nsCtx.symbolAliases = ii->second.symbolAliases; }
+        ContractSubst _cs(*this, ii->second);
         for (auto& m : ii->second.methods) {
             if (m.isCtor) continue;           // a contract-required ctor has no slot
             ClassInfo* owner = nullptr;
@@ -6442,6 +6459,7 @@ void CEmitter::emitPrimWidenVtables()
         }
         indent(1); *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
         *_out << "};\n\n";
+        _nsCtx = savedNs;
     }
 }
 
@@ -16797,15 +16815,30 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // `int32__hash(k)` (no pointer, no vtable).
     {
         std::string primTy = cls;
+        bool viaTypeParam = false;
         if (primTy.empty()) {
             // Prefer the KAMA type node — the only channel that tells `char` from `uint32`, which share the
             // C type `uint32_t`. A place with no recorded node (a collection element, an index into an
             // array) falls back to its C type, which answers `uint32` for both.
             SharedIdentifier tn = receiverTypeNode(receiver);
+            // THE GATE'S DISCRIMINATOR, and it has to be read BEFORE primKey: primKey substitutes first,
+            // and that substitution is exactly what turns `K` into `int32`. A receiver whose recorded node
+            // still spells a bound type PARAMETER is generic dispatch — the pervasive, zero-cost idiom —
+            // and must stay legal. One that spells `int32` is a concrete receiver.
+            // A NULL node means "cannot tell" (a collection element, an array index): permissive, because
+            // treating it as concrete would fire the gate on library code.
+            viaTypeParam = !tn || (tn->value && _typeSubst.count(*tn->value) != 0);
             std::string k = tn ? primKey(tn) : std::string();
             primTy = isScalarPrimKey(k) ? k : primKeyOfCType(receiverScalarCType(receiver));
         }
         if (ClassInfo* pci = primConformance(primTy)) {
+            // A contract decorates a primitive WITHIN THE SCOPE OF THAT CONTRACT — the method is not part
+            // of the primitive's own API. Otherwise any package declaring `type intrinsic <int32>
+            // implements Weighable` would put `.weight()` on every `int32` in the program.
+            if (!viaTypeParam && !_inSynthDispatch)
+                unsupported(("`" + method + "` is not `" + primTy + "`'s own method — it comes from a "
+                             "contract, so reach it through one: a bound (`fn f<T: C<T>>(T x)`) or a "
+                             "contract value (`C c = x;`)").c_str(), call->line);
             ClassInfo* powner = nullptr;
             MethodInfo* pmi = findMethod(pci, method, &powner);
             if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call->line); return "0"; }
@@ -16893,6 +16926,26 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             }
         } else {
             recvPtr = addrOfOperand(receiver, cls, call->line);
+        }
+    }
+    // The contract-scope gate, class path. `string` has a real `_classes` entry, so its INJECTED
+    // `compareTo`/`hash` never reach the primitive branch above — and they sit on the same ClassInfo as its
+    // NATIVE `equals`/`length`. `fromContract` is exactly what tells them apart: it is non-empty only for a
+    // method supplied from outside the type's own body (a `type intrinsic` block or a retro-impl), which is
+    // the property the rule wants. A type that declares `implements C` in its own body is untouched.
+    {
+        ClassInfo* gowner = nullptr;
+        MethodInfo* gmi = _classes.count(cls) ? findMethod(&_classes[cls], method, &gowner) : nullptr;
+        if (gmi && !gmi->fromContract.empty() && !_inSynthDispatch) {
+            // Same discriminator as the primitive branch: a receiver still spelling a bound type parameter
+            // is generic dispatch and stays legal. A null node means "cannot tell" — permissive.
+            SharedIdentifier tn = receiverTypeNode(receiver);
+            bool viaTypeParam = !tn || (tn->value && _typeSubst.count(*tn->value) != 0);
+            if (!viaTypeParam)
+                unsupported(("`" + method + "` is not `" + cls + "`'s own method — it comes from the "
+                             "contract `" + gmi->fromContract + "`, so reach it through one: a bound "
+                             "(`fn f<T: " + gmi->fromContract + "<T>>(T x)`) or a contract value").c_str(),
+                            call->line);
         }
     }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get());
