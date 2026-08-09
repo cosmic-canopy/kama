@@ -149,6 +149,50 @@ Unlocking it needs **compile-to-object-then-link** — the machinery already exi
 path (`clang -c` per TU, then `ar`) — plus a content-addressed `.o` cache keyed on content + flags.
 The same change gives **user projects incremental rebuilds**, which are impossible today.
 
+### Lever 4, re-measured 2026-08-09 — the numbers that decide the design
+
+`tests/parse_radix.kama`, 24 TUs, replaying the real captured command (prepend the compiler: `--cc echo`
+prints the *arguments*, not the program):
+
+| | ms |
+|---|---|
+| today: one clang invocation, 24 sources | **530** |
+| 24 separate `clang -c` (a fully cold cache) | **750** |
+| link 24 already-built `.o` (a fully warm cache) | **34** |
+
+Duplication re-confirmed on 40 fixtures: **276 TUs emitted, 31 distinct — 89 %**, matching the original
+sample exactly. So a warm build is a 34 ms link plus a handful of compiles, against 530 ms today. Across
+the 597-fixture phase that is most of its ~520 clang core-seconds.
+
+**Ruled out: dropping `-g`.** It is on by default in every emitted build, and the obvious guess was that
+debug info was a big slice. It is **7 ms of 530 ms** (1.3 %). The emitted C is simple enough that debug
+info is nearly free. Don't re-chase it.
+
+**The crux is cache-key soundness, and it is the whole design.** The compile flags include
+`-I<runtimeDir> -I<dirname(input)> -I. -I<headerDir>`. The first three are constant across the entire
+suite; **`headerDir` is the per-build output directory**, holding the shared generated header. So a key
+over "`.c` content + flag string" gets *zero* cross-fixture hits until `headerDir` is handled, and a key
+that simply drops the `-I` paths is unsound — it would reuse an object compiled against different
+headers. This is exactly the problem ccache solves with its direct mode (hash the source plus every
+header a previous `-MD` run reported).
+
+Which forces a fork, to settle before building:
+
+- **(a) Split only, delegate caching to `ccache`.** kama's job shrinks to emitting `-c` per TU and
+  linking the objects; `--cc "ccache clang"` then does the rest, with a mature and correct answer to the
+  header-dependency problem. But cold is 42 % *slower* (750 ms vs 530 ms), so the split cannot be the
+  default without a cache present, and ccache is not installable everywhere (notably the container image
+  and CI would both need it).
+- **(b) kama's own content-addressed cache**, direct-mode style: key on the `.c` content, the contents of
+  every header it actually includes (discovered with `-MD` on a miss and remembered in a manifest), the
+  normalized flags, and the compiler identity. Self-contained and helps every user with no extra
+  dependency — and it is the piece that also gives **incremental rebuilds**, which lever 4 is half about.
+  More code, and the stale-hit bar is absolute: a wrong hit is a wrong binary.
+
+Either way the driver change is the same shape and is the prerequisite: `kama.driver.cpp` builds one
+`cmd` stream with the sources in the *middle* (`kama.driver.cpp:5891`), so it needs splitting at that
+point into compile-flags and link-tail. `outStatic` (`:5958`) already demonstrates the per-TU loop.
+
 ⚠️ **Two traps, both verified:**
 
 - Under `-g`, identical `.c` at *different paths* produce **different** `.o` — debug info embeds the
@@ -208,9 +252,13 @@ this would need, so declining costs nothing. Re-ask after lever 3.
 
 1. ~~Lever 1 (stop double-running the guards)~~ ✅ −61 s from `./dev matrix`.
 2. ~~Lever 2 (parallelize the guards)~~ ✅ 61 s → 38 s. Plus `make -j`: cold build 8 s → 3 s.
-3. **Lever 3 (front-end reuse)** — now the whole remaining guard block, since `check-query.sh` at 36.8 s
-   *is* the floor. Price the multi-query invocation first, then batch mode, then the on-disk cache.
-4. Lever 4 (compile-to-object + `.o` cache).
+3. **Lever 3 (front-end reuse)** — partly banked: memoizing `check-query.sh` took it 35 s → 20 s with no
+   compiler change, and the guard block 38 s → 23 s. What is left of this lever is the real one: the 20 s
+   agreement phase, ~36 % of the fixture phase, `check-query`'s remaining 20 s (still ~15 full analyses),
+   and the LSP's per-keystroke floor. Price the multi-query invocation first, then batch mode, then the
+   on-disk cache.
+4. **Lever 4 (compile-to-object + `.o` cache)** — the biggest single item left: ~520 clang core-seconds
+   of the 81 s fixture phase, against a 34 ms warm link. Settle the (a)/(b) fork above first.
 
 Re-run `./dev test 2>&1 | grep '^phase:'` after each and record the delta here.
 
@@ -219,7 +267,11 @@ Measured on a 10-core M-series host, 2026-08-09:
 | | `./dev test` | guard block | native leg + `./dev check` |
 |---|---|---|---|
 | baseline | 184 s (970 pass) | 61 s serial | 184 + 61 = **245 s** |
-| levers 1 + 2 + `make -j` | **162 s** (971 pass) | **38 s** parallel | 128 s (guards skipped) + 40 s = **168 s** |
+| levers 1 + 2 + `make -j` | 162 s (971 pass) | 38 s parallel | 128 s (guards skipped) + 40 s = **168 s** |
+| + check-query memoized | **148 s** | **23 s** | ~153 s |
+
+Phases now: guards 23 s · fixtures 81 s · agreement 20 s · multi-file+xfail 11 s. The two remaining
+levers are aimed squarely at the 81 s and the 20 s.
 
 `971` rather than `970` because `check-agents.sh` joined the suite — it was in `./dev check`'s glob but
 not in `run_tests.sh`'s hand-written list, so no CI leg had ever run it.
