@@ -59,8 +59,15 @@ Notes:
 - The compiler is a tree-walking C emitter (`kama.cemit.*`) over the Flex/Bison/AST front end
   (`kama.l`, `kama.y`, `kama.ast.h`). (An early LLVM backend was removed; C emission is the only backend.)
 - Each language feature lands as a milestone with `tests/` fixtures verifying exit codes on native + wasm.
-- A `tools/check-*.sh` is **glob-enrolled** by `./dev check`, so a new guard joins the gate with no
-  list to update. A new negative claim in the docs wants a `tests/xfail/` fixture in the same commit.
+- A `tools/check-*.sh` is **glob-enrolled** by `tools/run-checks.sh`, which drives the guards for both
+  `./dev check` and `run_tests.sh`, so a new guard joins the gate with no list to update. A new negative
+  claim in the docs wants a `tests/xfail/` fixture in the same commit.
+- The guards run **in parallel**, so a guard must: work in a private `mktemp -d`, never write into the
+  worktree, never `cd` outside a subshell, and reach the compiler through `$KAMA` (the runner exports an
+  absolute one) rather than the `./kama` symlink — which `check-no-inheritance.sh` repoints while it
+  builds. A guard that cannot honor that says `# check-heavy: yes` in its own header and is then run
+  alone. The other marker is `# check-legs: native san` (default `native`) for a guard that must also run
+  on the sanitizer or wasm leg. Both live in the guard, not in a list, so enrollment stays automatic.
 
 ## Where things are written down
 

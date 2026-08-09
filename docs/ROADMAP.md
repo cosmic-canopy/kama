@@ -572,27 +572,28 @@ rather than here, so there is one number to keep current. Forward work:
   not the C toolchain, is the compile cost" — that compared `kama transpile` (which folds to ONE C file)
   against clang on that one file, which is not what `kama build` does.
 
-  The 187 s native leg:
+  **Levers 1 and 2 — the harness ones — have shipped.** `tools/run-checks.sh` now drives the guards for
+  both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel, and `./dev matrix` no longer pays
+  the block twice; `make` gained `-j`. Measured: guard block **61 s → 38 s**, `./dev test`
+  **184 s → 162 s**, `./dev matrix` a further **−61 s**, cold compiler build 8 s → 3 s. The native leg now
+  stands at:
 
   | phase | wall | what dominates it |
   |---|---|---|
-  | `tools/check-*.sh` guards, run **serially** before the fan-out | **~73 s** | `check-query.sh` 36 s, `check-packages.sh` 11 s |
-  | single-file fixtures (597, parallel) | 82 s | front end 36 % / clang 64 % |
-  | analysis agreement (915 `kama check`) | 20 s | pure front end |
-  | multi-file + xfail | 12 s | |
+  | `tools/check-*.sh` guards, parallel | **38 s** | `check-query.sh` **36.8 s** — the block *is* this one guard |
+  | single-file fixtures (597, parallel) | 81 s | front end 36 % / clang 64 % |
+  | analysis agreement (915 `kama check`) | 19 s | pure front end |
+  | multi-file + xfail | 11 s | |
 
-  Four levers, cheapest first. The first two are harness work with no compiler change:
+  Two levers left, both compiler work:
 
-  1. **The guards run TWICE in `./dev matrix`** — 23 of them inline in `run_tests.sh`, then all 24 again
-     via `./dev check`'s glob. ~73 s of pure duplication in the pre-commit gate.
-  2. **They run serially, on one core, while nine idle.** Parallelizing bounds the block at its slowest
-     member (`check-query.sh`) instead of their sum.
   3. **Cache the front end** (prelude + `lib/`). Every invocation re-parses and re-analyzes the prelude
      *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): for a `std`-heavy fixture, parse
      ≈ 2/3, analyze ≈ 1/3. This is the broadest lever — it is ~100 % of the 20 s agreement phase, 36 % of
-     the 82 s fixture phase, and nearly all of `check-query.sh`'s 36 s, which is **233 sequential
-     analyses of the same one file**. It is also the only item here that helps the **LSP** (the fixed
-     per-keystroke floor, §10) and **user projects**.
+     the 82 s fixture phase, and — now that lever 2 has parallelized everything around it — **the entire
+     38 s guard block**, which is `check-query.sh`: 259 `kama query` processes over ~15 programs, one
+     fixture alone accounting for 98 of them at ~210 ms each. It is also the only item here that helps the
+     **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
 
      Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
      whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so

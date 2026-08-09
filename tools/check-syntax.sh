@@ -54,13 +54,16 @@ note() { echo "FAIL syntax: $1" >&2; fails=$((fails+1)); }
 
 # ---- 1. snapshots -----------------------------------------------------------------------------------
 # Run from the extension dir so the default --config (package.json) resolves, exactly as VS Code does.
-if ! (cd "$EXT" && "$SNAP" "$FIX/"'*.kama' >"$FIX/.snapout" 2>&1); then
+# The capture goes to a private tmp dir, not into tests/syntax/: the guards now share a machine, and a
+# guard that writes to the worktree is one `git status` away from looking like an uncommitted change.
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+snapout="$tmp/snapout"
+if ! (cd "$EXT" && "$SNAP" "$FIX/"'*.kama' >"$snapout" 2>&1); then
     note "TextMate scopes differ from the committed snapshots:"
-    sed 's/^/    /' "$FIX/.snapout" >&2
+    sed 's/^/    /' "$snapout" >&2
     echo "    Re-bless ONLY if the change is intended:" >&2
     echo "    (cd editor/vscode && node_modules/.bin/vscode-tmgrammar-snap -u '../../tests/syntax/*.kama')" >&2
 fi
-rm -f "$FIX/.snapout"
 
 # A missing .snap is generated silently by the tool above, which would make a brand-new fixture
 # self-approving. Require one per fixture explicitly.

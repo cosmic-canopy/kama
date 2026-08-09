@@ -10,6 +10,11 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Resolve the platform binary, not the root ./kama symlink: tools/check-no-inheritance.sh repoints that
+# symlink at a DIFFERENT compiler while it builds, and this guard would then silently test the wrong one.
+# mcu/build.sh honors an exported $KAMA for the same reason.
+. "$ROOT/tools/kama-bin.sh"
+export KAMA
 FIXTURE="$ROOT/tests/embedded_blink.kama"   # returns 22 on every leg (native/wasm/embedded) — the shared oracle
 EXPECT=22
 
@@ -17,7 +22,7 @@ if ! command -v arm-none-eabi-gcc >/dev/null 2>&1 || ! command -v qemu-system-ar
     echo "SKIP check-mcu (no arm-none-eabi-gcc / qemu-system-arm — build the kama-mcu image: tools/cdev build-image-mcu)"
     exit 0
 fi
-if [ ! -x "$ROOT/kama" ]; then echo "check-mcu: $ROOT/kama not built" >&2; exit 1; fi
+if [ ! -x "$KAMA" ]; then echo "check-mcu: $KAMA not built" >&2; exit 1; fi
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 elf="$tmp/blink.elf"

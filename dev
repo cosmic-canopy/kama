@@ -60,8 +60,13 @@ Deploy / publish / provision live in ./ops (they need secrets from .env).
 EOF
 }
 
-build_host()      { make; }
-build_container() { tools/cdev make; }
+# `-j`: the compiler is ~10 translation units and a from-scratch build is 8s serial / 3s at -j10. Verified
+# safe by building both ways and comparing objects — every .o is byte-identical, so the dependency graph is
+# complete (including the generated bison/flex sources). The BINARY hash still varies run to run, but that is
+# the macOS linker, not parallelism: two serial builds differ from each other too.
+JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+build_host()      { make -j"$JOBS"; }
+build_container() { tools/cdev make -j"$JOBS"; }
 
 task="${1:-help}"; [ $# -gt 0 ] && shift || true
 case "$task" in
@@ -113,18 +118,21 @@ case "$task" in
   check)
     # The guard scripts resolve build/<os>-<arch>/kama directly (tools/kama-bin.sh), so they need the
     # HOST binary current — a container-only rebuild leaves them testing stale code while sitting green.
+    #
+    # `--all` includes the `# check-heavy:` guards (check-no-inheritance builds a second compiler), which
+    # run_tests.sh's set leaves out. The runner is shared with run_tests.sh so the two can't drift.
     build_host
-    rc=0
-    for s in tools/check-*.sh; do
-      printf '%s: ' "$s"
-      if sh "$s" >/tmp/kama-check.$$ 2>&1; then tail -1 /tmp/kama-check.$$
-      else rc=1; echo "FAILED"; cat /tmp/kama-check.$$; fi
-    done
-    rm -f /tmp/kama-check.$$
-    exit $rc ;;
+    exec sh tools/run-checks.sh --leg native --all ;;
 
   matrix)
-    "$0" test all
+    # Skip the guards inside the NATIVE test leg: `./dev check` runs the same set, on the same host,
+    # moments later, and that block is ~60s serial / ~38s parallel — paying it twice is pure waste.
+    #
+    # The variable reaches the native leg (a plain child process) and NOT the san/wasm legs, because
+    # `tools/cdev` does not forward host env. That is what we want, not an accident to be tidied up:
+    # check-argv-env under KAMA_SAN builds the probe WITH sanitizers, which is a different assertion
+    # from the one `./dev check` makes on the host, so the container legs must keep running it.
+    KAMA_SKIP_CHECKS=1 "$0" test all
     "$0" check ;;
 
   assets)         sh tools/gen-assets ;;

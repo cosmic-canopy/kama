@@ -1,7 +1,7 @@
 # Build & suite performance — campaign brief
 
-**Status: not started.** Design of record for the compile-time work. Delete this file when the last
-milestone ships, once `docs/ROADMAP.md` §9 carries the residual.
+**Status: levers 1 and 2 shipped. Levers 3 and 4 remain.** Design of record for the compile-time work.
+Delete this file when the last milestone ships, once `docs/ROADMAP.md` §9 carries the residual.
 
 > **Read this first.** Every brief in this repo has been wrong somewhere load-bearing, and this one was
 > written after being wrong three times in one session. **Re-run the measurement before building on it.**
@@ -19,35 +19,70 @@ Native leg, 187 s total (`./dev test`; phase lines are printed by the harness si
 
 | phase | wall | what dominates it |
 |---|---|---|
-| `tools/check-*.sh` guards, **serial**, before the fan-out | **~73 s** | `check-query.sh` 36 s, `check-packages.sh` 11 s, ~20 others ≈ 15 s |
+| `tools/check-*.sh` guards, **serial**, before the fan-out | **~61 s** | `check-query.sh` 35 s, `check-packages.sh` 11 s, ~21 others ≈ 15 s |
 | single-file fixtures (597, parallel at NCPU) | 82 s | kama front end 36 % / clang 64 % |
 | analysis agreement (915 `kama check`) | 20 s | pure front end |
 | multi-file + xfail | 12 s | |
 
-Reproduce: `./dev test 2>&1 | grep '^phase:'`, and per-guard with
-`for g in tools/check-*.sh; do /usr/bin/time -p sh $g; done`.
+Reproduce: `./dev test 2>&1 | grep '^phase:'`, and per-guard from the runner's own slowest-8 summary
+(`sh tools/run-checks.sh --leg native --all`).
+
+(The guard block was first measured at ~73 s; a careful re-run put it at **61 s**, the difference being
+whether `check-no-inheritance.sh`'s build directory was warm. Cold it is a full second compiler build.)
 
 ## The four levers, cheapest first
 
-### 1. The guards run twice — `./dev matrix` (harness only)
+### 1. The guards run twice — `./dev matrix` ✅ SHIPPED
 
-`run_tests.sh` runs **23** guards inline; `./dev check` then runs **all 24** again via its glob. `./dev
-matrix` is `test` + `check`, so that whole ~73 s block is paid twice.
+`run_tests.sh` ran **22** guards inline; `./dev check` then ran **all 24** again via its glob, so
+`./dev matrix` paid the whole block twice. `./dev matrix` now sets `KAMA_SKIP_CHECKS=1` around its
+`test all`, and `run_tests.sh` honors it. A bare `./run_tests.sh` (CI, container) never sets it and
+stays complete.
 
-Careful: the inline copies exist so a bare `./run_tests.sh` (CI, container) still covers them. Don't
-just delete them — gate them, so `./dev test` can skip what `./dev check` is about to do, while a bare
-run stays complete.
+The variable reaches the native leg and *not* the container legs, because `tools/cdev` does not forward
+host env — which is what we want: `check-argv-env` under `KAMA_SAN` builds the probe *with* sanitizers,
+a different assertion from the one `./dev check` makes on the host. That is commented at the site, so it
+does not get "tidied up".
 
-    grep -oE "tools/check-[a-z-]+\.sh" run_tests.sh | sort -u | wc -l   # 23
-    ls tools/check-*.sh | wc -l                                          # 24
+**Measured: −61 s from `./dev matrix`.**
 
-### 2. The guards run serially, on one core (harness only)
+### 2. The guards run serially, on one core ✅ SHIPPED
 
-They are independent scripts; nine cores idle for 73 s. Parallelizing bounds the block at its slowest
-member rather than their sum — ~73 s → ~36 s, limited by `check-query.sh` until lever 3 lands.
+They are independent scripts, and nine cores idled for 61 s — in a block that runs *before* the fixture
+fan-out, so nothing else was using them either. There is now one runner, `tools/run-checks.sh`, driving
+the guards for both `./dev check` and `run_tests.sh`.
 
-Watch for: some guards build the compiler or write to shared temp paths. Check for collisions before
-fanning out.
+**Measured: 61 s → 38 s** (79 s summed across guards / 38 s wall = 2.1× — individual guards get slower
+under contention). The floor is `check-query.sh` at 36.8 s, i.e. *the block is now that one guard*. Only
+lever 3 moves it further.
+
+Two properties worth keeping:
+
+- **The glob is the list.** The guard set used to exist twice — a glob in `./dev`, 22 hand-written
+  `if` blocks in `run_tests.sh` — and had already drifted: `check-agents.sh` was in one and not the
+  other, with no comment saying why. Per-guard policy now lives in the guard's own header
+  (`# check-legs: native san`, default `native`; `# check-heavy: yes`), so enrollment stays automatic.
+  `check-agents.sh` joined the suite as a result; the native headline is +1.
+- **Output is buffered and printed in glob order**, so a parallel run is byte-diffable against a serial
+  one. It was, exactly, on the first run.
+
+Collisions found and neutralized before fanning out: `check-no-inheritance.sh` runs `make` from `$ROOT`
+and repoints `./kama` for the duration (→ `# check-heavy: yes`, runs alone after the pool drains);
+`check-mcu.sh` / `check-softfloat.sh` resolved `$ROOT/kama` directly and would have silently tested the
+wrong binary (→ `tools/kama-bin.sh`, and `mcu/build.sh` now honors an exported `$KAMA`);
+`check-syntax.sh` wrote `tests/syntax/.snapout` into the worktree (→ private `mktemp -d`). Every guard
+also gets a private `KAMA_STORE`.
+
+### 2½. `make` was serial ✅ SHIPPED (not in the original brief)
+
+`build_host() { make; }` on a 10-core box. A from-scratch compiler build is **8 s serial → 3 s at
+`-j10`**. Verified safe by building both ways and comparing objects: every `.o` is byte-identical, so
+the dependency graph is complete, including the generated bison/flex sources. Note the *binary* hash
+still varies run to run — that is the macOS linker, not parallelism; two serial builds differ from each
+other too, so a binary hash cannot be used to check this.
+
+Small in absolute terms (incremental builds, the common case, were already near-zero), but it is free
+and it also covers `check-no-inheritance.sh`'s second compiler.
 
 ### 3. Cache the front end — the broadest lever
 
@@ -60,8 +95,12 @@ So **parse ≈ 2/3, analyze ≈ 1/3** for a std-heavy fixture. This lever reache
 
 - ~**100 %** of the 20 s agreement phase (915 × `kama check`)
 - ~**36 %** of the 82 s fixture phase
-- nearly all of `check-query.sh`'s 36 s — **233 assertions, each a separate full analysis of the same
-  one file.** The single most cacheable workload in the tree.
+- nearly all of `check-query.sh`'s 36 s. **Now the whole guard block**, since lever 2 parallelized
+  everything around it. Re-measured: **259 `kama query` processes over ~15 distinct programs** — not one
+  file, as an earlier draft of this brief said. But the ratio is what matters, and one fixture dominates:
+  `tests/query/complete.kama` is 98 assertions × ~210 ms ≈ **20.6 s**, of which ~63 % is re-parsing the
+  same 16-unit `std` import closure. On top of that a ~28-38 ms prelude-parse floor is paid 259 times
+  ≈ 8 s. Still the single most cacheable workload in the tree.
 - the **LSP's** fixed per-keystroke floor (ROADMAP §10) — nothing else touches this
 - **user projects**, which pin a toolchain whose `lib/` never changes during development
 
@@ -81,6 +120,16 @@ Two things make it real work, both already known:
 nothing else: a **batch mode** — N independent programs in one process, reusing the analyzed front end.
 Useless to user projects, but it would collapse the suite's ~1,900 processes per leg, and it is the
 natural fix for `check-query.sh` specifically.
+
+There is a **cheaper rung still**, worth pricing before either: a **multi-query invocation**. Everything
+after `idx.analyze(units)` (`kama.driver.cpp:5377`) is a pure read off the built index, measured at
+0.03-1.33 ms against a 210 ms analysis — a thousandfold difference. The only thing preventing one
+process from answering many questions is that the dispatch if-chain `return`s in every arm
+(`kama.driver.cpp:5393-5608`); passing `--def 1:1 --type 2:2` today silently answers whichever comes
+first in that fixed order. So `kama query` over one program is ~15 analyses instead of 259, with no
+caching, no cross-process state and no `pruneInactiveDecls` exposure at all. `check-query.sh` would need
+its `expect`/`reject` helpers restructured to ask per fixture and assert against a recorded answer set.
+Precedent for the shape: `check-lsp.sh` already drives **166 assertions against one `kama lsp` process**.
 
 ### 4. Object caching — the clang 64 %
 
@@ -148,12 +197,29 @@ job through — 8 jobs against a cap of 2 left 8 running). Fixed in `69c1123`. *
 wall-clock: 184 s → 185 s.** It is a correctness fix — an unthrottled suite is a memory-pressure and
 timing-sensitivity hazard — not a performance one. Do not re-derive the hypothesis expecting a win.
 
+**Overlapping the guard pool with the fixture fan-out** (share `gate`/`JOB_CAP` instead of running the
+guards to completion first). Modelled at ~25 s. Declined for now, on two grounds: it would make the
+`phase:` lines — the instrument this whole campaign steers by — meaningless right before the two levers
+that most need careful measurement, and lever 3 probably deletes the win by shrinking the block to
+~10 s. `tools/run-checks.sh` already buffers results and prints at one point, which is the structure
+this would need, so declining costs nothing. Re-ask after lever 3.
+
 ## Suggested order
 
-1. Lever 1 (stop double-running the guards) — biggest win per line changed, gate only.
-2. Lever 2 (parallelize the guards).
-3. Lever 3 (front-end cache), starting with the batch-mode rung and `check-query.sh` as its first
-   customer.
+1. ~~Lever 1 (stop double-running the guards)~~ ✅ −61 s from `./dev matrix`.
+2. ~~Lever 2 (parallelize the guards)~~ ✅ 61 s → 38 s. Plus `make -j`: cold build 8 s → 3 s.
+3. **Lever 3 (front-end reuse)** — now the whole remaining guard block, since `check-query.sh` at 36.8 s
+   *is* the floor. Price the multi-query invocation first, then batch mode, then the on-disk cache.
 4. Lever 4 (compile-to-object + `.o` cache).
 
 Re-run `./dev test 2>&1 | grep '^phase:'` after each and record the delta here.
+
+Measured on a 10-core M-series host, 2026-08-09:
+
+| | `./dev test` | guard block | native leg + `./dev check` |
+|---|---|---|---|
+| baseline | 184 s (970 pass) | 61 s serial | 184 + 61 = **245 s** |
+| levers 1 + 2 + `make -j` | **162 s** (971 pass) | **38 s** parallel | 128 s (guards skipped) + 40 s = **168 s** |
+
+`971` rather than `970` because `check-agents.sh` joined the suite — it was in `./dev check`'s glob but
+not in `run_tests.sh`'s hand-written list, so no CI leg had ever run it.

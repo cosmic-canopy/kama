@@ -11,6 +11,9 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# The platform binary, not the root ./kama symlink — see the same note in tools/check-mcu.sh.
+. "$ROOT/tools/kama-bin.sh"
+export KAMA
 FIXTURE="$ROOT/tests/mcu_softfloat.kama"   # returns 33 on every leg (native/wasm/embedded) — the shared oracle
 EXPECT=33
 BOARD=microbit                             # QEMU nRF51822, Cortex-M0, no FPU
@@ -19,7 +22,7 @@ if ! command -v arm-none-eabi-gcc >/dev/null 2>&1 || ! command -v qemu-system-ar
     echo "SKIP check-softfloat (no arm-none-eabi-gcc / qemu-system-arm — build the kama-mcu image: tools/cdev build-image-mcu)"
     exit 0
 fi
-if [ ! -x "$ROOT/kama" ]; then echo "check-softfloat: $ROOT/kama not built" >&2; exit 1; fi
+if [ ! -x "$KAMA" ]; then echo "check-softfloat: $KAMA not built" >&2; exit 1; fi
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 elf="$tmp/softfloat.elf"

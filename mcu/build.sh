@@ -15,7 +15,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-KAMA="$ROOT/../kama"
+KAMA="${KAMA:-$ROOT/../kama}"   # honor a caller-supplied binary (tools/check-mcu.sh exports the platform one)
 BOARD=lm3s6965evb
 OUT=
 QEMU=

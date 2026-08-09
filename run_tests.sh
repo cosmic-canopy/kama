@@ -175,159 +175,37 @@ run_one() {
     actual=$?
 }
 
-# Editor-syntax drift guard: the hand-maintained VSCode grammar must cover every kama.l keyword. Run once
-# (the plain native pass), not under the SAN/WASM re-runs. Keeps the highlighter honest as the language grows.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syntax-drift.sh ]; then
-    if sh tools/check-syntax-drift.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# The OTHER half of the highlighting guard: check-syntax-drift greps the grammar, so it can only see that a
-# rule EXISTS. check-syntax.sh runs the real vscode-textmate engine over tests/syntax/ and can see whether a
-# rule FIRES — which is how M6 Stage B found `#declarations` and `#cast` present, correct, and unreachable.
-# SKIPs (counting as a pass) without node or editor/vscode/node_modules, so a fresh clone is not failed for
-# not having run `npm install`.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-syntax.sh ]; then
-    if sh tools/check-syntax.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# LSP M6 C4: docs/editors.md must keep documenting the server it points at — every committed editor still
-# has a section, every snippet still names `kama lsp`, and the three watched-file globs are spelled the same
-# in the server's dynamic registration and the VS Code client's static list. A drift check, not a behaviour
-# test: exercising the snippets would need six editors installed.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-editors.sh ]; then
-    if sh tools/check-editors.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# M7: the THIRD grammar. Where check-syntax-drift/check-syntax are the grep/engine pair over the TextMate
-# grammar, this folds both halves into one file for tree-sitter-kama/ — keyword drift and fixture agreement
-# need no CLI and always run, while generate-is-a-no-op, the corpus tests and the whole-corpus parse need
-# the pinned tree-sitter CLI and SKIP (as a pass) without it, exactly like check-syntax.sh.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-treesitter.sh ]; then
-    if sh tools/check-treesitter.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# MCU step 3: `--target embedded` freestanding-build guard (emitted entry shape + libc-free object). Like
-# the drift guard, run once on the plain native pass (the SAN/WASM re-runs build the fixture hosted anyway).
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-embedded.sh ]; then
-    if sh tools/check-embedded.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# `slot` drop elision: an unassigned hole must emit NO destructor. Invisible to an exit-code fixture (a
-# missing drop and a no-op drop both exit 7), so it is asserted against the emitted C. Native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-slot.sh ]; then
-    if sh tools/check-slot.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# Build configuration: the toolchain flags a build hands to the C compiler must follow the SELECTED
-# TARGET, not the machine this compiler was built on (the cross-compilation blocker). Stubs the C
-# compiler with `echo`, so it needs no cross toolchain and is as host-agnostic as the drift guard.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-target.sh ]; then
-    if sh tools/check-target.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# LSP M0: the query-index guard (documentSymbols / definitionAt / typeAtPosition over the analysis-mode
-# front end). Host-checkable, native-only pass (the query path is target-agnostic; no need to re-run under
-# SAN/WASM, though it is sanitizer-clean).
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-query.sh ]; then
-    if sh tools/check-query.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# LSP walking skeleton (M1): drive the `kama lsp` server over stdio with a scripted JSON-RPC session and
-# assert the live-diagnostics loop (lifecycle -> full-document sync -> publishDiagnostics). Native-only
-# like check-query (the server is target-agnostic; sanitizer-clean but no need to re-run under SAN/WASM).
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-lsp.sh ]; then
-    if sh tools/check-lsp.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# MCU end-to-end: build a kama program into Cortex-M firmware and RUN it on emulated silicon (QEMU). SKIPs
-# (still counts as a pass) when the cross toolchain is absent, so this only truly exercises under the opt-in
-# `kama-mcu` image; on the base image it's a no-op. Native pass only (like the guards above).
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-mcu.sh ]; then
-    if sh tools/check-mcu.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# Soft-float end-to-end: build a float-math kama program into no-FPU Cortex-M0 firmware and RUN it on QEMU
-# (the emitted float ops become soft-float libcalls). SKIPs (still a pass) without the cross toolchain, like
-# check-mcu.sh above. Native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-softfloat.sh ]; then
-    if sh tools/check-softfloat.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# Task #2: command-line argv + environment access in the prelude floor. The standard harness runs fixtures
-# with no args/env (only the empty paths, via tests/args_env_empty.kama), so this dedicated guard drives the
-# WITH-args / SET-env paths + the `kama run --` passthrough. Runs on the native AND ASan passes (under
-# KAMA_SAN the script builds the probe with sanitizers, covering the owned-string copies with real args);
-# skipped on WASM (runs a native binary + needs a controllable process environment).
-if [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-argv-env.sh ]; then
-    if sh tools/check-argv-env.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# const-eval 6b-3: `comptime fn` table-baking guard (baked static-const aggregate + comptime fn not emitted).
-# Transpile-only + host-checkable, so run once on the plain native pass like the drift/embedded guards.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-comptime.sh ]; then
-    if sh tools/check-comptime.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# MCU step 5: `--no-heap` flag guard (flag-driven rejection can't ride the no-flag xfail loop). Run once on
-# the plain native pass, like the guards above.
-# The ECS architecture guard: tests/ecs_pattern.kama runs as an ordinary fixture, but its CLAIM is about
-# the emitted C (zero dispatch in a system loop, a contract bound monomorphized to a direct call). This
-# checks that against the generated code, so ENGINE_READINESS.md's engine story can't rot silently.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-ecs-zero-dispatch.sh ]; then
-    if sh tools/check-ecs-zero-dispatch.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-noheap.sh ]; then
-    if sh tools/check-noheap.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# NOTE: `tools/check-no-inheritance.sh` (the KAMA_INHERITANCE=0 build variant) is deliberately NOT run
-# here — it builds a whole second compiler. Run it directly, and in CI.
-
-# Conditional compilation: `@compileFor(FLAG)` decl-gate guard — builds the same fixture DEBUG vs
-# RELEASE and asserts (via transpile-grep) the gated body reaches the emitted C in exactly one build
-# (Kama-level selection, no #ifdef). Transpile+build, so run once on the plain native pass.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-compilefor.sh ]; then
-    if sh tools/check-compilefor.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# `debugAssert` strip: proves on the transpiled C that `--release` drops the dev-only debugAssert while the
-# always-on assert survives (Kama-level strip, not a C #ifdef). Transpile-grep, so plain native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-debug-assert.sh ]; then
-    if sh tools/check-debug-assert.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# Floor console output: the standard harness only sees exit codes, so this checks the actual stdout/stderr
-# bytes of the print family (+ an embedded transpile). Runs a native binary, so plain native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-print.sh ]; then
-    if sh tools/check-print.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# std::log v1: leveled/tagged diagnostics write to stderr (captured by the SAN harness), so the filter,
-# --log/KAMA_LOG config, swappable sink, and freestanding lowering are checked here. Plain native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-log.sh ]; then
-    if sh tools/check-log.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# setPanicHandler across TUs: the handler slot is process-global (external linkage), so a panic raised in a
-# different TU than the one that registered it must still run the handler. Multi-file build + a runtime abort,
-# so plain native pass only (wasm/SAN abort codes differ, like the trap fixtures).
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-panic-multitu.sh ]; then
-    if sh tools/check-panic-multitu.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# M2.1 package store: `kama install` fetches git/url deps into the content-addressed store, verifies
-# sha256 integrity, and writes a reproducible lock. Network-free (file:// git repo + local tarball). The
-# `.d/` harness only runs `kama build`, so install/store/integrity ride here — plain native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-packages.sh ]; then
-    if sh tools/check-packages.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
-fi
-
-# M1 toolchain selector: a versioned store + a PATH selector that resolves which toolchain to run per
-# directory (project pin > KAMA_VERSION > global default). Network-free (stub versioned binaries) — proves
-# resolution/precedence, not the download; plain native pass only.
-if [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] && [ -f tools/check-toolchain.sh ]; then
-    if sh tools/check-toolchain.sh; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# The tools/check-*.sh guards. ONE runner (tools/run-checks.sh) drives them here AND in `./dev check`,
+# glob-enrolled and in parallel, so the two can never drift again — which they already had: this file
+# listed 22 guards by hand while `./dev check` globbed 24, and nobody noticed check-agents.sh was in one
+# and not the other. Per-guard leg eligibility now lives in each guard's own `# check-legs:` header
+# (default: native), so a new tools/check-*.sh joins with nothing to edit here.
+#
+# They used to run SERIALLY, right here, before the fan-out — 61s on a 10-core host with nine cores idle.
+# In the pool the block is bounded by its slowest member instead of their sum.
+#
+# KAMA_TSAN is deliberately not a leg of its own: the old predicate was (SAN=0 && WASM=0), so a TSan run
+# has always executed the native guard set. Keep that.
+#
+# `./dev matrix` sets KAMA_SKIP_CHECKS=1 for this leg, because `./dev check` is about to run the same set
+# on the same host. A bare ./run_tests.sh — CI, the container — never sets it and stays complete.
+if [ "${KAMA_SKIP_CHECKS:-0}" = 0 ]; then
+    leg=native
+    [ "${KAMA_SAN:-0}"  != 0 ] && leg=san
+    [ "${KAMA_WASM:-0}" != 0 ] && leg=wasm
+    phase_start "check-*.sh guards"
+    # $KAMA is NOT passed through: ROOT is "." here, so it is relative, and guards `cd`. The runner
+    # resolves an absolute one itself.
+    sh tools/run-checks.sh --leg "$leg" --jobs "$NCPU" --tally "$TMP/checks.tally"
+    phase_end
+    if [ -f "$TMP/checks.tally" ]; then
+        read -r cpass cfail <"$TMP/checks.tally"
+        pass=$((pass+cpass)); fail=$((fail+cfail))
+    else
+        echo "FAIL check-*.sh guards (the runner produced no tally)"; fail=$((fail+1))
+    fi
+else
+    echo "(guards skipped: KAMA_SKIP_CHECKS=1 — ./dev check runs them)"
 fi
 
 # std::process cross-platform child helper: ONE native binary the proc_* fixtures drive instead of POSIX-only

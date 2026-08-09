@@ -10,6 +10,13 @@
 #   3. `kama run -- <args>` — proves the driver's `--` passthrough (kama.driver.cpp) reaches the child argv.
 # Fails (exit 1) with a diagnostic if any property breaks. Run standalone or from run_tests.sh. Native only
 # (runs a native binary + needs a controllable process environment).
+#
+# check-legs: native san
+#
+# The marker above is read by tools/run-checks.sh. This is the ONE guard that runs on more than the native
+# leg, and it is not redundant there: under KAMA_SAN the script builds the probe WITH sanitizers, so the
+# owned-string copies made from real argv/environ are covered by ASan — which the argument-free fixtures
+# (tests/args_env_empty.kama) can never reach. Skipped on wasm: it runs a native binary.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)

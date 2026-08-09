@@ -17,8 +17,16 @@
 #                 so the gate removed inheritance and not something load-bearing next to it.
 #   4. MEASURES — prints the `.text` delta between the two compilers.
 #
-# SLOW (a full compiler build), so it is NOT in run_tests.sh. Run it before shipping a change that touches
-# the inheritance paths, and in CI.
+# check-heavy: yes
+#
+# The marker above is read by tools/run-checks.sh and means two things, which are the same fact seen twice:
+# this guard is SLOW (a full second compiler build), so it stays out of run_tests.sh's set; and it cannot
+# share a machine with the other guards, because `make` here repoints the root ./kama symlink for the
+# duration of the build. Under `--all` (i.e. `./dev check`) it therefore runs ALONE, after the pool drains.
+#
+# Nothing in CI runs it today — the workflows run bare `./run_tests.sh`, and nothing runs `./dev check` —
+# so `./dev check` before shipping a change that touches the inheritance paths is the only thing standing
+# between this build variant and rot.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -27,26 +35,30 @@ cd "$ROOT"
 
 if [ ! -x "$KAMA" ]; then echo "check-no-inheritance: $KAMA not built (run make first)" >&2; exit 1; fi
 
+JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+
 PLATFORM=$(uname -s)-$(uname -m)
 OUT="build/$PLATFORM-noinherit"      # the Makefile picks this itself when KAMA_INHERITANCE=0
 NOINH="$OUT/kama"
 
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+LOG="$tmp/noinh.build.log"           # NOT a fixed /tmp path: two worktrees would clobber each other's build log
+
 # 1. BUILDS. `make` also repoints the root ./kama symlink at whatever built last, so put it back after.
+# `-j` because this is a from-scratch compiler build and the whole point of the guard is that it is slow.
 echo "check-no-inheritance: building with KAMA_INHERITANCE=0 ..."
-if ! make KAMA_INHERITANCE=0 >/tmp/noinh.build.log 2>&1; then
+if ! make -j"$JOBS" KAMA_INHERITANCE=0 >"$LOG" 2>&1; then
     echo "check-no-inheritance: FAIL — the KAMA_INHERITANCE=0 build does not compile:" >&2
-    tail -30 /tmp/noinh.build.log >&2
+    tail -30 "$LOG" >&2
     ln -sf "$KAMA" kama 2>/dev/null || true
     exit 1
 fi
 ln -sf "$KAMA" kama 2>/dev/null || true
-if grep -q ' error:\| warning:' /tmp/noinh.build.log; then
+if grep -q ' error:\| warning:' "$LOG"; then
     echo "check-no-inheritance: FAIL — the KAMA_INHERITANCE=0 build is not warning-clean:" >&2
-    grep ' error:\| warning:' /tmp/noinh.build.log | head -20 >&2; exit 1
+    grep ' error:\| warning:' "$LOG" | head -20 >&2; exit 1
 fi
-
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
 GATE='needs inheritance, and this kama was built without it'
 
 # 2. REJECTS — one program per surface. `extends` alone is not enough: a `virtual class` with no subclass
