@@ -530,36 +530,36 @@ rather than here, so there is one number to keep current. Forward work:
 ## 10. Tooling / distribution (deferred)
 
 - **AI/agent tooling, shipped WITH the language.** Design in its own session; scheduled after the four
-  contract-model campaigns. The goal is that an LLM or coding agent can work in kama — and on kama —
-  without the operator hand-assembling context first. Most of the substrate already exists and is
-  unadvertised:
-  - **`kama query` is already an agent interface.** `--symbols` (outline), `--def L:C` (go-to-definition),
-    `--type L:C` (hover), `--refs L:C` (find-references), `--complete L:C`, `--coverage`. One process, one
-    file, structured output, no editor and no LSP handshake. That is the piece a skill would drive, and it
-    is cheaper for an agent than speaking LSP over stdio.
-  - **`llms.txt`** (78 lines) is the discovery entry point and already points at the grammar as the source
-    of truth, the spec for semantics, and the fixtures for runnable examples.
-  - **`.claude/skills/`** already vendors two guidance skills (`karpathy-guidelines`, `ponytail`) that this
-    repo's own CLAUDE.md instructs an assistant to apply — so the "skills live in the repo" pattern is
-    established here, not novel.
+  contract-model campaigns. The goal is the **bare-bones native support a kama project would want** — not
+  this repo's own working preferences. kama ships what only kama can provide (the language's own
+  facts, verified); a user adds `ponytail` or anything else to their project themselves if they want it.
 
-  What to design: which skill(s) ship (a *write-kama* skill driving `kama query` for real symbol
-  resolution rather than grep, and plausibly a *work-on-kama* skill encoding the campaign/codegen-gate
-  discipline); whether they live under `.claude/skills/` for Claude Code specifically or in a
-  tool-neutral location with a thin adapter; and what an agent gets that `llms.txt` alone does not —
-  the honest answer being **verified** answers (a symbol the compiler resolved) instead of plausible ones.
-  Reference: <https://github.com/DietrichGebert/ponytail>.
+  **Not skill-only.** A skill is one delivery form, and a heavy one. The smaller and more portable form is a
+  snippet a user pastes into their own `CLAUDE.md` — which is exactly how `karpathy-guidelines` is applied
+  in this repo. Ship the snippet; offer the skill as the richer option, not the requirement.
 
-  Two things worth settling early, because they shape everything else. **Does a skill invoke the compiler,
-  or only read?** A skill that can run `kama build`/`./dev fixture` closes the loop — an agent can check its
-  own work — and that is the difference between a documentation aid and a working tool. And **what
-  guarantees the tooling does not drift** the way docs do: the answer this repo reaches for elsewhere is a
-  `tools/check-*.sh` guard, and the same should apply here (`check-lsp.sh` already carries 150 assertions
-  against the query surface, so the pattern and much of the coverage exist).
+  Most of the substrate already exists and is unadvertised:
+  - **`kama query` is already an agent interface.** `--symbols` (outline), `--def L:C`, `--type L:C`
+    (hover), `--refs L:C`, `--complete L:C`, `--coverage`. One process, one file, structured output, no
+    editor and no LSP handshake — cheaper for an agent than speaking LSP over stdio, and it answers with
+    what the COMPILER resolved rather than what a grep guessed. That is the whole value proposition:
+    verified answers, not plausible ones.
+  - **`llms.txt`** (78 lines) already points at the grammar as the source of truth, the spec for
+    semantics, and the fixtures for runnable examples.
 
-  It should also pay for itself immediately: developing kama in this repo is exactly the workload, and the
-  friction is known and recorded — stale build/platform traps, fixture coordinates, which suite rung to run.
+  **It can be written in kama.** A skill is markdown — both skills vendored here are a single `SKILL.md`
+  with no scripts at all — so nothing forces node. Where a helper binary IS wanted, kama can compile it,
+  and the language authoring its own tooling is the right dogfooding. Note the strongest version may need
+  no new binary: `kama query` is the tool already.
 
+  Two things worth settling early, because they shape everything else. **May the tooling invoke the
+  compiler, or only read?** Being able to run `kama build` / `./dev fixture` closes the loop — an agent can
+  check its own work — and that is the difference between a documentation aid and a working tool. And
+  **what keeps it from drifting** the way docs do: the answer this repo reaches for elsewhere is a
+  `tools/check-*.sh` guard, and `check-lsp.sh` already carries 150 assertions against the query surface.
+
+  Reference: <https://github.com/DietrichGebert/ponytail>. It should pay for itself immediately — developing
+  kama in this repo is exactly the workload.
 
 - **`kama fmt` — a native formatter, not an external tool.** The language should print itself: one
   canonical form, applied by the toolchain, so a project never argues about style and a diff never carries
@@ -581,13 +581,25 @@ rather than here, so there is one number to keep current. Forward work:
   normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
   but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
 
-- **A kama identifier that is a C keyword emits raw and breaks the C compiler.** `int32 inline = 3;` is a
-  legal kama declaration — `inline` is not a kama keyword — and it lowers to `int32_t inline = 3;`, which
-  clang rejects with an error pointing at generated C the author never wrote. The same holds for `register`,
-  `restrict`, `union`, `signed`, `unsigned`, `short`, `long`, `auto`, `goto`, and notably `volatile`, which
-  this project deliberately DE-reserved. Fix is a mangling rule for locals/params/fields whose spelling
-  collides with a C keyword, or a kama-side diagnostic naming the collision. Low frequency, but the failure
-  mode is the worst kind: a correct program, an error in a language the author is not writing.
+- **A kama identifier that is a C keyword emits raw and breaks the C compiler.** `int32 switch = 3;` is a
+  legal kama declaration and lowers to `int32_t switch = 3;`, which clang rejects with an error pointing at
+  generated C the author never wrote. **25 of C11's 44 keywords are legal kama identifiers** — including
+  `switch`, `float`, `long`, `short`, `signed`, `unsigned`, `union`, `struct`, `auto`, `goto`, `register`,
+  `inline`, `typedef` and `volatile` (which this project deliberately DE-reserved). `switch` and `float`
+  are the ones to worry about: kama spells them `match` and `float32`/`float64`, so both are free — and
+  `switch` is an entirely plausible variable name in the embedded code kama targets.
+
+  **Exposure is exactly locals, parameters, and struct FIELDS.** Types, functions and methods are already
+  namespace-mangled (`_F4__Holder`, `_F4__helper`) and cannot collide; the bare three can. A field named
+  `switch` breaks the struct definition, not just a statement.
+
+  **Mangle rather than reserve.** Reserving 25 more words is worse for users than a rename the emitter does
+  silently, and blanket-mangling every identifier would cost the readability of the emitted C, which is a
+  real property of a transpiler. So: rename ONLY on collision (`switch` -> `switch_` or similar), leaving
+  every other name exactly as written. The work is not one line — there is no single chokepoint where a
+  kama name becomes a C name, and a USE must agree with its DECLARATION, so a partial fix is worse than
+  none (an undeclared-identifier error instead of a keyword error). Intern the renamed form once, where the
+  name enters the emitter's tables, so every downstream use reads it naturally.
 
 - **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
   costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,
