@@ -12,7 +12,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
 > before starting anything**; several of its design points were revised once the code was written, and
-> *What M3 residual actually was* records where the brief and the build disagreed. **M5a has shipped; M5b/M5c are next.**
+> *What M3 residual actually was* records where the brief and the build disagreed. **M0–M5 have shipped; only M6 (delete retro-impl) remains.**
 
 ## Status — campaign 1, as of 2026-08-06
 

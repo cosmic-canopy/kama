@@ -82,13 +82,14 @@ Everything else here is library or toolchain work that does **not** gate the tag
       prelude and lib declare every one of their 90 primitive conformances, so `implements C for T`
       survives at three sites in `tests/` and nowhere else. **Three of the four pieces of machinery are
       gone** — retro-impl on enums, the enum tagged-union promotion, and the `string`-`Equatable` nominal
-      special case. **M5a has shipped**: a contract declares the self-type as a **pinned type parameter**
-      (`type contract Comparable<T is This>`) instead of naming `This` in a signature, which is what
-      removed the unsound vtbl slot — the slot bound `This` to the contract while the function behind it
-      bound the implementing type, and every program in the tree emitted that cast. What is LEFT:
-      **M5b**, primitive→contract widening (`Hashable h = 3;` as a borrow, then an `Owned<C>` heap box);
-      **M5c**, the contract-as-scope gate, so a primitive does not absorb an API it does not own; then
-      **M6**, deleting retro-impl itself. Per-milestone detail in the brief.
+      special case. **M5 has shipped in full** (2026-08-08): a contract declares the self-type as a
+      **pinned type parameter** (`type contract Comparable<T is This>`) rather than naming `This` in a
+      signature — which removed an unsound vtbl cast every program in the tree was emitting; a primitive
+      can be **widened** to a contract value, as a borrow or an owning box; and a contract-supplied method
+      is reached **through the contract**, so a primitive does not absorb an API it does not own. What is
+      LEFT: **M6** — delete retro-impl (its only consumers are `tests/impl_retro_user.kama` and
+      `tests/xfail/impl_conflict.kama` ×2, which exist to keep the path exercised until then), the renames
+      it unblocks, and the SPEC closeout. Per-milestone detail in the brief.
    2. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
       disjoint; no specificity lattice). Polymorphism for generic *functions*.
    3. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
