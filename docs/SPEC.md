@@ -69,6 +69,9 @@ never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
   iterates bytes. `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced.
+  That is one case of a general rule: a `foreach` binding must have the type the collection actually
+  yields, and a mismatch is rejected rather than left to C's implicit conversions
+  (`tests/xfail/foreach_char_over_string`, `tests/xfail/foreach_elem_type_mismatch`).
 - **codepoints** — `s.chars()` is a **UTF-8 codepoint iterator** (`implements Iterator<char>`):
   `foreach (char c in s.chars())` yields each Unicode scalar value as a **`char`**. It's a borrow, valid
   while the string is.

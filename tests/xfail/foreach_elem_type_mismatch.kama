@@ -1,0 +1,14 @@
+// The element-type rule is general, not a string quirk: a `foreach` binding must have the type the
+// collection actually yields. This shape compiled to `bool v = __o.u.Some.value;` over an int32
+// payload, so C's implicit conversion turned every non-zero element into `true`.
+//
+// Two emit paths need the rule and both have it: the intrinsic-collection loop (`string`) and the
+// iterator protocol (every std::collections container, which iterates via `iterator()`/`next()`).
+import std::collections::{FixedArray};
+
+fn int32 main() {
+    FixedArray<int32> a = FixedArray::<int32>.make(size: 2);
+    int32 n = 0;
+    foreach (bool v in a) { n = n + 1; }
+    return n;
+}

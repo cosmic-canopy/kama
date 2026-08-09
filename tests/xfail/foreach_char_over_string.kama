@@ -1,0 +1,14 @@
+// `foreach (char c in s)` must be rejected. SPEC (§ Strings): a `string` is UTF-8 BYTES, and the two
+// traversals are kept distinct BY TYPE so bytes and characters never blur — `foreach (uint8 b in s)`
+// for bytes, `foreach (char c in s.chars())` for codepoints.
+//
+// This compiled until the element-type check landed, and produced mojibake rather than a wrong count:
+// the loop walked BYTES and bound each one to a `char`, so iterating "é" (U+00E9, UTF-8 C3 A9) yielded
+// two `char`s with codepoints 195 and 169 instead of one with 233. `char` is documented as a Unicode
+// scalar value that "can't silently mix with ints", and this was exactly that silent mix.
+fn int32 main() {
+    string s = "é";
+    int32 n = 0;
+    foreach (char c in s) { n = n + 1; }
+    return n;
+}

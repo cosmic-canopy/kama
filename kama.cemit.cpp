@@ -3479,6 +3479,32 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         const std::string& coll = _classes[itCls].name;
         std::string elemTy   = cType(fe->type);
         std::string elemClass = _classes[itCls].collElemClass;   // "" if primitive element
+
+        // The DECLARED element type must be the collection's ACTUAL element type. Without this the
+        // binding's type was taken on trust and the element assigned straight into it, so
+        // `foreach (char c in s)` — which SPEC calls a type error, because the byte/codepoint
+        // distinction is the whole point of `string` being UTF-8 bytes — compiled and yielded one
+        // bogus `char` PER BYTE: iterating "é" gave codepoints 195 and 169 (the raw C3 A9) instead of
+        // 233. Mojibake from a type system that had promised `char` "can't silently mix with ints".
+        // The hole was general, not a string quirk: `foreach (bool v in someInt32Array)` was accepted
+        // just as happily. Both `elemCType` and `elemTy` come from cType(), so this compares like with
+        // like; an empty elemCType means a shape that does not record one, and is left alone.
+        auto collIt = _collections.find(coll);
+        if (collIt != _collections.end() && !collIt->second.elemCType.empty()
+            && elemTy != collIt->second.elemCType) {
+            const std::string& want = collIt->second.elemCType;
+            // The string case gets the spelling that works, because it is the one people reach for and
+            // the two right answers are not guessable from the error alone.
+            std::string hint = (_classes[itCls].collKind == CollKind::String && want == "uint8_t")
+                ? " — a `string` is UTF-8 BYTES: use `foreach (uint8 b in s)` for bytes, or "
+                  "`foreach (char c in s.chars())` for codepoints"
+                : "";
+            std::string msg = "foreach element type does not match the collection's (binding is `"
+                            + elemTy + "`, elements are `" + want + "`)" + hint;
+            unsupported(msg.c_str(), n->line);
+            *_out << "\n";
+            return;
+        }
         std::string nm = (fe->name && fe->name->value) ? *fe->name->value : "__x";
         int id = _tempCounter++;
         std::string fp = "__fe" + std::to_string(id);
@@ -7775,6 +7801,9 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // Resolve the iterator + method C-names (structural). `iterCall`/`nextCall`/`hasNextCall` are the
     // full direct calls; `iterCType`/`optC` the concrete types.
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
+    // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
+    // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
+    std::string actualElem;
     if (fe->isRef) {
         // Mirror the by-value branch: a container hands out a mutable iterator via `iterMut()`, OR the operand
         // IS its own mutable iterator (implements `IteratorMut` directly) and is iterated by value — the latter
@@ -7806,6 +7835,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         }
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
+        actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `ref T next()` -> T
     } else {
         MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
@@ -7830,6 +7860,26 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
         nextCall = nextMi->cName + "(&" + it + ")";
+        // `Optional<T> next()` -> T, read off the monomorphized Optional's `Some` payload rather than
+        // re-deriving it from the return type's generic argument: this is the very field the binding is
+        // initialized from two lines down (`__o.u.Some.value`), so it cannot disagree with what is emitted.
+        if (_classes.count(optC))
+            for (const auto& vc : _classes[optC].variants)
+                if (vc.name == "Some" && vc.payload.size() == 1)
+                    actualElem = cTypeInInstance(optC, vc.payload[0].type);
+    }
+
+    // Same rule as the intrinsic-collection path: the DECLARED element type must be what the iterator
+    // yields. Without it the payload was assigned straight into the binding and C's implicit conversions
+    // did the rest — `foreach (bool v in someInt32Array)` compiled to `bool v = __o.u.Some.value;`, so
+    // every non-zero element silently became `true`. Skipped when actualElem could not be determined, so
+    // an iterator shape this does not understand keeps working rather than becoming an error.
+    if (!actualElem.empty() && actualElem != elemTy) {
+        std::string msg = "foreach element type does not match what the iterator yields (binding is `"
+                        + elemTy + "`, elements are `" + actualElem + "`)";
+        unsupported(msg.c_str(), fe->line);
+        *_out << "\n";
+        return;
     }
 
     // Outer wrapper: the iterator, then the loop. All calls are direct (monomorphized), no vtable.
