@@ -35,6 +35,34 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 - **Engine track** (product north star): a portable lightweight **WebGPU** game engine, woven through 1.x — a
   product built *on* kama, not part of the language (§8).
 
+## Working order — what is actually next
+
+The sections below are organized by *topic*, not by sequence. This is the sequence:
+
+| # | work | where | why here |
+|---|---|---|---|
+| 1 | **M6 — delete retro-impl** | §1.2.1 | closes contract-model campaign 1; the path has three remaining consumers, all in `tests/` |
+| 2 | **AI/agent tooling** | §10 | ↓ |
+| 3 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
+| 4 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
+| 5 | Campaign 2 — full generic specialization | §1.2.2 | |
+| 6 | Campaign 3 — const generics on types | §1.2.3 | |
+| 7 | Campaign 4 — derived view-escape check | §1.2.4 | |
+| 8 | stdlib parity M2b / M2c | §3 | |
+
+**Why 2–4 come before the remaining language campaigns:** they are the work that makes every campaign after
+them cheaper and less error-prone. Close the in-flight campaign first (1), then invest in the tools — agent
+support that answers with what the compiler resolved rather than what a grep guessed, a repo layout where
+scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real changes.
+Items 5–8 are language work that will be done *through* those tools.
+
+`kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
+(so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
+can insert a brace can perform the rewrite.
+
+Everything else in §10 — **C symbol naming**, debug-build devirtualization, CPU tuning, Marketplace publish
+— stays unscheduled behind these.
+
 ## 1. Remaining before 1.0
 
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
@@ -54,8 +82,8 @@ dissolves the chicken-and-egg — a content check against a *commit* pin would f
 changes the grammar. `tools/check-editors.sh` §2c today proves only that the rev resolves and carries a
 grammar, never that it is the current one.
 
-**Mandatory braces on every branch and loop body** — `if`/`else`/`while`/`for`/`foreach` would require
-`{ }`, never a bare statement. This is the "easy to use correctly, hard to use incorrectly" argument, and
+**Mandatory braces on every branch and loop body** ► **scheduled with `kama fmt`** (§10; see *Working
+order*) — `if`/`else`/`while`/`for`/`foreach` would require `{ }`, never a bare statement. This is the "easy to use correctly, hard to use incorrectly" argument, and
 it is stronger in kama than in most languages precisely because there is no whitespace rule to fall back
 on: a bare branch body is where `goto fail;`-shaped bugs live, and where a later edit silently attaches a
 second statement to nothing. It is a **breaking source change**, so it lands before the tag or waits for
@@ -529,8 +557,8 @@ rather than here, so there is one number to keep current. Forward work:
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
 ## 10. Tooling / distribution (deferred)
 
-- **AI/agent tooling, shipped WITH the language.** Design in its own session; scheduled after the four
-  contract-model campaigns. The goal is the **bare-bones native support a kama project would want** — not
+- **AI/agent tooling, shipped WITH the language.** ► **NEXT AFTER M6** (see *Working order*). Design in
+  its own session. The goal is the **bare-bones native support a kama project would want** — not
   this repo's own working preferences. kama ships what only kama can provide (the language's own
   facts, verified); a user adds `ponytail` or anything else to their project themselves if they want it.
 
@@ -561,7 +589,8 @@ rather than here, so there is one number to keep current. Forward work:
   Reference: <https://github.com/DietrichGebert/ponytail>. It should pay for itself immediately — developing
   kama in this repo is exactly the workload.
 
-- **`kama fmt` — a native formatter, not an external tool.** The language should print itself: one
+- **`kama fmt` — a native formatter, not an external tool.** ► **Scheduled, WITH mandatory braces**
+  (see *Working order*; the brace rule is §1, and this is its migration tool). The language should print itself: one
   canonical form, applied by the toolchain, so a project never argues about style and a diff never carries
   noise that is not a change. Driven by the project's `kama.json` (the same manifest that already carries
   the flag universe and the toolchain pin), with a small, deliberately non-negotiable set of knobs —
@@ -581,7 +610,7 @@ rather than here, so there is one number to keep current. Forward work:
   normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
   but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
 
-- **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** README promises
+- **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** *(Unscheduled.)* README promises
   *"the output IS readable C, so kama drops into an existing C codebase one file at a time"*, and `--keep-c`
   exists for exactly that. Two things stand between the promise and the output, and they want opposite
   things from the naming rules — so they get decided together, not separately.
@@ -634,8 +663,8 @@ rather than here, so there is one number to keep current. Forward work:
   `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
   already optimal, and this only buys debug-build speed.
 
-- **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** Two separate
-  irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,
+- **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** ► **Scheduled**
+  (see *Working order*). Two separate irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,
   `kama.cemit.*`, `kama.driver.cpp`, `kama_runtime.h`) with everything else; they belong under `src/`, with
   build output staying outside it so nothing generated lands beside a hand-written file. (b) There is
   nowhere sanctioned to **prototype in kama** — trying a language feature means writing a `.kama` somewhere,
