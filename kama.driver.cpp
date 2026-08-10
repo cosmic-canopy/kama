@@ -3,7 +3,7 @@
 //
 //   kama transpile <in.kama> [-o out.c] [--no-line]
 //   kama build     <in.kama> [-o out] [--target HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED|<triple>] [--webgpu]
-//                              [--cc <compiler>] [--no-line] [--keep-c]
+//                              [--cc <compiler>] [--no-line] [--keep-c] [-j <n>]
 //
 // native builds invoke clang; wasm builds invoke emcc (Emscripten), keying the
 // output format off the -o extension (.html harness by default); embedded builds
@@ -45,6 +45,11 @@
 #else
   #include <unistd.h>
   #include <sys/wait.h>         // WEXITSTATUS
+  #include <signal.h>           // sigaction — the `-j` pool ignores SIGINT once per wave, not per job
+  #include <errno.h>            // EINTR — waitpid restart
+  // NB: NOT <spawn.h>, though posix_spawn is the tidier API. Like <windows.h> and <mach-o/dyld.h>
+  // above, it is compiled in the same TU as kama.parser.hpp and drags in a header whose TRUE/FALSE
+  // collide with the token enum's. runCmdsParallel uses fork/exec, which needs nothing new.
   #ifdef __APPLE__
     // NB: do NOT include <mach-o/dyld.h> for _NSGetExecutablePath — like windows.h above, it is compiled in
     // the same TU as kama.parser.hpp, and its `enum DYLD_BOOL { FALSE, TRUE }` collides with the token
@@ -2631,6 +2636,109 @@ int runCmd(const std::string& cmd)
 #endif
 }
 
+// Run `cmds` with at most `jobs` of them in flight — the `-j` compile pool. `rcs` is sized to
+// cmds.size(): each entry is that command's exit status, or -1 if an earlier failure stopped the wave
+// before it was ever launched. Returns the status of the LOWEST-INDEXED failing command (0 if all
+// succeeded), so the caller's error message names the failure a serial run would have named first.
+//
+// On the first failure we stop LAUNCHING but let what is in flight finish. Killing children risks
+// leaving a truncated .o in the user's output directory, and the cost of draining is at most one more
+// compile — while the extra diagnostics are often the more useful ones.
+//
+// Why not a pool of threads calling runCmd(): system() sets SIGINT/SIGQUIT to SIG_IGN and blocks
+// SIGCHLD for the whole PROCESS, then restores. N concurrent callers interleave that, and the first to
+// finish restores the default disposition while N-1 children are still running — so Ctrl-C during a
+// build lands somewhere undefined. Here the dispositions are saved once for the wave and restored once,
+// which is the same protection system() gives, done once instead of N times racily. It would also be
+// the first thread in an otherwise single-threaded compiler.
+//
+// Children exec `/bin/sh -c` rather than the compiler directly, because a kama "compiler" is a
+// SHELL STRING, not an argv — `"…/zig" cc`, or `clang -fsanitize=address,undefined -g` from the test
+// harness. Tokenizing that here would be a quoting-bug generator; sh already does it correctly. sh also
+// preserves the 128+signal exit convention that run_tests.sh reads to tell a rejection from a crash.
+int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<int>& rcs)
+{
+    rcs.assign(cmds.size(), -1);
+    if (cmds.empty()) return 0;
+
+#if defined(_WIN32)
+    // No posix_spawn/waitpid; `-j` is clamped to 1 on Windows, so this is the only path taken there.
+    (void)jobs;
+    for (size_t i = 0; i < cmds.size(); ++i) {
+        rcs[i] = runCmd(cmds[i]);
+        if (rcs[i] != 0) return rcs[i];
+    }
+    return 0;
+#else
+    if (jobs < 1) jobs = 1;
+
+    struct sigaction ign, oldInt, oldQuit;
+    memset(&ign, 0, sizeof ign);
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    sigaction(SIGINT,  &ign, &oldInt);
+    sigaction(SIGQUIT, &ign, &oldQuit);
+
+    std::map<pid_t, size_t> live;   // pid -> index in cmds
+    size_t next = 0;
+    bool stop = false;
+
+    while ((!stop && next < cmds.size()) || !live.empty()) {
+        while (!stop && next < cmds.size() && (int)live.size() < jobs) {
+            pid_t pid = fork();
+            if (pid < 0) {
+                rcs[next] = 127;      // could not fork
+                stop = true;
+                break;
+            }
+            if (pid == 0) {
+                // Child. Restore the DEFAULT dispositions we suppressed in the parent, so a Ctrl-C at
+                // the terminal (delivered to the whole foreground process group) kills the compilers
+                // while kama survives to drain them, replay diagnostics and clean up. Only
+                // async-signal-safe calls between fork and exec — signal() and execl() both are.
+                signal(SIGINT,  SIG_DFL);
+                signal(SIGQUIT, SIG_DFL);
+                execl("/bin/sh", "sh", "-c", cmds[next].c_str(), (char*)nullptr);
+                _exit(127);           // exec failed; 127 is the shell's own "cannot execute"
+            }
+            live[pid] = next++;
+        }
+        if (live.empty()) break;
+        int st = 0;
+        // waitpid(-1) is safe: every other runCmd() in the driver is synchronous, so this wave's
+        // children are the only ones kama can have outstanding.
+        pid_t done = waitpid(-1, &st, 0);
+        if (done < 0) { if (errno == EINTR) continue; break; }
+        std::map<pid_t, size_t>::iterator it = live.find(done);
+        if (it == live.end()) continue;
+        rcs[it->second] = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+        if (rcs[it->second] != 0) stop = true;
+        live.erase(it);
+    }
+
+    sigaction(SIGINT,  &oldInt,  nullptr);
+    sigaction(SIGQUIT, &oldQuit, nullptr);
+
+    for (size_t i = 0; i < cmds.size(); ++i) if (rcs[i] > 0) return rcs[i];
+    return 0;
+#endif
+}
+
+// Copy a captured child stream to ours verbatim, then remove the file. Per-job capture + ordered replay
+// is what makes interleaving unrepresentable rather than merely unlikely: today's single invocation
+// emits diagnostics in source order because the C compiler compiles the sources in order, and replaying
+// in input order reproduces exactly that.
+static void replayAndRemove(const std::string& path, FILE* to)
+{
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char buf[8192];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof buf, f)) > 0) fwrite(buf, 1, n, to);
+        fclose(f);
+    }
+    remove(path.c_str());
+}
+
 // Fetch `version` ("" = latest) into the versioned store via the canonical installer, which re-detects a C
 // compiler (slim vs bundled zig) so the flavor stays consistent. `makeDefault` tells the installer to also
 // refresh the PATH selector + the global default to that version (the installer always sets the default on a
@@ -4069,6 +4177,7 @@ void usage()
         "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
         "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
+        "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
@@ -5147,6 +5256,7 @@ int main(int argc, char** argv)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
     bool        eachMode   = false;        // `kama check --each`: every input is its own program, one process
+    int         buildJobs  = 0;            // -j/--jobs: concurrent C compiles; 0 => resolve from env/cores
     // Every `kama query` mode, in the order the caller asked. One list rather than a scalar per mode, so
     // a single analysis can answer N questions (see `Question` above).
     std::vector<Question> questions;
@@ -5159,7 +5269,19 @@ int main(int argc, char** argv)
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--") { for (++i; i < argc; ++i) progArgs.push_back(argv[i]); break; }   // rest are program args
-        else if (a == "-o" && i + 1 < argc)       output = argv[++i];
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) output = argv[++i];
+        // How many C compiles may run at once. Every option in this CLI has a long form; a short form
+        // exists only where the convention is universal enough that its absence would surprise (`-o`,
+        // `-v`, `-j`). `0`/negative/non-numeric is a mistake worth naming, not rounding to 1.
+        else if ((a == "-j" || a == "--jobs") && i + 1 < argc) {
+            char* end = nullptr;
+            long v = strtol(argv[++i], &end, 10);
+            if (!end || *end || v < 1 || v > 1024) {
+                fprintf(stderr, "kama: %s expects a positive job count (got '%s')\n", a.c_str(), argv[i]);
+                usage(); return 2;
+            }
+            buildJobs = (int)v;
+        }
         else if (a == "--cc" && i + 1 < argc)     cc = argv[++i];
         else if (a == "--link" && i + 1 < argc)   links.push_back(argv[++i]);
         else if (a == "--target" && i + 1 < argc) { target = argv[++i]; targetExplicit = true; }
@@ -6041,44 +6163,61 @@ int main(int argc, char** argv)
         // it too: under -sPROXY_TO_PTHREAD `main` runs on a worker, and EXIT_RUNTIME is what carries its
         // return value out as the process exit code (else node sees 0 regardless).
         if (wasm && (needsApp || needsPthread)) cmd << "-sEXIT_RUNTIME=1 ";
-        // STATIC compiles each TU on its own (below) and archives the results, so its sources are not
-        // appended here. Every link-tail flag is already suppressed for a compile-only build, which is
-        // what makes moving the sources to the end equivalent.
-        if (!outStatic) for (auto& cf : cFiles) cmd << "\"" << cf << "\" ";
-        // Native WebGPU seam: compile the surface TU (Objective-C on macOS — it attaches a CAMetalLayer
-        // to the NSWindow) and link GLFW + the window-system libs. Only when the program externs
-        // kama_gpu.h AND targets native (the web seam is header-only static-inline, compiled nowhere).
+        // ---- The command is three pieces, not one: the compile flags above (`cmd`), the INPUTS
+        // (`ccInputs`), and the link tail (`link`). A single invocation is exactly
+        // `cmd + inputs + link + -o out`, byte for byte — reassembly is an identity, not a
+        // re-derivation, which is what makes the split safe to verify by diffing commands. Splitting
+        // it is also what lets N inputs compile as N independent `-c` jobs joined by one link (`-j`).
+        //
+        // `tok` is the input spelled exactly as it appeared on the old single command line, trailing
+        // space included; `obj` is where a `-c` compile of it writes.
+        struct CcInput { std::string tok, obj; };
+        std::vector<CcInput> ccInputs;
+        for (auto& cf : cFiles)
+            ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o" });
+        // Native WebGPU seam: the surface TU (Objective-C on macOS — it attaches a CAMetalLayer to the
+        // NSWindow). Only when the program externs kama_gpu.h AND targets native (the web seam is
+        // header-only static-inline, compiled nowhere).
+        //
+        // It is an INPUT, not a tail flag, and that is also a fix: it used to be appended to `cmd`
+        // unconditionally, so a STATIC build — which compiles each TU on its own — compiled the seam
+        // into *every* archive member. Its object goes in genDir; the `stripExtension(cf) + ".o"` rule
+        // used for module TUs would write it into the stdlib INSTALL directory.
         if (!wasm && needsGpu) {
             std::string seam = resolveStdlibDir(argv[0]) + "/std/gpu/kama_gpu.c";
-            // On macOS the surface TU is Objective-C (it attaches a CAMetalLayer to the NSWindow).
-            if (g_target.isMacOS()) cmd << "-x objective-c \"" << seam << "\" -x none ";
-            else                    cmd << "\"" << seam << "\" ";
+            ccInputs.push_back({ g_target.isMacOS() ? "-x objective-c \"" + seam + "\" -x none "
+                                                    : "\"" + seam + "\" ",
+                                 genDir + "/kama_gpu.o" });
         }
+
+        // ---- The link tail. Every flag from here down is link-time, which is exactly why the sources
+        // can move to the end: a compile-only build (`stopsAtObject`) suppresses all of it.
+        std::ostringstream link;
         // Native --webgpu: link wgpu-native, with an rpath so the .dylib/.so is found at run time (dev
         // loop — a shipped app would bundle it). The link stays out of the wasm path (emcc port covers it).
-        if (!wasm && webgpu) {
-            cmd << "-L\"" << wgpuDir << "/lib\" -lwgpu_native ";
+        if (!wasm && webgpu && !stopsAtObject) {
+            link << "-L\"" << wgpuDir << "/lib\" -lwgpu_native ";
             if (!g_target.isWindows())   // no rpath concept in PE/COFF
-                cmd << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
+                link << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
         }
         // The seam's window/surface libraries (GLFW + platform frameworks). Split from wgpu-native
         // above so a windowless native build (e.g. the link-gate smoke) links only libwgpu_native.
-        if (!wasm && needsGpu) {
+        if (!wasm && needsGpu && !stopsAtObject) {
             if (g_target.isMacOS())
-                cmd << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
-                       "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
-                       "-framework CoreFoundation -framework CoreVideo -lobjc ";
+                link << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
+                        "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
+                        "-framework CoreFoundation -framework CoreVideo -lobjc ";
             else if (g_target.isWindows())
-                cmd << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
+                link << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
             else
-                cmd << "-lglfw -lX11 -ldl -lpthread ";
+                link << "-lglfw -lX11 -ldl -lpthread ";
         }
         // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
         // the user supplies startup + linker script — owns library selection).
-        if (!stopsAtObject) for (auto& lib : links) cmd << "-l" << lib << " ";   // FFI link flags
+        if (!stopsAtObject) for (auto& lib : links) link << "-l" << lib << " ";   // FFI link flags
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
-        if (needsLibm && !wasm && !stopsAtObject) cmd << "-lm ";
+        if (needsLibm && !wasm && !stopsAtObject) link << "-lm ";
         // Pay-for-what-you-use: wire up threads only when the program uses the isolate seam (std::concurrent's
         // kama_isolate.h / kama_channel.h). Native: link libpthread (harmless on macOS — pthreads live in libc;
         // required on Linux). Wasm: emscripten pthreads = Web Workers over a shared SharedArrayBuffer, so the
@@ -6090,15 +6229,19 @@ int main(int argc, char** argv)
         if (needsPthread && !stopsAtObject) {
             if (wasm) {
                 const char* pool = getenv("KAMA_PTHREAD_POOL");   // build-time override; unset => 0 (grow on demand)
-                cmd << "-pthread -sPROXY_TO_PTHREAD "
-                    << "-sPTHREAD_POOL_SIZE=" << (pool && *pool ? pool : "0") << " "
-                    << "-sPTHREAD_POOL_SIZE_STRICT=0 ";
+                link << "-pthread -sPROXY_TO_PTHREAD "
+                     << "-sPTHREAD_POOL_SIZE=" << (pool && *pool ? pool : "0") << " "
+                     << "-sPTHREAD_POOL_SIZE_STRICT=0 ";
             } else {
-                cmd << "-lpthread ";
+                link << "-lpthread ";
             }
             // M6.3: parallel_for's default worker count. KAMA_PARFOR_WORKERS (build-time) pins K for
             // deterministic CI; unset => 0 => the emitted code calls kama_parfor_workers() (hw cores) at
             // runtime. Only a *count* knob — slices are disjoint + joined, so K never changes results.
+            //
+            // This is a COMPILE flag that used to sit in the link tail (after the sources). Harmless
+            // there for one invocation — `-D` is position-independent — but a per-TU `-c` job takes only
+            // the compile flags, so it belongs in `cmd` or the TUs would silently lose the default.
             const char* pfw = getenv("KAMA_PARFOR_WORKERS");
             cmd << "-DKAMA_PARFOR_WORKERS_DEFAULT=" << (pfw && *pfw ? pfw : "0") << " ";
         }
@@ -6106,31 +6249,97 @@ int main(int argc, char** argv)
         // by --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
         // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
         // build produced on Linux silently omitted the socket library.
-        if (!wasm && !stopsAtObject && g_target.isWindows()) cmd << "-lws2_32 ";
+        if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lws2_32 ";
         // The target's own link flags from kama.json, last so they can override anything above.
-        if (!stopsAtObject) for (const auto& f : g_target.ldflags) cmd << f << " ";
+        if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << f << " ";
+
+        // ---- How many C compiles may run at once.
+        //
+        // A C compiler handed N sources in ONE invocation compiles them SERIALLY, so a 32-TU program
+        // (anything importing `std` — a directory-module import pulls in every file in the directory)
+        // uses one core for ~70% of `kama build`'s wall time. Compiling each TU as its own `-c` job and
+        // linking the objects is measurably ~3.2x on the C phase and ~2x on the whole build (httpd, 32
+        // TUs, 10-core M-series: 0.93s one-invocation vs 0.27s at -j10 + 0.02s link).
+        //
+        // Resolution: -j/--jobs > $KAMA_BUILD_JOBS > core count. (NOT $KAMA_JOBS — that name is already
+        // the test harness's own fixture-pool width.)
+        int nJobs = buildJobs;
+        if (nJobs < 1) {
+            if (const char* e = getenv("KAMA_BUILD_JOBS")) nJobs = atoi(e);
+#if !defined(_WIN32)
+            if (nJobs < 1) nJobs = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+            if (nJobs < 1) nJobs = 4;
+        }
+        // Clamped to 1 — i.e. today's single invocation, byte for byte — when splitting cannot pay:
+        //
+        //  * nothing to split (one input: an import-free program, or a --release native unity build).
+        //  * Windows: no posix_spawn/waitpid pool.
+        //  * wasm: emcc's link settings (--use-port, --js-library, -sEXPORTED_RUNTIME_METHODS,
+        //    -sEXIT_RUNTIME) are emitted into the COMPILE flags above, so a per-TU `emcc -c` would warn
+        //    on every TU; emcc's Python startup also makes per-TU spawning far costlier than clang's.
+        //  * `zig cc`: measured, and it is a SIGN FLIP rather than a smaller win. zig has its own
+        //    content-addressed object cache, so one invocation over 32 TUs is 4.13s cold but 0.07s warm
+        //    and 0.11s after editing one file — it already does incremental rebuilds. Per-TU zig cannot
+        //    use that cache (it is bounded by zig's ~0.18s process startup: 0.59s cold AND warm), so
+        //    parallelizing would be 7x better cold and 5x WORSE in the edit-rebuild loop, which is the
+        //    loop that matters. A bundled install is exactly where `zig cc` comes from.
+        if (ccInputs.size() < 2 || wasm || isZig(compiler)) nJobs = 1;
+#if defined(_WIN32)
+        nJobs = 1;
+#endif
+
+        // Compile every input on its own and join the results, rather than handing them all to one
+        // invocation. STATIC has always done this (an archive has no other shape); `-j` widens it to
+        // executables and shared libraries, where the join is a link rather than an `ar`.
+        const bool perTU = outStatic || nJobs > 1;
 
         int rc;
-        if (outStatic) {
-            // A static library is compile-each-TU then archive. `ar` comes from the target spec when the
-            // project declared one, so a cross build archives with the matching binutils rather than the
-            // host's (an ar from another toolchain writes an index the target linker cannot read).
+        if (perTU) {
             std::string base = cmd.str();
-            std::vector<std::string> objs;
-            rc = 0;
-            for (auto& cf : cFiles) {
-                std::string obj = stripExtension(cf) + ".o";
-                rc = runCmd(base + "\"" + cf + "\" -o \"" + obj + "\"");
-                if (rc != 0) break;
-                objs.push_back(obj);
-                genFiles.push_back(obj);
+            std::vector<std::string> objs, cmds;
+            // A compile-only job needs `-c`, which the flags already carry for OBJECT/STATIC.
+            const std::string dashC = stopsAtObject ? "" : "-c ";
+            for (auto& in : ccInputs) {
+                objs.push_back(in.obj);
+                genFiles.push_back(in.obj);
+                // Capture each job's streams separately — not `2>&1` — because stream identity matters:
+                // `--cc echo` (the measurement instrument) writes to stdout while a compiler writes to
+                // stderr. They live beside the object, in the directory that already takes generated files.
+                cmds.push_back(base + dashC + in.tok + "-o \"" + in.obj + "\""
+                               + " >\"" + in.obj + ".out\" 2>\"" + in.obj + ".err\"");
             }
+            std::vector<int> rcs;
+            rc = runCmdsParallel(cmds, nJobs, rcs);
+            // Replay in INPUT order, whatever order they finished in. Logs are not build artifacts, so
+            // they go regardless of --keep-c.
+            for (size_t i = 0; i < cmds.size(); ++i) {
+                if (rcs[i] < 0) { remove((objs[i] + ".out").c_str()); remove((objs[i] + ".err").c_str()); continue; }
+                replayAndRemove(objs[i] + ".out", stdout);
+                replayAndRemove(objs[i] + ".err", stderr);
+            }
+            // The join runs only on a clean wave, so it can never see an object a stopped wave skipped.
             if (rc == 0) {
-                std::ostringstream ar;
-                ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << outPath << "\"";
-                for (auto& o : objs) ar << " \"" << o << "\"";
-                rc = runCmd(ar.str());
-                if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
+                if (outStatic) {
+                    // A static library is compile-each-TU then archive. `ar` comes from the target spec when
+                    // the project declared one, so a cross build archives with the matching binutils rather
+                    // than the host's (an ar from another toolchain writes an index the target linker
+                    // cannot read).
+                    std::ostringstream ar;
+                    ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << outPath << "\"";
+                    for (auto& o : objs) ar << " \"" << o << "\"";
+                    rc = runCmd(ar.str());
+                    if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
+                } else {
+                    // Link the objects with the SAME flag prefix the compiles used, not a bare compiler
+                    // name: `--cc "clang -fsanitize=address,undefined"` (the sanitizer leg) needs those
+                    // flags on the link too, or the runtime is never pulled in.
+                    std::ostringstream ld;
+                    ld << base;
+                    for (auto& o : objs) ld << "\"" << o << "\" ";
+                    ld << link.str() << "-o \"" << outPath << "\"";
+                    rc = runCmd(ld.str());
+                }
             }
         } else {
             if (outObject && cFiles.size() > 1) {
@@ -6138,7 +6347,8 @@ int main(int argc, char** argv)
                                 "%zu — use OUTPUT=STATIC to get one archive instead\n", cFiles.size());
                 return 2;
             }
-            cmd << "-o \"" << outPath << "\"";
+            for (auto& in : ccInputs) cmd << in.tok;
+            cmd << link.str() << "-o \"" << outPath << "\"";
             rc = runCmd(cmd.str());
         }
 

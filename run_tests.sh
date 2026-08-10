@@ -43,6 +43,14 @@ suite_start_s=$(date +%s)
 # KAMA_JOBS. Results are collected per fixture then tallied in fixture order for stable output.
 NCPU="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
+# ...and `kama build` must NOT also fan out. `-j` (KAMA_BUILD_JOBS) compiles a program's translation
+# units concurrently, which is ~2x for a developer building one program on an idle machine — but this
+# loop already saturates every core with one fixture per core, so per-TU splitting here only adds
+# processes and costs CPU (a cold per-TU compile is ~30-40% more work than one invocation over the same
+# sources). j=1 is also *today's exact command*, so the suite keeps covering the path everyone ships on.
+# Overridable, deliberately: `KAMA_BUILD_JOBS=4 ./dev test` is the A/B that justifies this line.
+export KAMA_BUILD_JOBS="${KAMA_BUILD_JOBS:-1}"
+
 # Opt-in memory-safety pass: KAMA_SAN=1 builds every positive (and multi-file) fixture with
 # ASan + UBSan and runs it, so a use-after-free / overflow / leak / UB fails the suite. Native
 # only; xfail fixtures never link so they're unaffected. Requires the compiler-rt runtime in the

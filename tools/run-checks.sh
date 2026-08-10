@@ -62,6 +62,11 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$JOBS" ] || JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
+# This pool is already $JOBS wide and several guards call `kama build`, so `kama build`'s own `-j` must
+# not fan out underneath it — same reasoning as run_tests.sh. Overridable so check-build-jobs.sh (which
+# passes -j on the command line, where it wins) still measures what it means to.
+export KAMA_BUILD_JOBS="${KAMA_BUILD_JOBS:-1}"
+
 # Read a marker from the guard's OWN header. Bounded to the first 40 lines so a guard that merely
 # discusses the markers in prose cannot accidentally set one.
 marker() { sed -n "1,40{s/^# *$2: *//p;}" "$1" | head -1; }
