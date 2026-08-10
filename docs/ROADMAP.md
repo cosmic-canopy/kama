@@ -41,22 +41,32 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| 1 | **`kama seed`** — the project seed | §10 | ↓ |
-| 2 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
-| 3 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 4 | Campaign 2 — full generic specialization | §1.2.1 | |
-| 5 | Campaign 3 — const generics on types | §1.2.2 | |
-| 6 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 7 | stdlib parity M2b / M2c | §3 | |
+| **1** | **Closure pruning** — a directory import should not compile the directory | §9, [design/closure-pruning.md](design/closure-pruning.md) | ► **NEXT** |
+| 2 | **`kama seed`** — the project seed | §10 | ↓ |
+| 3 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
+| 4 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
+| 5 | Campaign 2 — full generic specialization | §1.2.1 | |
+| 6 | Campaign 3 — const generics on types | §1.2.2 | |
+| 7 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 8 | stdlib parity M2b / M2c | §3 | |
 
-**Why 1–3 come before the remaining language campaigns:** they are the work that makes every campaign after
+**Why closure pruning goes first, ahead of the tooling.** Two reasons, and the second is the deciding one.
+It is the largest remaining build-time lever — **20 of `examples/httpd`'s 32 translation units contribute
+no live symbol**, and those dead units cost *more* C-compile wall-clock than the live ones (0.15 s vs
+0.12 s at `-j 10`), because a near-empty generic TU still parses the runtime headers and the whole-program
+`gen.h`. It is also the only item anywhere in this file that cuts the front end, the C compile **and**
+§10's per-keystroke LSP floor at the same time. And it **changes module semantics** — a compile error in an
+unused sibling file stops failing the build — so it belongs on the pre-1.0 side of the API-stability line,
+not after the tag.
+
+**Why 2–4 come before the remaining language campaigns:** they are the work that makes every campaign after
 them cheaper and less error-prone — one command that seeds a project with the tooling wired up, a repo
 layout where scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real
-changes. Items 4–7 are language work that will be done *through* those tools.
+changes. Items 5–8 are language work that will be done *through* those tools.
 
 *(**AI/agent tooling shipped** — `kama query --search`/`--diagnostics`/`--json`, `kama agents`, and the
 `AGENTS.md` kama writes into a project. Record: [agents.md](agents.md), guarded by
-`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it is next.)*
+`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it follows closure pruning.)*
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -653,10 +663,14 @@ rather than here, so there is one number to keep current. Forward work:
   Every one of the 32 is also parsed and analyzed, in every build **and on every LSP keystroke** — so
   pruning is the one lever that cuts the front end, the C compile, and §10's per-keystroke floor together.
 
-  Not scoped: it changes what kama emits and touches module semantics. Note the obvious fix is not the
-  whole fix — the 14 collections files import each other, so resolving only the named symbols' defining
-  files still drags most of the directory in transitively. Post-analysis reachability pruning is the
-  shape that actually reaches the 20.
+  ► **SCHEDULED — item 1 in the *Working order*. Design of record:
+  [design/closure-pruning.md](design/closure-pruning.md)**, written for a cold start. Short version:
+  the intra-directory import graph turns out to be **sparse**, so resolving a directory import to the
+  files defining the named symbols (plus their transitive intra-package closure) reaches most of the 20
+  without whole-program reachability — httpd's `std::collections` goes 14 → 3 and `std::num` 5 → 1. An
+  earlier draft of this entry claimed the opposite, from an assumption rather than a measurement.
+  It changes module semantics (a compile error in an unused sibling stops failing the build), which is
+  why it lands **pre-1.0**.
 
 ## 10. Tooling / distribution (deferred)
 
