@@ -20,7 +20,7 @@ fail=0
 
 # Report-only timing (never gates pass/fail): each fixture records its build+run wall-clock in ms so we can
 # watch the suite's cost trend as fixtures grow. `$EPOCHREALTIME` (bash 5, on the container + brew-bash) is
-# microseconds; the harness already needs bash >=4.3 for `wait -n`. Per-fixture wall-clock is NOISY under the
+# microseconds, and absent on macOS's bash 3.2 — see HAVE_MS below. Per-fixture wall-clock is NOISY under the
 # parallel fan-out (cores are saturated), so treat the slowest-N as a trend signal, not a per-fixture budget.
 now_ms() { local e="${EPOCHREALTIME:-0.0}"; echo $(( ${e%.*} * 1000 + 10#${e#*.} / 1000 )); }
 suite_start=$(now_ms)
@@ -91,15 +91,12 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
-# Does this bash have `wait -n` (4.3+)? The gate below uses it to wake on the first completion instead of
-# polling. bash 3.2 (macOS) does not, and errors with status 2 — which is what the `-ne 2` distinguishes.
-#
-# ⚠️ PROBE HERE, and nowhere later. `wait -n` waits for the next job to finish, so with ANY live background
-# job it BLOCKS — and the wasm leg starts helper servers below that never exit. Probed after them, this line
-# hangs the whole leg forever, which is exactly what it did between 69c1123 and this fix: `./dev test wasm`
-# printed its banner and then sat there. With no jobs yet, bash 5 returns 127 immediately and bash 3.2
-# returns 2, so both answers are correct and neither waits.
-if wait -n >/dev/null 2>&1 || [ "$?" -ne 2 ]; then HAVE_WAIT_N=1; else HAVE_WAIT_N=0; fi
+# (There used to be a `wait -n` capability probe here, for a gate that polled. The gate is a fifo token
+# semaphore now — see `spawn` below — which blocks on a `read` and needs no probe. Worth remembering why
+# the probe had to sit exactly here if one is ever reintroduced: `wait -n` waits for the NEXT job to
+# finish, so with any live background job it BLOCKS, and the wasm leg starts helper servers below that
+# never exit. Probed after them, it hung the whole leg forever — `./dev test wasm` printed its banner and
+# sat there, between 69c1123 and its fix.)
 
 # Servers for the wasm net::web E2E fixtures, started once for the wasm leg and torn down on exit.
 # net_ws_loopback -> a Node WebSocket echo server (Node built-ins only). net_wt_loopback -> an aioquic
@@ -129,33 +126,41 @@ fi
 [ "$WASM" = 1 ] && sleep 0.3
 trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 
-# The concurrency gate below counts `jobs -rp`, which includes the long-lived helper servers started just
-# above — they are background jobs that never exit. Without budgeting for them the wasm leg (the SLOWEST
-# one) silently runs at NCPU-1, and at NCPU-3 under KAMA_BROWSER=1. Cap on NCPU *plus* the helpers, so the
-# fan-out always gets NCPU fixture slots whichever leg is active.
-JOB_CAP="$NCPU"
-for _p in "$WS_ECHO_PID" "$WT_ECHO_PID" "$SIG_RELAY_PID"; do [ -n "$_p" ] && JOB_CAP=$((JOB_CAP+1)); done
+# The concurrency gate: a TOKEN SEMAPHORE over a fifo. `spawn` takes a token before forking and the job
+# hands it back as its last act, so the pool is exactly $NCPU wide.
+#
+# It reads as more machinery than the `while [ $(jobs -rp | wc -l) -ge CAP ]` count it replaced, and it
+# is strictly less work. That loop ran in the PARENT, on the serial path that launches every fixture, and
+# each turn of it cost a subshell + a `wc` — and on macOS (bash 3.2, no `wait -n`) it then slept 20 ms, so
+# a phase of 597 fixtures could spend ~12 s doing nothing but waiting to notice a free slot. `read` on a
+# fifo blocks until a token is actually there, waking immediately, forking nothing.
+#
+# History worth keeping, because both of these FAILED OPEN — the suite still passed, it just stopped
+# throttling, and neither is possible in this shape:
+#
+#   1. `wait -n` is bash 4.3+; on macOS's bash 3.2 it exits 2 immediately, so the original
+#      `wait -n || break` let every job through. Measured: 8 jobs against a cap of 2 left 8 running, i.e.
+#      the host leg forked ~1800 concurrent jobs onto 10 cores and thrashed instead of compiling.
+#   2. Even on bash 5, `wait -n` returns the FINISHED JOB'S status, so one failing fixture tripped
+#      `|| break` and punched a hole in the cap for the rest of the phase.
+#
+# The long-lived helper servers (ws/wt echo, signal relay) no longer need budgeting for: they are not
+# spawned through `spawn`, so they hold no token, and the fan-out gets its full $NCPU on every leg. That
+# is what the old JOB_CAP fudge existed to patch up.
+#
+# A job killed outright would never return its token and the pool would narrow by one. Nothing kills
+# these (the trap fixtures are a separate serial leg, and a crashing fixture BINARY is captured by the
+# subshell, which still returns its token), and the failure mode is "slower", never "wrong".
+SEM="$TMP/sem.fifo"
+mkfifo "$SEM"
+exec 9<>"$SEM"                                   # read-write, so it never sees EOF and never blocks on open
+_i=0; while [ "$_i" -lt "$NCPU" ]; do printf '\n' >&9; _i=$((_i+1)); done
 
-# The gate itself. Every fan-out below calls `gate` before spawning the next job.
-#
-# This used to be written inline as `while [ jobs -ge CAP ]; do wait -n || break; done`, which had two
-# defects that both FAILED OPEN — the suite still passed, it just stopped throttling:
-#
-#   1. `wait -n` is bash 4.3+. macOS ships bash 3.2, where it exits 2 immediately, `|| break` fires, and
-#      the gate lets the job through. Measured: spawning 8 jobs against a cap of 2 left 8 running. So the
-#      host leg forked ~1800 concurrent jobs onto 10 cores and spent its time thrashing rather than
-#      compiling.
-#   2. Even on bash 5, `wait -n` returns the FINISHED JOB'S exit status, so one failing fixture also
-#      tripped `|| break` and punched a hole in the cap for the rest of that phase.
-#
-# `wait -n` is still used where it exists, because it wakes on the first completion instead of polling;
-# the `|| :` swallows a job's exit status (results are collected from files, never from `wait`). Elsewhere
-# a short poll is correct, portable, and costs nothing next to a fixture that takes tens of milliseconds.
-# (HAVE_WAIT_N is probed far above, before the helper servers start — see the warning there.)
-gate() {
-    while [ "$(jobs -rp | wc -l)" -ge "$JOB_CAP" ]; do
-        if [ "$HAVE_WAIT_N" = 1 ]; then wait -n 2>/dev/null || :; else sleep 0.02; fi
-    done
+# spawn <fn> [args…] — block for a slot, run the job in the background, release the slot when it ends.
+# $! is shell-global, so a caller can still collect the pid straight after calling this.
+spawn() {
+    read -r -u 9 _tok
+    { "$@"; printf '\n' >&9; } &
 }
 
 # Build one fixture: $1 = output base path, $2… = source .kama file(s). Honors the active mode.
@@ -244,17 +249,19 @@ fi
 # $TMP/$name.out and records PASS/FAIL/SKIP into $TMP/$name.res (tallied in fixture order afterward).
 test_one() {
     local src="$1" name expect_file expected exe out res
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"      # parameter expansion, not a `basename` fork
     out="$TMP/$name.out"; res="$TMP/$name.res"
     expect_file="$TESTS_DIR/$name.expect"
     if [ ! -f "$expect_file" ]; then echo "SKIP $name (no .expect)" >"$out"; echo SKIP >"$res"; return; fi
-    expected="$(cat "$expect_file")"
+    expected="$(<"$expect_file")"                # `$(<file)` is a bash builtin; `$(cat file)` is a fork
 
     # Net transports split by target (see below); skip the half that doesn't apply to the active target.
+    # These are static properties of the corpus, swept ONCE into $SET_* before the fan-out (see there) —
+    # they used to be five `grep`s per fixture, i.e. ~3000 processes per leg to recompute a constant.
     local uses_net_web=0 uses_net=0 uses_proc=0 BROWSER=0
-    { grep -q 'std::net::web' "$src" || grep -q 'kama_net_web.h' "$src"; } && uses_net_web=1
-    grep -q 'std::net' "$src" && uses_net=1
-    grep -q 'std::process' "$src" && uses_proc=1
+    case "$SET_NET_WEB" in *"|$name|"*) uses_net_web=1;; esac
+    case "$SET_NET"     in *"|$name|"*) uses_net=1;;     esac
+    case "$SET_PROC"    in *"|$name|"*) uses_proc=1;;    esac
     if [ "$WASM" = 1 ]; then
         if [ "$uses_net" = 1 ] && [ "$uses_net_web" = 0 ]; then
             echo "SKIP $name (native net: no raw sockets on wasm)" >"$out"; echo SKIP >"$res"; return
@@ -266,15 +273,15 @@ test_one() {
         fi
         # Inline asm (MCU 6a) is native/embedded-only — target-specific machine instructions have no wasm
         # form. Skip any fixture that uses `asm(` on the wasm leg (mnemonics like `nop`/`wfi` aren't wasm).
-        if grep -q 'asm(' "$src"; then
-            echo "SKIP $name (inline asm: native/embedded only)" >"$out"; echo SKIP >"$res"; return
-        fi
+        case "$SET_ASM" in *"|$name|"*)
+            echo "SKIP $name (inline asm: native/embedded only)" >"$out"; echo SKIP >"$res"; return;;
+        esac
     else
         if [ "$uses_net_web" = 1 ]; then
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return
         fi
     fi
-    grep -qE 'kama_wt_|kama_rtc_' "$src" && BROWSER=1
+    case "$SET_BROWSER" in *"|$name|"*) BROWSER=1;; esac
     if [ "$BROWSER" = 1 ] && [ "$BROWSER_TESTS" = 0 ]; then
         echo "SKIP $name (browser E2E — set KAMA_BROWSER=1 to run)" >"$out"; echo SKIP >"$res"; return
     fi
@@ -283,7 +290,9 @@ test_one() {
     # imported-module `.c` names key off the MODULE (e.g. dynamic_array_1.c), so two fixtures importing the
     # same stdlib module would collide in a shared dir under parallelism.
     local wd="$TMP/w_$name"; mkdir -p "$wd"; exe="$wd/$name"
-    local t0; t0=$(now_ms)
+    # Report-only timing, and bash-5-only (see HAVE_MS). Skipped entirely on bash 3.2 rather than forking
+    # two subshells per fixture to compute 0 - 0.
+    local t0=0; [ "$HAVE_MS" = 1 ] && t0=$(now_ms)
     if ! build_one "$exe" "$src" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
@@ -297,7 +306,7 @@ test_one() {
         echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"
-    echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock (ms)
+    [ "$HAVE_MS" = 1 ] && echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
@@ -308,59 +317,104 @@ test_one() {
     fi
 }
 
-# Fan out across NCPU cores, gating the number of concurrent jobs. Collect ONLY the fixture job PIDs and wait
-# on those explicitly: a bare `wait` also blocks on the long-lived echo servers (ws_echo/wt_echo/sig_relay,
-# started with `&` for the wasm net::web tests), which never exit — that hung the whole wasm leg after the
-# single-file phase. `wait -n` in the gate is fine (it returns as soon as ANY fixture finishes).
+# Fan out across NCPU cores, `spawn` holding the pool to that width. Collect ONLY the fixture job PIDs and
+# wait on those explicitly: a bare `wait` also blocks on the long-lived echo servers (ws_echo/wt_echo/
+# sig_relay, started with `&` for the wasm net::web tests), which never exit — that hung the whole wasm leg
+# after the single-file phase.
+# Which fixtures use which seam — swept ONCE over the whole corpus rather than re-derived per fixture.
+# These are properties of the source tree, constant for the run, and test_one used to spend five `grep`
+# processes rediscovering them for each of 597 fixtures. Five processes now, ~3000 before.
+#
+# Membership is tested with `case "$SET" in *"|$name|"*)`, so the delimiters on both ends are load-bearing:
+# without them `net_ws` would match `net_ws_smoke`.
+sweep() {
+    local out="|" f
+    for f in $(grep -lE "$1" "$TESTS_DIR"/*.kama 2>/dev/null); do
+        f="${f##*/}"; out="$out${f%.kama}|"
+    done
+    printf '%s' "$out"
+}
+# `std::net` deliberately also matches `std::net::web` — as the per-fixture greps it replaces did.
+SET_NET_WEB=$(sweep 'std::net::web|kama_net_web\.h')
+SET_NET=$(sweep 'std::net')
+SET_PROC=$(sweep 'std::process')
+SET_ASM=$(sweep 'asm\(')
+SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
+
 phase_start "single-file fixtures"
 fixture_pids=()
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
-    test_one "$src" &
+    spawn test_one "$src"
     fixture_pids+=($!)
-    gate
 done
 wait "${fixture_pids[@]}" 2>/dev/null
 phase_end
-# Tally in fixture order (stable output regardless of completion order).
+# Tally in fixture order (stable output regardless of completion order). Parameter expansion and `$(<f)`
+# rather than `basename`/`cat`: this loop is serial and runs once per fixture, so each fork here is paid
+# in full rather than spread across the pool.
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     [ -f "$TMP/$name.out" ] && cat "$TMP/$name.out"
     if [ -f "$TMP/$name.res" ]; then
-        case "$(cat "$TMP/$name.res")" in
+        case "$(<"$TMP/$name.res")" in
             PASS) pass=$((pass+1));;
             FAIL) fail=$((fail+1));;
         esac
     fi
 done
 
-# Multi-file fixtures: tests/<name>.d/ with several .kama built together.
-phase_start "multi-file fixtures"
-for dir in "$TESTS_DIR"/*.d; do
-    [ -d "$dir" ] || continue
-    name="$(basename "$dir" .d)"
+# Multi-file fixtures: tests/<name>.d/ with several .kama built together. Same shape as test_one — buffer
+# each fixture's lines into $TMP/md_$name.out and its verdict into .res, then tally in directory order —
+# because this leg used to be the one fan-out that was not one: 15 multi-unit programs built and run
+# strictly one after another while nine cores idled.
+multi_one() {
+    local dir="$1" name expect_file expected exe out res
+    name="${dir##*/}"; name="${name%.d}"
+    out="$TMP/md_$name.out"; res="$TMP/md_$name.res"
     expect_file="$dir/expect"
-    if [ ! -f "$expect_file" ]; then
-        echo "SKIP $name (no expect)"
-        continue
-    fi
-    expected="$(cat "$expect_file")"
+    if [ ! -f "$expect_file" ]; then echo "SKIP $name (no expect)" >"$out"; echo SKIP >"$res"; return; fi
+    expected="$(<"$expect_file")"
 
-    BROWSER=0   # multi-file fixtures never use a browser transport
-    exe="$TMP/$name"
+    local BROWSER=0   # multi-file fixtures never use a browser transport
+    # Its own build dir, for the reason test_one has one: the driver writes multi-unit intermediates to
+    # dirname(-o) and names an imported module's .c after the MODULE, so two fixtures importing the same
+    # stdlib module collide. Serial, `$TMP/$name` was safe; the moment this leg fans out it is not, which
+    # is exactly how 13 of these failed the first time they ran concurrently.
+    local wd="$TMP/wm_$name"; mkdir -p "$wd"; exe="$wd/$name"
     if ! build_one "$exe" "$dir"/*.kama >/dev/null 2>"$TMP/$name.err"; then
-        echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; fail=$((fail+1)); continue
+        { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
-        echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; fail=$((fail+1)); continue
+        { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
 
     if [ "$actual" = "$expected" ]; then
-        echo "PASS $name (multi-file, exit $actual)"; pass=$((pass+1))
+        echo "PASS $name (multi-file, exit $actual)" >"$out"; echo PASS >"$res"
     else
-        echo "FAIL $name (got $actual, expected $expected)"; fail=$((fail+1))
+        echo "FAIL $name (got $actual, expected $expected)" >"$out"; echo FAIL >"$res"
+    fi
+}
+
+phase_start "multi-file fixtures"
+multi_pids=()
+for dir in "$TESTS_DIR"/*.d; do
+    [ -d "$dir" ] || continue
+    spawn multi_one "$dir"
+    multi_pids+=($!)
+done
+if [ ${#multi_pids[@]} -gt 0 ]; then wait "${multi_pids[@]}" 2>/dev/null; fi
+for dir in "$TESTS_DIR"/*.d; do
+    [ -d "$dir" ] || continue
+    name="${dir##*/}"; name="${name%.d}"
+    [ -f "$TMP/md_$name.out" ] && cat "$TMP/md_$name.out"
+    if [ -f "$TMP/md_$name.res" ]; then
+        case "$(<"$TMP/md_$name.res")" in
+            PASS) pass=$((pass+1));;
+            FAIL) fail=$((fail+1));;
+        esac
     fi
 done
 
@@ -373,7 +427,7 @@ done
 # `kama build` into its own $TMP files. Serial, this leg was ~325 compiler processes run one at a time.
 xfail_one() {
     local src="$1" name out res err rc msg_file
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
     "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
     if [ "$rc" -eq 0 ]; then
@@ -398,16 +452,15 @@ phase_start "xfail fixtures"
 xfail_pids=()
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
-    xfail_one "$src" &
+    spawn xfail_one "$src"
     xfail_pids+=($!)
-    gate
 done
 wait "${xfail_pids[@]}" 2>/dev/null
 phase_end
 # Tally in fixture order, so output is identical to the serial version regardless of completion order.
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     [ -f "$TMP/xf_$name.out" ] && cat "$TMP/xf_$name.out"
     if [ "$(cat "$TMP/xf_$name.res" 2>/dev/null)" = "PASS" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
@@ -427,7 +480,7 @@ if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 1 ]; then
     ulimit -c 0
     for src in "$TESTS_DIR"/trap/*.kama; do
         [ -e "$src" ] || continue
-        name="$(basename "$src" .kama)"
+        name="${src##*/}"; name="${name%.kama}"
         if ! "$KAMA" build "$src" -o "$TMP/trap_$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
             echo "FAIL trap/$name (build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
         fi
@@ -490,7 +543,7 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build` �
 #   for c in /tmp/chunk.*; do "$KAMA" check --each $(cat "$c"); done
 check_pos_one() {
     local src="$1" name
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     if ! "$KAMA" check "$src" >/dev/null 2>"$TMP/ck_$name.err"; then
         { echo "  MISMATCH $name: builds, but \`kama check\` rejects it (the editor would show a clean file as broken)"
           head -3 "$TMP/ck_$name.err"; } >"$TMP/ck_$name.bad"
@@ -498,7 +551,7 @@ check_pos_one() {
 }
 check_neg_one() {
     local src="$1" name ck_rc
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     "$KAMA" check "$src" >/dev/null 2>&1; ck_rc=$?
     if [ "$ck_rc" -eq 0 ]; then
         echo "  MISMATCH xfail/$name: \`kama build\` rejects it but \`kama check\` accepts it (the editor would show a broken file as clean)" >"$TMP/ckx_$name.bad"
@@ -515,18 +568,19 @@ check_neg_one() {
 # Launch and collect are separate so the POSITIVE and NEGATIVE lists occupy ONE pool with one barrier.
 # Draining them in sequence leaves a straggler in each of the two waves: 11 s that way, 10 s pooled.
 CKB_PIDS=()
+# One chunk, as its own job — a function so it can go through `spawn`, which takes a command and not a
+# redirection. Unquoted `$(cat …)` on purpose: one argument per path. No fixture path contains whitespace,
+# and the collect step re-runs anything that does not come back with a verdict, so a pathological name
+# degrades to the unbatched path rather than to a wrong answer.
+check_batch_one() { "$KAMA" check --each $(cat "$1") >"$1.v" 2>/dev/null; }
 check_batch_launch() {
     local list="$1" tag="$2" c
     split -l 32 "$list" "$TMP/ckb_${tag}." 2>/dev/null || true
     for c in "$TMP/ckb_${tag}."*; do
         [ -e "$c" ] || continue
         case "$c" in *.v) continue;; esac
-        # Unquoted on purpose: one argument per path. No fixture path contains whitespace, and the collect
-        # step re-runs anything that does not come back with a verdict, so a pathological name degrades to
-        # the unbatched path rather than to a wrong answer.
-        "$KAMA" check --each $(cat "$c") >"$c.v" 2>/dev/null &
+        spawn check_batch_one "$c"
         CKB_PIDS+=($!)
-        gate
     done
 }
 # Echo back the fixtures whose verdict is not $2 (the expected per-file exit code), including any the
@@ -549,14 +603,14 @@ phase_start "analysis agreement"
 : >"$TMP/ck_pos.list"; : >"$TMP/ck_neg.list"
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     [ -f "$TMP/$name.res" ] && [ "$(cat "$TMP/$name.res")" = "PASS" ] || continue   # only fixtures that built
     ck_pos=$((ck_pos+1))
     echo "$src" >>"$TMP/ck_pos.list"
 done
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
-    name="$(basename "$src" .kama)"
+    name="${src##*/}"; name="${name%.kama}"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1))
     echo "$src" >>"$TMP/ck_neg.list"
@@ -576,8 +630,8 @@ fi
 
 # Solo re-runs: normally empty. These produce every message this leg prints, batched or not.
 ck_pids=()
-while read -r src; do [ -n "$src" ] || continue; check_pos_one "$src" & ck_pids+=($!); gate; done <"$TMP/ck_pos.redo"
-while read -r src; do [ -n "$src" ] || continue; check_neg_one "$src" & ck_pids+=($!); gate; done <"$TMP/ck_neg.redo"
+while read -r src; do [ -n "$src" ] || continue; spawn check_pos_one "$src"; ck_pids+=($!); done <"$TMP/ck_pos.redo"
+while read -r src; do [ -n "$src" ] || continue; spawn check_neg_one "$src"; ck_pids+=($!); done <"$TMP/ck_neg.redo"
 if [ ${#ck_pids[@]} -gt 0 ]; then wait "${ck_pids[@]}" 2>/dev/null; fi   # normally EMPTY — see above
 phase_end
 # Report mismatches in fixture order — a MISMATCH names the fixture, so stable ordering keeps a diff of two
