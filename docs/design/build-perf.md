@@ -196,11 +196,130 @@ that guard fail, which is how the guard was verified.
 exit codes, and each chunk's `--each` stderr byte-identical to the concatenation of its files' solo
 stderr. `KAMA_NO_BATCH=1` is both the escape hatch and the way to re-run it.
 
-**Still open:** rung 3, the on-disk serialized symbol table (the fixture phase's front end, the LSP
-floor, user projects). Note rung 2 did **not** need the "resettable emitter" work this brief kept
-predicting — each program simply gets its own `CEmitter`, and every table an emitter builds is already a
-per-emitter member keyed by node pointer. The only shared mutable thing was the AST, and the one pass
-that writes to it is the prune, dealt with above.
+**Still open:** rung 3 — see the next section, which is written to be picked up cold. Note rung 2 did
+**not** need the "resettable emitter" work this brief kept predicting — each program simply gets its own
+`CEmitter`, and every table an emitter builds is already a per-emitter member keyed by node pointer. The
+only shared mutable thing was the AST, and the one pass that writes to it is the prune, dealt with above.
+
+### Lever 3, rung 3 — the last front-end lever. READ THIS BEFORE STARTING; the shape changed.
+
+**Everything left in the campaign is the 81 s fixture phase.** The guard block is floored by
+`check-packages` at 11.5 s and the agreement phase is spent (rung 2 took it to 10 s, of which ~2/3 is
+`analyze`). Lever 4's suite premise is void (§4). So this rung is the whole remaining plan.
+
+#### What is actually re-done per fixture — measured cleanly, and this is the number to design against
+
+Take an **import-free** fixture and a **std-heavy** one; the difference *is* the shared closure, with no
+modelling:
+
+    KAMA_TIMING=1 ./kama check tests/arith.kama        # 1 unit
+    #   closure-parse=0.4  prelude-parse=28  analyze=10   total=38 ms
+    KAMA_TIMING=1 ./kama check tests/parse_radix.kama  # 24 units
+    #   closure-parse=137  prelude-parse=28  analyze=80   total=244 ms
+
+So for a std-heavy program **~234 ms of a 244 ms analysis is the shared closure** — identical, byte for
+byte, for every program importing the same set. The root file's own share is ~10 ms. Against a full
+build (825 ms for the same fixture, i.e. front end ≈ 31 % / emit+clang ≈ 69 %), the shared front-end work
+is **~28 % of build wall**.
+
+Two ceilings follow, and they are far apart — which is the whole design fork:
+
+| what the cache restores | `parse_radix` check | ceiling |
+|---|---|---|
+| nothing (today) | 244 ms | — |
+| the **parse** only (AST), collect re-runs | ~82 ms | **3.0×** |
+| parse **and** analysis state | ~12 ms | **20×** |
+
+#### ⚠️ "Serialize the symbol table" is not available. Verified by reading the header.
+
+`CEmitter` holds **138** container members, and the load-bearing ones store **raw pointers into the
+AST** — `_declUnit` is `map<const ASTNode*, const CompilationUnit*>`, `_generics` is
+`map<string, FunctionDeclarationNode*>`, `_enumDeclNodes` likewise, `_localTypeNodes` holds
+`SharedIdentifier`. The tables are not separable from the AST: serializing them means serializing the
+AST *and* rebuilding every pointer identity on load. The 20× row above is therefore not a small
+extension of the 3× row — it is a different, much larger project, and the brief's earlier framing
+("a serialized symbol-table snapshot, prior art Clang PCH / rmeta / .swiftmodule") understated it.
+
+#### The fork, and the recommendation
+
+**3a — `kama build --each`, the in-process route.** Exactly rung 2's mechanism moved from `check` to
+`build`: N programs, one process, sharing the parsed closure. **No serialization at all.**
+
+  - *Size of the prize — measured end to end over the real 597-fixture corpus, and it is SMALLER than a
+    per-fixture extrapolation suggests.* Three measured factors, multiplied:
+
+    | factor | measured | how |
+    |---|---|---|
+    | front end as a share of **build** work | **42 %** | 597 fixtures: `check` 129 s CPU vs `build` 307 s CPU |
+    | **build** as a share of the 81 s phase | **~43 %** | the same 597 built standalone at `-P 10` = 35 s wall; the rest of the phase is running each binary + harness overhead |
+    | of front-end work, what batching removes | **65 %** | rung 2's own A/B: 157.6 s → 55.7 s CPU |
+
+    `0.42 × 0.43 × 0.65 ≈ 12 %` of the phase → **≈ 9-10 s**, taking `./dev test` to roughly 119 s.
+
+    ⚠️ An earlier draft of this section said 16-21 s, by weighting per-fixture ratios by eye instead of
+    measuring the corpus. **Re-measure the phase's build share directly before committing to 3a** — the
+    43 % above is inferred from a standalone sweep, not read out of the harness, and it is the weakest
+    of the three factors.
+  - *Cost:* the build block is `kama.driver.cpp:5787-6164`, **377 lines** at the tail of `main`. It needs
+    the same factor-into-a-lambda that `checkOne` got, 8× bigger but equally mechanical. `run_tests.sh`
+    must split build-then-run into two phases, keeping each **run** its own process (isolation is what
+    attributes a crash or a sanitizer report) and falling back to a solo build for any fixture the batch
+    does not report — the pattern rung 2 already proved against a SIGSEGV'ing test double.
+  - *Gives user projects and the LSP nothing.*
+
+**3b — the on-disk cache, the product feature.** What the LSP's per-keystroke floor and user projects
+actually need. Given the pointer problem above, the realistic version is **serialize the AST and re-run
+collect** — the 3.0× row, ~20 % of the fixture phase for the suite, plus cross-run and cross-project
+reuse that 3a can never give.
+
+**3c — stop, and say the campaign is done.** A real option, and it got stronger once 3a's prize was
+measured honestly. The campaign has taken `./dev test` 184 s → 129 s and `./dev matrix` a further −61 s.
+3a is ~9-10 s (≈ 8 %) for a 377-line refactor plus a harness restructure that moves the fixture leg from
+"build and run each fixture" to "batch the builds, then run each" — the phase this campaign's own
+instrumentation is built around. The levers have been getting worse in value-per-risk since lever 2, and
+this is where that curve crosses.
+
+**Recommendation, in order of what the evidence supports:**
+
+1. **Take the cheap measurement first** — the phase's true build share (the 43 % above, the weakest
+   factor). One instrumented `./dev test` settles whether 3a is a 10 s win or a 5 s one, and it costs
+   minutes. *Do not skip this*: the estimate has already been wrong by 2× once, in this section.
+2. **If it holds, 3a** — it reuses a design that is proven and guarded, and it answers 3b's hardest
+   *soundness* question (is build-path front-end reuse across programs safe?) without a byte of
+   serialization. That is the same staging argument that made rung 2 precede this, and it was right.
+3. **3b is a 1.x product item, not a suite lever** — decide it against the LSP's per-keystroke floor and
+   user-project rebuild times, which is where its value actually is. Its suite value is smaller than 3a's.
+4. **3c is the right answer if step 1 comes back low.** Then delete this file, move the residual into
+   ROADMAP §9 as a product item, and close the campaign.
+
+#### Before starting, verify these — each has already been wrong once
+
+1. **The build path's per-program state.** `checkOne` was trivial to factor because everything lived in
+   the `CEmitter`. The build block has ~377 lines of `main` locals (output naming, the `cmd` stream, the
+   `gen.h` stem, temp-file cleanup). Confirm each is per-program before assuming a loop is safe.
+2. **`--release` folds every unit into ONE unity TU** (`kama.driver.cpp:5910`), a different code path
+   from the debug/wasm multi-TU one. Whatever 3a does must be checked on both.
+3. **`pruneInactiveDecls` is still the only pass writing through to a shared AST** — rung 2's
+   `CompilationUnit::prunedNames` fix made its by-product idempotent too. Re-check if another in-place
+   rewrite has appeared; `tools/check-batch.sh` is where a new assertion belongs.
+4. **There is no in-process content hash.** `sha256Of` (`kama.driver.cpp:2720`) *shells out* to
+   `sha256sum`/`shasum` per file — unusable for hashing a 24-unit closure per build. 3b needs a real
+   in-process hash before anything else; 3a needs none, which is another reason it goes first.
+
+#### What this rung will NOT fix
+
+Most of the 81 s phase is **not** front end at all: ~58 % is running each fixture's binary plus harness
+overhead, and of the build half, ~58 % is clang. Neither 3a nor 3b touches either. After 3a the phase
+floors around 71 s, and no lever in this brief reaches what is left — the clang share is lever 4's
+territory, and lever 4's suite premise is void (§4).
+
+So the honest position, whichever of 3a/3c is chosen: **the suite work is essentially finished.** What
+remains (incremental rebuilds, the LSP's per-keystroke floor) is a **user-facing product feature**, not
+a suite-speed lever. Say that in ROADMAP rather than leaving levers open that cannot pay.
+
+*(A separate observation worth someone's attention, outside this campaign: if ~58 % of the fixture phase
+is running binaries and bash overhead rather than compiling, the harness itself — not the compiler — is
+the next thing worth profiling. That was never measured because every lever here aimed at the compiler.)*
 
 ### What "batching" actually shares — measured, because the answer decides the design
 
@@ -280,8 +399,8 @@ number does not survive contact with the tree, and the design built on it does n
 2026-08-09 by reading the emitter, not by re-running the sample:
 
 - **Every emitted module `.c` has `#include "<output-stem>.gen.h"` as its second line**
-  (`kama.cemit.cpp:18103`, stem from `kama.driver.cpp:5876`), and the include guard carries the stem too
-  (`kama.cemit.cpp:18089`). Two fixtures built to different `-o` names therefore never emit identical bytes. The 89 %
+  (`kama.cemit.cpp:18109`, stem from `kama.driver.cpp:5924`), and the include guard carries the stem too
+  (`kama.cemit.cpp:18099`). Two fixtures built to different `-o` names therefore never emit identical bytes. The 89 %
   is only reproducible if every fixture in the sample was built to the *same* `-o` basename — which is
   almost certainly what happened, and is a measurement artifact, not a property of kama.
 - **Worse, that header is whole-program.** `tests/query/complete.gen.h` is 3160 lines and declares the
@@ -290,7 +409,7 @@ number does not survive contact with the tree, and the design built on it does n
   header the compile read — gets **zero** cross-fixture hits. Guaranteed, not merely unlikely. Renaming
   the header to something fixed would restore byte-identity of the `.c` and change nothing about this:
   the header *contents* still differ, so the key still misses. That fixes the measurement, not the cache.
-- **`--release` never takes the multi-file path at all** (`kama.driver.cpp:5862` folds every unit into
+- **`--release` never takes the multi-file path at all** (`kama.driver.cpp:5910` folds every unit into
   one unity TU), so a per-TU object cache can only ever touch debug and wasm builds.
 
 So the suite-speed case for this lever is gone. What survives is real but different, and belongs on a
@@ -366,7 +485,7 @@ delivers **user-project incremental rebuilds** — which is half of what this le
 **Build it in three steps, so the risk is staged and each step is falsifiable on its own:**
 
 1. **Split compile from link.** `kama.driver.cpp` builds one `cmd` stream with the sources in the
-   *middle* (`:5891`), so split it there into compile-flags and link-tail. `outStatic` (`:5958`) already
+   *middle* (`:6047`), so split it there into compile-flags and link-tail. `outStatic` (`:6114`) already
    demonstrates the per-TU loop and the archive. Keep today's single invocation as the default — this
    step changes no behavior and is verifiable by itself.
 2. **The cache, behind a flag, off by default.** Key: `.c` content + the contents of every header the
@@ -441,8 +560,10 @@ this would need, so declining costs nothing. Re-ask after lever 3.
 2. ~~Lever 2 (parallelize the guards)~~ ✅ 61 s → 38 s. Plus `make -j`: cold build 8 s → 3 s.
 3. **Lever 3 (front-end reuse)** — rung 1 ✅ shipped (multi-query invocation: `check-query` 20.9 s → 6.0 s,
    guard block 24 s → 13 s). Rung 2 ✅ shipped (`kama check --each`: agreement phase 22 s → 10 s).
-   Rung left: the on-disk symbol-table cache (~36 % of the fixture phase, the LSP's per-keystroke floor,
-   user projects). Not committed — price it against the numbers below, not against the old estimates.
+   **Rung 3 is the only work left in this campaign, and its shape changed** — read its section above
+   before planning it. Short version: `kama build --each` (in-process, ≈ 16-21 s off the fixture phase,
+   no serialization) first; the on-disk cache after, as a 1.x product item, because the symbol tables
+   hold raw AST pointers and cannot be serialized apart from the AST.
 4. **Lever 4 (compile-to-object + `.o` cache)** — ⚠️ **its 89 %-dedup premise is void**; see the warning
    at the head of §4. Re-decide after lever 3, from the three options recorded there.
 

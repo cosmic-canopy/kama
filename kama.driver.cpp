@@ -713,7 +713,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
 //
 // OPT-IN, enabled only by `kama lsp`, for two reasons that are not caution:
 //   * build/check/transpile parse each file exactly once, so a cache is pure overhead there;
-//   * a cached unit is DESTRUCTIVELY REWRITTEN by CEmitter::pruneInactiveDecls (kama.cemit.cpp:13971)
+//   * a cached unit is DESTRUCTIVELY REWRITTEN by CEmitter::pruneInactiveDecls (kama.cemit.cpp:17129)
 //     — `@compileFor`-inactive decls are dropped from codeDeclarationList in place. Reuse is therefore
 //     sound only while the build-flag set is fixed, which one `kama lsp` process guarantees and a
 //     future multi-configuration caller would not. Opt-in makes that a decision, not an accident.
@@ -873,7 +873,7 @@ ParseResult parseForQuery(const char* src, const std::string& name)
 // _preludeEnums, ClassInfo, the `unit == _preludeUnit` identity tests), so two emitters never see each
 // other's state. The one pass that writes THROUGH to the AST is CEmitter::pruneInactiveDecls, which
 // rewrites codeDeclarationList and each kept decl's attribute list in place and runs over the prelude
-// too (kama.cemit.cpp:13971 / :14021) — safe here twice over: the prelude carries no `@compileFor`, so
+// too (kama.cemit.cpp:17129 / :17182) — safe here twice over: the prelude carries no `@compileFor`, so
 // the prune drops nothing, and the pass is idempotent under a fixed build-flag set, which one process
 // always has. Re-check both claims if the emitter grows another in-place AST rewrite.
 SharedCompilationUnit preludeUnit()

@@ -603,9 +603,20 @@ rather than here, so there is one number to keep current. Forward work:
      `CompilationUnit::prunedNames` fix, which also closed a live `kama lsp` bug. Guarded by
      `tools/check-batch.sh`.)*
 
-     **What remains is the cross-PROCESS form**, which is where the bigger number is: the 81 s fixture
-     phase cannot batch in-process — each fixture builds *and runs* a binary, and per-process isolation is
-     what keeps a crash or a sanitizer report attributable to one fixture.
+     **What remains is rung 3, and its shape changed — read
+     [design/build-perf.md](design/build-perf.md)'s rung 3 section before planning it.** Two findings
+     there decide it. First, **"serialize the symbol table" is not available**: `CEmitter` holds 138
+     containers and the load-bearing ones store raw `ASTNode*`, so the tables cannot be serialized apart
+     from the AST — the realistic on-disk form is "serialize the AST, re-run collect", a 3× front-end
+     ceiling rather than 20×. Second, the in-process alternative (`kama build --each`, batching builds
+     exactly as `check` now does, while each fixture still **runs** in its own process) measures at only
+     **≈ 9-10 s** off the 81 s phase, because the front end is 42 % of build work and build is only ~43 %
+     of that phase.
+
+     So the campaign is at the point where **stopping is a live option**, and the brief says so. Take the
+     one cheap measurement it names (the phase's true build share) and decide. Either way the *suite*
+     work is essentially done: what is left — incremental rebuilds and the LSP's per-keystroke floor —
+     is a user-facing product feature, not a suite-speed lever.
 
      Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
      whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so
