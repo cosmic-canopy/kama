@@ -576,8 +576,8 @@ rather than here, so there is one number to keep current. Forward work:
   11 bench languages have stdlib JSON. **v1:** a by-value tree round-trip across the stdlib-JSON six —
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
-- **Compile-time / suite-time — the campaign is CLOSED.** Measured 2026-08-09/10 on a 10-core M-series
-  host. The whole record is below; there is no separate design doc any more.
+- **Compile-time / suite-time.** Measured 2026-08-09/10 on a 10-core M-series host. The whole record is
+  below; there is no separate design doc any more.
 
   **Shipped, in order of when the evidence justified it:**
 
@@ -590,9 +590,59 @@ rather than here, so there is one number to keep current. Forward work:
   | 3.2 | `kama check --each` — N programs in one process, sharing prelude + import closure | agreement 22 s → 10 s |
   | **5** | **`kama build -j` — the C compiles run concurrently** | **user builds ~2× (below)** |
   | 6 | the harness itself: fifo-semaphore gate, per-run seam sweeps, multi-file leg fanned out | −30 core-s, −9 s wall |
+  | **7** | **`-O2` on the compiler itself — it had never been optimized** | **front end 8.2× (below)** |
 
-  `./dev test` **184 s → 122 s**; guard block **61 s → 14 s**. Phases now: guards 14 s · fixtures 82 s ·
-  multi-file 2 s · xfail 4 s · agreement 9 s.
+  `./dev test` **184 s → 122 s → 104.6 s**; guard block **61 s → 14 s**.
+
+  ### Lever 7 — the compiler was built at `-O0`, and had been forever
+
+  **The single largest lever in this section, found last, by taking a measurement the closure-pruning
+  brief demanded before any code was written.** `Makefile`'s `CXXFLAGS` carried **no `-O` flag at all** —
+  not in the Makefile, not in `tools/`, not in `dev`, not in either CI workflow. Every kama binary ever
+  built ran unoptimized, **including the ones `release.yml` shipped**.
+
+  It hid because the `-O` flags anyone looks at are the ones `kama build --release` hands the C compiler
+  for the *user's* program (`-O3` native / `-Oz` wasm, `kama.driver.cpp`). That is a different codebase one
+  level down, and "we do optimized builds" was true the whole time — about the other one.
+
+  Measured (`OPT ?= -O2`, `examples/httpd`, same host):
+
+  | | `-O0` | `-O2` |
+  |---|---|---|
+  | `kama check` front end | 338 ms | **41 ms** (8.2×) |
+  | ├ closure-parse (32 units) | 174 ms | 13.7 ms (12.7×) |
+  | ├ prelude-parse | 28 ms | 2.2 ms |
+  | └ analyze | 135 ms | 25.1 ms (5.4×) |
+  | `kama build -j 10` | 0.67 s | **0.37 s** (1.8×) |
+  | `kama check --each tests/*.kama` (597 files) | 25.3 s | **4.65 s** (5.4×) |
+  | `./dev test` wall | 122.0 s | **104.6 s** (1.17×) |
+  | `./dev test` **CPU** | 391 s | **197 s** (**1.99×**) |
+
+  **The suite halves in CPU but drops only 17 % in wall clock**, because it is already parallel and its
+  remainder is external `clang`, running the fixture binaries, and bash — exactly what lever 6's
+  decomposition predicted. CI, on 2-4-core runners, is CPU-bound and should see much more of the 2×.
+
+  Correctness, in the order the evidence was taken — **the optimized compiler emits byte-identical C**:
+  every `.c` and the `.gen.h` for `examples/httpd` compare equal, and `kama check --each` over all 597
+  fixtures produces byte-identical diagnostics. `-Werror` is clean at `-O2`. A one-off **ASan+UBSan build
+  of the compiler itself at `-O2`** ran the whole suite green (974 passed, 26 checks, zero sanitizer
+  reports) — worth knowing because `./dev test san` sanitizes the *emitted programs*, never the compiler,
+  so nothing else in the gate covers UB in the compiler's own C++.
+
+  `-O1`/`-O2`/`-O3` landed within noise of each other (41.4 / 41.1 / 42.2 ms) and `-O3` built *and* ran
+  slower, so there is nothing above `-O2` to chase. Kept overridable (`make OPT=-O0`) for compiler
+  debugging and held by [`tools/check-opt.sh`](../tools/check-opt.sh). The from-scratch compiler build
+  costs more now (8 s → 23.5 s serial, 3 s → 12.7 s at `-j10`), which is why both CI workflows build with
+  `-j4`.
+
+  ⚠️ **Everything measured before 2026-08-10 was measured against an unoptimized compiler.** The rows above
+  are re-baselined; anything quoted elsewhere from that period is not. **`benchmarks/RESULTS.md`'s runtime
+  columns are unaffected** — the bench builds `--release`, so the *emitted* code was always `-O3`; only its
+  compile-time column measured the compiler.
+
+  ⚠️ **The LSP per-keystroke floor below (~85 ms, 86 % `analyze`) is a pre-`-O2` number and has NOT been
+  re-measured.** `analyze` alone got 5.4× faster, so the floor certainly moved; the split is not published
+  here again until someone takes the measurement rather than deriving it.
 
   **Lever 6 is where the suite's remaining time actually was, and it is not the compiler.** Decomposing
   the 82 s fixture phase: building all 597 standalone is 33.8 s, running the built binaries is 24.6 s, and
@@ -663,14 +713,47 @@ rather than here, so there is one number to keep current. Forward work:
   Every one of the 32 is also parsed and analyzed, in every build **and on every LSP keystroke** — so
   pruning is the one lever that cuts the front end, the C compile, and §10's per-keystroke floor together.
 
+  **RE-PRICED against the post-`-O2` baseline (2026-08-10), by hand-pruning a stdlib copy in a fake
+  install tree and building httpd against it — no compiler changes needed to get this number:**
+
+  | httpd | full (32 TU) | pruned (17 TU) | saving |
+  |---|---|---|---|
+  | `kama build -j 10` | 0.37 s | **0.22 s** | **40.5 %** |
+  | `kama build -j 1` | 0.98 s | 0.55 s | 44 % |
+  | `kama check` front end | 41.1 ms | 27.1 ms | 34 % |
+
+  The decision rule was fixed at **≥ 25 % → take it**, written down before the number was taken. It clears
+  that, so this is **taken**. Note it looks *better* after lever 7, not worse: `-O2` shrank the front end
+  and left the external C compile untouched, so the C compile now dominates a build and pruning cuts it
+  hardest.
+
   ► **SCHEDULED — item 1 in the *Working order*. Design of record:
-  [design/closure-pruning.md](design/closure-pruning.md)**, written for a cold start. Short version:
-  the intra-directory import graph turns out to be **sparse**, so resolving a directory import to the
-  files defining the named symbols (plus their transitive intra-package closure) reaches most of the 20
-  without whole-program reachability — httpd's `std::collections` goes 14 → 3 and `std::num` 5 → 1. An
-  earlier draft of this entry claimed the opposite, from an assumption rather than a measurement.
-  It changes module semantics (a compile error in an unused sibling stops failing the build), which is
-  why it lands **pre-1.0**.
+  [design/closure-pruning.md](design/closure-pruning.md)**, written for a cold start. Resolve a directory
+  import to the files defining the named symbols plus their transitive intra-directory closure. It changes
+  module semantics (a compile error in an unused sibling stops failing the build), which is why it lands
+  **pre-1.0**.
+
+  **Three claims in earlier drafts of this entry did not survive being run** — recorded because each was
+  asserted, not measured:
+
+  1. ~~"resolution-level pruning reaches most of the 20"~~ — it reaches **15**, and 17 units remain.
+     `dynamic_array`, `fixed_array`, `view`, `ptr`, `stream` are dead TUs whose symbols httpd *genuinely
+     imports*; they are near-empty because a generic materializes at its instantiation site. No
+     resolution-level scheme can drop a named import — only whole-program reachability reaches those.
+  2. ~~"the intra-directory import graph is sparse, so `import` edges suffice"~~ — the *import* graph is
+     sparse, but it is not the closure. `lib/std/collections/priority_queue.kama` has **no `import` at
+     all** and declares `DynamicArray<T, A> data;`: an unqualified name resolves against the file's own
+     namespace program-wide (`kama.cemit.cpp` `resolveFuncImpl`), so same-namespace siblings reference
+     each other implicitly. An import-edge closure **under**-computes and breaks real programs. The
+     closure must also follow top-level names a kept file references. Relatedly, `provided` in
+     `loadProgramUnits` is keyed by *namespace*, not symbol, so a self-import (`lib/std/net/udp.kama`)
+     would skip loading the file defining the symbol.
+  3. ~~"parsing is the cheap part, so needing a symbol→file index for the whole directory is free"~~ —
+     at `-O0` parsing was **54 %** of the front end and the objection was real. Lever 7 dissolved it:
+     the entire front end is now 41 ms of a 370 ms build and the parse share is 13.7 ms, so indexing by
+     full parse and pruning before analyze/emit/compile costs ~8 ms and keeps the whole win. **The simple
+     design is the right one** — a separate lightweight declaration scanner would only risk drifting from
+     the real parser.
 
 ## 10. Tooling / distribution (deferred)
 
@@ -832,7 +915,10 @@ rather than here, so there is one number to keep current. Forward work:
   - **The fixed prelude-ANALYSIS floor per keystroke** — see *Cache the toolchain front end* in §9, which
     is the same defect measured on the build path and is where the fix belongs. M5 removed the prelude
     *parse* from every keystroke; analyzing it again on every buffer change is what remains, and it is a
-    floor no file can get under.
+    floor no file can get under. ⚠️ **Re-measure before acting on it.** The ~85 ms/keystroke figure this
+    was sized against predates §9 lever 7, and `analyze` alone got 5.4× faster when the compiler started
+    being built optimized; whether this floor is still worth a campaign is now an open question, not a
+    settled one.
   - **One build configuration per server process.** It is pinned by the first opened document that resolves
     a manifest, so in a monorepo whose packages declare *different* flag universes the unpinned packages get
     the pinned one's configuration. Softened, not fixed: the status bar says which is active and

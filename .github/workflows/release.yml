@@ -49,7 +49,7 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
       - name: Build (version-stamped)
-        run: make VERSION="$VERSION" EXTRA_CXXFLAGS="${{ matrix.extra }}"
+        run: make -j4 VERSION="$VERSION" EXTRA_CXXFLAGS="${{ matrix.extra }}"
 
       - name: Verify version stamp
         run: ./kama --version | grep -q "$VERSION"
@@ -123,7 +123,7 @@ jobs:
       - name: Derive version (from tag)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: Build (version-stamped)
-        run: make VERSION="$VERSION"
+        run: make -j4 VERSION="$VERSION"
       - name: Verify version stamp
         run: ./kama --version | grep -q "$VERSION"
       - name: Smoke (fixtures)

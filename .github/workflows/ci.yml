@@ -44,8 +44,12 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           # The Makefile auto-detects the keg-only bison at /opt/homebrew/opt/bison/bin.
 
+      # -j4: the compiler is ~10 TUs and, since it started building at -O2, a serial build costs ~23 s
+      # against ~13 s at -j4. Safe by the same evidence `dev` records — -j and serial builds produce
+      # byte-identical objects. Capped at 4 rather than unbounded because the largest TU
+      # (kama.cemit.cpp) peaks near 1.1 GB, and the smallest runner here is macos-14 at 3 cores / 7 GB.
       - name: Build
-        run: make EXTRA_CXXFLAGS=${{ matrix.werror }}
+        run: make -j4 EXTRA_CXXFLAGS=${{ matrix.werror }}
 
       - name: Version
         run: ./kama --version
@@ -76,7 +80,7 @@ jobs:
             make bison flex
             mingw-w64-ucrt-x86_64-clang
       - name: Build
-        run: make
+        run: make -j4
       - name: Version
         run: ./kama --version
       - name: Test suite   # full suite incl. fs_* / net_* over the Windows kama_os.h branch
@@ -92,7 +96,7 @@ jobs:
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
-      - run: make
+      - run: make -j4
       - uses: mymindstorm/setup-emsdk@v16
       - name: Quick smoke (arith -> wasm -> node == 42)
         run: |
@@ -115,7 +119,7 @@ jobs:
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
-      - run: make
+      - run: make -j4
       - uses: actions/setup-node@v5
         with:
           node-version: '20'

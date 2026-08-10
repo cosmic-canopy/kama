@@ -4,7 +4,16 @@ all: kama
 VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
 
 CXX      = clang++
-CXXFLAGS = -std=c++14 -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"$(VERSION)"'
+# The compiler's OWN optimization level. There was no -O flag here at all until 2026-08-10, so kama
+# shipped unoptimized and every build-time number in ROADMAP §9 had been measured against an -O0
+# binary. It is worth 8.2x on the front end (httpd `check`: 338 ms -> 41 ms) and 5.4x over the fixture
+# corpus, for no change whatsoever in emitted C. -O1/-O2/-O3 measured within noise of each other
+# (41.4 / 41.1 / 42.2 ms); -O2 is the conventional level and the marginal winner, and -O3 both built
+# slower and ran slower, so there is nothing above here to chase. `tools/check-opt.sh` keeps it.
+# Overridable for compiler debugging (`make OPT=-O0`). `-g` stays on unconditionally: a compiler you
+# cannot get a backtrace out of is a bad trade for a few MB of binary.
+OPT     ?= -O2
+CXXFLAGS = -std=c++14 $(OPT) -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"$(VERSION)"'
 # Appended to both compile and link (the link rule reuses CXXFLAGS). CI sets this to
 # build a macOS universal binary: EXTRA_CXXFLAGS="-arch arm64 -arch x86_64".
 CXXFLAGS += $(EXTRA_CXXFLAGS)
