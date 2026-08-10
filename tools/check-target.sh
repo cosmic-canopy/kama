@@ -314,7 +314,55 @@ if [ "$rc" != 42 ]; then
     exit 1
 fi
 
+# ---- the out/ layout ---------------------------------------------------------------------------------
+# A project's build output collects under one root instead of scattering through the source tree, scoped
+# by TRIPLE and BUILD TYPE because both vary independently and a collision between them is SILENT — you
+# get yesterday's binary and no diagnostic. Belongs in this guard because the scoping IS the target axis.
+od="$tmp/outdir"; mkdir -p "$od/src"
+printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
+printf '{ "name": "od", "version": "0.1.0", "entry": "src/app.kama", "sources": ["src"] }\n' > "$od/kama.json"
+
+( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>"$tmp/od1.err" || {
+    echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
+HOSTTRIPLE=$(ls "$od/out")
+[ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
+    echo "check-target: FAIL — no binary at out/$HOSTTRIPLE/debug/app; tree was:" >&2
+    find "$od/out" -type f | sed 's/^/  /' >&2; exit 1; }
+
+# The source tree must be untouched — no stray binary, no generated .c beside the source. This is the
+# assertion that keeps a .gitignore three lines long instead of thirty.
+stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
+[ -z "$stray" ] || { echo "check-target: FAIL — build left artifacts in src/:" >&2
+                     echo "$stray" | sed 's/^/  /' >&2; exit 1; }
+
+# debug and release coexist rather than overwrite
+( cd "$od" && "$KAMA" build src/app.kama --release ) >/dev/null 2>&1
+[ -x "$od/out/$HOSTTRIPLE/release/app" ] && [ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
+    echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
+
+# the manifest's `out` key relocates the root
+printf '{ "name": "od", "version": "0.1.0", "entry": "src/app.kama", "sources": ["src"], "out": "artifacts" }\n' > "$od/kama.json"
+( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>&1
+[ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
+    echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }
+
+# -o still wins over both
+( cd "$od" && "$KAMA" build src/app.kama -o chosen ) >/dev/null 2>&1
+[ -x "$od/chosen" ] || { echo "check-target: FAIL — -o no longer wins over the out root" >&2; exit 1; }
+
+# A LOOSE .kama with no manifest is NOT a project and keeps landing beside itself — `kama build hello.kama`
+# -> ./hello is the documented first experience, and one file is not a project.
+loose="$tmp/loose"; mkdir -p "$loose"
+printf 'fn int32 main() { return 9; }\n' > "$loose/hello.kama"
+( cd "$loose" && "$KAMA" build hello.kama ) >/dev/null 2>&1
+[ -x "$loose/hello" ] && [ ! -d "$loose/out" ] || {
+    echo "check-target: FAIL — a manifest-less build changed behavior (expected ./hello, no out/)" >&2; exit 1; }
+# ...and still leaves no generated .c behind it
+[ ! -f "$loose/hello.c" ] || { echo "check-target: FAIL — a manifest-less build left hello.c behind" >&2; exit 1; }
+
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
   shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
   without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;
-  a declared default target applies and loses to --target;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output)"
+  a declared default target applies and loses to --target;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output;
+  a project's artifacts collect under out/<triple>/<type>/ leaving src/ clean, \"out\" relocates it, -o wins,
+  and a manifest-less build still lands beside its source)"

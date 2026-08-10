@@ -1690,6 +1690,7 @@ struct ManifestReader {
     bool* sawLegacyMainOut = nullptr;
     std::vector<std::string>* sourcesOut  = nullptr;
     std::vector<std::string>* projectsOut = nullptr;
+    std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
     std::string* versionOut = nullptr;                    // set to capture the `version` (else skipped) — `kama publish`
@@ -2071,6 +2072,7 @@ struct ManifestReader {
             else if (key == "sources" && sourcesOut) { if (!stringArray(*sourcesOut)) return false; }  // LSP project scope
             else if (key == "projects" && projectsOut) { if (!stringArray(*projectsOut)) return false; } // sub-projects
             else if (key == "entry" && entryOut) { if (!str(*entryOut)) return false; }   // entry `.kama` (read by `kama run`)
+            else if (key == "out" && outDirOut) { if (!str(*outDirOut)) return false; }   // build output root (default "out")
             // The pre-1.0 spelling. Not accepted — skipped like any unknown key — but remembered, so the
             // `kama run` failure can name the rename instead of claiming there is no entry at all.
             else if (key == "main" && sawLegacyMainOut) { *sawLegacyMainOut = true; if (!skipValue()) return false; }
@@ -2209,6 +2211,20 @@ static bool loadManifestEntry(const std::string& path, std::string& entryOut, bo
     ManifestReader r(src, declared, defaults);
     r.entryOut = &entryOut;
     r.sawLegacyMainOut = &sawLegacyMain;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
+// Load a `kama.json` manifest's `out` build-output root, relative to the manifest. Left empty if absent,
+// which the caller reads as the default "out". Returns false + sets `err` only on malformed JSON.
+static bool loadManifestOutDir(const std::string& path, std::string& outDir, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.outDirOut = &outDir;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -5689,6 +5705,26 @@ int main(int argc, char** argv)
     // Anything that is not a finished executable stops at `-c`; only EXE and SHARED reach the linker.
     const bool stopsAtObject = outObject || outStatic;
 
+    // ---- where generated files go --------------------------------------------------------------------
+    // A PROJECT (something with a kama.json) collects its build output under one root — `out` by default,
+    // the manifest's `"out"` if it says otherwise — so a `.gitignore` needs one line instead of chasing
+    // artifacts around the source tree. A loose `.kama` file with no manifest keeps landing beside itself:
+    // `kama build hello.kama` -> `./hello` is the documented first experience, and one file is not a
+    // project. Explicit `-o` wins over both.
+    //
+    // Scoped by TRIPLE and by BUILD TYPE, because both vary independently and a collision between them is
+    // silent — you get yesterday's binary and no diagnostic. That is the stale-binary trap this repo
+    // already learned the expensive way with build/<os>-<arch>/, and cargo splits on the same two axes.
+    std::string projectOutDir;
+    if (!bcReq.manifest.empty()) {
+        std::string rel, oerr;
+        loadManifestOutDir(bcReq.manifest, rel, oerr);       // malformed JSON already reported upstream
+        if (rel.empty()) rel = "out";
+        const std::string mdir = dirName(bcReq.manifest);
+        projectOutDir = joinPathLexical(mdir.empty() ? "." : mdir, rel)
+                      + "/" + g_target.triple() + "/" + (release ? "release" : "debug");
+    }
+
     // On wasm the host re-instantiates the module rather than `dlopen`ing it, so `expose` alone
     // (KAMA_EXPORT -> EMSCRIPTEN_KEEPALIVE) covers the web boundary — a shared library is meaningless.
     if (outShared && wasm) {
@@ -6146,7 +6182,18 @@ int main(int argc, char** argv)
         // Transpile to ONE .c. A file with no imports stays on the single-unit fast path; anything that
         // `import`s modules pulls in every transitive unit (loadProgramUnits, as `build` does) and folds
         // them into one self-contained translation unit.
-        std::string outPath = output.empty() ? (stripExtension(input) + ".c") : output;
+        // Same rule as `build`: inside a project the default lands under projectOutDir, outside one it
+        // lands beside the input. `kama transpile` exists to hand a .c to somebody else's toolchain, so the
+        // path matters to a human — but that is an argument for putting it somewhere findable and
+        // gitignored, not for scattering it through the sources.
+        const std::string tStem = projectOutDir.empty()
+                                ? stripExtension(input)
+                                : projectOutDir + "/" + baseName(stripExtension(input));
+        std::string outPath = output.empty() ? (tStem + ".c") : output;
+        const std::string tDir = dirName(outPath);
+        if (!dirExists(tDir) && !makeDirs(tDir)) {
+            fprintf(stderr, "kama: cannot create output directory %s\n", tDir.c_str()); return 1;
+        }
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
@@ -6246,18 +6293,28 @@ int main(int argc, char** argv)
         if (crossing && takesTargetFlag(compiler)) crossFlags = " -target " + g_target.triple();
 
         // Default output: native -> bare exe name (or lib<name>.<so|dylib|dll> for --shared);
-        // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it).
+        // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it). Inside a project the
+        // stem moves to projectOutDir (see above); outside one it stays beside the input, as it always has.
         const char* sharedExt = g_target.sharedLibExt();
-        std::string defaultOut = wasm      ? (stripExtension(input) + ".html")
-                               : outStatic ? (dirName(input) + "/lib" + baseName(stripExtension(input)) + ".a")
-                               : outObject ? (stripExtension(input) + ".o")
-                               : outShared ? (stripExtension(input) + sharedExt)
-                                           : stripExtension(input);
+        const std::string stem = projectOutDir.empty()
+                               ? stripExtension(input)
+                               : projectOutDir + "/" + baseName(stripExtension(input));
+        std::string defaultOut = wasm      ? (stem + ".html")
+                               : outStatic ? (dirName(stem) + "/lib" + baseName(stem) + ".a")
+                               : outObject ? (stem + ".o")
+                               : outShared ? (stem + sharedExt)
+                                           : stem;
         std::string outPath    = output.empty() ? defaultOut : output;
 
         // Transpile to one or more .c (multi-file emits a shared header too).
         // Generated files land in the output directory; cleaned unless --keep-c.
         std::string genDir = dirName(outPath);
+        // The output directory may not exist yet — `out/<triple>/<type>/` never does on a first build, and
+        // `-o build/app` is a shape people already write. Create it before anything tries to open a file
+        // inside it, or the failure surfaces as an unexplained transpile error.
+        if (!dirExists(genDir) && !makeDirs(genDir)) {
+            fprintf(stderr, "kama: cannot create output directory %s\n", genDir.c_str()); return 1;
+        }
         std::vector<std::string> cFiles;     // .c to compile
         std::vector<std::string> genFiles;   // generated files to remove afterwards
         std::string headerDir;
@@ -6275,7 +6332,10 @@ int main(int argc, char** argv)
         bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         if (units.size() == 1) {
-            std::string cPath = stripExtension(input) + ".c";
+            // genDir, not the input's directory. The multi-file paths below already did this; this one
+            // did not, which is why a bare `kama build x.kama` used to drop an `x.c` beside the source
+            // (and leave it there whenever the build died before the --keep-c cleanup).
+            std::string cPath = genDir + "/" + baseName(stripExtension(input)) + ".c";
             if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
             genFiles.push_back(cPath);
