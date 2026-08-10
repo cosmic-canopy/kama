@@ -637,8 +637,13 @@ rather than here, so there is one number to keep current. Forward work:
 
   ⚠️ **Everything measured before 2026-08-10 was measured against an unoptimized compiler.** The rows above
   are re-baselined; anything quoted elsewhere from that period is not. **`benchmarks/RESULTS.md`'s runtime
-  columns are unaffected** — the bench builds `--release`, so the *emitted* code was always `-O3`; only its
-  compile-time column measured the compiler.
+  columns were unaffected** — the bench builds `--release`, so the *emitted* code was always `-O3`; only its
+  compile-time column measured the compiler. Re-run in full 2026-08-10: **kama 1227 ms → 908 ms** for the
+  9 bench binaries, i.e. **3.38× C per binary → 2.33×**, while every other language in the cohort drifted
+  5-19 % *slower* in the same run. The runtime rows moved 3-5 % together, which is that run's ambient
+  noise, not a change — kama stays at C parity on compute. Since kama's figure is transpile-to-C **plus**
+  clang, it can never beat C; 2.33× means the front end now costs about a third again what clang costs on
+  the same code.
 
   ⚠️ **The LSP per-keystroke floor below (~85 ms, 86 % `analyze`) is a pre-`-O2` number and has NOT been
   re-measured.** `analyze` alone got 5.4× faster, so the floor certainly moved; the split is not published
