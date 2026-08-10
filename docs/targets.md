@@ -15,16 +15,17 @@ kama build lib.kama --select OUTPUT=STATIC       # a static library
 kama build app.kama -j 4                         # cap concurrent C compiles (default: core count)
 ```
 
-**Build parallelism.** A program that imports anything from `std` compiles 16-32 translation units — a
-directory-module import pulls in every file in the directory — and `kama build` compiles them
+**Build parallelism.** A program that imports from `std` compiles several translation units — an import
+brings in the files defining the names it asks for, plus their closure (see
+[SPEC.md](SPEC.md#modules--namespaces-); `examples/httpd` is 10) — and `kama build` compiles them
 concurrently, `-j`/`--jobs` wide, defaulting to your core count. `$KAMA_BUILD_JOBS` sets the default;
 `-j` on the command line beats it. It is purely a scheduling knob: the objects a build produces are
 byte-identical at every width, which [`tools/check-build-jobs.sh`](../tools/check-build-jobs.sh) asserts.
 
 Two cases stay a single compiler invocation, deliberately: `--release` native (which folds the whole
 program into one translation unit so the C compiler can inline across modules), and a **bundled**
-install, whose `zig cc` keeps its own object cache — one invocation over 32 TUs re-compiles only what
-changed (~0.1 s), which beats anything splitting them could do.
+install, whose `zig cc` keeps its own object cache — one invocation re-compiles only what changed
+(~0.1 s), which beats anything splitting them could do.
 
 kama compiles to **ISO C11** and hands it to a C compiler. That is why cross-compiling is realistic:
 the hard part is not code generation, it's having a C compiler that can reach the target. Everything

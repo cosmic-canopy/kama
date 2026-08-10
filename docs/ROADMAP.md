@@ -595,7 +595,8 @@ rather than here, so there is one number to keep current. Forward work:
   for the *user's* program (`-O3` native / `-Oz` wasm, `kama.driver.cpp`). That is a different codebase one
   level down, and "we do optimized builds" was true the whole time — about the other one.
 
-  Measured (`OPT ?= -O2`, `examples/httpd`, same host):
+  Measured (`OPT ?= -O2`, `examples/httpd`, same host). **Taken when httpd was 32 units; closure pruning
+  has since made it 10, so these absolute numbers no longer reproduce** — the ratios are the claim:
 
   | | `-O0` | `-O2` |
   |---|---|---|
@@ -647,9 +648,11 @@ rather than here, so there is one number to keep current. Forward work:
   each job needs, and the result writes. Nothing left there is worth a commit.
 
   **Lever 5 — `-j`, and it is the only one users feel.** A C compiler handed N sources in ONE invocation
-  compiles them **serially**, and a program importing anything from `std` is 16-32 TUs (a directory-module
-  import pulls in every file in the directory), so `kama build` used one core for ~70 % of its wall time.
-  Now each TU is its own `-c` job and the objects are linked. Measured on `examples/httpd` (32 TUs):
+  compiles them **serially**, and a program importing anything from `std` was 16-32 TUs at the time (a
+  directory-module import then pulled in every file in the directory — closure pruning has since cut that,
+  see below), so `kama build` used one core for ~70 % of its wall time.
+  Now each TU is its own `-c` job and the objects are linked. Measured on `examples/httpd`, **then 32 TUs
+  and now 10, so these absolute numbers no longer reproduce** — the ratio is what the lever claims:
   C phase 0.93 s → 0.27 s + 0.02 s link (**3.2×**), whole build **1.27 s → 0.67 s (1.9×)**. Degrades
   gracefully — ~1.3× on a 2-core machine — and gains exactly nothing for an import-free program (1 TU).
   Guarded by [`tools/check-build-jobs.sh`](../tools/check-build-jobs.sh); the harness pins
@@ -912,8 +915,10 @@ rather than here, so there is one number to keep current. Forward work:
     *parse* from every keystroke; analyzing it again on every buffer change is what remains, and it is a
     floor no file can get under. ⚠️ **Re-measure before acting on it.** The ~85 ms/keystroke figure this
     was sized against predates §9 lever 7, and `analyze` alone got 5.4× faster when the compiler started
-    being built optimized; whether this floor is still worth a campaign is now an open question, not a
-    settled one.
+    being built optimized; **closure pruning then took `analyze` a further 46 % on httpd** (26.5 → 14.2 ms)
+    by shrinking what a keystroke has to analyze at all. Two large cuts have landed under this number
+    since it was taken, so whether the floor is still worth a campaign is an open question, not a settled
+    one — and note the *prelude* share is the part neither cut touches.
   - **One build configuration per server process.** It is pinned by the first opened document that resolves
     a manifest, so in a monorepo whose packages declare *different* flag universes the unpinned packages get
     the pinned one's configuration. Softened, not fixed: the status bar says which is active and
