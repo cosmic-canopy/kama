@@ -1,6 +1,7 @@
 # Build & suite performance — campaign brief
 
-**Status: levers 1 and 2 shipped. Levers 3 and 4 remain.** Design of record for the compile-time work.
+**Status: levers 1 and 2 shipped; lever 3's first rung shipped. Lever 3's remaining rungs and lever 4
+remain — and lever 4's premise was wrong, see below.** Design of record for the compile-time work.
 Delete this file when the last milestone ships, once `docs/ROADMAP.md` §9 carries the residual.
 
 > **Read this first.** Every brief in this repo has been wrong somewhere load-bearing, and this one was
@@ -96,7 +97,9 @@ So **parse ≈ 2/3, analyze ≈ 1/3** for a std-heavy fixture. This lever reache
 - ~**100 %** of the 20 s agreement phase (915 × `kama check`)
 - ~**36 %** of the 82 s fixture phase
 - nearly all of `check-query.sh`'s 36 s. **Now the whole guard block**, since lever 2 parallelized
-  everything around it. Re-measured: **259 `kama query` processes over ~15 distinct programs** — not one
+  everything around it. *(Superseded — rung 1 below took this to 6 s and the guard block to 14 s. The
+  figures in this bullet are the pre-rung-1 state, kept because the reasoning still explains the shape.)*
+  Re-measured: **259 `kama query` processes over ~15 distinct programs** — not one
   file, as an earlier draft of this brief said. But the ratio is what matters, and one fixture dominates:
   `tests/query/complete.kama` is 98 assertions × ~210 ms ≈ **20.6 s**, of which ~63 % is re-parsing the
   same 16-unit `std` import closure. On top of that a ~28-38 ms prelude-parse floor is paid 259 times
@@ -121,17 +124,82 @@ nothing else: a **batch mode** — N independent programs in one process, reusin
 Useless to user projects, but it would collapse the suite's ~1,900 processes per leg, and it is the
 natural fix for `check-query.sh` specifically.
 
-There is a **cheaper rung still**, worth pricing before either: a **multi-query invocation**. Everything
-after `idx.analyze(units)` (`kama.driver.cpp:5377`) is a pure read off the built index, measured at
-0.03-1.33 ms against a 210 ms analysis — a thousandfold difference. The only thing preventing one
-process from answering many questions is that the dispatch if-chain `return`s in every arm
-(`kama.driver.cpp:5393-5608`); passing `--def 1:1 --type 2:2` today silently answers whichever comes
-first in that fixed order. So `kama query` over one program is ~15 analyses instead of 259, with no
-caching, no cross-process state and no `pruneInactiveDecls` exposure at all. `check-query.sh` would need
-its `expect`/`reject` helpers restructured to ask per fixture and assert against a recorded answer set.
-Precedent for the shape: `check-lsp.sh` already drives **166 assertions against one `kama lsp` process**.
+### Lever 3, rung 1 — the multi-query invocation ✅ SHIPPED
 
-### 4. Object caching — the clang 64 %
+Everything after `idx.analyze(units)` is a pure read off the built index — 0.03-1.33 ms against a 210 ms
+analysis. The only thing preventing one process from answering many questions was that every mode was its
+own scalar and the dispatch if-chain `return`ed in every arm, so `--def 1:1 --type 2:2` silently answered
+`--def` and dropped the rest. Now: an ordered `std::vector<Question>` filled in argv order, and one
+`answerOne` lambda over it.
+
+**Measured, back to back on one host** (baseline via `git stash`, so both legs built from source the same
+way): `check-query.sh` **20.9 s → 6.0 s** standalone, the guard block **23 s → 14 s**, `./dev test`
+**158 s → 140 s**. 971 pass / 0 fail on both.
+
+Attribute the **guard block** delta to this change and nothing else. The same pair also showed the
+fixture phase move 88 s → 81 s, which this change cannot touch — that is run-to-run variance, and it is
+the reason the totals above should be read as "≈ −10 s, plus noise", not as −18 s.
+
+Three properties worth keeping:
+
+- **A single question is byte-identical to before** — no delimiter, no `ask` key, same exit codes. Checked
+  by diffing every mode × fixture × `--json` combination against a stashed pre-change binary (48 on the
+  final tree, 80 in a wider sweep): stdout, stderr and exit code identical throughout. The one difference
+  anywhere in the surface is the usage text, which gained a sentence on purpose. Run the sweep under
+  `sh -c`, not zsh — see *Measuring, correctly*; a zsh version of it reported 48 false diffs.
+- **The guard derives its question list by parsing itself** (`preload`), rather than carrying a hand-written
+  list that would drift silently. The scan is conservative and a miss falls through to the old one-process
+  path, so **drift costs time, never correctness**. `CHECK_QUERY_NO_PRELOAD=1` disables it, and the
+  invariant — preloaded output byte-identical to solo output — is what proves the batch answers the same.
+- **All coordinates are validated before any answer is printed.** A partial batch that exits nonzero is
+  worse than no batch: a caller checking `$?` has already consumed output that looks complete.
+
+The guard block's floor is now `check-packages.sh` at 11.5 s, not `check-query.sh`. Anything further from
+lever 3 has to come from the rungs below.
+
+**Still open, in order:** batch mode (N programs per process — the 20 s agreement phase) then the on-disk
+serialized symbol table (the fixture phase's front end, the LSP floor, user projects). Both need the
+"resettable emitter" work; neither is committed. Precedent for a batched harness:
+`check-lsp.sh` drives its whole assertion set against one `kama lsp` process.
+
+### 4. Object caching — ⚠️ THE PREMISE BELOW IS WRONG. Read this first.
+
+Everything in this section rests on "455 emitted TUs, 49 distinct — 89 % byte-identical duplicates". That
+number does not survive contact with the tree, and the design built on it does not either. Verified
+2026-08-09 by reading the emitter, not by re-running the sample:
+
+- **Every emitted module `.c` has `#include "<output-stem>.gen.h"` as its second line**
+  (`kama.cemit.cpp:18103`, stem from `kama.driver.cpp:5876`), and the include guard carries the stem too
+  (`kama.cemit.cpp:18089`). Two fixtures built to different `-o` names therefore never emit identical bytes. The 89 %
+  is only reproducible if every fixture in the sample was built to the *same* `-o` basename — which is
+  almost certainly what happened, and is a measurement artifact, not a property of kama.
+- **Worse, that header is whole-program.** `tests/query/complete.gen.h` is 3160 lines and declares the
+  user's own types *and every monomorphized instantiation* (`Optional_completeprobe__Cell`). A stdlib
+  module's TU is program-dependent **by construction**, so a *sound* cache key — content plus every
+  header the compile read — gets **zero** cross-fixture hits. Guaranteed, not merely unlikely. Renaming
+  the header to something fixed would restore byte-identity of the `.c` and change nothing about this:
+  the header *contents* still differ, so the key still misses. That fixes the measurement, not the cache.
+- **`--release` never takes the multi-file path at all** (`kama.driver.cpp:5862` folds every unit into
+  one unity TU), so a per-TU object cache can only ever touch debug and wasm builds.
+
+So the suite-speed case for this lever is gone. What survives is real but different, and belongs on a
+different timeline:
+
+| option | delivers | costs |
+|---|---|---|
+| **A** — the cache as designed below | cross-**run** hits (a second `./dev test` skips clang) + user-project incremental rebuilds for body-only edits | run 1 is ~42 % slower per-TU, so **cold CI gets slower**; any new declaration changes `gen.h` and invalidates every TU |
+| **B** — split `gen.h` into per-module headers first | genuine cross-fixture *and* cross-project reuse | changes what kama **emits**; and a generic module's TU carries per-program instantiations, so the ceiling is only the **non-generic** slice of the stdlib |
+| **C** — re-open as a 1.x "incremental rebuilds" feature | the honest framing: `kama build` recompiles the whole import closure every time, and that is a product gap | not a suite-speed lever, so it leaves the 81 s fixture phase alone |
+
+**The one cheap measurement that would settle B**: count how many TUs in a typical closure contain no
+monomorphized symbol. That is the hard ceiling on what per-module headers could ever share. Take it before
+costing B.
+
+Decision deferred to after lever 3, deliberately. The rest of this section is the original design, kept
+because its *mechanics* (compile/link split, `-MD` direct-mode key, `-fdebug-prefix-map`, the guard) are
+all still correct and still needed by whichever option is chosen — only its motivating number is void.
+
+### 4 (original). Object caching — the clang 64 %
 
 `kama build` emits **one `.c` per unit** and passes them all to **one** clang invocation with **no
 `-c`**, so no object files ever exist and nothing can be cached or shared.
@@ -260,13 +328,12 @@ this would need, so declining costs nothing. Re-ask after lever 3.
 
 1. ~~Lever 1 (stop double-running the guards)~~ ✅ −61 s from `./dev matrix`.
 2. ~~Lever 2 (parallelize the guards)~~ ✅ 61 s → 38 s. Plus `make -j`: cold build 8 s → 3 s.
-3. **Lever 3 (front-end reuse)** — partly banked: memoizing `check-query.sh` took it 35 s → 20 s with no
-   compiler change, and the guard block 38 s → 23 s. What is left of this lever is the real one: the 20 s
-   agreement phase, ~36 % of the fixture phase, `check-query`'s remaining 20 s (still ~15 full analyses),
-   and the LSP's per-keystroke floor. Price the multi-query invocation first, then batch mode, then the
-   on-disk cache.
-4. **Lever 4 (compile-to-object + `.o` cache)** — the biggest single item left: ~520 clang core-seconds
-   of the 81 s fixture phase, against a 34 ms warm link. Settle the (a)/(b) fork above first.
+3. **Lever 3 (front-end reuse)** — rung 1 ✅ shipped (multi-query invocation: `check-query` 20.9 s → 6.0 s,
+   guard block 24 s → 13 s). Rungs left: batch mode (N programs per process → the 20 s agreement phase),
+   then the on-disk symbol-table cache (~36 % of the fixture phase, the LSP's per-keystroke floor, user
+   projects). Neither is committed — price them against the numbers below, not against the old estimates.
+4. **Lever 4 (compile-to-object + `.o` cache)** — ⚠️ **its 89 %-dedup premise is void**; see the warning
+   at the head of §4. Re-decide after lever 3, from the three options recorded there.
 
 Re-run `./dev test 2>&1 | grep '^phase:'` after each and record the delta here.
 
@@ -276,10 +343,20 @@ Measured on a 10-core M-series host, 2026-08-09:
 |---|---|---|---|
 | baseline | 184 s (970 pass) | 61 s serial | 184 + 61 = **245 s** |
 | levers 1 + 2 + `make -j` | 162 s (971 pass) | 38 s parallel | 128 s (guards skipped) + 40 s = **168 s** |
-| + check-query memoized | **148 s** | **23 s** | ~153 s |
+| + check-query memoized | 148 s | 23 s | ~153 s |
+| + lever 3 rung 1 (multi-query) | **140 s** (971 pass) | **14 s** | — |
 
-Phases now: guards 23 s · fixtures 81 s · agreement 20 s · multi-file+xfail 11 s. The two remaining
-levers are aimed squarely at the 81 s and the 20 s.
+The last row was measured back to back against its own baseline (`git stash`, rebuild, run): **158 s /
+23 s** before, **140 s / 14 s** after. The 158 s does not match the 148 s recorded a row above for what
+should be the same tree — which is the honest scale of run-to-run variance here, and the reason to trust
+the **guard-block** column (a repeatable −9 s) over the total.
+
+Phases now: guards 14 s · fixtures 81 s · agreement 20 s · multi-file+xfail 11 s.
+
+**The guard block is no longer `check-query`.** Its floor is `check-packages.sh` at 11.5 s, so there is
+~1.5 s left in that phase and no reason to keep aiming at it. What remains worth attacking is the 81 s
+fixture phase and the 20 s agreement phase — and note the 81 s is where lever 4's premise just collapsed,
+which makes lever 3's remaining rungs the only funded route to either.
 
 `971` rather than `970` because `check-agents.sh` joined the suite — it was in `./dev check`'s glob but
 not in `run_tests.sh`'s hand-written list, so no CI leg had ever run it.

@@ -572,28 +572,28 @@ rather than here, so there is one number to keep current. Forward work:
   not the C toolchain, is the compile cost" — that compared `kama transpile` (which folds to ONE C file)
   against clang on that one file, which is not what `kama build` does.
 
-  **Levers 1 and 2 — the harness ones — have shipped.** `tools/run-checks.sh` now drives the guards for
-  both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel, and `./dev matrix` no longer pays
-  the block twice; `make` gained `-j`. Measured: guard block **61 s → 38 s**, `./dev test`
-  **184 s → 162 s**, `./dev matrix` a further **−61 s**, cold compiler build 8 s → 3 s. The native leg now
-  stands at:
+  **Levers 1 and 2 (the harness ones) and lever 3's first rung have shipped.** `tools/run-checks.sh` now
+  drives the guards for both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel, `./dev matrix`
+  no longer pays the block twice, `make` gained `-j`, and `kama query` answers many questions per analysis.
+  Measured: `./dev test` **184 s → 140 s**, guard block **61 s → 14 s**, `./dev matrix` a further **−61 s**,
+  cold compiler build 8 s → 3 s. The native leg now stands at:
 
   | phase | wall | what dominates it |
   |---|---|---|
-  | `tools/check-*.sh` guards, parallel | **38 s** | `check-query.sh` **36.8 s** — the block *is* this one guard |
-  | single-file fixtures (597, parallel) | 81 s | front end 36 % / clang 64 % |
-  | analysis agreement (915 `kama check`) | 19 s | pure front end |
+  | `tools/check-*.sh` guards, parallel | 14 s | `check-packages.sh` 11.5 s — ~1.5 s left in this phase |
+  | single-file fixtures (597, parallel) | **81 s** | front end 36 % / clang 64 % |
+  | analysis agreement (915 `kama check`) | **20 s** | pure front end |
   | multi-file + xfail | 11 s | |
 
-  Two levers left, both compiler work:
+  What is left:
 
   3. **Cache the front end** (prelude + `lib/`). Every invocation re-parses and re-analyzes the prelude
      *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): for a `std`-heavy fixture, parse
-     ≈ 2/3, analyze ≈ 1/3. This is the broadest lever — it is ~100 % of the 20 s agreement phase, 36 % of
-     the 82 s fixture phase, and — now that lever 2 has parallelized everything around it — **the entire
-     38 s guard block**, which is `check-query.sh`: 259 `kama query` processes over ~15 programs, one
-     fixture alone accounting for 98 of them at ~210 ms each. It is also the only item here that helps the
-     **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
+     ≈ 2/3, analyze ≈ 1/3. It is ~100 % of the 20 s agreement phase and 36 % of the 81 s fixture phase, and
+     the only item here that helps the **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
+
+     *(Rung 1 shipped: `kama query` takes an ordered question list, so one analysis answers N questions —
+     the guard block went 23 s → 14 s. The guard block is no longer the target; these two phases are.)*
 
      Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
      whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so
@@ -606,17 +606,17 @@ rather than here, so there is one number to keep current. Forward work:
      **batch mode** (N programs in one process); it does nothing for user projects but would collapse the
      suite's ~1,900 processes per leg.
 
-  4. **Object caching for the clang 64 %.** `kama build` emits **one `.c` per unit** and hands them all to
-     a single clang invocation with no `-c`, so no object files exist and nothing can be reused. Across 60
-     random fixtures: **455 emitted TUs, only 49 distinct — 89 % byte-identical duplicates** (each
-     `std::collections` module emitted identically 23 times). Compiling only the distinct ones is
-     **16.2 s → 3.3 s**. Unlocking it means compile-to-object-then-link (the machinery already exists in
-     the `outStatic` path) plus a content-addressed `.o` cache — which also gives **user projects
-     incremental rebuilds**, today impossible. ⚠️ Under `-g`, identical `.c` at different paths produce
-     *different* `.o` (debug info embeds the path); `-fdebug-prefix-map` makes them byte-identical again,
-     and as a bonus makes builds reproducible. Note per-TU compilation is *slower* cold (455 separate
-     compiles beat one big invocation only once the cache hits), so the cache is part of the change, not
-     a follow-on.
+  4. **Incremental rebuilds — `kama build` recompiles the whole import closure, every time.** No object
+     file ever exists (one clang invocation, no `-c`), so nothing can be reused between builds. That is a
+     real product gap for user projects.
+
+     ⚠️ **This was filed as an 89 %-duplicate-TU suite lever. That premise is void** — every emitted `.c`
+     includes a **whole-program** `<stem>.gen.h` carrying the user's types and every monomorphized
+     instantiation, so a sound cache key gets *zero* cross-fixture hits, and `--release` folds to one unity
+     TU anyway. The three surviving options — cache as-is (cross-*run* hits, but cold CI gets slower), split
+     `gen.h` per module first (changes what kama emits; capped at the non-generic slice of the stdlib), or
+     re-open this as a 1.x incremental-rebuild feature — are written up with the evidence in
+     [design/build-perf.md](design/build-perf.md) §4. **Decide after lever 3, not before.**
 
   **Deliberately NOT taken: folding a build to a single TU.** It is the biggest raw number (24 TUs 0.52 s
   → 1 TU 0.08 s, same binary) but it changes what kama *emits*, and multi-TU emission is load-bearing —
