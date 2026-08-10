@@ -37,6 +37,23 @@
                              STAMP_YYLLOC \
                              return yylval->token = t;
 
+/* Record an identifier spelling for closure pruning (kama.ast.h CompilationUnit::identTokens). The set
+ * is a deliberate OVER-approximation of what the file references — a local named `sort` counts, and the
+ * only cost is one extra translation unit kept. Under-approximating is what would be fatal, so this must
+ * fire on EVERY rule that can carry a reference.
+ *
+ * There are THREE such rules, not two: `grep -n '{identifier}' kama.l`. The easy one to miss is the
+ * STRING_TAG rule (`{identifier}/\"`), which returns its token directly instead of going through
+ * getToken — and a string tag IS an unqualified reference to a sibling top-level function
+ * (`resolveFunc(*is->tag, nullptr)` in kama.cemit.cpp; `html`/`sql`/`stripIndent` live in
+ * lib/std/fmt/tags.kama). Hooking getToken alone would silently drop it.
+ *
+ * Keywords are skipped — not for correctness (no keyword can be a top-level declared name, so recording
+ * them would only waste memory) but because `getToken` has already classified the spelling, so the test
+ * is free. The STRING_TAG rule has no such classification and records unconditionally; a tag is an
+ * identifier by construction. */
+#define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng);
+
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 
 static int getToken(const char *);
@@ -245,7 +262,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the hole and resumes string lexing (the next ISTR_CHUNK follows). Whitespace inside the hole is ignored. */
 <IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
 <IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
-<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }
+<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) RECORD_IDENT(yytext, leng); return t; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
 <IN_INTERP_HOLE>"["                             { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -285,8 +302,8 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the quote, so the {regular_string_start} rule fires next and lexes the string/interpolation unchanged;
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
-{identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return getToken(yytext); }
+{identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RECORD_IDENT(yytext, leng); return STRING_TAG; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) RECORD_IDENT(yytext, leng); return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }

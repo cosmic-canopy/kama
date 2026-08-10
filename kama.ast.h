@@ -80,6 +80,28 @@ public:
     // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set; this makes its
     // by-product idempotent too.
     std::set<std::string> prunedNames;
+    // ---- closure-pruning facts, harvested at PARSE time (kama.y `compilation_unit`) ----------------
+    // A directory-module import loads only the files needed to satisfy its `{…}` symbol list, plus their
+    // transitive intra-directory closure (closureOfModule, kama.driver.cpp). These three fields are what
+    // that closure reads.
+    //
+    // Harvested at parse time, and NOT recomputed later, because both of the obvious later moments are
+    // wrong: pruneInactiveDecls (kama.cemit.cpp) rewrites codeDeclarationList IN PLACE, and the parse
+    // cache (kama.driver.cpp) hands the SAME unit back to a second analysis — `kama lsp` per keystroke,
+    // `kama check --each` per program. Anything derived from the decl list after an emitter has run has
+    // already lost every `@compileFor`-gated name, which would silently shrink the index and make a
+    // program's unit set depend on its position in a batch. Written once, before any emitter exists.
+    std::set<std::string> topLevelNames;   // every top-level DECLARED name — not just the `export` list,
+                                           // because same-namespace siblings reach each other's
+                                           // unexported names through the shared namespace scope.
+    std::set<std::string> identTokens;     // every identifier-token spelling in this file, straight from
+                                           // the lexer: a sound SUPERSET of the names it references.
+                                           // Over-pulling costs pruning; under-pulling would emit calls
+                                           // to undefined functions, so the superset is the safe side.
+    bool hasIntrinsicImpl = false;         // holds a `type intrinsic <int32> implements C` — a decl with
+                                           // NO top-level name that registers a conformance program-wide.
+                                           // Nothing can reference it by name, so such a file is never
+                                           // prunable. Only two files in lib/ have one.
     CompilationUnit(CodeGenContext& context, SharedString name,
                     SharedNamespaceDeclaration nameSpace,
                     SharedImportDeclarationList importDeclarationList,
@@ -1142,5 +1164,38 @@ public:
         : ASTNode(context), ExpressionStatementNode(context), subject(subject), arms(arms) { }
 };
 
+// Fill a freshly parsed unit's `topLevelNames` / `hasIntrinsicImpl` (see CompilationUnit). Called from
+// the `compilation_unit` action in kama.y — the single reduction every parse goes through — so the walk
+// sees the RAW decl list, before `@compileFor` pruning can rewrite it.
+//
+// The kind list must stay exhaustive against `CEmitter::emitModuleContent` (kama.cemit.cpp), which is the
+// only walk that errors on an unhandled top-level kind and is therefore the cross-check when a new
+// declaration form is added. `CEmitter::pruneInactiveDecls`'s local `nameOf` lambda answers the same
+// question for a narrower purpose (it needs only the `@compileFor`-gatable kinds, and omits
+// ModuleVariableDeclaration); if it grows, the two want reconciling.
+//
+// Missing a name here does NOT produce a wrong build: an import naming a symbol the index cannot find
+// falls back to loading the whole module (closureOfModule, kama.driver.cpp). It only costs pruning.
+inline void harvestUnitFacts(const SharedCompilationUnit& unit)
+{
+    if (!unit || !unit->codeDeclarationList) return;
+    for (auto& decl : *unit->codeDeclarationList) {
+        ASTNode* d = decl.get();
+        if (auto* f = dynamic_cast<FunctionDeclarationNode*>(d)) {          // fn / extern fn / comptime fn
+            if (f->name && f->name->value) unit->topLevelNames.insert(*f->name->value);
+        } else if (auto* c = dynamic_cast<ClassDeclarationNode*>(d)) {      // type <kind> Name — the kind
+            if (c->name && c->name->value) unit->topLevelNames.insert(*c->name->value);   // word is a bare
+        } else if (auto* e = dynamic_cast<EnumDeclarationNode*>(d)) {       // IDENTIFIER, not a closed set
+            if (e->identifier && e->identifier->value) unit->topLevelNames.insert(*e->identifier->value);
+        } else if (auto* v = dynamic_cast<ModuleVariableDeclaration*>(d)) { // static / comptime T NAME = …
+            if (v->variables)
+                for (auto& var : *v->variables)
+                    if (var && var->name && var->name->value) unit->topLevelNames.insert(*var->name->value);
+        } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
+            unit->hasIntrinsicImpl = true;   // declares no name, yet registers a conformance program-wide
+        }
+        // IncludeNode (`extern "hdr.h";`) declares no name and has no independent effect: nothing else.
+    }
+}
 
 #endif //__KAMA_AST_H__

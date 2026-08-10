@@ -92,6 +92,7 @@ typedef void* yyscan_t;
 
 #include "kama.ast.h"
 #include "kama.context.h"
+#include <unordered_set>
 
 #ifndef KAMA_LEXER_INSTANCE_DATA
 #define KAMA_LEXER_INSTANCE_DATA
@@ -116,6 +117,13 @@ struct LexerInstanceData {
       `"` emits a tail `ISTR_CHUNK` (interpolated) rather than a plain `STRING_LITERAL`. Strings don't
       nest (holes carry only identifier/member/index tokens), so a single flag suffices. */
    bool strInterp = false;
+
+   /* Every identifier-token spelling seen in this file, recorded by the lexer (RECORD_IDENT in kama.l)
+      and moved onto the CompilationUnit at reduction. It is the reference side of closure pruning: a
+      same-namespace sibling is reachable with NO import at all (`priority_queue.kama` declares
+      `DynamicArray<T, A> data;` and imports nothing), so an import-edge closure under-computes.
+      Unordered on purpose — this is one insert per identifier token on a ~14 ms parse. */
+   std::unordered_set<std::string> identTokens;
 };
 
 struct kamayystype {
@@ -338,7 +346,12 @@ struct kamayystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3); }
+  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3);
+      /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
+         and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
+      harvestUnitFacts(yyget_extra(scanner)->compilationUnit);
+      yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
+                                                                yyget_extra(scanner)->identTokens.end()); }
   ;
 
 /* The module's PUBLIC SURFACE, declared once at the top: `export { A, B, C };`. A name here must be a
