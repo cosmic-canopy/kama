@@ -431,6 +431,151 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
+// A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
+std::string unitNsKey(const SharedCompilationUnit& u)
+{
+    if (!u || !u->nameSpace || !u->nameSpace->name) return "";
+    std::string s; auto id = u->nameSpace->name;
+    if (id->qualifier) for (auto& seg : *id->qualifier) s += *seg + "::";
+    if (id->value) s += *id->value;
+    return s;
+}
+
+// ---- closure pruning: a directory import should not compile the directory ---------------------------
+// `import std::collections::{DynamicArray};` resolves to EVERY .kama in lib/std/collections/ — the `{…}`
+// list controls visibility, not compilation. examples/httpd names four imports and compiles 32 units, 20
+// of which contribute no live symbol. So: resolve to the files that DEFINE the named symbols, plus their
+// transitive intra-directory closure.
+//
+// The closure cannot be computed from `import` edges. Unqualified names resolve against the file's own
+// namespace program-wide (CEmitter::resolveFuncImpl), and every file of a directory module shares one
+// namespace — so siblings reference each other with no import at all. lib/std/collections/priority_queue
+// .kama has no `import` whatsoever and declares `DynamicArray<T, A> data;`. An import-edge closure
+// under-computes and emits calls to functions that were never compiled. What it follows instead is
+// CompilationUnit::identTokens — every identifier spelling in the file, a superset of its references.
+//
+// Intra-module import edges need no separate handling: `import std::collections::{View};` puts the token
+// `View` in the importing file's identTokens, so an import edge is just one more reference. Cross-module
+// edges remain the BFS in loadProgramUnits.
+struct ModuleIndex {
+    std::vector<std::string>                    files;   // as resolved — the SPELLING parseFile was handed
+    std::vector<SharedCompilationUnit>          units;   // parallel to files
+    std::map<std::string, std::vector<size_t>>  byName;  // top-level name -> the files declaring it
+    bool homogeneous = true;   // every file declares the same namespace (the closure's premise)
+    bool complete    = false;  // false if a file failed to parse: fall back, let the load path report it
+};
+
+// Index cache for ONE loadProgramUnits call, keyed by the joined file list. Deliberately not process-wide:
+// a static would go stale in `kama lsp` when a file changes on disk (the parse cache validates mtime/size,
+// a file-list key cannot), and the win does not need it. Within a call it earns its keep — per-symbol
+// `provided` re-enters the same module for a different symbol, and this is what keeps that from re-parsing.
+typedef std::map<std::string, ModuleIndex> ModuleIndexCache;
+
+const ModuleIndex& moduleIndexFor(const std::vector<std::string>& files, ModuleIndexCache& cache)
+{
+    std::string key;
+    for (auto& f : files) { key += f; key += '\n'; }
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+
+    ModuleIndex ix;
+    ix.files = files;
+    ix.complete = true;
+    std::string ns;
+    for (size_t i = 0; i < files.size(); ++i) {
+        // Parsed in resolution order, and STOPPING at the first failure — the load path below re-reads
+        // these same units rather than calling parseFile again, so a broken file is reported exactly
+        // once, and the files after it stay unparsed exactly as they are today.
+        SharedCompilationUnit u = parseFile(files[i]);
+        ix.units.push_back(u);
+        if (!u) { ix.complete = false; break; }
+        std::string k = unitNsKey(u);
+        if (i == 0) ns = k; else if (k != ns) ix.homogeneous = false;
+        for (auto& n : u->topLevelNames) ix.byName[n].push_back(i);
+    }
+    return cache.emplace(key, std::move(ix)).first->second;
+}
+
+// The subset of `files` needed to satisfy `symbols`, or EMPTY meaning "no pruning — load them all".
+//
+// Every bail-out returns empty rather than guessing, so anything this does not fully understand keeps
+// today's behavior byte for byte: the missing-symbol error, the `@compileFor` "not available in this
+// build configuration" diagnostic, and the export-privacy check all still fire from the full module.
+std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
+                                         const std::vector<std::string>& symbols,
+                                         ModuleIndexCache& cache,
+                                         const char** whyNot = nullptr)
+{
+    auto bail = [&](const char* why) { if (whyNot) *whyNot = why; return std::vector<std::string>(); };
+
+    // A bare `import a::b;` or `import a::b as m;` names nothing, so nothing pins a file. Do NOT try to
+    // seed it from the importing file's own tokens: a type reached only through inference is never
+    // spelled anywhere, and that unsoundness is not present in the symbol-list case, where the named
+    // symbol pins one file and the reference closure covers the rest.
+    if (symbols.empty())  return bail("bare import");
+    if (files.size() < 2) return bail("single file");
+
+    const ModuleIndex& ix = moduleIndexFor(files, cache);
+    if (!ix.complete)    return bail("parse failed");
+    // A package manifest's `sources` can span several directories and namespaces (packageSourceFiles is
+    // recursive), which breaks the shared-namespace premise the reference closure rests on. No fixture
+    // exhibits it today, which is exactly why it would land silently later.
+    if (!ix.homogeneous) return bail("mixed namespaces");
+
+    std::vector<size_t> work;
+    std::vector<bool>   keep(ix.files.size(), false);
+    auto add = [&](size_t i) { if (!keep[i]) { keep[i] = true; work.push_back(i); } };
+
+    for (auto& s : symbols) {
+        auto it = ix.byName.find(s);
+        // The index did not find a symbol this import names. Either it is genuinely undeclared, or it was
+        // dropped by `@compileFor` — both want the full module, so the existing tailored diagnostic fires.
+        if (it == ix.byName.end()) return bail("unknown symbol");
+        for (size_t i : it->second) add(i);
+    }
+    for (size_t i = 0; i < ix.units.size(); ++i)
+        if (ix.units[i] && ix.units[i]->hasIntrinsicImpl) add(i);   // nameless, unreachable by reference
+
+    // Fixpoint over references. A visited set, not recursion: `set` -> `Map` and `sort` -> `View` already
+    // make this a graph, and the reference closure makes a cycle far likelier than the import edges do.
+    while (!work.empty()) {
+        size_t i = work.back(); work.pop_back();
+        if (!ix.units[i]) continue;
+        for (auto& tok : ix.units[i]->identTokens) {
+            auto it = ix.byName.find(tok);
+            if (it == ix.byName.end()) continue;
+            for (size_t j : it->second) add(j);
+        }
+    }
+
+    std::vector<std::string> out;
+    for (size_t i = 0; i < ix.files.size(); ++i) if (keep[i]) out.push_back(ix.files[i]);
+    if (out.empty())            return bail("empty closure");   // a resolver bug looks like this
+    if (out.size() == files.size()) { if (whyNot) *whyNot = "nothing to drop"; }
+    return out;
+}
+
+// The unit for `file` if some module index in this call already parsed it, else a fresh parse. Indexing a
+// module parses every file in it, so without this the kept files would be parsed twice — and a file with
+// a syntax error would report it twice, which the fixture suite compares byte for byte.
+SharedCompilationUnit indexedUnit(ModuleIndexCache& cache, const std::string& file)
+{
+    for (auto& kv : cache) {
+        const ModuleIndex& ix = kv.second;
+        for (size_t i = 0; i < ix.units.size() && i < ix.files.size(); ++i)
+            if (ix.files[i] == file && ix.units[i]) return ix.units[i];
+    }
+    return parseFile(file);
+}
+
+// `KAMA_PRUNE_TRACE=1` reports what the closure decided, per import, on stderr. The campaign's validation
+// gate: the closure is computed and traced before it is allowed to change what gets loaded.
+bool pruneTraceOn()
+{
+    static bool on = [] { const char* e = getenv("KAMA_PRUNE_TRACE"); return e && *e; }();
+    return on;
+}
+
 // ---- phase timing (LSP M5.0) -----------------------------------------------------------------------
 // `KAMA_TIMING=1` prints one `kama-timing:` line per analysis to STDERR — never stdout, which `kama lsp`
 // owns for JSON-RPC framing. `KAMA_TIMING=2` adds a line per parsed/cached unit. Off by default and free
@@ -581,6 +726,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // output channel forever. A build calls this once, so nothing changes there.
     static std::set<std::string> warnedFreeRide;
     bool undeclaredImport = false;   // strict mode: report them ALL, then fail, rather than stop at one
+    ModuleIndexCache moduleIndex;    // per call, so it can never serve a unit staler than this analysis
     // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
     auto nsKey = [](SharedCompilationUnit u) -> std::string {
         if (!u || !u->nameSpace || !u->nameSpace->name) return "";
@@ -698,10 +844,28 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     }
                 }
             }
+            // What the closure WOULD load. Computed and traced here; nothing acts on it yet.
+            std::vector<std::string> wanted;
+            for (auto& sym : *imp->symbols)
+                if (sym && sym->identifier && sym->identifier->value)
+                    wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
+            const char* whyNot = nullptr;
+            std::vector<std::string> keep = closureOfModule(files, wanted, moduleIndex, &whyNot);
+            if (pruneTraceOn()) {
+                fprintf(stderr, "kama-prune: %s %zu/%zu%s%s\n", key.c_str(),
+                        keep.empty() ? files.size() : keep.size(), files.size(),
+                        whyNot ? " — " : "", whyNot ? whyNot : "");
+                if (whyNot && strcmp(whyNot, "unknown symbol") == 0)
+                    for (auto& s : wanted)
+                        fprintf(stderr, "kama-prune: UNFOUND %s::%s\n", key.c_str(), s.c_str());
+            }
+
             for (auto& f : files) {
                 std::string abs = absolutePath(f);
                 if (!seen.insert(abs).second) continue;
-                SharedCompilationUnit mu = parseFile(f);
+                // From the index when it has already parsed this file, so indexing never doubles the
+                // parse — and so a file that fails to parse is reported once, by whichever got there first.
+                SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
                 if (!mu) return false;
                 units.push_back(mu); paths.push_back(abs);
                 std::string mk = nsKey(mu); if (!mk.empty()) provided.insert(mk);
