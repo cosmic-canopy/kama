@@ -165,7 +165,7 @@ for g in $sel; do
     fi
 done
 
-# --- timing: the data the rest of the build-perf campaign is steered by -----------------------------------
+# --- timing: which guards actually cost, so the block stays honest as guards are added --------------
 # `cpu` is the summed guard wall-clock, so cpu/wall is the parallel speedup actually achieved. The slowest
 # guard is the floor: the pool can never finish sooner than its longest member.
 cpu=$(for g in $sel; do n=$(basename "$g" .sh); cat "$WORK/$n.sec" 2>/dev/null; done \

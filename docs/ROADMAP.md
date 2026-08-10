@@ -566,84 +566,81 @@ rather than here, so there is one number to keep current. Forward work:
   11 bench languages have stdlib JSON. **v1:** a by-value tree round-trip across the stdlib-JSON six —
   *intrinsic (kama)* vs *runtime-reflection (Go/C#)* vs *interpreted (Python/JS)*. **Document, don't race, the
   object graph** (kama's shared/`Weak`/`Owned` graph serde has no equivalent — a capability note, not a number).
-- **Compile-time / suite-time — the measured breakdown.** ► **NEXT campaign** (design of record:
-  [design/build-perf.md](design/build-perf.md), delete it when the work ships). Re-measured 2026-08-09
-  on an M-series host, 10 cores, and it **corrected an earlier claim in this file** that "the front end,
-  not the C toolchain, is the compile cost" — that compared `kama transpile` (which folds to ONE C file)
-  against clang on that one file, which is not what `kama build` does.
+- **Compile-time / suite-time — the campaign is CLOSED.** Measured 2026-08-09/10 on a 10-core M-series
+  host. The whole record is below; there is no separate design doc any more.
 
-  **Levers 1 and 2 (the harness ones) and lever 3's first two rungs have shipped.** `tools/run-checks.sh`
-  now drives the guards for both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel,
-  `./dev matrix` no longer pays the block twice, `make` gained `-j`, `kama query` answers many questions
-  per analysis, and `kama check --each` runs many programs per process. Measured: `./dev test`
-  **184 s → 128 s**, guard block **61 s → 13 s**, `./dev matrix` a further **−61 s**, cold compiler build
-  8 s → 3 s. The native leg now stands at:
+  **Shipped, in order of when the evidence justified it:**
 
-  | phase | wall | what dominates it |
+  | | change | measured |
   |---|---|---|
-  | `tools/check-*.sh` guards, parallel | 13 s | `check-packages.sh` 11.5 s — ~1.5 s left in this phase |
-  | single-file fixtures (597, parallel) | **81 s** | front end 36 % / clang 64 % |
-  | analysis agreement (915 `kama check`) | 10 s | batched; ~2/3 of what is left is `analyze` |
-  | multi-file + xfail | 11 s | |
+  | 1 | `./dev matrix` stopped running the guard block twice (`KAMA_SKIP_CHECKS`) | −61 s from `matrix` |
+  | 2 | one parallel guard runner, `tools/run-checks.sh`, glob-enrolled | guards 61 s → 38 s |
+  | 2½ | `make -j` | cold compiler build 8 s → 3 s |
+  | 3.1 | `kama query` takes an ordered question list — one analysis, N answers | `check-query` 20.9 s → 6.0 s |
+  | 3.2 | `kama check --each` — N programs in one process, sharing prelude + import closure | agreement 22 s → 10 s |
+  | **5** | **`kama build -j` — the C compiles run concurrently** | **user builds ~2× (below)** |
+  | 6 | the harness itself: fifo-semaphore gate, per-run seam sweeps, multi-file leg fanned out | −30 core-s, −9 s wall |
 
-  What is left:
+  `./dev test` **184 s → 122 s**; guard block **61 s → 14 s**. Phases now: guards 14 s · fixtures 82 s ·
+  multi-file 2 s · xfail 4 s · agreement 9 s.
 
-  3. **Cache the front end** (prelude + `lib/`). Every invocation re-parses and re-analyzes the prelude
-     *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): over the agreement corpus,
-     closure-parse 38 %, prelude-parse 28 %, analyze 34 %. It is 36 % of the 81 s fixture phase, and the
-     only item here that helps the **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
+  **Lever 6 is where the suite's remaining time actually was, and it is not the compiler.** Decomposing
+  the 82 s fixture phase: building all 597 standalone is 33.8 s, running the built binaries is 24.6 s, and
+  ~22 s is bash. Cutting at that got −30 **core**-seconds but only −9 s of wall, because the old polling
+  gate's latency overlapped with the other nine workers — a prediction of ~12 s that was simply wrong.
+  What remains of the 22 s is spread across one `mkdir` and one warning-`grep` per fixture, the subshell
+  each job needs, and the result writes. Nothing left there is worth a commit.
 
-     *(Rungs 1 and 2 shipped, in-process. `kama query` takes an ordered question list, so one analysis
-     answers N questions — the guard block went 23 s → 13 s. `kama check --each` treats each input as its
-     own program and reuses the parsed prelude and import closure across the batch, which the suite's
-     agreement phase now chunks at 32 — that phase went **22 s → 10 s**, verified A/B on one binary via
-     its `KAMA_NO_BATCH=1` escape hatch. Neither needed a "resettable emitter": each program gets its own
-     `CEmitter`, and every table an emitter builds is already keyed by node pointer. The one shared
-     mutable thing is the AST, whose only in-place rewrite is `pruneInactiveDecls` — see the
-     `CompilationUnit::prunedNames` fix, which also closed a live `kama lsp` bug. Guarded by
-     `tools/check-batch.sh`.)*
+  **Lever 5 — `-j`, and it is the only one users feel.** A C compiler handed N sources in ONE invocation
+  compiles them **serially**, and a program importing anything from `std` is 16-32 TUs (a directory-module
+  import pulls in every file in the directory), so `kama build` used one core for ~70 % of its wall time.
+  Now each TU is its own `-c` job and the objects are linked. Measured on `examples/httpd` (32 TUs):
+  C phase 0.93 s → 0.27 s + 0.02 s link (**3.2×**), whole build **1.27 s → 0.67 s (1.9×)**. Degrades
+  gracefully — ~1.3× on a 2-core machine — and gains exactly nothing for an import-free program (1 TU).
+  Guarded by [`tools/check-build-jobs.sh`](../tools/check-build-jobs.sh); the harness pins
+  `KAMA_BUILD_JOBS=1` because its own pool is already core-wide, which also keeps the suite covering the
+  single-invocation path. `-j 1` is that path byte for byte.
 
-     **What remains is rung 3, and its shape changed — read
-     [design/build-perf.md](design/build-perf.md)'s rung 3 section before planning it.** Two findings
-     there decide it. First, **"serialize the symbol table" is not available**: `CEmitter` holds 138
-     containers and the load-bearing ones store raw `ASTNode*`, so the tables cannot be serialized apart
-     from the AST — the realistic on-disk form is "serialize the AST, re-run collect", a 3× front-end
-     ceiling rather than 20×. Second, the in-process alternative (`kama build --each`, batching builds
-     exactly as `check` now does, while each fixture still **runs** in its own process) measures at only
-     **≈ 9-10 s** off the 81 s phase, because the front end is 42 % of build work and build is only ~43 %
-     of that phase.
+  ⚠️ **`-j` does NOT move the bench's compile-time column, and should not be expected to.** That column
+  builds `--release`, which folds the whole program into one unity TU — there is nothing to split.
+  Measured over the 9 bench workloads: `--release` is **1.71 s at both `-j 1` and `-j 10`**, while the
+  same nine in **debug** go **2.88 s → 2.04 s (1.41×)**. The win is a dev-loop win, and the bench measures
+  release artifacts. If a number for the edit-compile loop is ever wanted, it needs its own debug row —
+  don't "fix" the release one.
 
-     So the campaign is at the point where **stopping is a live option**, and the brief says so. Take the
-     one cheap measurement it names (the phase's true build share) and decide. Either way the *suite*
-     work is essentially done: what is left — incremental rebuilds and the LSP's per-keystroke floor —
-     is a user-facing product feature, not a suite-speed lever.
+  **What is left is a product feature, not a suite lever — and two premises died proving it.**
 
-     Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
-     whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so
-     `Map<string,int32>` does not exist until a program instantiates it. Cache the post-parse,
-     post-collect declaration state, keyed by toolchain version + content hash + **the flag universe**.
-     Prior art: Clang PCH, Rust `rmeta`, Swift `.swiftmodule`. Two things make it real work:
-     `pruneInactiveDecls` rewrites units **in place** per flag configuration, so the cached state must be
-     the pre-prune, pre-instantiation tables; and a stale cache must be *impossible* to hit — content-hash
-     the inputs, never trust an mtime. Rung 2 already proved the prune is the only obstacle in-process,
-     and that carrying its dropped-name set on the unit is enough to make re-analysis idempotent.
+  - **`zig cc` already does incremental rebuilds, so lever 4 (kama's own object cache) is mostly moot for
+    bundled installs.** Measured, 32 TUs: one invocation is 4.13 s cold, **0.07 s warm, 0.11 s after
+    editing one file** — it has a content-addressed per-TU object cache and re-compiles only what changed.
+    That is strictly better than the cache §4 of the old brief designed (no cold-CI penalty, no `gen.h`
+    invalidation problem). Per-TU `zig cc` cannot use it (bounded by zig's ~0.18 s process startup: 0.59 s
+    cold *and* warm), which is why `-j` clamps to 1 for zig — parallelizing there would be 7× better cold
+    and **5× worse in the edit-rebuild loop**. A slim install (the installer's choice whenever a system C
+    compiler exists) uses clang, which has no cache, and gets the full `-j` win.
+  - **An on-disk front-end cache does NOT fix the LSP's per-keystroke floor**, which is what the old brief
+    claimed was its main justification. The LSP already caches parses in-process
+    (`kama.driver.cpp` `g_parseCacheMap`); its measured steady state is **~85 ms/keystroke, 86 % of it
+    `CEmitter::analyze`** over the whole closure plus prelude. Serializing the AST and re-running collect
+    leaves that untouched. The keystroke floor needs *incremental or cached analysis*, and nothing else in
+    this section addresses it — see §10.
+  - **Declined: `kama build --each`** (batch the fixture builds in one process). Priced at ~9-10 s off a
+    129 s suite for a 377-line refactor plus a harness restructure, and it gives users nothing. Not worth
+    it; recorded so it is not re-derived.
 
-  4. **Incremental rebuilds — `kama build` recompiles the whole import closure, every time.** No object
-     file ever exists (one clang invocation, no `-c`), so nothing can be reused between builds. That is a
-     real product gap for user projects.
+  **Deliberately NOT taken: folding a build to a single TU.** The biggest raw number (24 TUs 0.52 s → 1 TU
+  0.08 s, same binary) but it changes what kama *emits*, and multi-TU emission is load-bearing — the
+  logging campaign fixed a whole multi-TU `static` hazard class (`adfffce`) that a single-TU suite would
+  stop exercising. (`--release` native already folds to one unity TU, for cross-module inlining.)
 
-     ⚠️ **This was filed as an 89 %-duplicate-TU suite lever. That premise is void** — every emitted `.c`
-     includes a **whole-program** `<stem>.gen.h` carrying the user's types and every monomorphized
-     instantiation, so a sound cache key gets *zero* cross-fixture hits, and `--release` folds to one unity
-     TU anyway. The three surviving options — cache as-is (cross-*run* hits, but cold CI gets slower), split
-     `gen.h` per module first (changes what kama emits; capped at the non-generic slice of the stdlib), or
-     re-open this as a 1.x incremental-rebuild feature — are written up with the evidence in
-     [design/build-perf.md](design/build-perf.md) §4. **Decide after lever 3, not before.**
-
-  **Deliberately NOT taken: folding a build to a single TU.** It is the biggest raw number (24 TUs 0.52 s
-  → 1 TU 0.08 s, same binary) but it changes what kama *emits*, and multi-TU emission is load-bearing —
-  the logging campaign fixed a whole multi-TU `static` hazard class (`adfffce`) that a single-TU suite
-  would stop exercising.
+- **Closure over-pull — unmeasured, and possibly larger than anything above.** `import
+  std::collections::{DynamicArray}` compiles **all 14** files of `lib/std/collections`, because a
+  directory module resolves to every `.kama` in the directory (`resolveModuleFiles`). `examples/httpd`
+  names four imports and gets 32 TUs. If most of a closure contributes nothing to the binary, pruning
+  unreachable units would cut the front end *and* the C compile *and* the LSP's analyze floor at once.
+  **The cheap measurement that sizes it:** for `examples/httpd`, count how many of the 32 units contribute
+  any symbol to the final binary (`nm` the objects, or a `--gc-sections` map). Not scoped: it changes what
+  kama emits and touches module semantics.
 
 ## 10. Tooling / distribution (deferred)
 
