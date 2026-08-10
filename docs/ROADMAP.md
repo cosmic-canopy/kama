@@ -572,28 +572,40 @@ rather than here, so there is one number to keep current. Forward work:
   not the C toolchain, is the compile cost" — that compared `kama transpile` (which folds to ONE C file)
   against clang on that one file, which is not what `kama build` does.
 
-  **Levers 1 and 2 (the harness ones) and lever 3's first rung have shipped.** `tools/run-checks.sh` now
-  drives the guards for both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel, `./dev matrix`
-  no longer pays the block twice, `make` gained `-j`, and `kama query` answers many questions per analysis.
-  Measured: `./dev test` **184 s → 140 s**, guard block **61 s → 14 s**, `./dev matrix` a further **−61 s**,
-  cold compiler build 8 s → 3 s. The native leg now stands at:
+  **Levers 1 and 2 (the harness ones) and lever 3's first two rungs have shipped.** `tools/run-checks.sh`
+  now drives the guards for both `./dev check` and `run_tests.sh`, glob-enrolled and in parallel,
+  `./dev matrix` no longer pays the block twice, `make` gained `-j`, `kama query` answers many questions
+  per analysis, and `kama check --each` runs many programs per process. Measured: `./dev test`
+  **184 s → 128 s**, guard block **61 s → 13 s**, `./dev matrix` a further **−61 s**, cold compiler build
+  8 s → 3 s. The native leg now stands at:
 
   | phase | wall | what dominates it |
   |---|---|---|
-  | `tools/check-*.sh` guards, parallel | 14 s | `check-packages.sh` 11.5 s — ~1.5 s left in this phase |
+  | `tools/check-*.sh` guards, parallel | 13 s | `check-packages.sh` 11.5 s — ~1.5 s left in this phase |
   | single-file fixtures (597, parallel) | **81 s** | front end 36 % / clang 64 % |
-  | analysis agreement (915 `kama check`) | **20 s** | pure front end |
+  | analysis agreement (915 `kama check`) | 10 s | batched; ~2/3 of what is left is `analyze` |
   | multi-file + xfail | 11 s | |
 
   What is left:
 
   3. **Cache the front end** (prelude + `lib/`). Every invocation re-parses and re-analyzes the prelude
-     *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): for a `std`-heavy fixture, parse
-     ≈ 2/3, analyze ≈ 1/3. It is ~100 % of the 20 s agreement phase and 36 % of the 81 s fixture phase, and
-     the only item here that helps the **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
+     *and every imported `std::` tree*. Per-phase (`KAMA_TIMING=1`): over the agreement corpus,
+     closure-parse 38 %, prelude-parse 28 %, analyze 34 %. It is 36 % of the 81 s fixture phase, and the
+     only item here that helps the **LSP** (the fixed per-keystroke floor, §10) and **user projects**.
 
-     *(Rung 1 shipped: `kama query` takes an ordered question list, so one analysis answers N questions —
-     the guard block went 23 s → 14 s. The guard block is no longer the target; these two phases are.)*
+     *(Rungs 1 and 2 shipped, in-process. `kama query` takes an ordered question list, so one analysis
+     answers N questions — the guard block went 23 s → 13 s. `kama check --each` treats each input as its
+     own program and reuses the parsed prelude and import closure across the batch, which the suite's
+     agreement phase now chunks at 32 — that phase went **22 s → 10 s**, verified A/B on one binary via
+     its `KAMA_NO_BATCH=1` escape hatch. Neither needed a "resettable emitter": each program gets its own
+     `CEmitter`, and every table an emitter builds is already keyed by node pointer. The one shared
+     mutable thing is the AST, whose only in-place rewrite is `pruneInactiveDecls` — see the
+     `CompilationUnit::prunedNames` fix, which also closed a live `kama lsp` bug. Guarded by
+     `tools/check-batch.sh`.)*
+
+     **What remains is the cross-PROCESS form**, which is where the bigger number is: the 81 s fixture
+     phase cannot batch in-process — each fixture builds *and runs* a binary, and per-process isolation is
+     what keeps a crash or a sanitizer report attributable to one fixture.
 
      Shape: a precompiled-header / serialized-symbol-table snapshot, **not** a prebuilt object — kama is
      whole-program monomorphizing and `lib/` is generic templates plus `static inline`, so
@@ -602,9 +614,8 @@ rather than here, so there is one number to keep current. Forward work:
      Prior art: Clang PCH, Rust `rmeta`, Swift `.swiftmodule`. Two things make it real work:
      `pruneInactiveDecls` rewrites units **in place** per flag configuration, so the cached state must be
      the pre-prune, pre-instantiation tables; and a stale cache must be *impossible* to hit — content-hash
-     the inputs, never trust an mtime. The cheaper rung that needs the same "resettable emitter" work is a
-     **batch mode** (N programs in one process); it does nothing for user projects but would collapse the
-     suite's ~1,900 processes per leg.
+     the inputs, never trust an mtime. Rung 2 already proved the prune is the only obstacle in-process,
+     and that carrying its dropped-name set on the unit is enough to make re-analysis idempotent.
 
   4. **Incremental rebuilds — `kama build` recompiles the whole import closure, every time.** No object
      file ever exists (one clang invocation, no `-c`), so nothing can be reused between builds. That is a

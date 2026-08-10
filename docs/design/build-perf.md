@@ -1,6 +1,6 @@
 # Build & suite performance — campaign brief
 
-**Status: levers 1 and 2 shipped; lever 3's first rung shipped. Lever 3's remaining rungs and lever 4
+**Status: levers 1 and 2 shipped; lever 3's first TWO rungs shipped. Lever 3's rung 3 and lever 4
 remain — and lever 4's premise was wrong, see below.** Design of record for the compile-time work.
 Delete this file when the last milestone ships, once `docs/ROADMAP.md` §9 carries the residual.
 
@@ -157,10 +157,50 @@ Three properties worth keeping:
 The guard block's floor is now `check-packages.sh` at 11.5 s, not `check-query.sh`. Anything further from
 lever 3 has to come from the rungs below.
 
-**Still open, in order:** batch mode (N programs per process — the 20 s agreement phase) then the on-disk
-serialized symbol table (the fixture phase's front end, the LSP floor, user projects). Both need the
-"resettable emitter" work; neither is committed. Precedent for a batched harness:
-`check-lsp.sh` drives its whole assertion set against one `kama lsp` process.
+### Lever 3, rung 2 — batch mode (`kama check --each`) ✅ SHIPPED
+
+`kama check --each f1 f2 …` treats every input as its **own program** and runs them all in one process,
+reusing the parsed prelude and the shared `std::` import closure across the batch. The suite's agreement
+phase chunks its fixture list at 32 and runs one process per chunk.
+
+**Measured A/B on ONE binary and one tree** — `KAMA_NO_BATCH=1 ./dev test` against `./dev test`, which is
+better evidence than the stash-and-rebuild pair rung 1 used, since nothing but the code path differs:
+**analysis agreement 22 s → 10 s**, 971 pass on both. Standalone, the same corpus is 18.4 s → 8.1 s wall
+and 157.6 s → 55.7 s CPU (**2.8× CPU**), against a projected floor of 2.4×.
+
+Three properties worth keeping:
+
+- **The batch is only a fast PRE-FILTER.** Any fixture that does not come back with the expected verdict
+  — a disagreement, or *no verdict at all* because the process died partway — is re-run solo through the
+  same one-file functions as before, which stay the only thing that prints a message. So a crash still
+  names its fixture and its signal, and a `MISMATCH` message is byte-for-byte what it was unbatched, with
+  no stderr to demultiplex. **Verified by running the whole suite against a test double that emitted three
+  verdicts per batch and then SIGSEGV'd**: the leg still passed, at 22 s. A crash costs time, never
+  correctness — the same property `check-query.sh`'s preload has.
+- **Verdicts are flushed per file**, which is what makes that attribution possible: `<rc> <path>` on
+  stdout, a channel non-`--json` `check` did not use.
+- **Launch and collect are separate**, so the positive and negative lists share ONE pool with one
+  barrier. Draining them in sequence left a straggler in each wave and cost ~1 s.
+
+**The soundness defect this rung found, and had to fix first.** `pruneInactiveDecls` is idempotent on the
+decl list, but it also recorded each dropped name in the **per-emitter** `_prunedNames`, which the
+export-manifest check consults. A second emitter over an already-pruned unit found the decls gone and the
+set empty — and reported a phantom `export list names 'sort' but there is no such top-level declaration`.
+Reachable because `lib/std/collections/sort.kama` exports `sort`/`sortWith` *and* gates them
+`@compileFor(!NOHEAP)`. **This was also a live `kama lsp` bug** — parse cache on, a `no-heap` project,
+second keystroke. Fixed by carrying the pruned-name set on the `CompilationUnit` instead of only on the
+emitter, so a cached unit is self-describing. `tools/check-batch.sh` guards it; reverting the fix makes
+that guard fail, which is how the guard was verified.
+
+**Equivalence, proven over the whole corpus, not argued:** all 923 fixtures, `--each` vs solo — identical
+exit codes, and each chunk's `--each` stderr byte-identical to the concatenation of its files' solo
+stderr. `KAMA_NO_BATCH=1` is both the escape hatch and the way to re-run it.
+
+**Still open:** rung 3, the on-disk serialized symbol table (the fixture phase's front end, the LSP
+floor, user projects). Note rung 2 did **not** need the "resettable emitter" work this brief kept
+predicting — each program simply gets its own `CEmitter`, and every table an emitter builds is already a
+per-emitter member keyed by node pointer. The only shared mutable thing was the AST, and the one pass
+that writes to it is the prune, dealt with above.
 
 ### What "batching" actually shares — measured, because the answer decides the design
 
@@ -177,6 +217,22 @@ multi-unit fixtures (`KAMA_TIMING=1 kama check`, one process each):
 | prelude-parse | 1762 | 12.7 % |
 | analyze | 5126 | 37.0 % |
 | **total** | **13867** | |
+
+⚠️ **Those shares are for MULTI-UNIT fixtures only, and they understate the prelude.** Re-measured over
+the phase this actually targets — all 909 fixtures the agreement leg checks, not the 62 with a closure —
+the prelude is **more than twice** that share, because most fixtures are small and single-unit so the
+fixed per-process cost dominates them:
+
+| | ms | share |
+|---|---|---|
+| closure-parse | 59 909 | 38.0 % |
+| prelude-parse | 44 582 | **28.2 %** |
+| analyze | 53 329 | 33.8 % |
+| **total** | **157 820** | (≈ 18 s wall at 10 cores) |
+
+5645 unit-parses over 909 files; ~4736 of those are the shared `std::` tree over ~106 distinct units —
+**≈ 45× redundancy on the shared part**, on top of a prelude parsed 909 times that collapses to one.
+Reproduce with `KAMA_TIMING=1` and `xargs -P 10`, summing the `kama-timing:` lines.
 
 Two facts make the batch selection problem disappear:
 
@@ -205,7 +261,7 @@ floor. That robustness is the argument for doing it.
 that is already one process's to give:
 
 - **The 20 s agreement phase** (915 × `kama check`) is pure front end — no emission, no execution — so it
-  batches cleanly. This is rung 2's target, worth roughly −12 s.
+  batches cleanly. This is rung 2's target, worth roughly −12 s. ✅ Shipped, and it was −12 s.
 - **The 81 s fixture phase cannot batch this way.** Each fixture must stay its own process: it builds and
   *runs* a binary, and per-process isolation is what keeps a crash or a sanitizer report attributable to
   one fixture. Its ~36 % front-end share needs a **cross-process** (on-disk) cache — rung 3 — which is
@@ -213,6 +269,9 @@ that is already one process's to give:
 
 That is the honest sequencing argument: rung 2 is cheap and proves the emitter can be reset; rung 3 is
 the same idea made durable, and it is where the larger number actually lives.
+
+*(Rung 2 shipped and confirmed the first half: −12 s, and the emitter needed no resetting at all. Rung 3
+is now the only funded route to the fixture phase, since lever 4's premise is void — see §4.)*
 
 ### 4. Object caching — ⚠️ THE PREMISE BELOW IS WRONG. Read this first.
 
@@ -381,9 +440,9 @@ this would need, so declining costs nothing. Re-ask after lever 3.
 1. ~~Lever 1 (stop double-running the guards)~~ ✅ −61 s from `./dev matrix`.
 2. ~~Lever 2 (parallelize the guards)~~ ✅ 61 s → 38 s. Plus `make -j`: cold build 8 s → 3 s.
 3. **Lever 3 (front-end reuse)** — rung 1 ✅ shipped (multi-query invocation: `check-query` 20.9 s → 6.0 s,
-   guard block 24 s → 13 s). Rungs left: batch mode (N programs per process → the 20 s agreement phase),
-   then the on-disk symbol-table cache (~36 % of the fixture phase, the LSP's per-keystroke floor, user
-   projects). Neither is committed — price them against the numbers below, not against the old estimates.
+   guard block 24 s → 13 s). Rung 2 ✅ shipped (`kama check --each`: agreement phase 22 s → 10 s).
+   Rung left: the on-disk symbol-table cache (~36 % of the fixture phase, the LSP's per-keystroke floor,
+   user projects). Not committed — price it against the numbers below, not against the old estimates.
 4. **Lever 4 (compile-to-object + `.o` cache)** — ⚠️ **its 89 %-dedup premise is void**; see the warning
    at the head of §4. Re-decide after lever 3, from the three options recorded there.
 
@@ -396,19 +455,22 @@ Measured on a 10-core M-series host, 2026-08-09:
 | baseline | 184 s (970 pass) | 61 s serial | 184 + 61 = **245 s** |
 | levers 1 + 2 + `make -j` | 162 s (971 pass) | 38 s parallel | 128 s (guards skipped) + 40 s = **168 s** |
 | + check-query memoized | 148 s | 23 s | ~153 s |
-| + lever 3 rung 1 (multi-query) | **140 s** (971 pass) | **14 s** | — |
+| + lever 3 rung 1 (multi-query) | 140 s (971 pass) | **14 s** | — |
+| + lever 3 rung 2 (`check --each`) | **129 s** (972 pass) | 13 s | — |
 
 The last row was measured back to back against its own baseline (`git stash`, rebuild, run): **158 s /
 23 s** before, **140 s / 14 s** after. The 158 s does not match the 148 s recorded a row above for what
 should be the same tree — which is the honest scale of run-to-run variance here, and the reason to trust
 the **guard-block** column (a repeatable −9 s) over the total.
 
-Phases now: guards 14 s · fixtures 81 s · agreement 20 s · multi-file+xfail 11 s.
+Phases now: guards 13 s · fixtures 81 s · agreement 10 s · multi-file+xfail 11 s.
 
 **The guard block is no longer `check-query`.** Its floor is `check-packages.sh` at 11.5 s, so there is
-~1.5 s left in that phase and no reason to keep aiming at it. What remains worth attacking is the 81 s
-fixture phase and the 20 s agreement phase — and note the 81 s is where lever 4's premise just collapsed,
-which makes lever 3's remaining rungs the only funded route to either.
+~1.5 s left in that phase and no reason to keep aiming at it. **The agreement phase is now spent too** —
+what is left of it is ~2/3 `analyze`, which batching does not touch. So the whole remaining target is the
+**81 s fixture phase**, and that is exactly where lever 4's premise collapsed — leaving rung 3, the
+on-disk cache, as the only funded route to it.
 
 `971` rather than `970` because `check-agents.sh` joined the suite — it was in `./dev check`'s glob but
-not in `run_tests.sh`'s hand-written list, so no CI leg had ever run it.
+not in `run_tests.sh`'s hand-written list, so no CI leg had ever run it. `972` from rung 2, which added
+`check-batch.sh` (glob-enrolled, so nothing had to be updated to enroll it).
