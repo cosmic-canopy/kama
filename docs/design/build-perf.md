@@ -162,6 +162,58 @@ serialized symbol table (the fixture phase's front end, the LSP floor, user proj
 "resettable emitter" work; neither is committed. Precedent for a batched harness:
 `check-lsp.sh` drives its whole assertion set against one `kama lsp` process.
 
+### What "batching" actually shares — measured, because the answer decides the design
+
+The recurring worry about batching is *how you choose the batches*. That question is inherited from
+lever 4, where the shared thing was the **emitted output**, so a batch only paid off if two programs
+happened to emit the same TU — and picking such groups is both hard and, as §4 now shows, futile.
+
+**For the front end the shared thing is the INPUT, and it is shared by construction.** Measured over 62
+multi-unit fixtures (`KAMA_TIMING=1 kama check`, one process each):
+
+| | ms | share |
+|---|---|---|
+| closure-parse | 6979 | 50.3 % |
+| prelude-parse | 1762 | 12.7 % |
+| analyze | 5126 | 37.0 % |
+| **total** | **13867** | |
+
+Two facts make the batch selection problem disappear:
+
+- **The prelude is byte-identical for every program**, always. That 12.7 % collapses to a single parse
+  with no grouping decision of any kind.
+- **The import closures overlap enormously**: those 62 programs performed **1079 unit-parses over 106
+  distinct units — 10.2×** redundancy. Reproduce by building each to a temp dir with `--keep-c --cc echo`
+  and counting emitted `.c` stems. (Build only fixtures whose `closure-units` > 1: a single-unit build
+  emits its `.c` **next to the source**, not into `-o`'s directory, which litters `tests/`.)
+
+So you do not choose batches. You cache **per unit**, key it on the unit, and put as many programs
+through one process as you like: overlap is exploited wherever it happens to exist, and a program that
+shares nothing simply pays what it pays today. Projected floor — one prelude parse + closure-parse
+collapsed by the measured redundancy + analyze untouched:
+
+| redundancy assumed | floor | vs 13867 ms |
+|---|---|---|
+| 10.2× (measured) | 5838 ms | **2.4×** |
+| 5× (pessimistic) | 6550 ms | 2.1× |
+| 3× (very pessimistic) | 7480 ms | 1.9× |
+
+The win barely moves as the assumption weakens, because the prelude and `analyze` terms dominate the
+floor. That robustness is the argument for doing it.
+
+**But note WHERE it can be spent, which is the real constraint.** In-process batching only reaches work
+that is already one process's to give:
+
+- **The 20 s agreement phase** (915 × `kama check`) is pure front end — no emission, no execution — so it
+  batches cleanly. This is rung 2's target, worth roughly −12 s.
+- **The 81 s fixture phase cannot batch this way.** Each fixture must stay its own process: it builds and
+  *runs* a binary, and per-process isolation is what keeps a crash or a sanitizer report attributable to
+  one fixture. Its ~36 % front-end share needs a **cross-process** (on-disk) cache — rung 3 — which is
+  also the only form that helps the LSP and user projects.
+
+That is the honest sequencing argument: rung 2 is cheap and proves the emitter can be reset; rung 3 is
+the same idea made durable, and it is where the larger number actually lives.
+
 ### 4. Object caching — ⚠️ THE PREMISE BELOW IS WRONG. Read this first.
 
 Everything in this section rests on "455 emitted TUs, 49 distinct — 89 % byte-identical duplicates". That
