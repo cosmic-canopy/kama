@@ -460,8 +460,26 @@ analysis_skip() {   # fixtures where `check` legitimately cannot match `build` �
 # the corpus is the same, only the entry point differs. A mismatch names the fixture; the tally is a
 # single PASS/FAIL plus the sample size.
 #
-# Fanned out across NCPU, like both legs above. This is ~915 more compiler processes; run one at a time it
-# was the single most expensive phase in the suite, and every one of them is independent.
+# BATCHED, then fanned out across NCPU. `kama check --each` runs N programs in ONE process, reusing the
+# parsed prelude and the shared `std::` import closure across all of them — measured over this corpus:
+# 909 programs re-parse the prelude 909 times and the ~106 distinct closure units 4,736 times. At NCPU=10
+# this phase went 22 s -> 10 s, measured A/B on one binary via KAMA_NO_BATCH=1 below. (Standalone, with
+# nothing else competing, the same corpus is 18.4 s -> 8.1 s wall and 157.6 s -> 55.7 s CPU.)
+#
+# The batch is only a fast PRE-FILTER. Anything that does not come back with the expected verdict — a
+# disagreement, or no verdict at all because the process died partway — is re-run SOLO through the two
+# one-file functions below, which stay the single source of truth for every message this leg prints. So:
+#   * a crash still names its fixture and its signal (the batch loses the verdict, the solo re-run
+#     reproduces it), which is the whole reason the xfail leg checks for signals at all;
+#   * a MISMATCH message and its `head -3` diagnostics are byte-for-byte what they were unbatched, with
+#     no need to demultiplex one process's stderr back into per-file slices.
+# In the green case nothing is re-run, so the fidelity is free.
+#
+# Proof of equivalence, and the escape hatch: KAMA_NO_BATCH=1 restores the per-file path. Both were run
+# over all 923 fixtures — identical exit codes, and each chunk's `--each` stderr byte-identical to the
+# concatenation of its files' solo stderr:
+#   ls tests/*.kama tests/xfail/*.kama > /tmp/f; split -l 32 /tmp/f /tmp/chunk.
+#   for c in /tmp/chunk.*; do "$KAMA" check --each $(cat "$c"); done
 check_pos_one() {
     local src="$1" name
     name="$(basename "$src" .kama)"
@@ -482,28 +500,77 @@ check_neg_one() {
         echo "  MISMATCH xfail/$name: \`kama check\` CRASHED (signal $((ck_rc-128))) — the language server would die on this input" >"$TMP/ckx_$name.bad"
     fi
 }
+# Split a fixture list into chunks and LAUNCH one `kama check --each` per chunk into the shared pool.
+# Chunked at 32: big enough that the shared `std::` closure is parsed ~29 times instead of ~909, small
+# enough that `gate` still load-balances and one crash costs one chunk.
+#
+# Launch and collect are separate so the POSITIVE and NEGATIVE lists occupy ONE pool with one barrier.
+# Draining them in sequence leaves a straggler in each of the two waves: 11 s that way, 10 s pooled.
+CKB_PIDS=()
+check_batch_launch() {
+    local list="$1" tag="$2" c
+    split -l 32 "$list" "$TMP/ckb_${tag}." 2>/dev/null || true
+    for c in "$TMP/ckb_${tag}."*; do
+        [ -e "$c" ] || continue
+        case "$c" in *.v) continue;; esac
+        # Unquoted on purpose: one argument per path. No fixture path contains whitespace, and the collect
+        # step re-runs anything that does not come back with a verdict, so a pathological name degrades to
+        # the unbatched path rather than to a wrong answer.
+        "$KAMA" check --each $(cat "$c") >"$c.v" 2>/dev/null &
+        CKB_PIDS+=($!)
+        gate
+    done
+}
+# Echo back the fixtures whose verdict is not $2 (the expected per-file exit code), including any the
+# batch never reported. The caller re-runs exactly that set solo.
+check_batch_redo() {
+    local list="$1" want="$2" tag="$3"
+    : >"$TMP/ckb_${tag}.verdicts"
+    cat "$TMP/ckb_${tag}."*.v 2>/dev/null >>"$TMP/ckb_${tag}.verdicts"
+    # One awk pass rather than a lookup per fixture: `<rc> <path>` verdicts in, the paths that did not
+    # answer `want` out, in list order. Keyed on FILENAME rather than the usual NR==FNR, which silently
+    # reads the LIST's first line as a verdict when the verdicts file is empty — i.e. exactly when every
+    # chunk died, which is the one case this leg must not under-report.
+    awk -v want="$want" -v vf="$TMP/ckb_${tag}.verdicts" \
+        'FILENAME == vf { v[$2] = $1; next } { if (!($0 in v) || v[$0] != want) print }' \
+        "$TMP/ckb_${tag}.verdicts" "$list"
+}
+
 ck_pos=0; ck_neg=0; ck_bad=0
 phase_start "analysis agreement"
-ck_pids=()
+: >"$TMP/ck_pos.list"; : >"$TMP/ck_neg.list"
 for src in "$TESTS_DIR"/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
     [ -f "$TMP/$name.res" ] && [ "$(cat "$TMP/$name.res")" = "PASS" ] || continue   # only fixtures that built
     ck_pos=$((ck_pos+1))
-    check_pos_one "$src" &
-    ck_pids+=($!)
-    gate
+    echo "$src" >>"$TMP/ck_pos.list"
 done
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     name="$(basename "$src" .kama)"
     if analysis_skip "$name"; then echo "  SKIP xfail/$name (rejected by the C compiler, not by kama)"; continue; fi
     ck_neg=$((ck_neg+1))
-    check_neg_one "$src" &
-    ck_pids+=($!)
-    gate
+    echo "$src" >>"$TMP/ck_neg.list"
 done
-wait "${ck_pids[@]}" 2>/dev/null
+
+if [ -n "${KAMA_NO_BATCH:-}" ]; then      # the escape hatch: every fixture its own process, as before
+    cp "$TMP/ck_pos.list" "$TMP/ck_pos.redo"; cp "$TMP/ck_neg.list" "$TMP/ck_neg.redo"
+else
+    check_batch_launch "$TMP/ck_pos.list" pos
+    check_batch_launch "$TMP/ck_neg.list" neg
+    # `"${arr[@]}"` on an EMPTY array is an unbound-variable error under `set -u` on bash 3.2 (macOS), and
+    # a bare `wait` would block on the never-exiting echo helpers — so gate on the count, as line 293 does.
+    if [ ${#CKB_PIDS[@]} -gt 0 ]; then wait "${CKB_PIDS[@]}" 2>/dev/null; fi
+    check_batch_redo "$TMP/ck_pos.list" 0 pos >"$TMP/ck_pos.redo"   # a positive must exit 0
+    check_batch_redo "$TMP/ck_neg.list" 1 neg >"$TMP/ck_neg.redo"   # a negative must exit nonzero
+fi
+
+# Solo re-runs: normally empty. These produce every message this leg prints, batched or not.
+ck_pids=()
+while read -r src; do [ -n "$src" ] || continue; check_pos_one "$src" & ck_pids+=($!); gate; done <"$TMP/ck_pos.redo"
+while read -r src; do [ -n "$src" ] || continue; check_neg_one "$src" & ck_pids+=($!); gate; done <"$TMP/ck_neg.redo"
+if [ ${#ck_pids[@]} -gt 0 ]; then wait "${ck_pids[@]}" 2>/dev/null; fi   # normally EMPTY — see above
 phase_end
 # Report mismatches in fixture order — a MISMATCH names the fixture, so stable ordering keeps a diff of two
 # runs meaningful.

@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <cstdint>      // int8_t … uint64_t (not transitively available on all libcs, e.g. Windows UCRT)
+#include <set>          // CompilationUnit::prunedNames
 #include "kama.forward.h"
 #include "kama.query.h"  // SrcRange — the per-segment spans of the `::`-separated name lists (M6 B3f)
 
@@ -71,6 +72,14 @@ public:
     SharedStringList exportList;              // the module's public surface (`export { … };`)
     std::vector<SrcRange> exportListPos;      // one span per exportList entry (M6 B3f), or empty
     SharedStatementList codeDeclarationList;
+    // Names `@compileFor` dropped from codeDeclarationList — recorded HERE, on the unit, and not only on
+    // the emitter that did the pruning. pruneInactiveDecls rewrites the decl list IN PLACE, so a second
+    // emitter over the same unit (a cached unit reused across analyses: `kama lsp` per keystroke, `kama
+    // check --each` per program) finds the decls already gone and would rebuild an EMPTY pruned set —
+    // and then report a phantom "export list names `sort` but there is no such top-level declaration"
+    // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set; this makes its
+    // by-product idempotent too.
+    std::set<std::string> prunedNames;
     CompilationUnit(CodeGenContext& context, SharedString name,
                     SharedNamespaceDeclaration nameSpace,
                     SharedImportDeclarationList importDeclarationList,

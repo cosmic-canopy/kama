@@ -4072,9 +4072,12 @@ void usage()
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
-        "  kama check     <in.kama>... [--json]   analyze without emitting C or invoking a C compiler\n"
+        "  kama check     <in.kama>... [--each] [--json]   analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis. NOT a full\n"
-        "                   type check: an expression type mismatch is caught by `kama build`, not here)\n"
+        "                   type check: an expression type mismatch is caught by `kama build`, not here.\n"
+        "                   Several inputs are ONE program; --each makes each input its own program and\n"
+        "                   checks them all in one process, reusing the parsed prelude and import closure —\n"
+        "                   it then prints one `<exit-code> <path>` verdict line per input on stdout)\n"
         "  kama query     <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
@@ -5143,6 +5146,7 @@ int main(int argc, char** argv)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
+    bool        eachMode   = false;        // `kama check --each`: every input is its own program, one process
     // Every `kama query` mode, in the order the caller asked. One list rather than a scalar per mode, so
     // a single analysis can answer N questions (see `Question` above).
     std::vector<Question> questions;
@@ -5171,6 +5175,7 @@ int main(int argc, char** argv)
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
         else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
         else if (a == "--dev")                      devBuild = true;                 // also resolve dev-dependencies
+        else if (a == "--each")                     eachMode = true;                 // check: one program per input
         // `kama query` modes. Appended in ARGV ORDER, and repeatable: `--def 1:1 --def 9:9` is two
         // questions, not last-wins. (Before this was a list, the second silently vanished.)
         else if (a == "--symbols")                  questions.push_back({QMode::Symbols,  ""});
@@ -5193,6 +5198,14 @@ int main(int argc, char** argv)
     // `-- <args>` are forwarded to the program `kama run` launches; they mean nothing to build/transpile.
     if (!runMode && !progArgs.empty()) {
         fprintf(stderr, "kama: `-- <args>` is only meaningful for `kama run`\n"); usage(); return 2;
+    }
+
+    // `--each` reinterprets the input list: N programs rather than one program's N files. Only `check` has
+    // a meaning for that — `build --each` would need N outputs, which is a different (unbuilt) feature, and
+    // silently building only the first input is the failure mode worth ruling out.
+    if (eachMode && subcommand != "check") {
+        fprintf(stderr, "kama: --each is only meaningful for `kama check` (it checks each input as its own "
+                        "program)\n"); usage(); return 2;
     }
 
     // `kama run` with no file resolves the entry from the manifest `main` field (discovered via --config,
@@ -5329,44 +5342,79 @@ int main(int argc, char** argv)
         // or invoking a C compiler. Runs the exact `collectProgram` analysis a build runs (via the
         // analysis-mode CEmitter's `analyze()`), so it catches the analysis-phase diagnostics fast. This is
         // the front-end-as-library entry the LSP query path (and its test harness) build on.
-        std::vector<SharedCompilationUnit> units;
-        std::vector<std::string> unitPaths;
-        if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+        //
+        // One program per process by default. `--each` instead treats every input as its OWN program and
+        // runs them all here — see the loop below.
+        auto checkOne = [&](const std::string& src) -> int {
+            std::vector<SharedCompilationUnit> units;
+            std::vector<std::string> unitPaths;
+            const std::vector<std::string> roots = eachMode ? std::vector<std::string>{ src } : inputs;
+            if (!loadProgramUnits(roots, argv[0], units, unitPaths, devBuild)) return 1;
 
-        CEmitter idx(input);                 // analysis mode: no output stream
-        configureEmitter(idx);
-        { Stopwatch sw(&timing().analyze); idx.analyze(units); }
-        timingDump("check", input);
-        const auto& diags = idx.diagnostics();
-        // Only an ERROR fails the check. A warning is advice — reporting it is the point, but failing on
-        // it would mean a deprecation notice breaks every `kama check` in the tree.
-        size_t errs = 0;
-        for (const auto& d : diags) if (d.severity == DiagSeverity::Error) ++errs;
-        if (jsonOut) {
-            // Everything on STDOUT and nothing on stderr, so a caller can read one stream. `ok` is the
-            // verdict the exit code carries, restated so a consumer that captured only stdout still has
-            // it. The exit code is unchanged — a wrapper script must keep working when --json is added.
-            Json j = jsonEnvelope("check", input);
-            j.set("ok", errs == 0);
-            j.set("units", (int)units.size());
-            Json rs = Json::array();
-            for (const auto& d : diags) rs.push(jsonDiagnostic(d));
-            j.set("results", rs);
-            jsonPrint(j);
-            return errs ? 1 : 0;
+            CEmitter idx(src);                   // analysis mode: no output stream
+            configureEmitter(idx);
+            { Stopwatch sw(&timing().analyze); idx.analyze(units); }
+            timingDump("check", src);
+            const auto& diags = idx.diagnostics();
+            // Only an ERROR fails the check. A warning is advice — reporting it is the point, but failing
+            // on it would mean a deprecation notice breaks every `kama check` in the tree.
+            size_t errs = 0;
+            for (const auto& d : diags) if (d.severity == DiagSeverity::Error) ++errs;
+            if (jsonOut) {
+                // Everything on STDOUT and nothing on stderr, so a caller can read one stream. `ok` is the
+                // verdict the exit code carries, restated so a consumer that captured only stdout still has
+                // it. The exit code is unchanged — a wrapper script must keep working when --json is added.
+                Json j = jsonEnvelope("check", src);
+                j.set("ok", errs == 0);
+                j.set("units", (int)units.size());
+                Json rs = Json::array();
+                for (const auto& d : diags) rs.push(jsonDiagnostic(d));
+                j.set("results", rs);
+                jsonPrint(j);
+                return errs ? 1 : 0;
+            }
+            for (const auto& d : diags)
+                fprintf(stderr, "%s:%d:%d: %s: %s\n",
+                        d.file.c_str(), d.line, d.column, diagSeverityName(d.severity), d.message.c_str());
+            if (errs) {
+                fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
+                        src.c_str(), errs, errs == 1 ? "" : "s");
+                return 1;
+            }
+            fprintf(stderr, "kama: %s OK (%zu unit%s analyzed%s)\n",
+                    src.c_str(), units.size(), units.size() == 1 ? "" : "s",
+                    diags.empty() ? "" : ", with warnings");
+            return 0;
+        };
+
+        if (!eachMode) return checkOne(input);
+
+        // `--each`: N independent programs, one process. The point is the FRONT END — the embedded prelude
+        // is already parsed once per process, and the parse cache (the same one `kama lsp` uses) makes the
+        // shared `std::` import closure parsed once for the whole batch instead of once per program.
+        // Measured over the suite's agreement corpus: 909 programs re-parse the prelude 909 times and the
+        // ~106 distinct closure units 4,736 times.
+        //
+        // Sound because each program still gets its OWN CEmitter — every table the emitter builds is a
+        // per-emitter member keyed by node pointer, so two programs never see each other's analysis (the
+        // argument written out in full at `preludeUnit()` above, which has shared one prelude AST between
+        // emitters since M5.1). The one pass that writes THROUGH to a shared AST is
+        // CEmitter::pruneInactiveDecls, which is idempotent under a fixed build-flag set — and one process
+        // has exactly one, since the flags come from argv and the manifest, not from the input.
+        //
+        // Verdicts go to STDOUT, one `<rc> <path>` line per input, FLUSHED as each program finishes.
+        // Non-`--json` `check` writes nothing to stdout, so this is a free channel — and flushing per file
+        // is what makes a crash attributable: the caller re-runs whatever has no verdict line, solo, and
+        // gets the signal exactly as it would have without batching. Under `--json` the per-file envelope
+        // already carries `ok` and the file, so the stream stays one envelope per line.
+        int worst = 0;
+        lspSetParseCache(true);
+        for (const auto& src : inputs) {
+            int rc = checkOne(src);
+            if (rc) worst = 1;
+            if (!jsonOut) { printf("%d %s\n", rc, src.c_str()); fflush(stdout); }
         }
-        for (const auto& d : diags)
-            fprintf(stderr, "%s:%d:%d: %s: %s\n",
-                    d.file.c_str(), d.line, d.column, diagSeverityName(d.severity), d.message.c_str());
-        if (errs) {
-            fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
-                    input.c_str(), errs, errs == 1 ? "" : "s");
-            return 1;
-        }
-        fprintf(stderr, "kama: %s OK (%zu unit%s analyzed%s)\n",
-                input.c_str(), units.size(), units.size() == 1 ? "" : "s",
-                diags.empty() ? "" : ", with warnings");
-        return 0;
+        return worst;
     }
 
     if (subcommand == "query") {
