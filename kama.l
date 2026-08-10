@@ -51,8 +51,13 @@
  * Keywords are skipped — not for correctness (no keyword can be a top-level declared name, so recording
  * them would only waste memory) but because `getToken` has already classified the spelling, so the test
  * is free. The STRING_TAG rule has no such classification and records unconditionally; a tag is an
- * identifier by construction. */
-#define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng);
+ * identifier by construction.
+ *
+ * A construct that requires a library seam WITHOUT naming anything — `spawn`, `parallel_for` — cannot be
+ * handled here, and trying was the first thing that failed. The `spawn` sits in the importing program, not
+ * in the module being pruned, and the requirement is program-wide, so no per-import closure can see it.
+ * The provider is marked unprunable instead; see harvestUnitFacts in kama.ast.h. */
+#define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng)
 
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 

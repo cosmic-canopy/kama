@@ -457,6 +457,8 @@ std::string unitNsKey(const SharedCompilationUnit& u)
 // Intra-module import edges need no separate handling: `import std::collections::{View};` puts the token
 // `View` in the importing file's identTokens, so an import edge is just one more reference. Cross-module
 // edges remain the BFS in loadProgramUnits.
+bool pruneTraceOn(int level = 1);   // defined below
+
 struct ModuleIndex {
     std::vector<std::string>                    files;   // as resolved — the SPELLING parseFile was handed
     std::vector<SharedCompilationUnit>          units;   // parallel to files
@@ -522,19 +524,25 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
     // exhibits it today, which is exactly why it would land silently later.
     if (!ix.homogeneous) return bail("mixed namespaces");
 
-    std::vector<size_t> work;
-    std::vector<bool>   keep(ix.files.size(), false);
-    auto add = [&](size_t i) { if (!keep[i]) { keep[i] = true; work.push_back(i); } };
+    std::vector<size_t>      work;
+    std::vector<bool>        keep(ix.files.size(), false);
+    std::vector<std::string> why(ix.files.size());   // trace level 2 only
+    auto add = [&](size_t i, const std::string& reason) {
+        if (keep[i]) return;
+        keep[i] = true; work.push_back(i);
+        if (pruneTraceOn(2)) why[i] = reason;
+    };
 
     for (auto& s : symbols) {
         auto it = ix.byName.find(s);
         // The index did not find a symbol this import names. Either it is genuinely undeclared, or it was
         // dropped by `@compileFor` — both want the full module, so the existing tailored diagnostic fires.
         if (it == ix.byName.end()) return bail("unknown symbol");
-        for (size_t i : it->second) add(i);
+        for (size_t i : it->second) add(i, "imported: " + s);
     }
     for (size_t i = 0; i < ix.units.size(); ++i)
-        if (ix.units[i] && ix.units[i]->hasIntrinsicImpl) add(i);   // nameless, unreachable by reference
+        if (ix.units[i] && ix.units[i]->unprunable)
+            add(i, "unprunable");   // nameless decl, so unreachable by any reference
 
     // Fixpoint over references. A visited set, not recursion: `set` -> `Map` and `sort` -> `View` already
     // make this a graph, and the reference closure makes a cycle far likelier than the import edges do.
@@ -542,14 +550,26 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
         size_t i = work.back(); work.pop_back();
         if (!ix.units[i]) continue;
         for (auto& tok : ix.units[i]->identTokens) {
+            // A name this file declares ITSELF is satisfied here; it pulls in no sibling. That is a
+            // no-op for ordinary declarations — two files of one namespace cannot both define `View` —
+            // but `extern fn` is the exception that matters: it declares a C symbol, not a module
+            // definition, so several files legitimately repeat it. Three of lib/std/collections' files
+            // each declare their own `extern fn memset`, and without this a reference to `memset` from
+            // fixed_array.kama drags in map.kama and bit_set.kama (and then hasher.kama behind map),
+            // which is three of the seven units httpd was keeping.
+            if (ix.units[i]->topLevelNames.count(tok)) continue;
             auto it = ix.byName.find(tok);
             if (it == ix.byName.end()) continue;
-            for (size_t j : it->second) add(j);
+            for (size_t j : it->second) add(j, baseName(ix.files[i]) + " references " + tok);
         }
     }
 
     std::vector<std::string> out;
     for (size_t i = 0; i < ix.files.size(); ++i) if (keep[i]) out.push_back(ix.files[i]);
+    if (pruneTraceOn(2))
+        for (size_t i = 0; i < ix.files.size(); ++i)
+            if (keep[i]) fprintf(stderr, "kama-prune:     keep %-22s %s\n",
+                                 baseName(ix.files[i]).c_str(), why[i].c_str());
     if (out.empty())            return bail("empty closure");   // a resolver bug looks like this
     if (out.size() == files.size()) { if (whyNot) *whyNot = "nothing to drop"; }
     return out;
@@ -570,10 +590,21 @@ SharedCompilationUnit indexedUnit(ModuleIndexCache& cache, const std::string& fi
 
 // `KAMA_PRUNE_TRACE=1` reports what the closure decided, per import, on stderr. The campaign's validation
 // gate: the closure is computed and traced before it is allowed to change what gets loaded.
-bool pruneTraceOn()
+// Level 2 additionally names every kept file and the reference that pulled it in — which is how you answer
+// "why is this still 19 units and not 17", the only question this campaign ever gets asked.
+bool pruneTraceOn(int level)
 {
-    static bool on = [] { const char* e = getenv("KAMA_PRUNE_TRACE"); return e && *e; }();
-    return on;
+    static int lvl = [] { const char* e = getenv("KAMA_PRUNE_TRACE"); return (e && *e) ? atoi(e) : 0; }();
+    return lvl >= level;
+}
+
+// `KAMA_NO_PRUNE=1` restores pre-campaign resolution: a directory import loads the directory. It exists so
+// the whole suite can be A/B'd on ONE binary, and the A/B is a proof rather than a hope — with pruning off
+// every `provided` entry is `whole`, so the unit set is identical to the pre-campaign one by construction.
+bool pruningOff()
+{
+    static bool off = [] { const char* e = getenv("KAMA_NO_PRUNE"); return e && *e; }();
+    return off;
 }
 
 // ---- phase timing (LSP M5.0) -----------------------------------------------------------------------
@@ -708,7 +739,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                       std::vector<std::string>& paths,
                       bool includeDevDeps = false,
                       bool strictImports = true,
-                      std::vector<Diagnostic>* diagsOut = nullptr)
+                      std::vector<Diagnostic>* diagsOut = nullptr,
+                      bool prune = true)
 {
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
@@ -865,9 +897,12 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     }
                 }
             }
-            // What the closure WOULD load. Computed and traced here; nothing acts on it yet.
+            // The files this import actually needs. Empty means "no pruning" — either a bail-out inside
+            // the closure, the escape hatch, or a caller that opted out.
             const char* whyNot = nullptr;
-            std::vector<std::string> keep = closureOfModule(files, wanted, moduleIndex, &whyNot);
+            std::vector<std::string> keep = (prune && !pruningOff())
+                                          ? closureOfModule(files, wanted, moduleIndex, &whyNot)
+                                          : std::vector<std::string>();
             if (pruneTraceOn()) {
                 fprintf(stderr, "kama-prune: %s %zu/%zu%s%s\n", key.c_str(),
                         keep.empty() ? files.size() : keep.size(), files.size(),
@@ -876,16 +911,25 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     for (auto& s : wanted)
                         fprintf(stderr, "kama-prune: UNFOUND %s::%s\n", key.c_str(), s.c_str());
             }
+            const std::vector<std::string>& toLoad = keep.empty() ? files : keep;
+            const bool pruned = !keep.empty() && keep.size() < files.size();
 
-            for (auto& f : files) {
+            for (auto& f : toLoad) {
                 std::string abs = absolutePath(f);
-                if (!seen.insert(abs).second) continue;
+                bool fresh = seen.insert(abs).second;
                 // From the index when it has already parsed this file, so indexing never doubles the
                 // parse — and so a file that fails to parse is reported once, by whichever got there first.
                 SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
                 if (!mu) return false;
-                units.push_back(mu); paths.push_back(abs);
-                std::string mk = unitNsKey(mu); if (!mk.empty()) providedWhole.insert(mk);
+                if (fresh) { units.push_back(mu); paths.push_back(abs); }
+                std::string mk = unitNsKey(mu);
+                if (mk.empty()) continue;
+                // What this module now provides. A pruned module contributes only the names it actually
+                // declares, so a later import asking for one that is absent re-resolves and the closure
+                // pulls the rest in. Recorded for every kept file, including one an earlier import
+                // already loaded — the record is about the namespace, not about who loaded the file.
+                if (pruned) for (auto& n : mu->topLevelNames) provided[mk].insert(n);
+                else        providedWhole.insert(mk);
             }
         }
     }
@@ -4980,9 +5024,17 @@ SharedLspIndex lspAnalyzeWorkspace(const std::vector<std::string>& files,
     // Passing every project file as a CLI input makes loadProgramUnits' BFS yield the UNION of all their
     // import closures, deduped by absolute path — which is exactly the project-wide set, plus whatever
     // std/dependency modules it needs for names to resolve.
+    //
+    // The ONE caller that opts out of closure pruning. This index backs find-references, rename and
+    // workspace symbols, and pruning would shrink it: a rename would silently skip files it did not load.
+    // The project's own files are CLI inputs and so are never pruned either way, so what is at stake is
+    // dependencies — for the read-only stdlib that would be tolerable, but a workspace sibling package is
+    // code the user can legitimately edit. Per-keystroke analysis (lspAnalyze) still prunes, which is
+    // where the latency actually is.
     std::vector<SharedCompilationUnit> units;
     std::vector<std::string> paths;
-    if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false) || units.empty())
+    if (!loadProgramUnits(files, argv0, units, paths, /*includeDevDeps*/ false, /*strictImports*/ false,
+                          /*diagsOut*/ nullptr, /*prune*/ false) || units.empty())
         return nullptr;
 
     // `units` and `paths` are PARALLEL, so the scan must be bounded by `paths` and the two must grow

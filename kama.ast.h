@@ -98,10 +98,9 @@ public:
                                            // the lexer: a sound SUPERSET of the names it references.
                                            // Over-pulling costs pruning; under-pulling would emit calls
                                            // to undefined functions, so the superset is the safe side.
-    bool hasIntrinsicImpl = false;         // holds a `type intrinsic <int32> implements C` — a decl with
-                                           // NO top-level name that registers a conformance program-wide.
-                                           // Nothing can reference it by name, so such a file is never
-                                           // prunable. Only two files in lib/ have one.
+    bool unprunable = false;               // holds a declaration with a program-wide effect and NO name to
+                                           // reference it by, so no closure can reach it. See
+                                           // harvestUnitFacts for the two kinds and why each is one.
     CompilationUnit(CodeGenContext& context, SharedString name,
                     SharedNamespaceDeclaration nameSpace,
                     SharedImportDeclarationList importDeclarationList,
@@ -1192,9 +1191,24 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
                 for (auto& var : *v->variables)
                     if (var && var->name && var->name->value) unit->topLevelNames.insert(*var->name->value);
         } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
-            unit->hasIntrinsicImpl = true;   // declares no name, yet registers a conformance program-wide
+            // `type intrinsic <int32> implements FromStr { … }` registers a conformance for a PRIMITIVE,
+            // program-wide, under no name of its own. Two files in lib/ have one.
+            unit->unprunable = true;
+        } else if (auto* inc = dynamic_cast<IncludeNode*>(d)) {
+            // A bare `extern "hdr.h";` is normally prunable — it supports that file's own functions, so if
+            // nothing references them the header is not needed either. The exception is a header a
+            // CONSTRUCT requires: `spawn` and `parallel_for` both demand the isolate seam and reject a
+            // program without it (CEmitter::isolatePrep, emitParallelFor), while naming nothing at all in
+            // the file that provides it. And the demand is program-wide — the file doing the `spawn` need
+            // not be the one that imported std::concurrent — so no per-import closure can see it.
+            //
+            // Keeping the provider unconditionally is one extra unit for programs that import
+            // std::concurrent, and nothing for anyone else. The blanket alternative (keep every file with
+            // any `extern`) would cost four of lib/std/collections' fourteen for no reason.
+            // KEEP IN SYNC with the `externsHeader(...)` calls in kama.cemit.cpp that REQUIRE rather than
+            // merely detect a header. Today that is exactly this one.
+            if (inc->header && *inc->header == "kama_isolate.h") unit->unprunable = true;
         }
-        // IncludeNode (`extern "hdr.h";`) declares no name and has no independent effect: nothing else.
     }
 }
 

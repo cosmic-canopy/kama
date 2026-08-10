@@ -41,8 +41,32 @@ bad() { echo "  FAIL: $1" >&2; fail=1; }
 # Absolute paths throughout rather than a `cd $ROOT`: the guards run in parallel from one runner, so
 # none of them may change directory outside a subshell. The runner also exports KAMA_BUILD_JOBS=1 for
 # the whole pool, which is exactly why every case below passes -j on the COMMAND LINE, where it wins.
-MULTI="$ROOT/tests/parse_radix.kama"     # 24 TUs
-[ -f "$MULTI" ] || { echo "check-build-jobs: $MULTI is gone — pick another multi-unit fixture" >&2; exit 1; }
+# The fixture is GENERATED, not borrowed from tests/. It must stay comfortably wider than the -j 10 pool
+# below or the width-dependence cases compare two runs that both compiled everything and prove nothing —
+# and a borrowed fixture's width is not this guard's to control. Closure pruning made that concrete: it
+# took tests/parse_radix.kama from 24 units to 3, and the replacement from 19 to 10 in the same afternoon,
+# each time surfacing as a confusing "block order is width-dependent" rather than "your fixture shrank".
+# Sixteen single-symbol modules, each genuinely referenced by main, so no resolution-level pruning can
+# drop one.
+NTU=16
+mkdir -p "$tmp/src"
+for i in $(seq 1 $NTU); do
+    printf 'namespace w%d;\nexport { v%d };\n\nfn int32 v%d() { return %d; }\n' "$i" "$i" "$i" "$i" \
+        > "$tmp/src/w$i.kama"
+done
+{
+    for i in $(seq 1 $NTU); do printf 'import w%d::{v%d};\n' "$i" "$i"; done
+    printf '\nfn int32 main() {\n    int32 t = 0;\n'
+    for i in $(seq 1 $NTU); do printf '    t = t + v%d();\n' "$i"; done
+    printf '    return t - %d;\n}\n' "$(( NTU * (NTU + 1) / 2 ))"
+} > "$tmp/src/multi.kama"
+MULTI="$tmp/src/multi.kama"
+units=$("$KAMA" check "$MULTI" 2>&1 | sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p')
+if [ -z "$units" ] || [ "$units" -lt 12 ]; then
+    echo "check-build-jobs: generated fixture is ${units:-?} units, expected $((NTU + 1)) — too narrow" >&2
+    "$KAMA" check "$MULTI" >&2 2>&1 || true
+    exit 1
+fi
 
 # --- 1. objects byte-identical, built at the same paths ---------------------------------------------
 # STATIC is the output kind that produces objects at BOTH widths, which is what makes them comparable.
@@ -132,8 +156,9 @@ for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 b=$(basename "$out")
 i=1
 while [ $i -le 5 ]; do echo "NOISE $b line $i" >&2; i=$((i+1)); done
-# One chosen TU fails, unless the caller asked for an all-succeed run (case 5a).
-[ -n "${KAMA_JOBS_NOFAIL:-}" ] || case "$b" in *map_*) exit 1 ;; esac
+# One chosen TU fails, unless the caller asked for an all-succeed run (case 5a). It names a module this
+# guard GENERATES, so the trigger cannot go missing the way a stdlib TU can.
+[ -n "${KAMA_JOBS_NOFAIL:-}" ] || case "$b" in w7_*) exit 1 ;; esac
 exit 0
 EOF
 chmod +x "$tmp/ccnoise"
