@@ -176,22 +176,30 @@ that simply drops the `-I` paths is unsound — it would reuse an object compile
 headers. This is exactly the problem ccache solves with its direct mode (hash the source plus every
 header a previous `-MD` run reported).
 
-Which forces a fork, to settle before building:
+The fork was settled with the user, 2026-08-09: **kama gets its own cache.** Delegating to `ccache` was
+the cheap alternative — mature, correct, ~60 lines — but it leaves two build paths forever (cold per-TU
+is 42 % slower, so the split cannot be the default without a cache present), needs ccache added to the
+container image and CI, and gives kama's own users nothing unless they install it. kama's cache is more
+code and carries the whole stale-hit risk, but it needs no dependency and it is the same machinery that
+delivers **user-project incremental rebuilds** — which is half of what this lever is for. Today
+`kama build` recompiles the entire import closure every time, because no object file ever exists.
 
-- **(a) Split only, delegate caching to `ccache`.** kama's job shrinks to emitting `-c` per TU and
-  linking the objects; `--cc "ccache clang"` then does the rest, with a mature and correct answer to the
-  header-dependency problem. But cold is 42 % *slower* (750 ms vs 530 ms), so the split cannot be the
-  default without a cache present, and ccache is not installable everywhere (notably the container image
-  and CI would both need it).
-- **(b) kama's own content-addressed cache**, direct-mode style: key on the `.c` content, the contents of
-  every header it actually includes (discovered with `-MD` on a miss and remembered in a manifest), the
-  normalized flags, and the compiler identity. Self-contained and helps every user with no extra
-  dependency — and it is the piece that also gives **incremental rebuilds**, which lever 4 is half about.
-  More code, and the stale-hit bar is absolute: a wrong hit is a wrong binary.
+**Build it in three steps, so the risk is staged and each step is falsifiable on its own:**
 
-Either way the driver change is the same shape and is the prerequisite: `kama.driver.cpp` builds one
-`cmd` stream with the sources in the *middle* (`kama.driver.cpp:5891`), so it needs splitting at that
-point into compile-flags and link-tail. `outStatic` (`:5958`) already demonstrates the per-TU loop.
+1. **Split compile from link.** `kama.driver.cpp` builds one `cmd` stream with the sources in the
+   *middle* (`:5891`), so split it there into compile-flags and link-tail. `outStatic` (`:5958`) already
+   demonstrates the per-TU loop and the archive. Keep today's single invocation as the default — this
+   step changes no behavior and is verifiable by itself.
+2. **The cache, behind a flag, off by default.** Key: `.c` content + the contents of every header the
+   compile actually read (pass `-MD` on a miss — the compiler hands the list back as a byproduct — and
+   remember it in a manifest) + normalized flags + compiler identity + a cache-format version. Turn it
+   on for the suite, measure the fixture phase end to end. **The 34 ms is a microbenchmark; do not
+   report a suite number until a suite run produces one.**
+3. **On by default**, once `tools/check-objcache.sh` proves it: build cold, build warm, byte-compare the
+   objects. Plus an escape hatch (`KAMA_NO_OBJ_CACHE=1`) and a way to clear it.
+
+Note the objects are the thing to compare, not the binary — the macOS linker makes the binary hash vary
+between two *identical* serial builds (found while measuring `make -j`).
 
 ⚠️ **Two traps, both verified:**
 
