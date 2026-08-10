@@ -34,7 +34,7 @@ echo "check-agents: discoverability"
 
 # `kama` with no args prints usage on stderr and exits 2.
 "$KAMA" > "$tmp/usage.txt" 2>&1 || true
-for verb in transpile build run check query lsp agents pkg publish toolchain update; do
+for verb in transpile build run check query lsp seed agents pkg publish toolchain update; do
     if grep -q "kama $verb" "$tmp/usage.txt"; then ok "usage() advertises \`$verb\`"
     else bad "usage() never mentions \`$verb\`"; fi
 done

@@ -39,6 +39,7 @@
   #include <stdlib.h>           // _fullpath, _MAX_PATH
   #include <direct.h>           // _mkdir (package view materialization)
   #include <process.h>          // _getpid (staging dir name for the package store)
+  #include <io.h>               // _isatty/_fileno — `kama seed` prompts only on a terminal
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -67,6 +68,7 @@
 #include "kama.lsp.h"       // ParseResult/parseForQuery + runLspServer (the `kama lsp` server)
 #include "kama.json.h"      // Json + serialize, for `--json` output (shared with the LSP's framing)
 #include "kama.agents.h"    // KAMA_AGENTS_MD + stubs, embedded — the `kama agents` command
+#include "kama.seed.h"      // KAMA_SEED_* project templates, embedded — the `kama seed` command
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
@@ -4470,6 +4472,356 @@ static int cmdAgentsInstall(const std::string& dir, const std::vector<std::strin
     return 0;
 }
 
+// ------------------------------------------------------------------------------------------------
+// `kama seed` — turn a directory into a kama project.
+//
+// The manifest is the point. Everything a project needs to be findable, importable and buildable lives
+// in kama.json, and until now the only way to learn its shape was to read docs/packages.md and type it
+// out. Two of its keys are also traps a template closes permanently: a library with src/ and no
+// `sources` is SILENTLY unimportable (see the comment at packageSourceFiles), and a manifest with no
+// `out` scatters build artifacts through the source tree.
+//
+// Named `seed`, not `init`: kama has a toolchain and a package store it could plausibly be
+// initializing, so `init` names the wrong thing about half the time.
+//
+// This is the driver's ONE interactive code path — nothing else here reads stdin. It prompts only when
+// stdin is a terminal; a pipe, a file or a CI runner gets the defaults, exactly as `--yes` would.
+// User docs: docs/packages.md.
+
+enum class SeedKind { Executable, Library, Monorepo };
+
+struct SeedOpts {
+    std::string name, version, kind, members;
+    bool nameGiven = false, versionGiven = false, kindGiven = false, membersGiven = false;
+    bool agents = false, agentsGiven = false;
+    std::vector<std::string> tools;
+    bool allTools = false, skill = false, yes = false, force = false;
+};
+
+void seedUsage()
+{
+    fprintf(stderr,
+        "usage:\n"
+        "  kama seed [<dir>] [--kind executable|library|monorepo] [--name <n>] [--version <v>]\n"
+        "            [--members <a,b,c>]        the members of a monorepo (required for that kind)\n"
+        "            [--agents|--no-agents] [--claude] [--tool <name>]... [--all-tools] [--skill]\n"
+        "            [--yes|-y] [--force]\n"
+        "\n"
+        "  Interactive when stdin is a terminal; a pipe or a script behaves as --yes.\n");
+}
+
+// Is stdin a terminal? The one place that asks, because `kama seed` is the one command that prompts.
+// <unistd.h> is already included above; Windows needs <io.h>, which like <direct.h>/<process.h> is a CRT
+// header and does not reach <windows.h> (the prohibition at the top of this file is about windows.h).
+static bool stdinIsTerminal()
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stdin)) != 0;
+#else
+    return isatty(fileno(stdin)) != 0;
+#endif
+}
+
+// Print `question [hint]: ` and return what was typed, trimmed — EMPTY for a bare Enter, and empty for
+// EOF too. Returning empty rather than substituting a default is what keeps the yes/no case honest: the
+// hint shown for a no-default question is "y/N", and folding that string in as the answer would make
+// Enter read as 'y'. (It did, once. The prompt said [y/N] and wrote the file anyway.)
+//
+// EOF returning empty is the load-bearing half: a prompt that spins on end-of-stream hangs forever, and
+// a seeding tool that can hang a CI job is worse than one that never prompts at all. Callers only reach
+// here when stdin IS a terminal and --yes was absent, so EOF means the terminal went away.
+static std::string seedReadLine(const char* question, const std::string& hint)
+{
+    printf("  %s [%s]: ", question, hint.c_str());
+    fflush(stdout);
+    char buf[256];
+    if (!fgets(buf, sizeof buf, stdin)) { printf("\n"); return std::string(); }
+    std::string s(buf);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
+        s.pop_back();
+    size_t b = 0;
+    while (b < s.size() && (s[b] == ' ' || s[b] == '\t')) ++b;
+    return s.substr(b);
+}
+
+// Ask, showing the default and taking it on a bare Enter.
+static std::string seedAsk(const char* question, const std::string& dflt)
+{
+    std::string a = seedReadLine(question, dflt);
+    return a.empty() ? dflt : a;
+}
+
+static bool seedAskYesNo(const char* question, bool dflt)
+{
+    std::string a = seedReadLine(question, dflt ? "Y/n" : "y/N");
+    if (a.empty()) return dflt;
+    return a[0] == 'y' || a[0] == 'Y';
+}
+
+// Replace every occurrence of the two placeholders. Both are legal kama identifiers, which is what lets
+// seed/*.kama compile as-is and join the tree-sitter corpus (see kama.seed.h).
+static std::string seedSubst(const char* tmpl, const std::string& name, const std::string& ident)
+{
+    std::string s = embeddedBody(tmpl);
+    struct { const char* tok; const std::string& val; } subs[] = {
+        { "KAMA_SEED_NAME", name }, { "KAMA_SEED_IDENT", ident },
+    };
+    for (const auto& sub : subs) {
+        const size_t n = strlen(sub.tok);
+        for (size_t p = s.find(sub.tok); p != std::string::npos; p = s.find(sub.tok, p + sub.val.size()))
+            s.replace(p, n, sub.val);
+    }
+    return s;
+}
+
+// A default name from the target directory: lowercased, with anything outside [a-z0-9_-] folded to '_'.
+// Only the DEFAULT is sanitized — an explicit --name or a typed answer is never rewritten, because
+// silently renaming somebody's package is the implicit behavior this language argues against.
+static std::string seedDefaultName(const std::string& dir)
+{
+    std::string b = baseName(absolutePath(dir));
+    std::string out;
+    for (char c : b) {
+        if (c >= 'A' && c <= 'Z') out += (char)(c - 'A' + 'a');
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') out += c;
+        else out += '_';
+    }
+    if (out.empty() || !((out[0] >= 'a' && out[0] <= 'z'))) out = "app";
+    return out;
+}
+
+// The package-name rule, written down here for the first time — nothing validated a name before, and
+// `kama seed` is the right place because the name it stamps into kama.json is the name every consumer
+// then has to spell.
+//
+//   <name> ::= [ "@" <seg> "/" ] <seg>        <seg> ::= [a-z] [a-z0-9_-]*
+//
+// Lowercase because the name is also a path component (.kama/deps/<importName>, the store label), and a
+// case-insensitive filesystem cannot tell `Geo` from `geo`.
+//
+// A LIBRARY is held to more: its name is what an importer writes after `import`, so it must also be a
+// legal kama IDENTIFIER. `import my-lib::{ … }` is a parse error, so a hyphenated library can never be
+// imported at all — better to refuse the name than to ship the dead end.
+static bool seedValidName(const std::string& name, bool mustBeImportable, std::string& err)
+{
+    const std::string ident = importNameOf(name);
+    const std::string scope = scopeOf(name);
+    auto seg = [](const std::string& s) {
+        if (s.empty() || !(s[0] >= 'a' && s[0] <= 'z')) return false;
+        for (char c : s)
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+        return true;
+    };
+    if (!scope.empty() && !seg(scope.substr(1))) {
+        err = "'" + name + "' has a bad scope — a scope is @ then [a-z][a-z0-9_-]*"; return false;
+    }
+    if (name[0] == '@' && scope.empty()) { err = "'" + name + "' is missing the /name after its scope"; return false; }
+    if (!seg(ident)) {
+        err = "'" + name + "' is not a valid package name — lowercase, starting with a letter, then "
+              "letters, digits, '_' or '-' (a name is a directory name in the package store, and a "
+              "case-insensitive filesystem cannot tell 'Geo' from 'geo')";
+        return false;
+    }
+    if (!mustBeImportable) return true;
+
+    if (ident.find('-') != std::string::npos) {
+        std::string suggest = ident;
+        for (char& c : suggest) if (c == '-') c = '_';
+        err = "a library is imported as `import " + ident + "::{ … }`, and '" + ident + "' is not a legal "
+              "kama identifier — try '" + suggest + "'";
+        return false;
+    }
+    if (kamaIsKeyword(ident.c_str())) {
+        err = "'" + ident + "' is a kama keyword, so `import " + ident + "::{ … }` cannot parse";
+        return false;
+    }
+    if (ident == "std" || ident == "core") {
+        err = "'" + ident + "' is reserved — an import rooted there resolves to the standard library, so "
+              "nothing could ever import this package";
+        return false;
+    }
+    return true;
+}
+
+static bool seedParseKind(const std::string& s, SeedKind& out)
+{
+    if (s == "executable" || s == "exe") { out = SeedKind::Executable; return true; }
+    if (s == "library"    || s == "lib") { out = SeedKind::Library;    return true; }
+    if (s == "monorepo")                 { out = SeedKind::Monorepo;   return true; }
+    return false;
+}
+
+// Split "a, b ,c" on commas, trimming each. Empty entries are dropped so a trailing comma is harmless.
+static std::vector<std::string> seedSplitMembers(const std::string& s)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == ',') {
+            size_t b = 0, e = cur.size();
+            while (b < e && (cur[b] == ' ' || cur[b] == '\t')) ++b;
+            while (e > b && (cur[e-1] == ' ' || cur[e-1] == '\t')) --e;
+            if (e > b) out.push_back(cur.substr(b, e - b));
+            cur.clear();
+        } else cur += s[i];
+    }
+    return out;
+}
+
+// The manifest text, generated directly. NOT via the byte-preserving splice mutators (manifestAddDep,
+// manifestSetTopString) — those exist to edit a file a HUMAN owns and every one of them requires the
+// file to already exist; a seed is the one case with no prior bytes to preserve. Nor via kama.json.h's
+// Json, which serializes compact, on one line, which is strictly worse for a file whose first reader is
+// a person.
+//
+// `sources` is emitted for every kind that HAS files, always. A library with src/ and no `sources` is
+// silently unimportable — it builds for its author and fails for every consumer, which is the worst
+// possible default for a template.
+static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version,
+                                const std::vector<std::string>& members)
+{
+    std::string m = "{\n";
+    m += "  \"name\": \""    + jsonEscape(name)    + "\",\n";
+    m += "  \"version\": \"" + jsonEscape(version) + "\"";
+    if (kind == SeedKind::Executable) m += ",\n  \"entry\": \"src/app.kama\",\n  \"sources\": [\"src\"]";
+    else if (kind == SeedKind::Library) m += ",\n  \"sources\": [\"src\"]";
+    else {
+        // A monorepo root is a pure aggregator: it contributes no files of its own, only its members'.
+        // An explicit list rather than a "libs/*" glob — kama does not get to invent a directory name
+        // for somebody else's repository, and the glob is available to anyone who wants it.
+        m += ",\n  \"projects\": [";
+        for (size_t i = 0; i < members.size(); ++i)
+            m += (i ? ", " : "") + std::string("\"") + jsonEscape(members[i]) + "\"";
+        m += "]";
+    }
+    return m + "\n}\n";
+}
+
+int cmdSeed(const std::string& dirArg, const SeedOpts& o)
+{
+    const std::string dir    = dirArg.empty() ? "." : dirArg;
+    const std::string prefix = (dir == ".") ? std::string() : dir + "/";
+
+    // (1) REFUSE FIRST, before a single prompt. Seeding over a real project is destructive in a way
+    // --force must not be able to authorize: a manifest carries dependencies, a toolchain pin and a flag
+    // universe that nothing here could reconstruct.
+    if (fileExists(prefix + "kama.json")) {
+        fprintf(stderr, "kama seed: %skama.json exists — this is already a kama project\n", prefix.c_str());
+        return 1;
+    }
+
+    // (2) ANSWERS. A terminal gets a prompt for whatever no flag already settled; anything else behaves
+    // as --yes. Both conditions matter: --yes wins over a terminal, and a non-terminal needs no --yes.
+    const bool ask = !o.yes && stdinIsTerminal();
+    std::string name = o.nameGiven ? o.name : seedDefaultName(dir);
+    if (ask && !o.nameGiven)    name    = seedAsk("package name", name);
+    std::string version = o.versionGiven ? o.version : "0.1.0";
+    if (ask && !o.versionGiven) version = seedAsk("version", version);
+    std::string kindStr = o.kindGiven ? o.kind : "executable";
+    if (ask && !o.kindGiven)    kindStr = seedAsk("kind (executable/library/monorepo)", kindStr);
+
+    // (3) VALIDATE EVERYTHING, still having written nothing.
+    SeedKind kind;
+    if (!seedParseKind(kindStr, kind)) {
+        fprintf(stderr, "kama seed: unknown kind '%s' (expected executable, library or monorepo)\n",
+                kindStr.c_str());
+        return 2;
+    }
+
+    std::string membersStr = o.members;
+    if (kind == SeedKind::Monorepo && ask && !o.membersGiven)
+        membersStr = seedAsk("members (comma-separated)", membersStr);
+    std::vector<std::string> members = seedSplitMembers(membersStr);
+    if (kind == SeedKind::Monorepo && members.empty()) {
+        fprintf(stderr, "kama seed: --kind monorepo needs --members <a,b,c> — a monorepo root is a list of "
+                        "the projects it composes, and kama does not get to invent their names\n");
+        return 2;
+    }
+    if (kind != SeedKind::Monorepo && !members.empty()) {
+        fprintf(stderr, "kama seed: --members applies to --kind monorepo only\n");
+        return 2;
+    }
+
+    std::string verr;
+    if (!seedValidName(name, kind == SeedKind::Library, verr)) {
+        fprintf(stderr, "kama seed: %s\n", verr.c_str()); return 2;
+    }
+    SemVer sv;
+    if (!parseSemVer(version, sv)) {
+        fprintf(stderr, "kama seed: '%s' is not a MAJOR.MINOR.PATCH version\n", version.c_str()); return 2;
+    }
+    // A member becomes a library, so it is held to the importable rule — and it is checked HERE, with
+    // every other answer, so a bad third member costs nothing rather than half a monorepo.
+    std::set<std::string> seenMember;
+    for (const auto& m : members) {
+        if (!seedValidName(m, true, verr)) {
+            fprintf(stderr, "kama seed: member %s\n", verr.c_str()); return 2;
+        }
+        if (!seenMember.insert(m).second) {
+            fprintf(stderr, "kama seed: member '%s' is listed twice\n", m.c_str()); return 2;
+        }
+    }
+
+    bool agents = o.agents;
+    if (ask && !o.agentsGiven) agents = seedAskYesNo("write AGENTS.md so AI agents know this project?", false);
+
+    // (4) THE WHOLE FILE LIST, built up front and pre-flighted for collisions, so a seed lands entirely
+    // or not at all. embeddedWrite checks per file as it writes, which stops halfway — fine for one file,
+    // wrong for a monorepo whose fourth member collides after three have landed.
+    const std::string ident = importNameOf(name);
+    std::vector<std::pair<std::string, std::string>> files;
+    files.push_back({ "kama.json", seedManifest(kind, name, version, members) });
+    if (kind == SeedKind::Executable)
+        files.push_back({ "src/app.kama", seedSubst(KAMA_SEED_APP, name, ident) });
+    else if (kind == SeedKind::Library)
+        files.push_back({ "src/" + ident + ".kama", seedSubst(KAMA_SEED_LIB, name, ident) });
+    else
+        for (const auto& m : members) {
+            const std::string mi = importNameOf(m);
+            files.push_back({ m + "/kama.json", seedManifest(SeedKind::Library, m, version, {}) });
+            files.push_back({ m + "/src/" + mi + ".kama", seedSubst(KAMA_SEED_LIB, m, mi) });
+        }
+    files.push_back({ ".gitignore", seedSubst(KAMA_SEED_GITIGNORE, name, ident) });
+    files.push_back({ "README.md",  seedSubst(KAMA_SEED_README,    name, ident) });
+
+    if (!o.force) {
+        int clash = 0;
+        for (const auto& f : files)
+            if (fileExists(prefix + f.first)) {
+                fprintf(stderr, "kama seed: %s%s exists\n", prefix.c_str(), f.first.c_str()); ++clash;
+            }
+        if (clash) { fprintf(stderr, "kama seed: nothing written — pass --force to overwrite\n"); return 1; }
+    }
+
+    // (5) WRITE.
+    int written = 0;
+    for (const auto& f : files)
+        if (!embeddedWrite("kama seed", dir, f.first, f.second, o.force, written)) return 1;
+
+    printf("kama seed: %d file%s written.\n", written, written == 1 ? "" : "s");
+
+    // (6) The agent guidance is just the shipped command, called in process (see cmdAgentsInstall). It
+    // prints its own summary, so seed's goes above rather than after it.
+    if (agents) {
+        std::vector<std::string> tools = o.tools;
+        if (o.allTools) {
+            tools.clear();
+            for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) tools.push_back(KAMA_AGENT_STUBS[i].name);
+        }
+        int rc = cmdAgentsInstall(dir, tools, o.skill, o.force);
+        if (rc) return rc;
+    }
+
+    // (7) The next step, which differs by kind — a library has nothing to run, and a monorepo root has
+    // nothing of its own to build.
+    const std::string cd = (dir == ".") ? "" : "cd " + dir + " && ";
+    if (kind == SeedKind::Executable)   printf("  next: %skama run\n", cd.c_str());
+    else if (kind == SeedKind::Library) printf("  next: %skama check src/%s.kama\n", cd.c_str(), ident.c_str());
+    else printf("  next: %skama check %s/src/%s.kama\n", cd.c_str(), members[0].c_str(),
+                importNameOf(members[0]).c_str());
+    return 0;
+}
+
 void usage()
 {
     fprintf(stderr,
@@ -4497,6 +4849,9 @@ void usage()
         "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
+        "  kama seed      [<dir>] [--kind executable|library|monorepo]   turn a directory into a kama project\n"
+        "                  ([--name N] [--version V] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
+        "                   [--yes] [--force]; interactive when stdin is a terminal, else it takes the defaults)\n"
         "  kama agents install [<dir>]         write AGENTS.md so an AI agent knows this project + `kama query`\n"
         "                  ([--claude] [--tool <name>]... [--all-tools] [--skill] [--force];\n"
         "                   `kama agents list` shows the tools, `kama agents print` writes to stdout)\n"
@@ -5388,6 +5743,39 @@ int main(int argc, char** argv)
         // front-end-as-library analysis path to publish live diagnostics. Takes no input file (it reads
         // buffers from the editor over the wire), so it returns here before the input/flag handling below.
         return runLspServer(argv[0]);   // argv[0] locates the stdlib for loading imported modules
+    }
+
+    if (subcommand == "seed") {
+        // An early-return command: it touches no .kama source, so it returns before the shared
+        // input/flag handling (same reason as `agents` and `lsp`). Deliberately NOT in maybeReExec's
+        // run-in-place list either: the templates and the manifest shape are version-specific, and
+        // seed runs where there is no manifest YET, so resolvePin walks up — which is what makes a new
+        // member inside an already-pinned monorepo get that monorepo's toolchain.
+        SeedOpts o;
+        std::string dir;
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            if      (a == "--name"    && i + 1 < argc) { o.name    = argv[++i]; o.nameGiven    = true; }
+            else if (a == "--version" && i + 1 < argc) { o.version = argv[++i]; o.versionGiven = true; }
+            else if (a == "--kind"    && i + 1 < argc) { o.kind    = argv[++i]; o.kindGiven    = true; }
+            else if (a == "--members" && i + 1 < argc) { o.members = argv[++i]; o.membersGiven = true; }
+            else if (a == "--agents")                  { o.agents = true;  o.agentsGiven = true; }
+            else if (a == "--no-agents")               { o.agents = false; o.agentsGiven = true; }
+            // Every tool selector implies --agents: asking for CLAUDE.md and not getting AGENTS.md,
+            // which is the file it points AT, would be a pointer to nothing.
+            else if (a == "--claude")   { o.tools.push_back("claude"); o.agents = true; o.agentsGiven = true; }
+            else if (a == "--tool" && i + 1 < argc) { o.tools.push_back(argv[++i]); o.agents = true; o.agentsGiven = true; }
+            else if (a == "--all-tools") { o.allTools = true; o.agents = true; o.agentsGiven = true; }
+            else if (a == "--skill")     { o.skill = true;    o.agents = true; o.agentsGiven = true; }
+            else if (a == "--yes" || a == "-y")        o.yes = true;
+            else if (a == "--force")                   o.force = true;
+            else if (!a.empty() && a[0] == '-') {
+                fprintf(stderr, "kama seed: unknown option '%s'\n", a.c_str()); seedUsage(); return 2;
+            }
+            else if (dir.empty())                      dir = a;
+            else { fprintf(stderr, "kama seed: unexpected arg '%s'\n", a.c_str()); return 2; }
+        }
+        return cmdSeed(dir, o);
     }
 
     if (subcommand == "agents") {
