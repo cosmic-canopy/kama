@@ -259,7 +259,7 @@ grep -qi "conflict" "$tmp/e10" || { echo "check-packages: FAIL — conflict not 
 #     `main`, builds + execs it, and FORWARDS the exit code. The explicit `run <file>` form does the same.
 t11="$tmp/t11"; mkdir -p "$t11/src"
 cat > "$t11/kama.json" <<J
-{ "name": "t11", "version": "0.1.0", "main": "src/app.kama",
+{ "name": "t11", "version": "0.1.0", "entry": "src/app.kama",
   "dependencies": { "geo": { "git": "file://$geo", "rev": "v1.0.0" } } }
 J
 printf 'import geo::{area};\nfn int32 main() { return area(); }\n' > "$t11/src/app.kama"   # 30
@@ -273,7 +273,7 @@ if ( cd "$t11" && "$KAMA" run src/app.kama ) >"$tmp/r11b.out" 2>&1; then RC=0; e
 # 12. kama run + the --dev boundary: a dev-dep-importing entry runs under --dev and FAILS to resolve without.
 t12="$tmp/t12"; mkdir -p "$t12/src"
 cat > "$t12/kama.json" <<J
-{ "name": "t12", "version": "0.1.0", "main": "src/app.kama",
+{ "name": "t12", "version": "0.1.0", "entry": "src/app.kama",
   "dev-dependencies": { "testkit": { "git": "file://$tk", "rev": "v1.0.0" } } }
 J
 printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t12/src/app.kama"   # 7
@@ -290,15 +290,25 @@ if ( cd "$t11" && "$KAMA" run --target wasm ) >"$tmp/r13.out" 2>&1; then
     echo "check-packages: FAIL — kama run --target wasm was not rejected" >&2; exit 1; fi
 grep -qi "native-only" "$tmp/r13.out" || { echo "check-packages: FAIL — run --target wasm error unclear:" >&2; sed 's/^/  /' "$tmp/r13.out" >&2; exit 1; }
 
-# 14. kama run with no file and no resolvable entry → a clear error (no kama.json; and kama.json without `main`).
+# 14. kama run with no file and no resolvable entry → a clear error (no kama.json; and kama.json without `entry`).
 t14="$tmp/t14"; mkdir -p "$t14"
 if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14a.out" 2>&1; then
     echo "check-packages: FAIL — kama run in an empty dir was not rejected" >&2; exit 1; fi
 grep -qi "no kama.json" "$tmp/r14a.out" || { echo "check-packages: FAIL — no-manifest run error unclear:" >&2; sed 's/^/  /' "$tmp/r14a.out" >&2; exit 1; }
 printf '{ "name": "t14", "version": "0.1.0" }\n' > "$t14/kama.json"
 if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14b.out" 2>&1; then
-    echo "check-packages: FAIL — kama run with no \"main\" was not rejected" >&2; exit 1; fi
-grep -qi 'no "main"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-main run error unclear:" >&2; sed 's/^/  /' "$tmp/r14b.out" >&2; exit 1; }
+    echo "check-packages: FAIL — kama run with no \"entry\" was not rejected" >&2; exit 1; fi
+grep -qi 'no "entry"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-entry run error unclear:" >&2; sed 's/^/  /' "$tmp/r14b.out" >&2; exit 1; }
+
+# 14b. The pre-1.0 spelling. `main` is NOT accepted (one way to do a thing), but a manifest that visibly
+#      names an entry must not be told it has none — the error has to name the rename. A prose claim that
+#      something is rejected has no guard unless a case proves it, so this is that case.
+t14c="$tmp/t14c"; mkdir -p "$t14c/src"
+printf 'fn int32 main() { return 0; }\n' > "$t14c/src/app.kama"
+printf '{ "name": "t14c", "version": "0.1.0", "main": "src/app.kama" }\n' > "$t14c/kama.json"
+if ( cd "$t14c" && "$KAMA" run ) >"$tmp/r14c.out" 2>&1; then
+    echo "check-packages: FAIL — kama run accepted the legacy \"main\" key" >&2; exit 1; fi
+grep -q 'now "entry"' "$tmp/r14c.out" || { echo "check-packages: FAIL — legacy-main error does not name the rename:" >&2; sed 's/^/  /' "$tmp/r14c.out" >&2; exit 1; }
 
 # ---- M3.0: SemVer version ranges (git+version, no rev) -----------------------------------------------
 # A single repo tagged across several versions; each tagged commit returns a version-distinguishable value
@@ -714,7 +724,7 @@ KAMA
 # The app declares only what IT imports. `config` therefore reaches the resolver for the first time as a
 # TRANSITIVE request from `net` — a non-root requestor, which is the case the top-level-only rule refused.
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "main": "main.kama",
+{ "name": "server", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } } }
 JSON
 printf 'import net::{listenPort};\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/main.kama"
@@ -737,7 +747,7 @@ if ! "$KAMA" check "$ws/libs/net/net.kama" >"$tmp/ws2.out" 2>&1; then
 #     vs net's `../config`). Paths are relative to the manifest that declared them, so the two must
 #     canonicalize to one package and dedup — comparing the spellings reports "require different sources".
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "main": "main.kama",
+{ "name": "server", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "config": { "path": "../../libs/config" },
                     "net":    { "path": "../../libs/net" } } }
 JSON
@@ -767,7 +777,7 @@ cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
 #     gate is the `projects` declaration and not mere directory adjacency. (The app is back to declaring
 #     only `net`, so `config` is again a first-encounter transitive request.)
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "main": "main.kama",
+{ "name": "server", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } } }
 JSON
 mv "$ws/kama.json" "$tmp/ws-root.bak"
@@ -779,7 +789,7 @@ mv "$tmp/ws-root.bak" "$ws/kama.json"
 #     declares it. That builds where it sits and nowhere else, so the BUILD FAILS and names the exact line
 #     to add. A hard error — a guarantee nobody is forced to honor is not a guarantee.
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "main": "main.kama",
+{ "name": "server", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "config": { "path": "../../libs/config" },
                     "net":    { "path": "../../libs/net" } } }
 JSON
@@ -825,7 +835,7 @@ printf 'namespace geodep;\nimport mathx::{two};\nexport { area };\nfn int32 area
 ( cd "$fr/geosrc" && git init -q . && git add -A \
   && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
 cat > "$fr/app/kama.json" <<JSON
-{ "name": "frapp", "version": "0.1.0", "main": "main.kama",
+{ "name": "frapp", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "geodep": { "git": "file://$fr/geosrc", "rev": "v1.0.0" },
                     "mathx":  { "path": "../mathx" } } }
 JSON
@@ -870,7 +880,7 @@ type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } 
 fn int32 viaMarker<T: Marker>(ref T v) { return v.mark(); }
 EOF
 cat > "$dc/app/kama.json" <<JSON
-{ "name": "dupapp", "version": "0.1.0", "main": "main.kama",
+{ "name": "dupapp", "version": "0.1.0", "entry": "main.kama",
   "dependencies": { "marklib": { "path": "../lib" } } }
 JSON
 cat > "$dc/app/main.kama" <<'EOF'

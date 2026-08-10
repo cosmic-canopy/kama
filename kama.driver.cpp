@@ -1683,7 +1683,11 @@ struct ManifestReader {
     std::set<std::string>& defaults;
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
-    std::string* mainOut = nullptr;                       // set to capture the `main` entry field (else skipped)
+    std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
+    // Set to notice a manifest still spelling the entry field `main` (renamed pre-1.0). Nothing ACCEPTS
+    // the old key — one way to do a thing — but `kama run` needs to tell "you have no entry" apart from
+    // "your entry is under the old name", which are the same silence to a reader looking at the file.
+    bool* sawLegacyMainOut = nullptr;
     std::vector<std::string>* sourcesOut  = nullptr;
     std::vector<std::string>* projectsOut = nullptr;
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
@@ -2066,7 +2070,10 @@ struct ManifestReader {
             else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
             else if (key == "sources" && sourcesOut) { if (!stringArray(*sourcesOut)) return false; }  // LSP project scope
             else if (key == "projects" && projectsOut) { if (!stringArray(*projectsOut)) return false; } // sub-projects
-            else if (key == "main" && mainOut) { if (!str(*mainOut)) return false; }   // entry `.kama` (read by `kama run`)
+            else if (key == "entry" && entryOut) { if (!str(*entryOut)) return false; }   // entry `.kama` (read by `kama run`)
+            // The pre-1.0 spelling. Not accepted — skipped like any unknown key — but remembered, so the
+            // `kama run` failure can name the rename instead of claiming there is no entry at all.
+            else if (key == "main" && sawLegacyMainOut) { *sawLegacyMainOut = true; if (!skipValue()) return false; }
             else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
             else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
             else if (key == "version" && versionOut) { if (!str(*versionOut)) return false; }
@@ -2188,17 +2195,20 @@ static bool loadManifestLocalInstall(const std::string& path, std::map<std::stri
     return true;
 }
 
-// Load a `kama.json` manifest's `main` entry field (the entry `.kama`, relative to the manifest). Reuses
-// ManifestReader; `mainOut` is left empty if the field is absent. Returns false + sets `err` on malformed
-// JSON. (M2.3 — read by `kama run` to resolve the entry when no file is passed.)
-static bool loadManifestMain(const std::string& path, std::string& mainOut, std::string& err)
+// Load a `kama.json` manifest's `entry` field (the entry `.kama`, relative to the manifest). Reuses
+// ManifestReader; `entryOut` is left empty if the field is absent. `sawLegacyMain` reports a manifest
+// still using the pre-1.0 name `main`, so the caller can name the rename rather than the absence.
+// Returns false + sets `err` on malformed JSON. (M2.3 — read by `kama run` when no file is passed.)
+static bool loadManifestEntry(const std::string& path, std::string& entryOut, bool& sawLegacyMain,
+                              std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.mainOut = &mainOut;
+    r.entryOut = &entryOut;
+    r.sawLegacyMainOut = &sawLegacyMain;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -4405,7 +4415,7 @@ void usage()
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
-        "                  (build the entry .kama — explicit <file>, else the manifest \"main\" — and run it; native-only)\n"
+        "                  (build the entry .kama — explicit <file>, else the manifest \"entry\" — and run it; native-only)\n"
         "  kama check     <in.kama>... [--each] [--json]   analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis. NOT a full\n"
         "                   type check: an expression type mismatch is caught by `kama build`, not here.\n"
@@ -5571,17 +5581,25 @@ int main(int argc, char** argv)
         if (manifest.empty()) {
             fprintf(stderr, "kama run: no input file and no kama.json in this directory\n"); return 2;
         }
-        std::string mainRel, merr;
-        if (!loadManifestMain(manifest, mainRel, merr)) {
+        std::string entryRel, merr;
+        bool sawLegacyMain = false;
+        if (!loadManifestEntry(manifest, entryRel, sawLegacyMain, merr)) {
             fprintf(stderr, "kama run: %s: %s\n", manifest.c_str(), merr.c_str()); return 2;
         }
-        if (mainRel.empty()) {
-            fprintf(stderr, "kama run: %s has no \"main\" entry (add \"main\": \"src/app.kama\") or pass a file\n",
-                    manifest.c_str());
+        if (entryRel.empty()) {
+            // Two silences that look identical in the file. Distinguish them, or a manifest that
+            // visibly names an entry gets told it has none.
+            if (sawLegacyMain)
+                fprintf(stderr, "kama run: %s uses \"main\", which is now \"entry\" — npm's `main` names a "
+                                "library's entry point for importers, kama's names the `kama run` target. "
+                                "Rename the key.\n", manifest.c_str());
+            else
+                fprintf(stderr, "kama run: %s has no \"entry\" (add \"entry\": \"src/app.kama\") or pass a file\n",
+                        manifest.c_str());
             return 2;
         }
         std::string mdir = dirName(manifest);
-        inputs.push_back(mdir == "." ? mainRel : mdir + "/" + mainRel);
+        inputs.push_back(mdir == "." ? entryRel : mdir + "/" + entryRel);
     }
 
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }

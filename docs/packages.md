@@ -21,7 +21,7 @@ myapp/
 {
   "name": "myapp",
   "version": "0.1.0",
-  "main": "src/app.kama"
+  "entry": "src/app.kama"
 }
 ```
 
@@ -32,7 +32,11 @@ fn int32 main() {
 }
 ```
 
-Build and run it in one step — `kama run` uses the manifest's `"main"` when you don't pass a
+**`entry`, not `main`** — the key names the file `kama run` builds when you don't name one, which is
+Cargo's `[[bin]] path`. npm's `main` means the opposite thing: the entry point *importers* get. kama
+expresses that with `sources` and `export` instead, so the two never share a name.
+
+Build and run it in one step — `kama run` uses the manifest's `"entry"` when you don't pass a
 file:
 
 ```sh
@@ -62,7 +66,7 @@ and with it the cap.
 {
   "name": "myapp",
   "version": "0.1.0",
-  "main": "src/app.kama",
+  "entry": "src/app.kama",
   "sources": ["src"]
 }
 ```
@@ -172,7 +176,7 @@ kama pkg add utils --path ../utils        # a sibling checkout
 {
   "name": "myapp",
   "version": "0.1.0",
-  "main": "src/app.kama",
+  "entry": "src/app.kama",
   "dependencies": {
     "geo":   { "git": "https://example.com/geo.git", "rev": "v1.0.0" },
     "mathx": { "url": "https://example.com/mathx-1.2.0.tar.gz" },
@@ -486,7 +490,7 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 
 | Command | What it does |
 |---|---|
-| `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"main"`) and run it; native-only. |
+| `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"entry"`) and run it; native-only. |
 | `kama build <file>… [--dev]` | Build a native/wasm/embedded artifact. |
 | `kama pkg install [<dir>] [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
 | `kama pkg add [--dev] <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |

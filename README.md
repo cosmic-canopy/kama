@@ -106,7 +106,7 @@ kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless:
 # Optimized release build (stripped, NDEBUG, no #line):
 kama build hello.kama --release
 
-# Build the project entry (from kama.json "main") and run it in one step:
+# Build the project entry (from kama.json "entry") and run it in one step:
 kama run                      # native-only; `kama run <file>` also works
 ```
 

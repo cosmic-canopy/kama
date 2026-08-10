@@ -186,7 +186,7 @@ type value Point {
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
-{ "name": "app", "version": "0.1.0", "main": "app.kama", "sources": ["."],
+{ "name": "app", "version": "0.1.0", "entry": "app.kama", "sources": ["."],
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
 cat > "$dep/app/app.kama" <<'KAMA'
