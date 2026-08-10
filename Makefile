@@ -71,7 +71,8 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.lsp.o    \
             kama.driver.o \
             kama.prelude.gen.o \
-            kama.agents.gen.o)
+            kama.agents.gen.o \
+            kama.seed.gen.o)
 
 # The built-in kama sources embedded into the binary (prelude core + the always-in-scope smart-ptr
 # triad). tools/embed_prelude.sh wraps them in raw-string literals -> build/kama.prelude.gen.cpp.
@@ -94,6 +95,18 @@ AGENTS_STUBS = $(sort $(wildcard agents/stubs/*.md))
 $(BUILD)/kama.agents.gen.cpp: $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS) tools/embed_agents.sh | $(BUILD)
 	sh tools/embed_agents.sh $@ $(AGENTS_MD) $(AGENTS_SKILL) $(AGENTS_STUBS)
 
+# The project templates `kama seed` writes, embedded for the same reason as the prelude and the agent
+# files: a `--no-std` install ships only bin/kama. Positional, not a wildcard — the four are four roles
+# kama.seed.h names one by one (see tools/embed_seed.sh). seed/gitignore is DOTLESS on purpose: a literal
+# seed/.gitignore would be a real gitignore governing seed/.
+SEED_APP       = seed/app.kama
+SEED_LIB       = seed/lib.kama
+SEED_GITIGNORE = seed/gitignore
+SEED_README    = seed/README.md
+
+$(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README) tools/embed_seed.sh | $(BUILD)
+	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README)
+
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
 # baked into the source, redirecting generated files into build/.
 $(BUILD)/kama.parser.cpp $(BUILD)/kama.parser.hpp: kama.y | $(BUILD)
@@ -105,7 +118,8 @@ $(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: kama.l $(BUILD)/kama.parser.hpp
 # Header dependencies (the implicit rules can't see #includes). Listing all
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
-HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h kama.query.h kama.lsp.h
+HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h kama.query.h kama.lsp.h \
+          kama.agents.h kama.seed.h kama.json.h
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.

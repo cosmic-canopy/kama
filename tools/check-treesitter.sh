@@ -168,7 +168,7 @@ done
 # ---- 5. THE WHOLE-CORPUS ORACLE ----------------------------------------------------------------------
 # ⚠️ `find` must be -type f: tests/pkg_path_dep.d/ contains a DIRECTORY literally named `.kama`, and
 # feeding it to the CLI aborts the whole run with "Is a directory (os error 21)".
-find "$ROOT/tests" "$ROOT/lib" "$ROOT/examples" "$ROOT/prelude" -type f -name '*.kama' 2>/dev/null |
+find "$ROOT/tests" "$ROOT/lib" "$ROOT/examples" "$ROOT/prelude" "$ROOT/seed" -type f -name '*.kama' 2>/dev/null |
     sed "s|^$ROOT/||" | sort > "$tmp/all"
 ncorp=$(wc -l < "$tmp/all" | tr -d ' ')
 

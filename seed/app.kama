@@ -1,0 +1,6 @@
+// The project entry — `kama run` builds this and runs it. What `main` returns is the exit code.
+fn int32 main()
+{
+    println(s: "hello from KAMA_SEED_NAME");
+    return 0;
+}

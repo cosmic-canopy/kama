@@ -1,0 +1,10 @@
+// The library surface. `namespace` must match this file's path under `sources`, and `export` is what
+// importers can see: `import KAMA_SEED_IDENT::{ answer };`
+namespace KAMA_SEED_IDENT;
+
+export { answer };
+
+fn int32 answer()
+{
+    return 42;
+}
