@@ -231,28 +231,33 @@ Re-grep before trusting any of these — line refs in this repo's prose drift, a
 
 ## Staging
 
-1. ~~Measure the front-end share.~~ **DONE** — 40.5 % off an httpd build, see above. Start at step 2.
+1. ~~Measure the front-end share.~~ **DONE — 40.5 %, campaign is GO. Start at step 2.**
 2. **Symbol→file index per directory module**, built by parsing the directory (index the raw parse —
    trap 9). It must map **every top-level declared name**, not just the `export` list, because siblings
    reach each other's unexported names through the shared namespace. No behavior change yet — assert
    the index finds every symbol every current import names, across the whole corpus.
-2½. **The reference-driven closure.** Fixpoint: seed with the files defining the named symbols; repeat
-   pulling in any sibling defining a top-level name a kept file references, plus `import` edges, until
-   stable. Validate against the corpus BEFORE wiring it to resolution — for every current program, the
-   computed needed-set must be a superset of what is actually required. `examples/httpd` is the
-   reference case: it must land on **17** units.
-3. **Prune at resolution**, behind an env escape hatch (`KAMA_NO_PRUNE=1`) so the whole suite can be
+3. **The reference-driven closure** (the part the brief originally missed — see *the import graph is
+   NOT the closure*). Fixpoint: seed with the files defining the named symbols; repeat, pulling in any
+   sibling that defines a top-level name a kept file references, plus `import` edges, until stable.
+   Validate against the corpus BEFORE wiring it to resolution — for every current program the computed
+   needed-set must be a superset of what is actually required. `examples/httpd` is the reference case:
+   it must land on **17** units. Fix `provided` to be per-symbol in the same step.
+4. **Prune at resolution**, behind an env escape hatch (`KAMA_NO_PRUNE=1`) so the whole suite can be
    A/B'd on ONE binary — the pattern `KAMA_NO_BATCH` and `KAMA_BUILD_JOBS` both proved.
-4. **Guard** (`tools/check-closure-pruning.sh`, glob-enrolled): httpd resolves to N units not 32; the
-   process-global singletons still exist exactly once; a program's behavior is identical pruned vs not,
-   across the fixture corpus; `--release` unaffected in output.
-5. **On by default**, `./dev matrix` green, record the measured delta in ROADMAP §9 and the resolution
+5. **Guard** (`tools/check-closure-pruning.sh`, glob-enrolled): httpd resolves to **17** units, not 32;
+   the process-global singletons still exist exactly once; a program's behavior is identical pruned vs
+   not, across the fixture corpus; `--release` unaffected in output.
+6. **On by default**, `./dev matrix` green, record the measured delta in ROADMAP §9 and the resolution
    rule in SPEC.
 
 ## What this does NOT fix
 
-The LSP's per-keystroke floor is ~85 ms, **86 % of it `CEmitter::analyze`** over the closure plus
-prelude. Pruning shrinks the closure, so it should cut that substantially — but the **prelude** share
-is a fixed floor pruning cannot touch, and analysis is still re-run from scratch every keystroke. If
-the floor is still uncomfortable after this, the remaining fix is incremental/cached *analysis*
-(ROADMAP §10), which is a different and much larger project.
+The LSP's per-keystroke floor. Pruning shrinks the closure, so it should cut that substantially — but
+the **prelude** share is a fixed floor pruning cannot touch, and analysis is still re-run from scratch
+every keystroke. If the floor is still uncomfortable after this, the remaining fix is
+incremental/cached *analysis* (ROADMAP §10), a different and much larger project.
+
+⚠️ **The ~85 ms / 86 %-`analyze` figure this used to quote is DEAD — do not reuse it.** It predates
+ROADMAP §9 lever 7, and `analyze` alone got 5.4× faster when the compiler started being built
+optimized. Nobody has re-measured the floor since. Take the measurement before deciding the LSP needs
+anything at all.

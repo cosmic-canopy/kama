@@ -51,13 +51,18 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 | 8 | stdlib parity M2b / M2c | §3 | |
 
 **Why closure pruning goes first, ahead of the tooling.** Two reasons, and the second is the deciding one.
-It is the largest remaining build-time lever — **20 of `examples/httpd`'s 32 translation units contribute
-no live symbol**, and those dead units cost *more* C-compile wall-clock than the live ones (0.15 s vs
-0.12 s at `-j 10`), because a near-empty generic TU still parses the runtime headers and the whole-program
-`gen.h`. It is also the only item anywhere in this file that cuts the front end, the C compile **and**
-§10's per-keystroke LSP floor at the same time. And it **changes module semantics** — a compile error in an
-unused sibling file stops failing the build — so it belongs on the pre-1.0 side of the API-stability line,
-not after the tag.
+It is the largest remaining build-time lever, and unlike every earlier entry here that claim is **measured,
+not estimated**: hand-pruning httpd's closure takes a `-j 10` build from **0.37 s to 0.22 s — 40.5 %**, and
+32 translation units to 17. Dead units cost *more* C-compile wall-clock than live ones (0.15 s vs 0.12 s),
+because a near-empty generic TU still parses the runtime headers and the whole-program `gen.h`. And it
+**changes module semantics** — a compile error in an unused sibling file stops failing the build — so it
+belongs on the pre-1.0 side of the API-stability line, not after the tag.
+
+Its step 1 was a measurement gate, and taking it found something larger than the campaign: **the compiler
+had never been built with an `-O` flag** (§9 lever 7, shipped). That is why the numbers above differ from
+earlier drafts of this paragraph, and why the campaign now prices *better* than it did — optimizing the
+front end left the external C compile untouched, so the C compile dominates a build and pruning cuts it
+hardest.
 
 **Why 2–4 come before the remaining language campaigns:** they are the work that makes every campaign after
 them cheaper and less error-prone — one command that seeds a project with the tooling wired up, a repo
@@ -685,10 +690,11 @@ rather than here, so there is one number to keep current. Forward work:
     compiler exists) uses clang, which has no cache, and gets the full `-j` win.
   - **An on-disk front-end cache does NOT fix the LSP's per-keystroke floor**, which is what the old brief
     claimed was its main justification. The LSP already caches parses in-process
-    (`kama.driver.cpp` `g_parseCacheMap`); its measured steady state is **~85 ms/keystroke, 86 % of it
-    `CEmitter::analyze`** over the whole closure plus prelude. Serializing the AST and re-running collect
-    leaves that untouched. The keystroke floor needs *incremental or cached analysis*, and nothing else in
-    this section addresses it — see §10.
+    (`kama.driver.cpp` `g_parseCacheMap`); its steady state was **~85 ms/keystroke, 86 % of it
+    `CEmitter::analyze`** over the whole closure plus prelude — ⚠️ **a pre-lever-7 number, now stale and
+    not re-measured.** Serializing the AST and re-running collect leaves that untouched either way, which
+    is the point that still stands. Whether the floor needs *incremental or cached analysis* is now an
+    open question rather than a settled one — see §10.
   - **Declined: `kama build --each`** (batch the fixture builds in one process). Priced at ~9-10 s off a
     129 s suite for a 377-line refactor plus a harness restructure, and it gives users nothing. Not worth
     it; recorded so it is not re-derived.
