@@ -96,8 +96,18 @@ kama query src/app.kama --search Widget --project --json | jq -r '.results[] | "
 returns `no type` where you expected a hit, try one column left before concluding anything.
 
 **Each invocation re-analyzes the prelude and every imported `std::` module** — a fixed ~0.05–0.35 s
-per process depending on imports, whether or not you use a symbol from them. Ask several questions
-about one file in one go rather than shelling out per identifier in a loop.
+per process depending on imports, whether or not you use a symbol from them. Answering a question off
+that analysis costs well under a millisecond, so the analysis *is* the cost of a query.
+
+So ask several questions in one go rather than shelling out per identifier in a loop — modes are
+repeatable and combinable, answered in argv order from one analysis:
+
+```sh
+kama query src/app.kama --def 24:9 --type 24:9 --refs 24:9   # ~0.23s; as three processes, ~0.68s
+```
+
+Each answer is preceded by a `## <question>` line; under `--json` you get one `"mode":"batch"`
+envelope whose records each carry an `ask` echo. One question on its own is unchanged.
 
 ## When to stop using this
 

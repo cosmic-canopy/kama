@@ -24,6 +24,17 @@ kama query <file> --diagnostics               # analysis diagnostics, structured
 Add `--json` to any of them for one stable envelope: `{"schema":1,"mode":…,"file":…,"results":[…]}`.
 Coordinates are **1-based line, 0-based column** — do not assume both are 1-based.
 
+**Ask everything about a file in ONE command.** Modes are repeatable and combinable, answered in the
+order given from a single analysis — and that analysis is essentially the entire cost of a query, so
+this is a large saving, not a tidy one:
+
+```sh
+kama query <file> --def 24:9 --type 24:9 --refs 24:9   # one analysis, three answers
+```
+
+Each answer is preceded by a `## <question>` line (under `--json`, each record carries an `ask` echo).
+A lone question prints exactly what it always did.
+
 Reach for `--search` first. It is the only mode that takes a name rather than a cursor position, so
 it is usually the cheapest way in. **Never invent a function signature** — `--search` to find it,
 then `--complete` or `--type` to read its real parameter names.

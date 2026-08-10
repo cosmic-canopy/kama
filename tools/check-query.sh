@@ -35,12 +35,115 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # Keyed on fixture + flags; the cksum keeps the filename short and the sanitized prefix keeps it legible.
 # Failures are cached too, deliberately: the output IS the result, exit status was already discarded.
 qcache=$(mktemp -d); trap 'rm -rf "$tmp" "$qcache"' EXIT
+qkey() { printf '%s|%s' "$1" "$2" | cksum | tr -cd '0-9'; }
 runq() {
-    _f="$qcache/$(printf '%s|%s' "$FIXTURE" "$1" | cksum | tr -cd '0-9')"
+    _f="$qcache/$(qkey "$FIXTURE" "$1")"
     # shellcheck disable=SC2086
     [ -f "$_f" ] || "$KAMA" query "$FIXTURE" $1 >"$_f" 2>&1 || true
     cat "$_f"
 }
+
+# ---- batch preload -------------------------------------------------------------------------------
+# Memoizing collapsed 233 assertions to 131 distinct queries, but 131 queries were still 131 PROCESSES,
+# each re-parsing its fixture's whole `std` import closure to answer one question. `kama query` now takes
+# many questions per invocation and answers them from ONE analysis, in argv order. Asked per FIXTURE
+# instead of per assertion, those 131 analyses become ~15.
+#
+# The question list is DERIVED FROM THIS FILE rather than written out beside it. A hand-maintained list
+# would drift the moment someone added an assertion, and drift here is invisible — the guard would still
+# pass, just slowly. The scan is deliberately conservative: anything it cannot read literally (a shell
+# variable, a quoted argument, an indented line inside a subshell) is simply left out, and `runq` answers
+# it the old way. A miss therefore costs time and never correctness, which is the property that makes
+# deriving-by-parsing acceptable at all.
+#
+# CHECK_QUERY_NO_PRELOAD=1 turns it off, which is how the reconstruction is verified — with it set every
+# assertion goes through runq one process at a time, and the guard's output must be byte-identical to a
+# preloaded run. That is the only proof that a batched answer is the same answer. Run it after touching
+# either side of this:
+#
+#     sh tools/check-query.sh                     2>&1 | grep -v '^check-query: preloaded' >/tmp/a
+#     CHECK_QUERY_NO_PRELOAD=1 sh tools/check-query.sh 2>&1 | grep -v '^check-query: preloaded' >/tmp/b
+#     diff /tmp/a /tmp/b        # must be empty (the preloaded-count line is the one expected difference)
+preload() {
+    [ -z "${CHECK_QUERY_NO_PRELOAD:-}" ] || return 0
+    plan="$tmp/preload.plan"
+    # fixture \t --project? \t the args string runq would key on \t the args to actually pass
+    awk -v root="$ROOT" '
+        function emit(  i, toks, n, proj, key, qa) {
+            n = split(argsrc, toks, " ")
+            if (n == 0 || fixture == "") return
+            proj = (toks[1] == "--project") ? 1 : 0
+            key = ""; qa = ""
+            for (i = 1; i <= n; i++) {
+                key = key " " toks[i]
+                if (!(i == 1 && proj)) qa = qa (qa == "" ? "" : " ") toks[i]
+            }
+            if (qa == "") return                       # --project alone is not a question
+            printf "%s\t%d\t%s\t%s\n", fixture, proj, key, qa
+        }
+        # Only column-1 assignments: an indented one is inside a subshell whose value we cannot resolve.
+        /^FIXTURE=/ {
+            f = $0; sub(/^FIXTURE=/, "", f); gsub(/"/, "", f)
+            if (f ~ /\$ROOT/) { sub(/\$ROOT/, root, f); fixture = f }
+            else              { fixture = "" }         # e.g. "$dep/..." — unresolvable here
+            next
+        }
+        # Only column-1 assertions, for the same reason.
+        /^(expect|reject) / {
+            line = $0
+            sub(/^(expect|reject)[ \t]+/, "", line)
+            i = index(line, " -- ")
+            if (i == 0) next
+            argsrc = substr(line, 1, i - 1)
+            if (argsrc ~ /[$"'"'"'`]/) next            # a substitution or a quoted arg: leave it to runq
+            emit()
+        }
+    ' "$0" | sort -u >"$plan"
+    [ -s "$plan" ] || return 0
+
+    # One group per (fixture, --project): --project widens the unit set, so it is a different analysis.
+    awk -F'\t' -v d="$tmp/plg_" '
+        { g = $1 SUBSEP $2
+          if (!(g in n)) { n[g] = ++c; printf "%s\t%s\n", $1, $2 >(d n[g]) }
+          printf "%s\t%s\n", $3, $4 >>(d n[g]) }
+    ' "$plan"
+
+    for g in "$tmp"/plg_*; do
+        [ -f "$g" ] || continue
+        pf=$(head -1 "$g" | cut -f1)
+        pp=$(head -1 "$g" | cut -f2)
+        nq=$(( $(wc -l <"$g") - 1 ))
+        [ "$nq" -ge 2 ] || continue                    # one question gains nothing from a batch
+        [ -f "$pf" ] || continue
+        qargs=$(tail -n +2 "$g" | cut -f2 | tr '\n' ' ')
+        [ "$pp" = 1 ] && qargs="--project $qargs"
+        # shellcheck disable=SC2086
+        "$KAMA" query "$pf" $qargs >"$tmp/plout" 2>&1 || true
+
+        # Split on the `## <question>` delimiter lines. Anything BEFORE the first one is stderr the
+        # analysis wrote once (a warning); a solo run would have shown it with every answer, so it is
+        # prepended to each chunk — the reconstruction has to match what runq would have cached, not
+        # merely resemble it.
+        rm -f "$tmp"/plc_* "$tmp/plpre"
+        awk -v d="$tmp/plc_" -v pre="$tmp/plpre" '
+            /^## / { k++; next }
+            { if (k == 0) print >pre; else print >(d k) }
+            END { print k >"/dev/stderr" }
+        ' "$tmp/plout" 2>"$tmp/plcount"
+        [ "$(cat "$tmp/plcount")" = "$nq" ] || continue   # not the shape we expect: leave it to runq
+
+        i=0
+        tail -n +2 "$g" | cut -f1 | while IFS= read -r ka; do
+            i=$((i + 1))
+            { [ -f "$tmp/plpre" ] && cat "$tmp/plpre"; [ -f "$tmp/plc_$i" ] && cat "$tmp/plc_$i"; } \
+                >"$qcache/$(qkey "$pf" "$ka")" 2>/dev/null || true
+        done
+    done
+}
+preload
+# Say how much was preloaded. A silent fallback — a changed assertion shape the scan stops recognizing,
+# an unreadable "$0" under some runner — would otherwise look exactly like everything working, just slow.
+echo "check-query: preloaded $(find "$qcache" -type f | wc -l | tr -d ' ') answers in $(find "$tmp" -name 'plg_*' | wc -l | tr -d ' ') batched analyses"
 
 # expect <flags...> -- <substring>: run `kama query $FIXTURE <flags>` and assert the output contains
 # <substring>. $FIXTURE is reassigned partway down for the M3.4 block — the helpers read it at call time.
@@ -805,6 +908,87 @@ for cov in "$ROOT"/tests/query/coverage/*.kama; do
         fail=1
     fi
 done
+
+# ---------------------------------------------------------------------------------------------------
+# MANY QUESTIONS, ONE ANALYSIS.
+#
+# `kama query` takes any number of modes per invocation and answers them from a single analysis. That is
+# what the preload at the top of this file rides on, and it is a capability an agent uses directly, so it
+# is pinned here rather than only implied by the guard getting faster.
+#
+# These run their own processes on purpose: each asserts something about the SHAPE of a whole invocation
+# (delimiters, ordering, exit codes), which is not a thing runq's per-question cache can hold.
+echo "check-query: multi-query (N questions, one analysis)"
+MQ="$ROOT/tests/query/shapes.kama"
+
+# Argv order IS answer order, and each answer is delimited by the question that produced it. Without the
+# delimiter the six magic empties ("no definition", "no type", …) would be unattributable.
+mq=$("$KAMA" query "$MQ" --def 6:11 --type 6:11 --refs 7:17 2>&1)
+mq_order=$(printf '%s\n' "$mq" | grep '^## ' | tr '\n' '|')
+if [ "$mq_order" = "## --def 6:11|## --type 6:11|## --refs 7:17|" ]; then
+    echo "  ok: three questions answered in argv order, each delimited"
+else
+    echo "  FAIL: expected three '## ' delimiters in argv order, got: $mq_order" >&2; fail=1
+fi
+printf '%s\n' "$mq" | grep -qF "value Point" \
+    && echo "  ok: the --type answer rides along in the batch" \
+    || { echo "  FAIL: --type answer missing from the batch" >&2; fail=1; }
+
+# A repeated flag is TWO questions, not last-wins. Before the question list existed, the second silently
+# vanished — the bug this whole change is downstream of.
+mq2=$("$KAMA" query "$MQ" --type 6:11 --type 7:17 2>&1)
+if [ "$(printf '%s\n' "$mq2" | grep -c '^## ')" = 2 ] \
+   && printf '%s\n' "$mq2" | grep -qF "value Point" \
+   && printf '%s\n' "$mq2" | grep -qF "field x"; then
+    echo "  ok: a repeated flag asks twice (not last-wins)"
+else
+    echo "  FAIL: --type 6:11 --type 7:17 did not answer both:" >&2
+    printf '%s\n' "$mq2" | sed 's/^/      /' >&2; fail=1
+fi
+
+# ONE question prints exactly what it always did — no delimiter. Every assertion above, and any script a
+# user already wrote, depends on this.
+if "$KAMA" query "$MQ" --symbols 2>&1 | grep -q '^## '; then
+    echo "  FAIL: a single question must not print a '## ' delimiter" >&2; fail=1
+else
+    echo "  ok: a single question is undelimited (output unchanged)"
+fi
+
+# Every coordinate is validated BEFORE any answer is printed: a partial batch that exits nonzero is worse
+# than no batch, because a caller who checks the exit code has already consumed output that looks whole.
+# `x=$(cmd)` carries cmd's status, so under `set -e` a deliberately-failing query would kill the guard
+# outright. `|| mqrc=$?` is what keeps the nonzero exit observable instead of fatal.
+mqrc=0
+mqbad=$("$KAMA" query "$MQ" --def 6:11 --type bogus 2>/dev/null) || mqrc=$?
+if [ "$mqrc" = 2 ] && [ -z "$mqbad" ]; then
+    echo "  ok: a malformed L:C anywhere exits 2 with NO partial output"
+else
+    echo "  FAIL: --def 6:11 --type bogus gave rc=$mqrc and stdout '$mqbad' (want rc=2, empty)" >&2; fail=1
+fi
+
+# --json: a batch is the same envelope one level up, and each record carries the question it answers.
+mqj=$("$KAMA" query "$MQ" --def 6:11 --symbols --json 2>/dev/null)
+if printf '%s' "$mqj" | grep -qF '"mode":"batch"' \
+   && printf '%s' "$mqj" | grep -qF '"ask":"--def 6:11"' \
+   && printf '%s' "$mqj" | grep -qF '"ask":"--symbols"'; then
+    echo "  ok: --json batch envelope carries an 'ask' echo per record"
+else
+    echo "  FAIL: --json batch envelope wrong: $mqj" >&2; fail=1
+fi
+if command -v python3 >/dev/null 2>&1; then
+    if printf '%s' "$mqj" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["mode"]=="batch"; assert len(d["results"])==2; assert d["results"][0]["mode"]=="def"; assert d["results"][1]["mode"]=="symbols"' 2>/dev/null; then
+        echo "  ok: --json batch parses, two records, in argv order"
+    else
+        echo "  FAIL: --json batch did not parse into two ordered records: $mqj" >&2; fail=1
+    fi
+fi
+# A single question keeps the flat per-mode envelope — no "batch", no "ask".
+mqj1=$("$KAMA" query "$MQ" --def 6:11 --json 2>/dev/null)
+if printf '%s' "$mqj1" | grep -qF '"mode":"def"' && ! printf '%s' "$mqj1" | grep -qF '"ask"'; then
+    echo "  ok: a single --json question keeps the flat envelope"
+else
+    echo "  FAIL: single --json question envelope changed: $mqj1" >&2; fail=1
+fi
 
 if [ "$fail" != 0 ]; then echo "check-query: FAILED" >&2; exit 1; fi
 echo "check-query: OK"

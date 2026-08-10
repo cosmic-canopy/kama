@@ -27,11 +27,15 @@ Nothing is overwritten without `--force`. If you already have an `AGENTS.md`, us
 ## `kama query` — the verified-facts interface
 
 ```
-kama query <file> <mode> [--project] [--json]
+kama query <file> <mode>... [--project] [--json]
 ```
 
 **Coordinates are 1-based LINE and 0-based COLUMN.** The two halves differ, so do not assume. On
 line 6 of a file where `Point` begins at the 12th character, the column is `11`.
+
+**Ask everything you want about a file in one invocation.** Modes are repeatable and freely
+combinable, answered in the order given, from a single analysis — see [Cost](#cost) for why that
+matters far more than it looks.
 
 `--project` widens the scope from the file's import closure to every `.kama` the nearest `kama.json`
 claims, and switches paths to absolute. Without it, only the named file is in scope.
@@ -125,6 +129,36 @@ its exit code, so a wrapper testing `$?` keeps working.
 The text forms are deliberately left as they are: four shapes, each suited to its own question when
 a human greps it. `--json` is the one format for machines; there is no plan to harmonize the text.
 
+### Many questions, one analysis
+
+Every mode above is repeatable and combinable. Ask them together and they are answered from **one**
+analysis, in argv order — each answer preceded by a `## <question>` line:
+
+```console
+$ kama query src/app.kama --def 24:9 --type 24:9 --refs 24:9
+## --def 24:9
+src/widget.kama:12:11
+## --type 24:9
+value Widget
+## --refs 24:9
+src/app.kama:24:9
+src/widget.kama:12:11
+```
+
+Under `--json` the batch is the same envelope one level up, and each record carries an `ask` echo so
+you can pair answers to questions without relying on order:
+
+```console
+$ kama query src/app.kama --def 24:9 --symbols --json
+{"schema":1,"mode":"batch","file":"src/app.kama","results":[
+  {"schema":1,"mode":"def","file":"src/app.kama","ask":"--def 24:9","results":[…]},
+  {"schema":1,"mode":"symbols","file":"src/app.kama","ask":"--symbols","results":[…]}]}
+```
+
+**A single question is unchanged** — no `## ` line, no `ask`, the flat per-mode envelope — so
+existing scripts keep working. A malformed `L:C` anywhere in the list is rejected before *any* answer
+is printed (exit 2, empty stdout): a partial batch that exits nonzero is worse than no batch.
+
 ## `kama check` is not a full type check
 
 This is the sharpest edge in the toolchain for an agent, so it is stated plainly:
@@ -147,12 +181,16 @@ this page to be corrected rather than letting it rot.
 Every invocation re-parses and re-analyzes the prelude and every imported `std::` module, so there
 is a fixed floor per process — roughly 0.05 s for a file with no imports, 0.33 s for one importing
 `std::collections` plus `std::fmt` and `std::math`, whether or not a symbol from them is used.
-Batch your questions about one file rather than shelling out per identifier.
-(Tracked in [ROADMAP.md](ROADMAP.md) §9 — the fix is a cached front end.)
+
+**Answering a question off the built index costs 0.03–1.33 ms against that ~210 ms floor**, so the
+cost of a query is essentially the cost of *starting* one. Ask everything about a file in a single
+invocation rather than shelling out per identifier: three questions in one process is ~0.23 s, the
+same three as separate processes is ~0.68 s, and the gap widens linearly with every question you add.
+(The floor itself is tracked in [ROADMAP.md](ROADMAP.md) §9 — the fix is a cached front end.)
 
 ## Why not the LSP?
 
 `kama lsp` is a full JSON-RPC 2.0 language server ([editors.md](editors.md)) and the right choice
 for an editor. For an agent it is the wrong shape: a stdio handshake, a lifecycle to manage, and a
-long-lived process. `kama query` is one process, one question, structured output — and it is
-answered by the same index the server uses, so the two cannot disagree.
+long-lived process. `kama query` is one process, as many questions as you have, structured output —
+and it is answered by the same index the server uses, so the two cannot disagree.

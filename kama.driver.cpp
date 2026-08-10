@@ -4075,10 +4075,12 @@ void usage()
         "  kama check     <in.kama>... [--json]   analyze without emitting C or invoking a C compiler\n"
         "                  (name resolution, named arguments, ownership/move and serde analysis. NOT a full\n"
         "                   type check: an expression type mismatch is caught by `kama build`, not here)\n"
-        "  kama query     <file> <mode> [--json]  ask the compiler what it resolved — the agent/editor interface\n"
+        "  kama query     <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
         "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; --project widens from <file>'s\n"
         "                   imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
+        "                   Modes are repeatable and combinable — asked together they are answered in order\n"
+        "                   from ONE analysis, which is nearly the whole cost of a query.\n"
         "                   --json gives one envelope for every mode: {schema,mode,file,results})\n"
         "  kama lsp                            language server (JSON-RPC 2.0 over stdio) — see docs/editors.md\n"
         "  kama agents install [<dir>]         write AGENTS.md so an AI agent knows this project + `kama query`\n"
@@ -4868,6 +4870,58 @@ std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std
     return { out.begin(), out.end() };
 }
 
+// ------------------------------------------------------------------------------------------------
+// One question asked of a `kama query` index.
+//
+// Analyzing a program costs ~210ms; answering a question off the finished index costs 0.03-1.33ms — a
+// thousandfold difference. Every mode used to be its own scalar (`queryDef`, `queryType`, …), which is
+// precisely why one process could answer only ONE: there was nowhere to put a second, and no record of
+// the order they were asked in. `--def 1:1 --type 2:2` silently answered whichever came first in the
+// dispatch chain and dropped the rest. An ordered list makes N questions per analysis representable,
+// and ARGV ORDER is the answer order — the only rule that makes such a command line well-defined.
+enum class QMode { Symbols, Search, Diags, Def, Type, Refs, Coverage, Complete, SigHelp };
+struct Question { QMode mode; std::string arg; };
+
+// The flag that spells a mode, and whether it carries a value. `--search ""` is legal (an empty needle
+// lists everything), so "takes an argument" is a property of the MODE, never of the argument's emptiness.
+static const char* qFlag(QMode m)
+{
+    switch (m) {
+        case QMode::Symbols:  return "--symbols";
+        case QMode::Search:   return "--search";
+        case QMode::Diags:    return "--diagnostics";
+        case QMode::Def:      return "--def";
+        case QMode::Type:     return "--type";
+        case QMode::Refs:     return "--refs";
+        case QMode::Coverage: return "--coverage";
+        case QMode::Complete: return "--complete";
+        case QMode::SigHelp:  return "--sighelp";
+    }
+    return "";
+}
+// Takes a CURSOR (`L:C`). Distinct from qTakesArg: --search also carries a value, but a name, not a
+// position — so it is the one arg-taking mode with nothing to parse or validate as coordinates.
+static bool qTakesPos(QMode m)
+{
+    return m == QMode::Def || m == QMode::Type || m == QMode::Refs ||
+           m == QMode::Complete || m == QMode::SigHelp;
+}
+static bool qTakesArg(QMode m) { return m == QMode::Search || qTakesPos(m); }
+// A question as the caller spelled it. One string, used for BOTH the text delimiter line and the JSON
+// `ask` key, so an answer is addressed the same way whichever form you asked in.
+static std::string qSpell(const Question& q)
+{
+    std::string s = qFlag(q.mode);
+    if (qTakesArg(q.mode)) s += " " + q.arg;
+    return s;
+}
+// Do the position modes need the file's raw text? (--coverage/--complete/--sighelp read the SOURCE, not
+// the index — see their arms.) Read it once for a whole batch rather than once per question.
+static bool qNeedsText(QMode m)
+{
+    return m == QMode::Coverage || m == QMode::Complete || m == QMode::SigHelp;
+}
+
 int main(int argc, char** argv)
 {
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
@@ -5089,16 +5143,9 @@ int main(int argc, char** argv)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
     std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
-    bool        querySymbols = false;      // `kama query --symbols`: dump the document outline
-    std::string queryDef;                  // `kama query --def L:C`: go-to-definition at a cursor
-    std::string queryType;                 // `kama query --type L:C`: hover (kind+name) at a cursor
-    std::string queryRefs;                 // `kama query --refs L:C`: find-references at a cursor
-    std::string queryComplete;             // `kama query --complete L:C`: completion candidates at a cursor
-    std::string querySigHelp;              // `kama query --sighelp L:C`: signature help at a cursor
-    bool        queryCoverage = false;     // `kama query --coverage`: index coverage for every identifier
-    std::string querySearch;               // `kama query --search NAME`: find symbols by NAME, not by cursor
-    bool        querySearchSet = false;    // --search was passed (an EMPTY needle is legal: list everything)
-    bool        queryDiags = false;        // `kama query --diagnostics`: this file's analysis diagnostics
+    // Every `kama query` mode, in the order the caller asked. One list rather than a scalar per mode, so
+    // a single analysis can answer N questions (see `Question` above).
+    std::vector<Question> questions;
     bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
     bool        jsonOut = false;           // --json: structured output for `query` and `check`
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
@@ -5124,15 +5171,17 @@ int main(int argc, char** argv)
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
         else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
         else if (a == "--dev")                      devBuild = true;                 // also resolve dev-dependencies
-        else if (a == "--symbols")                  querySymbols = true;             // `kama query` outline
-        else if (a == "--def" && i + 1 < argc)      queryDef = argv[++i];            // `kama query` go-to-def L:C
-        else if (a == "--type" && i + 1 < argc)     queryType = argv[++i];           // `kama query` hover L:C
-        else if (a == "--refs" && i + 1 < argc)     queryRefs = argv[++i];           // `kama query` refs L:C
-        else if (a == "--complete" && i + 1 < argc) queryComplete = argv[++i];       // `kama query` completion L:C
-        else if (a == "--sighelp" && i + 1 < argc)  querySigHelp = argv[++i];        // `kama query` signature help L:C
-        else if (a == "--coverage")                 queryCoverage = true;            // `kama query` index coverage
-        else if (a == "--search" && i + 1 < argc) { querySearch = argv[++i]; querySearchSet = true; }  // by NAME
-        else if (a == "--diagnostics")              queryDiags = true;               // `kama query` diagnostics
+        // `kama query` modes. Appended in ARGV ORDER, and repeatable: `--def 1:1 --def 9:9` is two
+        // questions, not last-wins. (Before this was a list, the second silently vanished.)
+        else if (a == "--symbols")                  questions.push_back({QMode::Symbols,  ""});
+        else if (a == "--coverage")                 questions.push_back({QMode::Coverage, ""});
+        else if (a == "--diagnostics")              questions.push_back({QMode::Diags,    ""});
+        else if (a == "--def" && i + 1 < argc)      questions.push_back({QMode::Def,      argv[++i]});
+        else if (a == "--type" && i + 1 < argc)     questions.push_back({QMode::Type,     argv[++i]});
+        else if (a == "--refs" && i + 1 < argc)     questions.push_back({QMode::Refs,     argv[++i]});
+        else if (a == "--complete" && i + 1 < argc) questions.push_back({QMode::Complete, argv[++i]});
+        else if (a == "--sighelp" && i + 1 < argc)  questions.push_back({QMode::SigHelp,  argv[++i]});
+        else if (a == "--search" && i + 1 < argc)   questions.push_back({QMode::Search,   argv[++i]});
         else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (a == "--json")                     jsonOut = true;                  // structured output
         else if (!a.empty() && a[0] == '-') {
@@ -5347,6 +5396,15 @@ int main(int argc, char** argv)
         //   kama query <file> --project      widen the unit set from <file>'s import closure to the whole
         //                                    project (M3.5 workspace indexing), so --refs sees files that
         //                                    use <file> without being imported by it
+        //
+        // MANY QUESTIONS, ONE ANALYSIS. Every mode above is repeatable and freely combinable, answered in
+        // the order given: `kama query f.kama --def 12:5 --type 12:5 --refs 12:5` analyzes once and prints
+        // three answers. Analysis is ~210ms; an answer off the finished index is 0.03-1.33ms, so asking N
+        // questions in one process is ~N× cheaper than N processes. With more than one question each answer
+        // is preceded by a `## <flag> <arg>` line (and under --json each record carries an `ask` key), because
+        // the text form's magic empties — "no definition", "no type", "no references", "no signature",
+        // "no symbols", "no diagnostics" — each sit alone on a line and would otherwise be unattributable.
+        // A SINGLE question prints exactly what it always did, byte for byte: no delimiter, no `ask`.
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         std::vector<std::string> queryInputs = inputs;
@@ -5377,8 +5435,9 @@ int main(int argc, char** argv)
         { Stopwatch sw(&timing().analyze); idx.analyze(units); }
 
         // `kama query <f> --symbols` is a faithful proxy for one lspAnalyze, so timing it here is what
-        // makes the LSP's per-keystroke cost measurable without a JSON-RPC session. The dispatch below has
-        // a return in every arm, hence the RAII pair (dump declared first, so it fires last).
+        // makes the LSP's per-keystroke cost measurable without a JSON-RPC session. RAII pair, dump
+        // declared first so it fires last — and it now covers a whole batch, which is the point: the
+        // `analyze=` figure is paid once no matter how many questions the `query=` figure covers.
         TimingScope tdump("query", input);
         Stopwatch qw(&timing().query);
 
@@ -5390,227 +5449,276 @@ int main(int argc, char** argv)
             return true;
         };
 
-        if (querySymbols) {
-            auto syms = idx.documentSymbols(queryUri);
-            if (jsonOut) {
-                Json j = jsonEnvelope("symbols", queryUri), rs = Json::array();
-                for (const auto& s : syms) rs.push(jsonSymbol(s, /*withUri*/ false));
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            for (const auto& s : syms)
-                printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
-                       symKindName(s.kind), s.name.c_str());
-            return 0;
+        if (questions.empty()) {
+            fprintf(stderr, "kama query: pass --symbols, --search NAME, --def L:C, --type L:C, --refs L:C, "
+                            "--complete L:C, --sighelp L:C, --diagnostics, or --coverage\n"
+                            "            (L:C is 1-based line, 0-based column; add --project to widen the "
+                            "scope to the whole package; any of them may be combined or repeated, and are "
+                            "answered in order from one analysis)\n");
+            return 2;
         }
-        if (querySearchSet) {
-            // Find a symbol by NAME rather than by cursor. Every other mode wants an L:C, which suits an
-            // editor (it has a caret) and not a caller that only knows what something is called — which
-            // otherwise has to run --symbols, parse it, and come back. Scope is the files asked about: the
-            // named file alone, or the whole package under --project. Same rule as the LSP's workspace
-            // picker (lspWorkspaceSymbols), and the reason the filter is here rather than in the facade is
-            // the same: deciding whether a path is ours needs real-path resolution the index has no
-            // business owning. No result cap — an editor wants a screenful, a script wants all of them.
-            std::set<std::string> own;
-            for (const auto& f : queryInputs) own.insert(absolutePath(f));
-            std::vector<SymbolInfo> hits;
-            for (const auto& s : idx.workspaceSymbols(querySearch))
-                if (own.count(absolutePath(s.uri))) hits.push_back(s);   // else std, a dep, or not ours
-            if (jsonOut) {
-                Json j = jsonEnvelope("search", queryUri), rs = Json::array();
-                j.set("query", querySearch);
-                for (const auto& s : hits) rs.push(jsonSymbol(s, /*withUri*/ true));
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            for (const auto& s : hits)
-                printf("%s:%d:%d %s %s\n", s.uri.c_str(), s.selectionRange.line, s.selectionRange.column,
-                       symKindName(s.kind), s.name.c_str());
-            if (hits.empty()) printf("no symbols\n");
-            return 0;
-        }
-        if (queryDiags) {
-            // The same analysis diagnostics `kama check` prints, addressed per file and reusing check's
-            // spelling — but on STDOUT, like every other query mode, where check puts them on stderr; and
-            // exit 0 either way, because `query` reports and `check` judges. NOTE the shared blind spot,
-            // which this mode does not change: analysis resolves names and checks named arguments, but an
-            // expression TYPE mismatch produces no diagnostic here at all — `kama build` catches it, via
-            // the C compiler. See the `check` arm above. Positions follow Diagnostic's own convention
-            // (kama.diagnostic.h), NOT SrcRange's: column 0 means "whole line / unknown".
-            auto ds = idx.diagnosticsFor(queryUri);
-            if (jsonOut) {
-                Json j = jsonEnvelope("diagnostics", queryUri), rs = Json::array();
-                for (const auto& d : ds) rs.push(jsonDiagnostic(d));
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            if (ds.empty()) { printf("no diagnostics\n"); return 0; }
-            for (const auto& d : ds)
-                printf("%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
-                       diagSeverityName(d.severity), d.message.c_str());
-            return 0;
-        }
-        if (!queryDef.empty()) {
+
+        // Validate EVERY coordinate before answering ANY question. A typo in the fifth one must not leave
+        // four answers already on stdout — a partial batch is worse than no batch, because a caller that
+        // checks the exit code has already consumed output that looks complete. Same message, same exit 2
+        // as when each arm checked its own.
+        for (const auto& q : questions) {
             int l, c;
-            if (!parseLC(queryDef, l, c)) { fprintf(stderr, "kama query: --def wants L:C\n"); return 2; }
-            Location loc = idx.definitionAt(queryUri, l, c);
-            if (jsonOut) {
-                Json j = jsonEnvelope("def", queryUri), rs = Json::array();
-                if (loc.range.line != 0) {
-                    Json e = jsonPos(loc.range.line, loc.range.column);
-                    e.set("uri", loc.uri);
-                    rs.push(e);
-                }
-                j.set("results", rs);       // 0 or 1 element — an array, so "not found" needs no special case
-                return jsonPrint(j);
+            if (qTakesPos(q.mode) && !parseLC(q.arg, l, c)) {
+                fprintf(stderr, "kama query: %s wants L:C\n", qFlag(q.mode));
+                return 2;
             }
-            if (loc.range.line == 0) { printf("no definition\n"); return 0; }
-            printf("%s:%d:%d\n", loc.uri.c_str(), loc.range.line, loc.range.column);
-            return 0;
         }
-        if (!queryType.empty()) {
-            int l, c;
-            if (!parseLC(queryType, l, c)) { fprintf(stderr, "kama query: --type wants L:C\n"); return 2; }
-            std::string t = idx.typeAtPosition(queryUri, l, c);
-            if (jsonOut) {
-                // The facade hands back one rendered string ("value Point", "method Box.get"). It is NOT
-                // split into kind + name here: that would be this layer guessing at a boundary the facade
-                // did not draw, and a name can contain a space it would get wrong.
-                Json j = jsonEnvelope("type", queryUri), rs = Json::array();
-                if (!t.empty()) { Json e = Json::object(); e.set("text", t); rs.push(e); }
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            printf("%s\n", t.empty() ? "no type" : t.c_str());
-            return 0;
-        }
-        if (!queryRefs.empty()) {
-            int l, c;
-            if (!parseLC(queryRefs, l, c)) { fprintf(stderr, "kama query: --refs wants L:C\n"); return 2; }
-            auto refs = idx.referencesAt(queryUri, l, c, /*includeDecl*/ true);
-            if (jsonOut) {
-                Json j = jsonEnvelope("refs", queryUri), rs = Json::array();
-                for (const auto& r : refs) {
-                    Json e = jsonPos(r.range.line, r.range.column);
-                    e.set("uri", r.uri);
-                    rs.push(e);
-                }
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            if (refs.empty()) { printf("no references\n"); return 0; }
-            for (const auto& r : refs)
-                printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
-            return 0;
-        }
-        if (queryCoverage) {
-            // The identifiers come from the file's RAW TEXT, never from the index — the whole point is to
-            // ask something the index cannot answer about itself. Deterministic source order, one line each.
+
+        // --coverage/--complete/--sighelp answer from the file's RAW TEXT rather than the index (see their
+        // arms for why). Slurped once for the whole batch instead of once per question.
+        std::string fileText;
+        bool needText = false;
+        for (const auto& q : questions) needText = needText || qNeedsText(q.mode);
+        if (needText) {
             std::ifstream in(input, std::ios::binary);
             if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
-            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            if (jsonOut) {
-                Json j = jsonEnvelope("coverage", queryUri), rs = Json::array();
-                for (const auto& id : sourceIdentifiers(text)) {
-                    Json e = jsonPos(id.line, id.column);
-                    e.set("name", id.name);
-                    e.set("status", idx.coverageAt(queryUri, id.line, id.column));
-                    rs.push(e);
-                }
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            for (const auto& id : sourceIdentifiers(text))
-                printf("%d:%d %s %s\n", id.line, id.column, id.name.c_str(),
-                       idx.coverageAt(queryUri, id.line, id.column).c_str());
-            return 0;
+            fileText.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         }
-        if (!queryComplete.empty()) {
-            int l, c;
-            if (!parseLC(queryComplete, l, c)) { fprintf(stderr, "kama query: --complete wants L:C\n"); return 2; }
-            // The lexical context comes from the file's RAW TEXT, never from the index — see
-            // completionContextAt. Reading it here (rather than reusing the parsed unit) is also what lets
-            // this harness exercise cursor positions mid-token, which is where an editor actually asks.
-            std::ifstream in(input, std::ios::binary);
-            if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
-            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            CompletionContext cc = completionContextAt(text, l, c);
-            // The import triggers answer from the module resolver, not the index — a module the file does
-            // not import yet is by definition absent from it.
-            struct Row { const char* kind; std::string label, detail; };
-            std::vector<Row> rows;
-            if (cc.trigger == CompletionTrigger::ImportPath) {
-                for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
-                    rows.push_back({"module", m, ""});
-            } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
-                for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
-                    rows.push_back({"type", sym, cc.receiver});
-            } else {
-                for (const auto& it : idx.completionsAt(queryUri, cc))
-                    rows.push_back({completionKindName(it.kind), it.label, it.detail});
-            }
-            if (jsonOut) {
-                // The text form's `key=value` header becomes a `context` object: it is not a result, it is
-                // what the cursor was found to be IN, and a caller checking `trigger` should not have to
-                // parse a line above the rows. `filled` stays a list rather than the text form's CSV.
-                Json j = jsonEnvelope("complete", queryUri);
-                Json ctx = Json::object();
-                ctx.set("trigger", completionTriggerName(cc.trigger));
-                ctx.set("receiver", cc.receiver);
-                ctx.set("callee", cc.callee);
-                ctx.set("prefix", cc.prefix);
-                ctx.set("activeParam", cc.activeParam);
-                Json fl = Json::array();
-                for (const auto& f : cc.filled) fl.push(f);
-                ctx.set("filled", fl);
-                j.set("context", ctx);
-                Json rs = Json::array();
-                for (const auto& r : rows) {
-                    Json e = Json::object();
-                    e.set("kind", r.kind);
-                    e.set("label", r.label);
-                    e.set("detail", r.detail);
-                    rs.push(e);
+
+        const bool multi = questions.size() > 1;
+
+        // Answer one question off the built index. Returns the `--json` record; in text mode it prints and
+        // the return value goes unused. Both forms stay in the same arm on purpose — they are two spellings
+        // of one answer, and separating them is how they drift apart.
+        auto answerOne = [&](const Question& q) -> Json {
+            // `ask` echoes the question, so a record in a batch says which one it answers. Omitted for a
+            // lone question, whose output must stay byte-identical to what this command has always printed.
+            auto env = [&](const char* mode) {
+                Json j = jsonEnvelope(mode, queryUri);
+                if (multi) j.set("ask", qSpell(q));
+                return j;
+            };
+            int l = 0, c = 0;
+            if (qTakesPos(q.mode)) parseLC(q.arg, l, c);   // already validated above
+
+            switch (q.mode) {
+                case QMode::Symbols: {
+                    auto syms = idx.documentSymbols(queryUri);
+                    if (jsonOut) {
+                        Json j = env("symbols"), rs = Json::array();
+                        for (const auto& s : syms) rs.push(jsonSymbol(s, /*withUri*/ false));
+                        j.set("results", rs);
+                        return j;
+                    }
+                    for (const auto& s : syms)
+                        printf("%d:%d %s %s\n", s.selectionRange.line, s.selectionRange.column,
+                               symKindName(s.kind), s.name.c_str());
+                    return Json::object();
                 }
-                j.set("results", rs);
-                return jsonPrint(j);
-            }
-            std::string filled;
-            for (size_t i = 0; i < cc.filled.size(); ++i) filled += (i ? "," : "") + cc.filled[i];
-            printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
-                   completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
-                   cc.prefix.c_str(), cc.activeParam, filled.c_str());
-            for (const auto& r : rows)
-                printf("%s\t%s\t%s\n", r.kind, r.label.c_str(), r.detail.c_str());
-            return 0;
-        }
-        if (!querySigHelp.empty()) {
-            int l, c;
-            if (!parseLC(querySigHelp, l, c)) { fprintf(stderr, "kama query: --sighelp wants L:C\n"); return 2; }
-            std::ifstream in(input, std::ios::binary);
-            if (!in) { fprintf(stderr, "kama query: cannot read %s\n", input.c_str()); return 1; }
-            std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            SignatureHelp h = idx.signatureAt(queryUri, completionContextAt(text, l, c));
-            if (jsonOut) {
-                Json j = jsonEnvelope("sighelp", queryUri), rs = Json::array();
-                if (!h.label.empty()) {
-                    Json e = Json::object();
-                    e.set("label", h.label);
-                    e.set("activeParam", h.activeParam);
-                    rs.push(e);
+                case QMode::Search: {
+                    // Find a symbol by NAME rather than by cursor. Every other mode wants an L:C, which suits an
+                    // editor (it has a caret) and not a caller that only knows what something is called — which
+                    // otherwise has to run --symbols, parse it, and come back. Scope is the files asked about: the
+                    // named file alone, or the whole package under --project. Same rule as the LSP's workspace
+                    // picker (lspWorkspaceSymbols), and the reason the filter is here rather than in the facade is
+                    // the same: deciding whether a path is ours needs real-path resolution the index has no
+                    // business owning. No result cap — an editor wants a screenful, a script wants all of them.
+                    std::set<std::string> own;
+                    for (const auto& f : queryInputs) own.insert(absolutePath(f));
+                    std::vector<SymbolInfo> hits;
+                    for (const auto& s : idx.workspaceSymbols(q.arg))
+                        if (own.count(absolutePath(s.uri))) hits.push_back(s);   // else std, a dep, or not ours
+                    if (jsonOut) {
+                        Json j = env("search"), rs = Json::array();
+                        j.set("query", q.arg);
+                        for (const auto& s : hits) rs.push(jsonSymbol(s, /*withUri*/ true));
+                        j.set("results", rs);
+                        return j;
+                    }
+                    for (const auto& s : hits)
+                        printf("%s:%d:%d %s %s\n", s.uri.c_str(), s.selectionRange.line, s.selectionRange.column,
+                               symKindName(s.kind), s.name.c_str());
+                    if (hits.empty()) printf("no symbols\n");
+                    return Json::object();
                 }
-                j.set("results", rs);
-                return jsonPrint(j);
+                case QMode::Diags: {
+                    // The same analysis diagnostics `kama check` prints, addressed per file and reusing check's
+                    // spelling — but on STDOUT, like every other query mode, where check puts them on stderr; and
+                    // exit 0 either way, because `query` reports and `check` judges. NOTE the shared blind spot,
+                    // which this mode does not change: analysis resolves names and checks named arguments, but an
+                    // expression TYPE mismatch produces no diagnostic here at all — `kama build` catches it, via
+                    // the C compiler. See the `check` arm above. Positions follow Diagnostic's own convention
+                    // (kama.diagnostic.h), NOT SrcRange's: column 0 means "whole line / unknown".
+                    auto ds = idx.diagnosticsFor(queryUri);
+                    if (jsonOut) {
+                        Json j = env("diagnostics"), rs = Json::array();
+                        for (const auto& d : ds) rs.push(jsonDiagnostic(d));
+                        j.set("results", rs);
+                        return j;
+                    }
+                    if (ds.empty()) { printf("no diagnostics\n"); return Json::object(); }
+                    for (const auto& d : ds)
+                        printf("%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
+                               diagSeverityName(d.severity), d.message.c_str());
+                    return Json::object();
+                }
+                case QMode::Def: {
+                    Location loc = idx.definitionAt(queryUri, l, c);
+                    if (jsonOut) {
+                        Json j = env("def"), rs = Json::array();
+                        if (loc.range.line != 0) {
+                            Json e = jsonPos(loc.range.line, loc.range.column);
+                            e.set("uri", loc.uri);
+                            rs.push(e);
+                        }
+                        j.set("results", rs);       // 0 or 1 element — an array, so "not found" needs no special case
+                        return j;
+                    }
+                    if (loc.range.line == 0) { printf("no definition\n"); return Json::object(); }
+                    printf("%s:%d:%d\n", loc.uri.c_str(), loc.range.line, loc.range.column);
+                    return Json::object();
+                }
+                case QMode::Type: {
+                    std::string t = idx.typeAtPosition(queryUri, l, c);
+                    if (jsonOut) {
+                        // The facade hands back one rendered string ("value Point", "method Box.get"). It is NOT
+                        // split into kind + name here: that would be this layer guessing at a boundary the facade
+                        // did not draw, and a name can contain a space it would get wrong.
+                        Json j = env("type"), rs = Json::array();
+                        if (!t.empty()) { Json e = Json::object(); e.set("text", t); rs.push(e); }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    printf("%s\n", t.empty() ? "no type" : t.c_str());
+                    return Json::object();
+                }
+                case QMode::Refs: {
+                    auto refs = idx.referencesAt(queryUri, l, c, /*includeDecl*/ true);
+                    if (jsonOut) {
+                        Json j = env("refs"), rs = Json::array();
+                        for (const auto& r : refs) {
+                            Json e = jsonPos(r.range.line, r.range.column);
+                            e.set("uri", r.uri);
+                            rs.push(e);
+                        }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    if (refs.empty()) { printf("no references\n"); return Json::object(); }
+                    for (const auto& r : refs)
+                        printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
+                    return Json::object();
+                }
+                case QMode::Coverage: {
+                    // The identifiers come from the file's RAW TEXT, never from the index — the whole point is to
+                    // ask something the index cannot answer about itself. Deterministic source order, one line each.
+                    if (jsonOut) {
+                        Json j = env("coverage"), rs = Json::array();
+                        for (const auto& id : sourceIdentifiers(fileText)) {
+                            Json e = jsonPos(id.line, id.column);
+                            e.set("name", id.name);
+                            e.set("status", idx.coverageAt(queryUri, id.line, id.column));
+                            rs.push(e);
+                        }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    for (const auto& id : sourceIdentifiers(fileText))
+                        printf("%d:%d %s %s\n", id.line, id.column, id.name.c_str(),
+                               idx.coverageAt(queryUri, id.line, id.column).c_str());
+                    return Json::object();
+                }
+                case QMode::Complete: {
+                    // The lexical context comes from the file's RAW TEXT, never from the index — see
+                    // completionContextAt. Using the text (rather than the parsed unit) is also what lets this
+                    // harness exercise cursor positions mid-token, which is where an editor actually asks.
+                    CompletionContext cc = completionContextAt(fileText, l, c);
+                    // The import triggers answer from the module resolver, not the index — a module the file does
+                    // not import yet is by definition absent from it.
+                    struct Row { const char* kind; std::string label, detail; };
+                    std::vector<Row> rows;
+                    if (cc.trigger == CompletionTrigger::ImportPath) {
+                        for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
+                            rows.push_back({"module", m, ""});
+                    } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
+                        for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
+                            rows.push_back({"type", sym, cc.receiver});
+                    } else {
+                        for (const auto& it : idx.completionsAt(queryUri, cc))
+                            rows.push_back({completionKindName(it.kind), it.label, it.detail});
+                    }
+                    if (jsonOut) {
+                        // The text form's `key=value` header becomes a `context` object: it is not a result, it is
+                        // what the cursor was found to be IN, and a caller checking `trigger` should not have to
+                        // parse a line above the rows. `filled` stays a list rather than the text form's CSV.
+                        Json j = env("complete");
+                        Json ctx = Json::object();
+                        ctx.set("trigger", completionTriggerName(cc.trigger));
+                        ctx.set("receiver", cc.receiver);
+                        ctx.set("callee", cc.callee);
+                        ctx.set("prefix", cc.prefix);
+                        ctx.set("activeParam", cc.activeParam);
+                        Json fl = Json::array();
+                        for (const auto& f : cc.filled) fl.push(f);
+                        ctx.set("filled", fl);
+                        j.set("context", ctx);
+                        Json rs = Json::array();
+                        for (const auto& r : rows) {
+                            Json e = Json::object();
+                            e.set("kind", r.kind);
+                            e.set("label", r.label);
+                            e.set("detail", r.detail);
+                            rs.push(e);
+                        }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    std::string filled;
+                    for (size_t i = 0; i < cc.filled.size(); ++i) filled += (i ? "," : "") + cc.filled[i];
+                    printf("trigger=%s recv=%s callee=%s prefix=%s active=%d filled=%s\n",
+                           completionTriggerName(cc.trigger), cc.receiver.c_str(), cc.callee.c_str(),
+                           cc.prefix.c_str(), cc.activeParam, filled.c_str());
+                    for (const auto& r : rows)
+                        printf("%s\t%s\t%s\n", r.kind, r.label.c_str(), r.detail.c_str());
+                    return Json::object();
+                }
+                case QMode::SigHelp: {
+                    SignatureHelp h = idx.signatureAt(queryUri, completionContextAt(fileText, l, c));
+                    if (jsonOut) {
+                        Json j = env("sighelp"), rs = Json::array();
+                        if (!h.label.empty()) {
+                            Json e = Json::object();
+                            e.set("label", h.label);
+                            e.set("activeParam", h.activeParam);
+                            rs.push(e);
+                        }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    if (h.label.empty()) { printf("no signature\n"); return Json::object(); }
+                    printf("sig=%s active=%d\n", h.label.c_str(), h.activeParam);
+                    return Json::object();
+                }
             }
-            if (h.label.empty()) { printf("no signature\n"); return 0; }
-            printf("sig=%s active=%d\n", h.label.c_str(), h.activeParam);
-            return 0;
+            return Json::object();   // unreachable: every QMode is handled above
+        };
+
+        Json batch = Json::array();
+        for (const auto& q : questions) {
+            // The delimiter earns its place only in a batch: it is what makes "no definition" attributable
+            // to the question that produced it. One question prints what it always did.
+            if (!jsonOut && multi) printf("## %s\n", qSpell(q).c_str());
+            Json a = answerOne(q);
+            if (jsonOut) {
+                if (!multi) return jsonPrint(a);   // byte-identical to the single-question envelope
+                batch.push(a);
+            }
         }
-        fprintf(stderr, "kama query: pass --symbols, --search NAME, --def L:C, --type L:C, --refs L:C, "
-                        "--complete L:C, --sighelp L:C, --diagnostics, or --coverage\n"
-                        "            (L:C is 1-based line, 0-based column; add --project to widen the "
-                        "scope to the whole package)\n");
-        return 2;
+        if (jsonOut) {
+            // A batch is the same envelope one level up: `results` holds the per-question records, each the
+            // exact shape that question answers with on its own, so a consumer needs no second parser.
+            // `schema` stays 1 — a new `mode` value is an addition, not a change of meaning to a field.
+            Json j = jsonEnvelope("batch", queryUri);
+            j.set("results", batch);
+            return jsonPrint(j);
+        }
+        return 0;
     }
 
     if (subcommand == "transpile") {
