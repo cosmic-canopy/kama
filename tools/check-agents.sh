@@ -136,6 +136,16 @@ fresh="$tmp/fresh"
 [ -e "$fresh" ] && bad "an unknown --tool still created $fresh" \
                 || ok "an unknown --tool writes nothing at all"
 
+# Neither may a COLLISION write anything. The name check above has always been up front, but the file
+# check used to happen per file AS IT WROTE: someone who already had a CLAUDE.md got a brand-new
+# AGENTS.md dropped in their repo and then an exit 1 — a half-install with no bad argument in sight.
+coll="$tmp/collide"; mkdir -p "$coll"
+printf 'mine\n' > "$coll/CLAUDE.md"
+"$KAMA" agents install "$coll" --claude >/dev/null 2>&1 || true
+[ -f "$coll/AGENTS.md" ] && bad "a colliding install still wrote AGENTS.md" \
+                         || ok "a colliding install writes nothing at all"
+[ "$(cat "$coll/CLAUDE.md")" = "mine" ] || bad "a refused install modified the existing file"
+
 "$KAMA" agents list >/dev/null 2>&1 && ok "\`agents list\` runs" || bad "\`agents list\` failed"
 
 # ---------------------------------------------------------------------------------------------------

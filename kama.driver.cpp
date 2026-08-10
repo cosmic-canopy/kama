@@ -4359,9 +4359,9 @@ Json jsonDiagnostic(const Diagnostic& d)
 // Everything is embedded in the binary (tools/embed_agents.sh), so this works from a `--no-std`
 // install and needs no path resolution. User docs: docs/agents.md.
 
-// The embedded text starts with the newline that follows `R"KAMAGENTS(`. Drop it so a written file
-// does not open with a blank line.
-static const char* agentBody(const char* s) { return (s && *s == '\n') ? s + 1 : s; }
+// Embedded text starts with the newline that follows the raw-string delimiter (`R"KAMAGENTS(` and
+// `R"KAMASEED(` alike). Drop it so a written file does not open with a blank line.
+static const char* embeddedBody(const char* s) { return (s && *s == '\n') ? s + 1 : s; }
 
 void agentsUsage()
 {
@@ -4396,27 +4396,78 @@ int cmdAgentsList()
 // Write `body` to <dir>/<rel>, creating parent directories. Refuses an existing file unless forced,
 // because this writes into somebody's repository and an AGENTS.md they already wrote is the common
 // case, not the exception.
-static bool agentsWrite(const std::string& dir, const std::string& rel, const char* body,
-                        bool force, int& written)
+//
+// `who` is the message prefix ("kama agents" / "kama seed"). Two commands write files into a user's tree
+// and they must refuse identically — a second no-clobber rule is a second set of ways to get it wrong.
+static bool embeddedWrite(const char* who, const std::string& dir, const std::string& rel,
+                          const std::string& body, bool force, int& written)
 {
     std::string path = dir.empty() || dir == "." ? rel : dir + "/" + rel;
     if (fileExists(path) && !force) {
-        fprintf(stderr, "kama agents: %s exists — pass --force to overwrite, or use "
-                        "`kama agents print` and merge by hand\n", path.c_str());
+        fprintf(stderr, "%s: %s exists — pass --force to overwrite\n", who, path.c_str());
         return false;
     }
     std::string parent = dirName(path);
     if (!parent.empty() && parent != path && !dirExists(parent) && !makeDirs(parent)) {
-        fprintf(stderr, "kama agents: cannot create %s\n", parent.c_str());
+        fprintf(stderr, "%s: cannot create %s\n", who, parent.c_str());
         return false;
     }
     std::ofstream out(path, std::ios::binary);
-    if (!out) { fprintf(stderr, "kama agents: cannot write %s\n", path.c_str()); return false; }
-    out << agentBody(body);
-    if (!out) { fprintf(stderr, "kama agents: failed writing %s\n", path.c_str()); return false; }
-    printf("kama agents: wrote %s\n", path.c_str());
+    if (!out) { fprintf(stderr, "%s: cannot write %s\n", who, path.c_str()); return false; }
+    out << body;
+    if (!out) { fprintf(stderr, "%s: failed writing %s\n", who, path.c_str()); return false; }
+    printf("%s: wrote %s\n", who, path.c_str());
     ++written;
     return true;
+}
+
+// `kama agents install`, callable: `kama seed` offers the same guidance at the end of a fresh project and
+// must reach it IN-PROCESS. Re-dispatching would re-enter maybeReExec, which could hand the agent files to
+// a different toolchain than the one that just wrote the manifest beside them.
+//
+// Every tool name is resolved BEFORE anything is written, and then every destination is checked for a
+// collision before the first write — a typo used to be caught halfway through, after AGENTS.md had already
+// landed, leaving a half-installed project behind an exit 2. The name check has been here a while; the
+// collision pre-flight has not, and an existing CLAUDE.md could still strand a freshly written AGENTS.md.
+static int cmdAgentsInstall(const std::string& dir, const std::vector<std::string>& tools,
+                            bool skill, bool force)
+{
+    std::vector<const KamaAgentStub*> chosen;
+    for (const auto& t : tools) {
+        const KamaAgentStub* found = nullptr;
+        for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i)
+            if (t == KAMA_AGENT_STUBS[i].name) { found = &KAMA_AGENT_STUBS[i]; break; }
+        if (!found) {
+            fprintf(stderr, "kama agents: unknown tool '%s' — `kama agents list` shows them all\n", t.c_str());
+            return 2;
+        }
+        chosen.push_back(found);
+    }
+
+    std::vector<std::pair<std::string, const char*>> files;
+    files.push_back({ "AGENTS.md", KAMA_AGENTS_MD });
+    for (const auto* s : chosen) files.push_back({ s->dest, s->src });
+    if (skill) files.push_back({ ".claude/skills/kama/SKILL.md", KAMA_AGENTS_SKILL });
+
+    if (!force) {
+        int clash = 0;
+        for (const auto& f : files) {
+            std::string path = dir.empty() || dir == "." ? f.first : dir + "/" + f.first;
+            if (fileExists(path)) { fprintf(stderr, "kama agents: %s exists\n", path.c_str()); ++clash; }
+        }
+        if (clash) {
+            fprintf(stderr, "kama agents: nothing written — pass --force to overwrite, or use "
+                            "`kama agents print` and merge by hand\n");
+            return 1;
+        }
+    }
+
+    int written = 0;
+    for (const auto& f : files)
+        if (!embeddedWrite("kama agents", dir, f.first, embeddedBody(f.second), force, written)) return 1;
+    printf("kama agents: %d file%s written. AGENTS.md holds the content; the rest point at it.\n",
+           written, written == 1 ? "" : "s");
+    return 0;
 }
 
 void usage()
@@ -5369,7 +5420,7 @@ int main(int argc, char** argv)
         if (verb == "print") {
             // The primitive the whole feature rests on: stdout, so it composes with anything —
             // pasting into a file this command has never heard of, or diffing against one.
-            printf("%s", agentBody(skill ? KAMA_AGENTS_SKILL : KAMA_AGENTS_MD));
+            printf("%s", embeddedBody(skill ? KAMA_AGENTS_SKILL : KAMA_AGENTS_MD));
             return 0;
         }
         if (verb != "install") {
@@ -5380,29 +5431,7 @@ int main(int argc, char** argv)
             tools.clear();
             for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) tools.push_back(KAMA_AGENT_STUBS[i].name);
         }
-        // Resolve every tool name BEFORE writing anything: a typo used to be caught halfway through,
-        // after AGENTS.md had already landed, leaving a half-installed project behind an exit 2.
-        std::vector<const KamaAgentStub*> chosen;
-        for (const auto& t : tools) {
-            const KamaAgentStub* found = nullptr;
-            for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i)
-                if (t == KAMA_AGENT_STUBS[i].name) { found = &KAMA_AGENT_STUBS[i]; break; }
-            if (!found) {
-                fprintf(stderr, "kama agents: unknown tool '%s' — `kama agents list` shows them all\n",
-                        t.c_str());
-                return 2;
-            }
-            chosen.push_back(found);
-        }
-        int written = 0;
-        if (!agentsWrite(dir, "AGENTS.md", KAMA_AGENTS_MD, force, written)) return 1;
-        for (const auto* s : chosen)
-            if (!agentsWrite(dir, s->dest, s->src, force, written)) return 1;
-        if (skill && !agentsWrite(dir, ".claude/skills/kama/SKILL.md", KAMA_AGENTS_SKILL, force, written))
-            return 1;
-        printf("kama agents: %d file%s written. AGENTS.md holds the content; the rest point at it.\n",
-               written, written == 1 ? "" : "s");
-        return 0;
+        return cmdAgentsInstall(dir, tools, skill, force);
     }
 
     if (subcommand == "update") {
