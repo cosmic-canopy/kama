@@ -633,14 +633,30 @@ rather than here, so there is one number to keep current. Forward work:
   logging campaign fixed a whole multi-TU `static` hazard class (`adfffce`) that a single-TU suite would
   stop exercising. (`--release` native already folds to one unity TU, for cross-module inlining.)
 
-- **Closure over-pull — unmeasured, and possibly larger than anything above.** `import
-  std::collections::{DynamicArray}` compiles **all 14** files of `lib/std/collections`, because a
-  directory module resolves to every `.kama` in the directory (`resolveModuleFiles`). `examples/httpd`
-  names four imports and gets 32 TUs. If most of a closure contributes nothing to the binary, pruning
-  unreachable units would cut the front end *and* the C compile *and* the LSP's analyze floor at once.
-  **The cheap measurement that sizes it:** for `examples/httpd`, count how many of the 32 units contribute
-  any symbol to the final binary (`nm` the objects, or a `--gc-sections` map). Not scoped: it changes what
-  kama emits and touches module semantics.
+- **Closure over-pull — MEASURED, and it is the largest remaining compile-time lever.** `import
+  std::collections::{DynamicArray}` compiles **all 14** files of `lib/std/collections`: a directory module
+  resolves to every `.kama` in the directory (`resolveModuleFiles` falls back to a flat listing), and the
+  named symbols in `{…}` control *visibility*, not what gets compiled. `examples/httpd` names four imports
+  and gets 32 TUs.
+
+  **20 of those 32 units contribute no live symbol to the binary** (measured 2026-08-10: build with
+  `--keep-c`, link the objects with `-Wl,-dead_strip`, and `comm` each object's `nm -jU` defs against the
+  stripped binary's). Two distinct populations, and they want different fixes:
+
+  - **13 near-empty generic TUs** — `deque`, `dynamic_array`, `fixed_array`, `map`, `priority_queue`,
+    `set`, `slot_map`, `sort`, `sorted_map`, `sorted_set`, `view`, `ptr`, `stream` each emit **1**
+    definition, because a generic materializes only where it is instantiated. They cost a compiler
+    process each and almost nothing else.
+  - **7 units of real, entirely dead code** — `fixed` (35 defs), `poll` (20), `ops` (18), `limits` (17),
+    `endian` (14), `hasher` (12), `wrapping` (10). This is the part that costs actual compile time.
+
+  Every one of the 32 is also parsed and analyzed, in every build **and on every LSP keystroke** — so
+  pruning is the one lever that cuts the front end, the C compile, and §10's per-keystroke floor together.
+
+  Not scoped: it changes what kama emits and touches module semantics. Note the obvious fix is not the
+  whole fix — the 14 collections files import each other, so resolving only the named symbols' defining
+  files still drags most of the directory in transitively. Post-analysis reachability pruning is the
+  shape that actually reaches the 20.
 
 ## 10. Tooling / distribution (deferred)
 
