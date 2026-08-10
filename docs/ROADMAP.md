@@ -41,37 +41,22 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **Closure pruning** — a directory import should not compile the directory | §9, [design/closure-pruning.md](design/closure-pruning.md) | ► **NEXT** |
-| 2 | **`kama seed`** — the project seed | §10 | ↓ |
-| 3 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
-| 4 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 5 | Campaign 2 — full generic specialization | §1.2.1 | |
-| 6 | Campaign 3 — const generics on types | §1.2.2 | |
-| 7 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 8 | stdlib parity M2b / M2c | §3 | |
+| **1** | **`kama seed`** — the project seed | §10 | ► **NEXT** |
+| 2 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
+| 3 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
+| 4 | Campaign 2 — full generic specialization | §1.2.1 | |
+| 5 | Campaign 3 — const generics on types | §1.2.2 | |
+| 6 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 7 | stdlib parity M2b / M2c | §3 | |
 
-**Why closure pruning goes first, ahead of the tooling.** Two reasons, and the second is the deciding one.
-It is the largest remaining build-time lever, and unlike every earlier entry here that claim is **measured,
-not estimated**: hand-pruning httpd's closure takes a `-j 10` build from **0.37 s to 0.22 s — 40.5 %**, and
-32 translation units to 17. Dead units cost *more* C-compile wall-clock than live ones (0.15 s vs 0.12 s),
-because a near-empty generic TU still parses the runtime headers and the whole-program `gen.h`. And it
-**changes module semantics** — a compile error in an unused sibling file stops failing the build — so it
-belongs on the pre-1.0 side of the API-stability line, not after the tag.
-
-Its step 1 was a measurement gate, and taking it found something larger than the campaign: **the compiler
-had never been built with an `-O` flag** (§9 lever 7, shipped). That is why the numbers above differ from
-earlier drafts of this paragraph, and why the campaign now prices *better* than it did — optimizing the
-front end left the external C compile untouched, so the C compile dominates a build and pruning cuts it
-hardest.
-
-**Why 2–4 come before the remaining language campaigns:** they are the work that makes every campaign after
+**Why 1–3 come before the remaining language campaigns:** they are the work that makes every campaign after
 them cheaper and less error-prone — one command that seeds a project with the tooling wired up, a repo
 layout where scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real
 changes. Items 5–8 are language work that will be done *through* those tools.
 
 *(**AI/agent tooling shipped** — `kama query --search`/`--diagnostics`/`--json`, `kama agents`, and the
 `AGENTS.md` kama writes into a project. Record: [agents.md](agents.md), guarded by
-`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it follows closure pruning.)*
+`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it follows it.)*
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -704,67 +689,66 @@ rather than here, so there is one number to keep current. Forward work:
   logging campaign fixed a whole multi-TU `static` hazard class (`adfffce`) that a single-TU suite would
   stop exercising. (`--release` native already folds to one unity TU, for cross-module inlining.)
 
-- **Closure over-pull — MEASURED, and it is the largest remaining compile-time lever.** `import
-  std::collections::{DynamicArray}` compiles **all 14** files of `lib/std/collections`: a directory module
-  resolves to every `.kama` in the directory (`resolveModuleFiles` falls back to a flat listing), and the
-  named symbols in `{…}` control *visibility*, not what gets compiled. `examples/httpd` names four imports
-  and gets 32 TUs.
+- **Closure pruning — SHIPPED 2026-08-10.** A directory-module import used to compile the whole
+  directory: `import std::collections::{DynamicArray}` pulled in all 14 files of `lib/std/collections`,
+  because `resolveModuleFiles` falls back to a flat listing and the `{…}` names control *visibility*, not
+  what gets compiled. `examples/httpd` named four imports and got 32 TUs, 20 of which contributed no live
+  symbol. An import now resolves to the files defining the named symbols plus their transitive
+  intra-directory closure. Resolution rule: [SPEC.md](SPEC.md#module-resolution). Guard:
+  `tools/check-closure-pruning.sh`. Escape hatch: `KAMA_NO_PRUNE=1`, plus `KAMA_PRUNE_TRACE=1|2` for
+  per-import decisions and the reference that pulled in each kept file.
 
-  **20 of those 32 units contribute no live symbol to the binary** (measured 2026-08-10: build with
-  `--keep-c`, link the objects with `-Wl,-dead_strip`, and `comm` each object's `nm -jU` defs against the
-  stripped binary's). Two distinct populations, and they want different fixes:
-
-  - **13 near-empty generic TUs** — `deque`, `dynamic_array`, `fixed_array`, `map`, `priority_queue`,
-    `set`, `slot_map`, `sort`, `sorted_map`, `sorted_set`, `view`, `ptr`, `stream` each emit **1**
-    definition, because a generic materializes only where it is instantiated. They cost a compiler
-    process each and almost nothing else.
-  - **7 units of real, entirely dead code** — `fixed` (35 defs), `poll` (20), `ops` (18), `limits` (17),
-    `endian` (14), `hasher` (12), `wrapping` (10). This is the part that costs actual compile time.
-
-  Every one of the 32 is also parsed and analyzed, in every build **and on every LSP keystroke** — so
-  pruning is the one lever that cuts the front end, the C compile, and §10's per-keystroke floor together.
-
-  **RE-PRICED against the post-`-O2` baseline (2026-08-10), by hand-pruning a stdlib copy in a fake
-  install tree and building httpd against it — no compiler changes needed to get this number:**
-
-  | httpd | full (32 TU) | pruned (17 TU) | saving |
+  | examples/httpd | before (32 TU) | after (10 TU) | saving |
   |---|---|---|---|
-  | `kama build -j 10` | 0.37 s | **0.22 s** | **40.5 %** |
-  | `kama build -j 1` | 0.98 s | 0.55 s | 44 % |
-  | `kama check` front end | 41.1 ms | 27.1 ms | 34 % |
+  | `kama build -j 10` | 390 ms | **168 ms** | **57 %** |
+  | `kama build -j 1` | 1011 ms | 355 ms | 65 % |
+  | `kama check` front end | 43.9 ms | 29.2 ms | 33 % |
+  | └ `analyze` | 26.5 ms | 14.2 ms | 46 % |
+  | └ `closure-parse` | 14.9 ms | 12.8 ms | 14 % |
 
-  The decision rule was fixed at **≥ 25 % → take it**, written down before the number was taken. It clears
-  that, so this is **taken**. Note it looks *better* after lever 7, not worse: `-O2` shrank the front end
-  and left the external C compile untouched, so the C compile now dominates a build and pruning cuts it
-  hardest.
+  Well past the ≥ 25 % rule fixed before the measurement, and past the 40.5 % the design brief predicted
+  from a 32 → 17 hand-prune. The derived closure reaches **10**, and even the parse got cheaper: a module
+  no kept file imports is never indexed at all. That also repaid the 1.1 ms the identifier set cost to
+  collect, so the front end is now below its pre-campaign baseline on every phase.
 
-  ► **SCHEDULED — item 1 in the *Working order*. Design of record:
-  [design/closure-pruning.md](design/closure-pruning.md)**, written for a cold start. Resolve a directory
-  import to the files defining the named symbols plus their transitive intra-directory closure. It changes
-  module semantics (a compile error in an unused sibling stops failing the build), which is why it lands
-  **pre-1.0**.
+  **It changes module semantics**, which is why it landed pre-1.0: a compile error in an unused sibling
+  file no longer fails the build, and neither does a conformance that was arriving only because the whole
+  directory loaded.
 
-  **Three claims in earlier drafts of this entry did not survive being run** — recorded because each was
-  asserted, not measured:
+  **Five claims did not survive being run.** Three were caught by the Step-1 measurement and two by the
+  implementation; each is recorded because each was asserted rather than measured.
 
-  1. ~~"resolution-level pruning reaches most of the 20"~~ — it reaches **15**, and 17 units remain.
-     `dynamic_array`, `fixed_array`, `view`, `ptr`, `stream` are dead TUs whose symbols httpd *genuinely
-     imports*; they are near-empty because a generic materializes at its instantiation site. No
-     resolution-level scheme can drop a named import — only whole-program reachability reaches those.
+  1. ~~"resolution-level pruning reaches most of the 20 dead units"~~ — the brief settled on 17 units
+     remaining, reasoning that a named-but-dead generic TU can never be dropped. True, but it under-counted
+     what the closure drops elsewhere: the answer is **10**.
   2. ~~"the intra-directory import graph is sparse, so `import` edges suffice"~~ — the *import* graph is
-     sparse, but it is not the closure. `lib/std/collections/priority_queue.kama` has **no `import` at
-     all** and declares `DynamicArray<T, A> data;`: an unqualified name resolves against the file's own
-     namespace program-wide (`kama.cemit.cpp` `resolveFuncImpl`), so same-namespace siblings reference
-     each other implicitly. An import-edge closure **under**-computes and breaks real programs. The
-     closure must also follow top-level names a kept file references. Relatedly, `provided` in
-     `loadProgramUnits` is keyed by *namespace*, not symbol, so a self-import (`lib/std/net/udp.kama`)
-     would skip loading the file defining the symbol.
-  3. ~~"parsing is the cheap part, so needing a symbol→file index for the whole directory is free"~~ —
-     at `-O0` parsing was **54 %** of the front end and the objection was real. Lever 7 dissolved it:
-     the entire front end is now 41 ms of a 370 ms build and the parse share is 13.7 ms, so indexing by
-     full parse and pruning before analyze/emit/compile costs ~8 ms and keeps the whole win. **The simple
-     design is the right one** — a separate lightweight declaration scanner would only risk drifting from
-     the real parser.
+     sparse but it is not the closure. `priority_queue.kama` has **no `import` at all** and declares
+     `DynamicArray<T, A> data;`: an unqualified name resolves against the file's own namespace
+     program-wide, so same-namespace siblings reference each other implicitly. The closure follows every
+     identifier spelling instead, which is a superset of the references and cannot under-compute.
+  3. ~~"parsing is the cheap part, so indexing the directory is free"~~ — at `-O0` parse was 54 % of the
+     front end and the objection was real; lever 7 dissolved it. Indexing by **full parse** was the right
+     call, and a lightweight declaration scanner would have been wrong for a second reason the brief did
+     not have: `view.kama` declares `type view View<T>`, so the type-kind word is a bare identifier rather
+     than a closed `value|resource|contract` set. A regex would have missed it.
+  4. ~~"a nameless declaration is inert"~~ — two kinds are not, and both are invisible to any closure.
+     `type intrinsic <int32> implements FromStr` registers a conformance for a *primitive* under no name.
+     Worse, `spawn` and `parallel_for` require `extern "kama_isolate.h";` from
+     `lib/std/concurrent/concurrent.kama` while naming nothing in it — and the demand is program-wide, so
+     the `spawn` need not even be in the file that did the import. Both providers are marked unprunable.
+  5. ~~"an `extern fn` is a declaration like any other"~~ — this one cost more than half the win.
+     `extern fn` declares a C symbol, not a module definition, so several files legitimately repeat it:
+     three of collections' fourteen each declare their own `extern fn memset`. A reference to `memset`
+     from `fixed_array.kama` was dragging in `map.kama` and `bit_set.kama`, and `hasher.kama` behind
+     `map`. A name a file declares *itself* is satisfied there and pulls in no sibling — which took httpd
+     from 19 units to 10.
+
+  **Residual, not scheduled.** Five dead-but-kept TUs need whole-program reachability rather than
+  resolution-level pruning (`dynamic_array`, `fixed_array`, `view`, `ptr`, `stream` are near-empty because
+  a generic materializes at its instantiation site, yet their symbols are genuinely imported). They are the
+  cheapest population — one definition each — so the remaining prize is small. A bare `import a::b;` also
+  loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
+  be unsound, since a type reached only through inference is never spelled.
 
 ## 10. Tooling / distribution (deferred)
 

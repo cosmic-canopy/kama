@@ -2524,6 +2524,26 @@ no `import std::…` means the resolver never touches it, and nothing is auto-li
 (only `kama_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
 compiler).
 
+**A directory-module import compiles only what it needs.** `import a::b::{X, Y}` resolves to the files of
+`a/b/` that *declare* `X` and `Y`, plus their transitive closure within that directory — not to every
+`*.kama` in it. The closure follows references, not `import` edges: files of one directory share a
+namespace, so a sibling is reachable unqualified with no `import` at all (`priority_queue.kama` imports
+nothing and declares `DynamicArray<T, A> data;`), and an import-edge closure would under-compute. A name a
+file declares itself is satisfied there and pulls in no sibling, which is what keeps a repeated
+`extern fn memset` from tying three files together.
+
+Anything the resolver does not fully understand loads the **whole** module, so the diagnostics are
+unchanged: a bare `import a::b;` (nothing pins a file — and a type reached only through inference is never
+spelled, so the importing file's own text cannot be used to seed one), a symbol the directory does not
+declare, a package whose manifest `sources` span several namespaces, and a file whose declarations are
+nameless but program-wide — a `type intrinsic` conformance on a primitive, or the `extern` seam that
+`spawn`/`parallel_for` require.
+
+Two consequences, both deliberate and both pre-1.0: a compile error in a sibling file nothing imports no
+longer fails the build, and a conformance that was arriving only because the whole directory loaded must
+now be reachable. `KAMA_NO_PRUNE=1` restores whole-directory loading; `KAMA_PRUNE_TRACE=1` reports each
+import's decision and `=2` names the reference that retained each file.
+
 Passing several files to one build still works (`kama build a.kama b.kama -o app`); the compiler emits a
 shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resolved module files to that set.
 
