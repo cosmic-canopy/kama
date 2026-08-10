@@ -727,27 +727,33 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     static std::set<std::string> warnedFreeRide;
     bool undeclaredImport = false;   // strict mode: report them ALL, then fail, rather than stop at one
     ModuleIndexCache moduleIndex;    // per call, so it can never serve a unit staler than this analysis
-    // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
-    auto nsKey = [](SharedCompilationUnit u) -> std::string {
-        if (!u || !u->nameSpace || !u->nameSpace->name) return "";
-        std::string s; auto id = u->nameSpace->name;
-        if (id->qualifier) for (auto& seg : *id->qualifier) s += *seg + "::";
-        if (id->value) s += *id->value;
-        return s;
-    };
     std::set<std::string> seen;      // resolved absolute paths already parsed
-    std::set<std::string> provided;  // namespaces already in the compilation (satisfy an import w/o disk lookup)
+    // Namespaces already in the compilation, satisfying an import without a disk lookup. TWO states,
+    // because once a module can be loaded in PART, "is this namespace here?" stops being the question:
+    //   whole   — every file of it is loaded; satisfies any symbol list, and a bare import.
+    //   partial — only the files some earlier import needed. Satisfies a symbol list only if it declares
+    //             every name asked for; otherwise the import is re-resolved and the closure pulls more.
+    // Without the partial state a second import of the same module with DIFFERENT symbols would be
+    // skipped and its files never loaded. lib/std/net/udp.kama is the live case: it imports
+    // `std::net::{SocketAddr, RecvFrom}` from INSIDE namespace std::net.
+    std::set<std::string> providedWhole;
+    std::map<std::string, std::set<std::string>> provided;
     // The smart-pointer triad is now a built-in module (embedded, always in scope — see preludeModuleUnits),
     // so an explicit `import std::memory` is a satisfied no-op: skip the disk lookup rather than re-parse it
     // (which would double-define the triad, and would fail outright in a `--no-std` install with no lib/).
-    provided.insert("std::memory");
+    // WHOLE, necessarily: there is no lib/std/memory on disk, so a partial entry would send an unsatisfied
+    // symbol to the resolver and turn a satisfied no-op into `cannot resolve module 'std::memory'`.
+    providedWhole.insert("std::memory");
+    // A CLI input is always loaded entire, so it contributes `whole` — which is also what makes the
+    // escape hatch a proof rather than a hope: with pruning off every entry below is `whole` too, so the
+    // unit set is identical to the pre-campaign one by construction, not by testing.
     for (auto& in : cliInputs) {
         std::string abs = absolutePath(in);
         if (!seen.insert(abs).second) continue;
         SharedCompilationUnit u = parseFile(in);
         if (!u) return false;
         units.push_back(u); paths.push_back(abs);
-        std::string k = nsKey(u); if (!k.empty()) provided.insert(k);
+        std::string k = unitNsKey(u); if (!k.empty()) providedWhole.insert(k);
     }
     for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
         // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
@@ -759,7 +765,22 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (segs.empty()) continue;
             std::string key;                                  // "a::b" — match against loaded namespaces
             for (size_t k = 0; k < segs.size(); ++k) key += (k ? "::" : "") + segs[k];
-            if (provided.count(key)) continue;                // already in the compilation (CLI input / earlier import)
+            // The names this import needs, and whether what is already loaded covers them. A bare import
+            // (no symbol list) names nothing and is satisfied only by a `whole` module.
+            std::vector<std::string> wanted;
+            if (imp->symbols)
+                for (auto& sym : *imp->symbols)
+                    if (sym && sym->identifier && sym->identifier->value)
+                        wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
+            if (providedWhole.count(key)) continue;           // already in the compilation, entire
+            if (!wanted.empty()) {
+                auto pit = provided.find(key);
+                if (pit != provided.end()) {
+                    bool covered = true;
+                    for (auto& w : wanted) if (!pit->second.count(w)) { covered = false; break; }
+                    if (covered) continue;                    // every name asked for is already loaded
+                }
+            }
             bool reserved = (segs[0] == "std" || segs[0] == "core");
             std::vector<std::string> roots;
             if (!reserved) {
@@ -845,10 +866,6 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 }
             }
             // What the closure WOULD load. Computed and traced here; nothing acts on it yet.
-            std::vector<std::string> wanted;
-            for (auto& sym : *imp->symbols)
-                if (sym && sym->identifier && sym->identifier->value)
-                    wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
             const char* whyNot = nullptr;
             std::vector<std::string> keep = closureOfModule(files, wanted, moduleIndex, &whyNot);
             if (pruneTraceOn()) {
@@ -868,7 +885,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
                 if (!mu) return false;
                 units.push_back(mu); paths.push_back(abs);
-                std::string mk = nsKey(mu); if (!mk.empty()) provided.insert(mk);
+                std::string mk = unitNsKey(mu); if (!mk.empty()) providedWhole.insert(mk);
             }
         }
     }
