@@ -845,16 +845,17 @@ rather than here, so there is one number to keep current. Forward work:
   `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
   already optimal, and this only buys debug-build speed.
 
-- **`projectManifestDir` does not walk up, so a build from outside a project cannot see its
-  dependencies.** *(Unscheduled, small, real.)* It checks the input file's own directory and then the CWD
-  — while `owningPackageDir`, twenty lines below it, walks up with a `.kama` stop. So
-  `kama build proj/src/app.kama` from a parent directory fails with `cannot resolve module 'x'` for any
-  dependency, while the same build from inside `proj/` succeeds. Latent for as long as it has existed and
-  **more reachable now that `kama seed` puts every project in `src/`** — before, a project with its
-  `.kama` files at the root happened to satisfy the shallow check. The fix is to reuse the walk that is
-  already there, but it changes dependency discovery for every command, so it wants its own step and its
-  own cases in `check-packages.sh` rather than a ride on someone else's campaign.
-  (`tools/check-seed.sh` builds from inside the member and says why.)
+- **Manifest discovery is still spelled FOUR ways.** *(Unscheduled; the build path is fixed, the
+  inconsistency is not.)* `kama build` now walks up from the input file to find its project, and
+  `check-packages.sh` §38 holds that down. But the codebase answers "where is the manifest?" in four
+  places with three different rules: `projectManifestDir` (input dir → walk → CWD, dependency view),
+  the inline discovery in the build-config path (the same rule, written out a second time — they must
+  be kept in step by hand, and a comment is all that says so), `findManifestUpward` (walks up from the
+  **CWD only**, ignoring the input — the toolchain pin), and `owningPackageDir` (walks up from a given
+  dir with a `.kama` stop — per-file ownership). The toolchain pin is the odd one out and is probably a
+  live bug: `kama build proj/src/app.kama` from outside now uses proj's manifest for dependencies and
+  its `out` root, but still resolves the *toolchain version* from wherever the shell is standing. One
+  discovery function, taking the inputs, would collapse all four.
 
 - **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
   done ([targets.md](targets.md), [SPEC.md](SPEC.md)). What is left:

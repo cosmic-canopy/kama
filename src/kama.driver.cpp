@@ -685,12 +685,52 @@ void timingDump(const char* what, const std::string& subject)
     t = Timing();
 }
 
-// The directory of the manifest DRIVING this build: next to the first input, else the CWD. "" if none.
-// Note this is whoever is compiling, which for a monorepo is not necessarily the package a given source
-// file belongs to — that distinction is the whole of the per-package import check below.
+std::string owningPackageDir(const std::string& fromDir);   // defined below, beside the manifest loaders
+
+// owningPackageDir answers with an ABSOLUTE path, and that answer reaches user-facing output — the `out`
+// root is built from it, so every "kama: built …" line would carry a full path for an ordinary build run
+// from inside its own project. Spell it "." when it IS the current directory, which is what the shallow
+// check used to return there. Purely cosmetic, and purely about not making the common case noisier.
+static std::string relativizeToCwd(const std::string& dir)
+{
+    char buf[PATH_MAX];
+    if (getcwd(buf, sizeof(buf)) && absolutePath(dir) == std::string(buf)) return ".";
+    return dir;
+}
+
+// The directory of the manifest DRIVING this build: next to the first input, else WALKING UP from it,
+// else the CWD. "" if none. Note this is whoever is compiling, which for a monorepo is not necessarily
+// the package a given source file belongs to — that distinction is the whole of the per-package import
+// check below.
+//
+// The walk is the part that took a while to exist, and its absence was invisible until `kama seed`
+// started putting every project's code in `src/`: before that, a project's .kama files sat beside its
+// kama.json and the shallow check happened to succeed. After it,
+//
+//     kama build proj/src/app.kama          # from proj/'s PARENT
+//
+// found no manifest at all, and the two consequences compound. Dependencies stopped resolving
+// ("cannot resolve module 'x'"), and — worse because it is silent — the project was treated as
+// manifest-LESS, so the binary landed next to the source in proj/src/ instead of under proj/out/.
+// The same build from inside proj/ worked, which is what made it read as a fluke rather than a rule.
+//
+// The walk goes BEFORE the CWD, not after: a file belongs to the project it lives in, not to wherever
+// the shell happens to be standing. Building projB/src/app.kama while sitting in projA now uses
+// projB's manifest rather than silently borrowing projA's.
+//
+// owningPackageDir already implements exactly this walk, including the `.kama` stop that keeps a
+// vendored dependency from being owned by its host project — so this reuses it rather than growing a
+// fourth spelling of "find the manifest".
 std::string projectManifestDir(const std::vector<std::string>& inputs)
 {
-    if (!inputs.empty()) { std::string d = dirName(inputs[0]); if (fileExists(d + "/kama.json")) return d; }
+    // The shallow hit first, so the common in-project case keeps returning the RELATIVE path it always
+    // did (owningPackageDir returns an absolute one, and this string reaches user-facing diagnostics).
+    if (!inputs.empty()) {
+        std::string d = dirName(inputs[0]);
+        if (fileExists(d + "/kama.json")) return d;
+        std::string owner = owningPackageDir(d);
+        if (!owner.empty()) return relativizeToCwd(owner);
+    }
     if (fileExists("kama.json")) return ".";
     return "";
 }
@@ -6059,10 +6099,16 @@ int main(int argc, char** argv)
     BuildConfigRequest bcReq;
     bcReq.manifest = configPath;
     if (bcReq.manifest.empty()) {
+        // Same discovery as projectManifestDir, and deliberately kept in step with it: this one decides
+        // the build CONFIG and the `out` root, that one decides the DEPENDENCY view. If only one of them
+        // walked up, a build from outside a project would resolve its dependencies and then write the
+        // binary next to the source anyway — half-fixed, and harder to reason about than not fixed.
         std::string dir; size_t slash = input.find_last_of('/');
         if (slash != std::string::npos) dir = input.substr(0, slash + 1);
         if      (std::ifstream(dir + "kama.json").good()) bcReq.manifest = dir + "kama.json";
-        else if (std::ifstream("kama.json").good())       bcReq.manifest = "kama.json";
+        else if (!dir.empty() && !owningPackageDir(dir).empty())
+                 bcReq.manifest = relativizeToCwd(owningPackageDir(dir)) + "/kama.json";
+        else if (std::ifstream("kama.json").good())        bcReq.manifest = "kama.json";
     }
     bcReq.target          = target;
     bcReq.targetExplicit  = targetExplicit;

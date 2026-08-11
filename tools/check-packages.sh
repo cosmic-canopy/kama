@@ -913,4 +913,54 @@ grep -q "already implements" "$tmp/dup2.out" \
 if grep -q "and by package" "$tmp/dup2.out"; then
     echo "check-packages: FAIL — named two packages for a duplicate inside ONE package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; ACCEPTANCE every member builds standalone; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
+# 38. BUILD FROM OUTSIDE THE PROJECT. Manifest discovery used to check the input file's own directory and
+#     then the CWD, with no walk up — while owningPackageDir, twenty lines below it, had walked all along.
+#     That was survivable while a project's .kama files sat beside its kama.json, and stopped being
+#     survivable when `kama seed` put every project's code in src/:
+#
+#         kama build proj/src/app.kama        # from proj/'s PARENT
+#
+#     found no manifest, so (a) dependencies did not resolve, and (b) — silently, which is worse — the
+#     project was treated as manifest-LESS and the binary was written next to the source in proj/src/
+#     instead of under proj/out/. Both halves are checked here, because fixing only the first would leave
+#     a build that resolves its dependencies and then litters the source tree anyway.
+out="$tmp/outside"; mkdir -p "$out"
+"$KAMA" seed "$out/dep" --kind library >/dev/null 2>&1 \
+    || { echo "check-packages: FAIL — could not seed the outside-build library" >&2; exit 1; }
+"$KAMA" seed "$out/app" >/dev/null 2>&1 \
+    || { echo "check-packages: FAIL — could not seed the outside-build app" >&2; exit 1; }
+cat > "$out/app/kama.json" <<'JSON'
+{ "name": "app", "version": "0.1.0", "entry": "src/app.kama",
+  "dependencies": { "dep": { "path": "../dep" } } }
+JSON
+cat > "$out/app/src/app.kama" <<'EOF'
+import dep::{ answer };
+fn int32 main() { return answer(); }
+EOF
+"$KAMA" pkg install "$out/app" >"$tmp/out.out" 2>&1 \
+    || { echo "check-packages: FAIL — outside-build fixture did not install:" >&2; sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
+
+# (a) the dependency resolves when the build is driven from outside the project.
+( cd "$out" && "$KAMA" build app/src/app.kama >"$tmp/out.out" 2>&1 ) \
+    || { echo "check-packages: FAIL — a build from OUTSIDE the project cannot see its dependencies:" >&2
+         sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
+
+# (b) the output went to the project's out/, not next to the source. src/ must hold sources only —
+#     the same invariant tools/check-clean-tree.sh holds for a manifest-less build.
+_stray=$(ls "$out/app/src" | grep -v '\.kama$' || true)
+[ -z "$_stray" ] \
+    || { echo "check-packages: FAIL — a build from outside wrote into the project's src/: $_stray" >&2; exit 1; }
+[ -n "$(find "$out/app/out" -name app -type f -print -quit 2>/dev/null)" ] \
+    || { echo "check-packages: FAIL — a build from outside did not use the project's out/ root" >&2; exit 1; }
+
+# (c) a file's OWN project wins over the directory the shell happens to be standing in. Sitting inside
+#     `dep`, building app's entry must still use APP's manifest — otherwise the walk would have merely
+#     traded one wrong answer for another.
+( cd "$out/dep" && "$KAMA" build ../app/src/app.kama >"$tmp/out.out" 2>&1 ) \
+    || { echo "check-packages: FAIL — building app from inside a SIBLING project failed:" >&2
+         sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
+grep -q "app/out/" "$tmp/out.out" \
+    || { echo "check-packages: FAIL — used the CWD's manifest instead of the input file's own project:" >&2
+         sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
