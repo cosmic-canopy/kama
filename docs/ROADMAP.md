@@ -303,6 +303,21 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
 - **Windows long-path support is deferred** (`kama_os.h`): the temp-path builder assumes `MAX_PATH`-class
   lengths. Surfaces only on a deep working directory.
+- **An unsuffixed integer literal near `INT32_MAX` behaves differently as an initializer than in a
+  comparison.** `uint32 x = 2147483648;` then `x != 2147483648` compares UNEQUAL — the initializer keeps
+  the value while the comparison's literal narrows through `Int32Node`, so the two spellings of the same
+  number stop agreeing. Turned up while writing `tests/int_literal_wide.kama` for the LLP64 `strtol`
+  saturation bug (fixed: the grammar uses `strtoll` now, so every host agrees). This one is a SEPARATE
+  path — the literal's type is decided without consulting the target type — and is deliberately not
+  bundled with that fix. It is platform-independent. The fixture covers only the assignment path it was
+  written for and says so; a fixture for this belongs with the fix.
+- **A threaded kama program is not standalone on Windows.** Anything using `isolate` / `parfor` /
+  `channel` links `libwinpthread-1.dll` out of the msys2 tree, so it dies with `STATUS_DLL_NOT_FOUND` on
+  a machine without it — the same failure the compiler itself had before the Makefile started passing
+  `-static`. A plain program needs nothing beyond the OS today; the rule to apply is "link non-system
+  runtime statically, system components dynamically", which is a no-op on Linux/macOS (libc IS the
+  system) and fixes Windows. `--shared` is already taken (it selects a shared-library OUTPUT), so the
+  opt-in for dynamic runtime linking needs its own spelling.
 - **UBSan's `function` check is disabled suite-wide** (`run_tests.sh`). Vtable / contract /
   `BindableFunctionPtr` dispatch stores each slot as `Ret (*)(void* self, …)` and calls a concrete
   `Ret C__m(C* self, …)` through it — ABI-identical, and how essentially all C OO dispatch works, but the
