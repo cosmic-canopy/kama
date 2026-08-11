@@ -10,10 +10,28 @@ that resolved view — they never reach the network.
 
 ## A minimal project
 
+`kama seed` writes one, so the manifest below is something to read rather than something to type:
+
+```sh
+kama seed myapp            # prompts, with a sensible default on every answer
+kama seed myapp --yes      # take every default; also what a script or CI gets
+```
+
+It asks for a name, a version, and a **kind** — `executable`, `library`, or `monorepo` — then writes the
+manifest, a starter source file, a `.gitignore`, and a README stub. Prompting happens only when it has a
+terminal to prompt on; a pipe, a script or a CI runner behaves as `--yes`, so `kama seed` never hangs a
+build. Every answer also has a flag (`--name`, `--version`, `--kind`, `--members`), and `--agents` adds
+the [AI-agent guidance](agents.md). It refuses to touch a directory that already has a `kama.json`, and
+if any other file it would write already exists it writes **nothing** rather than half a project.
+
+What `--kind executable` produces:
+
 ```
 myapp/
   kama.json
   src/app.kama
+  .gitignore
+  README.md
 ```
 
 ```json
@@ -21,7 +39,8 @@ myapp/
 {
   "name": "myapp",
   "version": "0.1.0",
-  "entry": "src/app.kama"
+  "entry": "src/app.kama",
+  "sources": ["src"]
 }
 ```
 
@@ -49,6 +68,54 @@ kama run src/app.kama    # explicit file — same thing
 location, runs it, forwards the exit code, and cleans up. It's **native-only** (wasm needs a
 browser/node, a bare-metal target emits a freestanding object) — for those, use `kama build --target …`;
 see [targets.md](targets.md).
+
+### The three kinds
+
+They differ only in which manifest keys they start with. **`sources` and `projects` are independent**, so
+a kind is a starting shape, not a category — an executable that later composes sub-projects just gains a
+`projects` key.
+
+| `--kind` | manifest | on disk |
+|---|---|---|
+| `executable` | `entry` + `sources` | `src/app.kama` with `fn int32 main()` |
+| `library` | `sources` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
+| `monorepo` | `projects` | one seeded library per `--members` name |
+
+A monorepo takes the member names from you rather than inventing a directory convention:
+
+```sh
+kama seed acme --kind monorepo --members engine,server
+```
+```json
+// acme/kama.json — a pure aggregator: no sources of its own, only its members'
+{ "name": "acme", "version": "0.1.0", "projects": ["engine", "server"] }
+```
+
+Each member is seeded as a library, because that is what most members are; promoting one to an
+executable is adding `entry` and a `main`. A member that imports a sibling still declares it as a path
+dependency — see [Sub-projects are self-contained](#sub-projects-are-self-contained--declare-what-you-import).
+
+A **library's name has to be a legal kama identifier**, because it is what an importer writes after
+`import`. `kama seed --kind library --name my-lib` is refused, and says to use `my_lib`: `import
+my-lib::{ … }` does not parse, so that package could never be imported by anyone. An *executable* may be
+`my-app` — nothing imports it.
+
+## Build output — `out`
+
+Everything a build generates goes under one root, so ignoring it is one line rather than a hunt:
+
+```
+myapp/out/aarch64-macos-none/debug/app
+myapp/out/aarch64-macos-none/release/app
+myapp/out/wasm32-emscripten-none/debug/app.html
+```
+
+The root defaults to `out` and the `"out"` key moves it. It is scoped by **target triple** and by
+**build type** because those vary independently, and a collision between them is silent — you would get
+yesterday's binary and no diagnostic. `-o` still overrides everything.
+
+A loose `.kama` file with **no manifest** is unchanged: `kama build hello.kama` still writes `./hello`
+beside it. `out/` is a project's concept, and one file is not a project.
 
 ## Telling the tooling what your project contains — `sources` and `packages`
 
@@ -490,6 +557,7 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 
 | Command | What it does |
 |---|---|
+| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project: manifest, starter source, `.gitignore`, README, optionally `AGENTS.md`. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version`, `--members a,b`, `--force`. |
 | `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"entry"`) and run it; native-only. |
 | `kama build <file>… [--dev]` | Build a native/wasm/embedded artifact. |
 | `kama pkg install [<dir>] [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |

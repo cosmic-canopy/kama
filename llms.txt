@@ -40,8 +40,8 @@ examples read the test fixtures.
   wasm targets; `kama build [--release] [--target <name-or-triple>]`.
 - [Targets & toolchains](docs/targets.md): which platforms `--target` reaches, how to get a cross
   toolchain (your own / clang+sysroot / zig), output kinds, and per-platform notes.
-- [Packages & projects](docs/packages.md): the `kama.json` manifest, dependencies, the lockfile,
-  publishing, and the toolchain version manager.
+- [Packages & projects](docs/packages.md): `kama seed` to start one, the `kama.json` manifest,
+  dependencies, the lockfile, publishing, and the toolchain version manager.
 - [Editor setup](docs/editors.md): `kama lsp` is a JSON-RPC/stdio language server built into the
   compiler — one server, thin clients. Config for VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate,
   plus which editors get syntax colour from what.
@@ -78,9 +78,9 @@ immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time eva
 (`comptime` constants and `comptime fn`); **conditional compilation** (`@compileFor`); and the
 **MCU surface** (`hardware` MMIO, `@interrupt`/`@section`/`@noheap`, inline `asm`, fallible
 allocation). Targets **native, WebAssembly and bare-metal**, debug/release, with source-level
-breakpoint debugging in an IDE and in browser DevTools. Tooling: a package + toolchain manager
-(`kama pkg`, `kama toolchain`, `kama publish`) and a language server (`kama lsp`) serving eight
-editors.
+breakpoint debugging in an IDE and in browser DevTools. Tooling: a project seed (`kama seed`), a package +
+toolchain manager (`kama pkg`, `kama toolchain`, `kama publish`) and a language server (`kama lsp`)
+serving eight editors.
 
 The remaining work before the 1.0 tag is documentation and release polish, not language
 features — see [docs/ROADMAP.md](docs/ROADMAP.md).

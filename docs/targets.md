@@ -186,6 +186,29 @@ linker script own the final image, which is your link step.
 `SHARED` exports only functions marked `expose` (everything else is hidden), so the library's surface
 is exactly what you declared.
 
+## Where the artifacts land
+
+Inside a **project** (a directory with a `kama.json`), everything a build generates goes under one root:
+
+```
+out/<triple>/<debug|release>/
+```
+
+```sh
+kama build src/app.kama                          # out/aarch64-macos-none/debug/app
+kama build src/app.kama --release                # out/aarch64-macos-none/release/app
+kama build src/app.kama --target WASM            # out/wasm32-emscripten-none/debug/app.html
+```
+
+Scoped by **both** axes deliberately. They vary independently, and a collision between them is silent —
+you would run yesterday's binary with no diagnostic to tell you so. Cross-compiling for three targets
+leaves three trees that never overwrite each other, and `.gitignore` needs one line: `out/`.
+
+The root is the manifest's `"out"` key, defaulting to `out`. An explicit `-o` overrides it entirely.
+
+A **loose `.kama` file with no manifest** is unaffected — `kama build hello.kama` still writes `./hello`
+beside the source. `out/` is a project's concept, and one file is not a project.
+
 ## Platform notes
 
 - **macOS → anything**: fine with zig or a sysroot.

@@ -79,7 +79,25 @@ node hello.js; echo $?              # -> 42  (browser: use the .html target)
 
 `kama transpile hello.kama -o hello.c` emits the generated C if you want to read it.
 
-## 4. Set up your editor
+## 4. Start a project
+
+One file needs no ceremony. The moment you want a second one, a dependency, or a name your editor can
+rename across files, you want a **project** — a directory with a `kama.json`:
+
+```sh
+kama seed myapp        # asks for a name, a version, and a kind; every answer has a default
+cd myapp
+kama run               # builds src/app.kama and runs it
+```
+
+`kama seed` writes the manifest, a starter source file, a `.gitignore` and a README stub. It prompts only
+when it has a terminal, so `kama seed myapp --yes` (or any script, or CI) takes the defaults instead.
+`--kind library` and `--kind monorepo` give you the other two shapes.
+
+Build output lands under `out/<triple>/<debug|release>/`, which is the one line the generated
+`.gitignore` needs. Dependencies, workspaces and the lockfile: **[packages quickstart](packages.md)**.
+
+## 5. Set up your editor
 
 The compiler is its own language server, so you get live diagnostics, hover, go-to-definition,
 find-references, project-wide rename, completion and signature help in any editor with a generic LSP
@@ -89,7 +107,7 @@ client — VS Code, Neovim, Vim, Emacs, Sublime Text, Helix and Kate. Each is a 
 VS Code has a packaged extension that also brings syntax highlighting, a build-configuration picker, and
 the F5 debugging below.
 
-## 5. Debug in VSCode (breakpoints, call stack, locals)
+## 6. Debug in VSCode (breakpoints, call stack, locals)
 
 kama debug builds embed `#line` directives back to your `.kama` and keep your variable names, so you get
 real source-level debugging.

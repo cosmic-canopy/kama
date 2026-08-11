@@ -41,22 +41,18 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **`kama seed`** — the project seed | §10 | ► **NEXT** |
-| 2 | **Repo layout** — `src/` + a gitignored scratch dir | §10 | ↓ |
-| 3 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 4 | Campaign 2 — full generic specialization | §1.2.1 | |
-| 5 | Campaign 3 — const generics on types | §1.2.2 | |
-| 6 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 7 | stdlib parity M2b / M2c | §3 | |
+| **1** | **Repo layout** — `out/<platform>/`, the root symlink, `src/`, a scratch dir | §10 | ► **NEXT** |
+| 2 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
+| 3 | Campaign 2 — full generic specialization | §1.2.1 | |
+| 4 | Campaign 3 — const generics on types | §1.2.2 | |
+| 5 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 6 | stdlib parity M2b / M2c | §3 | |
 
-**Why 1–3 come before the remaining language campaigns:** they are the work that makes every campaign after
-them cheaper and less error-prone — one command that seeds a project with the tooling wired up, a repo
-layout where scratch work cannot pollute the tree, and one canonical formatting so a diff carries only real
-changes. Items 5–8 are language work that will be done *through* those tools.
-
-*(**AI/agent tooling shipped** — `kama query --search`/`--diagnostics`/`--json`, `kama agents`, and the
-`AGENTS.md` kama writes into a project. Record: [agents.md](agents.md), guarded by
-`tools/check-agents.sh`. `kama seed` installs what it produces, which is why it follows it.)*
+**Why 1–2 come before the remaining language campaigns:** they are the work that makes every campaign
+after them cheaper and less error-prone — a repo layout where generated files cannot pollute the tree, and
+one canonical formatting so a diff carries only real changes. Items 3–6 are language work that will be
+done *through* those tools. Repo layout is first now because `kama seed` shipped the convention
+(`out/<triple>/<type>/`) that this repo still does not follow.
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -74,6 +70,11 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
 (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
 would *break* source has to land first or wait for 2.0.
+
+The **manifest** key set is reconciled: the entry field is `entry`, not `main` (npm's `main` names a
+library's entry point for importers — the opposite end of the word), and `out` names the build-output
+root. Both are read by `kama seed`, which is what would otherwise have propagated a wrong name into every
+project created after it.
 
 **At the tag itself — repoint the Zed grammar pin.** `editor/zed/extension.toml` pins a *commit*, and Zed
 installs the grammar by fetching that rev — so the pin, not the working tree, is what Zed users get. It is
@@ -765,36 +766,13 @@ rather than here, so there is one number to keep current. Forward work:
   - **One full `analyze()` per invocation** — the §9 front-end cache is the fix, and a batch mode the
     cheaper rung.
 
-- **`kama seed` — the project seed.** ► **NEXT** (see *Working order*). The seed's job is to install what
-  the AI tooling above produces, which is why it follows it. In the spirit of `npm init`: one command that turns an
-  empty directory into a working kama project instead of a hunt through the docs for what `kama.json` has to
-  contain. Interactive by default — prompt for the fields, with a sensible default on every one — and fully
-  bypassable by flag for scripts and for the impatient (`--yes`, plus a flag per prompt), which is the shape
-  every seeding tool that people actually keep using has converged on.
-
-  What it writes:
-  - **`kama.json`** — the manifest is already the project's single source of truth (name, version, the flag
-    universe, the toolchain pin, dependencies, targets/build types, `sources`), and today it is hand-written
-    from the docs. This is where most of the value is.
-  - **The project shape**, chosen at the prompt: **executable** (a `main` and a runnable `kama build`),
-    **library** (no `main`, an exported surface), and — since workspaces ship — a **workspace** with a
-    `projects/` tree. The kind decides the manifest fields *and* the seed source file.
-  - **The AI/agent tooling**, opt-in at the prompt — which is now just calling the shipped
-    `kama agents install` (plus `--claude` / `--all-tools` / `--skill` from the answers), so a new project
-    starts with `kama query` already advertised to whatever agent works on it. Nothing to write here: the
-    content and the writer both exist, and `check-agents.sh` already guards them.
-  - The ordinary hygiene a new repo wants — a `.gitignore` that knows about generated `.c` and
-    `build/<os>-<arch>/`, and a README stub.
-
-  **Named `seed`, not `init`**, because the name should say what it does: `init` is the ambiguous one — it
-  reads as "initialize the toolchain" or "initialize a repo" as easily as "write me a project", and kama has
-  a toolchain and a package store it could plausibly be initializing. `seed` says the intent.
-
-  Worth settling early: whether it refuses to run in a non-empty directory (npm does not; cargo does), and
-  whether seeding in place and seeding into a new `<name>/` directory are one command or two — one optional
-  positional argument is probably enough. It is a driver-level command with no language surface, so it can be built in kama once the
-  toolchain hosts it, and its guard is a `tools/check-*.sh` that seeds each project kind into a temp dir and
-  asserts the result builds — which is the only check that keeps a template honest.
+- **No `scripts` table in `kama.json`.** *(Decided; not scheduled — recorded so it stops being
+  re-proposed.)* npm needed one because npm had no build system. kama has `kama build` plus `select`,
+  `flags` and `TARGET` entries, so a named configuration is already declarative and portable, which a
+  table of shell strings is not. It would also become a second, per-project, undocumented build system
+  that every consumer has to read to learn what `test` means. If tasks are ever wanted, the 2.0
+  scripting runtime (§7) is the vehicle — a task written in kama, not a shell string — and that is a
+  reason to spend the design budget there rather than here.
 
 - **`kama fmt` — a native formatter, not an external tool.** ► **Scheduled, WITH mandatory braces**
   (see *Working order*; the brace rule is §1, and this is its migration tool). The language should print itself: one
@@ -870,15 +848,33 @@ rather than here, so there is one number to keep current. Forward work:
   `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
   already optimal, and this only buys debug-build speed.
 
-- **Repo layout — compiler sources under `src/`, and a gitignored scratch directory.** ► **Scheduled**
-  (see *Working order*). Two separate irritations with one shape. (a) The repo root mixes the compiler's own sources (`kama.l`, `kama.y`,
-  `kama.cemit.*`, `kama.driver.cpp`, `kama_runtime.h`) with everything else; they belong under `src/`, with
-  build output staying outside it so nothing generated lands beside a hand-written file. (b) There is
-  nowhere sanctioned to **prototype in kama** — trying a language feature means writing a `.kama` somewhere,
-  and the only choices today are the repo root (pollution) or a path outside the tree (invisible to the next
-  session). A gitignored scratch directory (`.scratch/`, or similar) gives that work one home, so a
-  throwaway `type contract Foo<T is This>` never risks being committed and never has to be re-derived.
-  Neither is urgent; both get cheaper to do the sooner they happen, since every path reference is a cost.
+- **Repo layout — eat our own dog food.** ► **NEXT** (see *Working order*). User projects now collect
+  build output under `out/<triple>/<debug|release>/` ([targets.md](targets.md)); this repo still does not,
+  and the gap is visible in its own `.gitignore`. Four parts, one shape:
+  - **`build/<os>-<arch>/` → `out/<platform>/`**, so the compiler's own layout is the one it teaches.
+    Well-abstracted already: `tools/kama-bin.sh` is the single resolver, and only `bench/scripts/build.sh`,
+    `mcu/build.sh`, `tests/support/expose_shared_check.sh` and the VS Code extension hardcode a path.
+  - **The root `./kama` symlink.** It exists because build output is platform-scoped and something has to
+    name "the one that built last"; under `out/<platform>/` it is the same question with a tidier answer.
+    ⚠️ `tools/check-no-inheritance.sh` repoints it while it builds, which is why that guard is heavy.
+  - **`run_tests.sh` should build fixtures into a scratch dir.** This is what finally retires the
+    ~25 lines of `.gitignore` that exist only to hide fixture artifacts — including the `tests/*` +
+    four-`!`-lines **allowlist inversion**, written that way because a compiled binary is a stem with no
+    extension and no glob can match one. `out/` did not fix this: fixtures are built with no manifest.
+  - **Compiler sources under `src/`**, and a gitignored **`.scratch/`** for prototyping in kama — today
+    the only places to try a language feature are the repo root (pollution) or outside the tree (invisible
+    to the next session).
+
+- **`projectManifestDir` does not walk up, so a build from outside a project cannot see its
+  dependencies.** *(Unscheduled, small, real.)* It checks the input file's own directory and then the CWD
+  — while `owningPackageDir`, twenty lines below it, walks up with a `.kama` stop. So
+  `kama build proj/src/app.kama` from a parent directory fails with `cannot resolve module 'x'` for any
+  dependency, while the same build from inside `proj/` succeeds. Latent for as long as it has existed and
+  **more reachable now that `kama seed` puts every project in `src/`** — before, a project with its
+  `.kama` files at the root happened to satisfy the shallow check. The fix is to reuse the walk that is
+  already there, but it changes dependency discovery for every command, so it wants its own step and its
+  own cases in `check-packages.sh` rather than a ride on someone else's campaign.
+  (`tools/check-seed.sh` builds from inside the member and says why.)
 
 - **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
   done ([targets.md](targets.md), [SPEC.md](SPEC.md)). What is left:

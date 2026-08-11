@@ -9,6 +9,9 @@ This page is the reference. The short version an agent actually reads is `AGENTS
 
 ## Install it into a project
 
+A new project can have it from the start — `kama seed --agents` (or `--claude` / `--all-tools` /
+`--skill`) runs exactly the command below once the manifest is written. For an existing project:
+
 ```sh
 kama agents install            # write AGENTS.md — read natively by most agent tools
 kama agents install --claude   # ...and a CLAUDE.md that imports it

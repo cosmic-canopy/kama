@@ -90,6 +90,10 @@ run `make`.
 ## Using the compiler
 
 ```sh
+# Start a project (manifest, starter source, .gitignore, README). Interactive on a terminal;
+# a script or CI gets the defaults. --kind library|monorepo for the other shapes:
+kama seed myapp && cd myapp && kama run
+
 # Transpile kama to C (no C compiler invoked):
 kama transpile hello.kama -o hello.c
 
@@ -117,8 +121,9 @@ cross-compiling works with `--cc "zig cc"`), `--select GROUP=VALUE` (build-confi
 (link Emscripten's WebGPU port), `--cc <compiler>`, `--no-line` (omit `#line`), `--keep-c`.
 Targets, cross-compilation and toolchain setup: **[targets & toolchains](docs/targets.md)**.
 
-For multi-file / dependency projects — a `kama.json` manifest, `kama pkg add`/`install`,
-the lockfile, and `kama run` — see the **[packages quickstart](docs/packages.md)**.
+For multi-file / dependency projects — `kama seed`, the `kama.json` manifest, `kama pkg add`/`install`,
+the lockfile, and `kama run` — see the **[packages quickstart](docs/packages.md)**. Inside a project,
+build output collects under `out/<triple>/<debug|release>/` rather than beside your sources.
 
 ## Debugging
 

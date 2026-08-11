@@ -448,5 +448,5 @@ program became. It is ordinary, portable C11 with your original names intact.
 - [Getting started](GETTING_STARTED.md) — install, build, and set up your editor.
 - [The specification](SPEC.md) — the complete reference.
 - [The type model](TYPE_MODEL.md) — why `value` / `resource` / `view` / `contract`, in depth.
-- [Packages](packages.md) — projects, dependencies and publishing.
+- [Packages](packages.md) — `kama seed` to start a project, then dependencies and publishing.
 - [Editor setup](editors.md) — one language server, eight editors.
