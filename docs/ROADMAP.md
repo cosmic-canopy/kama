@@ -845,18 +845,6 @@ rather than here, so there is one number to keep current. Forward work:
   `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
   already optimal, and this only buys debug-build speed.
 
-- **Manifest discovery is still spelled FOUR ways.** *(Unscheduled; the build path is fixed, the
-  inconsistency is not.)* `kama build` now walks up from the input file to find its project, and
-  `check-packages.sh` §38 holds that down. But the codebase answers "where is the manifest?" in four
-  places with three different rules: `projectManifestDir` (input dir → walk → CWD, dependency view),
-  the inline discovery in the build-config path (the same rule, written out a second time — they must
-  be kept in step by hand, and a comment is all that says so), `findManifestUpward` (walks up from the
-  **CWD only**, ignoring the input — the toolchain pin), and `owningPackageDir` (walks up from a given
-  dir with a `.kama` stop — per-file ownership). The toolchain pin is the odd one out and is probably a
-  live bug: `kama build proj/src/app.kama` from outside now uses proj's manifest for dependencies and
-  its `out` root, but still resolves the *toolchain version* from wherever the shell is standing. One
-  discovery function, taking the inputs, would collapse all four.
-
 - **Build configuration + cross-compilation — residuals.** The target/build-type/output selection model is
   done ([targets.md](targets.md), [SPEC.md](SPEC.md)). What is left:
   - **⚠️ No CPU-tuning knob.** kama passes **no** `-march`/`-mcpu`/`-mtune` anywhere, so every build targets
