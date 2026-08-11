@@ -1644,6 +1644,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                              + nm + "`); `::` resolves namespaces and types").c_str(), v->line);
             }
         }
+        // A const generic parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
+        // with its declared width. A compile-time binder outranks every runtime name, and nothing else
+        // may bind the name anyway (a param/field/local that shadows one is rejected at its declaration).
+        if (!v->qualifier || v->qualifier->empty()) {
+            std::string cpv = constParamCValue(nm);
+            if (!cpv.empty()) return cpv;
+        }
         // A ref/out parameter is a pointer in C; reads dereference it.
         if (_refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + nm + ")"; }
         // An unqualified name that is a field of the enclosing class (or an
@@ -5427,7 +5434,7 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
     }
     if (arg->value && !arg->genericArg) {
         auto it = _constSubst.find(*arg->value);
-        if (it != _constSubst.end()) { out = it->second; return true; }
+        if (it != _constSubst.end()) { out = it->second.value; return true; }
         // 6b-2: a function-local `const` bound to a folded integer (`const int32 CAP = 8;` then
         // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
         auto lv = _constLocalVals.find(*arg->value);
@@ -5438,6 +5445,41 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         if (mc != _moduleConsts.end()) { out = mc->second; return true; }
     }
     return false;
+}
+
+// Bind one instantiation's parameters. A const param binds a VALUE plus the width it was declared with;
+// every other param binds a type. One loop, so the two maps can never disagree about which is which.
+void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdentifierList& constTypes,
+                              const std::vector<SharedIdentifier>& args)
+{
+    _typeSubst.clear();
+    _constSubst.clear();
+    if (!params) return;
+    for (size_t i = 0; i < params->size() && i < args.size(); ++i) {
+        if (!(*params)[i]) continue;
+        const std::string& pn = *(*params)[i];
+        // `constTypes` is parallel to `params` and non-null exactly on a const param — the same fact
+        // `constParams` carries as a name subset, but positional, so the declared width comes with it.
+        SharedIdentifier ct = (constTypes && i < constTypes->size()) ? (*constTypes)[i] : SharedIdentifier();
+        int64_t v;
+        if (ct && constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = ct->builtInVal; _constSubst[pn] = b; }
+        else                             _typeSubst[pn] = args[i];
+    }
+}
+
+// A bound const param as a C value: the integer, cast to the type it was declared with. Without the cast
+// a bare `8` is a C `int`, so `const F: uint32` would compare signed and `const F: int8` would not wrap
+// where a real `int8` local does — the value has to behave as the declared type under every promotion.
+std::string CEmitter::constParamCValue(const std::string& name)
+{
+    auto it = _constSubst.find(name);
+    if (it == _constSubst.end()) return "";
+    const ConstBinding& b = it->second;
+    std::string lit = std::to_string(b.value);
+    // The literal has to be REPRESENTABLE before the cast can apply, so the 64-bit kinds keep a suffix.
+    if (b.kind == IDENTIFIER_INT64_VAL)  lit += "LL";
+    if (b.kind == IDENTIFIER_UINT64_VAL) lit = std::to_string((uint64_t)b.value) + "ULL";
+    return "((" + cType(primTypeNode(b.kind)) + ")" + lit + ")";
 }
 
 bool CEmitter::isFixedColl(const std::string& cls) const
@@ -5454,7 +5496,10 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
     // const generic ARGUMENT: a literal value (`Fixed<T,4>`) or a const-param identifier bound in
     // this instantiation (`Fixed<T,N>` with N=4) mangles to the integer itself (`_4`), symmetric to
     // a type arg's name. Consulted before the type-param path since a const arg has no `value`.
-    { int64_t v; if (constArgN(elem, v)) return std::to_string(v); }
+    // A NEGATIVE value spells its sign as `n`: `-` is not a C identifier character, so `f::<(-1)>()`
+    // otherwise mangled to `_F4__neg8__-1` and died in the C compiler with no kama diagnostic.
+    { int64_t v; if (constArgN(elem, v))
+        return v < 0 ? "n" + std::to_string(-(uint64_t)v) : std::to_string(v); }
     // substitute a bound type-param before mangling (mirrors cType).
     if (!_typeSubst.empty() && elem->value && !elem->genericArg) {
         auto s = _typeSubst.find(*elem->value);
@@ -6444,7 +6489,12 @@ std::string CEmitter::scanPrimKeyOf(SharedExpression e)
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (!id->value) return "";
         auto it = _scanLocalTys.find(*id->value);
-        if (it == _scanLocalTys.end()) return "";
+        if (it == _scanLocalTys.end()) {
+            auto cs = _constSubst.find(*id->value);
+            if (cs == _constSubst.end()) return "";
+            std::string ck = primKey(primTypeNode(cs->second.kind));
+            return isScalarPrimKey(ck) ? ck : std::string();
+        }
         std::string k = primKey(it->second);
         return isScalarPrimKey(k) ? k : std::string();
     }
@@ -6820,7 +6870,11 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (!id->value) return nullptr;
         auto it = localTys.find(*id->value);
-        return it != localTys.end() ? it->second : nullptr;
+        if (it != localTys.end()) return it->second;
+        // A bound const generic param is a value of its DECLARED integral type. Answered with a
+        // synthesized node (not the declaration's own), so the reference index stays clean.
+        auto cs = _constSubst.find(*id->value);
+        return cs != _constSubst.end() ? primTypeNode(cs->second.kind) : nullptr;
     }
     if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
     if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
@@ -7377,19 +7431,9 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     if (cit != _genericCtx.end()) _nsCtx = cit->second;
 
     // Bind each parameter to its argument: a const param (`const N: int`) binds a VALUE in
-    // _constSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`); a type param binds a type
-    // in _typeSubst. Both are cleared identically at the end.
-    std::set<std::string> cps;
-    if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
-    _typeSubst.clear();
-    _constSubst.clear();
-    for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
-        if (!(*tmpl->typeParams)[i]) continue;
-        const std::string& pn = *(*tmpl->typeParams)[i];
-        int64_t v;
-        if (cps.count(pn) && constArgN(gi.typeArgs[i], v)) _constSubst[pn] = v;
-        else _typeSubst[pn] = gi.typeArgs[i];
-    }
+    // _constSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`, and the body can READ `N`);
+    // a type param binds a type in _typeSubst. Both are cleared identically at the end.
+    bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
 
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
@@ -7415,17 +7459,7 @@ void CEmitter::registerInstColls()
         if (!tmpl || !tmpl->block || !tmpl->typeParams) continue;
         auto cit = _genericCtx.find(gi.templateKey);
         _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
-        std::set<std::string> cps;
-        if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
-        _typeSubst.clear();
-        _constSubst.clear();
-        for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
-            if (!(*tmpl->typeParams)[i]) continue;
-            const std::string& pn = *(*tmpl->typeParams)[i];
-            int64_t v;
-            if (cps.count(pn) && constArgN(gi.typeArgs[i], v)) _constSubst[pn] = v;
-            else _typeSubst[pn] = gi.typeArgs[i];
-        }
+        bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
         _scanLocalTys.clear();
         _constLocalVals.clear();   // 6b-2: local const values are per-body
         if (tmpl->parameters) for (auto& p : *tmpl->parameters)
@@ -7506,15 +7540,9 @@ void CEmitter::registerInstGenerics()
             if (!tmpl->block || !tmpl->typeParams) continue;
             auto cit = _genericCtx.find(gi.templateKey);
             _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
-            std::set<std::string> cps;
-            if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
-            _typeSubst.clear();
-            for (size_t i = 0; i < tmpl->typeParams->size() && i < gi.typeArgs.size(); ++i) {
-                if (!(*tmpl->typeParams)[i]) continue;
-                const std::string& pn = *(*tmpl->typeParams)[i];
-                if (cps.count(pn)) continue;             // a const param is a value, not a type binding
-                if (gi.typeArgs[i]) _typeSubst[pn] = gi.typeArgs[i];
-            }
+            // A const param binds a VALUE, not a type — but it still has to bind, or a generic call in
+            // this body that passes one (`ident(x: F)`) cannot infer the callee's type parameter from it.
+            bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
             std::map<std::string, SharedIdentifier> lt; seed(tmpl->parameters, lt);
             scanStmtForGenerics(tmpl->block, lt);
         }
@@ -16686,6 +16714,7 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
+        if (id->value) { auto cs = _constSubst.find(*id->value); if (cs != _constSubst.end()) return cType(primTypeNode(cs->second.kind)); }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -16725,6 +16754,7 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
+        if (id->value) { auto cs = _constSubst.find(*id->value); if (cs != _constSubst.end()) return primTypeNode(cs->second.kind); }
     } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {

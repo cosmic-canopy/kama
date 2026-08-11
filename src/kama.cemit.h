@@ -923,7 +923,12 @@ private:
     std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
     std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
-    std::map<std::string, int64_t>                  _constSubst;    // const-param name (`const N: int`) -> value (parallel to _typeSubst)
+    // A bound const generic param: its folded value AND the integral type it was DECLARED with. The two
+    // travel together in one map on purpose — the value alone was enough while a const param could only
+    // be a size, but reading it as a value needs the width, and a second parallel map would be one
+    // missed `clear()` away from a stale binding silently retyping an unrelated name.
+    struct ConstBinding { int64_t value = 0; int kind = 0; };   // kind = the declared type's builtInVal
+    std::map<std::string, ConstBinding>             _constSubst;    // const-param name (`const N: int`) -> binding (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
     // Build a type node the PARSER never saw (`Chars`, `Split`, a fallible ctor's `Optional<T>`), tagged
@@ -1144,6 +1149,15 @@ private:
     // integer literal, or a const-param identifier bound in the current instantiation via _constSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
+    // Bind one instantiation's parameters: a const param binds a VALUE (+ its declared width) in
+    // _constSubst, every other param binds a type in _typeSubst. Clears both first — this IS the
+    // binding, not an addition to one. `constTypes` is parallel to `params` (null = a type param).
+    void bindInstParams(const SharedStringList& params, const SharedIdentifierList& constTypes,
+                        const std::vector<SharedIdentifier>& args);
+    // A bound const param spelled as a C VALUE — the integer cast to its declared type. The cast is
+    // load-bearing: a bare `8` is a C `int`, so a `const F: uint32`/`int8` would promote and compare
+    // differently from a real local of the type the author wrote. "" if `name` is not bound.
+    std::string constParamCValue(const std::string& name);
     // A `Fixed<T,N>` intrinsic instance (a value-semantics collection). Its indexing/foreach reuse the
     // collection machinery, but it is carved out of ownership (never destructible, copies freely).
     bool isFixedColl(const std::string& cls) const;

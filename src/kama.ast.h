@@ -292,6 +292,10 @@ public:
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
     bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
+    // The declared integral type of that parameter (`int32` in `const N: int32`). Carried because the
+    // param is READ as a value in the body: a bare literal would be a C `int`, so `const N: uint32` or
+    // `int8` would promote and compare differently from a real local of the type the author wrote.
+    SharedIdentifier constType;
     // `<T is This>` on a `type contract` — the parameter is PINNED to the implementing type. `is` is an
     // identity constraint, which is why it is not a `bounds` entry: a bound list holds contracts, and
     // admitting a non-contract there would need an exception plus a hand-rejection of `This + Contract`.
@@ -353,6 +357,7 @@ public:
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
     bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
     SharedAttributeList attributes; // `@interrupt`/`@section(".x")` (null when none) — MCU codegen attributes
@@ -864,6 +869,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typeDefaults; // per-param default type (`= DefaultHasher`) parallel to typeParams; null entry = no default
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
@@ -1065,6 +1071,7 @@ public:
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
     SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default
     SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)

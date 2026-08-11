@@ -1,0 +1,13 @@
+// A const param read as a value inside a string interpolation. `${F}` and `${F:x}` both route through
+// holeBuiltinType, which asks receiverTypeNode for the hole's type — a path that knew about locals and
+// fields but not about a bound const param, so a formatted hole reported "base specifier `:x` applies
+// only to an integer hole" about something that plainly was one.
+fn int32 widths<const F: int32>() {
+    string d = "${F}";
+    string h = "${F:x}";
+    int32 n = 0;
+    if (d == "255")  { n = n + 1; }
+    if (h == "ff")   { n = n + 1; }
+    return n;
+}
+fn int32 main() { return widths::<255>(); }   // 2

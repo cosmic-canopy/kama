@@ -1,0 +1,29 @@
+// A const generic parameter READ AS A VALUE. Until now a const param could only be a size — a
+// `InlineArray<int32, N>` bound or a `[v; (N+1)]` repeat count — because emitExpression's identifier
+// branch never consulted the binding. `x >> F` emitted a bare `F` into C and died in clang with NO
+// kama diagnostic: silent bad codegen, and the same on a generic type.
+//
+// The value is spelled with the width it was DECLARED with (see constgen_value_widths), and each
+// instantiation binds its own — `shifted::<4>` and `shifted::<2>` are separate specializations.
+fn int32 shifted<const F: int32>(int32 x) { return x >> F; }
+
+// Read in a local's initializer, in arithmetic, and as a loop bound — not just in the return.
+fn int32 scaled<const K: int32>(int32 x) {
+    int32 y = K * 2;
+    int32 t = 0;
+    int32 i = 0;
+    while (i < K) { t = t + x; i = i + 1; }   // K as a runtime comparison operand
+    return t + y;
+}
+
+// A const param and a type param in one list, with the const read as a value in the body.
+fn T pick<T, const N: int32>(T a, T b) { if (N > 0) { return a; } return b; }
+
+fn int32 main() {
+    int32 a = shifted::<4>(x: 256);   // 16
+    int32 b = shifted::<2>(x: 256);   // 64
+    int32 c = scaled::<3>(x: 4);      // 4+4+4 + 6 = 18
+    int32 d = pick::<int32, 1>(a: 3, b: 99);    // N > 0 -> 3
+    int32 e = pick::<int32, 0>(a: 99, b: 5);    // N == 0 -> 5
+    return a + b + c + d + e;         // 16 + 64 + 18 + 3 + 5 = 106
+}

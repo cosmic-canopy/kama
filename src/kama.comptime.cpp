@@ -188,7 +188,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     auto mc = _moduleConsts.find(qualify(*id->value));
     if (mc != _moduleConsts.end()) { asInt(mc->second); return true; }
     auto cs = _constSubst.find(*id->value);
-    if (cs != _constSubst.end()) { asInt(cs->second); return true; }
+    if (cs != _constSubst.end()) { asInt(cs->second.value); return true; }
     auto lv = _constLocalVals.find(*id->value);
     if (lv != _constLocalVals.end()) { asInt(lv->second); return true; }
     return false;
