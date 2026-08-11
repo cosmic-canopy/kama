@@ -474,12 +474,20 @@ module_variable_declaration
 
 literal
   : boolean_literal
-  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol( $1->c_str(), NULL, 10)); }
-  | HEX_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol( $1->c_str(), NULL, 16)); }
-  | OCT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol( $1->substr(2).c_str(), NULL, 8)); }
+  /* ⚠️ strtoLL, not strtol: `long` is 64-bit on Unix and 32-BIT ON WINDOWS (LLP64), so strtol SATURATES
+     an unsuffixed literal above 2147483647 to LONG_MAX there and silently returns a different number
+     than the same source produces on macOS or Linux. `att.depthSlice = 4294967295` — WebGPU's
+     DEPTH_SLICE_UNDEFINED — compiled to 2147483647, and wgpu rejected the render pass with "Depth slice
+     was provided but the color attachment's view is not 3D": the native examples/webgpu triangle drew
+     nothing on Windows and was fine everywhere else. strtoll is 64-bit on every platform, so the
+     narrowing to Int32Node's int32_t wraps identically on all of them, which is the point.
+     The suffixed forms below already learned this (see createIntegerLiteralNode's note on strtoull). */
+  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->c_str(), NULL, 10)); }
+  | HEX_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->c_str(), NULL, 16)); }
+  | OCT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->substr(2).c_str(), NULL, 8)); }
   | BASED_LITERAL_NO_SUFFIX   { std::string::size_type underscoreIndex = $1->find('_');
-    int base = strtol($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
-    $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol( $1->substr(2, underscoreIndex - 3).c_str(), NULL, base)); 
+    int base = (int)strtoll($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
+    $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->substr(2, underscoreIndex - 3).c_str(), NULL, base));
   }
   | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1 ); }
   | HEX_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  16, $1->substr(2) ); }
@@ -524,7 +532,7 @@ interp_hole
   ;
 interp_index
   : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, strtol($1->c_str(), NULL, 10))); }
+  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll($1->c_str(), NULL, 10))); }
   ;
 boolean_literal
   : TRUE   { $$ = std::make_shared<BooleanNode>(SCANNER_CODEGENCONTEXT, true); }

@@ -27,9 +27,12 @@ case "$arch" in
   *) echo "fetch-webgpu: unsupported arch '$arch'" >&2; exit 1 ;;
 esac
 
-# Windows prebuilts come in msvc/gnu flavors; default to msvc (the common toolchain).
+# Windows prebuilts come in msvc/gnu flavors, and the choice is not a preference — an import library
+# has to match the toolchain doing the link. kama on Windows is built with mingw-w64 clang under msys2
+# (see the CI job and the Makefile's -static), so `gnu` is the one that links; `msvc` was the default
+# here and produces an archive mingw's linker cannot read. Overridable for anyone building with MSVC.
 if [ "$plat" = windows ]; then
-  ASSET="wgpu-${plat}-${cpu}-msvc-release.zip"
+  ASSET="wgpu-${plat}-${cpu}-${WGPU_WINDOWS_ABI:-gnu}-release.zip"
 else
   ASSET="wgpu-${plat}-${cpu}-release.zip"
 fi
