@@ -4246,6 +4246,36 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
+
+        // kama has no overloading, so a name is declared once per namespace — but this was a bare
+        // assignment, so a second declaration silently REPLACED the first. For a plain function clang
+        // caught it downstream as a C redefinition (a C-level diagnostic for a kama-level error); for a
+        // generic template nothing caught it at all — the LAST body won and the program built clean.
+        // Same shape as the duplicate-operator rejection: the key carries the discriminator, so a
+        // collision on the exact key IS the error.
+        //
+        // `extern` is exempt on BOTH sides. Re-declaring a C entry point in each module that calls it is
+        // idiomatic and pervasive here (`malloc` in 3 files, `kama_last_error` in 5), and it is what an
+        // extern IS — a reference to a symbol someone else defines, not a definition. A genuinely
+        // conflicting pair still fails, in the C compiler, on the two disagreeing prototypes.
+        //
+        // Both lines come off `fn->name`, not `fn`: a declaration node is built with the lexer counter at
+        // reduce time, which lags by one lookahead token, while the NAME is STAMP_LOC'd from `@4` — the
+        // arm's own comment says so ("an unmodified fn's @$ starts at the previous token"). A duplicate
+        // must point at the duplicate, so the accurate span is the one worth reading.
+        if (!isExtern(fn)) {
+            auto prev = _funcs.find(sig.cName);
+            if (prev != _funcs.end() && !(prev->second.node && isExtern(prev->second.node))) {
+                FunctionDeclarationNode* first = prev->second.node;
+                std::string where = (first && first->name)
+                                        ? " (first declared at line " + std::to_string(first->name->line) + ")"
+                                        : std::string();
+                unsupported(("duplicate function '" + *fn->name->value + "' — kama has no overloading, so a "
+                             "name may be declared only once in its namespace" + where).c_str(),
+                            fn->name->line);
+            }
+        }
+
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is

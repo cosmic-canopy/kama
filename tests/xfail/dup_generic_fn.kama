@@ -1,0 +1,9 @@
+// kama has no overloading, so a name is declared once per namespace — and for a GENERIC function
+// nothing enforced that. `_generics[cName]` was a bare map assignment, so the second declaration
+// silently replaced the first: this program built clean and returned 6, the LAST body's answer, with
+// no diagnostic anywhere. A plain function at least died in the C compiler as a redefinition; this one
+// was a wrong program that compiled.
+fn T id<T>(T x) { return x; }
+fn T id<T>(T x) { return x + x; }
+
+fn int32 main() { return id(x: 3); }
