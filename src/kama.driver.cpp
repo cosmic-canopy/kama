@@ -48,6 +48,13 @@
   // interactive. HANDLE is void*, DWORD is unsigned long; __stdcall is a no-op on x64/ARM64 and correct on x86.
   extern "C" void* __stdcall GetStdHandle(unsigned long);
   extern "C" int   __stdcall GetConsoleMode(void*, unsigned long*);
+  // Three more, for absolutePath's reparse-point resolution — see the note there. The CRT's _fullpath
+  // canonicalizes text and never touches the disk, so it cannot see a junction; only a handle to the
+  // opened object can be asked where it actually landed.
+  extern "C" void*         __stdcall CreateFileA(const char*, unsigned long, unsigned long, void*,
+                                                 unsigned long, unsigned long, void*);
+  extern "C" unsigned long __stdcall GetFinalPathNameByHandleA(void*, char*, unsigned long, unsigned long);
+  extern "C" int           __stdcall CloseHandle(void*);
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -146,7 +153,37 @@ std::string absolutePath(const std::string& path)
     // paths are minted: Win32 and the CRT accept forward slashes everywhere, as do gcc/clang command lines.
     // The fallback below is normalized too: a caller that handed us a backslash spelling of a file that
     // does not exist yet must not be the one path that escapes the convention.
-    std::string s = _fullpath(buf, path.c_str(), PATH_MAX) ? std::string(buf) : path;
+    // ⚠️ And RESOLVE REPARSE POINTS, because resolving links is what the POSIX branch below DOES — this
+    // function is realpath(), and the rest of the driver leans on that. `joinPathLexical` exists purely to
+    // opt OUT of it; `owningPackageDir` opts IN, and that is load-bearing: a fetched package is reached
+    // through the `.kama/deps/<name>` link, and the check that a package's manifest is not the user's to
+    // edit is "did I land inside the store?". _fullpath is pure text manipulation and never touches the
+    // disk, so on Windows — where linkDir materializes the view with `mklink /J`, a JUNCTION — that walk
+    // stopped at the view entry, the store test failed, and `kama build` told the user to go edit a
+    // kama.json inside the content-addressed store, whose tree hash the edit would invalidate.
+    //
+    // Only a handle knows. FILE_FLAG_BACKUP_SEMANTICS is what makes CreateFile open a DIRECTORY at all,
+    // and access 0 asks for metadata only, so this neither locks the file nor needs rights to read it.
+    // A path that does not exist yet cannot be opened — a `-o` output, say — so that falls through to
+    // _fullpath, mirroring realpath's own failure mode (POSIX falls back to the path as given).
+    std::string s;
+    void* h = CreateFileA(path.c_str(), 0, 0x7 /* FILE_SHARE_READ|WRITE|DELETE */, nullptr,
+                          3 /* OPEN_EXISTING */, 0x02000000 /* FILE_FLAG_BACKUP_SEMANTICS */, nullptr);
+    if (h != (void*)-1) {          // INVALID_HANDLE_VALUE
+        char fin[PATH_MAX];
+        // 0 == FILE_NAME_NORMALIZED | VOLUME_NAME_DOS: the long-name spelling on a drive letter, not the
+        // \\?\Volume{GUID} form. A return >= the buffer means "needed this much" — treat it as a miss and
+        // fall back, which keeps the MAX_PATH ceiling this file already documents as a known limit.
+        unsigned long n = GetFinalPathNameByHandleA(h, fin, (unsigned long)sizeof fin, 0);
+        CloseHandle(h);
+        if (n > 0 && n < (unsigned long)sizeof fin) s.assign(fin, n);
+    }
+    if (s.empty()) s = _fullpath(buf, path.c_str(), PATH_MAX) ? std::string(buf) : path;
+    // GetFinalPathNameByHandle always answers in the \\?\ extended form. Strip it: everything downstream
+    // (and every C compiler command line) wants the ordinary spelling, and a UNC path comes back as
+    // \\?\UNC\server\share, whose ordinary spelling is \\server\share.
+    if      (s.rfind("\\\\?\\UNC\\", 0) == 0) s = "\\\\" + s.substr(8);
+    else if (s.rfind("\\\\?\\",      0) == 0) s = s.substr(4);
     for (char& c : s) if (c == '\\') c = '/';
     return s;
 #else
