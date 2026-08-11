@@ -77,7 +77,11 @@ SET="$GATED $ROOT/tests/parse_radix.kama $ROOT/tests/xfail/$(ls "$ROOT/tests/xfa
 : >"$tmp/solo.v"; : >"$tmp/solo.err"
 for f in $SET; do
     "$KAMA" check "$f" >/dev/null 2>>"$tmp/solo.err" && rc=0 || rc=$?
-    echo "$rc $f" >>"$tmp/solo.v"
+    # kama's OWN spelling of the path, because that is what `--each` prints in its verdict lines and this
+    # file is diffed against them. Under msys2 the shell holds `/c/Users/…` while kama — which received the
+    # path already converted, as arguments always are — reports `C:/Users/…`. Same file, and the diff was
+    # 1,3c1,3 on every line. Identity everywhere else.
+    echo "$rc $(kama_native_path "$f")" >>"$tmp/solo.v"
 done
 # shellcheck disable=SC2086
 "$KAMA" check --each $SET >"$tmp/each.v" 2>"$tmp/each.err" || true

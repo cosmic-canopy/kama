@@ -117,8 +117,10 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          # diffutils + git: not in the msys2 base install, and tools/run-checks.sh refuses to start
+          # without them (see ci.yml for what their absence looked like before it did).
           install: >-
-            make bison flex unzip
+            make bison flex unzip diffutils git
             mingw-w64-ucrt-x86_64-clang
       - name: Derive version (from tag)
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"

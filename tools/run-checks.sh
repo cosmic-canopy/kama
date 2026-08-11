@@ -62,6 +62,27 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$JOBS" ] || JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
+# --- preflight: the tools the guards compare WITH ---------------------------------------------------
+# A guard that cannot find `diff` does not report a missing tool. It reports the COMPARISON as failed.
+# That is how a clean tree said "the binary's AGENTS.md differs from agents/AGENTS.md" on the Windows
+# leg: msys2's base install carries neither diffutils nor git, CI installed neither, and nine guards
+# blamed the repository for it — a confident, specific, wrong diagnosis in place of "diff: not found".
+#
+# So ask once, here, and name the tool. These three are the ones no guard can work around: `diff`/`cmp`
+# are how a generated file is checked against its committed copy, and `git` is how check-editors.sh
+# resolves the commits editor/zed/extension.toml pins and how check-packages.sh serves a `file://` dep.
+missing=
+for t in diff cmp git; do
+    command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+if [ -n "$missing" ]; then
+    echo "run-checks.sh: missing required tool(s):$missing" >&2
+    echo "  the guards compare files and resolve commits with these; without them they report" >&2
+    echo "  false content failures instead of saying the tool is absent." >&2
+    echo "  msys2: pacman -S diffutils git   |   debian: apt-get install diffutils git" >&2
+    exit 2
+fi
+
 # This pool is already $JOBS wide and several guards call `kama build`, so `kama build`'s own `-j` must
 # not fan out underneath it — same reasoning as run_tests.sh. Overridable so check-build-jobs.sh (which
 # passes -j on the command line, where it wins) still measures what it means to.
@@ -111,7 +132,7 @@ run_one() {
     # means a future git/url dep in any guard cannot race another guard — or the user's own store.
     # HOME is deliberately NOT overridden: npm and the tree-sitter CLI cache under it, and
     # check-toolchain.sh already isolates its own.
-    KAMA_STORE="$WORK/store/$_n"; export KAMA_STORE
+    KAMA_STORE="$(kama_native_path "$WORK")/store/$_n"; export KAMA_STORE
     if [ "$HAVE_TIME" = 1 ]; then
         # `-p` prints "real <sec>" on ITS stderr; the inner sh redirects the guard's own stdout+stderr
         # into the log before exec, so the two never mix. Exit status passes through (verified: macOS

@@ -25,7 +25,13 @@ if ! command -v curl >/dev/null 2>&1; then echo "check-packages: SKIP (curl not 
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export KAMA_STORE="$tmp/store"          # isolate the store; NOT KAMA_HOME (that selects the stdlib root)
+# Native-spelled: KAMA_STORE reaches kama through the ENVIRONMENT, which msys2 does not path-convert the
+# way it converts arguments (see kama_native_path in tools/kama-bin.sh). Left as `/tmp/…` the store landed
+# on a different drive root than the one this guard writes its fixtures to.
+#
+# The `file://` URLs below stay POSIX on purpose. git here is msys2's own build, which resolves `/tmp/x`
+# natively and reads a `file:///C:/x` URL as the path `/C:/x` — "does not appear to be a git repository".
+export KAMA_STORE="$(kama_native_path "$tmp")/store"   # isolate the store; NOT KAMA_HOME (that selects the stdlib root)
 
 # ---- a tiny package as a local git repo, tagged v1.0.0 -----------------------------------------------
 geo="$tmp/geo-src"
@@ -70,7 +76,14 @@ if ! grep -q '"commit"' "$lock" || ! grep -q '"integrity": "sha256-' "$lock"; th
     sed 's/^/  /' "$lock" >&2; exit 1
 fi
 link="$proj/.kama/deps/geo"
+# Normalized to the same spelling as $KAMA_STORE before comparing. On Windows the view entry is a junction
+# (mklink /J) and readlink hands back the msys spelling `/tmp/…` of a store that kama created — correctly —
+# at `C:/msys64/tmp/…`. Same directory, two names; without this the case below rejects a passing result.
 target=$(readlink "$link" 2>/dev/null || true)
+# `if`, not `[ -n … ] && …`: under `set -e` a trailing test that comes out false is the script's exit
+# status, so an empty $target (readlink on a Windows junction can give one) killed this guard with no
+# message at all rather than reaching the case below.
+if [ -n "$target" ]; then target=$(kama_native_path "$target"); fi
 case "$target" in
     "$KAMA_STORE"/geo-*) : ;;   # view symlink points into the content-addressed store
     *) echo "check-packages: FAIL — .kama/deps/geo does not link into the store (got '$target')" >&2; exit 1 ;;
@@ -438,7 +451,12 @@ mv "$gv.hidden" "$gv"
 # `kama publish` writes a static registry (<name>/index.json + <name>/<version>.tar.gz); a registry dep
 # (a bare `version` range + a `registry` base) resolves the highest version FROM the index and reduces to
 # a url dep for the fetch. Everything runs against a `file://` dir — nothing needs a live host.
-reg="$tmp/reg"; mkdir -p "$reg"
+# Native-spelled, unlike the git repos above, because a `file://` REGISTRY is a plain directory: kama
+# strips the scheme and uses the rest as a path (registryDirFromArg), then hands that same path to tar.
+# Left as `/tmp/…`, native kama resolved it against the current drive (`C:\tmp\…`) while msys2's tar read
+# it as `C:\msys64\tmp\…`, so publish created the staging directory in one place and tar looked in another.
+# The git URLs must stay POSIX for the opposite reason — msys2's git resolves `/tmp/…` itself.
+reg="$(kama_native_path "$tmp")/reg"; mkdir -p "$reg"
 
 # publish two versions of `rg` (area() returns a version-distinguishing value) by dogfooding `kama publish`.
 pub_rg() {   # pub_rg <version> <area-return>
@@ -469,7 +487,7 @@ if ! "$KAMA" pkg install "$rc1" >"$tmp/rc1.out" 2>&1; then echo "check-packages:
 lock="$rc1/kama.lock"
 grep -q '"source": "registry"' "$lock" && grep -q '"version": "1.2.0"' "$lock" && grep -q '"integrity": "sha256-' "$lock" \
     || { echo "check-packages: FAIL — registry lock missing source/version/integrity:" >&2; sed 's/^/  /' "$lock" >&2; exit 1; }
-case "$(readlink "$rc1/.kama/deps/rg" 2>/dev/null || true)" in
+case "$(kama_native_path "$(readlink "$rc1/.kama/deps/rg" 2>/dev/null || echo /nonexistent)")" in
     "$KAMA_STORE"/rg-*) : ;;
     *) echo "check-packages: FAIL — .kama/deps/rg does not link into the store" >&2; exit 1 ;;
 esac
@@ -516,7 +534,7 @@ mv "$reg.hidden" "$reg"
 
 # 22. scoped routing + opt-out-of-default. Publish `@acme/sc` to a scope registry; a consumer routes
 # `@acme` to it (and drops the default), imports it as `sc`, builds, and runs.
-areg="$tmp/areg"; mkdir -p "$areg"
+areg="$(kama_native_path "$tmp")/areg"; mkdir -p "$areg"
 sc="$tmp/sc-src"; mkdir -p "$sc"
 printf '{ "name": "@acme/sc", "version": "1.0.0" }\n' > "$sc/kama.json"
 printf 'namespace sc;\nexport { val };\nfn int32 val() { return 7; }\n' > "$sc/sc.kama"
@@ -547,7 +565,9 @@ grep -qi "no registry configured" "$tmp/opo.out" || { echo "check-packages: FAIL
 # 23. re-pointable scope + the confusion guard. `cf` published with the SAME bytes to two registries and
 # DIFFERENT bytes (same version) to a third. Re-pointing to the same-bytes mirror re-resolves with an
 # unchanged integrity; re-pointing to the different-bytes mirror is a hard error.
-ra="$tmp/cf-a"; rb="$tmp/cf-b"; rc_="$tmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
+# Native-spelled: these three are REGISTRIES (see the note at `reg=` above), not git repos.
+ntmp=$(kama_native_path "$tmp")
+ra="$ntmp/cf-a"; rb="$ntmp/cf-b"; rc_="$ntmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
 mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d"; printf '{ "name": "cf", "version": "1.0.0" }\n' > "$d/kama.json"; printf 'namespace cf;\nexport { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/cf.kama"; echo "$d"; }
 csame=$(mkcf same 3); cdiff=$(mkcf diff 4)
 ( cd "$csame" && "$KAMA" publish --registry "file://$ra" ) >/dev/null 2>&1
@@ -570,7 +590,7 @@ if "$KAMA" pkg install "$cfp" >"$tmp/cfc.out" 2>&1; then echo "check-packages: F
 grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusion-guard message unclear:" >&2; sed 's/^/  /' "$tmp/cfc.out" >&2; exit 1; }
 
 # 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
-creg="$tmp/creg"; mkdir -p "$creg"
+creg="$(kama_native_path "$tmp")/creg"; mkdir -p "$creg"
 for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d"; printf '{ "name": "@%s/cn", "version": "1.0.0" }\n' "$scp2" > "$d/kama.json"; printf 'namespace cn;\nexport { val };\nfn int32 val() { return 1; }\n' > "$d/cn.kama"; ( cd "$d" && "$KAMA" publish --registry "file://$creg" ) >/dev/null 2>&1; done
 colp="$tmp/colp"; mkdir -p "$colp"
 cat > "$colp/kama.json" <<JSON
@@ -585,7 +605,7 @@ grep -qi "collision" "$tmp/colp.out" || { echo "check-packages: FAIL — collisi
 # `kama publish --key` signs the tarball; the index carries the signature + signer key. `--verify` on
 # install enforces (a present signature must verify; a missing one is an error); the default is warn-only.
 if command -v ssh-keygen >/dev/null 2>&1; then
-    sreg="$tmp/sreg"; mkdir -p "$sreg"
+    sreg="$(kama_native_path "$tmp")/sreg"; mkdir -p "$sreg"
     ssh-keygen -t ed25519 -f "$tmp/pubkey" -N "" -q
     sg="$tmp/sg-src"; mkdir -p "$sg"
     printf '{ "name": "sg", "version": "1.0.0" }\n' > "$sg/kama.json"

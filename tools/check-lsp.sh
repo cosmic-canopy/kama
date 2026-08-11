@@ -129,17 +129,29 @@ TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    p
 QURI="file:///shapes.kama"
 SHP='namespace t;\ntype value Point { public int32 x;   public ctor zero() { this.x = 0; } }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p = Point.zero(); Point q = mid(a: p); return q.x; }\n'
 
+# A `file://` URI the SERVER can resolve back to a real file. The in-memory buffers above use invented
+# paths and never get opened, but the two below are read off disk, so their URI has to name the file the
+# way the OS does: under msys2 $ROOT is `/c/Users/…`, which a native kama resolves against the current
+# drive as `C:\c\Users\…` and cannot open. `cygpath -m` gives `C:/Users/…`, and the extra slash makes it
+# the conventional `file:///C:/…` that uriToPath strips back off.
+furi() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) printf 'file:///%s' "$(cygpath -m "$1")" ;;
+        *)                    printf 'file://%s'  "$1" ;;
+    esac
+}
+
 # Module-loading fixture: a REAL on-disk file that imports a std module. Unlike the in-memory buffers above
 # (fake paths -> single-file fallback), this exercises loadProgramUnits pulling std::collections off disk so
 # the imported DynamicArray resolves (no false "does not export"), and cross-module go-to-def into the std
 # source. URI must be the real path so imports resolve relative to it + the stdlib.
-IURI="file://$ROOT/tests/query/imports.kama"
+IURI=$(furi "$ROOT/tests/query/imports.kama")
 IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
 # M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
-WWURI="file://$ROOT/tests/query/ws/widget.kama"
+WWURI=$(furi "$ROOT/tests/query/ws/widget.kama")
 WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
@@ -210,7 +222,7 @@ cat > "$tmp/own/shared/shared.kama" <<'KAMA'
 namespace shared;
 type value Leak { public int32 v;   public ctor zero() { this.v = 0; } }
 KAMA
-OURI="file://$tmp/own/proj/app.kama"
+OURI=$(furi "$tmp/own/proj/app.kama")
 OSRC='namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n'
 printf 'namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
 
@@ -232,10 +244,10 @@ type resource Sink implements Writer {
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 }
 KAMA
-CIURI="file://$tmp/impl/sink.kama"
+CIURI=$(furi "$tmp/impl/sink.kama")
 CISRC='namespace sink;\nimport std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
-DURI="file://$dep/app/app.kama"
+DURI=$(furi "$dep/app/app.kama")
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
 # M6 A3 fixture: a FREE-RIDING sub-project. `libs/net` imports `config`, but only the top-level app
@@ -270,7 +282,7 @@ frok=0
 cat > "$frws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "sources": ["."] }
 JSON
-FRURI="file://$frws/libs/net/net.kama"
+FRURI=$(furi "$frws/libs/net/net.kama")
 FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
 FRSRC2='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
 
@@ -540,11 +552,11 @@ expect '"workspace":{"workspaceFolders":{"supported":true}}' \
                                                         "advertises workspaceFolders support (M3.5)"
 # THE MILESTONE: app.kama is not in widget.kama's import closure, so every one of these would be missing
 # without the project-wide unit set.
-expect '"id":28,"result":[{"uri":"file://'"$ROOT"'/tests/query/ws/widget.kama"' \
+expect '"id":28,"result":[{"uri":"'"$(furi "$ROOT/tests/query/ws/widget.kama")"'"' \
                                                         "references: starts with the declaring file"
 expect '/tests/query/ws/app.kama","range":{"start":{"line":4,"character":3}' \
                                                         "references REACH app.kama, which widget.kama does not import"
-expect '"id":29,"result":{"changes":{"file://'"$ROOT"'/tests/query/ws/app.kama":[' \
+expect '"id":29,"result":{"changes":{"'"$(furi "$ROOT/tests/query/ws/app.kama")"'":[' \
                                                         "rename: the WorkspaceEdit rewrites the OTHER file too"
 # M6 B3f: the declaring file's edits now START with the `export { Widget, … };` mention, which sorts before
 # the declaration. Until the grammar carried per-segment positions the export manifest was not a reference

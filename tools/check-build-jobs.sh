@@ -114,18 +114,33 @@ fi
 # the invocation COUNT is under test here, and this guard runs inside a core-wide parallel pool, so four
 # unnecessary 24-TU builds are four everyone else waits behind. Compiles that produce no object make the
 # link fail, which is fine — the link still counts, and every case below ignores the exit status.
-cat >"$tmp/ccount" <<'EOF'
+#
+# Two spellings of the same shim. kama runs the compiler through system(), which on Windows is `cmd /c`,
+# and cmd cannot execute a `#!/bin/sh` file — it is not a program to it, so the shim never ran and every
+# case here counted 0 invocations. A `.cmd` is the thing cmd.exe will actually start.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        CCOUNT="$tmp/ccount.cmd"
+        printf '@echo off\r\necho x >> "%%COUNTFILE%%"\r\nexit /b 0\r\n' > "$CCOUNT"
+        ;;
+    *)
+        CCOUNT="$tmp/ccount"
+        cat >"$CCOUNT" <<'EOF'
 #!/bin/sh
 echo x >> "$COUNTFILE"
 exit 0
 EOF
-chmod +x "$tmp/ccount"
+        ;;
+esac
+chmod +x "$CCOUNT"
 
 invocations() {   # invocations <label> <expected> -- <extra kama args...>
     lab="$1"; want="$2"; shift 3
-    COUNTFILE="$tmp/count.$lab"; export COUNTFILE
+    # Native-spelled: COUNTFILE reaches the shim through the ENVIRONMENT, which msys2 does not convert
+    # (see kama_native_path). The shell then counts lines in the file it named, not the one cmd wrote.
+    COUNTFILE="$(kama_native_path "$tmp")/count.$lab"; export COUNTFILE
     : > "$COUNTFILE"
-    "$KAMA" build "$MULTI" -o "$tmp/c_$lab" --cc "$tmp/ccount" "$@" >/dev/null 2>&1 || true
+    "$KAMA" build "$MULTI" -o "$tmp/c_$lab" --cc "$CCOUNT" "$@" >/dev/null 2>&1 || true
     got=$(wc -l < "$COUNTFILE" | tr -d ' ')
     unset COUNTFILE
     if [ "$got" = "$want" ]; then ok "$lab: $got compiler invocation(s)"
@@ -217,8 +232,8 @@ for badj in 0 -1 x 99999; do
 done
 # ...and the long form is the same option. Counted through the shim rather than really built, so that
 # "accepted" is checked without a fifth 24-TU compile.
-COUNTFILE="$tmp/count.longform"; export COUNTFILE; : > "$COUNTFILE"
-if "$KAMA" build "$MULTI" -o "$tmp/z2" --cc "$tmp/ccount" --jobs 4 >/dev/null 2>&1 \
+COUNTFILE="$(kama_native_path "$tmp")/count.longform"; export COUNTFILE; : > "$COUNTFILE"
+if "$KAMA" build "$MULTI" -o "$tmp/z2" --cc "$CCOUNT" --jobs 4 >/dev/null 2>&1 \
    || [ -s "$COUNTFILE" ]; then ok "--jobs is accepted as -j's long form"
 else bad "--jobs 4 was rejected"; fi
 unset COUNTFILE

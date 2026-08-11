@@ -19,21 +19,43 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # Total isolation: a throwaway HOME (so kamaHome() = $HOME/.kama) + store; drop any inherited selector env.
-export HOME="$tmp/home"
-export KAMA_STORE="$tmp/home/.kama/store"
+export HOME="$(kama_native_path "$tmp")/home"
+export KAMA_STORE="$HOME/.kama/store"
 unset KAMA_VERSION 2>/dev/null || true
 unset KAMA_NO_SELECT 2>/dev/null || true
 mkdir -p "$HOME/.kama/bin"
 
+# `.exe` where the OS requires one, matching selectorPath()/versionBin() in the driver. The selector
+# recognizes itself by comparing its own executable path against selectorPath(), so a stub named `kama`
+# on Windows is not the selector and not an installed version either — it is simply invisible.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;;
+    *)                    EXE=""     ;;
+esac
+
 # The selector on PATH is a copy of a real kama (here, the repo build). It re-execs the resolved version.
-cp -f "$KAMA" "$HOME/.kama/bin/kama"
-SEL="$HOME/.kama/bin/kama"
+cp -f "$KAMA" "$HOME/.kama/bin/kama$EXE"
+SEL="$HOME/.kama/bin/kama$EXE"
 
 # Two "installed" versions: stub binaries that just announce which one ran (stand in for real toolchains).
+#
+# On Windows the stub must be a REAL EXECUTABLE. The selector hands off with _spawnv, which starts a PE
+# image and nothing else — a `#!/bin/sh` file is not a program it can run, so every hand-off failed. kama
+# is right here and builds one in a second, which also makes the stub a genuine native binary rather than
+# something only a shell would honour.
 mkstub() {
     d="$HOME/.kama/versions/$1/bin"; mkdir -p "$d"
-    printf '#!/bin/sh\necho "TOOLCHAIN %s"\n' "$1" > "$d/kama"
-    chmod +x "$d/kama"
+    case "$EXE" in
+        .exe)
+            printf 'fn int32 main() {\n    println(s: "TOOLCHAIN %s");\n    return 0;\n}\n' "$1" > "$tmp/stub-$1.kama"
+            "$KAMA" build "$tmp/stub-$1.kama" -o "$d/kama.exe" >/dev/null 2>&1 \
+                || { echo "check-toolchain: could not build the $1 stub" >&2; exit 1; }
+            ;;
+        *)
+            printf '#!/bin/sh\necho "TOOLCHAIN %s"\n' "$1" > "$d/kama"
+            chmod +x "$d/kama"
+            ;;
+    esac
 }
 mkstub vA
 mkstub vB

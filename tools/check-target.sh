@@ -33,6 +33,16 @@ esac
 CROSS_LINUX="$CROSS_ARCH-linux-gnu"
 CROSS_WINDOWS="$CROSS_ARCH-windows-gnu"
 
+# The named target used in §6 to prove the cross-toolchain rules has to be genuinely FOREIGN to this
+# host. WINDOWS is not foreign when the host is Windows: kama builds it natively and correctly, so the
+# "no cross toolchain, therefore refuse" branch was asserting a refusal that must never happen there.
+# Every other case in this file stubs the compiler out and only inspects the command line, so the host
+# does not enter into them.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CROSS_OS=LINUX;   CROSS_FILE_MAGIC="ELF" ;;
+    *)                    CROSS_OS=WINDOWS; CROSS_FILE_MAGIC="MS Windows" ;;
+esac
+
 # The assembled cc command line for a given target, with the compiler stubbed out.
 ccline() {
     "$KAMA" build --release --cc "echo" "$FIXTURE" --target "$1" -o "$tmp/out" 2>/dev/null
@@ -131,21 +141,21 @@ fi
 #    one widely-available compiler that bundles every target's libc, so it is the only thing kama can
 #    substitute unprompted and expect to succeed).
 if command -v zig >/dev/null 2>&1; then
-    if ! "$KAMA" build "$FIXTURE" --target WINDOWS -o "$tmp/auto.exe" >/dev/null 2>"$tmp/auto.err"; then
+    if ! "$KAMA" build "$FIXTURE" --target $CROSS_OS -o "$tmp/auto.exe" >/dev/null 2>"$tmp/auto.err"; then
         echo "check-target: FAIL — a cross build did not pick up the zig on PATH:" >&2
         sed 's/^/  /' "$tmp/auto.err" >&2
         exit 1
     fi
     # ...and it must be a real binary FOR THAT TARGET, not a host one with a foreign name.
     if command -v file >/dev/null 2>&1; then
-        if ! file "$tmp/auto.exe" | grep -qi "MS Windows"; then
-            echo "check-target: FAIL — --target WINDOWS produced something that is not a PE binary:" >&2
+        if ! file "$tmp/auto.exe" | grep -qi "$CROSS_FILE_MAGIC"; then
+            echo "check-target: FAIL — --target $CROSS_OS produced something that is not a $CROSS_FILE_MAGIC binary:" >&2
             file "$tmp/auto.exe" | sed 's/^/  /' >&2
             exit 1
         fi
     fi
 else
-    if "$KAMA" build "$FIXTURE" --target WINDOWS -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
+    if "$KAMA" build "$FIXTURE" --target $CROSS_OS -o "$tmp/x" >/dev/null 2>"$tmp/cross.err"; then
         echo "check-target: FAIL — a cross build with no cross toolchain was accepted" >&2
         exit 1
     fi

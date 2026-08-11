@@ -383,7 +383,25 @@ multi_one() {
     # stdlib module collide. Serial, `$TMP/$name` was safe; the moment this leg fans out it is not, which
     # is exactly how 13 of these failed the first time they ran concurrently.
     local wd="$TMP/wm_$name"; mkdir -p "$wd"; exe="$wd/$name"
-    if ! build_one "$exe" "$dir"/*.kama >/dev/null 2>"$TMP/$name.err"; then
+    # A fixture with `dependencies` needs its `.kama/deps` view MATERIALIZED, and materializing writes into
+    # the project — so build a copy under $TMP instead of the worktree (tools/check-clean-tree.sh holds
+    # that line, and it is the same rule the rest of this harness follows).
+    #
+    # The view used to be COMMITTED, as a git symlink into the fixture's own vendor/ directory. Three of
+    # them. Git only creates real symlinks on Windows when core.symlinks is on, which needs Developer Mode
+    # or elevation and is off on the CI runners — everywhere else git writes a PLAIN FILE whose contents
+    # are the target path. The module resolver then found a 16-byte text file where a package directory
+    # was meant to be and said "cannot resolve module 'geo'". Running the real `pkg install` is also the
+    # more honest test: it exercises the code that builds the view rather than a hand-made stand-in.
+    local src="$dir"
+    if [ -f "$dir/kama.json" ] && grep -q '"dependencies"' "$dir/kama.json"; then
+        src="$wd/src"
+        cp -R "$dir" "$src"
+        if ! "$KAMA" pkg install "$src" >/dev/null 2>"$TMP/$name.err"; then
+            { echo "FAIL $name (pkg install failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
+        fi
+    fi
+    if ! build_one "$exe" "$src"/*.kama >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"

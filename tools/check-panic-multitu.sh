@@ -47,9 +47,17 @@ KAMA
 
 # The program is EXPECTED to abort (non-zero) — `|| rc=$?` keeps `set -e` from killing the script here.
 rc=0; "$tmp/prog" >/dev/null 2>"$tmp/err" || rc=$?
-# The runtime always terminates after the handler (abort → signal exit ≥ 128).
-if [ "$rc" -lt 128 ]; then
-    echo "check-panic-multitu: FAIL — expected a runtime abort (exit ≥ 128), got $rc" >&2
+# The runtime always terminates after the handler. "Terminated" is spelled differently per platform:
+# POSIX reports a signal death as 128+signo, while on Windows abort() is not a signal at all — the CRT
+# exits 127. That is the same divergence run_tests.sh records for the whole tests/trap/ leg, which it
+# skips on Windows for exactly this reason. What this guard is actually about is the cross-TU handler
+# below, so assert the portable half: the program did not exit 0.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) abort_ok=$([ "$rc" -ne 0 ] && echo 1 || echo 0) ;;
+    *)                    abort_ok=$([ "$rc" -ge 128 ] && echo 1 || echo 0) ;;
+esac
+if [ "$abort_ok" != 1 ]; then
+    echo "check-panic-multitu: FAIL — expected a runtime abort, got $rc" >&2
     sed 's/^/  /' "$tmp/err" >&2; exit 1
 fi
 # The custom handler must have fired despite the panic originating in another TU.

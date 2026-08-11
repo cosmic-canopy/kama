@@ -76,8 +76,14 @@ jobs:
         with:
           msystem: UCRT64
           update: true
+          # `diffutils` and `git` are NOT in the msys2 base install, and a guard that cannot find `diff`
+          # does not report a missing tool — it reports the comparison as FAILED. That is how
+          # check-agents said "the binary's AGENTS.md differs from agents/AGENTS.md" on a tree where the
+          # two were identical. tools/run-checks.sh now refuses to start without them, so this list and
+          # that preflight are one fact stated twice on purpose: the list makes CI work, the preflight
+          # makes a future omission say so.
           install: >-
-            make bison flex
+            make bison flex diffutils git
             mingw-w64-ucrt-x86_64-clang
       - name: Build
         run: make -j4

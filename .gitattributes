@@ -1,3 +1,14 @@
+# LF in the repository AND in the worktree, on every platform.
+#
+# Without this the checkout obeys `core.autocrlf`, which is `true` on a stock Git for Windows and on
+# GitHub's windows-latest runners — so every text file lands with CRLF. The suite still RUNS, because
+# MSYS2's bash ignores a trailing CR, which is exactly what made this hard to see: it fails only where
+# bytes are COMPARED rather than executed. tools/check-grammar.sh diffs the CRLF docs/grammar.bnf in the
+# worktree against the LF file tools/gen-grammar just wrote, all 1272 lines differ, and the guard reports
+# "the grammar is stale" — a true-looking answer to a question nobody asked. `text=auto` still leaves
+# binary files (assets, .vsix, .png) alone; git detects those itself.
+* text=auto eol=lf
+
 # Kama is the point of this repo — keep the GitHub language bar reading as Kama.
 # The benchmark comparison sources and the parked LLVM backend are not the project's
 # code; mark them vendored so they don't dominate the stats. The C++ compiler sources
