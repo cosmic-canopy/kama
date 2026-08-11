@@ -1,0 +1,1 @@
+shadows the type of the same name

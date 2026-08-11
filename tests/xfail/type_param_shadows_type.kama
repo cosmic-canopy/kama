@@ -1,0 +1,12 @@
+// A type parameter is a BINDER, so `<Point>` legally declared a fresh `Point` shadowing the type —
+// which is what Rust and C++ do too. The problem was the silence: inside the declaration `Point` meant
+// the parameter, the call below bound it to `int32`, and the mistake surfaced as a clang error about
+// `int32_t` not being a structure or union, pointing at generated C.
+//
+// This is also why a generic specialization cannot be spelled `fn f<Concrete>`: that form is already
+// taken, and taken silently. Naming it here is what makes that readable.
+type value Point { public int32 x; }
+
+fn int32 area<Point>(Point p) { return p.x; }
+
+fn int32 main() { return area(p: 5); }

@@ -602,9 +602,27 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 unsupported("`self` names the receiver inside a type body — the kama spelling is `this`; "
                             "rename this parameter", p->identifier->line);
     };
-    auto bindTypeParams = [&](const SharedStringList& names) {
+    // A type parameter is a BINDER, so `fn f<Point>(Point p)` legally declares a fresh `Point` that
+    // shadows the type — Rust and C++ do the same. What was wrong is that nothing said so: inside the
+    // body `Point` silently meant the parameter, `f(p: 5)` bound it to `int32`, and the mistake surfaced
+    // as a clang error about `int32_t` not being a structure. The shadowing is the whole reason a
+    // specialization cannot be spelled `fn f<Concrete>`, so it is worth naming rather than tolerating.
+    //
+    // Resolved through the emitter's own resolver, at the DECLARATION's namespace, so an import, a
+    // per-symbol alias and a `using` all count as visible — and via the Impl form, because recording a
+    // reference from a name that is not a type reference would pollute the LSP index.
+    auto bindTypeParams = [&](const SharedStringList& names, int line, const char* what) {
         tp.clear();
-        if (names) for (auto& n : *names) if (n) tp.insert(*n);
+        if (!names) return;
+        for (auto& n : *names) if (n) {
+            tp.insert(*n);
+            std::string k = resolveUserNameImpl(*n, SharedStringList());
+            if (_classes.count(k) || _enums.count(k) || _interfaces.count(k)
+                || _genericTypes.count(k) || _genericContracts.count(k))
+                unsupported(("type parameter `" + *n + "` of " + what + " shadows the type of the same "
+                             "name, which is then unreachable in this declaration — rename the parameter")
+                                .c_str(), line);
+        }
     };
 
     NsCtx saved = _nsCtx;
@@ -618,12 +636,12 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // passes such a name through verbatim as the literal C spelling. That is the FFI seam
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
                 if (isExtern(fn)) continue;
-                bindTypeParams(fn->typeParams);
+                bindTypeParams(fn->typeParams, fn->name ? fn->name->line : fn->line, "a function");
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
                 checkReturns(fn, nullptr, "function");
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
-                bindTypeParams(cd->typeParams);
+                bindTypeParams(cd->typeParams, cd->name ? cd->name->line : cd->line, "a type");
                 if (cd->members) for (auto& m : *cd->members) {
                     if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
                         check(fld->type, "a field");
@@ -644,7 +662,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     }
                 }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-                bindTypeParams(ed->typeParams);
+                bindTypeParams(ed->typeParams, ed->identifier ? ed->identifier->line : ed->line, "an enum");
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
