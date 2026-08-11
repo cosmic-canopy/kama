@@ -698,41 +698,48 @@ static std::string relativizeToCwd(const std::string& dir)
     return dir;
 }
 
-// The directory of the manifest DRIVING this build: next to the first input, else WALKING UP from it,
-// else the CWD. "" if none. Note this is whoever is compiling, which for a monorepo is not necessarily
-// the package a given source file belongs to — that distinction is the whole of the per-package import
-// check below.
+// THE project-discovery rule. There is one question here — "which project owns this invocation?" — and
+// it used to be answered in four places with three different rules: the dependency view walked nowhere,
+// the build-config path (which decides the `out` root) repeated that same non-walk verbatim, the
+// toolchain selector walked but only from the CWD, and owningPackageDir walked properly but was reserved
+// for a different question. The rules disagreed, so `kama build proj/src/app.kama` from outside proj/
+// could take its dependencies from one project, its output root from another, and its toolchain version
+// from a third. Everything routes through here now; owningPackageDir stays the walk primitive.
 //
-// The walk is the part that took a while to exist, and its absence was invisible until `kama seed`
-// started putting every project's code in `src/`: before that, a project's .kama files sat beside its
-// kama.json and the shallow check happened to succeed. After it,
+// The rule: **walk up from the first input's directory, else from the CWD**, stopping at a `.kama`
+// component so a vendored dependency is never owned by its host project.
 //
-//     kama build proj/src/app.kama          # from proj/'s PARENT
+//     kama build proj/src/app.kama          # from proj/'s PARENT -> proj/
+//     kama run                              # no input -> walk up from the CWD
 //
-// found no manifest at all, and the two consequences compound. Dependencies stopped resolving
-// ("cannot resolve module 'x'"), and — worse because it is silent — the project was treated as
-// manifest-LESS, so the binary landed next to the source in proj/src/ instead of under proj/out/.
-// The same build from inside proj/ worked, which is what made it read as a fluke rather than a rule.
+// Two things this settles that the old spellings got wrong:
 //
-// The walk goes BEFORE the CWD, not after: a file belongs to the project it lives in, not to wherever
-// the shell happens to be standing. Building projB/src/app.kama while sitting in projA now uses
-// projB's manifest rather than silently borrowing projA's.
+//   * The walk goes BEFORE the CWD fallback. A file belongs to the project it LIVES in, not to wherever
+//     the shell happens to be standing — building projB/src/app.kama while sitting in projA uses projB's
+//     manifest rather than silently borrowing projA's.
+//   * With no inputs the CWD is WALKED, not just probed. `projectManifestDir` used to test `./kama.json`
+//     and give up, so `kama run` from a subdirectory of its own project found nothing while the toolchain
+//     selector, walking, found the project — the two disagreeing about the same directory.
 //
-// owningPackageDir already implements exactly this walk, including the `.kama` stop that keeps a
-// vendored dependency from being owned by its host project — so this reuses it rather than growing a
-// fourth spelling of "find the manifest".
+// NOTE this is whoever is COMPILING, which for a monorepo is not necessarily the package a given source
+// file belongs to. That distinction is the whole of the per-package import check below, and is why
+// owningPackageDir remains a separate entry point rather than being folded in here: it answers
+// "who owns THIS file?" per unit, while this answers "who is driving?" once per invocation.
 std::string projectManifestDir(const std::vector<std::string>& inputs)
 {
     // The shallow hit first, so the common in-project case keeps returning the RELATIVE path it always
     // did (owningPackageDir returns an absolute one, and this string reaches user-facing diagnostics).
-    if (!inputs.empty()) {
-        std::string d = dirName(inputs[0]);
-        if (fileExists(d + "/kama.json")) return d;
-        std::string owner = owningPackageDir(d);
-        if (!owner.empty()) return relativizeToCwd(owner);
-    }
-    if (fileExists("kama.json")) return ".";
-    return "";
+    std::string start = inputs.empty() ? std::string(".") : dirName(inputs[0]);
+    if (fileExists(start + "/kama.json")) return start;
+    std::string owner = owningPackageDir(start);
+    return owner.empty() ? std::string() : relativizeToCwd(owner);
+}
+
+// The same answer as a manifest PATH, for the callers that want the file rather than its directory.
+std::string projectManifestPath(const std::vector<std::string>& inputs)
+{
+    std::string dir = projectManifestDir(inputs);
+    return dir.empty() ? std::string() : dir + "/kama.json";
 }
 
 // The project's resolved-dependency view (`<projectDir>/.kama/deps`), or "" if there is no project
@@ -756,6 +763,12 @@ std::string storeDir();   // the content-addressed package store (~/.kama/store)
 // no manifest is above it at all (a scratch file, which nothing can be said about).
 std::string owningPackageDir(const std::string& fromDir)
 {
+    // POSITIVE results only. The cache is a process-wide `static` with no invalidation, and `kama lsp`
+    // is a long-lived process that re-analyzes on every keystroke — so a cached "there is no project
+    // here" would survive the user creating the kama.json that makes one. That is not hypothetical: the
+    // LSP registers a `**/kama.json` watcher precisely because manifests appear mid-session, and
+    // `kama seed` is a normal way to make one appear. A miss costs a walk to the root, which is a
+    // handful of stat calls — nothing next to the parse it precedes.
     static std::map<std::string, std::string> cache;
     auto it = cache.find(fromDir);
     if (it != cache.end()) return it->second;
@@ -767,6 +780,7 @@ std::string owningPackageDir(const std::string& fromDir)
         if (parent == cur || parent == ".") break;
         cur = parent;
     }
+    if (found.empty()) return found;
     return cache.emplace(fromDir, found).first->second;
 }
 
@@ -4959,21 +4973,21 @@ static std::string readTrimmedFile(const std::string& path)
     return s.substr(b);
 }
 
-// The nearest `kama.json` walking up from the cwd ("" if none). The selector reads its `toolchain` pin —
-// a project rooted in any subdirectory still resolves its pin, like git/cargo find their root.
-static std::string findManifestUpward()
+// The input file the SELECTOR should resolve a pin for, picked out of raw argv. The selector runs before
+// argument parsing — it has to, since its whole job is deciding which binary does the parsing — so it
+// cannot ask the option table which token is an input. Hence a deliberately narrow rule: an existing file
+// whose name ends in `.kama`.
+//
+// Narrow in the safe direction. `-o out`, `--cc "zig cc"` and `--target WASM` cannot match, and no one
+// names a build OUTPUT `.kama`. If nothing matches we return "" and the caller walks up from the CWD,
+// which is exactly what the selector did before it knew about inputs — so the worst case is the old
+// behavior, never a worse one.
+static std::string selectorInputFile(char** argv)
 {
-    char buf[PATH_MAX];
-    if (!getcwd(buf, sizeof(buf))) return "";
-    std::string dir = buf;
-    for (;;) {
-        if (fileExists(dir + "/kama.json")) return dir + "/kama.json";
-        size_t slash = dir.find_last_of("/\\");
-        if (slash == std::string::npos) break;
-        std::string parent = dir.substr(0, slash);
-        if (parent.empty()) parent = "/";     // parent of "/foo" is "/"
-        if (parent == dir) break;             // reached the root — no progress
-        dir = parent;
+    for (int i = 2; argv[i]; ++i) {
+        std::string a = argv[i];
+        if (!a.empty() && a[0] == '-') continue;
+        if (a.size() > 5 && a.compare(a.size() - 5, 5, ".kama") == 0 && fileExists(a)) return a;
     }
     return "";
 }
@@ -4982,9 +4996,12 @@ static std::string findManifestUpward()
 // M5.3) → project pin (nearest kama.json `toolchain`) → `KAMA_VERSION` env → global default
 // (`~/.kama/default`). "" ⇒ no preference (run this binary as-is). The local override is gitignored, so a
 // dev can test against a different toolchain without touching the committed pin.
-static std::string resolvePin()
+static std::string resolvePin(const std::vector<std::string>& inputs = std::vector<std::string>())
 {
-    std::string manifest = findManifestUpward();
+    // Same project as the build's dependencies and its `out` root. Before this, the pin walked up from
+    // the CWD while the build walked up from the input file, so `kama build proj/src/app.kama` from
+    // outside proj/ could compile proj's code with a toolchain proj never asked for.
+    std::string manifest = projectManifestPath(inputs);
     if (!manifest.empty()) {
         std::string local = dirName(manifest) + "/kama.local.json";
         if (std::ifstream(local).good()) {
@@ -5132,7 +5149,8 @@ void maybeReExec(char** argv, const std::string& subcommand)
     if (getenv("KAMA_NO_SELECT")) return;                              // explicit escape hatch
     if (subcommand == "toolchain" || subcommand == "update") return;  // these manage the install in place
     if (absolutePath(selfExePath(argv[0])) != absolutePath(selectorPath())) return;   // only the selector selects
-    std::string v = resolvePin();
+    std::string in = selectorInputFile(argv);
+    std::string v = resolvePin(in.empty() ? std::vector<std::string>() : std::vector<std::string>{ in });
     if (v.empty()) return;                                            // no default/pin — run in place
     std::string bin = versionBin(v);
     if (!fileExists(bin)) {
@@ -6098,18 +6116,10 @@ int main(int argc, char** argv)
     // while the editor walks up from the open buffer bounded by its workspace folder.
     BuildConfigRequest bcReq;
     bcReq.manifest = configPath;
-    if (bcReq.manifest.empty()) {
-        // Same discovery as projectManifestDir, and deliberately kept in step with it: this one decides
-        // the build CONFIG and the `out` root, that one decides the DEPENDENCY view. If only one of them
-        // walked up, a build from outside a project would resolve its dependencies and then write the
-        // binary next to the source anyway — half-fixed, and harder to reason about than not fixed.
-        std::string dir; size_t slash = input.find_last_of('/');
-        if (slash != std::string::npos) dir = input.substr(0, slash + 1);
-        if      (std::ifstream(dir + "kama.json").good()) bcReq.manifest = dir + "kama.json";
-        else if (!dir.empty() && !owningPackageDir(dir).empty())
-                 bcReq.manifest = relativizeToCwd(owningPackageDir(dir)) + "/kama.json";
-        else if (std::ifstream("kama.json").good())        bcReq.manifest = "kama.json";
-    }
+    // The build CONFIG and the `out` root come from the same project as the dependency view — one rule,
+    // one function. When these were spelled separately, a build from outside a project could resolve its
+    // dependencies from proj/ and still write the binary beside the source.
+    if (bcReq.manifest.empty()) bcReq.manifest = projectManifestPath({ input });
     bcReq.target          = target;
     bcReq.targetExplicit  = targetExplicit;
     bcReq.selects         = selects;

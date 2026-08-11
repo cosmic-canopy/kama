@@ -76,6 +76,28 @@ run sh -c "cd '$tmp/pinned' && '$SEL' build x.kama"                   # kama.jso
 grep -q "TOOLCHAIN vB" "$tmp/out" || fail "kama.local.json toolchain override did not beat the kama.json pin"
 rm -f "$tmp/pinned/kama.local.json"
 
+# ---- 4c. THE PIN FOLLOWS THE FILE, not the shell. Manifest discovery used to be spelled four different
+#         ways, and this was the last one out of step: the build walked up from the input file to find its
+#         project, while the selector walked up from the CWD. So building a pinned project's source from
+#         outside it compiled that project's code with whatever toolchain the current directory resolved
+#         to — the project's own pin ignored, silently, with a correct-looking build.
+#
+#         `pinned` pins vA; the default is vB. Standing OUTSIDE it and naming its source must give vA.
+#         (The selector cannot parse arguments — it runs before the parse — so it recognizes an input by
+#         "existing file ending in .kama"; hence a real file here, unlike the cases above.)
+printf 'fn int main() { return 0; }\n' > "$tmp/pinned/real.kama"
+run sh -c "cd '$tmp' && '$SEL' build pinned/real.kama"
+grep -q "TOOLCHAIN vA" "$tmp/out" \
+    || fail "the pin did not follow the input file: building pinned/real.kama from outside used the CWD's toolchain"
+
+#         And with no recognizable input it still falls back to walking up from the CWD — the behavior the
+#         selector had before it knew about inputs, which is what keeps `kama seed` in a fresh subdirectory
+#         inheriting the repo's toolchain.
+mkdir -p "$tmp/pinned/deep/deeper"
+run sh -c "cd '$tmp/pinned/deep/deeper' && '$SEL' build nosuchfile.kama"
+grep -q "TOOLCHAIN vA" "$tmp/out" \
+    || fail "with no resolvable input the selector no longer walks up from the CWD"
+
 # ---- 5. a pin to a missing version → a clear, actionable error ---------------------------------------
 mkdir -p "$tmp/missing"
 printf '{ "name": "m", "toolchain": "v9" }\n' > "$tmp/missing/kama.json"
@@ -96,4 +118,4 @@ run "$KAMA" toolchain uninstall vA             # vA is not the default → remov
 [ "$RC" = 0 ] || fail "uninstall of a non-default version errored"
 [ ! -d "$HOME/.kama/versions/vA" ] || fail "uninstall did not remove the version dir"
 
-echo "check-toolchain: PASS (list; default switch; kama.local.json > pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default)"
+echo "check-toolchain: PASS (list; default switch; kama.local.json > pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default; the pin follows the INPUT FILE, falling back to a CWD walk)"
