@@ -4,13 +4,26 @@
 `platforms/windows.md` carry the record. Its deletion is the signal that Windows is done and the
 branch can be pushed.*
 
-Where things stood at the start (2026-08-11, msys2/UCRT64, real hardware): **970 passed, 2 failed**,
-up from 923/48, with no fixture failures left. **Now: 972 passed, 0 failed** — `./run_tests.sh`,
-906 s wall. Environment and gotchas: [../platforms/windows.md](../platforms/windows.md) — read it
-first, every session.
+## Cold start — read this first
 
-**The order is load-bearing.** Item 3 flips CI to required; doing it before 1 and 2 means the first
-*required* run fails on failures that were already known.
+**Windows is green.** `./run_tests.sh` on real hardware (msys2/UCRT64, ARM64 host, x86_64 toolchain):
+**972 passed, 0 failed**, 906 s wall. It was 970/2 at the start of this campaign and 923/48 before
+the triage that preceded it. Items 1–3 are done; **4 and 5 are what is left**, and neither blocks a
+push — they are gaps, not regressions.
+
+The invocation that works, from outside msys2 (this cost a session once — see
+[../platforms/windows.md](../platforms/windows.md), which now explains why both halves are needed):
+
+```sh
+MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'pushd /c/Users/matt/Documents/kama >/dev/null; ./run_tests.sh'
+```
+
+A `tools/check-*.sh` run by absolute path needs no `pushd` — it resolves `ROOT` from `$0`. `./dev`
+works as documented; container legs (`./dev test san|wasm`) need Docker and are not available here.
+
+**Read [../platforms/windows.md](../platforms/windows.md) before touching anything.** Its "things
+that are true on Windows and nowhere else" list is now nine entries, three of them added by this
+campaign, and every one of them was a wrong diagnosis first.
 
 | # | Item | Status |
 |---|------|--------|
@@ -20,9 +33,19 @@ first, every session.
 | 4 | Static runtime linking for USER programs | not started |
 | 5 | The literal initializer/comparison asymmetry | not started |
 
-**The house rule applies to every line below.** These sections quote source, and the source was read
-— but only item 1's cause is pinned to a mechanism that fully explains the symptom. Items 2 and 5
-say so in their own words and require a *run* before a fix.
+**The house rule earned its keep three times today.** Item 1 was recorded as 6 assertions and was 12.
+Item 2's hypothesis was right but hid a second failure behind it. The invocation this page opens with
+was wrong in `platforms/windows.md` until someone ran it. **Items 4 and 5 below are read, not run** —
+item 5 in particular records a cause that does not survive first contact with the existing fixture.
+
+### Suggested split for the two remaining sessions
+
+- **Item 4 alone.** It is a language-surface decision (the opt-out spelling) plus a driver change plus
+  a fixture plus a `docs/targets.md` entry. It is the only item here that adds user-visible surface,
+  so it wants the room to survey prior art properly.
+- **Item 5 alone.** It starts with a reproduction, not a fix, and may end in `docs/SPEC.md`. It is
+  platform-independent and could equally be done on the Mac — **nothing about it needs Windows**, so
+  if the goal is to get off this machine, item 5 is the one to take with you.
 
 ---
 
@@ -200,6 +223,11 @@ claim with no fixture is not a claim.
 
 ## Close-out
 
+0. **Not in this repo:** required status checks are a GitHub branch-protection / ruleset setting,
+   server-side — no file here can assert them. If `dev`/`main` use required checks, the entry needs
+   to be **`build + test (windows-x64)`**; the job's `name:` lost its `, best-effort` suffix in
+   `0daa00e`. If they do not use required checks, item 3 is already complete as it stands: the run
+   goes red, which is the whole of what the workflow file can do.
 1. `./dev matrix` on Windows, and again on macOS before switching back.
 2. Delete this file.
 3. Shrink `docs/ROADMAP.md` §3's Windows entry to whatever genuinely remains — the wall-clock note

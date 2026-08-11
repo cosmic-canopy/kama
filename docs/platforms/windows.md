@@ -29,11 +29,21 @@ because a guard that cannot find `diff` does not report a missing tool — it re
 failed, and a clean tree gets blamed for it.
 
 Everything must run with `MSYSTEM=UCRT64` set, or `uname -s` reports `MSYS_NT` and the build lands in
-a different `out/` directory than the one the tests look in:
+a different `out/` directory than the one the tests look in. Driving that shell from *outside* msys2
+— another terminal, an editor task, an agent — needs two things that pull against each other:
 
 ```sh
-MSYSTEM=UCRT64 CHERE_INVOKING=1 /c/msys64/usr/bin/bash.exe -lc '. ./your-script.sh'
+MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'pushd /c/path/to/kama >/dev/null; ./run_tests.sh'
 ```
+
+- **`-l` is required.** Without a login shell `/ucrt64/bin` is not on `PATH`, so there is no `clang`
+  and no `bison` — `-c` alone gets you a shell that cannot build.
+- **`-l` also `cd`s to `$HOME`,** and `run_tests.sh` resolves `tools/kama-bin.sh` relatively, so it
+  dies on a path that is not there. Hence the explicit `pushd`. ⚠️ `CHERE_INVOKING=1` is **not** the
+  answer, whatever it does elsewhere: this msys2's `/etc/profile` never mentions it, and msys2's
+  environment filter does not pass it to the child anyway (`MSYSTEM` it does pass). It was in this
+  page until someone ran it.
+- A `tools/check-*.sh` invoked by **absolute path** needs neither — each resolves `ROOT` from `$0`.
 
 ⚠️ **`uname -s` carries the OS build number** — `MINGW64_NT-10.0-26200-ARM64` — so `out/<platform>/`
 is not a name anything outside that shell can reconstruct. The VS Code extension globs `out/*/` and
