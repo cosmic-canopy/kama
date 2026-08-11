@@ -490,13 +490,34 @@ Build the design above. Open questions:
 
 ### 2 · Const generics → `Fixed<intBits, fracBits>`
 
-Blocked today by three things, two of which are compiler bugs in their own right:
+Blocked today by three things, two of which are compiler bugs in their own right.
+
+> **Re-measured 2026-08-11** (while scoping the campaign that became a non-goal), and blockers 1 and 2 are
+> **not** the two independent bugs they read as. They are one symptom — *a const param cannot be used as a
+> value* — reached by two different routes, and the symptom is **wider than "on types"**. Both spellings
+> below die in the C compiler with **no kama diagnostic**:
+>
+> ```kama
+> fn int32 shifted<const F: int32>(int32 x) { return x >> F; }        // -> undeclared identifier 'F'
+> type value Fixed<const F: int32> { public fn int32 whole() { return this.raw >> F; } }   // same
+> ```
+>
+> - On a **function**, `constParams` *is* read (four sites in `kama.cemit.cpp` build `_constSubst`), so
+>   blocker 1 does not apply — and it still fails, because `emitExpression`'s identifier branch never
+>   consults `_constSubst`. That is blocker 2 alone.
+> - On a **type**, blocker 1 applies *first*: nothing reads `ClassDeclarationNode::constParams`, so
+>   `_constSubst` is never populated at all. Blocker 2 is then unreachable for types until 1 is fixed.
+> - The *instance* monomorphizes correctly either way (`Fixed<8>`, `Fixed::<8>.of(raw: 256)`), because
+>   mangling reads the type **argument**, not the param list. That is exactly why the gap stayed hidden.
+>
+> So the order is forced: fix 1, then 2, and expect 2 to fix the function case at the same time.
 
 1. `ClassDeclarationNode::constParams` is **populated by the grammar and never read** by the emitter —
-   const params on *types* are parse-only plumbing.
+   const params on *types* are parse-only plumbing. (`FunctionDeclarationNode::constParams` *is* read.)
 2. A const param **cannot be a runtime value**: `emitExpression`'s identifier branch never consults
    `_constSubst`, so `this.raw >> F` emits an undeclared C identifier and dies in the C compiler **with
-   no kama diagnostic**. Silent bad codegen — worth fixing regardless of `Fixed`.
+   no kama diagnostic**. Silent bad codegen — worth fixing regardless of `Fixed`, and it hits **functions
+   as well as types**.
 3. No **type-level selection** to map `I+F` onto a backing width, and no "next wider type" for the
    multiply. This is the genuine design question.
 
