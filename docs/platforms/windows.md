@@ -47,8 +47,9 @@ MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'pushd /c/path/to/kama >/dev/null;
 
 ⚠️ **`uname -s` carries the OS build number** — `MINGW64_NT-10.0-26200-ARM64` — so `out/<platform>/`
 is not a name anything outside that shell can reconstruct. The VS Code extension globs `out/*/` and
-takes the newest rather than trying. Note also that UCRT64 and CLANGARM64 report the *same* `uname`,
-so they share one `out/` directory and will clobber each other; pass `PLATFORM=` to separate them.
+takes the newest rather than trying. UCRT64 and CLANGARM64 report the *same* `uname` and so share one
+`out/` directory — `PLATFORM=` separates the build but **not** the harness, which is its own trap:
+see [Two msys2 environments](#two-msys2-environments-and-why-the-build-system-cannot-tell-them-apart).
 
 ## Running things
 
@@ -57,14 +58,79 @@ not usually available on a Windows box, so `./dev test` and `./dev check` are th
 
 ```sh
 make -j4                    # ~100 s here
-./run_tests.sh              # ~850 s; the cost is per-fixture C compilation, not the tests
+./run_tests.sh              # ~906 s; the cost is per-fixture C compilation, not the tests
 ./dev fixture <name>...     # the inner loop
 ```
 
-If the suite looks slow, it is not hung. On a Windows runner the same suite takes ~1837 s against
-~75 s in the Linux container, and the gap is process startup plus the C compile — **not** a network
-or socket timeout, whatever an older note may have said. `net_addr_ctor` opens no socket at all and
-cost the same 40 s as `net_refused`.
+If the suite looks slow, it is not hung. It is ~906 s here against ~75 s in the Linux container, and
+what it is spending that on is process startup plus the C compile — **not** a network or socket
+timeout, whatever an older note may have said. `net_addr_ctor` opens no socket at all and cost the
+same 40 s as `net_refused`.
+
+⚠️ **Do not compare against a CI number to size this up.** A `~1837 s` figure for the CI runner was
+briefly recorded here as if it were the native-x86_64 control. It is not usable as one: it was taken
+on a leg that was `continue-on-error` and RED, and several of this suite's failure modes are ~40 s
+timeouts, so dozens of failures inflate the wall clock for reasons unrelated to the platform.
+
+**The likelier explanation for this box specifically is emulation, and it is worth checking before
+blaming Windows.** `uname -s` reporting `…-ARM64` while `uname -m` reports `x86_64` means the kernel
+is ARM64 and the msys2 environment is not: every process — `clang`, `kama.exe`, and each fixture
+binary — is x86_64 running under Windows' x64 translation layer. `file "$(which clang)"` says which
+you have. See
+[Two msys2 environments](#two-msys2-environments-and-why-the-build-system-cannot-tell-them-apart).
+
+## Two msys2 environments, and why the build system cannot tell them apart
+
+On an ARM64 Windows host both of these can be installed at once, and they select **different
+compilers for the same source tree**:
+
+| `MSYSTEM` | `which clang` | that clang is | matches CI? |
+|---|---|---|---|
+| `UCRT64` | `/ucrt64/bin/clang` | x86-64 — **emulated** on an ARM64 host | yes |
+| `CLANGARM64` | `/clangarm64/bin/clang` | ARM64 — native | no |
+
+⚠️ **They are indistinguishable to the build system.** Measured, both from this box:
+
+```
+UCRT64      uname -s=MINGW64_NT-10.0-26200-ARM64  uname -m=x86_64
+CLANGARM64  uname -s=MINGW64_NT-10.0-26200-ARM64  uname -m=x86_64
+```
+
+Identical on both keys — `uname -m` says `x86_64` in *both*, because `bash.exe` is itself the
+emulated x86_64 binary reporting on itself, not on the compiler it is about to invoke. msys2 ships no
+native ARM64 runtime, so `bash` and `make` stay emulated whichever environment you pick.
+
+So `out/$(uname -s)-$(uname -m)/` is the **same directory** for both, and there is no safe way today
+to keep both builds:
+
+- **No `PLATFORM=`** → the second build silently overwrites the first *in place*. The harness then
+  tests whichever compiler built last while reporting the platform of the other. This is the
+  stale-binary trap that `./dev` exists to make unrepresentable, and here it is representable.
+- **`PLATFORM=<name>`** → the build lands in `out/<name>/`, and the harness **never sees it**.
+  `tools/kama-bin.sh` resolves `$KAMA` from `uname`, not from `PLATFORM`:
+
+  ```sh
+  KAMA="$ROOT/out/$(uname -s)-$(uname -m)/kama"
+  [ -x "$KAMA" ] || KAMA="$ROOT/kama"
+  ```
+
+  The other environment's binary is still sitting at that path, so the `-x` test passes and the
+  fallback is never reached. You build ARM64, and `./run_tests.sh` tests the stale x86_64 one without
+  a word. (The root `./kama` is no help either: `ln -s` degrades to a **copy** on msys2, so it is a
+  snapshot of whichever build ran last, not a pointer.)
+
+  **Until the fix below lands, `export KAMA=<abs path>` is the only way to be sure which compiler the
+  harness runs** — `kama-bin.sh` honors an externally set one, and `tools/run-checks.sh` passes it
+  down to the guards.
+
+**Until that is fixed, pick one environment per checkout and stay in it.** `UCRT64` is the one that
+matches CI, which is why everything on this page uses it. Keying the platform off `$MSYSTEM` — in
+both `Makefile`'s `PLATFORM ?=` and `tools/kama-bin.sh` — is the fix, since `$MSYSTEM` is what
+actually selects the toolchain and msys2 does pass it to child processes.
+
+*(Whether the native ARM64 toolchain is meaningfully faster for the suite is untested — do not assume
+it from the emulation fact alone. `bash`, `make`, and the per-fixture process churn stay emulated
+either way, and this suite's cost is dominated by process startup.)*
 
 ## The language server, while you are changing the compiler
 
@@ -105,6 +171,14 @@ Worth knowing before debugging, because each of these produced a confident wrong
   junctions (`mklink /J`, how `kama install` materializes `.kama/deps/<name>`) therefore stayed
   unresolved, and every "which package owns this file?" test answered differently than on macOS.
   `absolutePath` opens a handle and asks `GetFinalPathNameByHandle`, which is the only API that knows.
+- **`-lfoo` prefers the DLL import library over the static archive.** mingw-w64 installs both
+  `libfoo.dll.a` and `libfoo.a` for most of its packages, and the linker takes the import library — so
+  a bare `-lpthread` bound `libwinpthread-1.dll` out of `/ucrt64/bin`, which exists on no other
+  machine. The binary then dies at process start with `STATUS_DLL_NOT_FOUND` (`0xC0000135`), before
+  `main`, so no build-time check and no `try` catches it. `-Wl,-Bstatic -lfoo -Wl,-Bdynamic` pins one
+  library without the blast radius of a blanket `-static` (which would also re-bind `-lglfw3` and
+  break `--webgpu`). This is what `kama build` now does for its own runtime; `docs/targets.md`
+  § *Runtime linkage* is the user-facing half.
 - **git does not create real symlinks** without `core.symlinks` (needs Developer Mode or elevation);
   it writes a text file containing the target path instead. Do not commit symlinks.
 - **A `.exe` suffix is load-bearing** in any path comparison against a running binary — and in any
@@ -114,16 +188,21 @@ Worth knowing before debugging, because each of these produced a confident wrong
 
 ## Where the remaining work is
 
-**The suite is green here: 972 passed, 0 failed** (`./run_tests.sh`, ~906 s). The two guards that were
-failing — `check-lsp`'s `@compileFor` section and `check-packages`' free-rider check — are fixed, and
-the `windows-test` CI leg is no longer `continue-on-error`.
+**The suite is green here: 972 passed, 0 failed** (`./run_tests.sh`, ~906 s), the guards pass, and the
+`windows-test` CI leg is no longer `continue-on-error`. Windows is a supported platform, not a
+best-effort one, and a program kama builds here is distributable as it stands.
 
-What is left is not a regression but a gap: **what shape a Windows *application* is.** One item is
-in flight and the rest are parked:
+What is left is one question with two entries against it — **what shape a Windows *application* is,
+as opposed to a Windows console tool.** Both are parked in [ROADMAP.md](../ROADMAP.md)'s known-issues
+list; neither is a regression:
 
-- **Runtime linking** — a threaded program links `libwinpthread-1.dll` out of the msys2 tree and is
-  not distributable off this machine. In flight: [design/windows-parity.md](../design/windows-parity.md),
-  which is deleted when it ships.
 - **Console subsystem** — every emitted binary is CONSOLE subsystem, so a GUI program opens a console
-  it never asked for. Parked in [ROADMAP.md](../ROADMAP.md)'s known-issues list.
-- **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Also parked there.
+  it never asked for. `-mwindows` suppresses it but then `print`/`eprintln` go nowhere, so it needs an
+  explicit choice rather than a new default.
+- **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Surfaces only on a deep
+  working directory.
+
+The **wall clock** is the other thing to know: the suite is ~906 s here against ~75 s in the Linux
+container. The cost is per-fixture C compilation plus Windows process startup — `kama build -j`
+parallelizes, but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out per fixture instead. A Defender
+exclusion on the runner's temp dir is the cheapest untried lever.

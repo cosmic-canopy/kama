@@ -25,11 +25,23 @@ trap 'rm -rf "$tmp"' EXIT
 # hardcode `x86_64-linux-gnu` and `x86_64-windows-gnu`, and each of those IS the host triple on one of the
 # CI runners (hostTarget() in kama.driver.cpp spells the Windows/MSYS2 host `x86_64-windows-gnu`). kama then
 # correctly omits `-target` for a same-host build — and the assertion failed for being wrong, not for the
-# compiler being wrong. Flipping the ARCH is enough: a differing arch makes the triple foreign on any host.
-case "$(uname -m)" in
-    x86_64|amd64) CROSS_ARCH=aarch64 ;;
-    *)            CROSS_ARCH=x86_64  ;;
-esac
+# compiler being wrong.
+#
+# ⚠️⚠️ …and the arch has to come from KAMA, not from `uname -m`, which answers a different question.
+# This used to flip uname's answer, on the reasoning that a differing arch is foreign on any host. It is
+# not: on an ARM64 Windows box running the x86_64 msys2 environment, `bash` is itself an emulated x86_64
+# binary reporting on ITSELF, so `uname -m` says x86_64 while an ARM64-built kama.exe targets aarch64.
+# Flipping then nominated aarch64 — the host — as the "cross" target, kama rightly omitted `-target`, and
+# §8 failed for being wrong. (See docs/platforms/windows.md § "Two msys2 environments".)
+#
+# So probe instead of infer: kama adds `-target` exactly when the arch differs from its own, so the arch
+# it stays SILENT about is the host's. The first one it names is genuinely foreign, whatever built kama.
+CROSS_ARCH=
+for _a in aarch64 x86_64 riscv64; do
+    if "$KAMA" build --cc "echo zig cc" "$FIXTURE" --target "$_a-windows-gnu" -o "$tmp/archprobe" 2>/dev/null \
+       | grep -qF -- "-target $_a-windows-gnu"; then CROSS_ARCH=$_a; break; fi
+done
+[ -n "$CROSS_ARCH" ] || { echo "check-target: could not find an arch foreign to this kama" >&2; exit 1; }
 CROSS_LINUX="$CROSS_ARCH-linux-gnu"
 CROSS_WINDOWS="$CROSS_ARCH-windows-gnu"
 
@@ -43,9 +55,11 @@ case "$(uname -s)" in
     *)                    CROSS_OS=WINDOWS; CROSS_FILE_MAGIC="MS Windows" ;;
 esac
 
-# The assembled cc command line for a given target, with the compiler stubbed out.
+# The assembled cc command line for a given target, with the compiler stubbed out. The optional second
+# argument picks a different input: most assertions here hold for any program, but the pay-for-what-you-use
+# link flags (`-lpthread`) only appear when the program actually pulls in the seam that needs them.
 ccline() {
-    "$KAMA" build --release --cc "echo" "$FIXTURE" --target "$1" -o "$tmp/out" 2>/dev/null
+    "$KAMA" build --release --cc "echo" "${2:-$FIXTURE}" --target "$1" -o "$tmp/out" 2>/dev/null
 }
 
 # Run a stubbed build and echo its stdout, KEEPING stderr for a failure report. A bare `2>/dev/null` here
@@ -69,18 +83,20 @@ why() {   # why <label> — print whatever the stubbed build said, for a failing
     fi
 }
 
-want() {   # want <target> <substring> <description>
-    if ! ccline "$1" | grep -qF -- "$2"; then
+want() {   # want <target> <substring> <description> [fixture]
+    if ! ccline "$1" "${4:-}" | grep -qF -- "$2"; then
         echo "check-target: FAIL — target $1 did not pass '$2' ($3)" >&2
         echo "  command line was:" >&2
-        ccline "$1" | sed 's/^/    /' >&2
+        ccline "$1" "${4:-}" | sed 's/^/    /' >&2
         exit 1
     fi
 }
 
-reject() {   # reject <target> <substring> <description>
-    if ccline "$1" | grep -qF -- "$2"; then
+reject() {   # reject <target> <substring> <description> [fixture]
+    if ccline "$1" "${4:-}" | grep -qF -- "$2"; then
         echo "check-target: FAIL — target $1 passed '$2' but must not ($3)" >&2
+        echo "  command line was:" >&2
+        ccline "$1" "${4:-}" | sed 's/^/    /' >&2
         exit 1
     fi
 }
@@ -98,6 +114,75 @@ reject MACOS   -Wl,--gc-sections "that is the GNU-style spelling"
 reject MACOS   " -s "            "ld64 warns that -s is obsolete"
 want   LINUX   -Wl,--gc-sections "GNU ld/lld spell section GC --gc-sections"
 want   WINDOWS -Wl,--gc-sections "a mingw target links with a GNU-style linker"
+
+# 2b. RUNTIME LINKAGE — a Windows program must not depend on a runtime DLL it cannot ship.
+#     mingw-w64 installs BOTH libpthread.a and libpthread.dll.a and the linker prefers the import library,
+#     so a bare `-lpthread` bound libwinpthread-1.dll out of the msys2 tree. Measured before this was
+#     written: tests/isolate_basic.kama built on Windows imported it and exited 0xC0000135
+#     (STATUS_DLL_NOT_FOUND) from a plain PowerShell — on the very machine that built it.
+#
+#     Only ONE library is wrapped, not a blanket `-static`: the rule is "link non-system runtime
+#     statically, system components dynamically", and libraries the USER names (--link, --webgpu) stay
+#     their choice. A blanket -static would also re-bind -lglfw3 and break --webgpu, whose libwgpu_native.a
+#     needs -lntdll/-luserenv/-lbcrypt that this tail never emits.
+THREADED="$ROOT/tests/isolate_basic.kama"
+if [ ! -f "$THREADED" ]; then echo "check-target: missing $THREADED" >&2; exit 1; fi
+
+want   WINDOWS "-Wl,-Bstatic -lpthread -Wl,-Bdynamic" \
+       "a Windows program must not need libwinpthread-1.dll to start" "$THREADED"
+#     ...and the wrapper closes, or -lws2_32 and the target's own ldflags below it change meaning.
+want   WINDOWS "-Wl,-Bdynamic" "the static wrapper must restore the linker default" "$THREADED"
+#     Keyed on the TARGET: -static on Linux would statically link glibc, which is not the intent, and on
+#     macOS pthreads live in libc so there is nothing to choose. This is the half that fails if someone
+#     "fixes" it with a host #ifdef.
+want   LINUX   " -lpthread " "Linux links pthreads dynamically, as it should" "$THREADED"
+reject LINUX   "-Wl,-Bstatic" "static linkage on Linux would swallow glibc" "$THREADED"
+reject MACOS   "-Wl,-Bstatic" "macOS pthreads live in libc — nothing to link statically" "$THREADED"
+#     Pay-for-what-you-use survives: a program that never touches the isolate seam links no pthread at
+#     all, so it gets no wrapper either.
+reject WINDOWS "-Wl,-Bstatic" "a non-threaded program links no pthread to make static"
+
+#     The opt-IN to the DLL, both spellings. `--shared` was already taken (it picks the OUTPUT kind), so
+#     this is its own switch — and it has to be a real one, because the target's `ldflags` escape hatch
+#     cannot cleanly UNDO a -Bstatic the driver already emitted.
+dynline=$(tryline dynrt build --release --cc "echo" "$THREADED" --target WINDOWS --dynamic-runtime -o "$tmp/dyn")
+if printf '%s' "$dynline" | grep -qF -- "-Wl,-Bstatic"; then
+    echo "check-target: FAIL — --dynamic-runtime still linked the runtime statically" >&2
+    why dynrt; exit 1
+fi
+if ! printf '%s' "$dynline" | grep -qF -- " -lpthread "; then
+    echo "check-target: FAIL — --dynamic-runtime dropped -lpthread entirely" >&2
+    why dynrt; exit 1
+fi
+
+#     The same choice per-project, as a target property in kama.json — it belongs beside cc/sysroot/cflags
+#     rather than in a select group, because linkage is a toolchain fact and `@compileFor` has no business
+#     branching on it. (A RUNTIME select group would also collide with OUTPUT=STATIC: the flag namespace
+#     is flat.)
+rt="$tmp/rt"; mkdir -p "$rt"
+cat > "$rt/kama.json" <<'JSON'
+{ "name": "rt-demo", "version": "0.1.0",
+  "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
+JSON
+cp "$THREADED" "$rt/app.kama"
+rtline=$("$KAMA" build --release --cc "echo" "$rt/app.kama" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
+if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
+    echo "check-target: FAIL — a target's \"runtime\": \"dynamic\" did not reach the link tail" >&2
+    printf '%s\n' "$rtline" | sed 's/^/    /' >&2
+    exit 1
+fi
+#     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
+printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0",
+  "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
+if "$KAMA" build --release --cc "echo" "$rt/app.kama" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
+    echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
+    exit 1
+fi
+if ! grep -qF 'must be "static" or "dynamic"' "$rt/err"; then
+    echo "check-target: FAIL — a bad \"runtime\" value failed, but not with the value diagnostic:" >&2
+    sed 's/^/  /' "$rt/err" >&2
+    exit 1
+fi
 
 # 3. SHARED-LIBRARY EXTENSION — the default output name follows the target's platform convention, so a
 #    cross build does not produce a `.dylib` for Windows.
@@ -371,8 +456,10 @@ printf 'fn int32 main() { return 9; }\n' > "$loose/hello.kama"
 [ ! -f "$loose/hello.c" ] || { echo "check-target: FAIL — a manifest-less build left hello.c behind" >&2; exit 1; }
 
 echo "check-target: PASS (link/compile flags follow the selected target, not the host: winsock, section GC,
+  a Windows runtime linked statically so the .exe ships (with --dynamic-runtime / a target \"runtime\" key to opt out),
   shared-library extension, freestanding keyed on os=none rather than a target name; cross builds refuse
   without a toolchain, transpile always works, zig cc gets -target, kama.json target specs apply;
-  a declared default target applies and loses to --target;\n  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output;
+  a declared default target applies and loses to --target;
+  OUTPUT selects exe/shared/static/object, incl. static archives and hosted object output;
   a project's artifacts collect under out/<triple>/<type>/ leaving src/ clean, \"out\" relocates it, -o wins,
   and a manifest-less build still lands beside its source)"

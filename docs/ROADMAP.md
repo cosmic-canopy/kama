@@ -115,27 +115,13 @@ Everything else here is library or toolchain work that does **not** gate the tag
      (WebSocket `permessage-deflate`, HTTP `Content-Encoding`). Pairs naturally with the binary serde backend
      (crushes its field-name redundancy). (Engine-level replication — snapshots/deltas/dirty-tracking — stays
      above this, in the engine.)
-   - **Windows: one item from closed.** The suite is **green on real hardware** — 972 passed, 0 failed
-     (2026-08-11, msys2/UCRT64), from 970/2 and 923/48 before that — and the `windows-test` leg is no
-     longer `continue-on-error`. Environment and gotchas: [platforms/windows.md](platforms/windows.md).
-
-     What is left is **static runtime linking for user programs**: a threaded program links
-     `libwinpthread-1.dll` out of the msys2 tree and is not distributable off the machine that built
-     it. It is a gap, not a regression, and it needs a Windows box. It — with its source reading, the
-     opt-out design question, and the reproduction that has *not* been done yet — is in
-     **[design/windows-parity.md](design/windows-parity.md)**. **That file's deletion closes Windows**;
-     this entry shrinks to whatever is genuinely left at that point.
-
-     ⚠️ The literal initializer/comparison asymmetry was fifth in that order and **left this campaign**:
-     it is platform-independent, and a Windows test cycle is ~906 s against ~75 s in the container. It
-     is in the known-issues list below, to be done on macOS or Linux.
-
-     Remaining wall-clock: the suite is ~906 s here vs ~75 s in the container. `kama build -j` now
-     parallelizes on Windows (1.65x on 17 TUs), but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out
-     per fixture, so that win does not reach the suite. The per-fixture cost is the C compile plus Windows
-     process startup, not — as previously recorded here — a connect/accept timeout: `net_addr_ctor` opens
-     no socket at all and cost the same 40 s as `net_refused`. Defender exclusion on the runner temp dir
-     is the cheapest untried lever.
+   - **Windows suite wall-clock — the residual now that Windows itself is closed.** ~906 s there vs
+     ~75 s in the container. `kama build -j` parallelizes on Windows (1.65x on 17 TUs), but
+     `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out per fixture, so that win does not reach the
+     suite. The per-fixture cost is the C compile plus Windows process startup, not — as previously
+     recorded here — a connect/accept timeout: `net_addr_ctor` opens no socket at all and cost the same
+     40 s as `net_refused`. Defender exclusion on the runner temp dir is the cheapest untried lever.
+     Platform record: [platforms/windows.md](platforms/windows.md).
 4. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
    ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
    flash pass — detail in §5 (embedded "Toolchain / build" row).
@@ -308,8 +294,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **Windows long-path support is deferred** (`kama_os.h`): the temp-path builder assumes `MAX_PATH`-class
-  lengths. Surfaces only on a deep working directory.
+- **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
+  used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
+  *different* ceilings that want separate fixes:
+  - **Runtime, in shipped code** — `kama_diropen` (`include/kama_os.h:117`) builds its `<path>\*` search
+    pattern in a `char[MAX_PATH]` and returns `ENOMEM` past it, so a **user's** program fails to iterate
+    a deep directory. The fix is the `\\?\` prefix + `FindFirstFileW` (the `A` variants cannot exceed
+    `MAX_PATH` at all), which means going wide through that whole seam.
+  - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
+    `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
+    so). Lower stakes: it degrades to the unresolved spelling rather than failing.
 - **An unsuffixed integer literal near `INT32_MAX` behaves differently as an initializer than in a
   comparison.** `uint32 x = 2147483648;` then `x != 2147483648` compares UNEQUAL — the initializer keeps
   the value while the comparison's literal narrows through `Int32Node`, so the two spellings of the same
@@ -336,15 +330,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   and `kama.exe` both report `(console)`. A shipped GUI app is linked `-mwindows`
   (`-Wl,--subsystem,windows`), which suppresses the console; the cost is that `print`/`eprintln` then go
   nowhere unless the program attaches one, so it cannot simply be the default. It wants an explicit
-  choice — a manifest field or a build flag — and it belongs with the two items below, since all three are
-  the same question: what shape is a Windows application, as opposed to a Windows console tool.
-- **A threaded kama program is not standalone on Windows.** Anything using `isolate` / `parfor` /
-  `channel` links `libwinpthread-1.dll` out of the msys2 tree, so it dies with `STATUS_DLL_NOT_FOUND` on
-  a machine without it — the same failure the compiler itself had before the Makefile started passing
-  `-static`. A plain program needs nothing beyond the OS today; the rule to apply is "link non-system
-  runtime statically, system components dynamically", which is a no-op on Linux/macOS (libc IS the
-  system) and fixes Windows. `--shared` is already taken (it selects a shared-library OUTPUT), so the
-  opt-in for dynamic runtime linking needs its own spelling.
+  choice — a manifest field or a build flag — which is now a **solved shape rather than an open one**:
+  runtime linkage took exactly that question and answered it with a `TargetSpec` field, a `kama.json`
+  target key, and a CLI flag that wins over it (`runtime` / `--dynamic-runtime`, `kama.driver.cpp`;
+  [targets.md](targets.md) § *Runtime linkage*). A `subsystem` key beside it is the obvious spelling.
+  What is genuinely undecided is only the **default**, and unlike runtime linkage there is no
+  can't-lose answer: console-by-default surprises GUI apps with a stray window, windows-by-default
+  makes every `print` vanish. Pairs with the long-path item above — both are "what shape is a Windows
+  application, as opposed to a Windows console tool".
 - **UBSan's `function` check is disabled suite-wide** (`run_tests.sh`). Vtable / contract /
   `BindableFunctionPtr` dispatch stores each slot as `Ret (*)(void* self, …)` and calls a concrete
   `Ret C__m(C* self, …)` through it — ABI-identical, and how essentially all C OO dispatch works, but the

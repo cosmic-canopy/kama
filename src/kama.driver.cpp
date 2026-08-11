@@ -1318,6 +1318,11 @@ struct TargetSpec {
     std::string name;                            // catalog/user name ("WINDOWS", "RPI"); the triple if anonymous
     std::string arch, os, abi;
     std::string cc, ar, sysroot;                 // toolchain override (empty -> the default resolution)
+    // How the language's OWN runtime is linked: "" (unset -> the target's default) | "static" | "dynamic".
+    // A toolchain property, which is why it lives here beside cc/ar/sysroot rather than in a select group —
+    // Rust's model. Only Windows has a default worth overriding today (see the -lpthread arm of the link
+    // tail); elsewhere libc IS the system, so there is no non-system runtime to make a choice about.
+    std::string runtime;
     std::vector<std::string> cflags, ldflags;
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
@@ -1506,6 +1511,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (!u.cc.empty())      out.cc      = u.cc;
         if (!u.ar.empty())      out.ar      = u.ar;
         if (!u.sysroot.empty()) out.sysroot = u.sysroot;
+        if (!u.runtime.empty()) out.runtime = u.runtime;
         out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
         out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
         if (out.arch.empty() || out.os.empty()) {
@@ -1996,6 +2002,14 @@ struct ManifestReader {
                 else if (k == "cc")      { if (!str(t.cc))        return false; }
                 else if (k == "ar")      { if (!str(t.ar))        return false; }
                 else if (k == "sysroot") { if (!str(t.sysroot))   return false; }
+                // How the language's own runtime links. VALIDATED rather than tolerated, unlike the
+                // unknown keys below: a typo here ("shared", "dyn") would otherwise read as "not dynamic"
+                // and silently give you the default you were trying to change.
+                else if (k == "runtime")  {
+                    if (!str(t.runtime)) return false;
+                    if (t.runtime != "static" && t.runtime != "dynamic")
+                        return fail("a target's `runtime` must be \"static\" or \"dynamic\"");
+                }
                 else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
                 else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
@@ -2582,6 +2596,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!l.cc.empty())      t.cc      = l.cc;
                 if (!l.ar.empty())      t.ar      = l.ar;
                 if (!l.sysroot.empty()) t.sysroot = l.sysroot;
+                if (!l.runtime.empty()) t.runtime = l.runtime;
                 if (!l.cflags.empty())  t.cflags  = l.cflags;
                 if (!l.ldflags.empty()) t.ldflags = l.ldflags;
             }
@@ -5112,6 +5127,10 @@ void usage()
         "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
+        "                             [--dynamic-runtime]  link the runtime as a DLL instead of statically.\n"
+        "                              Windows only in effect (elsewhere libc IS the system, so there is no\n"
+        "                              non-system runtime to choose about); a target's `runtime` key in\n"
+        "                              kama.json says the same thing per-project. See docs/targets.md.\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"entry\" — and run it; native-only)\n"
@@ -6224,6 +6243,7 @@ int main(int argc, char** argv)
     bool        release    = false;        // debug by default
     bool releaseExplicit   = false;        // was --release/--debug passed? (sugar must not beat a manifest default)
     bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
+    bool dynamicRuntime    = false;        // --dynamic-runtime: link the runtime as a DLL (Windows opt-in)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
     std::vector<std::string> selects;      // --select GROUP=VALUE: pick a single-select group (repeatable)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
@@ -6263,6 +6283,10 @@ int main(int argc, char** argv)
         else if (a == "--keep-c")                 keepC = true;
         else if (a == "--webgpu")                 webgpu = true;
         else if (a == "--shared")                 shared = true;
+        // Opt IN to a DLL runtime. A no-op — not an error — on a target with no non-system runtime to
+        // choose about, so one cross-platform build script can carry it. Orthogonal to `--shared`, which
+        // picks the OUTPUT kind rather than how the runtime is linked.
+        else if (a == "--dynamic-runtime")        dynamicRuntime = true;
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
@@ -6362,6 +6386,9 @@ int main(int argc, char** argv)
         if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: %s\n", cerr.c_str()); return 2; }
     }
     release = bcfg.release;
+    // The CLI wins over the manifest's `runtime`, exactly as --target wins over a `"default": true`.
+    // Set after resolveBuildConfig because that is what assigns g_target.
+    if (dynamicRuntime) g_target.runtime = "dynamic";
 
     // Package deps (M2): if the manifest declares dependencies, the resolved view must already be
     // materialized. The build is a pure, reproducible READ of the view — it never fetches — so a missing
@@ -7273,6 +7300,24 @@ int main(int argc, char** argv)
                 link << "-pthread -sPROXY_TO_PTHREAD "
                      << "-sPTHREAD_POOL_SIZE=" << (pool && *pool ? pool : "0") << " "
                      << "-sPTHREAD_POOL_SIZE_STRICT=0 ";
+            } else if (g_target.isWindows() && g_target.runtime != "dynamic") {
+                // mingw-w64 installs BOTH libpthread.a and libpthread.dll.a, and the linker prefers the
+                // IMPORT LIBRARY — so a bare `-lpthread` binds libwinpthread-1.dll out of the msys2 tree
+                // and the program dies at process start with STATUS_DLL_NOT_FOUND (0xC0000135) anywhere
+                // that DLL is absent. That is *every* machine including the one that built it, unless the
+                // launcher happens to be an msys2 shell. Measured, not reasoned: tests/isolate_basic.kama
+                // built here imported libwinpthread-1.dll and exited 0xC0000135 from PowerShell.
+                //
+                // `-Bstatic` around this ONE library, not a blanket `-static`, because the rule is "link
+                // non-system runtime statically, system components dynamically" — and the libraries a user
+                // names (`--link`, `--webgpu`) are their choice, not ours. Go and Rust draw the same line.
+                // A blanket -static would also silently re-bind -lglfw3 and break --webgpu outright:
+                // libwgpu_native.a needs -lntdll/-luserenv/-lbcrypt, which this tail never emits.
+                //
+                // -Bdynamic restores the linker default so nothing downstream (-lws2_32, the target's own
+                // ldflags) changes meaning. Opt back into the DLL with --dynamic-runtime or a target's
+                // "runtime": "dynamic" — see docs/targets.md.
+                link << "-Wl,-Bstatic -lpthread -Wl,-Bdynamic ";
             } else {
                 link << "-lpthread ";
             }

@@ -72,7 +72,8 @@ Use it. Declare it once in `kama.json` so it is checked in and the whole team ge
         "ar":      "aarch64-linux-gnu-ar",
         "sysroot": "/opt/rpi-sysroot",
         "cflags":  ["-mcpu=cortex-a72"],
-        "ldflags": []
+        "ldflags": [],
+        "runtime": "static"
       }
     }
   }
@@ -85,6 +86,10 @@ kama build app.kama --target RPI
 
 `ar` matters for `OUTPUT=STATIC`: an archive indexed by the host's `ar` may be unreadable to the
 target's linker.
+
+`runtime` is `"static"` or `"dynamic"` and says how the *language's own* runtime is linked — see
+[Runtime linkage](#runtime-linkage) below. Every key is optional; omitting one takes the target's
+default.
 
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
@@ -186,6 +191,48 @@ linker script own the final image, which is your link step.
 `SHARED` exports only functions marked `expose` (everything else is hidden), so the library's surface
 is exactly what you declared.
 
+## Runtime linkage
+
+A separate axis from the output kind: **how the language's own runtime is linked into whatever you
+produce.** The rule is *link non-system runtime statically, system components dynamically* — so a
+binary depends only on things the target OS already has.
+
+**Static is the default, and you opt *in* to a DLL:**
+
+```sh
+kama build app.kama                        # runtime linked statically
+kama build app.kama --dynamic-runtime      # opt in to the runtime DLL
+```
+
+or per-project, since linkage is a toolchain property like `cc` and `sysroot`:
+
+```json
+"select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } }
+```
+
+`--dynamic-runtime` wins over the manifest, the same way `--target` beats a declared `"default": true`.
+
+**In practice this only bites on Windows.** On Linux and macOS libc *is* the system — glibc and
+libSystem ship with the OS and pthreads live inside libc — so there is no non-system runtime to make a
+choice about, and the flag is an accepted no-op there (one build script, no branching). Going further
+would be actively wrong: static glibc breaks `dlopen`/NSS, and Apple does not support a static
+libSystem at all.
+
+On Windows it matters, because mingw-w64's winpthread ships with your *compiler*, not with Windows.
+A program using `isolate` / `parfor` / `channel` used to bind `libwinpthread-1.dll` out of the msys2
+tree and die at process start with `STATUS_DLL_NOT_FOUND` (`0xC0000135`) on any machine without it —
+including the machine that built it, unless an msys2 shell launched it.
+
+This is the same stance Go, Rust and Zig take: static runtime on Windows, dynamic libc elsewhere.
+Libraries **you** name (`--link`, `--webgpu`) are untouched and remain your choice to ship or link —
+kama makes the decision only about its own runtime.
+
+Check what you actually produced:
+
+```sh
+objdump -p app.exe | grep 'DLL Name'    # want only KERNEL32 + api-ms-win-crt-*
+```
+
 ## Where the artifacts land
 
 Inside a **project** (a directory with a `kama.json`), everything a build generates goes under one root:
@@ -214,7 +261,8 @@ beside the source. `out/` is a project's concept, and one file is not a project.
 - **macOS → anything**: fine with zig or a sysroot.
 - **anything → macOS**: needs the macOS SDK, which Apple's licence keeps on Apple hardware. Practical
   answer: build macOS artifacts on a Mac (or a Mac CI runner).
-- **→ Windows**: `WINDOWS` targets the **mingw-w64** ABI (`-gnu`), which zig covers. An MSVC-ABI build
+- **→ Windows**: the runtime links statically, so the `.exe` is distributable as-is — see
+  [Runtime linkage](#runtime-linkage). `WINDOWS` targets the **mingw-w64** ABI (`-gnu`), which zig covers. An MSVC-ABI build
   (`x86_64-windows-msvc`) needs the MSVC headers and libraries, so build it on Windows.
 - **→ wasm**: uses Emscripten (`emcc`), not zig — it emits an `.html` + `.js` + `.wasm` harness, and
   `$EMCC` or `--cc` overrides which `emcc`.
@@ -226,6 +274,13 @@ beside the source. `out/` is a project's concept, and one file is not a project.
 **"cannot build for X — the default C compiler has no libc for it"**
 kama will not guess a toolchain that cannot work. Pick a route from *Getting a cross toolchain* above,
 or `kama transpile` and build the C elsewhere.
+
+**My Windows `.exe` dies immediately with `0xC0000135` / "the code execution cannot proceed".**
+That is `STATUS_DLL_NOT_FOUND` at process start — a DLL the binary imports is not on the machine.
+`objdump -p app.exe | grep 'DLL Name'` names it. If it is `libwinpthread-1.dll`, you built with
+`--dynamic-runtime` or a `"runtime": "dynamic"` target; drop it and the runtime links in statically.
+If it is a library **you** named (`--link`, `--webgpu`), ship that DLL beside the `.exe` — kama does
+not decide linkage for your dependencies. See [Runtime linkage](#runtime-linkage).
 
 **I want to tune for a specific CPU.**
 kama passes no `-march`/`-mcpu`/`-mtune`, so builds target the architecture's generic baseline — which
