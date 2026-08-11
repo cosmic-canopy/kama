@@ -317,6 +317,14 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   path — the literal's type is decided without consulting the target type — and is deliberately not
   bundled with that fix. It is platform-independent. The fixture covers only the assignment path it was
   written for and says so; a fixture for this belongs with the fix.
+- **Every Windows binary kama emits is CONSOLE subsystem, including GUI programs.** Double-clicking the
+  native `examples/webgpu` triangle opens TWO windows: the console Windows creates for a console-subsystem
+  PE, and then the actual graphics window GLFW opens on top of it. Verified with `file` — `triangle.exe`
+  and `kama.exe` both report `(console)`. A shipped GUI app is linked `-mwindows`
+  (`-Wl,--subsystem,windows`), which suppresses the console; the cost is that `print`/`eprintln` then go
+  nowhere unless the program attaches one, so it cannot simply be the default. It wants an explicit
+  choice — a manifest field or a build flag — and it belongs with the two items below, since all three are
+  the same question: what shape is a Windows application, as opposed to a Windows console tool.
 - **A threaded kama program is not standalone on Windows.** Anything using `isolate` / `parfor` /
   `channel` links `libwinpthread-1.dll` out of the msys2 tree, so it dies with `STATUS_DLL_NOT_FOUND` on
   a machine without it — the same failure the compiler itself had before the Makefile started passing
