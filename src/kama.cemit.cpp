@@ -5333,6 +5333,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // needs per-tag walks — both are follow-ons (ROADMAP), not a silent half-derive.
             unsupported("`@generate(Equatable, Hashable)` applies only to a plain (non-generic, non-variant) "
                         "type — write `implements Equatable`/`Hashable` by hand for a generic or variant", cd->line);
+        } else if (ci.genSerialize || ci.genDeserialize) {
+            // The only two kinds that had NO arm here, so they were accepted in silence: the type read as
+            // conforming, nothing synthesized the conformance, and the first `encode(v: b)` died in the C
+            // compiler on a missing `_F4__Box_int32__as_Serialize` vtable. Its four siblings above all say so.
+            unsupported("`@generate(Serialize, Deserialize)` applies only to a plain (non-generic, non-variant) "
+                        "type — write `implements Serialize`/`Deserialize` by hand for a generic or variant", cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/

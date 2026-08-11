@@ -1,0 +1,9 @@
+// An unsuffixed integer literal is `int32`. A value that does not FIT int32 used to be truncated in
+// silence — `int64 a = 4294967295;` bound -1, with no kama diagnostic at any width. C/C++/C# widen the
+// literal to the first type that fits; Rust/Go/Zig reject it. kama rejects it, because widening would
+// make a literal's type depend on its magnitude, so editing a constant could silently retype the
+// expression around it.
+fn int32 main() {
+    int64 a = 4294967295;   // needs `4294967295i64` (or `ui32`)
+    return cast<int32>(a);
+}

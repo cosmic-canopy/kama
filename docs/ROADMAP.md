@@ -323,10 +323,40 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   hot-reload); the **full `expose`** — richer wasm module exports + the scripting host interface — stays 2.0 (§7).
 - **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
   open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
-  `@generate(Format)` draws — both error rather than half-deriving), and on a payload-less **enum**, which
+  `@generate(Format)` draws — all of them now error rather than half-deriving; `Serialize`/`Deserialize`
+  were the two kinds with no arm, so they were *accepted in silence* and died in the C compiler on a
+  missing `_F4__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
+  and on a payload-less **enum**, which
   has no struct to walk and today declares `implements` on its own `type enum` line instead. A `Copyable` derive is a
   **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
   walk can make (a memberwise copy of a raw handle double-frees).
+- **A generic FREE function cannot call a generic free function with its own type parameter.**
+  `fn T outer<T>(T v) { return ident(x: v); }` reports "cannot infer generic type parameter 'T' —
+  argument 'x' is not a literal or a locally-typed value". `collectGenericInsts` walks each body ONCE,
+  verbatim, with `_typeSubst` empty, so the argument's declared type reads as a bare name and
+  `inferGenericInst` rejects it *in that pre-pass* — before the per-instantiation re-walk that would
+  resolve it. The same fixpoint already answers this for a generic call inside a generic **TYPE**'s
+  member (`registerInstGenerics`); the free-fn-inside-free-fn case never got the matching treatment.
+  Fix = let the pre-pass DEFER an unresolvable argument instead of diagnosing it, and diagnose only what
+  is still unbound after the fixpoint settles. Clean diagnostic, not silent, so it is a limitation rather
+  than a hazard — but it blocks the ordinary "thin generic wrapper" shape. Found while checking whether
+  a const generic param could be passed to a generic call; it fails identically for a type param, so it
+  is the general gap, not a const-generic one.
+
+- **A generic `enum` cannot declare members or contracts.** `type enum Tag<const N: int32> { A; public fn
+  int32 bump() { return N; } }` is rejected — "a generic enum is a monomorphization template, so each
+  instance would need its own conformance". Clean diagnostic and a real limitation: it is why
+  `EnumDeclarationNode`'s const-param data still has no reader after the const-generics campaign, since a
+  const param can only be READ inside a body and a generic enum has none. Whoever lifts this should add
+  the const-param fixture that could not be written (`tests/constgen_value_type.kama` records the gap).
+
+- **`INT32_MIN` has no direct spelling.** `-2147483648` is unary minus over the literal `2147483648`,
+  which does not fit `int32` — so it is now a clean parse error (it used to emit `--2147483648`, which
+  clang reads as a pre-decrement and rejects with "expression is not assignable", so the value was never
+  writable). The corpus already spells it `0i32 - 2147483647i32 - 1i32`. Fix = fold a unary minus over an
+  out-of-range literal at parse time when the NEGATED value fits, which is what Rust does. Small, and
+  entirely in the literal rule; filed rather than done because it wants its own fixtures.
+
 - **Unresolved type names — one residual: GENERIC ARGUMENTS.** Declared type names are now checked
   (`checkDeclaredTypes`, a single-visit walk at the tail of `collectProgram`), so a misspelled or unimported
   type in a parameter, return, field or variant payload is a kama-level error instead of a C-level

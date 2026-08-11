@@ -10,7 +10,7 @@ fn int32 main() {
     uint16 b   = byteswapU16(x: cast<uint16>(4660));       // 0x1234 -> 0x3412 = 13330
     int32  ok2 = (b == cast<uint16>(13330)) ? 1 : 0;
 
-    uint64 c0  = cast<uint64>(1234567890123);              // swapping twice is the identity
+    uint64 c0  = cast<uint64>(1234567890123i64);              // swapping twice is the identity
     int32  ok3 = (byteswapU64(x: byteswapU64(x: c0)) == c0) ? 1 : 0;
 
     float32 f  = 3.5f32;                                   // float swap round-trips (via bitcast)

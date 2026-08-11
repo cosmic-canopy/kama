@@ -154,7 +154,7 @@ fn Ptr makePipeline(Ptr device, int32 format) {
     pd.vertex.entryPoint.length = cast<usize>(vsEntry.length());
     pd.primitive.topology = 4;           // WGPUPrimitiveTopology_TriangleList
     pd.multisample.count = 1;
-    pd.multisample.mask = 4294967295;    // 0xFFFFFFFF
+    pd.multisample.mask = 4294967295ui32;    // 0xFFFFFFFF
     pd.fragment = cast<Ptr>(addr(of: frag));
     return wgpuDeviceCreateRenderPipeline(device: device, descriptor: addr(of: pd));
 }
@@ -254,7 +254,7 @@ fn int32 frameTick(Ptr state) {
 
         WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
         att.view = view;
-        att.depthSlice = 4294967295;   // WGPU_DEPTH_SLICE_UNDEFINED
+        att.depthSlice = 4294967295ui32;   // WGPU_DEPTH_SLICE_UNDEFINED
         att.loadOp = 2;                // WGPULoadOp_Clear
         att.storeOp = 1;               // WGPUStoreOp_Store
         // Full-range RGB sweep with phase offsets — an obvious colour cycle (~3.3s).

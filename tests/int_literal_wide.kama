@@ -1,25 +1,40 @@
-// An unsuffixed integer literal above INT32_MAX must mean the same number on every host.
+// A wide integer literal must mean the same number on every host — and must SAY what width it means.
 //
-// It did not. The grammar parsed these with `strtol`, whose `long` is 64-bit on Unix and 32-BIT ON
-// WINDOWS (LLP64) — so a literal past 2147483647 SATURATED to LONG_MAX there, and the same source
-// compiled to a different value depending on who built it.
-//
-// It surfaced in examples/webgpu, not in a test: `att.depthSlice = 4294967295` (WebGPU's
+// This fixture was written for the first half. The grammar parsed unsuffixed literals with `strtol`,
+// whose `long` is 64-bit on Unix and 32-BIT ON WINDOWS (LLP64), so a literal past 2147483647 SATURATED
+// to LONG_MAX there and the same source compiled to a different value depending on who built it. It
+// surfaced in examples/webgpu, not in a test: `att.depthSlice = 4294967295` (WebGPU's
 // DEPTH_SLICE_UNDEFINED) became 2147483647, wgpu rejected the render pass with "Depth slice was
-// provided but the color attachment's view is not 3D", and the native triangle drew nothing on
-// Windows while being correct on macOS. strtoll is 64-bit everywhere, so the narrowing to Int32Node's
-// int32_t now wraps identically on all platforms — which is the whole point.
+// provided but the color attachment's view is not 3D", and the native triangle drew nothing on Windows
+// while being correct on macOS.
 //
-// The ASSIGNMENT path is the one that saturated; an initializer takes a different route through the
-// emitter and always worked, which is most of why this went unnoticed for so long.
+// The second half arrived right after, from the other end: an unsuffixed literal is `int32`, and one
+// that does not FIT int32 was truncated in silence on EVERY host (`int64 a = 4294967295;` bound -1).
+// That is now an error naming the suffix — see tests/xfail/int_literal_overflow — which subsumes the
+// portability bug rather than sitting beside it: the value is rejected before it can reach a narrowing
+// step, so there is no longer a wrap whose result could differ by host.
+//
+// So the literals below carry their width, and what this fixture guards is that a wide value survives
+// the round trip intact through both an ASSIGNMENT and an INITIALIZER. The assignment path is the one
+// that saturated; the initializer took a different route through the emitter and was always correct,
+// which is most of why it went unnoticed for so long. Both are pinned here.
 fn int32 main() {
-    uint32 assigned = 0;
-    assigned = 4294967295;
-    if (assigned != 4294967295) { return 1; }
+    uint32 assigned = 0ui32;
+    assigned = 4294967295ui32;
+    if (assigned != 4294967295ui32) { return 1; }
 
-    uint32 hex = 0;
-    hex = 0xFFFFFFFF;
-    if (hex != 4294967295) { return 2; }
+    uint32 hex = 0ui32;
+    hex = 0xFFFFFFFFui32;
+    if (hex != 4294967295ui32) { return 2; }
+
+    uint32 initialized = 4294967295ui32;          // the initializer path, for the same value
+    if (initialized != assigned) { return 3; }
+
+    uint64 wide = 18446744073709551615ui64;       // the full 64-bit range, above INT64_MAX
+    if (wide != 18446744073709551615ui64) { return 4; }
+
+    int64 signedWide = 9223372036854775807i64;
+    if (signedWide != 9223372036854775807i64) { return 5; }
 
     return 42;
 }

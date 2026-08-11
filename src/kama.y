@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <cstdlib>
+#include <cerrno>
 #include "kama.parser.hpp"
 #include "kama.ast.h"
 #include "kama.context.h"
@@ -31,6 +32,8 @@ struct LexerInstanceData*  yyget_extra ( yyscan_t scanner );
 extern int yylex(YYSTYPE * yylval_param, YYLTYPE * yylloc_param, yyscan_t scanner);
 
 int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
+static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
+                                          YYLTYPE* loc, yyscan_t scanner);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
     SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
@@ -496,20 +499,21 @@ module_variable_declaration
 
 literal
   : boolean_literal
-  /* ⚠️ strtoLL, not strtol: `long` is 64-bit on Unix and 32-BIT ON WINDOWS (LLP64), so strtol SATURATES
-     an unsuffixed literal above 2147483647 to LONG_MAX there and silently returns a different number
-     than the same source produces on macOS or Linux. `att.depthSlice = 4294967295` — WebGPU's
-     DEPTH_SLICE_UNDEFINED — compiled to 2147483647, and wgpu rejected the render pass with "Depth slice
-     was provided but the color attachment's view is not 3D": the native examples/webgpu triangle drew
-     nothing on Windows and was fine everywhere else. strtoll is 64-bit on every platform, so the
-     narrowing to Int32Node's int32_t wraps identically on all of them, which is the point.
-     The suffixed forms below already learned this (see createIntegerLiteralNode's note on strtoull). */
-  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->c_str(), NULL, 10)); }
-  | HEX_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->c_str(), NULL, 16)); }
-  | OCT_LITERAL_NO_SUFFIX   { $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->substr(2).c_str(), NULL, 8)); }
+  /* An unsuffixed integer literal is `int32`, and one that does not FIT int32 is an ERROR — see
+     makeUnsuffixedInt. That subsumes the portability bug this block used to carry: `strtol` returns a
+     `long`, which is 64-bit on Unix and 32-BIT ON WINDOWS (LLP64), so a literal past 2147483647
+     SATURATED to LONG_MAX there and the same source meant a different number depending on who built it.
+     `att.depthSlice = 4294967295` — WebGPU's DEPTH_SLICE_UNDEFINED — compiled to 2147483647, wgpu
+     rejected the render pass with "Depth slice was provided but the color attachment's view is not 3D",
+     and the native examples/webgpu triangle drew nothing on Windows while being correct on macOS.
+     Rejecting the literal outright cannot regress that way: strtoull is 64-bit on every platform AND the
+     value never reaches a narrowing step. The host-dependent wrap and the silent wrap are one bug. */
+  | DEC_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner); }
+  | HEX_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 16, &@1, scanner); }
+  | OCT_LITERAL_NO_SUFFIX   { $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2), 8, &@1, scanner); }
   | BASED_LITERAL_NO_SUFFIX   { std::string::size_type underscoreIndex = $1->find('_');
     int base = (int)strtoll($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
-    $$ = std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll( $1->substr(2, underscoreIndex - 3).c_str(), NULL, base));
+    $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2, underscoreIndex - 3), base, &@1, scanner);
   }
   | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1 ); }
   | HEX_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  16, $1->substr(2) ); }
@@ -554,7 +558,7 @@ interp_hole
   ;
 interp_index
   : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<Int32Node>(SCANNER_CODEGENCONTEXT, (int32_t)strtoll($1->c_str(), NULL, 10))); }
+  | DEC_LITERAL_NO_SUFFIX   { $$ = std::make_shared<ExpressionList>(); $$->push_back(makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner)); }
   ;
 boolean_literal
   : TRUE   { $$ = std::make_shared<BooleanNode>(SCANNER_CODEGENCONTEXT, true); }
@@ -1908,6 +1912,31 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
         head->genericArg  = SharedIdentifier();
     }
     return n;
+}
+
+/* An unsuffixed integer literal is `int32` — the language's default width, as in Rust. A value that does
+ * not FIT int32 used to be truncated in SILENCE: `int64 a = 4294967295;` bound -1, and `-2147483648`
+ * emitted `--2147483648`, which clang reads as a pre-decrement and rejects ("expression is not
+ * assignable") — so INT32_MIN was not writable at all. Neither of the two conventional answers was in
+ * force: C/C++/C# widen the literal to the first type that fits, Rust/Go/Zig make it an error. kama
+ * takes the second, because widening would make a literal's TYPE depend on its magnitude — editing a
+ * constant could silently retype the expression around it, which is the opposite of explicit.
+ *
+ * Applies to every unsuffixed base (decimal, hex, octal, based): a mask is a value like any other, and
+ * `0xFFFFFFFFui32` says what it means. */
+static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
+                                          YYLTYPE* loc, yyscan_t scanner)
+{
+    errno = 0;
+    unsigned long long v = strtoull(digits.c_str(), NULL, base);
+    if(errno == ERANGE || v > 2147483647ULL)
+    {
+        yyerror(loc, scanner, ("integer literal `" + digits + "` does not fit `int32`, the width of an "
+                               "unsuffixed literal -- write the width you mean (`" + digits + "i64`, `"
+                               + digits + "ui32`)").c_str());
+        return std::make_shared<Int32Node>(ctx, 0);
+    }
+    return std::make_shared<Int32Node>(ctx, (int32_t)v);
 }
 
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str)

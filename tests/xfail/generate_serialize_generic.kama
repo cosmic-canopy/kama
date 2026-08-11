@@ -1,0 +1,14 @@
+// `@generate` synthesizes against one concrete ClassInfo, so it does not apply to a generic template —
+// `of`/`zero`, `Format`, `Equatable`/`Hashable` each say so. `Serialize`/`Deserialize` were the two
+// kinds with NO arm, so they were accepted in silence: the type read as conforming, nothing synthesized
+// the conformance, and the first `encode(v:)` died in the C compiler on a missing
+// `_F4__Box_int32__as_Serialize` vtable symbol.
+@generate(Serialize)
+type value Box<T> {
+    @field public T v;
+    public ctor of(T v) { this.v = v; }
+}
+fn int32 main() {
+    Box<int32> b = Box::<int32>.of(v: 42);
+    return b.v;
+}
