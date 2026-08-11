@@ -258,6 +258,30 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   corpus (enumerating rule violations across `tests/` had to filter by "is the reported line past this
   file's end?" to tell the two apart). Wants the unit to travel with the diagnostic, as `RefUnitScope`
   already does for the reference index.
+
+- **A top-level `fn`'s diagnostics point at the PREVIOUS declaration — LOW-prio, and pairs with the item
+  above.** `ASTNode::line` is "the lexer position at reduction time — approximate for multi-token nodes
+  (bison lookahead skew)" ([kama.ast.h](../src/kama.ast.h)), refined by `STAMP_LOC` only where hover and
+  rename need it. For a top-level `FunctionDeclarationNode` that approximation is not off by a token, it
+  is off by a whole **declaration**. Instrumented on a file whose functions really sit at lines 4, 7, 8:
+
+  | | line 4 | line 7 | line 8 |
+  |---|---|---|---|
+  | `fn->line` | **1** | **4** | **7** |
+  | `fn->name->line` | 4 | 7 | 8 |
+
+  Confined to that node: `cd->line` (a type, 28 sites), `ed->line` (an enum), `md->line` (a method, 24
+  sites) and an operator declarator each landed exactly right in the same probes. So the fix is small —
+  route the ~10 `fn->line` diagnostic sites through the `STAMP_LOC`'d `fn->name`, which is what
+  `collectSignatures`' duplicate-function check already does.
+
+  **The small half is not the point, and that is why this is tracked rather than done.** *Nothing in the
+  repo checks a diagnostic's line number* — `run_tests.sh` greps each `tests/xfail/*.msg` as a fixed
+  substring only, so all 337 xfail fixtures would pass with every line wrong, and this skew sat unnoticed
+  for exactly that reason. Fixing the sites without a guard only resets the clock. The guard is the work,
+  and it is **the same guard the lib/prelude-attribution item above needs** — assert file *and* line for a
+  sample of diagnostics — so do the two together. LOW-prio because nothing miscompiles; it costs an editor
+  a squiggle on the wrong function and an agent a wrong `file:line`.
 - **Contract refinement — one under-tested edge (clean workaround).** `type contract Child … implements
   Parent` works for dispatch, but was exercised mainly with scalar-param parents. Remaining: a concrete type
   implementing the child gets **no parent-contract conformance thunk** — pass it where the parent is expected
