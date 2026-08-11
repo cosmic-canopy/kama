@@ -21,9 +21,16 @@ RUN apt-get update \
       clang \
       libclang-rt-18-dev \
       openssh-client \
+      diffutils \
+      git \
  && rm -rf /var/lib/apt/lists/*
 # openssh-client provides `ssh-keygen -Y sign/verify` (SSHSIG) for `kama publish --key` + `--verify`
 # (M3.2a package signing). Absent it, signing/verification skip gracefully.
+# diffutils + git are what the GUARDS compare and resolve with, and tools/run-checks.sh refuses to start
+# without them. Both almost certainly come with the emsdk base already — listed anyway, because "the base
+# image probably has it" is precisely the assumption that left the Windows leg reporting a clean tree as
+# "the binary's AGENTS.md differs from agents/AGENTS.md" for months. Naming them costs nothing and makes
+# a future base-image change say so instead of misreporting it as a content failure.
 # libclang-rt-18-dev ships the compiler-rt runtime (libclang_rt.asan/ubsan.*) that the bare
 # `clang` metapackage omits on arm64 — without it `-fsanitize=address,undefined` fails to LINK.
 # It tracks the clang version above (18 here); bump the suffix if the base image's clang moves.

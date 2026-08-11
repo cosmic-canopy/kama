@@ -115,20 +115,26 @@ Everything else here is library or toolchain work that does **not** gate the tag
      (WebSocket `permessage-deflate`, HTTP `Content-Encoding`). Pairs naturally with the binary serde backend
      (crushes its field-name redundancy). (Engine-level replication — snapshots/deltas/dirty-tracking — stays
      above this, in the engine.)
-   - **⚠️ Windows CI is RED, and must be green + required before the tag.** The `windows-latest` leg last
-     reported **779 passed, 48 failed** (2026-08-01, MSYS2/UCRT64). It is still best-effort, so those
-     failures do not block a merge — which is how a red leg stayed invisible. Two pieces:
-     - **Triage the 48.** Only one was captured in the log tail, and it was a *harness* bug, not a compiler
-       one: `check-target` asserted the `--shared` output name by grepping the stubbed `--cc echo` command
-       line, which a natively-built Windows kama emits through `cmd.exe` — whose `echo` keeps the quotes
-       that POSIX `sh` strips, so `-o "…/arith.dll"` failed an anchored `arith\.dll$` match while the build
-       itself was correct. **Fixed** (`tr -d '"'` in `tools/check-target.sh`). The other 47 need the full
-       CI log — the excerpt on hand stops after the first failing guard.
-     - **The Windows suite takes 1496 s vs ~75 s in the container**, and every `net_*` fixture costs ~30 s
-       (`net_refused` 30.7 s, `net_nonblocking_connect` 30.2 s). That is the shape of a connect/accept
-       timeout being waited out rather than a test running, so it is likely one root cause across a dozen
-       fixtures, not a dozen bugs.
-     Promote to **required** once green, so a Windows regression blocks a merge.
+   - **⚠️ Windows CI: 3 guard failures from green, then promote to required.** Triaged on real Windows
+     hardware (2026-08-11, msys2/UCRT64) — **969 passed, 3 failed**, from 923/48, with **no fixture
+     failures left**. The leg is still `continue-on-error`; **do not flip it until the three below are
+     green**, or the first run after this blocks merges on known failures. Everything else here shipped.
+     - **`check-lsp` — 6 assertions in the `@compileFor` manifest-flag section.** The server does not pick
+       up the project manifest's flags, so the editor and the CLI disagree about which declarations a
+       build keeps ("lsp: [always onlyWithoutA] cli: [always onlyWithA]"). The other 32 assertions that
+       were failing are fixed; this is the residue.
+     - **`check-packages` — a free-rider check fires on Windows that should not**, so `kama run` exits 1
+       where the guard expects 2. Hypothesis, unverified: `absolutePath()` uses `realpath()` on POSIX,
+       which RESOLVES the `.kama/deps` symlink into the package store, while Windows `_fullpath` does not
+       resolve junctions — so package ownership is computed against a different directory per platform.
+       ⚠️ Confirm before fixing: the repair likely changes package resolution on **all three** platforms.
+     - **`check-build-jobs`** is green, and the `-j` clamp that made it fail is gone (see below).
+     Remaining wall-clock: the suite is ~900 s here vs ~75 s in the container. `kama build -j` now
+     parallelizes on Windows (1.65x on 17 TUs), but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out
+     per fixture, so that win does not reach the suite. The per-fixture cost is the C compile plus Windows
+     process startup, not — as previously recorded here — a connect/accept timeout: `net_addr_ctor` opens
+     no socket at all and cost the same 40 s as `net_refused`. Defender exclusion on the runner temp dir
+     is the cheapest untried lever.
 4. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
    ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
    flash pass — detail in §5 (embedded "Toolchain / build" row).
