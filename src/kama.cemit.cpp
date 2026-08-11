@@ -4543,6 +4543,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 for (auto& p : *ed->typeParams) if (p) ps.push_back(*p);
                 _genericTypeParams[name] = ps;
                 _genericTypeBounds[name] = ed->typeBounds;
+                if (ed->constTypes) _genericTypeConstTypes[name] = *ed->constTypes;
                 if (ed->typeDefaults) _genericTypeDefaults[name] = *ed->typeDefaults;
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
@@ -5341,6 +5342,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             for (auto& p : *cd->typeParams) if (p) ps.push_back(*p);   // [A, B, …]
             _genericTypeParams[ci.name] = ps;
             _genericTypeBounds[ci.name] = cd->typeBounds;   // per-param contract bounds
+            if (cd->constTypes) _genericTypeConstTypes[ci.name] = *cd->constTypes;   // per-param `const N: int32` width
             if (cd->typeDefaults) _genericTypeDefaults[ci.name] = *cd->typeDefaults;   // per-param `= Default` (null entry = required)
             _genericTypeCtx[ci.name]    = _nsCtx;
             _genericTypes[ci.name]      = ci;
@@ -5464,6 +5466,19 @@ void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdenti
         int64_t v;
         if (ct && constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = ct->builtInVal; _constSubst[pn] = b; }
         else                             _typeSubst[pn] = args[i];
+    }
+}
+
+void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args)
+{
+    auto cti = _genericTypeConstTypes.find(tmplKey);
+    if (cti == _genericTypeConstTypes.end()) return;
+    const std::vector<SharedIdentifier>& cts = cti->second;
+    const std::vector<std::string>& ps = _genericTypeParams[tmplKey];
+    for (size_t i = 0; i < ps.size() && i < args.size() && i < cts.size(); ++i) {
+        if (!cts[i]) continue;                       // a type param — already bound in _typeSubst
+        int64_t v;
+        if (constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; _constSubst[ps[i]] = b; }
     }
 }
 
@@ -15401,8 +15416,10 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _nsCtx = _genericTypeInstCtx.count(gi.mangledName) ? _genericTypeInstCtx[gi.mangledName]
                                                        : _genericTypeCtx[gi.templateKey];
     _typeSubst.clear();
+    _constSubst.clear();
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
     _emitStaticClass = true;
     if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
@@ -15413,6 +15430,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     else { emitClassInterfaceVtables(ci); emitClassDefinitions(ci); }   // `static` C__as_I vtables (e.g. List<int32> as Serialize)
     _emitStaticClass = false;
     _typeSubst.clear();
+    _constSubst.clear();
     _nsCtx = savedCtx;
 }
 

@@ -945,6 +945,11 @@ private:
     std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
     std::map<std::string, SharedBoundsList>   _genericTypeBounds;   // template name -> per-param contract bounds
     std::map<std::string, std::vector<SharedIdentifier>> _genericTypeDefaults; // template name -> per-param default type (null entry = required, no default)
+    // template name -> per-param DECLARED integral type for a `const N: int32` param (null entry = a
+    // type param). The first reader of ClassDeclarationNode/EnumDeclarationNode::constParams' data:
+    // both nodes carried const-param info that nothing consumed, which is why a const param on a TYPE
+    // was parse-only plumbing while the same spelling on a function worked.
+    std::map<std::string, std::vector<SharedIdentifier>> _genericTypeConstTypes;
     std::map<std::string, NsCtx>              _genericTypeCtx;      // template name -> home namespace ctx
     std::map<std::string, NsCtx>              _genericTypeInstCtx;  // instance -> registration (use-site) ctx, so a
                                                                     // prelude template's user-type args resolve at emit time
@@ -1154,6 +1159,10 @@ private:
     // binding, not an addition to one. `constTypes` is parallel to `params` (null = a type param).
     void bindInstParams(const SharedStringList& params, const SharedIdentifierList& constTypes,
                         const std::vector<SharedIdentifier>& args);
+    // ADD a generic TYPE/enum instantiation's const params to _constSubst. Additive on purpose: a
+    // generic type keeps EVERY param in _typeSubst, which mangleElem hops through and deepSubstType /
+    // argCarriesUnboundParam walk — moving const params out of it would break all three.
+    void bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args);
     // A bound const param spelled as a C VALUE — the integer cast to its declared type. The cast is
     // load-bearing: a bare `8` is a C `int`, so a `const F: uint32`/`int8` would promote and compare
     // differently from a real local of the type the author wrote. "" if `name` is not bound.
