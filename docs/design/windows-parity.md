@@ -5,18 +5,18 @@
 branch can be pushed.*
 
 Where things stood at the start (2026-08-11, msys2/UCRT64, real hardware): **970 passed, 2 failed**,
-up from 923/48, with **no fixture failures left**. The `windows-test` leg is still
-`continue-on-error`. Environment and gotchas: [../platforms/windows.md](../platforms/windows.md) —
-read it first, every session.
+up from 923/48, with no fixture failures left. **Now: 972 passed, 0 failed** — `./run_tests.sh`,
+906 s wall. Environment and gotchas: [../platforms/windows.md](../platforms/windows.md) — read it
+first, every session.
 
 **The order is load-bearing.** Item 3 flips CI to required; doing it before 1 and 2 means the first
 *required* run fails on failures that were already known.
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | `check-lsp` — the `@compileFor` manifest-flag assertions | not started |
-| 2 | `check-packages` — the free-rider check fires on Windows | not started |
-| 3 | Drop `continue-on-error` from the `windows-test` job | blocked on 1 + 2 |
+| 1 | `check-lsp` — the `@compileFor` manifest-flag assertions | **done** — `f47d5a2` |
+| 2 | `check-packages` — the free-rider check fires on Windows | **done** — `96f688b`, `ce61944` |
+| 3 | Drop `continue-on-error` from the `windows-test` job | **ready** — see below |
 | 4 | Static runtime linking for USER programs | not started |
 | 5 | The literal initializer/comparison asymmetry | not started |
 
@@ -49,12 +49,18 @@ the server keeps `/c/Users/…` and never finds the project's `kama.json` — it
 flags, which is the reported symptom exactly. The `didOpen` text is inlined, so the buffer still
 parses; that is why only the manifest-flag assertions fail and the rest of the section passes.
 
-**Fix.** Route those six interpolations through `furi`. `cfgsession` reassigns the global `session`
-variable that `frame()` appends to — keep that intact. No-op on POSIX, where `furi` is the identity.
+**Confirmed by measurement, then fixed — `f47d5a2`.** One probe session sent both spellings to the
+same server. Only the `cygpath -m` one logged
+`config: C:/…/tests/query/cfg/kama.json | target … | strict | flags: … FEATURE_A …` and returned
+`onlyWithA`; the raw one logged `(no kama.json — permissive defaults)` and returned `onlyWithoutA`.
 
-**If that is not it.** The fallback hypothesis is server-side manifest discovery keying off `rootUri`
-rather than the document path. Instrument `uriToPath` / `owningPackageDir` before touching the
-server, and record which it was here.
+Two corrections to what the ROADMAP recorded:
+
+- It was **12 assertions, not 6** — the A1 section plus one in M6 C1 (`kama/buildConfig`, a project's
+  own select group).
+- Two assertion **labels** carried unescaped backticks inside double quotes, so the shell ran
+  `Color::` and `collections` as commands on *every* platform and pasted the empty result into the
+  message you would read when that assertion broke. Fixed in the same commit.
 
 ---
 
@@ -79,29 +85,30 @@ So on POSIX a fetched dep's file resolves into `$KAMA_STORE/<name>-<hash>/`, `ow
 `kama run` reaches the program (exit 2). On Windows `owner` stays `<app>/.kama/deps/<name>`, which is
 not under `storeRoot`, the strict check fires, and the run dies at exit 1.
 
-**⚠️ Confirm before fixing.** The cheapest probe is running case 35's fixture by hand with `owner`
-and `storeRoot` printed from a scratch build. The claim to falsify is specifically *"`_fullpath`
-leaves the junction unresolved"*.
+**Confirmed by measurement — both halves, separately.**
 
-**Fix, narrowest first.** Preferred: give the Windows branch of `absolutePath()` the contract the
-POSIX branch already documents, resolving through `GetFinalPathNameByHandleW(…, VOLUME_NAME_DOS)`
-and stripping the `\\?\` prefix, keeping the existing as-given fallback for a path that does not
-exist yet. That is a **Windows-only** change that makes the two branches agree — not the
-all-three-platforms change the ROADMAP entry feared. Two things to watch:
+1. The guard's own failure output names `owner` outright:
+   `…/app/.kama/deps/geodep/kama.json does not declare it` — so the walk stopped at the *view* entry,
+   not the store.
+2. A standalone C probe against a hand-built junction:
+   `_fullpath` → `C:\…\app\.kama\deps\geodep`;
+   `GetFinalPathNameByHandleA` → `\\?\C:\…\store\geodep-deadbeef`.
 
-- It also strengthens the `collectProjectDirs` cycle break (`:433`), which today keys on an
-  unresolved spelling — two names for one directory look distinct.
-- It must **not** leak into `joinPathLexical` (`:186-190`), whose comment explains why a path dep has
-  to keep reaching its package *through* the view link.
+**Fixed.** `absolutePath()`'s Windows branch now opens a handle (`FILE_FLAG_BACKUP_SEMANTICS`, access
+0 — no lock, no read rights needed) and asks `GetFinalPathNameByHandle`, stripping the `\\?\` /
+`\\?\UNC\` prefix; a path that cannot be opened, such as a `-o` output that does not exist yet, falls
+through to `_fullpath` exactly as POSIX falls back when `realpath` fails. **Windows-only** — the
+change is inside `#ifdef _WIN32`, so it is not the all-three-platforms change the ROADMAP feared.
+It also strengthens the `collectProjectDirs` cycle break, which keyed on an unresolved spelling.
 
-Fallback if the broad change destabilizes the suite: resolve only inside `owningPackageDir`, or test
-store membership against the *view* prefix instead of the store prefix.
-
-**Verify.** The guard alone, then the full `./run_tests.sh` on Windows (~850 s) — `absolutePath` is
-used everywhere, so the whole suite is the regression test — then macOS/Linux unchanged.
+**A second, pre-existing failure came out from behind it.** Case 35 `exit 1`s, so cases 36–38 had
+never run on Windows at all. Case 38 asserts `find "$out/app/out" -name app -type f` — and Windows
+builds `app.exe`. `find -name` matches a filename, not a stem, so a build that landed exactly where
+it should reported "did not use the project's out/ root". Fixed with the `EXE=".exe"` idiom
+`tools/check-toolchain.sh` already uses. **This was exposed, not introduced.**
 
 Two un-normalized `readlink` sites survive in the guard (`tools/check-packages.sh:490`, `:676`).
-They pass today; harden them only if the session has budget.
+They pass today; harden them only if a later session has budget.
 
 ---
 

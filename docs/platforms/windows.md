@@ -86,10 +86,21 @@ Worth knowing before debugging, because each of these produced a confident wrong
 - **The CRT opens stdin/stdout/stderr in TEXT mode**, which rewrites `\n` ⇄ `\r\n`. kama sets binary
   mode in `main()` and in `kama_args_init`; anything new that writes bytes must not undo that.
 - **msys2 rewrites POSIX paths in ARGUMENTS** when spawning a native child, but **not in environment
-  variables**. `kama_native_path` in `tools/kama-bin.sh` exists for the second case.
+  variables**, and **not inside a payload it cannot see into** — a `file://` URI in a JSON-RPC frame is
+  just a string. `kama_native_path` in `tools/kama-bin.sh` covers the second case; `furi` in
+  `tools/check-lsp.sh` covers the third. A `/c/Users/…` that reaches native kama unrewritten resolves
+  against the CURRENT DRIVE as `C:\c\Users\…`, which exists nowhere, and the failure is silent: the
+  server finds no manifest and answers under defaults rather than reporting a path it cannot open.
+- **`_fullpath` does not resolve reparse points**, where POSIX `realpath` resolves symlinks. Directory
+  junctions (`mklink /J`, how `kama install` materializes `.kama/deps/<name>`) therefore stayed
+  unresolved, and every "which package owns this file?" test answered differently than on macOS.
+  `absolutePath` opens a handle and asks `GetFinalPathNameByHandle`, which is the only API that knows.
 - **git does not create real symlinks** without `core.symlinks` (needs Developer Mode or elevation);
   it writes a text file containing the target path instead. Do not commit symlinks.
-- **A `.exe` suffix is load-bearing** in any path comparison against a running binary.
+- **A `.exe` suffix is load-bearing** in any path comparison against a running binary — and in any
+  filename predicate a test writes. `find … -name app` matches a filename, not a stem, so a guard
+  asserting that a build produced `app` reports "the output went somewhere else" when it went exactly
+  where it should. `case "$(uname -s)" in MINGW*) EXE=".exe"` is the idiom (`tools/check-toolchain.sh`).
 
 ## Where the remaining work is
 
