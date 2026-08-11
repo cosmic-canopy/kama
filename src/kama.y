@@ -68,6 +68,28 @@ static void requireBraced(const SharedStatement& body, YYLTYPE* loc, yyscan_t sc
                            + shape + "`").c_str());
 }
 
+/* A FUNCTION's type parameter takes no `= Default`. The grammar shares `type_param` with types and
+ * enums, where a trailing default is a real feature (`Map<string, int32>` filling in a hasher and an
+ * allocator), so `fn f<T = int32>()` parsed — and the three `fn` arms then dropped the default on the
+ * floor, because FunctionDeclarationNode has no `typeDefaults` to put it in. The call failed afterwards
+ * with `cannot infer type parameter 'T'`, which names the symptom of the silently discarded default.
+ *
+ * Rejected rather than implemented: a default fills in a type argument the use site OMITTED, and a
+ * function's type arguments are not written at the use site to begin with — inference reads them off the
+ * arguments, or a turbofish spells them. There is nothing for a default to fill in. Zero uses anywhere in
+ * the tree. Same shape as `requireBraced` above and the `is` check in type_param: a hand-raised yyerror,
+ * because bison's generic "unexpected =" cannot say which parameter or why. */
+static void rejectFnTypeParamDefault(const SharedIdentifierList& params, YYLTYPE* loc, yyscan_t scanner)
+{
+    if (!params) return;
+    for (auto& p : *params)
+        if (p && p->defaultArg)
+            yyerror(loc, scanner, (std::string("type parameter `") + (p->value ? *p->value : "?")
+                                   + "` of a function may not have a default -- a default fills in an "
+                                     "argument the use site omitted, and a function's type arguments come "
+                                     "from inference or a turbofish. Defaults belong on a `type`.").c_str());
+}
+
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
 
 /* LSP source spans (M0). With %locations the lexer stamps each token's true [start,end) into yylloc, so
@@ -800,6 +822,7 @@ function_declaration
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
       STAMP_LOC(fn->name, @4);   /* precise name span (an unmodified fn's @$ starts at the previous token) */
       /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
+      rejectFnTypeParamDefault($5, &@5, scanner);
       if ($5 && !$5->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
@@ -819,6 +842,7 @@ function_declaration
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
       STAMP_LOC(fn->name, @5);
       fn->attributes = $1;
+      rejectFnTypeParamDefault($6, &@6, scanner);
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
@@ -840,6 +864,7 @@ function_declaration
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
       STAMP_LOC(fn->name, @5);
       fn->isRef = true;
+      rejectFnTypeParamDefault($6, &@6, scanner);
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();

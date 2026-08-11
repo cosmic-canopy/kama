@@ -1,0 +1,12 @@
+// A default type argument fills in an argument the USE SITE omitted — which is why it is a `type`
+// feature (`Map<string, int32>` fills in a hasher and an allocator). A function's type arguments are
+// not written at the use site at all: inference reads them off the arguments, or a turbofish spells
+// them. So there is nothing for a default to fill in.
+//
+// It used to parse, because the grammar shares `type_param` between functions and types — and then the
+// three `fn` arms dropped it, because FunctionDeclarationNode has no `typeDefaults`. The call below
+// failed afterwards with `cannot infer type parameter 'T'`, naming the symptom of the discarded default
+// rather than the cause.
+fn int32 f<T = int32>() { return 7; }
+
+fn int32 main() { return f(); }
