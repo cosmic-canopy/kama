@@ -145,8 +145,21 @@ $(BUILD)/%.o: src/%.cpp | $(BUILD)
 $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote src -c $< -o $@
 
+# Windows links the compiler runtime STATICALLY, and this is not an optimization — without it the
+# binary does not run at all outside the shell that built it. A mingw-w64 build links libstdc++-6.dll,
+# libgcc_s_seh-1.dll and libwinpthread-1.dll out of /ucrt64/bin; nothing else on a Windows machine has
+# those, so kama.exe died on startup with STATUS_DLL_NOT_FOUND (0xC0000135) the moment anything but an
+# msys2 shell launched it — VS Code starting `kama lsp`, or a user running the RELEASE tarball, which
+# ships bin/kama.exe and none of those DLLs. It surfaced as the language server silently never starting.
+#
+# Keyed off `uname -s` rather than a new switch because that is already how PLATFORM is decided, and the
+# msys2 environments (MINGW64/UCRT64/CLANG64) all report MINGW*.
+ifneq (,$(findstring MINGW,$(shell uname -s)))
+LDFLAGS += -static
+endif
+
 $(BUILD)/kama: $(OBJECTS)
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Root ./kama — a symlink to this platform's binary, refreshed on every build. Consumers that
 # must not care which platform built last (run_tests.sh, the VS Code extension) resolve
