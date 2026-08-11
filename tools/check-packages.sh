@@ -970,7 +970,14 @@ EOF
 _stray=$(ls "$out/app/src" | grep -v '\.kama$' || true)
 [ -z "$_stray" ] \
     || { echo "check-packages: FAIL — a build from outside wrote into the project's src/: $_stray" >&2; exit 1; }
-[ -n "$(find "$out/app/out" -name app -type f -print -quit 2>/dev/null)" ] \
+# `app$EXE`: Windows names the binary app.exe, and `-name app` matches filenames, not stems — so the
+# assertion looked like a build that had written its output somewhere else entirely. It was invisible
+# until case 35 above stopped exiting first and this case became reachable at all.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;;
+    *)                    EXE=""     ;;
+esac
+[ -n "$(find "$out/app/out" -name "app$EXE" -type f -print -quit 2>/dev/null)" ] \
     || { echo "check-packages: FAIL — a build from outside did not use the project's out/ root" >&2; exit 1; }
 
 # (c) a file's OWN project wins over the directory the shell happens to be standing in. Sitting inside
