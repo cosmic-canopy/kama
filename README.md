@@ -141,19 +141,25 @@ see **[editor setup](docs/editors.md)**.
 
 ## Layout
 
-- `kama.l`, `kama.y` — Flex lexer and Bison grammar (the language front end)
-- `kama.ast.h`, `kama.forward.h` — AST
-- `kama.cemit.{h,cpp}` — the C-emitting backend
-- `kama_runtime.h` — the small runtime included by generated C
-- `kama_os.h` — cross-platform OS/IO bindings header (POSIX + Windows), pulled in only by `std::io`/`std::fs`/`std::net`
+- `src/` — the compiler itself (C++):
+  - `kama.l`, `kama.y` — Flex lexer and Bison grammar (the language front end)
+  - `kama.ast.h`, `kama.forward.h` — AST
+  - `kama.cemit.{h,cpp}` — the C-emitting backend
+  - `kama.driver.cpp` — CLI (`transpile` / `build`)
+- `include/` — the headers that SHIP: generated C `#include`s them, and an install puts them in
+  `<prefix>/include`. Not compiler sources — a different audience entirely.
+  - `kama_runtime.h` — the small runtime included by generated C
+  - `kama_os.h` — cross-platform OS/IO bindings header (POSIX + Windows), pulled in only by `std::io`/`std::fs`/`std::net`
 - `lib/std/` — the self-hosted standard library (`memory`, `collections`, `io`, `fs`, `net`)
-- `kama.driver.cpp` — CLI (`transpile` / `build`)
+- `out/` — every build artifact, under `out/<os>-<arch>/` so a host and a container build coexist.
+  The same `out/` a `kama seed` project gets, which is the point ([targets.md](docs/targets.md)).
+- `.scratch/` — gitignored, for throwaway language probes and local benchmark logs
 - `tests/`, `run_tests.sh` — end-to-end fixtures (assert on exit codes)
 - `examples/` — worked programs (e.g. `httpd/`, a static-file server in Kama)
 - `Dockerfile`, `tools/cdev` — containerized toolchain
 - `./dev serve` — preview the site locally, served by the Kama-written `examples/httpd` (dogfooding; → http://localhost:8080)
 - `docs/` — `SPEC.md` (language reference), `tour.md` (the guided introduction),
-  `grammar.bnf` (generated from `kama.y`), `TYPE_MODEL.md`, `KEYWORDS.md`, `FLOOR.md`,
+  `grammar.bnf` (generated from `src/kama.y`), `TYPE_MODEL.md`, `KEYWORDS.md`, `FLOOR.md`,
   `ROADMAP.md` (what's next), `editors.md`, `packages.md`, `targets.md`, `mcu.md`,
   `*_READINESS.md` (per-domain gap analyses), `benchmarks/`, and `design/` (in-flight design
   notes — deleted once the work ships and its record lands in the docs above)

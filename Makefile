@@ -18,13 +18,18 @@ CXXFLAGS = -std=c++14 $(OPT) -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"
 # build a macOS universal binary: EXTRA_CXXFLAGS="-arch arm64 -arch x86_64".
 CXXFLAGS += $(EXTRA_CXXFLAGS)
 
-# All build artifacts live under build/<os>-<arch>/ (objects + generated parser/lexer + the
+# All build artifacts live under out/<os>-<arch>/ (objects + generated parser/lexer + the
 # binary), so the repo root stays sources-only AND a host (mach-o) build coexists with a
 # container (ELF) build instead of clobbering it — no `make clean` when switching between
 # `make` and `tools/cdev make`. The root ./kama is a symlink to the last-built platform's
 # binary, keeping the stable path every consumer (CI, release, docs) already uses.
+#
+# `out/` is the name `kama build` gives a project's artifacts (docs/targets.md), so the compiler's
+# own tree is the one it teaches. The leaf is `uname -s`-`uname -m` rather than a kama triple
+# because THIS build is clang++ and make, not kama — and a Makefile-side uname->triple table would
+# be a second copy of what the driver already knows, free to drift from it.
 PLATFORM ?= $(shell uname -s)-$(shell uname -m)
-BUILD     = build/$(PLATFORM)
+BUILD     = out/$(PLATFORM)
 
 # Inheritance is a BUILD-TIME feature switch on the compiler, not a runtime flag (docs/SPEC.md,
 # docs/design/inheritance.md). Two purposes: isolate what the feature costs the compiler — answerable only
@@ -32,14 +37,14 @@ BUILD     = build/$(PLATFORM)
 # the `#if KAMA_INHERITANCE` blocks are then the deletion list.
 #
 #   make                        # inheritance in, up to 2 levels below a root
-#   make KAMA_INHERITANCE=0     # a compiler without it, into build/<platform>-noinherit
+#   make KAMA_INHERITANCE=0     # a compiler without it, into out/<platform>-noinherit
 #   make KAMA_INHERIT_DEPTH=1   # no middle layer: a root plus ONE derived level
 #
 # KAMA_INHERIT_DEPTH is the CEILING on what a hierarchy may ask for. Each `virtual`/`abstract class` still
 # has to state its own budget (`virtual(maxDepth: 2)`), which may not exceed this.
 #
 # The no-inheritance build gets its OWN directory: objects compiled under different macro values must never
-# mix, and sharing build/<platform> would silently do exactly that (make sees the .o as up to date).
+# mix, and sharing out/<platform> would silently do exactly that (make sees the .o as up to date).
 # `tools/check-no-inheritance.sh` builds it and proves the variant still works.
 KAMA_INHERITANCE   ?= 1
 KAMA_INHERIT_DEPTH ?= 2
@@ -54,7 +59,7 @@ through EXTRA_CXXFLAGS, which is appended earlier and would be overridden withou
 endif
 CXXFLAGS += -DKAMA_INHERITANCE=$(KAMA_INHERITANCE) -DKAMA_INHERIT_DEPTH=$(KAMA_INHERIT_DEPTH)
 ifeq ($(KAMA_INHERITANCE),0)
-BUILD = build/$(PLATFORM)-noinherit
+BUILD = out/$(PLATFORM)-noinherit
 endif
 
 # The grammar uses %code/api.pure full, which need bison >= 2.7. macOS ships
@@ -75,7 +80,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.seed.gen.o)
 
 # The built-in kama sources embedded into the binary (prelude core + the always-in-scope smart-ptr
-# triad). tools/embed_prelude.sh wraps them in raw-string literals -> build/kama.prelude.gen.cpp.
+# triad). tools/embed_prelude.sh wraps them in raw-string literals -> out/<platform>/kama.prelude.gen.cpp.
 PRELUDE_GLOBAL  = prelude/global.kama
 PRELUDE_MODULES = prelude/std/memory/owned.kama prelude/std/memory/shared.kama prelude/std/memory/weak.kama
 
@@ -108,18 +113,18 @@ $(BUILD)/kama.seed.gen.cpp: $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_REA
 	sh tools/embed_seed.sh $@ $(SEED_APP) $(SEED_LIB) $(SEED_GITIGNORE) $(SEED_README)
 
 # Bison/flex: CLI -o/--defines/--header-file override the %output/%option names
-# baked into the source, redirecting generated files into build/.
-$(BUILD)/kama.parser.cpp $(BUILD)/kama.parser.hpp: kama.y | $(BUILD)
-	$(BISON) -o $(BUILD)/kama.parser.cpp --defines=$(BUILD)/kama.parser.hpp kama.y
+# baked into the source, redirecting generated files into out/<platform>/.
+$(BUILD)/kama.parser.cpp $(BUILD)/kama.parser.hpp: src/kama.y | $(BUILD)
+	$(BISON) -o $(BUILD)/kama.parser.cpp --defines=$(BUILD)/kama.parser.hpp src/kama.y
 
-$(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: kama.l $(BUILD)/kama.parser.hpp | $(BUILD)
-	flex -o $(BUILD)/kama.lexer.cpp --header-file=$(BUILD)/kama.lexer.hpp kama.l
+$(BUILD)/kama.lexer.cpp $(BUILD)/kama.lexer.hpp: src/kama.l $(BUILD)/kama.parser.hpp | $(BUILD)
+	flex -o $(BUILD)/kama.lexer.cpp --header-file=$(BUILD)/kama.lexer.hpp src/kama.l
 
 # Header dependencies (the implicit rules can't see #includes). Listing all
 # project headers against every object is coarse but cheap, and prevents stale
 # object/ABI-skew bugs when a class layout in a header changes.
-HEADERS = kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h kama.query.h kama.lsp.h \
-          kama.agents.h kama.seed.h kama.json.h
+HEADERS = $(addprefix src/, kama.forward.h kama.context.h kama.ast.h kama.cemit.h kama.prelude.h kama.diagnostic.h \
+                            kama.query.h kama.lsp.h kama.agents.h kama.seed.h kama.json.h)
 $(OBJECTS): $(HEADERS)
 
 # Generated-header dependencies.
@@ -130,26 +135,28 @@ $(BUILD)/kama.lexer.o $(BUILD)/kama.driver.o: $(BUILD)/kama.lexer.hpp
 # silence that one warning on this TU only — keeps the -Werror CI gate clean.
 $(BUILD)/kama.parser.o: CXXFLAGS += -Wno-unused-but-set-variable
 
-# Compile: hand-written sources live in the root, generated ones in build/.
-# -Ibuild so #include "kama.parser.hpp" finds the generated header.
-$(BUILD)/%.o: %.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote . -c $< -o $@
+# Compile: hand-written compiler sources live in src/, generated ones in out/<platform>/.
+# -iquote $(BUILD) so #include "kama.parser.hpp" finds the generated header; -iquote src so both
+# hand-written and generated TUs find the hand-written headers by bare name (every #include among
+# them is a bare filename, which is why the move to src/ needed no source edit).
+$(BUILD)/%.o: src/%.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote src -c $< -o $@
 
 $(BUILD)/%.o: $(BUILD)/%.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote . -c $< -o $@
+	$(CXX) $(CXXFLAGS) -iquote $(BUILD) -iquote src -c $< -o $@
 
 $(BUILD)/kama: $(OBJECTS)
 	$(CXX) $(CXXFLAGS) $^ -o $@
 
 # Root ./kama — a symlink to this platform's binary, refreshed on every build. Consumers that
 # must not care which platform built last (run_tests.sh, the VS Code extension) resolve
-# build/$(PLATFORM)/kama directly instead. On msys2 `ln -s` degrades to a copy; that works too.
+# out/$(PLATFORM)/kama directly instead. On msys2 `ln -s` degrades to a copy; that works too.
 # PHONY on purpose: make stats through the symlink, so after the *other* platform built last it
 # would see a newer file and skip the relink, leaving ./kama pointing at a foreign binary.
 kama: $(BUILD)/kama
 	ln -sf $(BUILD)/kama kama
 
-# Cleans THIS platform only, on purpose: nuking build/ wholesale would defeat the coexistence
+# Cleans THIS platform only, on purpose: nuking out/ wholesale would defeat the coexistence
 # the platform-scoped layout buys (a container `make clean` would wipe the host build).
 clean:
 	rm -rf $(BUILD)

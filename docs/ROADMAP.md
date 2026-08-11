@@ -41,18 +41,15 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **Repo layout** — `out/<platform>/`, the root symlink, `src/`, a scratch dir | §10 | ► **NEXT** |
-| 2 | **`kama fmt`, with mandatory braces** | §10, §1 | ↓ |
-| 3 | Campaign 2 — full generic specialization | §1.2.1 | |
-| 4 | Campaign 3 — const generics on types | §1.2.2 | |
-| 5 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 6 | stdlib parity M2b / M2c | §3 | |
+| **1** | **`kama fmt`, with mandatory braces** | §10, §1 | ► **NEXT** |
+| 2 | Campaign 2 — full generic specialization | §1.2.1 | ↓ |
+| 3 | Campaign 3 — const generics on types | §1.2.2 | |
+| 4 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 5 | stdlib parity M2b / M2c | §3 | |
 
-**Why 1–2 come before the remaining language campaigns:** they are the work that makes every campaign
-after them cheaper and less error-prone — a repo layout where generated files cannot pollute the tree, and
-one canonical formatting so a diff carries only real changes. Items 3–6 are language work that will be
-done *through* those tools. Repo layout is first now because `kama seed` shipped the convention
-(`out/<triple>/<type>/`) that this repo still does not follow.
+**Why 1 comes before the remaining language campaigns:** one canonical formatting means a diff carries
+only real changes, which makes every campaign after it cheaper to review. Items 2–5 are language work
+that will be done *through* that tool.
 
 `kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
 (so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
@@ -180,7 +177,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
   (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
   callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
-  ([kama.y](../kama.y), the `FNPTR` rule has no type-param slot). **Deliberately deferred, not overlooked**
+  ([kama.y](../src/kama.y), the `FNPTR` rule has no type-param slot). **Deliberately deferred, not overlooked**
   — for the case it would serve, a generic **contract** is the better tool anyway: it monomorphizes to a
   direct inlinable call where an `fnptr` is an indirect one, and a comparator object can carry state,
   which matters because kama has no capturing closures. `std::collections`' `Order<T>` is the worked
@@ -306,7 +303,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **A value-producing `match` over an `enum X : IntType` does not compile (small, self-contained).** The
   explicit underlying type makes the tag a plain `uint8_t`/`int16_t`/… rather than a C `enum`, so the C
   compiler cannot prove the emitted `switch` exhaustive and rejects the uninitialized match temp
-  (`kama_string __match1;` — `emitValueMatch`, [kama.cemit.cpp](../kama.cemit.cpp), the temp declared just
+  (`kama_string __match1;` — `emitValueMatch`, [kama.cemit.cpp](../src/kama.cemit.cpp), the temp declared just
   before `emitMatchSwitch`). Reproduces on a bare `enum Color : uint8 { Red, Green, Blue }` with no
   contract and no `type` marker; a statement-form `match` is unaffected, and so is the same enum without
   the `: IntType`. Fix = emit a `default:` arm for a plain-integer tag (kama has already checked
@@ -843,27 +840,10 @@ rather than here, so there is one number to keep current. Forward work:
   and reduces the whole call to six instructions with no call at all. At `-O0` the indirection survives, so
   a debug build pays for a fat pointer whose target the compiler knew when it wrote it one line earlier.
   kama already does the analogous analysis for inheritance — `buildVtables` keeps a whole-program override
-  index so a never-overridden slot lowers to a direct call ([kama.cemit.cpp](../kama.cemit.cpp), guarded by
+  index so a never-overridden slot lowers to a direct call ([kama.cemit.cpp](../src/kama.cemit.cpp), guarded by
   `tools/check-ecs-zero-dispatch.sh`). The contract-value case needs less: a local "this fat pointer's
   `vtbl` was assigned a known constant and never reassigned" check. Low priority — release builds are
   already optimal, and this only buys debug-build speed.
-
-- **Repo layout — eat our own dog food.** ► **NEXT** (see *Working order*). User projects now collect
-  build output under `out/<triple>/<debug|release>/` ([targets.md](targets.md)); this repo still does not,
-  and the gap is visible in its own `.gitignore`. Four parts, one shape:
-  - **`build/<os>-<arch>/` → `out/<platform>/`**, so the compiler's own layout is the one it teaches.
-    Well-abstracted already: `tools/kama-bin.sh` is the single resolver, and only `bench/scripts/build.sh`,
-    `mcu/build.sh`, `tests/support/expose_shared_check.sh` and the VS Code extension hardcode a path.
-  - **The root `./kama` symlink.** It exists because build output is platform-scoped and something has to
-    name "the one that built last"; under `out/<platform>/` it is the same question with a tidier answer.
-    ⚠️ `tools/check-no-inheritance.sh` repoints it while it builds, which is why that guard is heavy.
-  - **`run_tests.sh` should build fixtures into a scratch dir.** This is what finally retires the
-    ~25 lines of `.gitignore` that exist only to hide fixture artifacts — including the `tests/*` +
-    four-`!`-lines **allowlist inversion**, written that way because a compiled binary is a stem with no
-    extension and no glob can match one. `out/` did not fix this: fixtures are built with no manifest.
-  - **Compiler sources under `src/`**, and a gitignored **`.scratch/`** for prototyping in kama — today
-    the only places to try a language feature are the repo root (pollution) or outside the tree (invisible
-    to the next session).
 
 - **`projectManifestDir` does not walk up, so a build from outside a project cannot see its
   dependencies.** *(Unscheduled, small, real.)* It checks the input file's own directory and then the CWD

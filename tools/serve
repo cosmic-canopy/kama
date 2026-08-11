@@ -34,10 +34,10 @@ if [ ! -d "$DIR" ]; then echo "serve: '$DIR' is not a directory" >&2; exit 1; fi
 
 # Build the compiler (only if missing) and the httpd binary, inside the container.
 "$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" sh -c \
-  '[ -x ./kama ] || make >/dev/null 2>&1; ./kama build examples/httpd/httpd.kama -o build/httpd >/dev/null'
+  '[ -x ./kama ] || make >/dev/null 2>&1; ./kama build examples/httpd/httpd.kama -o .scratch/httpd >/dev/null'
 
 echo "kama httpd: serving ./$DIR on http://localhost:$PORT   (Ctrl-C to stop)"
 # `-t` (pseudo-TTY) only when stdin is a terminal, so the server also runs headless (CI / backgrounded).
 TTY=(-i); [ -t 0 ] && TTY=(-i -t)
 exec "$ENGINE" run --rm "${TTY[@]}" -p "$PORT:$PORT" -v "$ROOT:/work" -w /work "$IMAGE" \
-  env HTTPD_HOST=0.0.0.0 HTTPD_PORT="$PORT" HTTPD_ROOT="$DIR" ./build/httpd
+  env HTTPD_HOST=0.0.0.0 HTTPD_PORT="$PORT" HTTPD_ROOT="$DIR" ./.scratch/httpd

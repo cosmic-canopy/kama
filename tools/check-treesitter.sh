@@ -46,7 +46,7 @@ if [ ! -x "$KAMA" ]; then echo "FAIL treesitter: $KAMA not built" >&2; exit 1; f
 # ⚠️ The character class MUST include digits. check-syntax-drift.sh:17-20 records that blind spot — a
 # `[a-z_]+` class silently excluded every one of int8…uint64 and float32.
 lexer_keywords() {
-    sed -n '/static struct name_value keywords/,/};/p' "$ROOT/kama.l" |
+    sed -n '/static struct name_value keywords/,/};/p' "$ROOT/src/kama.l" |
         grep -oE '\{"[a-z0-9_]+"' | tr -d '{"' | sort -u
 }
 grammar_terminals() {

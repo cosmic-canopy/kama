@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kama httpd</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.6 system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.25rem; }
+    h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+    code { background: color-mix(in srgb, currentColor 12%, transparent); padding: .1em .35em; border-radius: 4px; }
+    .muted { opacity: .7; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <h1>It works. 🌾</h1>
+  <p>This page is being served by <strong>kama httpd</strong> — a static-file HTTP server written in
+     <a href="https://kama-lang.org">Kama</a>, in about 200 lines, over <code>std::net</code> +
+     <code>std::fs</code>.</p>
+  <p class="muted">Point it at any directory:
+     <code>HTTPD_ROOT=./my-site HTTPD_PORT=9000 ./httpd</code>.</p>
+</body>
+</html>

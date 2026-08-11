@@ -2,7 +2,7 @@
 # dev — everyday contributor tasks (no secrets). Run `./dev` for help.
 #
 # The one rule this script exists to enforce: EVERY TEST TASK BUILDS THE BINARY IT IS ABOUT TO TEST.
-# Build artifacts are platform-scoped (`build/<os>-<arch>/`), so a host build and a container build
+# Build artifacts are platform-scoped (`out/<os>-<arch>/`), so a host build and a container build
 # coexist — which is convenient right up until you edit the compiler, rebuild one, and test the other.
 # That failure is silent: the suite runs and passes against last week's compiler.
 set -eu
@@ -118,7 +118,7 @@ case "$task" in
     esac ;;
 
   check)
-    # The guard scripts resolve build/<os>-<arch>/kama directly (tools/kama-bin.sh), so they need the
+    # The guard scripts resolve out/<os>-<arch>/kama directly (tools/kama-bin.sh), so they need the
     # HOST binary current — a container-only rebuild leaves them testing stale code while sitting green.
     #
     # `--all` includes the `# check-heavy:` guards (check-no-inheritance builds a second compiler), which
@@ -145,9 +145,9 @@ case "$task" in
     port="${1:-8080}"; dir="${2:-_site}"
     if ./kama --version >/dev/null 2>&1; then
       [ "$dir" = "_site" ] && sh tools/build-site >/dev/null
-      ./kama build examples/httpd/httpd.kama -o build/httpd
+      ./kama build examples/httpd/httpd.kama -o .scratch/httpd
       echo "kama httpd: serving ./$dir on http://localhost:$port   (Ctrl-C to stop)"
-      HTTPD_HOST=127.0.0.1 HTTPD_PORT="$port" HTTPD_ROOT="$dir" exec ./build/httpd
+      HTTPD_HOST=127.0.0.1 HTTPD_PORT="$port" HTTPD_ROOT="$dir" exec ./.scratch/httpd
     else
       exec tools/serve "$port" "$dir"
     fi

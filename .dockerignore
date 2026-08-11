@@ -3,11 +3,7 @@
 .git
 *.o
 kama
-build/
 *.output
-bison_report
 out/
-*.wasm
-*.html
-*.llvm.bak
+.scratch/
 .DS_Store

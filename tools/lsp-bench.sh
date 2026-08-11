@@ -14,12 +14,13 @@
 #   tools/lsp-bench.sh --lsp [file]        # a real `kama lsp` stdio session (steady-state cost)
 #   REPS=11 tools/lsp-bench.sh             # more samples (default 7; the first is discarded)
 #
-# Numbers only mean something next to a baseline, so record one BEFORE touching anything — build/ is
+# Numbers only mean something next to a baseline, so record one BEFORE touching anything — .scratch/ is
 # gitignored (same contract as tools/lspref.sh), so regenerate it, never assume it is present:
 #
-#   tools/lsp-bench.sh > build/lsp-bench-before.txt
+#   mkdir -p .scratch                             # gitignored; not present in a fresh checkout
+#   tools/lsp-bench.sh > .scratch/lsp-bench-before.txt
 #   ...change...
-#   tools/lsp-bench.sh > build/lsp-bench-after.txt && diff -u build/lsp-bench-before.txt build/lsp-bench-after.txt
+#   tools/lsp-bench.sh > .scratch/lsp-bench-after.txt && diff -u .scratch/lsp-bench-before.txt .scratch/lsp-bench-after.txt
 #
 # Default mode drives `kama query <f> --symbols`, a faithful proxy for one lspAnalyze (same
 # loadProgramUnits + prelude + fresh-CEmitter setup), with no JSON-RPC session — that is what makes it

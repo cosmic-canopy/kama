@@ -39,7 +39,7 @@ for w in $WORKLOADS; do
   if have bench/src/kama/$w.kama; then
   t=$(now_ms)
   ( ./kama transpile bench/src/kama/$w.kama -o bench/build/wasm/$w.c --no-line >/dev/null 2>&1 \
-    && emcc -std=c11 -O3 -DNDEBUG -I. bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ); rc=$?
+    && emcc -std=c11 -O3 -DNDEBUG -Iinclude bench/build/wasm/$w.c -o bench/build/wasm/$w.js >/dev/null 2>&1 ); rc=$?
   add_ct kama-wasm $t; [ $rc -eq 0 ] && echo "  ok kama-wasm" || echo "  FAIL kama-wasm"
   else echo "  n/a kama-wasm"; rm -f bench/build/wasm/$w.js bench/build/wasm/$w.wasm; fi
   if have bench/src/c/$w.c; then

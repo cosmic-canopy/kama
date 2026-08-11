@@ -3,8 +3,9 @@
 This repo builds **the kama compiler itself**. That makes it two codebases at once, and which one
 you are in decides which tools help:
 
-- **~34k lines of C++** (`kama.l`, `kama.y`, `kama.cemit.*`, `kama.driver.cpp`, `kama_runtime.h`) —
-  the compiler. Ordinary C++ work; `kama query` cannot see any of it.
+- **~34k lines of C++** in `src/` (`kama.l`, `kama.y`, `kama.cemit.*`, `kama.driver.cpp`) plus the
+  shipped runtime headers in `include/` (`kama_runtime.h`, `kama_os.h`, …) — the compiler. Ordinary
+  C++ work; `kama query` cannot see any of it.
 - **~28k lines of kama** across `lib/std/`, `tests/`, `prelude/`, `examples/`, `bench/` — the
   stdlib and the fixture corpus. Here the guidance in `docs/agents.md` applies, and
   `kama query --search` beats grep because it answers from what the compiler resolved.
@@ -47,14 +48,24 @@ hand reliably (see the trap below).
 ```
 
 Notes:
-- **The stale-binary trap.** Build artifacts are platform-scoped (`build/<os>-<arch>/`), so a host
+- **The stale-binary trap.** Build artifacts are platform-scoped (`out/<os>-<arch>/`), so a host
   build and a container build coexist — switching needs no `make clean`. The cost is that building
   one and testing the other passes *silently* against an old compiler. `./dev` exists to make that
   unrepresentable; if you bypass it, rebuild for the platform you are about to test on.
-- The repo root holds only hand-written sources plus `./kama`, a symlink to whichever platform built
+- **The layout, which is the one kama teaches** (`kama seed` gives a project the same shape):
+  `src/` compiler sources · `include/` the runtime headers that SHIP (generated C includes them; an
+  install puts them in `<prefix>/include`) · `lib/std/` the stdlib · `out/<os>-<arch>/` every build
+  artifact · `.scratch/` gitignored, for throwaway language probes and local benchmark logs. The root
+  holds docs, config, `./dev`, `run_tests.sh`, and `./kama`, a symlink to whichever platform built
   last. Anything that must get the *native* binary regardless (the test harness, the
-  `tools/check-*.sh` guards, the VS Code extension) resolves `build/<os>-<arch>/kama` directly — in a
+  `tools/check-*.sh` guards, the VS Code extension) resolves `out/<os>-<arch>/kama` directly — in a
   shell script, source `tools/kama-bin.sh` rather than hardcoding a path.
+- **Nothing a build generates belongs in the worktree.** `kama build` writes only into `dirname(-o)`,
+  and `run_tests.sh` gives every fixture its own dir under a `mktemp -d`. `tools/check-clean-tree.sh`
+  holds that down. If a stray artifact ever appears, find what wrote it — **do not add a pattern to
+  `.gitignore`**. That file used to carry ~30 lines of blanket globs and `!` rescues for exactly this,
+  and one of the rescues was missing, so a hand-written `examples/httpd/public/index.html` sat
+  untracked and invisible for months.
 - The grammar needs bison ≥ 2.7 (the container has 3.8; macOS host needs `brew install bison`).
 - The compiler is a tree-walking C emitter (`kama.cemit.*`) over the Flex/Bison/AST front end
   (`kama.l`, `kama.y`, `kama.ast.h`). (An early LLVM backend was removed; C emission is the only backend.)

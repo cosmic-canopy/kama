@@ -38,7 +38,7 @@ if [ ! -x "$KAMA" ]; then echo "check-no-inheritance: $KAMA not built (run make 
 JOBS="${KAMA_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
 PLATFORM=$(uname -s)-$(uname -m)
-OUT="build/$PLATFORM-noinherit"      # the Makefile picks this itself when KAMA_INHERITANCE=0
+OUT="out/$PLATFORM-noinherit"        # the Makefile picks this itself when KAMA_INHERITANCE=0
 NOINH="$OUT/kama"
 
 tmp=$(mktemp -d)

@@ -42,7 +42,7 @@ a JSON-RPC server over stdio built into the compiler) and provides, as you type
   which names are types, fields, locals or parameters, which a regex cannot
 
 It uses the same `kama` binary as the debugger: **`kama.path`** if you set it, else a
-workspace-local `build/<os>-<arch>/kama` or `./kama`, else `PATH`.
+workspace-local `out/<os>-<arch>/kama` or `./kama`, else `PATH`.
 
 ## Build configuration (the status bar)
 

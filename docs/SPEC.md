@@ -2896,5 +2896,5 @@ in every by-value position. An owned rvalue receiver is RAII-dropped through met
 ## Reserved/runtime
 
 Generated C reserves `__`-prefixed identifiers (`__base`, `__vptr`, `__ret_N`) and `Type__member` mangling.
-The runtime ([../kama_runtime.h](../kama_runtime.h)) provides `kama_string` and a
+The runtime ([../include/kama_runtime.h](../include/kama_runtime.h)) provides `kama_string` and a
 `kama_trace`/`kama_trace_get` hook used by tests.

@@ -17,7 +17,7 @@ examples read the test fixtures.
   smart pointers, collections, concurrency, FFI, build/debug. Start here for semantics.
 - [Type model](docs/TYPE_MODEL.md): the ownership vocabulary in depth — `value` copies,
   `resource` moves, `contract` is the guarantee; the `type` marker + access-control rules.
-- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `kama.y` by
+- [Grammar (BNF)](docs/grammar.bnf): authoritative syntax, generated from `src/kama.y` by
   `tools/gen-grammar`.
 - [Keyword reference](docs/KEYWORDS.md): every reserved word and what it does.
 - [Coming from another language](docs/coming-from-other-languages.md): where kama's instincts differ from
@@ -45,7 +45,7 @@ examples read the test fixtures.
 - [Editor setup](docs/editors.md): `kama lsp` is a JSON-RPC/stdio language server built into the
   compiler — one server, thin clients. Config for VS Code, Neovim, Vim, Emacs, Sublime, Helix, Kate,
   plus which editors get syntax colour from what.
-- [Runtime header](kama_runtime.h): the small C runtime included by generated code.
+- [Runtime header](include/kama_runtime.h): the small C runtime included by generated code.
 - [Repo guide for AI assistants](AGENTS.md): working conventions and build commands.
 
 ## For AI agents

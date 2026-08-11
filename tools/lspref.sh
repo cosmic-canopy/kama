@@ -5,9 +5,10 @@
 # generated C, one `<sha>  <name>` line per fixture, sorted. The M0 query-index work (T4/T5) is purely
 # ADDITIVE — it must not change a single byte of emitted C — so this hash set must stay IDENTICAL before
 # and after. Usage:
-#   tools/lspref.sh > build/lspref-after.txt   # regenerate
-#   diff build/lspref-before.txt build/lspref-after.txt && echo IDENTICAL
-# Run inside the container: tools/cdev exec tools/lspref.sh > build/lspref-after.txt
+#   mkdir -p .scratch                             # gitignored; not present in a fresh checkout
+#   tools/lspref.sh > .scratch/lspref-after.txt   # regenerate
+#   diff .scratch/lspref-before.txt .scratch/lspref-after.txt && echo IDENTICAL
+# Run inside the container: tools/cdev exec tools/lspref.sh > .scratch/lspref-after.txt
 set -u
 ROOT="."                        # run from the repo root (see the usage lines above)
 . tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink

@@ -1,11 +1,26 @@
 .DS_store
-*.o
-*.bc
-bison_report
-*.llvm.bak
 
-# all build artifacts (objects + generated parser/lexer) live here
-build/
+# All build output lives here: the compiler's own objects + generated parser/lexer + binary, under
+# out/<os>-<arch>/ so a host and a container build coexist — and anything `kama build` emits, which
+# is the same `out/` a seeded project gets (docs/targets.md). One rule covers both.
+#
+# ⚠️ This file used to carry ~30 more lines: a blanket `*.c` / `*.wasm` / `*.html` / `*.js`, a
+# `tests/*` allowlist INVERSION with four `!` rescues, and six more `!` rescues scattered below to
+# un-ignore real sources those blankets swallowed. None of it was ever an ignore policy — it was
+# scaffolding around a compiler that wrote generated files next to their sources. It doesn't any
+# more (`genDir` follows `-o`, and run_tests.sh builds every fixture under a mktemp dir), so the
+# scaffolding is gone. `tools/check-clean-tree.sh` is what keeps it gone: it fails if a build leaves
+# anything behind, which is a real check, unlike an ignore rule that hides the evidence.
+#
+# So: DON'T re-add a blanket pattern here when you see a stray artifact. Find what wrote it.
+out/
+
+# throwaway language probes and disposable local output — benchmark logs, a scratch httpd binary.
+# A probe worth keeping becomes a tests/ fixture.
+.scratch/
+
+# the root compiler binary (anchored to root so it doesn't also ignore bench/src/kama/)
+/kama
 
 # per-machine local manifest override (deep-merges over kama.json; dev-local, never committed — see M5)
 kama.local.json
@@ -14,38 +29,7 @@ kama.local.json
 # fetched native SDKs (wgpu-native for native --webgpu) — never vendored; tools/fetch-webgpu.sh fills it
 third_party/
 
-# the root compiler binary (anchored to root so it doesn't also ignore bench/src/kama/)
-/kama
-
-# generated C from `./kama build foo.kama` without -o (lands next to the source as foo.c);
-# anchored to root so hand-written C in tests/webgpu/ and bench/src/c/ stays tracked
-/*.c
-
-# build output / generated transpiler artifacts
-out/
-*.wasm
-*.html
-*.js
-# hand-written stdlib JS glue (emcc --js-library) — source, not build output
-!lib/std/net/web/*.js
-# hand-written test support scripts (e.g. the WebSocket echo server), not build output
-!tests/support/*.js
-# generated C from `kama transpile`/`build` (keep generated .c out of the tree)
-tests/**/*.c
-!tests/webgpu/smoke.c
-# multi-unit build intermediates + the shared header a `kama build` emits next to -o
-tests/**/*.c.tmp
-tests/**/*.gen.h
-# Top-level tests/ is SOURCE ONLY — ignore every direct-child build artifact (compiled fixture binaries a
-# bare `kama build tests/x.kama` drops next to the source — a stem with NO extension — plus generated .c/
-# .gen.h). Subdirs (support/, webgpu/, xfail/, *.d/) are un-ignored so their own tracked files stay tracked.
-tests/*
-!tests/*.kama
-!tests/*.expect
-!tests/*.msg
-!tests/*/
-
-# benchmark build artifacts
+# benchmark build artifacts (the bench corpus has its own output root, not the compiler's out/)
 bench/build/
 
 # dotnet build output (lands in the bind-mounted bench source dir)
@@ -55,25 +39,9 @@ bench/src/csharp/obj/
 # qemu core dumps (from emulated-arch crashes)
 *.core
 
-# benchmark JS sources are real (override the global *.js ignore)
-!bench/src/js/*.js
-# the VSCode extension's hand-written JS is real, too
-!editor/vscode/*.js
-# so is the tree-sitter grammar — grammar.js is the ONE hand-written file in the whole
-# package (everything under tree-sitter-kama/src/ is generated FROM it)
-!tree-sitter-kama/*.js
-# the website sources are real (override the global *.html/*.js ignores)
-!site/**
-# so is the site generator (templates are .html; the scripts are .mjs, which the *.js rule misses)
-!tools/site/**
-*.wasm.map
-*.wasm
-
-# throwaway language probes (a scratch dir, not a fixture — a probe worth keeping becomes a tests/ fixture)
-.scratch/
-
 # local secrets — seed from .env.example
 .env
+
 # assembled site output (from tools/build-site) and packaged extension
 /_site/
 *.vsix
@@ -87,5 +55,6 @@ editor/vscode/node_modules/
 # tree-sitter CLI (a 20 MB prebuilt binary fetched by the package's install script;
 # the lockfile is tracked and PINS the version tools/check-treesitter.sh regenerates with)
 tree-sitter-kama/node_modules/
+
 # the Zed extension's Rust build output (Zed compiles this itself; Cargo.lock is tracked)
 editor/zed/target/

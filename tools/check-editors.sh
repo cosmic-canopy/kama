@@ -15,7 +15,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DOC="$ROOT/docs/editors.md"
 EXT="$ROOT/editor/vscode/extension.js"
-SRV="$ROOT/kama.lsp.cpp"
+SRV="$ROOT/src/kama.lsp.cpp"
 
 fail=0
 bad() { echo "check-editors: FAIL — $1" >&2; fail=1; }

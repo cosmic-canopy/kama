@@ -42,7 +42,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 # Guards `cd` — into their own tmp dir, into tree-sitter-kama/, into an installed test project — so
 # the binary they inherit MUST be absolute. run_tests.sh sets ROOT="." and its $KAMA is therefore
-# "./build/…"; it does not export it, and it must not start.
+# "./out/…"; it does not export it, and it must not start.
 case "$KAMA" in
     /*) ;;
     *)  KAMA=$(CDPATH= cd -- "$(dirname -- "$KAMA")" && pwd)/$(basename "$KAMA") ;;

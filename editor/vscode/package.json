@@ -58,7 +58,7 @@
         "kama.path": {
           "type": "string",
           "default": "",
-          "description": "Path to the kama compiler. Empty searches the workspace (build/<os>-<arch>/kama, then ./kama) and falls back to PATH. The binary must be native to this OS — a container-built one will not launch."
+          "description": "Path to the kama compiler. Empty searches the workspace (out/<os>-<arch>/kama, then ./kama) and falls back to PATH. The binary must be native to this OS — a container-built one will not launch."
         },
         "kama.trace.server": {
           "type": "string",

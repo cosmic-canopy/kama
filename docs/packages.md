@@ -353,7 +353,7 @@ refuses to overwrite it. That is the lockfile-drift and dependency-confusion gua
 kama publish --registry file:///srv/kama-registry
 ```
 
-It tarballs the sources (excluding `.git/`, `.kama/`, `build/`, and `kama.lock`), hashes them, and adds a
+It tarballs the sources (excluding `.git/`, `.kama/`, `out/`, and `kama.lock`), hashes them, and adds a
 version entry to `<registry>/<name>/index.json` alongside the tarball. **Published versions are
 immutable** — re-publishing an existing version is refused; bump the `version` in `kama.json` instead.
 

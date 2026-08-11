@@ -15,7 +15,7 @@ whole surface — which is why the qualifier waited for a language server: witho
 been a spelling with no discovery payoff.
 
 Everything here lives in [`prelude/global.kama`](../prelude/global.kama) over
-[`kama_runtime.h`](../kama_runtime.h). The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
+[`kama_runtime.h`](../include/kama_runtime.h). The **grammar is authoritative** ([grammar.bnf](grammar.bnf)); this is
 a semantics index. See also [SPEC.md](SPEC.md) for the language.
 
 ## What is floor, and what is an `import`

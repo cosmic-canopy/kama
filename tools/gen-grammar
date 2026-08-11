@@ -7,12 +7,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="$ROOT/kama.y"
+SRC="$ROOT/src/kama.y"
 OUT="${1:-$ROOT/docs/grammar.bnf}"
 mkdir -p "$(dirname "$OUT")"
 
 {
-  echo "// kama grammar (BNF) — GENERATED from kama.y by tools/gen-grammar. Do not edit."
+  echo "// kama grammar (BNF) — GENERATED from src/kama.y by tools/gen-grammar. Do not edit."
   echo "// The Bison grammar is the source of truth; regenerate after any grammar change."
   echo
   awk '

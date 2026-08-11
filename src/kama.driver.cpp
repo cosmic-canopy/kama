@@ -183,16 +183,22 @@ bool fileExists(const std::string& p)
 }
 
 // Where kama_runtime.h lives, resolved so an INSTALLED binary finds it from any
-// cwd: <exeDir>/../include (bin/kama -> ../include), else <exeDir> (repo root
-// layout), else <exeDir>/../.. (dev tree: the Makefile builds to build/<os>-<arch>/kama),
+// cwd: <exeDir>/../include (bin/kama -> ../include), else <exeDir> (a flat tree
+// with the binary beside its headers), else <exeDir>/../../include (dev tree: the
+// Makefile builds to out/<os>-<arch>/kama and the runtime headers live in include/),
 // else ".". Always exe-relative — so a per-version toolchain at
 // ~/.kama/versions/<v>/bin/kama finds *its own* runtime, never an ambient one.
+//
+// ⚠️ The dev-tree branch is NOT covered by the first one: from out/<platform>/kama,
+// <exeDir>/../include resolves to out/include, which does not exist. Both are needed.
+// Failure here is silent — the fallback is "." and the error surfaces much later as a
+// C compile that cannot find kama_runtime.h — so tools/check-runtime-dir.sh pins it.
 std::string resolveRuntimeDir(const char* argv0)
 {
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
-    if (fileExists(exeDir + "/../include/kama_runtime.h")) return exeDir + "/../include";
-    if (fileExists(exeDir + "/kama_runtime.h"))            return exeDir;
-    if (fileExists(exeDir + "/../../kama_runtime.h"))      return exeDir + "/../..";
+    if (fileExists(exeDir + "/../include/kama_runtime.h"))    return exeDir + "/../include";
+    if (fileExists(exeDir + "/kama_runtime.h"))               return exeDir;
+    if (fileExists(exeDir + "/../../include/kama_runtime.h")) return exeDir + "/../../include";
     return ".";
 }
 
@@ -234,7 +240,8 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
         if (n.empty() || n[0] == '.') continue;          // ".", "..", .git, .kama (the package store) …
         std::string childRel = rel.empty() ? n : rel + "/" + n;
         if (dirExists(dir + "/" + n)) {
-            if (n == "build") continue;                  // generated C + objects, never sources
+            if (n == "out" || n == "build") continue;    // generated C + objects, never sources
+                                                         // ("out" is the current convention; "build" predates it)
             collectKamaFiles(root, childRel, out, seen, budget);
             if (seen > budget) break;
         } else if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
@@ -247,7 +254,7 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
 
 // The stdlib root, resolved from the binary like resolveRuntimeDir: <exeDir>/../lib/kama
 // (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo root), else <exeDir>/../../lib
-// (dev tree: the Makefile builds to build/<os>-<arch>/kama), else "lib".
+// (dev tree: the Makefile builds to out/<os>-<arch>/kama), else "lib".
 // The stdlib ships INSIDE each install; `std::*` resolves here — exe-relative, so a
 // per-version toolchain uses its own stdlib, never an ambient one.
 std::string resolveStdlibDir(const char* argv0)
@@ -4224,7 +4231,12 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     std::string wrapper = importNameOf(name);   // a single path component (a scoped name has a '/')
     runCmd(rmRfCmd(tmp));
     if (!makeDirs(tmp + "/" + wrapper)) { fprintf(stderr, "kama publish: cannot stage the package\n"); runCmd(rmRfCmd(tmp)); return 1; }
-    std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama --exclude=./build "
+    // `./out` is the build-output root a project actually uses (docs/targets.md); `./build` predates
+    // that convention and stays excluded so an older layout is not suddenly published. Excluding the
+    // output is not tidiness — out/<triple>/ differs per publishing machine, so shipping it would
+    // break the REPRODUCIBLE integrity hash the block immediately below depends on.
+    std::string copyCmd = "tar -c -C \"" + base + "\" --exclude=./.git --exclude=./.kama "
+                          "--exclude=./out --exclude=./build "
                           "--exclude=./kama.lock --exclude=./kama.local.json -f - . | tar -x -C \"" + tmp + "/" + wrapper + "\" -f -";
     if (runCmd(copyCmd) != 0) { fprintf(stderr, "kama publish: cannot copy sources (is tar available?)\n"); runCmd(rmRfCmd(tmp)); return 1; }
     // The integrity hash must be REPRODUCIBLE: publishing the same sources twice (e.g. to two mirrors) has
@@ -6131,7 +6143,7 @@ int main(int argc, char** argv)
     //
     // Scoped by TRIPLE and by BUILD TYPE, because both vary independently and a collision between them is
     // silent — you get yesterday's binary and no diagnostic. That is the stale-binary trap this repo
-    // already learned the expensive way with build/<os>-<arch>/, and cargo splits on the same two axes.
+    // already learned the expensive way with out/<os>-<arch>/, and cargo splits on the same two axes.
     std::string projectOutDir;
     if (!bcReq.manifest.empty()) {
         std::string rel, oerr;
@@ -6734,6 +6746,17 @@ int main(int argc, char** argv)
         }
         std::vector<std::string> cFiles;     // .c to compile
         std::vector<std::string> genFiles;   // generated files to remove afterwards
+        // RAII, not a call at the bottom, because the bottom is only reached on the SUCCESS path.
+        // Every `return` between here and there — a failed transpile, a missing SDK, a C compiler
+        // that rejected the output — used to leave the generated .c behind, next to the user's
+        // source for a manifest-less build. That is how 271 stale .c files (~72 KB each) came to sit
+        // in tests/xfail/: the fixtures there are *meant* to fail, so they took the leaking path
+        // every time. A destructor cannot be forgotten by the next early return added here.
+        struct GenCleanup {
+            const std::vector<std::string>& files;
+            const bool& keep;
+            ~GenCleanup() { if (!keep) for (auto& f : files) remove(f.c_str()); }
+        } genCleanup{genFiles, keepC};
         std::string headerDir;
 
         // Parse the CLI inputs and transitively pull in every imported module. A single
@@ -6753,9 +6776,12 @@ int main(int argc, char** argv)
             // did not, which is why a bare `kama build x.kama` used to drop an `x.c` beside the source
             // (and leave it there whenever the build died before the --keep-c cleanup).
             std::string cPath = genDir + "/" + baseName(stripExtension(input)) + ".c";
+            // Registered BEFORE the call that writes it. A failed transpile has already emitted a
+            // (partial) .c by the time it reports the error, so registering afterwards — as this
+            // did — leaves exactly the file the failure path was supposed to clean up.
+            genFiles.push_back(cPath);
             if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
-            genFiles.push_back(cPath);
         } else if (release && !wasm) {
             // UNITY release build: fold every unit into ONE translation unit (the same merge the
             // `transpile` command uses) instead of per-module .c files. kama has no incremental object
@@ -6767,9 +6793,9 @@ int main(int argc, char** argv)
             // recovers only part of it). Debug keeps per-module .c for faithful
             // stepping; wasm keeps its own path.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
+            genFiles.push_back(cPath);       // before the call that writes it — see the single-unit note
             if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
-            genFiles.push_back(cPath);
         } else {
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
             std::string headerPath = genDir + "/" + headerName;
@@ -6777,10 +6803,10 @@ int main(int argc, char** argv)
             std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
             for (size_t i = 0; i < units.size(); ++i)
                 cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
+            genFiles = cPaths;               // before the call that writes them — see the single-unit note
+            genFiles.push_back(headerPath);
             if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
             cFiles   = cPaths;
-            genFiles = cPaths;
-            genFiles.push_back(headerPath);
         }
 
         // Native --webgpu needs the fetched wgpu-native SDK. Fail early with an actionable message
@@ -7080,8 +7106,7 @@ int main(int argc, char** argv)
             rc = runCmd(cmd.str());
         }
 
-        if (!keepC) for (auto& gf : genFiles) remove(gf.c_str());
-        if (rc != 0) {
+        if (rc != 0) {                       // genCleanup removes the generated files on the way out
             fprintf(stderr, "kama: %s failed (exit %d)\n", compiler.c_str(), rc);
             return rc;
         }

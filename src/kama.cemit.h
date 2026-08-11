@@ -55,7 +55,7 @@
 // it the failure modes turn asymmetric: too strict pushes a middle layer into COMPOSITION, which this
 // design is happy with, while too loose grows the deep hierarchies the restriction exists to prevent.
 //
-// ⚠️ Objects do NOT depend on the Makefile, so changing this needs a clean rebuild of build/<platform>/
+// ⚠️ Objects do NOT depend on the Makefile, so changing this needs a clean rebuild of out/<platform>/
 // (unlike KAMA_INHERITANCE=0, which gets its own directory).
 #ifndef KAMA_INHERIT_DEPTH
 #define KAMA_INHERIT_DEPTH 2

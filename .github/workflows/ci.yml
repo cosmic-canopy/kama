@@ -99,9 +99,11 @@ jobs:
       - run: make -j4
       - uses: mymindstorm/setup-emsdk@v16
       - name: Quick smoke (arith -> wasm -> node == 42)
+        # Into out/, not the repo root. Nothing a build generates belongs in the worktree — that is what
+        # tools/check-clean-tree.sh holds down, and `out/` is the one ignored root (see .gitignore).
         run: |
-          ./kama build tests/arith.kama -o out.js --target wasm --cc emcc
-          test "$(node out.js; echo $?)" = "42"
+          ./kama build tests/arith.kama -o out/ci-smoke/arith.js --target wasm --cc emcc
+          test "$(node out/ci-smoke/arith.js; echo $?)" = "42"
       - name: Full wasm suite (every positive fixture built to wasm + run under node; net skipped)
         run: KAMA_WASM=1 ./run_tests.sh
 

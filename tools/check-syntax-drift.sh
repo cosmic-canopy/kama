@@ -10,7 +10,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-LEXER="$ROOT/kama.l"
+LEXER="$ROOT/src/kama.l"
 GRAMMAR="$ROOT/editor/vscode/syntaxes/kama.tmLanguage.json"
 
 # Keywords the compiler reserves — the `{"word", TOKEN}` rows of the sorted keyword table in kama.l.

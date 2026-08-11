@@ -286,7 +286,7 @@ target is the identity.
 
 ### Traps this campaign has already sprung
 
-- **`tools/check-*.sh` run the HOST binary** (`build/<os>-<arch>/kama`). `tools/cdev make` updates only the
+- **`tools/check-*.sh` run the HOST binary** (`out/<os>-<arch>/kama`). `tools/cdev make` updates only the
   container one, so a guard can pass against **stale** code. Run `make` on the host before believing one.
 - **`_enumDeclNodes` is the LSP def-site table's only unified index over enums** — plain enums land in
   `_enums`, tagged concrete ones in `_classes`, generic ones in `_genericTypes`, and no single map holds
@@ -394,7 +394,7 @@ Three things settle it:
   than; direct calls on concrete primitives are test-only (see *Measured cost*).
 - **Name collisions are an import problem, and `import` already solves them.** Two contracts named `Marker`
   from different libraries are disambiguated by `import a::{Marker as AMarker}` (per-symbol aliasing,
-  [kama.y:391](../../kama.y#L391)) — at the point the ambiguity is introduced, not at every call site.
+  [kama.y:391](../../src/kama.y#L391)) — at the point the ambiguity is introduced, not at every call site.
 - **`::` would need machinery nothing else uses**: a contract can never appear in the `::` resolver today
   (contracts live in `_interfaces`, and the resolver only consults `_classes` / `implTargetInfo`), and the
   `self:` argument convention exists nowhere else in the language.
@@ -410,7 +410,7 @@ idiom — goes through exactly those injected methods. It has to tell "receiver 
 directly" from "receiver's type came from a substituted type parameter".
 
 `cast<Contract>(x)` is **not** the escape hatch either: a cast produces a value, and a contract value
-borrows storage a cast expression does not have. It is rejected outright ([kama.cemit.cpp](../../kama.cemit.cpp),
+borrows storage a cast expression does not have. It is rejected outright ([kama.cemit.cpp](../../src/kama.cemit.cpp),
 `CastNode`; fixture `tests/xfail/cast_to_contract.kama`) — it used to emit `((Shape)(c))` and die in the C
 compiler with no kama diagnostic. The opposite direction, contract value → concrete, is `expr.as<T>()`.
 
