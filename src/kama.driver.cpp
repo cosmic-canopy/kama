@@ -39,7 +39,15 @@
   #include <stdlib.h>           // _fullpath, _MAX_PATH
   #include <direct.h>           // _mkdir (package view materialization)
   #include <process.h>          // _getpid (staging dir name for the package store)
-  #include <io.h>               // _isatty/_fileno — `kama seed` prompts only on a terminal
+  #include <io.h>               // _fileno / _setmode — binary stdio, and `kama seed`'s terminal check
+  #include <fcntl.h>            // _O_BINARY (a CRT header: it does not reach <windows.h> either)
+  // Two Win32 entry points DECLARED rather than included, the same way _NSGetExecutablePath is on macOS
+  // below and for the same reason: <windows.h> cannot come into this TU (see the note above), and the CRT
+  // has no equivalent. GetConsoleMode is the only honest "is stdin a terminal" test here — _isatty answers
+  // "is this fd a CHARACTER DEVICE", and the NUL device is one, so `kama seed </dev/null` read as
+  // interactive. HANDLE is void*, DWORD is unsigned long; __stdcall is a no-op on x64/ARM64 and correct on x86.
+  extern "C" void* __stdcall GetStdHandle(unsigned long);
+  extern "C" int   __stdcall GetConsoleMode(void*, unsigned long*);
   #ifndef PATH_MAX
     #define PATH_MAX _MAX_PATH
   #endif
@@ -72,6 +80,30 @@
 
 #ifndef KAMA_VERSION
 #define KAMA_VERSION "0.0.0-dev"
+#endif
+
+// The null device, spelled the way the SHELL runCmd hands a command to will read it. runCmd goes through
+// system(), which is `cmd /c` on Windows, and cmd.exe has no `/dev/null` — it takes it for a path, cannot
+// find a `\dev` directory, and prints
+//     The system cannot find the path specified.
+// The redirection failing means the COMMAND never runs, and the caller then reports its own operation as
+// having failed. That is why `kama install` said "git clone failed" for every package dependency on
+// Windows: the clone was fine, `2>/dev/null` was not.
+#if defined(_WIN32)
+  #define KAMA_DEVNULL "NUL"
+  #define KAMA_TAR_LOCAL "--force-local "   // see the tar call in fetchToStore
+  // "is this program on PATH", for the same shell. `command` is a POSIX shell BUILTIN and cmd.exe has no
+  // such thing — the probe did not report "no ssh-keygen", it reported "'command' is not recognized",
+  // which the caller read as absent. So `kama publish --key` refused to sign on Windows on machines that
+  // had ssh-keygen installed all along.
+  #define KAMA_WHICH "where "
+  // What the OS calls an executable. See selectorPath()/versionBin().
+  #define KAMA_EXE_SUFFIX ".exe"
+#else
+  #define KAMA_DEVNULL "/dev/null"
+  #define KAMA_TAR_LOCAL ""
+  #define KAMA_WHICH "command -v "
+  #define KAMA_EXE_SUFFIX ""
 #endif
 
 namespace {
@@ -198,6 +230,7 @@ std::string resolveRuntimeDir(const char* argv0)
     std::string exeDir = dirName(absolutePath(argv0 ? argv0 : "kama"));
     if (fileExists(exeDir + "/../include/kama_runtime.h"))    return exeDir + "/../include";
     if (fileExists(exeDir + "/kama_runtime.h"))               return exeDir;
+    if (fileExists(exeDir + "/include/kama_runtime.h"))       return exeDir + "/include";
     if (fileExists(exeDir + "/../../include/kama_runtime.h")) return exeDir + "/../../include";
     return ".";
 }
@@ -2941,6 +2974,24 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
 
 int runCmd(const std::string& cmd)
 {
+#if defined(_WIN32)
+    // system() on Windows is `cmd /c <string>`, and cmd.exe has a quoting rule that bites exactly one
+    // shape of command: when the string STARTS with a double quote, cmd strips the first and last quote
+    // on the whole line and runs what is left as one token. Every command built here that leads with a
+    // quoted program path therefore arrives mangled —
+    //     "C:/…/kama-run-6644.exe" "alpha" "beta" "gamma"
+    //  -> 'C:/…/kama-run-6644.exe" "alpha" "beta" "gamma' is not recognized as an internal or external
+    // which is what `kama run -- args` did on Windows once it had a temp path valid enough to reach here.
+    // The C compiler invocations never hit it because they lead with a bare `clang`, not a quoted path.
+    //
+    // The documented workaround is an extra outer pair: cmd strips those, and the inner quoting — which
+    // was correct all along — survives. Applied only when the command leads with a quote, so every other
+    // command keeps the exact string it has always had.
+    if (!cmd.empty() && cmd[0] == '"') {
+        int wrapped = system(("\"" + cmd + "\"").c_str());
+        return wrapped == -1 ? 1 : wrapped;
+    }
+#endif
     int rc = system(cmd.c_str());
     if (rc == -1) return 1;
 #if defined(_WIN32)
@@ -3146,8 +3197,8 @@ std::string sha256Of(const std::string& path)
 #ifdef _WIN32
     cmds.push_back("certutil -hashfile " + q + " SHA256");
 #else
-    cmds.push_back("sha256sum " + q + " 2>/dev/null");    // Linux / container
-    cmds.push_back("shasum -a 256 " + q + " 2>/dev/null"); // macOS
+    cmds.push_back("sha256sum " + q + " 2>" KAMA_DEVNULL);    // Linux / container
+    cmds.push_back("shasum -a 256 " + q + " 2>" KAMA_DEVNULL); // macOS
 #endif
     for (auto& c : cmds) {
         int rc = 0; std::string hex = firstSha256Hex(runCmdCapture(c, &rc));
@@ -3163,7 +3214,7 @@ static const char* kSigNamespace = "kama-registry";
 // Is `ssh-keygen` on PATH? Signing/verification skip gracefully when it's absent (like git/curl/sha256).
 static bool hasSshKeygen()
 {
-    int rc = 0; runCmdCapture("command -v ssh-keygen 2>/dev/null", &rc); return rc == 0;
+    int rc = 0; runCmdCapture(KAMA_WHICH "ssh-keygen 2>" KAMA_DEVNULL, &rc); return rc == 0;
 }
 
 // Sign `file` with the SSH private key `keyPath` (`ssh-keygen -Y sign` writes `<file>.sig`). On success
@@ -3173,7 +3224,7 @@ static bool sshSign(const std::string& file, const std::string& keyPath,
 {
     std::string sigfile = file + ".sig";
     runCmd(rmRfCmd(sigfile));
-    int rc = runCmd("ssh-keygen -Y sign -f \"" + keyPath + "\" -n " + kSigNamespace + " \"" + file + "\" >/dev/null 2>&1");
+    int rc = runCmd("ssh-keygen -Y sign -f \"" + keyPath + "\" -n " + kSigNamespace + " \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
     if (rc != 0) { err = "ssh-keygen -Y sign failed (is the key '" + keyPath + "' an SSH private key?)"; return false; }
     { std::ifstream f(sigfile, std::ios::binary); sigOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
     { std::ifstream f(keyPath + ".pub", std::ios::binary); pubKeyOut.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); }
@@ -3191,7 +3242,7 @@ static bool sshVerify(const std::string& file, const std::string& signature, con
     std::string sigTmp = stagingDir + ".sig";
     { std::ofstream o(sigTmp, std::ios::binary); if (!o) return false; o << signature; }
     int rc = runCmd("ssh-keygen -Y check-novalidate -n " + std::string(kSigNamespace) +
-                    " -s \"" + sigTmp + "\" < \"" + file + "\" >/dev/null 2>&1");
+                    " -s \"" + sigTmp + "\" < \"" + file + "\" >" KAMA_DEVNULL " 2>&1");
     runCmd(rmRfCmd(sigTmp));
     return rc == 0;
 }
@@ -3242,10 +3293,16 @@ std::string treeHashOf(const std::string& dir)
 // support dirs exe-relative, never via an ambient env var. (`KAMA_HOME` is only the *installer's* prefix.)
 std::string kamaHome()
 {
+    // HOME first on BOTH platforms, %USERPROFILE% only as the Windows fallback — the same order Git for
+    // Windows uses, and for the same two reasons. In an msys2/Cygwin shell `~` IS $HOME, so consulting
+    // only USERPROFILE made `~/.kama` in the shell and kamaHome() name different directories. And that
+    // shell does not always export USERPROFILE at all, in which case this fell through to the degenerate
+    // project-local ".kama" — silently putting the toolchain root inside whatever tree you happened to be
+    // building. It is also what lets a test isolate itself by setting HOME, which is how
+    // tools/check-toolchain.sh keeps its stub versions out of the developer's real ~/.kama.
+    if (const char* h = getenv("HOME")) return std::string(h) + "/.kama";
 #ifdef _WIN32
     if (const char* u = getenv("USERPROFILE")) return std::string(u) + "/.kama";
-#else
-    if (const char* h = getenv("HOME")) return std::string(h) + "/.kama";
 #endif
     return ".kama";   // degenerate fallback (no HOME): project-local, still functional
 }
@@ -3264,9 +3321,15 @@ std::string storeDir()
 // default version (one line). These are shared across every installed toolchain.
 std::string versionsDir()        { return kamaHome() + "/versions"; }
 std::string defaultVersionFile() { return kamaHome() + "/default"; }
-std::string selectorPath()       { return kamaHome() + "/bin/kama"; }
+// ⚠️ The `.exe` is load-bearing on Windows, and its absence disabled the whole versioned-toolchain
+// feature there rather than breaking it visibly. maybeReExec decides "am I the selector?" by comparing
+// selfExePath() — which the OS answers `…\bin\kama.exe` — against selectorPath(). Spelled without the
+// suffix the two could never be equal, so the selector always concluded it was not the selector and ran
+// in place: no pin was ever honoured on Windows. versionBin has the same problem one step later, where
+// an installed toolchain is `kama.exe` and fileExists() was asked about `kama`.
+std::string selectorPath()       { return kamaHome() + "/bin/kama" KAMA_EXE_SUFFIX; }
 std::string versionDir(const std::string& v) { return versionsDir() + "/" + v; }
-std::string versionBin(const std::string& v) { return versionDir(v) + "/bin/kama"; }
+std::string versionBin(const std::string& v) { return versionDir(v) + "/bin/kama" KAMA_EXE_SUFFIX; }
 
 // M2.1: fetch a `git`/`url` dependency into the content-addressed store, verify sha256 integrity, and
 // fill `out` (lock entry) + `storePath` (target for the view symlink). Staging is atomic — nothing
@@ -3296,7 +3359,7 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
         } else {
             // tag/branch pin via a shallow clone.
             std::string branch = d.rev.empty() ? "" : (" --branch \"" + d.rev + "\"");
-            if (runCmd("git clone --depth 1" + branch + " \"" + d.git + "\" \"" + staging + "\" 2>/dev/null") != 0) {
+            if (runCmd("git clone --depth 1" + branch + " \"" + d.git + "\" \"" + staging + "\" 2>" KAMA_DEVNULL) != 0) {
                 err = "git clone failed for '" + name + "' (" + d.git + ")"; runCmd(rmRfCmd(staging)); return false;
             }
             commit = runCmdCapture("git -C \"" + staging + "\" rev-parse HEAD");
@@ -3332,7 +3395,12 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
         }
         lockIntegrity = tarballHash;   // trust-on-first-use when the manifest omits `integrity`
         if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; runCmd(rmRfCmd(tgz)); return false; }
-        if (runCmd("tar -xzf \"" + tgz + "\" -C \"" + staging + "\" --strip-components=1") != 0) {
+        // --force-local on Windows: GNU tar reads a `:` in a file argument as a REMOTE HOST separator, so an
+        // ordinary absolute path becomes a network fetch —
+        //     tar (child): Cannot connect to C: resolve failed
+        // and every url-tarball dependency failed to unpack. The flag says "that colon is part of a path".
+        // POSIX paths have no colon to misread, and the flag is GNU-only, so it stays on this side.
+        if (runCmd("tar " KAMA_TAR_LOCAL "-xzf \"" + tgz + "\" -C \"" + staging + "\" --strip-components=1") != 0) {
             err = "cannot unpack '" + name + "'"; runCmd(rmRfCmd(staging)); runCmd(rmRfCmd(tgz)); return false;
         }
         runCmd(rmRfCmd(tgz));
@@ -3421,7 +3489,7 @@ static bool gitVersionTags(const std::string& gitUrl,
                            std::vector<std::pair<SemVer, std::string>>& out, std::string& err)
 {
     int rc = 0;
-    std::string res = runCmdCapture("git ls-remote --tags \"" + gitUrl + "\" 2>/dev/null", &rc);
+    std::string res = runCmdCapture("git ls-remote --tags \"" + gitUrl + "\" 2>" KAMA_DEVNULL, &rc);
     if (rc != 0) { err = "cannot list tags of git repo '" + gitUrl + "'"; return false; }
     std::set<std::string> seen;
     std::istringstream ss(res);
@@ -3566,7 +3634,7 @@ static bool fetchRegistryIndex(const std::string& base, const std::string& name,
 {
     std::string url = joinUri(base, name + "/index.json");
     int rc = 0;
-    std::string body = runCmdCapture("curl -fsSL \"" + url + "\" 2>/dev/null", &rc);
+    std::string body = runCmdCapture("curl -fsSL \"" + url + "\" 2>" KAMA_DEVNULL, &rc);
     if (rc != 0 || body.empty()) { err = "cannot fetch registry index for '" + name + "' from " + url; return false; }
     IndexReader r(body);
     if (!r.parse(out)) { err = "malformed registry index for '" + name + "' (" + url + "): " + r.err; return false; }
@@ -4579,10 +4647,16 @@ void seedUsage()
 // Is stdin a terminal? The one place that asks, because `kama seed` is the one command that prompts.
 // <unistd.h> is already included above; Windows needs <io.h>, which like <direct.h>/<process.h> is a CRT
 // header and does not reach <windows.h> (the prohibition at the top of this file is about windows.h).
+//
+// ⚠️ NOT _isatty on Windows. _isatty answers "is this fd a character device", and NUL is a character
+// device — so `kama seed </dev/null`, which is how every script, every CI job and tools/check-seed.sh
+// runs it, looked INTERACTIVE and prompted. GetConsoleMode succeeds only on a real console handle, which
+// is the question being asked. STD_INPUT_HANDLE is (DWORD)-10.
 static bool stdinIsTerminal()
 {
 #ifdef _WIN32
-    return _isatty(_fileno(stdin)) != 0;
+    unsigned long mode;
+    return GetConsoleMode(GetStdHandle((unsigned long)-10), &mode) != 0;
 #else
     return isatty(fileno(stdin)) != 0;
 #endif
@@ -5771,6 +5845,20 @@ static bool qNeedsText(QMode m)
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // Binary stdio, before a single byte moves. The CRT opens fd 0/1/2 in TEXT mode, where every '\n' on
+    // the way out becomes "\r\n" and every "\r\n" on the way in loses its '\r'. kama's standard streams
+    // carry BYTES, not a document:
+    //   * `kama agents print` must reproduce the embedded file exactly — check-agents diffs it, and the
+    //     CR per line read as "the binary's AGENTS.md differs from agents/AGENTS.md";
+    //   * `kama lsp` frames JSON-RPC with a Content-Length counted in bytes, and writes the header's
+    //     \r\n itself. Text mode turns those into \r\r\n and makes every byte count a lie, which is the
+    //     kind of corruption that shows up as an editor mysteriously losing half its replies.
+    // Same decision, same reasoning, as kama_args_init() in kama_runtime.h does for compiled programs.
+    _setmode(_fileno(stdin),  _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
     if (argc >= 2 && (!strcmp(argv[1], "--version") || !strcmp(argv[1], "-v"))) {
         printf("kama %s\n", KAMA_VERSION);
         return 0;
@@ -6694,10 +6782,32 @@ int main(int argc, char** argv)
         // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
         // stray `-o` can't leave an artifact behind.
         if (runMode) {
+            // The temp directory, asked the way each platform actually answers.
+            //
+            // `TMPDIR` is the POSIX spelling and was the only one consulted here, with `/tmp` as the
+            // fallback. Nothing on Windows sets TMPDIR — not the OS, not MSYS2 — so every `kama run`
+            // fell through to the literal `/tmp`, which a NATIVE compiler reads as `\tmp` on the current
+            // drive. On the CI runner that drive is D:, `D:\tmp` does not exist, and the link died:
+            //     ld: cannot open output file /tmp/kama-run-5384.exe: No such file or directory
+            // On a dev box `C:\tmp` often does exist, which is worse: `kama run` appeared to work while
+            // writing into a directory nobody owns. Windows sets `TMP`/`TEMP` for every session, and
+            // MSYS2 rewrites both to Win32 paths when it spawns a native child, so they are the question
+            // to ask here. (Not GetTempPathA: <windows.h> is banned in this TU — see the include block.)
             const char* td = getenv("TMPDIR");
+#ifdef _WIN32
+            if (!(td && *td)) td = getenv("TMP");
+            if (!(td && *td)) td = getenv("TEMP");
+#endif
             std::string tmpDir = (td && *td) ? td : "/tmp";
+            for (char& c : tmpDir) if (c == '\\') c = '/';   // one path spelling, as absolutePath() mints
             if (!tmpDir.empty() && tmpDir.back() == '/') tmpDir.pop_back();
             output = tmpDir + "/kama-run-" + std::to_string((long)getpid());
+            // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
+            // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
+            // that never existed and every `kama run` leaked its binary into the temp directory.
+#ifdef _WIN32
+            output += ".exe";
+#endif
         }
         // ---- Compiler selection + cross-compilation -------------------------------------------
         // kama emits ISO C and shells out, so reaching another platform is "invoke the right C
@@ -6751,7 +6861,7 @@ int main(int argc, char** argv)
 #ifdef _WIN32
                 return runCmd("zig version >NUL 2>&1") == 0;
 #else
-                return runCmd("zig version >/dev/null 2>&1") == 0;
+                return runCmd("zig version >" KAMA_DEVNULL " 2>&1") == 0;
 #endif
             }();
             if (zigOnPath) compiler = "zig cc";
@@ -7173,7 +7283,18 @@ int main(int argc, char** argv)
             run << "\"" << outPath << "\"";
             for (auto& pa : progArgs) run << " \"" << pa << "\"";
             int prc = runCmd(run.str());   // system() -> WEXITSTATUS: the child's exit code
+#if defined(_WIN32)
+            // Windows holds the image section of an executable open a little past process exit, so the
+            // remove() below fails outright the instant the child returns — measured at ~774 spins before
+            // the handle dropped. That is why every `kama run` on Windows left its binary behind (~110 KB
+            // a time) even once the path was right. Bounded spin rather than a sleep: the wait is
+            // sub-millisecond, and <windows.h> — where Sleep lives — cannot be included in this TU.
+            // If it somehow never clears, let the temp file go: the run already has the child's exit code,
+            // and failing `kama run` over a leftover file in the temp directory would be the worse trade.
+            for (int i = 0; i < 20000; ++i) if (remove(outPath.c_str()) == 0) break;
+#else
             remove(outPath.c_str());
+#endif
             return prc;
         }
         fprintf(stderr, "kama: built %s\n", outPath.c_str());

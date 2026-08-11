@@ -225,6 +225,15 @@ std::string uriToPath(const std::string& uri) {
         }
         path += s[i];
     }
+    // ...and here is where that actually happens. The comment above has described this strip since the
+    // function was written and the code never performed it, so on Windows every URI became `/C:/Users/…`
+    // — a path nothing can open. `kama build` never sees a URI and resolved the same imports fine, so the
+    // damage was confined to the editor: no imported module loaded, every cross-file go-to-definition
+    // missed, and `import std::collections` reported as not exporting what it plainly exports.
+    // Shape-tested rather than #ifdef'd — a POSIX path cannot look like `/X:/`.
+    if (path.size() >= 3 && path[0] == '/' && path[2] == ':' &&
+        ((path[1] >= 'A' && path[1] <= 'Z') || (path[1] >= 'a' && path[1] <= 'z')))
+        path.erase(0, 1);
     return path;
 }
 
@@ -237,6 +246,12 @@ std::string pathToUri(const std::string& path) {
                c == '-' || c == '.' || c == '_' || c == '~' || c == '/' || c == ':';
     };
     std::string uri = "file://";
+    // The inverse of uriToPath's strip: a Windows path starts at its drive letter, and `file://C:/x`
+    // would make `C:` look like a HOSTNAME. The conventional spelling is `file:///C:/x`, which is also
+    // what round-trips back through uriToPath.
+    if (path.size() >= 2 && path[1] == ':' &&
+        ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')))
+        uri += '/';
     for (unsigned char c : path) {
         if (safe(c)) { uri += (char)c; }
         else { char buf[4]; snprintf(buf, sizeof buf, "%%%02X", c); uri += buf; }

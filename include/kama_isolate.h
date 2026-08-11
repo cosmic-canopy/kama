@@ -51,6 +51,17 @@ static inline void kama_isolate_join_boxed(void* h) {
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/threading.h>
 static inline int kama_parfor_workers(void) { int n = emscripten_num_logical_cores(); return n > 0 ? n : 1; }
+#elif defined(_WIN32)
+// mingw-w64 ships <unistd.h> but no sysconf, so the POSIX branch below did not merely misreport the core
+// count on Windows — it failed to COMPILE, and took every fixture that reaches this header with it
+// (isolate, channel, atomic, parfor, scope, shared, ecs: 31 of the 48 failures on the Windows leg).
+//
+// winpthreads answers this itself, and <pthread.h> is already included above — which is the whole reason
+// to prefer it over GetActiveProcessorCount. That would mean either <windows.h>, which cannot be included
+// here (a TU that also uses kama_os.h needs <winsock2.h> to come FIRST — see the note at the top of that
+// header), or a hand-declared prototype that clang warns about the moment windows.h declares it too, and
+// a warning is a failed build in this suite.
+static inline int kama_parfor_workers(void) { int n = pthread_num_processors_np(); return n > 0 ? n : 1; }
 #else
 #include <unistd.h>
 static inline int kama_parfor_workers(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }

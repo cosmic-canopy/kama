@@ -963,7 +963,31 @@ static inline int  kama_trace_get(void) { return kama_trace_acc; }
 // thread before any spawn, so a single shared object is race-free — not KAMA_ISOLATE_LOCAL/per-isolate).
 extern int    kama_argc;
 extern char** kama_argv;
-static inline void kama_args_init(int argc, char** argv) { kama_argc = argc; kama_argv = argv; }
+static inline void kama_args_init(int argc, char** argv) {
+    kama_argc = argc; kama_argv = argv;
+#if defined(_WIN32)
+    // ...and, on Windows, put the standard streams in BINARY mode before a single byte moves.
+    //
+    // kama_raw_write is a BYTE writer — `print` means "these bytes, on this fd". The Windows CRT opens
+    // fd 0/1/2 in TEXT mode, where _write silently rewrites every 0x0A to 0x0D 0x0A, so `println` emitted
+    // CRLF and any program piping non-text (an image, a protocol frame, a tarball) had its 0x0A bytes
+    // corrupted on the way out. check-print caught the visible half of that and printed two lines that
+    // looked identical, because the only difference was the carriage returns.
+    //
+    // LF-only is also what the neighbours do: Go's os.Stdout and Rust's println! both write the bytes
+    // given and translate nothing. Console hosts (conhost, Windows Terminal, cmd, PowerShell) render a
+    // bare LF as a newline, so this costs nothing on the display side.
+    //
+    // `main` is the one place this can go — it must happen before any output, exactly once — and this is
+    // what already runs first there. _setmode/_O_BINARY are declared at block scope rather than pulled in
+    // with <io.h>/<fcntl.h>, the same way _write is above, so the header stays dependency-light and
+    // `--no-std`-clean. _O_BINARY is 0x8000 in every Microsoft CRT (msvcrt, UCRT) and in mingw-w64.
+    {
+        extern int _setmode(int, int);
+        _setmode(0, 0x8000); _setmode(1, 0x8000); _setmode(2, 0x8000);
+    }
+#endif
+}
 static inline int  kama_args_count(void) { return kama_argc > 1 ? kama_argc - 1 : 0; }   // drop argv[0]
 // The i-th user arg (0-based over argv[1..argc)) as a FRESH owned kama_string; out-of-range -> "".
 static inline kama_string kama_args_at(int i) {
