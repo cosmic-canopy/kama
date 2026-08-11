@@ -115,34 +115,47 @@ fi
 # unnecessary 24-TU builds are four everyone else waits behind. Compiles that produce no object make the
 # link fail, which is fine — the link still counts, and every case below ignores the exit status.
 #
-# Two spellings of the same shim. kama runs the compiler through system(), which on Windows is `cmd /c`,
-# and cmd cannot execute a `#!/bin/sh` file — it is not a program to it, so the shim never ran and every
-# case here counted 0 invocations. A `.cmd` is the thing cmd.exe will actually start.
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*)
-        CCOUNT="$tmp/ccount.cmd"
-        printf '@echo off\r\necho x >> "%%COUNTFILE%%"\r\nexit /b 0\r\n' > "$CCOUNT"
-        ;;
-    *)
-        CCOUNT="$tmp/ccount"
-        cat >"$CCOUNT" <<'EOF'
+# kama runs the compiler through system(), which on Windows is `cmd /c`, and cmd cannot execute a
+# `#!/bin/sh` file — it is not a program to it, so the shim never ran and every case here counted 0
+# invocations. Both shims below are therefore invoked as `sh <script>` there, which is legal because kama
+# treats a compiler as a SHELL STRING rather than a program path.
+#
+# ⚠️ Each invocation drops its OWN uniquely-named file into $COUNTDIR, and the tally is a file count.
+# Appending a line to one shared file is NOT safe here: the whole point of this guard is that `-j N` runs
+# N compilers AT ONCE, and on Windows concurrent `cmd` processes appending to a single file do not get
+# atomic-append semantics, so writes clobber each other. It counted 18 of 18 on an idle machine and 14 of
+# 18 inside the parallel guard pool — a flake that reads as "the pool lost jobs" when the pool was fine
+# and the TALLY was lossy. A distinct file per invocation cannot race.
+cat >"$tmp/ccount" <<'EOF'
 #!/bin/sh
-echo x >> "$COUNTFILE"
+# $$ is this shim process's pid — one per invocation, so no two concurrent writers pick the same name.
+: > "$COUNTDIR/$$.tick"
 exit 0
 EOF
-        ;;
+chmod +x "$tmp/ccount"
+
+# ONE shim, run through `sh` on Windows rather than rewritten as a .cmd. kama treats a "compiler" as a
+# SHELL STRING, not a program path (`"…/zig" cc` is the precedent), so `sh <script>` is a legal --cc and
+# cmd.exe can start `sh` — which is how the POSIX shim gets to run unchanged.
+#
+# The .cmd version this replaces could not tally correctly: cmd has no PID to key a filename on, and
+# %RANDOM% is seeded from the SYSTEM CLOCK, so `cmd` processes launched in the same tick — which is
+# exactly what `-j 4` does — draw identical sequences, write the same filename, and overwrite each other.
+# It counted 3, 2 and 1 of 18 across three runs. `$$` is unique by construction.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CCOUNT="sh $(kama_native_path "$tmp")/ccount" ;;
+    *)                    CCOUNT="$tmp/ccount" ;;
 esac
-chmod +x "$CCOUNT"
 
 invocations() {   # invocations <label> <expected> -- <extra kama args...>
     lab="$1"; want="$2"; shift 3
-    # Native-spelled: COUNTFILE reaches the shim through the ENVIRONMENT, which msys2 does not convert
-    # (see kama_native_path). The shell then counts lines in the file it named, not the one cmd wrote.
-    COUNTFILE="$(kama_native_path "$tmp")/count.$lab"; export COUNTFILE
-    : > "$COUNTFILE"
+    # Native-spelled: COUNTDIR reaches the shim through the ENVIRONMENT, which msys2 does not convert
+    # (see kama_native_path). The shell would otherwise count files in a directory cmd never wrote to.
+    rm -rf "$tmp/count.$lab"; mkdir -p "$tmp/count.$lab"
+    COUNTDIR="$(kama_native_path "$tmp")/count.$lab"; export COUNTDIR
     "$KAMA" build "$MULTI" -o "$tmp/c_$lab" --cc "$CCOUNT" "$@" >/dev/null 2>&1 || true
-    got=$(wc -l < "$COUNTFILE" | tr -d ' ')
-    unset COUNTFILE
+    got=$(ls "$tmp/count.$lab" | wc -l | tr -d ' ')
+    unset COUNTDIR
     if [ "$got" = "$want" ]; then ok "$lab: $got compiler invocation(s)"
     else bad "$lab: $got compiler invocations, expected $want"; fi
 }
@@ -177,13 +190,18 @@ while [ $i -le 5 ]; do echo "NOISE $b line $i" >&2; i=$((i+1)); done
 exit 0
 EOF
 chmod +x "$tmp/ccnoise"
+# Through `sh` on Windows, for the reason the tally shim is — cmd.exe cannot start a `#!/bin/sh` file.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) CCNOISE="sh $(kama_native_path "$tmp")/ccnoise" ;;
+    *)                    CCNOISE="$tmp/ccnoise" ;;
+esac
 
 # 5a. When every job SUCCEEDS, all N run and replay, so stderr must be byte-identical at any POOLED
 #     width. This is the strongest form of the ordering claim and it needs no message text.
 #     -j 1 is excluded on purpose: it is one invocation over all sources, so it has no per-TU
 #     diagnostics to order. That it stays one invocation is check 3's assertion, not this one's.
 for j in 2 3 10; do
-    KAMA_JOBS_NOFAIL=1 "$KAMA" build "$MULTI" -o "$tmp/s_$j" --cc "$tmp/ccnoise" -j "$j" \
+    KAMA_JOBS_NOFAIL=1 "$KAMA" build "$MULTI" -o "$tmp/s_$j" --cc "$CCNOISE" -j "$j" \
         >"$tmp/s_$j.out" 2>"$tmp/s_$j.err" || true
     # The final link runs the shim too and names the output binary, which differs per width; drop it.
     grep '^NOISE ' "$tmp/s_$j.err" | grep -v "NOISE s_$j " >"$tmp/s_$j.blocks"
@@ -200,7 +218,7 @@ fi
 #     every block that appears is whole, and the blocks are in SOURCE order at every width (so the
 #     narrower run's block list is a prefix of the wider run's).
 for j in 2 10; do
-    "$KAMA" build "$MULTI" -o "$tmp/n_$j" --cc "$tmp/ccnoise" -j "$j" >"$tmp/n_$j.out" 2>"$tmp/n_$j.err" || true
+    "$KAMA" build "$MULTI" -o "$tmp/n_$j" --cc "$CCNOISE" -j "$j" >"$tmp/n_$j.out" 2>"$tmp/n_$j.err" || true
 done
 torn=0
 for b in $(awk '/^NOISE /{print $2}' "$tmp/n_10.err" | sort -u); do
@@ -232,11 +250,12 @@ for badj in 0 -1 x 99999; do
 done
 # ...and the long form is the same option. Counted through the shim rather than really built, so that
 # "accepted" is checked without a fifth 24-TU compile.
-COUNTFILE="$(kama_native_path "$tmp")/count.longform"; export COUNTFILE; : > "$COUNTFILE"
+rm -rf "$tmp/count.longform"; mkdir -p "$tmp/count.longform"
+COUNTDIR="$(kama_native_path "$tmp")/count.longform"; export COUNTDIR
 if "$KAMA" build "$MULTI" -o "$tmp/z2" --cc "$CCOUNT" --jobs 4 >/dev/null 2>&1 \
-   || [ -s "$COUNTFILE" ]; then ok "--jobs is accepted as -j's long form"
+   || [ "$(ls "$tmp/count.longform" | wc -l | tr -d ' ')" -gt 0 ]; then ok "--jobs is accepted as -j's long form"
 else bad "--jobs 4 was rejected"; fi
-unset COUNTFILE
+unset COUNTDIR
 
 [ "$fail" = 0 ] && echo "check-build-jobs: PASS" || echo "check-build-jobs: FAIL" >&2
 exit "$fail"
