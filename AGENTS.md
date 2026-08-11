@@ -48,6 +48,13 @@ hand reliably (see the trap below).
 ```
 
 Notes:
+- **Per-platform notes live in `docs/platforms/`** — one page per host that needs more than `./dev`.
+  Only [windows.md](docs/platforms/windows.md) exists so far, because macOS and Linux are where this
+  repo is built daily and have nothing to say that this file does not. On Windows read it FIRST: msys2
+  setup, why the language server needs a snapshot of the compiler rather than the build itself, and the
+  list of things that are true there and nowhere else (`long` is 32-bit; `system()` runs cmd.exe, which
+  has no `/dev/null`; a running executable is locked; git writes symlinks as text files). Every entry
+  on that list cost a wrong diagnosis before someone wrote it down.
 - **The stale-binary trap.** Build artifacts are platform-scoped (`out/<os>-<arch>/`), so a host
   build and a container build coexist — switching needs no `make clean`. The cost is that building
   one and testing the other passes *silently* against an old compiler. `./dev` exists to make that
