@@ -23,6 +23,26 @@ function platformDir() {
   return os && arch ? os + '-' + arch : null;
 }
 
+// The executable suffix this OS requires. Without it the search below found the root `kama` — which on
+// Windows is a real 43 MB copy, because msys2's `ln -s` degrades to one — and then handed a path with no
+// extension to spawn, which Windows will not start.
+const EXE = process.platform === 'win32' ? '.exe' : '';
+
+// Windows has no platformDir(): the Makefile names that directory from `uname -s`, which under msys2 is
+// something like `MINGW64_NT-10.0-26200-ARM64` — a string carrying the OS BUILD NUMBER, so nothing
+// outside that shell can reconstruct it. Look at what is actually on disk instead and take the most
+// recently built, which is the same "whichever platform built last" rule the root symlink encodes.
+function outDirsWindows(root) {
+  const out = path.join(root, 'out');
+  let names = [];
+  try { names = fs.readdirSync(out); } catch (_) { return []; }
+  return names
+    .map((n) => path.join(out, n))
+    .filter((d) => { try { return fs.statSync(path.join(d, 'kama' + EXE)).isFile(); } catch (_) { return false; } })
+    .sort((a, b) => fs.statSync(path.join(b, 'kama' + EXE)).mtimeMs -
+                    fs.statSync(path.join(a, 'kama' + EXE)).mtimeMs);
+}
+
 // Prefer a workspace-local build of the compiler (a dev checkout), else trust PATH. In a dev tree the
 // Makefile builds per platform into out/<os>-<arch>/kama and leaves the root ./kama a symlink to
 // whichever platform built last — so check the NATIVE path first, or a `tools/cdev make` would hand
@@ -34,13 +54,14 @@ function findKama() {
   if (configured) return configured;
   const plat = platformDir();
   for (const f of vscode.workspace.workspaceFolders || []) {
-    const roots = plat ? [path.join(f.uri.fsPath, 'out', plat), f.uri.fsPath] : [f.uri.fsPath];
+    const roots = plat ? [path.join(f.uri.fsPath, 'out', plat), f.uri.fsPath]
+                       : [...outDirsWindows(f.uri.fsPath), f.uri.fsPath];
     for (const r of roots) {
-      const p = path.join(r, 'kama');
+      const p = path.join(r, 'kama' + EXE);
       try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) { /* not here */ }
     }
   }
-  return 'kama';
+  return 'kama' + EXE;
 }
 
 function build(kama, file, out) {
