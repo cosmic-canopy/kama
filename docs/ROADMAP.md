@@ -118,28 +118,13 @@ Everything else here is library or toolchain work that does **not** gate the tag
    - **⚠️ Windows CI: 2 guard failures from green, then promote to required.** Triaged on real Windows
      hardware (2026-08-11, msys2/UCRT64) — **970 passed, 2 failed**, from 923/48, with **no fixture
      failures left**. The leg is still `continue-on-error`. Environment and gotchas:
-     [platforms/windows.md](platforms/windows.md). **Take these in order:**
+     [platforms/windows.md](platforms/windows.md).
 
-     1. **`check-lsp` — 6 assertions in the `@compileFor` manifest-flag section.** The server does not
-        pick up the project manifest's flags, so the editor and the CLI disagree about which
-        declarations a build keeps ("lsp: [always onlyWithoutA] cli: [always onlyWithA]"). Self-contained
-        and Windows-only as far as anyone knows; the other 32 assertions that were failing are fixed, so
-        this is the residue. Start here — it is the smaller of the two.
-     2. **`check-packages` — a free-rider check fires on Windows that should not**, so `kama run` exits 1
-        where the guard expects 2. Hypothesis, UNVERIFIED: `absolutePath()` uses `realpath()` on POSIX,
-        which RESOLVES the `.kama/deps` symlink into the package store, while Windows `_fullpath` does
-        not resolve junctions — so package ownership is computed against a different directory per
-        platform. ⚠️ **Confirm the hypothesis before writing the fix**: the repair likely changes package
-        resolution on **all three** platforms, and it is not a change to make from a guess.
-     3. **Then, and only then, drop `continue-on-error: true`** from the `windows-test` job in
-        `.github/workflows/ci.yml`, so a Windows regression blocks a merge. Flipping it earlier means the
-        first required run fails on the two above, which are already known. Leave `release.yml`'s Windows
-        job best-effort — its comment records the macos-13 lesson deliberately.
-     4. **Static linking for USER programs** (see the known-issues entry). This is what makes a threaded
-        program — a game engine — shippable off the machine that built it, and it is the largest
-        remaining gap for anyone actually using kama on Windows.
-     5. **The literal initializer/comparison asymmetry** (known-issues). Platform-independent and
-        unrelated to Windows; ordered last only because nothing is blocked on it.
+     The five remaining items, their order (which is load-bearing — the CI flip is third, and doing it
+     earlier means the first *required* run fails on failures already known), and the evidence gathered
+     for each live in **[design/windows-parity.md](design/windows-parity.md)**, the campaign's live
+     tracker. **That file's deletion is the signal that Windows is closed**; this entry shrinks to
+     whatever is genuinely left at that point.
 
      Remaining wall-clock: the suite is ~850 s here vs ~75 s in the container. `kama build -j` now
      parallelizes on Windows (1.65x on 17 TUs), but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out
