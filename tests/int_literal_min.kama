@@ -1,0 +1,21 @@
+// INT32_MIN is `-2147483648`, and that is the only way to write it — the magnitude is one past
+// INT32_MAX, so the literal ALONE does not fit int32 and is rejected (tests/xfail/int_literal_overflow).
+// Under a unary minus it fits exactly, which is Rust's rule and now kama's: the literal parks itself
+// and the MINUS claims it.
+//
+// Before, the spelling did not work at ALL and had nothing to do with the range check: the literal
+// wrapped to INT32_MIN at parse time, the unary minus then wrapped a Node that was ALREADY negative,
+// and the emitter wrote `--2147483648` — which the C compiler reads as a pre-decrement of a literal and
+// rejects with "expression is not assignable". The corpus worked around it as `0i32 - 2147483647i32 - 1i32`.
+fn int32 main() {
+    int32 min      = -2147483648;
+    int32 viaChain = 0i32 - 2147483647i32 - 1i32;   // what the workaround spelled
+    int64 wide     = -2147483648i64;                 // the suffixed form, for comparison
+
+    int32 n = 0;
+    if (min == viaChain)              { n = n + 1; }
+    if (cast<int64>(min) == wide)     { n = n + 1; }
+    if (-2147483647 == min + 1i32)    { n = n + 1; }   // a negative literal one INSIDE the range
+    if (min < -2147483647)            { n = n + 1; }   // and it really is the smallest
+    return n;   // 4
+}

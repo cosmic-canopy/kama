@@ -350,12 +350,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   const param can only be READ inside a body and a generic enum has none. Whoever lifts this should add
   the const-param fixture that could not be written (`tests/constgen_value_type.kama` records the gap).
 
-- **`INT32_MIN` has no direct spelling.** `-2147483648` is unary minus over the literal `2147483648`,
-  which does not fit `int32` — so it is now a clean parse error (it used to emit `--2147483648`, which
-  clang reads as a pre-decrement and rejects with "expression is not assignable", so the value was never
-  writable). The corpus already spells it `0i32 - 2147483647i32 - 1i32`. Fix = fold a unary minus over an
-  out-of-range literal at parse time when the NEGATED value fits, which is what Rust does. Small, and
-  entirely in the literal rule; filed rather than done because it wants its own fixtures.
+- ~~**`INT32_MIN` has no direct spelling.**~~ **Fixed.** `-2147483648` folds the negation into the
+  literal at parse time (Rust's rule): the magnitude is one past INT32_MAX so the literal alone is
+  rejected, but under a unary minus it fits exactly. It previously did not work at all and for an
+  unrelated reason — the emitter wrote `--2147483648`, which the C compiler reads as a pre-decrement.
+  Guarded by `tests/int_literal_min.kama`.
+
+  **Still open, same family: a SUFFIXED literal is not range-checked against its own suffix.** `300i8`
+  truncates to 44 and `2147483648i32` to INT32_MIN, both in silence — `createIntegerLiteralNode` narrows
+  with a C cast and never compares. The unsuffixed path checks; the suffixed one, where the author has
+  *stated* the width, does not. Corpus-clean today (no suffixed literal anywhere exceeds its suffix), so
+  this is a latent hole rather than a live bug. Fix = the same range test, against the suffix's width,
+  with the negation fold extended to cover `-128i8` / `-2147483648i32`.
 
 - **Unresolved type names — one residual: GENERIC ARGUMENTS.** Declared type names are now checked
   (`checkDeclaredTypes`, a single-visit walk at the tail of `collectProgram`), so a misspelled or unimported

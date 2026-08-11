@@ -51,6 +51,36 @@ public:
     // it), so the pointer removes any dependence on reduction order.
     std::map<const StringList*, std::vector<SrcRange>> listSegPos;
 
+    // An unsuffixed integer literal that does not fit `int32` is an error — except that `-2147483648`
+    // IS that literal, under a unary minus, and the negation fits exactly. So the check cannot fire at
+    // the literal: 2147483648 parks itself here, `MINUS` takes the entry when it consumes one (the
+    // Int32Node already holds the wrapped value, which is the right answer), and compilation_unit
+    // reports whatever is left over. Keyed by the NODE, like listSegPos and for the same reason —
+    // literals nest inside other reductions, so a single pending slot would clobber.
+    struct WideLit { std::string digits; int line; int col; };
+    std::map<const void*, WideLit> pendingWideLits;
+
+    // TAKE, not read — see listSegPos. True iff `node` was a parked wide literal, which is exactly the
+    // case where a unary minus makes it representable.
+    bool takeWideLit(const void* node)
+    {
+        auto it = pendingWideLits.find(node);
+        if (it == pendingWideLits.end()) return false;
+        pendingWideLits.erase(it);
+        return true;
+    }
+
+    // Anything still parked at the end of the parse was never negated, so it really does not fit.
+    void reportPendingWideLits()
+    {
+        for (auto& kv : pendingWideLits)
+            handleError(kv.second.line, kv.second.col, "Parse",
+                        ("integer literal `" + kv.second.digits + "` does not fit `int32`, the width of an "
+                         "unsuffixed literal -- write the width you mean (`" + kv.second.digits + "i64`, `"
+                         + kv.second.digits + "ui32`)").c_str());
+        pendingWideLits.clear();
+    }
+
     void stampSeg(const StringList* list, int line, int col, int endLine, int endCol)
     {
         if (list) listSegPos[list].push_back(SrcRange{ line, col, endLine, endCol });

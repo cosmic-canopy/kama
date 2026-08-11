@@ -21,6 +21,7 @@ Test — each task builds first, so it can never run against a stale compiler
   test              native fixture suite            (host)
   test san          ASan/UBSan fixture suite        (container — see below)
   test wasm         wasm/node fixture suite         (container)
+  test linux        the CI Linux leg, exactly       (container — opt-in, see below)
   test all          native + san + wasm
   check             the tools/check-*.sh guard scripts (host)
   matrix            test all + check — the full pre-commit gate
@@ -41,6 +42,7 @@ every experiment is where a session's wall-clock goes. Match the rung to the que
   before committing `./dev test san|wasm`   both, once — they catch what native cannot
   when relevant     `./dev check`           grammar, LSP, docs, packaging
   the whole gate    `./dev matrix`
+  closing a campaign `./dev test linux`     the one leg nothing else here reproduces
 
 The trap this replaces: with no way to run three fixtures, the only honest answer to "did I break
 anything?" was the whole suite — so it got run dozens of times in one session, mostly to learn that one
@@ -110,11 +112,18 @@ case "$task" in
       native) build_host;      ./run_tests.sh ;;
       san)    build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh ;;
       wasm)   build_container; tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
+      # The CI Linux leg, run the way CI runs it: plain run_tests.sh on Linux, no KAMA_SAN/KAMA_WASM.
+      # NOTHING else here is that. `native` runs it on the host; `san`/`wasm` run a DIFFERENT set on Linux
+      # and carry 1 and 0 guards respectively. So a Linux-only guard failure was invisible locally — a
+      # bashism in a guard (`sh` is bash on macOS, dash on Debian) sat green here and red in CI.
+      # Deliberately NOT in `all` or `matrix`: it is a container round-trip, and paying it per commit is a
+      # tax. Run it before closing a campaign, or before any push that touches tools/check-*.sh.
+      linux)  build_container; tools/cdev exec ./run_tests.sh ;;
       all)
         build_host;      ./run_tests.sh
         build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh
                          tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
-      *) echo "dev test: expected native|san|wasm|all" >&2; exit 2 ;;
+      *) echo "dev test: expected native|linux|san|wasm|all" >&2; exit 2 ;;
     esac ;;
 
   check)

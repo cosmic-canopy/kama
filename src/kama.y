@@ -404,6 +404,8 @@ compilation_unit
       /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
          and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
       harvestUnitFacts(yyget_extra(scanner)->compilationUnit);
+      /* Any 2^31 literal still parked was never claimed by a unary minus, so it really does not fit. */
+      (SCANNER_CODEGENCONTEXT).reportPendingWideLits();
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
                                                                 yyget_extra(scanner)->identTokens.end()); }
   ;
@@ -1473,7 +1475,12 @@ unary_expression
   | bitcast_expression
   | sizeof_expression
   | PLUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
-  | MINUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
+  /* `-2147483648` is INT32_MIN, and the only way to write it: the magnitude is one past INT32_MAX, so
+     the literal alone does not fit. Claiming the parked literal here folds the negation into it — which
+     also removes an emission bug, since the old path wrapped an already-negative Int32Node in another
+     minus and emitted `--2147483648`, read by the C compiler as a pre-decrement of a literal. */
+  | MINUS unary_expression   { if ((SCANNER_CODEGENCONTEXT).takeWideLit($2.get())) { $$ = $2; }
+                               else { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); } }
   | pre_increment_expression   { $$ = $1; }
   | pre_decrement_expression   { $$ = $1; }
   ;
@@ -1929,12 +1936,23 @@ static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string
 {
     errno = 0;
     unsigned long long v = strtoull(digits.c_str(), NULL, base);
-    if(errno == ERANGE || v > 2147483647ULL)
+    if(errno == ERANGE || v > 2147483648ULL)
     {
         yyerror(loc, scanner, ("integer literal `" + digits + "` does not fit `int32`, the width of an "
                                "unsuffixed literal -- write the width you mean (`" + digits + "i64`, `"
                                + digits + "ui32`)").c_str());
         return std::make_shared<Int32Node>(ctx, 0);
+    }
+    if(v == 2147483648ULL)
+    {
+        /* Exactly 2^31 — one past INT32_MAX, and the ONLY out-of-range magnitude a unary minus can
+           rescue: `-2147483648` is INT32_MIN. Park it rather than diagnose it; the MINUS rule takes the
+           entry, and compilation_unit reports it if nothing did. The wrapped int32 IS the answer for the
+           negated form, which is why the node needs no fixing up when it is claimed. */
+        auto n = std::make_shared<Int32Node>(ctx, (int32_t)v);
+        ctx.pendingWideLits[n.get()] = CodeGenContext::WideLit{ digits, loc ? loc->first_line : ctx.line,
+                                                                        loc ? loc->first_column : ctx.col };
+        return n;
     }
     return std::make_shared<Int32Node>(ctx, (int32_t)v);
 }

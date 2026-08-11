@@ -923,7 +923,12 @@ unary_expression
   | bitcast_expression
   | sizeof_expression
   | PLUS unary_expression
+  /* `-2147483648` is INT32_MIN, and the only way to write it: the magnitude is one past INT32_MAX, so
+     the literal alone does not fit. Claiming the parked literal here folds the negation into it — which
+     also removes an emission bug, since the old path wrapped an already-negative Int32Node in another
+     minus and emitted `--2147483648`, read by the C compiler as a pre-decrement of a literal. */
   | MINUS unary_expression
+
   | pre_increment_expression
   | pre_decrement_expression
   ;
