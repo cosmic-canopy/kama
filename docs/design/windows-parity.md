@@ -16,7 +16,7 @@ first, every session.
 |---|------|--------|
 | 1 | `check-lsp` — the `@compileFor` manifest-flag assertions | **done** — `f47d5a2` |
 | 2 | `check-packages` — the free-rider check fires on Windows | **done** — `96f688b`, `ce61944` |
-| 3 | Drop `continue-on-error` from the `windows-test` job | **ready** — see below |
+| 3 | Drop `continue-on-error` from the `windows-test` job | **done** — needs one GitHub setting, below |
 | 4 | Static runtime linking for USER programs | not started |
 | 5 | The literal initializer/comparison asymmetry | not started |
 
@@ -112,14 +112,18 @@ They pass today; harden them only if a later session has budget.
 
 ---
 
-## 3. Drop `continue-on-error` — only after 1 and 2 are green
+## 3. Drop `continue-on-error` — done
 
-Remove `continue-on-error: true` from the `windows-test` job at `.github/workflows/ci.yml:66` and
-rewrite the comment above it, which currently says "flip to required once reliably green", to record
-that it now is.
+`continue-on-error: true` is gone from the `windows-test` job in `.github/workflows/ci.yml`, so a
+Windows-only regression now fails the run. `release.yml`'s Windows job is deliberately untouched —
+a release must not be blocked by it, which is the macos-13 lesson its own comment records.
 
-**Leave `.github/workflows/release.yml` alone.** Its Windows job (`:101-107`) is deliberately
-best-effort and its comment records the macos-13 lesson.
+> ### ⚠️ One thing is left, and it is not in this repo
+>
+> Failing the *run* is not the same as blocking a *merge*. "Required check" is a branch-protection
+> setting on GitHub, so the workflow file cannot assert it. Add **`build + test (windows-x64)`** to
+> the required-checks list for `dev` and `main`. That string is the job's `name:`, which **changed**
+> with this commit — it used to carry a `, best-effort` suffix.
 
 ---
 

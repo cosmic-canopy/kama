@@ -58,12 +58,22 @@ jobs:
         run: ./run_tests.sh
 
   windows-test:
-    name: build + test (windows-x64, best-effort)
+    name: build + test (windows-x64)
     runs-on: windows-latest
     # std::fs/std::net's Windows branch (kama_os.h Winsock/CRT) can only be verified here — it has no local
-    # equivalent on the Linux/macOS dev boxes. Best-effort (continue-on-error) so a Windows-only regression
-    # reports status without blocking dev/main CI while it stabilizes; flip to required once reliably green.
-    continue-on-error: true
+    # equivalent on the Linux/macOS dev boxes.
+    #
+    # No longer `continue-on-error`, as of 972 passed / 0 failed on real Windows hardware (2026-08-11,
+    # msys2/UCRT64). It ran best-effort while it stabilized, which bought the triage room to work but also
+    # meant a failure here changed nothing — and the state it was found in was 923/48. A leg that reports
+    # without consequence is a leg whose failures get read as weather. This job now fails the run.
+    #
+    # ⚠️ That is not the same as blocking a merge: "required check" is a BRANCH-PROTECTION setting on
+    # GitHub, not something a workflow file can assert. Add `build + test (windows-x64)` to the required
+    # list for `dev`/`main` — the job's `name:`, which changed with this commit, is the string it matches.
+    #
+    # release.yml's Windows job stays best-effort ON PURPOSE — a release must not be blocked by it (the
+    # macos-13 lesson its own comment records). Different question, different answer.
     defaults:
       run: { shell: 'msys2 {0}' }
     steps:
