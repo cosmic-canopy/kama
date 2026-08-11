@@ -6255,10 +6255,15 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     }
     for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
-    for (auto& kv : ci.methods) {
-        if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
-        else if (kv.second.isOperator && kv.second.opDecl)   // an operator has no `node`
-            kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
+    // A `This` PARAMETER (`This operator+(This rhs)`) is this instance, so `_thisType` has to be bound
+    // here too — the conformance block below binds it for the same reason, but only after this loop.
+    {
+        ScopedStr _ts(_thisType, mangled);
+        for (auto& kv : ci.methods) {
+            if (kv.second.node) kv.second.params = paramSigsOf(kv.second.node->params);
+            else if (kv.second.isOperator && kv.second.opDecl)   // an operator has no `node`
+                kv.second.params = paramSigsOf(operatorParamList(kv.second.opDecl->operatorDeclarator.get()));
+        }
     }
     // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances). A
     // generic contract implemented with the class's own param (`Box<T> implements Deref<T>`) mangles to the
@@ -15489,6 +15494,10 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
                 std::string ownerCls = owner ? owner->name : cls;
                 NsCtx savedCtx = _nsCtx;
                 std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+                // A `This` return type resolves to the method's OWNER — the same binding the operator
+                // path makes for `This operator+`. Without it `t.merge(…)` on a named receiver reaches
+                // cType with `_thisType` empty and dies as "`This` is only valid inside a type".
+                ScopedStr _ts(_thisType, ownerCls);
                 auto gi = _genericTypeInsts.find(ownerCls);
                 if (gi != _genericTypeInsts.end()) {
                     _typeSubst.clear();

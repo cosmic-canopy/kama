@@ -1,0 +1,56 @@
+// A GENERIC `type value` carrying binary arithmetic operators AND pinned `Equatable<This>` /
+// `Comparable<This>`, whose arithmetic runs through a contract method on its own type parameter.
+// Every half of that shipped, but the combination had no fixture and no stdlib user: generic types
+// with operators were `operator[]` only (tests/opindex_generic.kama), operators-plus-contracts was
+// non-generic only (tests/generic_arith.kama), and `Equatable<This>`/`Comparable<This>` appeared on
+// non-generic types and `type intrinsic` blocks alone.
+//
+// It did not work. An operator's `This` PARAMETER (`This operator+(This rhs)`) is re-derived per
+// instance in registerGenericTypeInst, and that loop ran before the block that binds `_thisType`,
+// so `This` in a parameter position had nothing to resolve against. A `This` RETURN type was fine
+// (operatorResultClass binds it), which is why the failure looked like a declaration-site error.
+//
+// This is also the shape `Fixed<B, const F>` needs: widen through the parameter's contract, do the
+// arithmetic at width, narrow back.
+type contract Widen<T is This> for value {
+    fn int64 wide();
+    ctor T fromWide(int64 v);
+}
+
+type intrinsic <int16> implements Widen<This> {
+    public fn int64 wide() { return cast<int64>(this); }
+    public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
+}
+type intrinsic <int32> implements Widen<This> {
+    public fn int64 wide() { return cast<int64>(this); }
+    public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
+}
+
+type value Q<B: Widen<B>> implements Equatable<This>, Comparable<This> {
+    public B raw;
+    public ctor of(B raw) { this.raw = raw; }
+
+    public This operator+(This rhs) { return Q::<B>.of(raw: B.fromWide(v: this.raw.wide() + rhs.raw.wide())); }
+    public This operator-(This rhs) { return Q::<B>.of(raw: B.fromWide(v: this.raw.wide() - rhs.raw.wide())); }
+
+    // Comparison is a CONTRACT, not an operator — `==` calls equals, `<` calls compareTo.
+    public fn bool equals(ref This other) { return this.raw.wide() == other.raw.wide(); }
+    public fn Ordering compareTo(ref This other) {
+        if (this.raw.wide() < other.raw.wide()) { return Ordering::Less; }
+        if (this.raw.wide() > other.raw.wide()) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+}
+
+fn int32 main() {
+    Q<int32> a = Q::<int32>.of(raw: 10i32);
+    Q<int32> b = Q::<int32>.of(raw: 32i32);
+    Q<int32> c = a + b;
+    Q<int16> s = Q::<int16>.of(raw: 7i16);       // a SECOND instantiation, so the binding is per-instance
+    Q<int16> t = Q::<int16>.of(raw: 7i16);
+    int32 n = 0;
+    if (c.raw == 42i32) { n = n + 1; }           // the operator, at width
+    if (s == t)         { n = n + 1; }           // Equatable<This> on a generic instance
+    if (a < b)          { n = n + 1; }           // Comparable<This> on a generic instance
+    return n;                                    // 3
+}

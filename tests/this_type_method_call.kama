@@ -1,0 +1,29 @@
+// `This` as a method's return type, reached through a NAMED receiver. `callReturnTypeRaw` binds the
+// owning instance's type args and namespace context before resolving the declared return type, but not
+// `_thisType` — so `t.merge(other: t)` died as "`This` is only valid inside a `type` or `contract`",
+// pointing at the declaration rather than the call. The operator path already bound it
+// (operatorResultClass), which is why `This operator+` worked and `fn This merge` did not.
+//
+// tests/this_type.kama and tests/decl_type_check_guards.kama both had `This`-returning methods and both
+// passed, because each happens to CHAIN (`Tally.make(…).merge(…)`) or bind through a `This` local — a
+// chained receiver never reaches this path. The named-receiver spelling had no fixture at all.
+type value Tally {
+    public int32 total;
+    public ctor make(int32 total) { this.total = total; }
+    public fn This merge(This other) { return Tally.make(total: this.total + other.total); }
+    public fn This twice() { return Tally.make(total: this.total * 2); }   // no parameter, so `This` is the only self mention
+}
+
+type value Boxed<T> {
+    public T v;
+    public ctor of(T v) { this.v = v; }
+    public fn This same() { return Boxed::<T>.of(v: this.v); }   // the generic instance's `This`
+}
+
+fn int32 main() {
+    Tally t = Tally.make(total: 10);
+    Tally m = t.merge(other: t);        // 20 — the named-receiver call that used to fail
+    Tally d = t.twice();                // 20
+    Boxed<int32> b = Boxed::<int32>.of(v: 2);
+    return m.total + d.total + b.same().v;   // 20 + 20 + 2 = 42
+}
