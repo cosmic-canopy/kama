@@ -42,8 +42,19 @@ for _a in aarch64 x86_64 riscv64; do
        | grep -qF -- "-target $_a-windows-gnu"; then CROSS_ARCH=$_a; break; fi
 done
 [ -n "$CROSS_ARCH" ] || { echo "check-target: could not find an arch foreign to this kama" >&2; exit 1; }
-CROSS_LINUX="$CROSS_ARCH-linux-gnu"
 CROSS_WINDOWS="$CROSS_ARCH-windows-gnu"
+# The Linux triple needs its OWN probe. The loop above establishes foreignness against `-windows-gnu`,
+# where a DIFFERENT OS makes any arch foreign — including the host's. Reusing that arch for `-linux-gnu`
+# then asks whether `aarch64-linux-gnu` is a cross build, which on an aarch64 LINUX host it is not: kama
+# correctly passes no -target, and the assertion below read that as a failure. Invisible on x86_64 CI and
+# on macOS (both genuinely cross to aarch64-linux-gnu); it fires on an ARM Linux host, which is what this
+# repo's own dev container is.
+CROSS_LINUX=
+for _a in aarch64 x86_64 riscv64; do
+    if "$KAMA" build --cc "echo zig cc" "$FIXTURE" --target "$_a-linux-gnu" -o "$tmp/archprobe2" 2>/dev/null \
+       | grep -qF -- "-target $_a-linux-gnu"; then CROSS_LINUX="$_a-linux-gnu"; break; fi
+done
+[ -n "$CROSS_LINUX" ] || { echo "check-target: could not find a linux arch foreign to this kama" >&2; exit 1; }
 
 # The named target used in §6 to prove the cross-toolchain rules has to be genuinely FOREIGN to this
 # host. WINDOWS is not foreign when the host is Windows: kama builds it natively and correctly, so the

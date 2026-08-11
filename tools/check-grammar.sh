@@ -27,8 +27,15 @@ if [ ! -f "$ROOT/docs/grammar.bnf" ]; then
     exit 1
 fi
 
-sh "$ROOT/tools/gen-grammar" "$tmp/grammar.bnf" >/dev/null 2>&1 || {
-    echo "check-grammar: FAIL — tools/gen-grammar did not run" >&2; exit 1; }
+# Run it DIRECTLY, not as `sh tools/gen-grammar`: the script declares `#!/usr/bin/env bash` and uses
+# `set -o pipefail`, which is a bashism. Forcing `sh` discards that shebang, and `sh` is bash on macOS
+# but DASH on Debian/Ubuntu — so this passed on a developer's Mac and failed on the Linux CI leg with
+# "Illegal option -o pipefail". Keep gen-grammar's stderr too: swallowing it turned a one-line shell
+# error into "did not run", which says nothing about what went wrong.
+"$ROOT/tools/gen-grammar" "$tmp/grammar.bnf" >/dev/null 2>"$tmp/generr" || {
+    echo "check-grammar: FAIL — tools/gen-grammar did not run" >&2
+    sed 's/^/    /' "$tmp/generr" >&2
+    exit 1; }
 
 if diff -u "$ROOT/docs/grammar.bnf" "$tmp/grammar.bnf" > "$tmp/drift"; then
     echo "check-grammar: PASS (docs/grammar.bnf matches src/kama.y)"
