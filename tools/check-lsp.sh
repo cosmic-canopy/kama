@@ -653,7 +653,7 @@ echo "check-lsp: M6 B3f the :: qualifier of a name"
 # The whole edit set, asserted EXACTLY: the declaration, the type annotation, and — new in B3f — the
 # `Color::` qualifier. The `Green` after it is the enum MEMBER, a separate symbol, and must not be touched.
 expect '"id":60,"result":{"changes":{"file:///qualrename.kama":[{"range":{"start":{"line":0,"character":10},"end":{"line":0,"character":15}},"newText":"Hue"},{"range":{"start":{"line":1,"character":18},"end":{"line":1,"character":23}},"newText":"Hue"},{"range":{"start":{"line":1,"character":28},"end":{"line":1,"character":33}},"newText":"Hue"}]}}' \
-       "renaming an enum rewrites the `Color::` qualifier, and only the qualifier (M6 B3f)"
+       "renaming an enum rewrites the \`Color::\` qualifier, and only the qualifier (M6 B3f)"
 expect '"id":61,"result":{"uri":"file:///qualrename.kama","range":{"start":{"line":0,"character":10},"end":{"line":0,"character":15}}}' \
        "go-to-definition FROM a qualifier lands on the enum declaration"
 expect '"id":62,"result":{"contents":{"kind":"plaintext","value":"enum Color"}}' \
@@ -662,7 +662,7 @@ expect '"id":62,"result":{"contents":{"kind":"plaintext","value":"enum Color"}}'
 # is the DIRECTORY path, so renaming one is a file move, not a symbol rename. `module:` keys name no
 # def-site, which is exactly what makes prepareRename refuse without needing a new flag — the same line
 # clangd draws for `#include` and gopls for an import path.
-expect '"id":63,"result":{"uri":"file://'                "go-to-definition on `collections` opens the module"
+expect '"id":63,"result":{"uri":"file://'                "go-to-definition on \`collections\` opens the module"
 expect '/lib/std/collections/'                           "...the module's own source, not the importer"
 expect '"id":64,"result":{"contents":{"kind":"plaintext","value":"module std::collections"}}' \
        "hover on a module path segment names the module"
@@ -813,15 +813,22 @@ expect '"id":54,"result":[{"uri":"file:///labels.kama","range":{"start":{"line":
 echo "check-lsp: M6 A1 build configuration"
 
 # cfgsession <sessionfile> <root> <file>: a whole short server run over one buffer. id 47 = documentSymbol.
+#
+# ⚠️ furi(), not a bare `file://$path` — and this section is WHY it exists. Every buffer above is invented
+# and never opened, so its URI can be anything; these are real files, and the server has to walk UP from
+# the one it is told about to find the kama.json whose flags this whole section is about. Under msys2 a
+# raw `/c/Users/…` reaches native kama as `C:\c\Users\…` (the current drive), the walk finds no manifest,
+# and the server answers under permissive defaults — which is the exact INVERSE of what the manifest says,
+# so case B still passed and cases A/C/E/F/I' failed. It looked like the server ignoring manifests.
 cfgsession() {
-    cfgsess="$1"; cfgroot="$2"; cfgfile="$3"
+    cfgsess="$1"; cfgrooturi=$(furi "$2"); cfgfile="$3"; cfgfileuri=$(furi "$3")
     : > "$cfgsess"
     cfgtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$cfgfile" | awk '{printf "%s\\n", $0}')
     session="$cfgsess"      # frame() appends to $session
-    frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$cfgroot"'","capabilities":{}}}'
+    frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"'"$cfgrooturi"'","capabilities":{}}}'
     frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
-    frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://'"$cfgfile"'","languageId":"kama","version":1,"text":"'"$cfgtext"'"}}}'
-    frame '{"jsonrpc":"2.0","id":47,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file://'"$cfgfile"'"}}}'
+    frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$cfgfileuri"'","languageId":"kama","version":1,"text":"'"$cfgtext"'"}}}'
+    frame '{"jsonrpc":"2.0","id":47,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"'"$cfgfileuri"'"}}}'
     frame '{"jsonrpc":"2.0","id":48,"method":"shutdown","params":null}'
     frame '{"jsonrpc":"2.0","method":"exit"}'
     "$KAMA" lsp < "$cfgsess" 2>/dev/null || true
@@ -905,10 +912,10 @@ cfgexpect "$CFGTYPO" 'undeclared flag' "a typo'd @compileFor flag is a diagnosti
 : > "$tmp/cfgG"
 session="$tmp/cfgG"
 cfggtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$CFGSRC/app.kama" | awk '{printf "%s\\n", $0}')
-frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$tmp"'","capabilities":{}}}'
+frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"'"$(furi "$tmp")"'","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://'"$CFGSRC"'/app.kama","languageId":"kama","version":1,"text":"'"$cfggtext"'"}}}'
-frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"file://'"$CFGSRC"'/kama.json","type":2}]}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$(furi "$CFGSRC/app.kama")"'","languageId":"kama","version":1,"text":"'"$cfggtext"'"}}}'
+frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$(furi "$CFGSRC/kama.json")"'","type":2}]}}'
 frame '{"jsonrpc":"2.0","id":48,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 CFGG=$("$KAMA" lsp < "$tmp/cfgG" 2>/dev/null || true)
@@ -927,7 +934,7 @@ echo "check-lsp: M6 C0 dynamic watched-file registration"
 #    every non-VS-Code client silently never hears about a manifest change.
 : > "$tmp/cfgH"
 session="$tmp/cfgH"
-frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$tmp"'","capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}}'
+frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"'"$(furi "$tmp")"'","capabilities":{"workspace":{"didChangeWatchedFiles":{"dynamicRegistration":true}}}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 # A RESPONSE to the registration we just sent. It has an id and no method; the dispatch loop must ignore
 # it rather than answer `method not found` addressed to the client's own id, which is a protocol violation.
