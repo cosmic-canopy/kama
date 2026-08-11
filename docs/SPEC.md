@@ -2362,8 +2362,27 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   Wrap<bool, float64> c = Wrap.make(a: true,  b: 3.5);   // U overridden positionally
   Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
   ```
+  Defaults are a **`type`** feature — a `type value`/`resource`/`contract` or a `type enum`. A default
+  fills in an argument the *use site* omitted, and a **function's** type arguments are not written at the
+  use site at all: inference reads them off the arguments, or a turbofish spells them. So there is nothing
+  for a default to fill in, and `fn f<T = int32>()` is an error naming that
+  (`tests/xfail/fn_type_param_default`).
+
   Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
   self-documenting named `ctor` (`Map.withAllocator(allocator: …)`) covers that need instead.
+- **A type parameter may not shadow a visible type.** A type parameter is a binder, so `fn area<Point>(…)`
+  would declare a fresh `Point` and make the real one unreachable inside that declaration — legal in Rust
+  and C++, and silent in both. kama rejects it and says so, because the failure otherwise surfaces as a
+  C-compiler error about the substituted type. Visibility is the declaration's own: a type it declares,
+  imports, aliases or gets from the prelude all count (`tests/xfail/type_param_shadows_type`).
+- **A name is declared once per namespace** — kama has no overloading, so a second `fn` of the same name
+  is an error naming both declaration sites, for a plain function and a generic template alike. `extern`
+  is exempt on both sides: re-declaring a C entry point in each module that calls it is what an `extern`
+  is for (`tests/xfail/dup_fn`, `tests/xfail/dup_generic_fn`).
+- **Specialization is a non-goal.** There is no way to give one generic function a second body for a
+  particular concrete type argument, and there will not be — the mechanism for a per-type body is a
+  `contract` (plus `type intrinsic` for a primitive), which is what `std::math`'s `Real` is. Reasoning in
+  [ROADMAP.md](ROADMAP.md) § *Deferred language bits*.
 
 ## Access control ✅
 

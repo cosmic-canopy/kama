@@ -41,10 +41,13 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **Campaign 2 — full generic specialization** | §1.2.1 | ► **NEXT** |
-| 2 | Campaign 3 — const generics on types | §1.2.2 | ↓ |
-| 3 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 4 | stdlib parity M2b / M2c | §3 | |
+| **1** | **Campaign 2 — const generics on types** | §1.2.1 | ► **NEXT** |
+| 2 | Campaign 3 — derived view-escape check | §1.2.2 | ↓ |
+| 3 | stdlib parity M2b / M2c | §3 | |
+
+**Full generic specialization is a declared non-goal** and no longer sits at the head of this table —
+the reasoning is in §2, and the three defects that scoping it exposed have shipped. What was four
+campaigns is three.
 
 Mandatory braces **shipped** (record in [SPEC.md](SPEC.md#control-flow-)) — the last breaking source change
 before the tag. It used to sit here paired with `kama fmt`, on the argument that the formatter was its
@@ -84,16 +87,29 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **The CONTRACT MODEL — three campaigns left of four**, briefed in
+2. **The CONTRACT MODEL — two campaigns left**, briefed in
    [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — several
    design points were revised once the code existed; delete the file when the last campaign ships).
-   Campaign 1 **shipped** — what the language now *is* lives in [SPEC.md](SPEC.md). Run the rest in order,
-   each its own session, **before M2b**:
-   1. **Full generic specialization** — universal, concrete-args-only (so any two are identical or
-      disjoint; no specificity lattice). Polymorphism for generic *functions*.
-   2. **Const generics on types** — `constParams` is parsed but never read, and a const param cannot be
-      a runtime value (silent bad C today). Unblocks `Fixed16_16` → `Fixed<intBits, fracBits>`.
-   3. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
+   Campaign 1 **shipped** — what the language now *is* lives in [SPEC.md](SPEC.md). The planned second
+   campaign, full generic specialization, is a **declared non-goal** (§2). Run the rest in order, each
+   its own session, **before M2b**:
+   1. **Const generics on types.** Three blockers, two of them compiler bugs in their own right, and
+      the "const param cannot be a runtime value" one is **wider than it was written down as** — it hits
+      *functions* too, not only types:
+      - `fn int32 shifted<const F: int32>(int32 x) { return x >> F; }` builds `_constSubst` (a
+        function's `constParams` *is* read) and still emits `use of undeclared identifier 'F'`, because
+        `emitExpression`'s identifier branch never consults it.
+      - `type value Fixed<const F: int32>` fails the same way for a *second, distinct* reason:
+        `ClassDeclarationNode::constParams` has no reader at all, so `_constSubst` is never populated.
+        The instance still monomorphizes correctly, because mangling reads the type ARGUMENT rather
+        than that list — which is why the gap hid.
+      - No **type-level selection** to map `I+F` onto a backing width, and no "next wider type" for the
+        multiply. The genuine design question.
+
+      Both value-use failures surface as a raw clang error with **no kama diagnostic**, so this is
+      silent bad codegen and worth fixing regardless of `Fixed`. Unblocks `Fixed16_16` →
+      `Fixed<intBits, fracBits>`.
+   2. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
 
 3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
    [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
@@ -162,9 +178,35 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   — for the case it would serve, a generic **contract** is the better tool anyway: it monomorphizes to a
   direct inlinable call where an `fnptr` is an indirect one, and a comparator object can carry state,
   which matters because kama has no capturing closures. `std::collections`' `Order<T>` is the worked
-  example. Additive and non-breaking, so it costs nothing to wait. **Revisit alongside the full
-  specialization campaign** (§1) — a concrete-args specialization covers the per-type-body case a generic
-  `fnptr` would otherwise be reached for.
+  example. Additive and non-breaking, so it costs nothing to wait. *(This used to defer itself "alongside
+  the full specialization campaign", on the argument that a concrete-args specialization would cover the
+  per-type-body case an `fnptr` gets reached for. That campaign is now a non-goal — see the entry below —
+  and it changes nothing here: the generic-contract answer never depended on it.)*
+
+- **Full generic specialization — a DECLARED NON-GOAL.** It was scheduled as campaign 2 of the contract
+  model ("polymorphism for generic functions, across all types": a second body for a generic function,
+  selected by fully-concrete type arguments, so any two are identical or disjoint). Scoping it against
+  the tree killed it, on three counts:
+  - **It re-opens the hole M6 closed, in a worse form.** Retro-impl (`implements C for T`) was deleted
+    because it let a module reach into a type it does not own. A specialization lets a module reach into
+    a *function* it does not own and change what that function does for a given type — program-wide,
+    invisible at every call site, from any package that can see the generic. Retro-impl at least added a
+    *named method* you could see on the type; a specialization silently replaces a body. Whole-program
+    coherence catches a *duplicate* specialization and does nothing about a single one, which is the
+    dangerous case.
+  - **What is left over is contract design, which is the language's answer already.** `type contract`
+    plus `type intrinsic` covers primitives, `string`, and every type you own — that is exactly what
+    `std::math`'s `Real` is, and [scalar.kama](../lib/std/math/scalar.kama) says so in prose. The
+    genuine remainder is a per-type body for a user type you do **not** own, and unlocking that is the
+    thing we do not want.
+  - **Nothing depends on it.** Const generics' three blockers are all const-generics-on-types issues;
+    the view-escape check is independent; no site in `lib/`, `prelude/`, `tests/`, `examples/` or
+    `bench/` needs it.
+
+  Reopen only if a concrete case appears that a contract genuinely cannot express. Three real defects
+  came out of scoping it and have shipped: a duplicate function declaration was silent (for a generic
+  template the last body simply won), a function type parameter's `= Default` was parsed and dropped,
+  and a type parameter shadowing a visible type said nothing. All three are pinned by `tests/xfail/`.
 
 - **`--no-heap` does not gate container allocation.** The flag rejects `new`, string interpolation,
   `spawn`, `parallel_for` and error boxing (`rejectIfNoHeap`), but a `DynamicArray`/`Map`/`string` growing

@@ -6,8 +6,9 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > ### ►► What this is
 >
 > A design review held during M2a (2026-08-04) that started as "is retro-impl dangerous?" and ended with
-> a coherent model for how *every* kind declares conformance. It schedules **four campaigns**, each its
-> own session, in the order given.
+> a coherent model for how *every* kind declares conformance. It scheduled **four campaigns**, each its
+> own session, in the order given. It is now **three**: the planned second, full generic specialization,
+> is a declared non-goal — see *The campaigns, in order*, and [ROADMAP §2](../ROADMAP.md) for the record.
 >
 > Read the *Corrections* section before re-deriving anything — three plausible-sounding claims were
 > checked against the tree and turned out to be false. **Campaign 1 is part-built — see *Status* below
@@ -467,8 +468,14 @@ Three claims that sounded right and are **false**:
 ## The campaigns, in order
 
 ```
-contract model  ->  full specialization  ->  const generics  ->  view-escape check
+contract model  ->  const generics  ->  view-escape check
 ```
+
+It was four. **Full specialization is a declared non-goal** — the record, and the reasoning, are in
+[ROADMAP §2](../ROADMAP.md). The short version: it re-opens the hole M6 closed (reaching into a
+*function* you do not own is worse than reaching into a *type*, because it replaces a body rather than
+adding a visible method); what it would otherwise buy is contract design, which is what campaign 1 built;
+and nothing in the tree or in the campaigns after it depends on it.
 
 ### 1 · Contract model
 
@@ -481,21 +488,7 @@ Build the design above. Open questions:
    intrinsic). The existing duplicate/clobber checks already have the right shape.
 4. ~~**Migration**~~ — **done (M4)**; the measured outcome is under *Remaining*.
 
-### 2 · Full generic specialization
-
-**Universal, not an intrinsic workaround.** Once conformance is settled this stops being a substitute for
-it and becomes what it is: polymorphism for generic *functions*, across all types.
-
-- **Full, not partial** — a specialization's type arguments must be **fully concrete**: no type
-  parameters, no bounds. Any two are then either identical (a duplicate → clean compile error, the same
-  shape as the existing duplicate-operator rejection) or disjoint. No specificity lattice to define and
-  nothing to prove — this is the sound half of C++'s explicit specialization. `View<int32>` qualifies;
-  `View<T>` does not.
-- Specializing on a **contract bound** is where overlap returns; defer unless a total order proves
-  definable.
-- Confirm the whole-program property (see *Corrections*) also holds on the `kama check` / LSP paths.
-
-### 3 · Const generics → `Fixed<intBits, fracBits>`
+### 2 · Const generics → `Fixed<intBits, fracBits>`
 
 Blocked today by three things, two of which are compiler bugs in their own right:
 
@@ -510,7 +503,7 @@ Blocked today by three things, two of which are compiler bugs in their own right
 (`@generate(of)` is also rejected on generic types, which `Fixed16_16` uses — but that is fixable in
 kama source by hand-writing a ctor.) `Fixed16_16` keeps its name meanwhile precisely to reserve `Fixed`.
 
-### 4 · Derived view-escape check
+### 3 · Derived view-escape check
 
 Nothing verifies that a `view` can satisfy the contract it implements — every `isBorrow` use is at escape
 sites, destructibility or isolate prep, none at the `implements` site. Reject at that site, over the
