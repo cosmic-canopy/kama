@@ -39,6 +39,35 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
     SharedModifierList modifiers, SharedIdentifier head, SharedIdentifier underlying,
     SharedClassBaseDeclaration base, SharedEnumBody body);
 
+/* MANDATORY BRACES — every branch and loop body must be a block.
+ *
+ * A bare body is where `goto fail;`-shaped bugs live: a later edit adds a second statement, it indents
+ * like it belongs to the branch, and it does not. kama has no whitespace rule to fall back on, so the
+ * brace is the only thing that can carry that meaning. Requiring it makes the bug unrepresentable.
+ *
+ * Checked HERE, at parse time, and not in the analysis walk: analysis never visits an uninstantiated
+ * generic or a closure-pruned unit, so a bare body would survive in exactly the code nobody compiles
+ * today. A parse check is total. It is a hand-raised yyerror inside the action rather than a grammar
+ * restriction (`IF LPAREN … RPAREN block`) because bison's generic "expecting LEFT_BRACE" cannot say
+ * WHICH body or why — the punctuation tokens carry no string aliases. Same shape as the `is` check in
+ * type_parameter below.
+ *
+ * A body is braced iff it is a BlockNode, which is sound because the parser NEVER synthesizes one — a
+ * bare body is stored raw on the parent, and the braces appear only at emission (emitBody in
+ * kama.cemit.cpp). A NULL body is `if (x);`: empty_statement has an empty action, so $$ stays
+ * default-constructed. That is the purest form of the bug, so it is rejected, not skipped.
+ *
+ * `else` additionally accepts an `if`. `else if (…) { … }` is one branch chain — the `if` IS the body's
+ * brace — and forcing `else { if (…) { … } }` would nest every chain in the corpus for no safety gain. */
+static void requireBraced(const SharedStatement& body, YYLTYPE* loc, yyscan_t scanner,
+                          const char* what, const char* shape, bool elseArm = false)
+{
+    if (std::dynamic_pointer_cast<BlockNode>(body)) return;
+    if (elseArm && std::dynamic_pointer_cast<IfNode>(body)) return;   /* an `else if` chain link */
+    yyerror(loc, scanner, (std::string("the body of `") + what + "` must be braced -- write `"
+                           + shape + "`").c_str());
+}
+
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
 
 /* LSP source spans (M0). With %locations the lexer stamps each token's true [start,end) into yylloc, so
@@ -1025,12 +1054,24 @@ statement_expression
   | pre_decrement_expression
   | match_expression   /* `match (…) { … };` as a statement (trailing `;`, value discarded) */
   ;
+/* MANDATORY BRACES. Every branch and loop body below — if / else / while / do / for / foreach — must be a
+   `block`. The body is spelled `embedded_statement` here on purpose: the restriction is enforced in the
+   semantic action (requireBraced, in src/kama.y's prologue) rather than in the CFG, so the diagnostic can name the
+   construct and point at the offending body instead of degrading to bison's "expecting LEFT_BRACE". A body
+   that is not a `block` is a PARSE error; so is an empty `;` body. The single exemption is the `else` arm,
+   which also accepts an `if` — that is an `else if` chain link, not a bare body. Rule + rationale:
+   docs/SPEC.md "Control flow"; rejections guarded by tests/xfail/brace_*.kama. */
 selection_statement
   : if_statement
   ;
 if_statement
-  : IF LPAREN boolean_expression RPAREN embedded_statement   { $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, SharedStatement()); }
-  | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement   { $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, $7); }
+  : IF LPAREN boolean_expression RPAREN embedded_statement
+      { requireBraced($5, &@5, scanner, "if", "if (...) { ... }");
+        $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, SharedStatement()); }
+  | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
+      { requireBraced($5, &@5, scanner, "if", "if (...) { ... }");
+        requireBraced($7, &@7, scanner, "else", "else { ... }", /*elseArm*/ true);
+        $$ = std::make_shared<IfNode>(SCANNER_CODEGENCONTEXT, $3, $5, $7); }
   ;
 iteration_statement
   : while_statement
@@ -1039,13 +1080,18 @@ iteration_statement
   | foreach_statement
   ;
 while_statement
-  : WHILE LPAREN boolean_expression RPAREN embedded_statement   { $$ = std::make_shared<WhileNode>(SCANNER_CODEGENCONTEXT,  $3, $5 ); }
+  : WHILE LPAREN boolean_expression RPAREN embedded_statement
+      { requireBraced($5, &@5, scanner, "while", "while (...) { ... }");
+        $$ = std::make_shared<WhileNode>(SCANNER_CODEGENCONTEXT,  $3, $5 ); }
   ;
 do_statement
-  : DO embedded_statement WHILE LPAREN boolean_expression RPAREN SEMICOLON   { $$ = std::make_shared<DoWhileNode>(SCANNER_CODEGENCONTEXT,  $5, $2 ); }
+  : DO embedded_statement WHILE LPAREN boolean_expression RPAREN SEMICOLON
+      { requireBraced($2, &@2, scanner, "do", "do { ... } while (...);");
+        $$ = std::make_shared<DoWhileNode>(SCANNER_CODEGENCONTEXT,  $5, $2 ); }
   ;
 for_statement
-  : FOR LPAREN for_initializer_opt SEMICOLON for_condition_opt SEMICOLON for_iterator_opt RPAREN embedded_statement   { 
+  : FOR LPAREN for_initializer_opt SEMICOLON for_condition_opt SEMICOLON for_iterator_opt RPAREN embedded_statement   {
+      requireBraced($9, &@9, scanner, "for", "for (...; ...; ...) { ... }");
       $$ = std::make_shared<ForNode>(SCANNER_CODEGENCONTEXT, $3, $5, $7, $9); }
   ;
 for_initializer_opt
@@ -1129,8 +1175,8 @@ match_binding
       STAMP_LOC($$->name, @1); }
   ;
 foreach_statement
-  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
-  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
+  : FOREACH LPAREN type IDENTIFIER IN expression RPAREN embedded_statement   { requireBraced($8, &@8, scanner, "foreach", "foreach (T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
+  | FOREACH LPAREN REF type IDENTIFIER IN expression RPAREN embedded_statement   { requireBraced($9, &@9, scanner, "foreach", "foreach (ref T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
   ;
 jump_statement
   : break_statement

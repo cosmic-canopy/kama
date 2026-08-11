@@ -591,12 +591,21 @@ statement_expression
   | pre_decrement_expression
   | match_expression   /* `match (…) ;` as a statement (trailing `;`, value discarded) */
   ;
+/* MANDATORY BRACES. Every branch and loop body below — if / else / while / do / for / foreach — must be a
+   `block`. The body is spelled `embedded_statement` here on purpose: the restriction is enforced in the
+   semantic action (requireBraced, in src/kama.y's prologue) rather than in the CFG, so the diagnostic can name the
+   construct and point at the offending body instead of degrading to bison's "expecting LEFT_BRACE". A body
+   that is not a `block` is a PARSE error; so is an empty `;` body. The single exemption is the `else` arm,
+   which also accepts an `if` — that is an `else if` chain link, not a bare body. Rule + rationale:
+   docs/SPEC.md "Control flow"; rejections guarded by tests/xfail/brace_*.kama. */
 selection_statement
   : if_statement
   ;
 if_statement
   : IF LPAREN boolean_expression RPAREN embedded_statement
+
   | IF LPAREN boolean_expression RPAREN embedded_statement ELSE embedded_statement
+
   ;
 iteration_statement
   : while_statement
@@ -606,9 +615,11 @@ iteration_statement
   ;
 while_statement
   : WHILE LPAREN boolean_expression RPAREN embedded_statement
+
   ;
 do_statement
   : DO embedded_statement WHILE LPAREN boolean_expression RPAREN SEMICOLON
+
   ;
 for_statement
   : FOR LPAREN for_initializer_opt SEMICOLON for_condition_opt SEMICOLON for_iterator_opt RPAREN embedded_statement

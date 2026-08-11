@@ -1408,6 +1408,32 @@ scripting-host interface — is future work; the keyword is live today for the C
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
 is done with `if` / `else if`. There is no `switch` statement.
 
+**Every branch and loop body must be braced.** `if`, `else`, `while`, `do`, `for` and `foreach` each take a
+`{ … }` block — never a bare statement, and never an empty `;`:
+
+```kama
+if (n > 0) { return 1; }        // ok — and a one-line body is fine, the rule is about the braces
+if (n > 0) return 1;            // ERROR: the body of `if` must be braced
+if (n > 0);                     // ERROR: binds the branch to nothing
+```
+
+A bare body is where `goto fail;`-shaped bugs live: a later edit adds a second statement, it indents as
+though it belongs to the branch, and it does not. kama has no whitespace rule to fall back on, so the brace
+is the only thing that can carry that meaning — requiring it makes the bug unrepresentable. The rule is
+about **braces, not line breaks**: `if (x) { return; }` on one line stays legal, because a braced body
+cannot silently acquire a second statement.
+
+The one exemption is **`else if`**. The `else` arm accepts a block *or* another `if`, so a chain stays flat:
+
+```kama
+if (n > 100) { return 4; } else if (n > 10) { return 3; } else { return 0; }
+```
+
+That `if` **is** the branch — it cannot grow a sibling statement the way a bare body can — and requiring
+`else { if (…) { … } }` would nest every chain for no safety gain. `unsafe`, `scope`, `parallel_for` and
+`match` are unaffected: they already require a block (a `match` arm's `case P: expr;` is an expression, not
+a statement body).
+
 ## Type declarations — `value` / `resource` / `view` / `contract` / `enum` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on

@@ -665,6 +665,13 @@ module.exports = grammar({
         $.match_expression,
       ),
 
+    // MANDATORY BRACES — every branch and loop body is a `block`, never a bare statement. kama.y raises
+    // "the body of `if` must be braced" as a PARSE error, so tree-sitter must reject the same inputs:
+    // test/parse-errors.txt is DERIVED from the compiler's parse-vs-semantic split, and this rule lands
+    // on the parse side. The editor flagging a bare body live is the point, not a side effect.
+    //
+    // `else` is the one exemption, and it is not a bare body: the alternative may be a block OR another
+    // `if`, which is an `else if` chain link. prec.right still binds an `else` to the nearest `if`.
     if_statement: ($) =>
       prec.right(
         seq(
@@ -672,8 +679,10 @@ module.exports = grammar({
           '(',
           field('condition', $._expression),
           ')',
-          field('consequence', $._statement),
-          optional(seq('else', field('alternative', $._statement))),
+          field('consequence', $.block),
+          optional(
+            seq('else', field('alternative', choice($.block, $.if_statement))),
+          ),
         ),
       ),
 
@@ -683,13 +692,13 @@ module.exports = grammar({
         '(',
         field('condition', $._expression),
         ')',
-        field('body', $._statement),
+        field('body', $.block),
       ),
 
     do_statement: ($) =>
       seq(
         'do',
-        field('body', $._statement),
+        field('body', $.block),
         'while',
         '(',
         field('condition', $._expression),
@@ -709,7 +718,7 @@ module.exports = grammar({
         ';',
         optional($._statement_expression_list),
         ')',
-        field('body', $._statement),
+        field('body', $.block),
       ),
 
     _for_initializer_declaration: ($) =>
@@ -727,7 +736,7 @@ module.exports = grammar({
         'in',
         field('collection', $._expression),
         ')',
-        field('body', $._statement),
+        field('body', $.block),
       ),
 
     // kama.y:490 — `ref` is MANDATORY (disjoint mutable access is the whole point) and the body must be a

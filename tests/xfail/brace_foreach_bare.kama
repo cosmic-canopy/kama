@@ -1,0 +1,9 @@
+// Mandatory braces: a `foreach` body must be a block. Both arms are checked — `foreach (T e in …)`
+// and `foreach (ref T e in …)`.
+fn int32 main() {
+    InlineArray<int32, 4> a = [1; 4];
+    int32 sum = 0;
+    foreach (int32 e in a)
+        sum = sum + e;   // ERROR: not braced
+    return sum - 4;
+}

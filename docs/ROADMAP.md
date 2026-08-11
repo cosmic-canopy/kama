@@ -41,22 +41,20 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **`kama fmt`, with mandatory braces** | §10, §1 | ► **NEXT** |
-| 2 | Campaign 2 — full generic specialization | §1.2.1 | ↓ |
-| 3 | Campaign 3 — const generics on types | §1.2.2 | |
-| 4 | Campaign 4 — derived view-escape check | §1.2.3 | |
-| 5 | stdlib parity M2b / M2c | §3 | |
+| **1** | **Campaign 2 — full generic specialization** | §1.2.1 | ► **NEXT** |
+| 2 | Campaign 3 — const generics on types | §1.2.2 | ↓ |
+| 3 | Campaign 4 — derived view-escape check | §1.2.3 | |
+| 4 | stdlib parity M2b / M2c | §3 | |
 
-**Why 1 comes before the remaining language campaigns:** one canonical formatting means a diff carries
-only real changes, which makes every campaign after it cheaper to review. Items 2–5 are language work
-that will be done *through* that tool.
+Mandatory braces **shipped** (record in [SPEC.md](SPEC.md#control-flow-)) — the last breaking source change
+before the tag. It used to sit here paired with `kama fmt`, on the argument that the formatter was its
+mechanical migration. Measuring the corpus killed that: 2,116 branch/loop bodies were **already** braced,
+there were **zero** same-line bare bodies, and the entire migration was **2 sites in 1 file**. `kama fmt` is
+therefore an independent item (§10) and no longer gates 1.0 — read its entry before scoping it, because the
+substrate question it used to leave open is now settled in writing.
 
-`kama fmt` and mandatory braces ship together deliberately: the brace rule is a **breaking source change**
-(so it lands pre-1.0 or waits for 2.0), and the formatter is the mechanical migration for it — a tool that
-can insert a brace can perform the rewrite.
-
-Everything else in §10 — **C symbol naming**, debug-build devirtualization, CPU tuning, Marketplace publish
-— stays unscheduled behind these.
+Everything else in §10 — **`kama fmt`**, **C symbol naming**, debug-build devirtualization, CPU tuning,
+Marketplace publish — stays unscheduled behind these.
 
 ## 1. Remaining before 1.0
 
@@ -81,16 +79,6 @@ SHA: assert the tag's `tree-sitter-kama/grammar.js` + `queries/` match the tree.
 dissolves the chicken-and-egg — a content check against a *commit* pin would fail the very commit that
 changes the grammar. `tools/check-editors.sh` §2c today proves only that the rev resolves and carries a
 grammar, never that it is the current one.
-
-**Mandatory braces on every branch and loop body** ► **scheduled with `kama fmt`** (§10; see *Working
-order*) — `if`/`else`/`while`/`for`/`foreach` would require `{ }`, never a bare statement. This is the "easy to use correctly, hard to use incorrectly" argument, and
-it is stronger in kama than in most languages precisely because there is no whitespace rule to fall back
-on: a bare branch body is where `goto fail;`-shaped bugs live, and where a later edit silently attaches a
-second statement to nothing. It is a **breaking source change**, so it lands before the tag or waits for
-2.0. Design questions worth settling first: whether `else if` chains stay exempt (they are the one case
-where the brace adds nothing and nests everything), and whether a single-line `if (x) { return; }` is
-still allowed on one line — the rule should be about the braces, not about line breaks. Pairs naturally
-with the formatter below, which can insert them mechanically for the migration.
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 
@@ -771,18 +759,50 @@ rather than here, so there is one number to keep current. Forward work:
   scripting runtime (§7) is the vehicle — a task written in kama, not a shell string — and that is a
   reason to spend the design budget there rather than here.
 
-- **`kama fmt` — a native formatter, not an external tool.** ► **Scheduled, WITH mandatory braces**
-  (see *Working order*; the brace rule is §1, and this is its migration tool). The language should print itself: one
-  canonical form, applied by the toolchain, so a project never argues about style and a diff never carries
-  noise that is not a change. Driven by the project's `kama.json` (the same manifest that already carries
-  the flag universe and the toolchain pin), with a small, deliberately non-negotiable set of knobs —
-  indent width, line width, brace style — rather than a style language. Baseline behaviour: normalize
-  redundant whitespace, enforce the house layout, and stabilize the shapes that produce spurious diffs
-  (argument lists that wrap, trailing commas, alignment). Two things make this cheaper here than
-  elsewhere: the tree-sitter grammar already parses every accepted file and is checked against the
-  compiler on every run (`tools/check-treesitter.sh`), so the formatter has a trustworthy CST to print
-  from; and `kama fmt --check` is one more guard script. It is also the migration tool for mandatory
-  braces (§1) — the rewrite is mechanical, and a formatter that can insert a brace can perform it.
+- **`kama fmt` — a native formatter, not an external tool.** *(Unscheduled.)* The language should print
+  itself: one canonical form, applied by the toolchain, so a project never argues about style and a diff
+  never carries noise that is not a change. Driven by the project's `kama.json` (the same manifest that
+  already carries the flag universe and the toolchain pin), with a small, deliberately non-negotiable set
+  of knobs — indent width, line width, brace style — rather than a style language. `kama fmt --check` is
+  one more `tools/check-*.sh`, glob-enrolled automatically.
+
+  **This entry used to be scheduled with mandatory braces, and used to argue tree-sitter was the cheap
+  substrate. Both were wrong; the corrections were measured, and are recorded here so they are not
+  re-derived.**
+
+  - **It was never the migration tool.** The brace rule's entire migration was **2 sites in 1 file** —
+    2,116 bodies were already braced and there were zero same-line bare bodies. Braces shipped alone.
+  - **Do NOT link the vendored tree-sitter parser.** `tree-sitter-kama/src/parser.c` is a generated
+    *table* — the only `ts_*` symbols it defines are `ts_lex`/`ts_lex_keywords`. The parsing engine is
+    tree-sitter's **runtime library**, which this repo does not vendor (three headers only; `node_modules/`
+    is gitignored). Linking it means vendoring a third-party C runtime into `src/` permanently *and*
+    making the editor grammar load-bearing for the compiler. The old "the CST is already trustworthy"
+    argument is true and still does not reach that conclusion.
+  - **Use the compiler's own front end.** Comments die in exactly three lexer rules (`kama.l`: the
+    `{reserved_preprocessor}` and `{single_line_comment}` actions, and the `IN_COMMENT` start state).
+    Retaining them is a `vector<Trivia>` on `LexerInstanceData` — the same struct that already carries
+    `identTokens`, an `unordered_set<std::string>` taking *one insert per identifier token on a ~14 ms
+    parse*. At ~8k comments corpus-wide the cost is below measurement noise, and a `bool keepTrivia`
+    gates it to the fmt path anyway. This is also the only route that keeps one parser, and it serves the
+    LSP.
+  - **Byte offsets are not needed** — attaching a comment requires only a *monotonic* position, and
+    `(line, col)` already is one. (An earlier brief claimed the opposite and would have sent the work
+    through a much larger lexer change.)
+  - **The cost is the printer, not the parser.** 72 AST node types; the C emitter needed ~530 dispatch
+    arms over them. `CEmitter::unparseExpr` (`kama.cemit.cpp`) is a partial precedent — it renders
+    expressions back to kama text for `assert` messages — but it covers ~20 node types, is deliberately
+    lossy (`return ""` on anything unhandled), and drops literal spelling (`'a'` → `97`), so it is proof
+    of shape, not a foundation. Retaining raw literal spellings is a prerequisite either way.
+  - **Policy calls to make against a working printer, not in the abstract.** The corpus already agrees on
+    4-space indent (zero tabs), operator/comma spacing, no paren padding, no trailing commas, and ≤1
+    consecutive blank line — a formatter enforcing only those is a near no-op. What it would *change* is
+    the contested part: **6,090** one-line `{ … }` blocks, **1,586** one-line `fn` bodies, **3,486**
+    hand-aligned lines, a de-facto line width of **110** (picking 100 rewraps ~14.5% of the corpus), and
+    brace style — `lib/`, `prelude/` and `examples/` are 100% K&R while `tests/`, `bench/` and, most
+    visibly, both `seed/` templates carry Allman.
+  - **Free leverage:** `tools/check-treesitter.sh` already maintains a 1,000+ file corpus both parsers
+    agree on — a ready-made test set for the two properties that matter, **idempotence**
+    (`fmt(fmt(x)) == fmt(x)`) and **semantic preservation** (reparse, or compare emitted C).
 
 - **A diagnostic raised inside an inlined prelude/lib body reports the USER's filename with the PRELUDE's
   line.** A prelude generic whose bound fails correctly reports it at the call site, then emits a cascade

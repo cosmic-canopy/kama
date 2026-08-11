@@ -14,6 +14,13 @@
 # one pass, diffs against this list, and only asks the compiler about files where the two DISAGREE — so a
 # stale manifest and a wrong grammar are told apart, by name, at no steady-state cost.
 tests/syntax/bad.kama
+tests/xfail/brace_do_bare.kama
+tests/xfail/brace_else_bare.kama
+tests/xfail/brace_for_bare.kama
+tests/xfail/brace_foreach_bare.kama
+tests/xfail/brace_if_bare.kama
+tests/xfail/brace_if_empty_semi.kama
+tests/xfail/brace_while_bare.kama
 tests/xfail/enum_bare_spelling.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/float_bare_dot.kama

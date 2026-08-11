@@ -1,0 +1,8 @@
+// Mandatory braces: `do` is checked on its body, which precedes the `while` clause.
+fn int32 main() {
+    int32 x = 0;
+    do
+        x = x + 1;   // ERROR: not braced
+    while (x < 4);
+    return 0;
+}

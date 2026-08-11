@@ -1,0 +1,8 @@
+// Mandatory braces: a branch body must be a block. A bare body is the `goto fail;` shape — a later
+// edit adds a second statement, it indents like it belongs to the branch, and it does not.
+fn int32 main() {
+    int32 x = 1;
+    if (x > 0)
+        return 1;   // ERROR: not braced
+    return 0;
+}

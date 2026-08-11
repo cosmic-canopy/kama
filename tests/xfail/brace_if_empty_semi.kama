@@ -1,0 +1,8 @@
+// Mandatory braces, the emptiest case: `if (x);` binds the branch to NOTHING and the statement after it
+// runs unconditionally. It parses to a null body (empty_statement has an empty action), so the check must
+// reject a null body rather than skip it — this is the purest form of the bug the rule exists to kill.
+fn int32 main() {
+    int32 x = 1;
+    if (x > 0);
+    return 0;
+}
