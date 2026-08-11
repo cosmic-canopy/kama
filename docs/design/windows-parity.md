@@ -8,8 +8,11 @@ branch can be pushed.*
 
 **Windows is green.** `./run_tests.sh` on real hardware (msys2/UCRT64, ARM64 host, x86_64 toolchain):
 **972 passed, 0 failed**, 906 s wall. It was 970/2 at the start of this campaign and 923/48 before
-the triage that preceded it. Items 1–3 are done; **4 and 5 are what is left**, and neither blocks a
-push — they are gaps, not regressions.
+the triage that preceded it.
+
+**One item is left: #4, static runtime linking.** It is a gap, not a regression — nothing is broken,
+a threaded program simply is not distributable off this machine yet. The tree is pushable as it
+stands; #4 is the last thing that needs *this* machine.
 
 The invocation that works, from outside msys2 (this cost a session once — see
 [../platforms/windows.md](../platforms/windows.md), which now explains why both halves are needed):
@@ -29,27 +32,26 @@ campaign, and every one of them was a wrong diagnosis first.
 |---|------|--------|
 | 1 | `check-lsp` — the `@compileFor` manifest-flag assertions | **done** — `f47d5a2` |
 | 2 | `check-packages` — the free-rider check fires on Windows | **done** — `96f688b`, `ce61944` |
-| 3 | Drop `continue-on-error` from the `windows-test` job | **done** — needs one GitHub setting, below |
-| 4 | Static runtime linking for USER programs | not started |
-| 5 | The literal initializer/comparison asymmetry | not started |
+| 3 | Drop `continue-on-error` from the `windows-test` job | **done** — `0daa00e`, plus one GitHub setting |
+| 4 | Static runtime linking for USER programs | ◄ **the only thing left** |
+
+The literal initializer/comparison asymmetry was fifth in the original order and **has left this
+campaign**. It is platform-independent, it was only ever here because this is where it was found, and
+a Windows test cycle is ~906 s against ~75 s in the container. It lives in
+[../ROADMAP.md](../ROADMAP.md)'s known-issues list, with a warning that its recorded cause does not
+survive arithmetic. Do it on the Mac.
 
 **The house rule earned its keep three times today.** Item 1 was recorded as 6 assertions and was 12.
 Item 2's hypothesis was right but hid a second failure behind it. The invocation this page opens with
 was wrong in `platforms/windows.md` until someone ran it. **Items 4 and 5 below are read, not run** —
 item 5 in particular records a cause that does not survive first contact with the existing fixture.
 
-### Suggested split for the two remaining sessions
-
-- **Item 4 alone.** It is a language-surface decision (the opt-out spelling) plus a driver change plus
-  a fixture plus a `docs/targets.md` entry. It is the only item here that adds user-visible surface,
-  so it wants the room to survey prior art properly.
-- **Item 5 alone.** It starts with a reproduction, not a fix, and may end in `docs/SPEC.md`. It is
-  platform-independent and could equally be done on the Mac — **nothing about it needs Windows**, so
-  if the goal is to get off this machine, item 5 is the one to take with you.
+**Item 4 is read, not run.** Its source citations below were verified by reading; the DLL dependency
+it describes has not been reproduced on this hardware. Reproducing it is step one — see its section.
 
 ---
 
-## 1. `check-lsp` — 6 assertions in the `@compileFor` manifest-flag section
+## 1. `check-lsp` — 12 assertions in the `@compileFor` manifest-flag section
 
 **Symptom.** The server does not pick up the project manifest's flags, so the editor and the CLI
 disagree about which declarations a build keeps: `lsp: [always onlyWithoutA] cli: [always onlyWithA]`.
@@ -152,9 +154,34 @@ a release must not be blocked by it, which is the macos-13 lesson its own commen
 
 ## 4. Static runtime linking for USER programs
 
-**The gap.** `src/kama.driver.cpp:7241-7251` emits `-lpthread` for every non-wasm target; on
-mingw-w64 that is `libwinpthread-1.dll` out of the msys2 tree. Any program using `isolate` /
-`parfor` / `channel` dies with `STATUS_DLL_NOT_FOUND` on a machine without msys2. This is the
+### Step 0 — reproduce it. This has been READ, not RUN.
+
+Nothing below has been observed on this hardware. Before designing anything, build a threaded fixture
+and look at what it actually links:
+
+```sh
+MSYSTEM=UCRT64 /c/msys64/usr/bin/bash.exe -lc 'pushd /c/Users/matt/Documents/kama >/dev/null;
+  ./kama build tests/<a fixture using isolate/parfor/channel>.kama -o /tmp/t.exe &&
+  objdump -p /tmp/t.exe | grep "DLL Name"'
+```
+
+Two things to establish, because they change the size of the job:
+
+1. **Does `libwinpthread-1.dll` actually appear?** The host toolchain here is
+   `mingw-w64-ucrt-x86_64-clang`. If it links winpthread statically already, the reproduction needs a
+   different trigger (or the gap is narrower than recorded).
+2. **What else is in the list besides system DLLs?** `libc++`/`libunwind`/`libgcc_s_seh-1` would each
+   widen the fix. The compiler's own `Makefile` needed plain `-static` to sweep all of them.
+
+The decisive test is not `objdump` but **running the `.exe` in a plain `cmd.exe` with msys2 off
+`PATH`** — that is where the original `STATUS_DLL_NOT_FOUND` lived, and it is the only check that
+proves the artifact is distributable.
+
+### The gap, as recorded
+
+`src/kama.driver.cpp:7270-7278` emits `-lpthread` for every non-wasm target; on mingw-w64 that
+resolves to `libwinpthread-1.dll` out of the msys2 tree. Any program using `isolate` / `parfor` /
+`channel` should therefore die with `STATUS_DLL_NOT_FOUND` on a machine without msys2. This is the
 largest remaining gap for anyone actually shipping kama on Windows — a game engine is not
 distributable until it is closed.
 
@@ -162,62 +189,65 @@ distributable until it is closed.
 and its comment is the best statement of the problem in the repo. There is **no `-static` anywhere in
 the driver** today.
 
-**Decided with the user (2026-08-11): default static, with a real opt-out.** kama is a language, and
-a language does not get to YAGNI its way out of a user who legitimately wants the DLL. The default
-goes in the link tail beside the existing `-lws2_32` (`:7256`), gated on `g_target.isWindows()` —
-the *target*, so a cross-compile gets it too, and only Windows, because `-static` on Linux would
-statically link glibc, which is not the intent. The rule being applied is "link non-system runtime
-statically, system components dynamically", a no-op where libc *is* the system.
+⚠️ **Line numbers in this section were re-derived after `ce61944`**, which added ~39 lines near the
+top of `kama.driver.cpp`. Anything quoted from an older note will be off by that much.
 
-**The opt-out spelling is the design work.** `--shared` is taken (it selects a shared-library
-*output*). Survey prior art first — the close analogues are Rust's `-C target-feature=+crt-static`
-(a *target* property), Zig's `-static` / `-dynamic`, and CMake's `MSVC_RUNTIME_LIBRARY`. Two real
-seams exist in the driver:
+### The default
 
-1. **A `TargetSpec` field.** `TargetSpec` (`:1280-1294`) already carries `cc`, `ar`, `sysroot`,
-   `cflags`, `ldflags` — toolchain properties, which is what runtime linkage is. Needs the field, a
-   `kama.json` target key parsed beside `cflags` (`:1961-1962`) and merged (`:1471-1472`), a CLI
-   flag, and a `docs/targets.md` entry next to the `cflags` guidance (`:232`).
-2. **A built-in select group**, following `OUTPUT` (`:1424-1429`; `--shared` is sugar for
-   `--select OUTPUT=SHARED`, resolved at `:6370-6377`). ⚠️ **Known trap:** the flag namespace is
-   *flat* — a group's values land in `g_activeFlags` as bare strings (`:2571`, `:2590`, `:2649`), so
-   a `RUNTIME` group valued `STATIC`/`DYNAMIC` **collides with `OUTPUT=STATIC`**. It would need
-   non-colliding value names, and it would expose linkage to `@compileFor`, where source has no
-   business branching on it.
+**Decided with the user (2026-08-11): static by default, with a real opt-out.** kama is a language,
+and a language does not get to YAGNI its way out of a user who legitimately wants the DLL. The
+default goes in the link tail beside the existing `-lws2_32` (`kama.driver.cpp:7293`), gated on
+`g_target.isWindows()` — the *target*, so a cross-compile gets it too, and only Windows, because
+`-static` on Linux would statically link glibc, which is not the intent. The rule is "link non-system
+runtime statically, system components dynamically", a no-op where libc *is* the system.
 
-Either way `g_target.ldflags` is already appended last (`:7257-7259`) and stays the escape hatch of
-last resort.
+### The opt-out spelling — this is the design work
 
-**Verify.** Build a threaded fixture, then `objdump -p | grep 'DLL Name'` (or `dumpbin /dependents`)
-and confirm only system DLLs remain. The decisive test is running the `.exe` **outside** the msys2
-shell — a plain `cmd.exe` with msys2 off `PATH` — because that is where the original failure lived.
-Add a fixture for the opt-out. Then delete the known-issues entry at `docs/ROADMAP.md` ("A threaded
-kama program is not standalone on Windows"). The console-subsystem entry beside it is a **sibling,
-not part of this**, and stays.
+`--shared` is taken; it selects a shared-library *output*, an orthogonal axis. **Survey prior art
+before choosing.** The close analogues, and they disagree with each other, which is the point:
 
----
+| | spelling | what it says about the model |
+|---|---|---|
+| Rust | `-C target-feature=+crt-static` / `-crt-static` | linkage is a property of the **target**, toggled per-target |
+| Zig | `-static` / `-dynamic` | linkage is a **build mode**, one axis, both directions named |
+| CMake | `MSVC_RUNTIME_LIBRARY`, `BUILD_SHARED_LIBS` | linkage is a **per-artifact property** |
+| Go | `CGO_ENABLED=0`, `-linkmode` | linkage falls out of a **toolchain** choice |
 
-## 5. The literal initializer/comparison asymmetry
+Two real seams exist in the driver:
 
-Platform-independent and unrelated to Windows; last only because nothing is blocked on it. The
-known-issues entry reports `uint32 x = 2147483648;` then `x != 2147483648` comparing **unequal**.
+1. **A `TargetSpec` field** — the starting recommendation. `TargetSpec` (`kama.driver.cpp:1317`)
+   already carries `cc`, `ar`, `sysroot`, `cflags`, `ldflags`: toolchain properties, which is what
+   runtime linkage is, and it matches Rust's model. Needs the field, a `kama.json` target key parsed
+   beside `cflags` (`:1999`) and merged (`:1509`), a CLI flag, and a `docs/targets.md` entry next to
+   the `cflags` guidance (`docs/targets.md:232`).
+2. **A built-in select group**, following `OUTPUT` (`seedBuiltinSelectGroups`, `:1454`; `--shared` is
+   sugar for `--select OUTPUT=SHARED`, resolved at `:6409`). ⚠️ **Known trap, verified:** the flag
+   namespace is *flat* — a group's values land in `g_activeFlags` as bare strings (`:2608`, `:2627`,
+   `:2686`), so a `RUNTIME` group valued `STATIC`/`DYNAMIC` **collides with `OUTPUT=STATIC`**. It
+   would need non-colliding value names, and it would expose linkage to `@compileFor`, where source
+   has no business branching on it.
 
-**Reproduce before theorizing.** The recorded cause — the comparison's literal narrowing through
-`Int32Node` (`src/kama.y:485-490`, where every unsuffixed literal is unconditionally an `Int32Node`,
-plus the duplicate production at `:535`) — does not by itself explain the symptom:
-`tests/int_literal_wide.kama` already proves `assigned != 4294967295` compares **equal** through that
-same path, because C's usual arithmetic conversions turn the truncated `int32_t` back into the right
-`uint32_t`. Something more specific happens near `INT32_MAX`. Write the failing case, watch it fail,
-and **read the emitted C** before touching the grammar.
+Either way `g_target.ldflags` is already appended last (`:7295`) and stays the escape hatch of last
+resort. Note it cannot cleanly *undo* a `-static` that the driver already emitted — which is part of
+why the opt-out needs to be a real switch rather than "put it in ldflags".
 
-**Candidate fix, not a decision.** Pick the literal's node type from its *value* — the C ladder,
-widening rather than truncating — rather than teaching the parser the target type. That is a language
-semantics call: check it against `docs/GOALS.md` and write it into `docs/SPEC.md`.
+### Verify
 
-**Verify.** Extend `tests/int_literal_wide.kama` (or add a sibling) across initializer, assignment
-and comparison at `INT32_MAX`, `INT32_MAX+1` and `UINT32_MAX`, decimal and hex. If the resolution
-makes some spelling *rejected*, that needs a `tests/xfail/` fixture in the same commit — a negative
-claim with no fixture is not a claim.
+- `objdump -p out.exe | grep 'DLL Name'` shows only system DLLs.
+- **Run the `.exe` in a plain `cmd.exe` with msys2 off `PATH`.** This is the one that matters; the
+  original failure was `STATUS_DLL_NOT_FOUND` at process start, which no build-time check catches.
+- A fixture for the opt-out, and one for the default.
+- Nothing regressed on macOS/Linux — the gate is `g_target.isWindows()`, so it should be inert there,
+  but `./dev test` on the Mac is what proves it.
+
+### When it lands
+
+Delete the `docs/ROADMAP.md` known-issues entry "A threaded kama program is not standalone on
+Windows". The **console-subsystem** entry beside it (`-mwindows`, every emitted binary is CONSOLE
+subsystem) is a sibling and **stays** — it is the same question, "what shape is a Windows
+application", but it is not this item and has its own unresolved design call.
+
+Then this campaign is over: close out below.
 
 ---
 
@@ -228,10 +258,14 @@ claim with no fixture is not a claim.
    to be **`build + test (windows-x64)`**; the job's `name:` lost its `, best-effort` suffix in
    `0daa00e`. If they do not use required checks, item 3 is already complete as it stands: the run
    goes red, which is the whole of what the workflow file can do.
-1. `./dev matrix` on Windows, and again on macOS before switching back.
+1. `./run_tests.sh` on Windows (`./dev matrix` also wants the container legs, which need Docker and
+   are not available on this box — `./dev test` + `./dev check` is the local gate here).
 2. Delete this file.
 3. Shrink `docs/ROADMAP.md` §3's Windows entry to whatever genuinely remains — the wall-clock note
    and the long-path / console-subsystem known issues, at minimum.
-4. Update the closing pointer in `docs/platforms/windows.md`, which names the two failing guards and
-   the three application-shape items and will be stale.
-5. That deletion commit is the push signal.
+4. Re-check the closing pointer in `docs/platforms/windows.md`. It no longer names the two fixed
+   guards, but it still names runtime linking; that line goes when item 4 does.
+5. `./dev test` on the Mac before switching back, because item 4 touches the shared link tail.
+
+**The tree is already pushable** — 972/0, clean, nothing half-applied. Deleting this file is the
+signal that Windows is *finished*, not the signal that it is safe to push.

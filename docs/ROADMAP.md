@@ -115,18 +115,22 @@ Everything else here is library or toolchain work that does **not** gate the tag
      (WebSocket `permessage-deflate`, HTTP `Content-Encoding`). Pairs naturally with the binary serde backend
      (crushes its field-name redundancy). (Engine-level replication — snapshots/deltas/dirty-tracking — stays
      above this, in the engine.)
-   - **⚠️ Windows CI: 2 guard failures from green, then promote to required.** Triaged on real Windows
-     hardware (2026-08-11, msys2/UCRT64) — **970 passed, 2 failed**, from 923/48, with **no fixture
-     failures left**. The leg is still `continue-on-error`. Environment and gotchas:
-     [platforms/windows.md](platforms/windows.md).
+   - **Windows: one item from closed.** The suite is **green on real hardware** — 972 passed, 0 failed
+     (2026-08-11, msys2/UCRT64), from 970/2 and 923/48 before that — and the `windows-test` leg is no
+     longer `continue-on-error`. Environment and gotchas: [platforms/windows.md](platforms/windows.md).
 
-     The five remaining items, their order (which is load-bearing — the CI flip is third, and doing it
-     earlier means the first *required* run fails on failures already known), and the evidence gathered
-     for each live in **[design/windows-parity.md](design/windows-parity.md)**, the campaign's live
-     tracker. **That file's deletion is the signal that Windows is closed**; this entry shrinks to
-     whatever is genuinely left at that point.
+     What is left is **static runtime linking for user programs**: a threaded program links
+     `libwinpthread-1.dll` out of the msys2 tree and is not distributable off the machine that built
+     it. It is a gap, not a regression, and it needs a Windows box. It — with its source reading, the
+     opt-out design question, and the reproduction that has *not* been done yet — is in
+     **[design/windows-parity.md](design/windows-parity.md)**. **That file's deletion closes Windows**;
+     this entry shrinks to whatever is genuinely left at that point.
 
-     Remaining wall-clock: the suite is ~850 s here vs ~75 s in the container. `kama build -j` now
+     ⚠️ The literal initializer/comparison asymmetry was fifth in that order and **left this campaign**:
+     it is platform-independent, and a Windows test cycle is ~906 s against ~75 s in the container. It
+     is in the known-issues list below, to be done on macOS or Linux.
+
+     Remaining wall-clock: the suite is ~906 s here vs ~75 s in the container. `kama build -j` now
      parallelizes on Windows (1.65x on 17 TUs), but `run_tests.sh` pins `KAMA_BUILD_JOBS=1` and fans out
      per fixture, so that win does not reach the suite. The per-fixture cost is the C compile plus Windows
      process startup, not — as previously recorded here — a connect/accept timeout: `net_addr_ctor` opens
@@ -312,8 +316,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   number stop agreeing. Turned up while writing `tests/int_literal_wide.kama` for the LLP64 `strtol`
   saturation bug (fixed: the grammar uses `strtoll` now, so every host agrees). This one is a SEPARATE
   path — the literal's type is decided without consulting the target type — and is deliberately not
-  bundled with that fix. It is platform-independent. The fixture covers only the assignment path it was
-  written for and says so; a fixture for this belongs with the fix.
+  bundled with that fix. The fixture covers only the assignment path it was written for and says so;
+  a fixture for this belongs with the fix.
+
+  **Platform-independent — do this on macOS or Linux, NOT on Windows.** It was carried in the Windows
+  close-out order only because that is where it was found, and a Windows test cycle is ~906 s against
+  ~75 s in the container. Nothing about it needs that machine.
+
+  ⚠️ **Reproduce before trusting the cause above.** The stated mechanism does not survive arithmetic:
+  if the comparison's literal narrows through `Int32Node`, then `2147483648` becomes `-2147483648`,
+  and C's usual arithmetic conversions turn that back into `2147483648` against a `uint32` — which is
+  exactly why `tests/int_literal_wide.kama` PASSES its `assigned != 4294967295` case through that same
+  narrowing. By that reasoning this case should pass too. So either the symptom or the cause is
+  misrecorded here. Write the failing case, watch it fail, and read the emitted C before touching
+  `kama.y`.
 - **Every Windows binary kama emits is CONSOLE subsystem, including GUI programs.** Double-clicking the
   native `examples/webgpu` triangle opens TWO windows: the console Windows creates for a console-subsystem
   PE, and then the actual graphics window GLFW opens on top of it. Verified with `file` — `triangle.exe`

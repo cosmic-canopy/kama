@@ -114,6 +114,16 @@ Worth knowing before debugging, because each of these produced a confident wrong
 
 ## Where the remaining work is
 
-[ROADMAP.md](../ROADMAP.md) — §3 for the two guards still failing (`check-lsp`'s `@compileFor` section
-and `check-packages`' free-rider check), and the known-issues list for the three items about what
-shape a Windows *application* is: console subsystem, runtime linking, and which DLLs must ship.
+**The suite is green here: 972 passed, 0 failed** (`./run_tests.sh`, ~906 s). The two guards that were
+failing — `check-lsp`'s `@compileFor` section and `check-packages`' free-rider check — are fixed, and
+the `windows-test` CI leg is no longer `continue-on-error`.
+
+What is left is not a regression but a gap: **what shape a Windows *application* is.** One item is
+in flight and the rest are parked:
+
+- **Runtime linking** — a threaded program links `libwinpthread-1.dll` out of the msys2 tree and is
+  not distributable off this machine. In flight: [design/windows-parity.md](../design/windows-parity.md),
+  which is deleted when it ships.
+- **Console subsystem** — every emitted binary is CONSOLE subsystem, so a GUI program opens a console
+  it never asked for. Parked in [ROADMAP.md](../ROADMAP.md)'s known-issues list.
+- **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Also parked there.
