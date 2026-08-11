@@ -110,6 +110,29 @@ namespace {
 
 int runCmd(const std::string& cmd);   // fwd decl (defined below) — used by linkDir on Windows
 
+// The directory for throwaway files, asked the way each platform actually answers.
+//
+// `TMPDIR` is the POSIX spelling and was once the only one consulted here, with `/tmp` as the fallback.
+// Nothing on Windows sets TMPDIR — not the OS, not msys2 — so `kama run` fell through to the literal
+// `/tmp`, which a NATIVE tool reads as `\tmp` on the current drive. On the CI runner that drive is D:,
+// `D:\tmp` does not exist, and the link died with "cannot open output file". On a dev box `C:\tmp` often
+// DOES exist, which is worse: it appeared to work while filling a directory nobody owns. Windows sets
+// `TMP`/`TEMP` for every session, and msys2 rewrites both to Win32 paths when it spawns a native child,
+// so those are the question to ask. (Not GetTempPathA: <windows.h> is banned in this TU — see the
+// include block at the top.) Normalized to '/' for the reason absolutePath() normalizes.
+std::string tempDir()
+{
+    const char* td = getenv("TMPDIR");
+#ifdef _WIN32
+    if (!(td && *td)) td = getenv("TMP");
+    if (!(td && *td)) td = getenv("TEMP");
+#endif
+    std::string d = (td && *td) ? td : "/tmp";
+    for (char& c : d) if (c == '\\') c = '/';
+    if (!d.empty() && d.back() == '/') d.pop_back();
+    return d;
+}
+
 std::string absolutePath(const std::string& path)
 {
     char buf[PATH_MAX];
@@ -3027,13 +3050,93 @@ int runCmdsParallel(const std::vector<std::string>& cmds, int jobs, std::vector<
     if (cmds.empty()) return 0;
 
 #if defined(_WIN32)
-    // No posix_spawn/waitpid; `-j` is clamped to 1 on Windows, so this is the only path taken there.
-    (void)jobs;
-    for (size_t i = 0; i < cmds.size(); ++i) {
-        rcs[i] = runCmd(cmds[i]);
-        if (rcs[i] != 0) return rcs[i];
+    // The Windows pool. This used to run the wave SERIALLY and `-j` was clamped to 1 above, on the
+    // grounds that there is no posix_spawn/waitpid here — so a 16-TU program compiled one TU at a time
+    // no matter what the user asked for, on the platform where process startup is most expensive. That
+    // is the single largest lever on Windows build time.
+    //
+    // Two documented CRT calls do it, both from <process.h>, which is already included: _spawn with
+    // _P_NOWAIT starts a child without blocking, and _cwait reaps one. No <windows.h>, which cannot come
+    // into this TU (its token macros collide with kama.parser.hpp's enum).
+    //
+    // ⚠️ Each command goes through a generated .bat rather than being passed to `cmd /c` as an argument.
+    // The command is a SHELL STRING carrying its own quotes (`"…/zig" cc`, `-o "out dir/x.o"`), and the
+    // CRT builds a child's command line by quoting each argv entry and escaping inner quotes with
+    // backslashes — rules cmd.exe does not use. `cmd /c "clang \"a b.c\""` reaches clang with the
+    // backslashes intact. A file has no such layer: cmd reads the line verbatim. It also keeps the
+    // POSIX branch's contract that a "compiler" is a shell string, not a tokenized argv.
+    if (jobs < 1) jobs = 1;
+    if (jobs == 1) {
+        for (size_t i = 0; i < cmds.size(); ++i) {
+            rcs[i] = runCmd(cmds[i]);
+            if (rcs[i] != 0) return rcs[i];
+        }
+        return 0;
     }
-    return 0;
+
+    // Which cmd.exe, and found how. %COMSPEC% is the right answer when it is set — but an msys2 shell
+    // does NOT export it, so this cannot rely on it. (Asking cmd.exe to print %COMSPEC% says it is set;
+    // that is cmd defining the variable for itself, not evidence about kama's environment.) Fall back to
+    // %SystemRoot%, and finally to the bare name resolved through PATH by _spawnLP — the `p` matters,
+    // because _spawnl does no PATH search at all and failed with ENOENT for every job in the wave.
+    std::string comspecBuf;
+    if (const char* cs = getenv("COMSPEC")) { if (*cs) comspecBuf = cs; }
+    if (comspecBuf.empty()) {
+        if (const char* sr = getenv("SystemRoot")) { if (*sr) comspecBuf = std::string(sr) + "\\System32\\cmd.exe"; }
+    }
+    if (comspecBuf.empty()) comspecBuf = "cmd.exe";
+    const char* comspec = comspecBuf.c_str();
+
+    const std::string base = tempDir() + "/kama-j-" + std::to_string((long)getpid()) + "-";
+    std::vector<std::string> bats(cmds.size());
+    struct Live { intptr_t h; size_t idx; };
+    std::vector<Live> live;          // in LAUNCH order; reaped from the front
+    size_t next = 0;
+    bool stop = false;
+    int firstFail = 0, firstFailIdx = -1;
+
+    auto reapFront = [&]() {
+        int status = 0;
+        Live l = live.front();
+        live.erase(live.begin());
+        // _cwait waits for ONE named child — there is no wait-for-any here without <windows.h> — so the
+        // pool reaps in launch order. It still keeps `jobs` compiles in flight, which is where the win
+        // is; the only cost is that a slot behind an unusually slow job opens later than it could.
+        if (_cwait(&status, l.h, 0) == -1) status = 1;
+        rcs[l.idx] = status;
+        remove(bats[l.idx].c_str());
+        if (status != 0 && (firstFailIdx < 0 || (int)l.idx < firstFailIdx)) {
+            firstFail = status; firstFailIdx = (int)l.idx;
+            stop = true;   // stop LAUNCHING; drain what is already running (see the note above)
+        }
+    };
+
+    while (next < cmds.size() || !live.empty()) {
+        while (!stop && next < cmds.size() && (int)live.size() < jobs) {
+            bats[next] = base + std::to_string((unsigned long)next) + ".bat";
+            {
+                std::ofstream b(bats[next], std::ios::binary | std::ios::trunc);
+                if (!b) { rcs[next] = 1; firstFail = 1; firstFailIdx = (int)next; stop = true; ++next; break; }
+                // @echo off so the command is not echoed into the compiler's own diagnostics.
+                b << "@echo off\r\n" << cmds[next] << "\r\n";
+            }
+            // BACKSLASHES for the spawn argument. Everything else in this driver joins paths with '/',
+            // and the CRT file APIs accept that — but this string is handed to cmd.exe as the command to
+            // RUN, and cmd reads a leading '/' as a switch introducer, so a forward-slash path is not a
+            // program to it. The children simply failed, silently, and the wave produced no objects.
+            std::string batArg = bats[next];
+            for (char& c : batArg) if (c == '/') c = '\\';
+            intptr_t h = _spawnlp(_P_NOWAIT, comspec, comspec, "/c", batArg.c_str(), (const char*)NULL);
+            if (h == -1) { rcs[next] = 1; remove(bats[next].c_str());
+                           if (firstFailIdx < 0) { firstFail = 1; firstFailIdx = (int)next; }
+                           stop = true; ++next; continue; }
+            live.push_back(Live{h, next});
+            ++next;
+        }
+        if (live.empty()) break;
+        reapFront();
+    }
+    return firstFail;
 #else
     if (jobs < 1) jobs = 1;
 
@@ -6782,26 +6885,7 @@ int main(int argc, char** argv)
         // removes afterward (mirrors the store staging name at fetchToStore). Force the output there so any
         // stray `-o` can't leave an artifact behind.
         if (runMode) {
-            // The temp directory, asked the way each platform actually answers.
-            //
-            // `TMPDIR` is the POSIX spelling and was the only one consulted here, with `/tmp` as the
-            // fallback. Nothing on Windows sets TMPDIR — not the OS, not MSYS2 — so every `kama run`
-            // fell through to the literal `/tmp`, which a NATIVE compiler reads as `\tmp` on the current
-            // drive. On the CI runner that drive is D:, `D:\tmp` does not exist, and the link died:
-            //     ld: cannot open output file /tmp/kama-run-5384.exe: No such file or directory
-            // On a dev box `C:\tmp` often does exist, which is worse: `kama run` appeared to work while
-            // writing into a directory nobody owns. Windows sets `TMP`/`TEMP` for every session, and
-            // MSYS2 rewrites both to Win32 paths when it spawns a native child, so they are the question
-            // to ask here. (Not GetTempPathA: <windows.h> is banned in this TU — see the include block.)
-            const char* td = getenv("TMPDIR");
-#ifdef _WIN32
-            if (!(td && *td)) td = getenv("TMP");
-            if (!(td && *td)) td = getenv("TEMP");
-#endif
-            std::string tmpDir = (td && *td) ? td : "/tmp";
-            for (char& c : tmpDir) if (c == '\\') c = '/';   // one path spelling, as absolutePath() mints
-            if (!tmpDir.empty() && tmpDir.back() == '/') tmpDir.pop_back();
-            output = tmpDir + "/kama-run-" + std::to_string((long)getpid());
+            output = tempDir() + "/kama-run-" + std::to_string((long)getpid());
             // ...under the name the LINKER will actually produce. clang/gcc append `.exe` when the `-o`
             // name carries no extension, so the `remove()` at the end of runMode was unlinking a path
             // that never existed and every `kama run` leaked its binary into the temp directory.
@@ -7205,9 +7289,6 @@ int main(int argc, char** argv)
         //    parallelizing would be 7x better cold and 5x WORSE in the edit-rebuild loop, which is the
         //    loop that matters. A bundled install is exactly where `zig cc` comes from.
         if (ccInputs.size() < 2 || wasm || isZig(compiler)) nJobs = 1;
-#if defined(_WIN32)
-        nJobs = 1;
-#endif
 
         // Compile every input on its own and join the results, rather than handing them all to one
         // invocation. STATIC has always done this (an archive has no other shape); `-j` widens it to
