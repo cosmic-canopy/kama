@@ -39,11 +39,19 @@ log; what the language **is** lives in [SPEC.md](SPEC.md). This file is only *wh
 
 The sections below are organized by *topic*, not by sequence. This is the sequence:
 
+Ordered by severity, after an audit that probed each claim rather than re-reading it (two tracked entries
+died on contact — see §2):
+
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **borrow-escape gaps — two are observable use-after-free today** | §2 | ► **NEXT**: correctness before surface area |
-| 2 | stdlib parity M2b / M2c | §3 | ↓ |
-| 3 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns the deepest of the three gaps | §2 | source-breaking, so before the tag |
+| **1** | **enforce `export { … }` for QUALIFIED references** | §2 | ► **NEXT**: measurable, and it narrows #2's reach from user code |
+| 2 | iterator laundering — an observable use-after-free | §2 | the honest fix is the unsafe seam; needs a scope decision first |
+| 3 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
+| 4 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
+| 5 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns #2 | §2 | source-breaking, so before the tag |
+
+**`Ptr<T>` is still spelled `Ptr<T>`** — the rename to `UnsafePtr<T>` is what item 5 *is*, not something
+already done. 144 uses across `lib/` and `prelude/` today.
 
 **The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
 shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
@@ -437,26 +445,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
     `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
     so). Lower stakes: it degrades to the unresolved spelling rather than failing.
-- **An unsuffixed integer literal near `INT32_MAX` behaves differently as an initializer than in a
-  comparison.** `uint32 x = 2147483648;` then `x != 2147483648` compares UNEQUAL — the initializer keeps
-  the value while the comparison's literal narrows through `Int32Node`, so the two spellings of the same
-  number stop agreeing. Turned up while writing `tests/int_literal_wide.kama` for the LLP64 `strtol`
-  saturation bug (fixed: the grammar uses `strtoll` now, so every host agrees). This one is a SEPARATE
-  path — the literal's type is decided without consulting the target type — and is deliberately not
-  bundled with that fix. The fixture covers only the assignment path it was written for and says so;
-  a fixture for this belongs with the fix.
-
-  **Platform-independent — do this on macOS or Linux, NOT on Windows.** It was carried in the Windows
-  close-out order only because that is where it was found, and a Windows test cycle is ~906 s against
-  ~75 s in the container. Nothing about it needs that machine.
-
-  ⚠️ **Reproduce before trusting the cause above.** The stated mechanism does not survive arithmetic:
-  if the comparison's literal narrows through `Int32Node`, then `2147483648` becomes `-2147483648`,
-  and C's usual arithmetic conversions turn that back into `2147483648` against a `uint32` — which is
-  exactly why `tests/int_literal_wide.kama` PASSES its `assigned != 4294967295` case through that same
-  narrowing. By that reasoning this case should pass too. So either the symptom or the cause is
-  misrecorded here. Write the failing case, watch it fail, and read the emitted C before touching
-  `kama.y`.
 - **Every Windows binary kama emits is CONSOLE subsystem, including GUI programs.** Double-clicking the
   native `examples/webgpu` triangle opens TWO windows: the console Windows creates for a console-subsystem
   PE, and then the actual graphics window GLFW opens on top of it. Verified with `file` — `triangle.exe`
@@ -471,11 +459,19 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   can't-lose answer: console-by-default surprises GUI apps with a stray window, windows-by-default
   makes every `print` vanish. Pairs with the long-path item above — both are "what shape is a Windows
   application, as opposed to a Windows console tool".
-- **UBSan's `function` check is disabled suite-wide** (`run_tests.sh`). Vtable / contract /
-  `BindableFunctionPtr` dispatch stores each slot as `Ret (*)(void* self, …)` and calls a concrete
-  `Ret C__m(C* self, …)` through it — ABI-identical, and how essentially all C OO dispatch works, but the
-  check enforces exact function-pointer identity. Either emit a matching-signature trampoline or document
-  the exemption as permanent; silently off is the wrong end state for 1.0.
+- **UBSan's `function` check is disabled suite-wide, for a REASON — not an oversight** (`run_tests.sh:60`).
+  It is a false-positive suppression, not a masked bug: kama's dispatch stores every slot as
+  `Ret (*)(void* self, …)` and calls the concrete `Ret C__m(C* self, …)` through it. That type-erased
+  `self` is ABI-identical — it is how essentially all C OO dispatch works — but the `function` sub-check
+  enforces exact function-pointer type identity, so it would flag *every* contract call. Every other UBSan
+  check (integer overflow, null, bounds, alignment, …) and all of ASan stay on. The residual risk is narrow
+  and real: a genuine slot/signature mismatch is not caught *by UBSan* (the emitter builds both sides, so
+  one usually fails to compile). If that coverage is ever wanted back, the route is emitting a per-slot
+  typed thunk — `static Ret C__m__thunk(void* self, …)` that casts and calls — which makes the pointer
+  types exact and lets the check be re-enabled. **The open decision for 1.0 is which end state to pick** —
+  emit the thunks, or declare the exemption permanent and say so in the docs. *Silently* off is the wrong
+  answer either way, which is why this entry exists; but it is a documentation/coverage call, not a bug.
+  Older text here read as though a defect were being masked. It is not.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way to do
   a thing," and **named parameters** already cover the disambiguation overloading is usually reached for.
   **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by operand
