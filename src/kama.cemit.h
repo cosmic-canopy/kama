@@ -724,7 +724,10 @@ private:
     // Scope, If/Else, While, DoWhile, For, ForEach, ParallelFor and match arms. (scanStmtForCollections
     // omits Unsafe and Scope and has silently under-scanned ever since; do not copy that bug.)
     std::vector<QueryBinding> bindingsAt(const QueryCtx& qc, int line) const;
-    void collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const;
+    // `stmtOnly` walks the DECLARATION statements alone, skipping the `match`-arm half: a payload binding
+    // carries a derived type rather than a source spelling, and its resolution replay does not belong in a
+    // check pass. `checkDeclaredTypes` is that caller.
+    void collectBindings(SharedStatement s, std::vector<QueryBinding>& out, bool stmtOnly = false) const;
     void collectBindingsExpr(SharedExpression e, std::vector<QueryBinding>& out) const;  // finds match arms only
     // A type NODE -> its _classes / _genericTypes / _interfaces key, "" for a primitive or unknown. The
     // cType-FREE stand-in for exprClass, which is unusable here twice over: it calls cType on six paths,
@@ -1579,6 +1582,10 @@ private:
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
+    // A qualified type spelling reaches no further than an `import` would: reject one naming a symbol its
+    // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
+    // clause alone, without the resolution half. Caller owns `_nsCtx`.
+    void checkQualifiedExport(const SharedIdentifier& t, const char* what);
     // Fall-off-the-end analysis: a non-void function must return on every path (or diverge).
     void checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what);
     bool alwaysExits(const SharedStatement& s) const;   // provably returns or diverges (one-sided: no => "cannot prove")

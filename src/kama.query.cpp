@@ -1438,7 +1438,7 @@ std::vector<CEmitter::QueryBinding> CEmitter::bindingsAt(const QueryCtx& qc, int
     return binds;
 }
 
-void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out) const
+void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out, bool stmtOnly) const
 {
     if (!s) return;
     ASTNode* n = s.get();
@@ -1446,50 +1446,50 @@ void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out
         if (name && name->value) out.push_back(QueryBinding{ *name->value, type, name->line, false });
     };
     if (auto* b = dynamic_cast<BlockNode*>(n)) {
-        if (b->statements) for (auto& st : *b->statements) collectBindings(st, out);
+        if (b->statements) for (auto& st : *b->statements) collectBindings(st, out, stmtOnly);
     } else if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
-        collectBindings(u->body, out);
+        collectBindings(u->body, out, stmtOnly);
     } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
-        collectBindings(sc->body, out);
+        collectBindings(sc->body, out, stmtOnly);
     } else if (auto* i = dynamic_cast<IfNode*>(n)) {
-        collectBindingsExpr(i->booleanExpression, out);
-        collectBindings(i->ifStatement, out);
-        collectBindings(i->elseStatement, out);
+        if (!stmtOnly) collectBindingsExpr(i->booleanExpression, out);
+        collectBindings(i->ifStatement, out, stmtOnly);
+        collectBindings(i->elseStatement, out, stmtOnly);
     } else if (auto* w = dynamic_cast<WhileNode*>(n)) {
-        collectBindingsExpr(w->booleanExpression, out);
-        collectBindings(w->whileStatement, out);
+        if (!stmtOnly) collectBindingsExpr(w->booleanExpression, out);
+        collectBindings(w->whileStatement, out, stmtOnly);
     } else if (auto* dw = dynamic_cast<DoWhileNode*>(n)) {
-        collectBindingsExpr(dw->booleanExpression, out);
-        collectBindings(dw->doWhileStatement, out);
+        if (!stmtOnly) collectBindingsExpr(dw->booleanExpression, out);
+        collectBindings(dw->doWhileStatement, out, stmtOnly);
     } else if (auto* f = dynamic_cast<ForNode*>(n)) {
-        if (f->initializerStatements) for (auto& st : *f->initializerStatements) collectBindings(st, out);
-        collectBindingsExpr(f->booleanExpression, out);
-        if (f->iteratorStatements) for (auto& st : *f->iteratorStatements) collectBindings(st, out);
-        collectBindings(f->body, out);
+        if (f->initializerStatements) for (auto& st : *f->initializerStatements) collectBindings(st, out, stmtOnly);
+        if (!stmtOnly) collectBindingsExpr(f->booleanExpression, out);
+        if (f->iteratorStatements) for (auto& st : *f->iteratorStatements) collectBindings(st, out, stmtOnly);
+        collectBindings(f->body, out, stmtOnly);
     } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
         add(fe->name, fe->type);
-        collectBindingsExpr(fe->expression, out);
-        collectBindings(fe->body, out);
+        if (!stmtOnly) collectBindingsExpr(fe->expression, out);
+        collectBindings(fe->body, out, stmtOnly);
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         add(pf->name, pf->type);
-        collectBindingsExpr(pf->expression, out);
-        collectBindings(pf->body, out);
+        if (!stmtOnly) collectBindingsExpr(pf->expression, out);
+        collectBindings(pf->body, out, stmtOnly);
     } else if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
         if (lv->variables) for (auto& d : *lv->variables) if (d) {
             add(d->name, lv->type);
-            collectBindingsExpr(d->initializer, out);
+            if (!stmtOnly) collectBindingsExpr(d->initializer, out);
         }
     } else if (auto* cl = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         if (cl->variables) for (auto& d : *cl->variables) if (d) {
             add(d->name, cl->type);
-            collectBindingsExpr(d->initializer, out);
+            if (!stmtOnly) collectBindingsExpr(d->initializer, out);
         }
     } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
-        collectBindingsExpr(r->expression, out);
+        if (!stmtOnly) collectBindingsExpr(r->expression, out);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         // Assignment / invocation / object-creation / match / isolate in statement position: all of these
         // are BOTH an ExpressionNode and a StatementNode, so re-enter through the expression side.
-        collectBindingsExpr(std::dynamic_pointer_cast<ExpressionNode>(s), out);
+        if (!stmtOnly) collectBindingsExpr(std::dynamic_pointer_cast<ExpressionNode>(s), out);
     }
 }
 

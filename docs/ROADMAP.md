@@ -44,14 +44,16 @@ died on contact — see §2):
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **enforce `export { … }` for QUALIFIED references** | §2 | ► **NEXT**: measurable, and it narrows #2's reach from user code |
-| 2 | iterator laundering — an observable use-after-free | §2 | the honest fix is the unsafe seam; needs a scope decision first |
+| **1** | **the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns #2** | §2 | ► **NEXT**: source-breaking, so before the tag |
+| 2 | iterator laundering — an observable use-after-free | §2 | folded into #1; the honest fix *is* the seam |
 | 3 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
 | 4 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
-| 5 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns #2 | §2 | source-breaking, so before the tag |
 
-**`Ptr<T>` is still spelled `Ptr<T>`** — the rename to `UnsafePtr<T>` is what item 5 *is*, not something
-already done. 144 uses across `lib/` and `prelude/` today.
+**`Ptr<T>` is still spelled `Ptr<T>`** — the rename to `UnsafePtr<T>` is what item 1 *is*, not something
+already done. 144 uses across `lib/` and `prelude/` today. It is a compiler builtin recognized by the
+*string* `"Ptr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo` — so the
+rename itself is mechanical; the campaign's only new semantics is telling a **borrowed** raw pointer from an
+**owned** one, which is what closes #2.
 
 **The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
 shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
@@ -252,37 +254,24 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the seam itself: a borrowed pointer type that *says* it is borrowed, not a kind swap on two structs.
     Recorded as a known limitation in [SPEC.md](SPEC.md) meanwhile.
 
-- **Borrow-escape gaps — two left, both verified by running.** Found while closing the derived view-escape
-  check; scheduled ahead of stdlib parity because they are correctness. The third (a view constructor
-  borrowing a by-value parameter — an observable use-after-free) **shipped**; `xfail/view_ctor_over_byval_param`
-  pins it.
-  1. **`export { … }` enforcement for qualified references — PARTIAL, and here is the exact line.**
-     A qualified spelling used to reach a symbol its module does not export (`std::collections::ViewIter`),
-     which is how a borrowed iterator became storable outside the module owning it. Now enforced in
-     `checkDeclaredTypes`.
-
-     | position | status | verified |
-     |---|---|---|
-     | field · parameter · return type | **enforced** | `xfail/export_qualified_ref` |
-     | **local variable declaration** | **NOT enforced** | `std::collections::ViewIter<int32> it = v.iterator();` passes |
-     | expression only, never naming the type | **NOT enforced** | `v.iterator().next()` passes |
-
-     **What is left is consistency, not soundness.** The escaping vectors are closed — a field and a return
-     type are both checked — and a local is scope-bound. Closing the local case means a recursive statement
-     walk in `checkDeclaredTypes`, which today does not descend into function bodies at all and has no
-     existing walker to reuse; that is the bulk of the remaining work. In-tree blast radius was **zero** for
-     the shipped half and is expected to stay zero — nothing in `lib/`, `tests/`, `examples/` or `bench/`
-     names a non-exported symbol across modules.
-  2. **Iterator laundering — FOLDED into the unsafe seam** (decided with the user 2026-08-12). It is not a
-     separate campaign: the honest fix *is* the seam, so doing them apart would design the same thing
-     twice. See the unsafe-seam bullet above, which now owns it. Item 1 removed the easy *reachability*
-     from user code; it did not fix the underlying hole, and does nothing inside `std`.
+- **Borrow-escape gaps — one left.** Found while closing the derived view-escape check; scheduled ahead of
+  stdlib parity because they are correctness. Two of the three shipped — a view constructor borrowing a
+  by-value parameter (`xfail/view_ctor_over_byval_param`) and `export { … }` enforcement for qualified
+  references, now covering every position that NAMES a type (`xfail/export_qualified_ref`,
+  `xfail/export_qualified_ref_local`). What is left is **iterator laundering**, and it is **FOLDED into the
+  unsafe seam** (decided with the user 2026-08-12) — not a separate campaign, because the honest fix *is*
+  the seam and doing them apart would design the same thing twice. See the unsafe-seam bullet above, which
+  now owns it. The export rule removed the easy *reachability* from user code; it did not fix the underlying
+  hole, and does nothing inside `std`.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler
   (correctly located, since the emitted C carries `#line`). What `check` *does* catch is name
   resolution, unknown functions/methods/types, named-argument mismatches, and ownership/move and
-  serde analysis — a useful fast subset, but not the verdict its name suggests. This matters most to
+  serde analysis — a useful fast subset, but not the verdict its name suggests. It also owns the last
+  residual of the `export { … }` rule: every position that *names* a type is checked, but an expression
+  that never names one (`v.iterator().next()`, reaching a non-exported iterator through inference) is not a
+  declaration at all, and catching it means knowing an expression's type. This matters most to
   the two consumers that surface `check`-class diagnostics and nothing else: an **AI agent** told to
   verify its work, and the **LSP**, which shows a clean buffer for a file that will fail to compile.
   Documented rather than hidden ([agents.md](agents.md), `usage()`, `agents/AGENTS.md`) and pinned by

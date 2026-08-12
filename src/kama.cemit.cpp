@@ -550,6 +550,38 @@ void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationN
                  "with no exit)").c_str(), body->line);
 }
 
+// Module privacy for a QUALIFIED type reference. The `import a::b::{X}` form is enforced at the import
+// (see collectProgram), but the qualified spelling reached the same symbol unchecked — so
+// `std::collections::ViewIter<int32>` could name a type its module deliberately does not export, which is
+// how a borrowed iterator became storable outside the module that owns it. SPEC calls a non-exported
+// top-level declaration "invisible to other modules"; this is the half that was missing from making that
+// true.
+//
+// Same-module references are untouched: a directory module's files share one namespace and refer to each
+// other by design (a bare sibling name is the idiomatic spelling). Only a resolved USER declaration is
+// checked — an unresolved name is someone else's diagnostic, and an FFI/extern name is a literal C
+// spelling, not a module symbol.
+//
+// Its own member rather than a lambda because two callers need it at different strengths: a DECLARED type
+// gets it as one clause of the full `check`, and a LOCAL declaration gets it alone (see `checkBodyLocals`).
+// Callers own the namespace context — `_nsCtx` must already be the declaring unit's.
+void CEmitter::checkQualifiedExport(const SharedIdentifier& t, const char* what)
+{
+    if (!t || !t->value) return;
+    if (!t->qualifier || t->qualifier->empty()) return;
+    const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
+    const size_t cut = key.rfind("__");
+    const std::string mod = cut == std::string::npos ? std::string() : key.substr(0, cut);
+    const bool isUserDecl = _classes.count(key) || _enums.count(key) || _interfaces.count(key)
+                         || _genericTypes.count(key) || _genericContracts.count(key)
+                         || _sigs.count(key);
+    if (isUserDecl && !mod.empty() && mod != _nsCtx.scope && !_exported.count(key))
+        unsupported(("`" + *t->value + "` is not exported by its module, so " + what
+                     + " cannot name it — a qualified spelling reaches no further than an "
+                     "`import`, which would report the same thing. Add it to that module's "
+                     "`export { … };` if it is meant to be public").c_str(), t->line);
+}
+
 // The same check as `checkTypeResolves`, applied to every type a DECLARATION spells: parameter types,
 // return types, field types and enum-variant payload types. Those positions used to be silent — only a
 // local's type was checked (the single call site in `emitStatement`) — so a misspelled or unimported type
@@ -611,31 +643,25 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             return;
         }
         if (tp.count(*t->value)) return;
-        // Module privacy for a QUALIFIED type reference. The `import a::b::{X}` form is enforced at the
-        // import (see collectProgram), but the qualified spelling reached the same symbol unchecked — so
-        // `std::collections::ViewIter<int32>` could name a type its module deliberately does not export,
-        // which is how a borrowed iterator became storable outside the module that owns it. SPEC calls a
-        // non-exported top-level declaration "invisible to other modules"; this is the half that was
-        // missing from making that true.
-        //
-        // Same-module references are untouched: a directory module's files share one namespace and refer
-        // to each other by design (a bare sibling name is the idiomatic spelling). Only a resolved USER
-        // declaration is checked — an unresolved name is someone else's diagnostic, and an FFI/extern
-        // name is a literal C spelling, not a module symbol.
-        if (t->qualifier && !t->qualifier->empty()) {
-            const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
-            const size_t cut = key.rfind("__");
-            const std::string mod = cut == std::string::npos ? std::string() : key.substr(0, cut);
-            const bool isUserDecl = _classes.count(key) || _enums.count(key) || _interfaces.count(key)
-                                 || _genericTypes.count(key) || _genericContracts.count(key)
-                                 || _sigs.count(key);
-            if (isUserDecl && !mod.empty() && mod != _nsCtx.scope && !_exported.count(key))
-                unsupported(("`" + *t->value + "` is not exported by its module, so " + what
-                             + " cannot name it — a qualified spelling reaches no further than an "
-                             "`import`, which would report the same thing. Add it to that module's "
-                             "`export { … };` if it is meant to be public").c_str(), t->line);
-        }
+        checkQualifiedExport(t, what);
         checkTypeResolves(t, cType(t), what, t->line);
+    };
+    // Every LOCAL declared type in a body, checked for module privacy ONLY. `collectBindings` is the
+    // statement walker (kama.query.cpp) the position index already uses; `stmtOnly` drops its `match`-arm
+    // half, whose payload bindings carry a DERIVED type rather than a source spelling and whose resolution
+    // replay has no business running in a check pass.
+    //
+    // Deliberately NOT the full `check` lambda: `checkTypeResolves`/`cType` have never seen a function
+    // body, and a generic METHOD's own type params are never bound here (`bindTypeParams` runs per
+    // top-level declaration), so every `T` in a generic method's locals would report as unknown. The
+    // export gate is immune — it returns at once unless the spelling is qualified, and a type parameter
+    // never is.
+    auto checkBodyLocals = [&](const SharedBlock& body) {
+        if (!body) return;
+        std::vector<QueryBinding> binds;
+        collectBindings(std::static_pointer_cast<StatementNode>(body), binds, /*stmtOnly=*/true);
+        for (auto& b : binds)
+            if (!b.isParam) checkQualifiedExport(b.type, "a local variable");
     };
     auto checkParams = [&](const SharedParameterList& params, const char* what) {
         if (!params) return;
@@ -697,6 +723,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
                 checkReturns(fn, nullptr, "function");
+                checkBodyLocals(fn->block);
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
                 bindTypeParams(cd->typeParams, cd->constParams,
                                cd->name ? cd->name->line : cd->line, "a type");
@@ -712,9 +739,11 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                         checkParams(md->params, "a parameter");
                         checkNoSelfParam(md->params);
                         checkReturns(nullptr, md, "method");
+                        checkBodyLocals(md->body);
                     } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
                         if (ct->declarator) { checkParams(ct->declarator->params, "a parameter");
                                               checkNoSelfParam(ct->declarator->params); }
+                        checkBodyLocals(ct->body);
                     } else if (auto* op = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                         if (auto* od = op->operatorDeclarator.get()) {
                             check(od->returnType, "a return type");
@@ -722,6 +751,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             check(od->param2Type, "a parameter");
                             constParamShadow("parameter", od->param1Name);
                             constParamShadow("parameter", od->param2Name);
+                            checkBodyLocals(op->body);
                         }
                     }
                 }

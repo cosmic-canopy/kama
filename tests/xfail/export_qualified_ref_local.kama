@@ -1,0 +1,19 @@
+// The LOCAL-declaration half of the same rule as `export_qualified_ref`. A qualified spelling reaches no
+// further than an `import` would, and that has to hold in every position that NAMES a type — a field, a
+// parameter, a return type and, here, a local variable declaration:
+//
+//     std::collections::ViewIter<int32> it = v.iterator();   // ACCEPTED, before this rule
+//
+// `lib/std/collections/view.kama` says `export { View };` — the iterators are deliberately internal. A
+// local is scope-bound, so this position never escaped anything on its own; the reason to close it is that
+// a half-enforced rule is worse to inherit than an unenforced one. What is still NOT checked is an
+// expression that never names the type (`v.iterator().next()`), which is not a declaration at all and
+// belongs to expression type checking.
+import std::collections::{View};
+
+fn int32 sum(View<int32> v) {
+    std::collections::ViewIter<int32> it = v.iterator();
+    return 0;
+}
+
+fn int32 main() { return 0; }

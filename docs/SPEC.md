@@ -2665,7 +2665,9 @@ a compile error — disambiguate with `as`.
 
 **Visibility — a top-of-file `export { … };` manifest, module-private by default.** A module lists its public
 surface in one block at the top; a top-level `type`/`fn` is invisible to other modules unless named there
-(C#'s `internal`/`public` model), and a per-symbol import of a non-exported symbol is rejected. A listed name
+(C#'s `internal`/`public` model), and a per-symbol import of a non-exported symbol is rejected. **A qualified
+spelling reaches no further than an `import` would** — `a::b::X` naming a non-exported `X` is the same error,
+in every position that names a type (field, parameter, return type, local declaration). A listed name
 must be a top-level declaration in that same file — so a directory-module's files each state their own
 surface. Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
 reads as the mirror of `import`. Member access (`public`/`protected`/`private`) is a separate axis; the
