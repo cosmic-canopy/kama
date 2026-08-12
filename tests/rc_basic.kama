@@ -3,8 +3,8 @@
 // retains (strong++); the object is released exactly once when the last handle drops. No compiler support
 // beyond new/HeapOwner/Deref/drop/Copyable.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type value Ctrl { public int32 strong; public int32 weak; }
 
@@ -15,11 +15,11 @@ type value Counter {
 }
 
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
-    Ptr<T> p;
-    Ptr<Ctrl> c;
-    public ctor adopt(Ptr<T> raw) {
+    UnsafePtr<T> p;
+    UnsafePtr<Ctrl> c;
+    public ctor adopt(UnsafePtr<T> raw) {
         this.p = raw;
-        unsafe { this.c = cast<Ptr<Ctrl>>(malloc(n: sizeof(Ctrl))); this.c[0].strong = 1; this.c[0].weak = 0; }
+        unsafe { this.c = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); this.c[0].strong = 1; this.c[0].weak = 0; }
     }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     public ctor copy(ref Rc<T> source) {                         // Copyable -> retain
@@ -31,8 +31,8 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy
             this.c[0].strong = this.c[0].strong - 1;
             if (this.c[0].strong == 0) {
                 drop(value: this.deref());           // run the pointee's dtor (no-op for a value)
-                free(p: cast<Ptr>(this.p));
-                if (this.c[0].weak == 0) { free(p: cast<Ptr>(this.c)); }
+                free(p: cast<UnsafePtr>(this.p));
+                if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
             }
         }
     }

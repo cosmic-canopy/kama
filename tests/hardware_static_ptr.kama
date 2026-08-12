@@ -1,6 +1,6 @@
-// MCU step 2: a `hardware Ptr<T>` static — a peripheral register handle. Emits `volatile uint32*`
+// MCU step 2: a `hardware UnsafePtr<T>` static — a peripheral register handle. Emits `volatile uint32*`
 // so reads/writes through it are real MMIO accesses.
-static hardware Ptr<uint32> reg;
+static hardware UnsafePtr<uint32> reg;
 
 fn int32 main() {
     uint32 cell = 7;

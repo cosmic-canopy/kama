@@ -6,7 +6,7 @@ export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
 // returns UNINITIALIZED bytes, so the `state` tag buffer is zeroed with `memset` after allocation
 // (a bump allocator also hands back dirty reused memory, so container-side zeroing is the correct place).
 extern "<string.h>";
-extern fn Ptr memset(Ptr p, int32 value, usize n);
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // The primitive `Hashable`/`Equatable` conformances (`string`, `int32`) now live in the PRELUDE
 // (kama.driver.cpp `PRELUDE_SRC`) so they're universal — a `<T: Equatable>` bound or `DynamicArray<int32>.contains`
@@ -17,8 +17,8 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // so it exists only for a `Copyable` key. Like `DynamicArrayIter` it snapshots the map's mutation counter and
 // rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
 type view MapKeyIter<K> implements Iterator<K> {
-    Ptr<K> keys; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<K> keys, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<K> keys; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<K> keys, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
@@ -39,8 +39,8 @@ type view MapKeyIter<K> implements Iterator<K> {
 // value. Like `MapKeyIter` it borrows the value + state buffers, walks only FULL slots, yields each value BY
 // VALUE (a copy), and rejects a structural change made mid-iteration via the `mods` snapshot.
 type view MapValueIter<V> implements Iterator<V> {
-    Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
@@ -62,8 +62,8 @@ type view MapValueIter<V> implements Iterator<V> {
 // `ref V` at that slot. Same borrow safety as `DynamicArrayIterMut` (the ref may not escape; a structural
 // change is caught).
 type view MapValueIterMut<V> implements IteratorMut<V> {
-    Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn bool hasNext() {
@@ -96,8 +96,8 @@ type resource Entry<K, V> {
 // value + state buffers, walks only FULL slots, yields each pair BY VALUE (a deep copy of both), and rejects
 // a structural change made mid-iteration via the `mods` snapshot.
 type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
-    Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<K> keys, Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<K> keys; UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<K> keys, UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.vals = vals; this.state = state; this.cap = cap; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -135,7 +135,7 @@ type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
 type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
                    Serialize when [K: Serialize, V: Serialize], Deserialize when [K: Deserialize, V: Deserialize] {
-    Ptr<K> keys = null; Ptr<V> vals = null; Ptr<uint8> state = null;
+    UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     int32 len = 0; int32 cap = 0; int32 tombs = 0; int32 mods = 0; A alloc;
 
     // The bare map draws from the default `GlobalAllocator` (a zero-size field — no state, no cost). A
@@ -144,7 +144,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // The four-ctor matrix (M8c). `empty`/`withCapacity` are the default-allocator conveniences, gated
     // `when [A: default]` (M8d.0) so they don't exist for a custom `A` without a `default` (which would
     // otherwise build a zero-allocator, incomplete map). Custom `A` uses the allocator-taking ctors below.
-    // A bare `Map<K,V,H,A> r;` zero-inits the primitive/`Ptr` fields and default-fills `alloc`; the M8d.1
+    // A bare `Map<K,V,H,A> r;` zero-inits the primitive/`UnsafePtr` fields and default-fills `alloc`; the M8d.1
     // completeness gate proves it's fully initialized.
     public default ctor empty() when [A: default] { }
 
@@ -201,7 +201,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public fn bool contains(ref K key) { return this.slotOf(key: key) >= 0; }
 
     // Deep-copy a stored value through a typed `ref V` borrow. `copy this.vals[i]` directly can't deep-copy
-    // an owning element: `this.vals` is a raw `Ptr<V>`, whose index has no known element class, so the `copy`
+    // an owning element: `this.vals` is a raw `UnsafePtr<V>`, whose index has no known element class, so the `copy`
     // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
     // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
     fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
@@ -306,7 +306,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // Move the value at `slot` OUT of the buffer into a fresh owned local. A direct `V v = this.vals[slot]` is
     // rejected (giving out of an element leaves a moved-from owner); instead relocate bitwise through raw
-    // `Ptr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
+    // `UnsafePtr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
     // never dropped again — the same move-out idiom as `Deque.takeAt`.
     fn V takeVal(int32 at) {
         slot V x;                                          // the hole `relocate`'s `out` parameter fills
@@ -344,12 +344,12 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
     fn void growTo(int32 nc) {
-        Ptr<K> nk = null; Ptr<V> nv = null; Ptr<uint8> ns = null;
+        UnsafePtr<K> nk = null; UnsafePtr<V> nv = null; UnsafePtr<uint8> ns = null;
         unsafe {
-            nk = cast<Ptr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
-            nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
-            ns = cast<Ptr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
-            memset(p: cast<Ptr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
+            nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
+            nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
+            ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
+            memset(p: cast<UnsafePtr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         }
         int32 i = 0;
         while (i < this.cap) {
@@ -366,9 +366,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         }
         if (this.cap > 0) {
             unsafe {
-                this.alloc.deallocate(pointer: cast<Ptr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
             }
         }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
@@ -430,9 +430,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         }
         if (this.cap > 0) {
             unsafe {
-                this.alloc.deallocate(pointer: cast<Ptr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
             }
         }
     }

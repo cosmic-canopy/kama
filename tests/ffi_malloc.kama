@@ -1,11 +1,11 @@
-// FFI core: hold an opaque Ptr (void*) from malloc, size_t, null-check, free.
+// FFI core: hold an opaque UnsafePtr (void*) from malloc, size_t, null-check, free.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 fn int main()
 {
-    Ptr p = malloc(n: 64);
+    UnsafePtr p = malloc(n: 64);
     if (p == null) { return 1; }
     free(p: p);
     return 42;

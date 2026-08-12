@@ -4,8 +4,8 @@
 // pointee. This is the exact shape a library `Owned<T>` needs — the prerequisite for porting the
 // intrinsic smart pointers out of the compiler.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 @generate(of)
 type value Point {
@@ -14,10 +14,10 @@ type value Point {
 }
 
 type resource Own<T> implements Deref<T> {
-    Ptr<T> p;
-    public ctor make(T v) { unsafe { this.p = cast<Ptr<T>>(malloc(n: sizeof(T))); this.p[0] = v; } }
+    UnsafePtr<T> p;
+    public ctor make(T v) { unsafe { this.p = cast<UnsafePtr<T>>(malloc(n: sizeof(T))); this.p[0] = v; } }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    ~Own() { unsafe { free(p: cast<Ptr>(this.p)); } }
+    ~Own() { unsafe { free(p: cast<UnsafePtr>(this.p)); } }
 }
 
 fn int32 main() {

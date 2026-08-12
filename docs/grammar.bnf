@@ -94,7 +94,7 @@ code_declaration
 
 /* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
    (fn/type don't start with it), so no conflict. Reuses `variable_declarators`;
-   const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
+   const-init + value/UnsafePtr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON
   | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON      /* `@section(".x") static …` */
@@ -1166,7 +1166,7 @@ const_opt
   | CONST
   ;
 /* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
-   modifier) so it appears only where it is meaningful: a module `static` and a `Ptr<T>` parameter. */
+   modifier) so it appears only where it is meaningful: a module `static` and an `UnsafePtr<T>` parameter. */
 hardware_opt
   : /* Nothing */
   | HARDWARE

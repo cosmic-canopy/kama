@@ -65,7 +65,7 @@ feature.
 - **`match`, never `switch`.** `switch` does not exist. `match` is exhaustive and produces a value.
 - **No `null`, no exceptions.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
   safe type is a compile error. Constructors cannot fail — a fallible one is a `static` factory
-  returning `Result`. `null` exists only for `Ptr<T>` at the FFI boundary.
+  returning `Result`. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
 - **A `type resource`'s fields are always private.** Expose behavior, not state. (A `type value`
   owns nothing, so its fields may be public.)
 - **`.` constructs, `::` resolves scope.** `Box.make(v: 10)` builds; `Plain::tag()` is a static.

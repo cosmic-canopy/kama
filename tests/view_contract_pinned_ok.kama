@@ -2,7 +2,7 @@
 // only on a self-CONSTRUCTING slot with nothing borrowable in its parameter list; these three shapes stay
 // legal, and this fixture is the guard that they do:
 //
-//   * a `ctor` slot whose parameters DO carry the borrow (`Ptr<int64> p`)  -> `over`
+//   * a `ctor` slot whose parameters DO carry the borrow (`UnsafePtr<int64> p`)  -> `over`
 //   * an INSTANCE method returning the self-type, which borrows `this`     -> `rest` (the `Real<T is This>`
 //     shape, and the same reason `View.slice()` is legal)
 //   * an UNPINNED generic contract, whose slots return some other type     -> `Iterable<T>` on `View<T>`
@@ -13,13 +13,13 @@ import std::collections::{DynamicArray, View};
 type contract Windowed<S is This> for value {
     fn int32 length();
     fn S rest();                             // instance method: borrows the receiver — always legal
-    ctor S over(Ptr<int64> p, int32 n);      // a self-constructing ctor WITH a borrow source — legal
+    ctor S over(UnsafePtr<int64> p, int32 n);      // a self-constructing ctor WITH a borrow source — legal
 }
 
 type view Span implements Windowed<This> {
-    Ptr<int64> p; int32 n;
+    UnsafePtr<int64> p; int32 n;
 
-    public ctor over(Ptr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public fn int32 length() { return this.n; }
     public fn int64 at(int32 i) { unsafe { return this.p[i]; } }
     // Returns a view over `this`'s buffer — roots at `this`, so the return escape check accepts it.

@@ -3,12 +3,12 @@ import std::collections::{View};
 export { FixedArray };
 
 extern "<string.h>";
-extern fn Ptr memset(Ptr p, int32 value, usize n);
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T> implements Iterator<T> {
-    Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafePtr<T> data; int32 pos; int32 len;
+    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -18,8 +18,8 @@ type view FixedArrayIter<T> implements Iterator<T> {
 
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
 type view FixedArrayIterMut<T> implements IteratorMut<T> {
-    Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafePtr<T> data; int32 pos; int32 len;
+    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
@@ -29,7 +29,7 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
                                   Serialize when [T: Serialize] {
-    Ptr<T> data = null; int32 size = 0; A alloc;
+    UnsafePtr<T> data = null; int32 size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
@@ -43,11 +43,11 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     fn void allocBuffer(int32 size) {
         if (size > 0) {
             unsafe {
-                this.data = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
-                memset(p: cast<Ptr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
+                this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
+                memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
             }
         } else {
-            unsafe { this.data = cast<Ptr<T>>(cast<usize>(0)); }
+            unsafe { this.data = cast<UnsafePtr<T>>(cast<usize>(0)); }
         }
         this.size = size;
     }
@@ -68,7 +68,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     }
 
     // The safe FixedArray->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
-    public fn Ptr<T> dataPtr() { return this.data; }
+    public fn UnsafePtr<T> dataPtr() { return this.data; }
 
     // Borrow the whole array (or a sub-range) as a non-owning `View<T>` slice — zero copy. See
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
@@ -124,7 +124,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         int32 i = 0;
         while (i < this.size) { drop(value: this[i]); i = i + 1; }
         if (this.size > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.size) * sizeof(T)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T)); }
         }
     }
 }

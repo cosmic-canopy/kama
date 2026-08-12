@@ -29,7 +29,7 @@ static inline kama_isolate_t kama_isolate_spawn(void* (*entry)(void*), void* arg
 static inline void kama_isolate_join(kama_isolate_t h) { pthread_join(h, NULL); }
 
 // Heap-BOXED handle, for the RAII `Isolate` type (`Isolate h = isolate worker(...);`). kama holds the box
-// as an opaque `Ptr` (void*) — portable, since a bare kama_isolate_t is not always pointer-sized. spawn_boxed
+// as an opaque `UnsafePtr` (void*) — portable, since a bare kama_isolate_t is not always pointer-sized. spawn_boxed
 // mallocs the box and spawns; join_boxed joins the thread and frees the box. The handle owns the join, so
 // dropping it (scope exit) joins — a forgotten join can't orphan the thread.
 static inline void* kama_isolate_spawn_boxed(void* (*entry)(void*), void* arg) {

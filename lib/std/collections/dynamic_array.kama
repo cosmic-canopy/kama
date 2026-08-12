@@ -7,8 +7,8 @@ export { DynamicArray };
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type view DynamicArrayIter<T> implements Iterator<T> {
-    Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn Optional<T> next() {
@@ -22,8 +22,8 @@ type view DynamicArrayIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
 // The invalidation check lives in hasNext() (it runs before each next()).
 type view DynamicArrayIterMut<T> implements IteratorMut<T> {
-    Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn bool hasNext() {
@@ -40,8 +40,8 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
                                   Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
-    // (force-explicit-field-init: a primitive or raw `Ptr` no longer rides silently on `= {0}`).
-    Ptr<T> data = null; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
+    // (force-explicit-field-init: a primitive or raw `UnsafePtr` no longer rides silently on `= {0}`).
+    UnsafePtr<T> data = null; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The bare list draws from the default `GlobalAllocator` (a zero-size field — no state, no cost).
     // The `alloc` field is a plain value (not Owned/Shared), so the bare ctor need not set it; a
@@ -77,13 +77,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // the live prefix, and release the old block through the same allocator. Replaces the old in-place
     // `realloc` so every allocation flows through the allocator (matching Map/Deque's grow idiom).
     fn void growTo(int32 nc) {
-        Ptr<T> nd = null;
-        unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
-        Ptr<T> od = this.data;
+        UnsafePtr<T> nd = null;
+        unsafe { nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
+        UnsafePtr<T> od = this.data;
         int32 i = 0;
         unsafe { while (i < this.len) { nd[i] = od[i]; i = i + 1; } }   // relocate the live prefix (raw move)
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
         }
         this.data = nd; this.cap = nc;
     }
@@ -102,7 +102,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // The safe DynamicArray->pointer bridge (see FixedArray.dataPtr): obtaining the buffer pointer is
     // safe; dereferencing it is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
-    public fn Ptr<T> dataPtr() { return this.data; }
+    public fn UnsafePtr<T> dataPtr() { return this.data; }
 
     // Borrow the whole array as a `View<T>` (a non-owning slice / span) — zero copy, no ownership
     // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
@@ -128,7 +128,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
             int32 nc = this.cap == 0 ? 4 : this.cap * 2;
             this.growTo(nc: nc);
         }
-        Ptr<T> d = this.data;
+        UnsafePtr<T> d = this.data;
         int32 i = this.len;
         unsafe { while (i > index) { d[i] = d[i - 1]; i = i - 1; } }   // open slot `index` (raw tail shift)
         unsafe { this.data[index] = give item; }                      // tracked hand-off into the slot
@@ -178,7 +178,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         // Relocate the tail down one slot through a LOCAL pointer alias: `d[i] = d[i+1]` is a raw store
         // (a bitwise move that leaves no owner holding a moved-from field), whereas `this.data[i] = …`
         // routes an owning element through the move-tracker and is rejected.
-        Ptr<T> d = this.data;
+        UnsafePtr<T> d = this.data;
         unsafe { while (i + 1 < this.len) { d[i] = d[i + 1]; i = i + 1; } }
         this.len = this.len - 1;
         this.mods = this.mods + 1;                      // structural change — invalidates any live iterator
@@ -197,7 +197,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // Move the element at `idx` OUT of the buffer into a fresh owned local (the slot is left stale — the
     // caller either overwrites it by shifting or drops it by decrementing `len`). Bitwise-relocate through raw
-    // `Ptr<T>` aliases into a zero-init'd local, then `give` — the same move-out idiom as `Deque.takeAt`.
+    // `UnsafePtr<T>` aliases into a zero-init'd local, then `give` — the same move-out idiom as `Deque.takeAt`.
     fn T takeAt(int32 idx) {
         slot T x;                                           // the hole `relocate`'s `out` parameter fills
         relocate(from: this.data, at: idx, into: out x);
@@ -206,14 +206,14 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // Exchange the elements at `i` and `j` IN PLACE (O(1), no copy, no drop) — the primitive in-place
     // algorithms need (heap sift, sort, shuffle). Move `d[i]` out to a local, relocate `d[j]` into slot `i`,
-    // then `give` the local into slot `j`. The two raw stores go through a LOCAL `Ptr<T>` alias `d` — a
+    // then `give` the local into slot `j`. The two raw stores go through a LOCAL `UnsafePtr<T>` alias `d` — a
     // `this.data[i] = …` would route the owning element through the move-tracker and be rejected (see
     // `remove`). Not a structural change (len/buffer unchanged), so `mods` is untouched, like `operator[]`.
     public fn void swap(int32 i, int32 j) {
         if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "DynamicArray.swap index out of bounds"); }
         if (i == j) { return; }
         T tmp = this.takeAt(idx: i);                   // move d[i] OUT (slot i now stale)
-        Ptr<T> d = this.data;
+        UnsafePtr<T> d = this.data;
         unsafe { d[i] = d[j]; }                        // relocate d[j] into slot i via a local alias (a raw
                                                        // `this.data[i] = …` move is move-tracker-rejected)
         unsafe { this.data[j] = give tmp; }            // tracked hand-off of tmp into slot j (like `Map.put`);
@@ -275,7 +275,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
         }
     }
 }

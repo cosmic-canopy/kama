@@ -402,9 +402,9 @@ bool CEmitter::isTypeParamName(const std::string& n) const
 //   - the name IS a real type in another namespace  -> missing import, name the namespace;
 //   - the name is nowhere at all                    -> unknown type.
 // Only for a BARE, non-builtin name. The caller passes what `cType` produced, and anything cType mapped to
-// a different spelling is by definition known — that covers primitives, `Ptr`/`usize`/`isize`, `This`,
+// a different spelling is by definition known — that covers primitives, `UnsafePtr`/`usize`/`isize`, `This`,
 // generic instances and defaulted-generic bare names WITHOUT re-deriving cType's special cases here (the
-// first cut did re-derive them and promptly flagged `Ptr`). Type params / FFI extern names are excluded
+// first cut did re-derive them and promptly flagged `UnsafePtr`). Type params / FFI extern names are excluded
 // explicitly (see isTypeParamName / _externNames).
 void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                                  const char* what, int line)
@@ -873,10 +873,10 @@ std::string CEmitter::cType(SharedIdentifier type)
             return "void";
         }
     }
-    // FFI: a raw C pointer carrier (opaque). Bare `Ptr` -> void* (the
-    // universal handle / opaque pointer); `Ptr<T>` -> T*. usize/isize map to the
+    // FFI: a raw C pointer carrier (opaque). Bare `UnsafePtr` -> void* (the
+    // universal handle / opaque pointer); `UnsafePtr<T>` -> T*. usize/isize map to the
     // C size types. These are the explicit, extern-marked unsafe boundary.
-    if (type->value && *type->value == "Ptr")
+    if (type->value && *type->value == "UnsafePtr")
         return type->genericArg ? (cType(type->genericArg) + "*") : "void*";
     if (type->value && !type->genericArg) {
         if (*type->value == "usize") return "size_t";
@@ -1579,7 +1579,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
 }
 
 // A tagged string `<tag>"lit ${hole} lit"` lowers to: render each part + hole to an owned `kama_string`, pack
-// them into two C arrays, wrap a prelude `Template` (borrowed `Ptr<string>` + counts) over them, and call the
+// them into two C arrays, wrap a prelude `Template` (borrowed `UnsafePtr<string>` + counts) over them, and call the
 // tag function `fn R <tag>(ref Template)`. The tag decides how literals (trusted) and holes (values) combine —
 // escaping, dedenting, or `?`-parameter binding (holes stay out-of-band → injection-safe by construction).
 // Holes render via the SAME per-hole path as plain interpolation (spec/char/Format), so specs compose for free.
@@ -1870,7 +1870,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
         // GOALS §3b: `== null` / `!= null` on a safe type is a compile error — a value,
         // smart pointer, or contract is never null (the C habit checks the wrong thing here).
-        // `null` is only for `Ptr<T>` at the FFI boundary (exprClass is empty for those).
+        // `null` is only for `UnsafePtr<T>` at the FFI boundary (exprClass is empty for those).
         if (v->token == EQEQ || v->token == NOTEQ) {
             bool lNull = dynamic_cast<NullNode*>(v->LHS.get()) != nullptr;
             bool rNull = dynamic_cast<NullNode*>(v->RHS.get()) != nullptr;
@@ -1878,7 +1878,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string oc = exprClass((lNull ? v->RHS : v->LHS));
                 if (!oc.empty())
                     unsupported(("'" + oc + "' is never null in safe code — don't null-check it "
-                                 "(a `Weak` uses `tryUpgrade`; `null` is only for `Ptr<T>` at the FFI boundary)").c_str(),
+                                 "(a `Weak` uses `tryUpgrade`; `null` is only for `UnsafePtr<T>` at the FFI boundary)").c_str(),
                                 v->line);
             }
         }
@@ -2721,7 +2721,7 @@ void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
 // class type comes into being without an initializer, and they must agree exactly.
 //
 // Construction-model M8d.1: `= {0}` alone is valid only for a PROVABLY-ZERO default (a primitive, a raw
-// `Ptr`, an intrinsic collection). A field whose `default` ALLOCATES (a `SortedMap` building a B-tree root)
+// `UnsafePtr`, an intrinsic collection). A field whose `default` ALLOCATES (a `SortedMap` building a B-tree root)
 // would otherwise zero-init to a broken null-root value; this is what makes `isDefaultFillable` actually
 // FILL correctly. A gated-away default (a custom-`A` collection) has no `isDefaultCtor` method and is not
 // filled — it is `mustAssign`, so the completeness gate already forces an explicit assignment.
@@ -3478,7 +3478,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // the returned view roots at `this` or a `ref`/by-value view parameter — the borrow then
         // outlives the call. The by-value sibling of the `ref T` place-return rule above; structural
         // root-tracing, no lifetime analysis (north star 3e). A view over a LOCAL is (correctly) rejected.
-        // A named `ctor` factory RETURNS the view it builds (borrowing from its by-value `Ptr`/view params,
+        // A named `ctor` factory RETURNS the view it builds (borrowing from its by-value `UnsafePtr`/view params,
         // which the caller owns); that provenance is validated structurally by checkViewCtorEscape instead,
         // so skip the fn-shaped check here for a ctor body.
         if (retExpr && !_inNamedCtorBody && isViewCType(_currentReturnCType)) {
@@ -3843,7 +3843,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // something (string/collection/resource/smart-ptr). Release the old element, then move/copy the new
         // one THROUGH the place — an `ElementAccessNode` LHS isn't a named lvalue, so the branches below miss
         // it, and the RHS `give`/`copy` marker would otherwise hit the "bare sub-expression" reject. A
-        // primitive element keeps the plain store path; a raw `Ptr<T>` slot is handled just below.
+        // primitive element keeps the plain store path; a raw `UnsafePtr<T>` slot is handled just below.
         if (as->token == EQ && !_inUnsafe) {
             if (auto* ea = dynamic_cast<ElementAccessNode*>(as->unaryExpression.get())) {
                 std::string dcoll, drecv, didx, et;
@@ -3901,12 +3901,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             }
         }
         // A RAW pointer-slot store `ptr[i] = give x` / `ptr[i] = x` in unsafe manual-memory code: the
-        // exprClass of a `Ptr<T>` index is unknown (not a collection / user `operator[]`), so it's a raw
+        // exprClass of an `UnsafePtr<T>` index is unknown (not a collection / user `operator[]`), so it's a raw
         // C store. Blit the value in, DON'T release the (uninitialized) old slot, and consume a moved
         // resource source (mark it moved so its scope dtor is skipped). This is how a library container
         // relocates an element into its buffer. Only intercepted for an owned RHS (marker or resource) —
         // a plain `ptr[i] = value` or a value-producing RHS keeps the generic path below.
-        // A bare-LOCAL `Ptr<T>` slot (`buf[i]`, not `this.field[i]`) is the UNTRACKED raw-relocate escape
+        // A bare-LOCAL `UnsafePtr<T>` slot (`buf[i]`, not `this.field[i]`) is the UNTRACKED raw-relocate escape
         // hatch collections rely on (`nd[i] = od[j]`), so there an UNMARKED store stays a plain C store —
         // only an explicit `give`/`copy` is a tracked move. A FIELD slot keeps the implicit-owned guard.
         std::string pfield = ptrElemType(as->unaryExpression);                              // `this.data[i]` FIELD slot
@@ -4397,7 +4397,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                             "C-ABI symbol; expose a concrete wrapper instead", fn->line);
             if (fn->isRef)
                 unsupported("`expose` cannot mark a `fn ref T` place-returning function — its "
-                            "return has no C-ABI form; return a value or a `Ptr<T>`", fn->line);
+                            "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn->line);
             if (!_exposedNames.insert(*fn->name->value).second)
                 unsupported(("`expose`d function name '" + *fn->name->value + "' is already exposed — "
                              "the bare C-ABI symbol must be unique").c_str(), fn->line);
@@ -6149,7 +6149,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         return;
     }
 
-    // a non-escaping borrow — a contract (fat pointer) or a `type view` (borrowed `Ptr<T>`) — can't be
+    // a non-escaping borrow — a contract (fat pointer) or a `type view` (borrowed `UnsafePtr<T>`) — can't be
     // a BARE collection element (a `DynamicArray` of them would dangle). Own the referent instead:
     // a contract → store `Shared<I>` (`DynamicArray<Shared<I>>`); a view → copy into an owning collection.
     if (isNonEscapingBorrow(elemCType)) {
@@ -6501,9 +6501,9 @@ SharedIdentifier CEmitter::absolutizeType(SharedIdentifier t)
     if (!t || !t->value) return t;
     auto clone = synthClone(*t);
     // A user class/enum/contract NAME is rebound to its use-site mangle (qualifier dropped); primitives,
-    // `Ptr`, `This`, usize/isize keep their spelling (they resolve context-free). Generic args recurse
-    // either way (`Ptr<Counter>`, `List<Counter>`, `Owned<Counter>`).
-    bool contextFree = (t->builtInVal != 0) || *t->value == "Ptr" || *t->value == "This"
+    // `UnsafePtr`, `This`, usize/isize keep their spelling (they resolve context-free). Generic args recurse
+    // either way (`UnsafePtr<Counter>`, `List<Counter>`, `Owned<Counter>`).
+    bool contextFree = (t->builtInVal != 0) || *t->value == "UnsafePtr" || *t->value == "This"
                      || *t->value == "usize" || *t->value == "isize";
     if (!contextFree) {
         clone->value = std::make_shared<std::string>(resolveUserName(*t->value, t->qualifier));
@@ -6531,7 +6531,7 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
     }
     if (a->builtInVal != 0) return false;                       // a primitive
     const std::string& v = *a->value;
-    if (v == "This" || v == "Ptr" || v == "usize" || v == "isize") return false;
+    if (v == "This" || v == "UnsafePtr" || v == "usize" || v == "isize") return false;
     std::string r = resolveUserName(v, a->qualifier);
     return !_classes.count(r) && !_enums.count(r) && !_genericTypes.count(r)
         && !_interfaces.count(r) && !_genericContracts.count(r);
@@ -6585,22 +6585,22 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // unbound-`N` skip.)
     for (auto& c : concrete) if (argCarriesUnboundParam(c)) return;
     // `Atomic<T>` (M6): the element must be a lock-free machine word — an integer primitive, `usize`/`isize`,
-    // or `Ptr`. A struct/`resource`/contract element can't be one atomic cell (atomicity is a hardware
+    // or `UnsafePtr`. A struct/`resource`/contract element can't be one atomic cell (atomicity is a hardware
     // property of a word), so reject it here at the user's use-site with a clear message.
     if (!_atomicTmpl.empty() && tmpl == _atomicTmpl && !concrete.empty() && concrete[0]) {
         SharedIdentifier el = concrete[0];
         bool isInt  = el->builtInVal >= IDENTIFIER_INT8_VAL && el->builtInVal <= IDENTIFIER_UINT64_VAL;
         bool isSize = el->value && !el->genericArg && (*el->value == "usize" || *el->value == "isize");
-        bool isPtr  = el->value && *el->value == "Ptr";
+        bool isPtr  = el->value && *el->value == "UnsafePtr";
         if (!isInt && !isSize && !isPtr) {
-            unsupported(("`Atomic<T>` requires an integer primitive or `Ptr` element (a lock-free machine "
+            unsupported(("`Atomic<T>` requires an integer primitive or `UnsafePtr` element (a lock-free machine "
                          "word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
             return;
         }
     }
 
     // A `type view` as a generic type ARGUMENT (a collection's buffered element, a user generic's field)
-    // stores a borrow that dangles. A collection buffers behind `Ptr<View>` — NOT a bare `View` field — so
+    // stores a borrow that dangles. A collection buffers behind `UnsafePtr<View>` — NOT a bare `View` field — so
     // emitClassStruct's field-reject misses it, and today the only signal is the indirect escape check on an
     // element-returning library method (a diagnostic pointing at a library line, not the user's decl). Reject
     // here at the instantiation, at the user's use-site line. Skip variant/enum templates (`Optional<View>`) —
@@ -8299,7 +8299,7 @@ std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier
 // calls, no vtable). VALUE (`foreach (T x in v)`): `v.iterator()` yields an iterator with
 // `next() -> Optional<T>` (or `v` itself is the iterator); loop while `next()` returns `Some`. MUTABLE
 // (`foreach (ref T x in v)`): `v.iterMut()` yields an iterator with `hasNext()` + a place-returning
-// `next()`; loop while `hasNext()`, binding `x` to the place. A borrowing iterator holds a `Ptr` cursor
+// `next()`; loop while `hasNext()`, binding `x` to the place. A borrowing iterator holds an `UnsafePtr` cursor
 // (its own unsafe internals); the `foreach` surface stays safe.
 void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container, int depth)
 {
@@ -8448,7 +8448,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             recordDestructibleLocal(nm, elemTy);
     }
     // Mutation guard: mutating the container mid-loop is the author's concern for a user iterator (its
-    // `Ptr` cursor would dangle) — the built-in `add`-reject can't see into user methods. Still push the
+    // `UnsafePtr` cursor would dangle) — the built-in `add`-reject can't see into user methods. Still push the
     // root so a mix of a user container + a built-in field-collection `add` inside is caught.
     std::string iterRoot = rootBinding(fe->expression);
     if (!iterRoot.empty()) _foreachColls.push_back(iterRoot);
@@ -9673,7 +9673,7 @@ void CEmitter::computeDestructible()
     }
     // A `value` owns nothing. `destructible` (computed above, transitively over base + owned fields +
     // collections + smart-ptrs) is exactly "owns something to drop", so a destructible `value` is a
-    // design/field disagreement: declare it a `resource`. (A raw `Ptr`/borrowed contract confers no
+    // design/field disagreement: declare it a `resource`. (A raw `UnsafePtr`/borrowed contract confers no
     // ownership → not destructible → correctly still a value.) Only user `Value` types are checked —
     // compiler-built `Intrinsic` types (collections/smart-ptrs/variants) own by their own machinery.
     for (auto& kv : _classes) {
@@ -9850,7 +9850,7 @@ void CEmitter::computeReachesSharedWeak()
 }
 
 // M6.2 predicate: is `cls` a deeply-immutable class? (Primitives/enums aren't in `_classes`, so a non-class
-// name — a scalar, `Ptr`, etc. — is not deeply immutable here; that's handled by fieldTypeDeeplyImmutable.)
+// name — a scalar, `UnsafePtr`, etc. — is not deeply immutable here; that's handled by fieldTypeDeeplyImmutable.)
 bool CEmitter::deeplyImmutable(const std::string& cls) const
 {
     auto it = _classes.find(cls);
@@ -9860,7 +9860,7 @@ bool CEmitter::deeplyImmutable(const std::string& cls) const
 // Is a FIELD/variant-payload type deeply immutable — admissible inside an `immutable` type? A primitive
 // scalar (incl. `bool`/`float`/`char`) or the immutable `string` is an immutable leaf; an `enum` is an
 // immutable value; a named user type is immutable iff its class is `deeplyImmutable`. Everything else — a raw
-// `Ptr`, an `Owned`/`Shared`/`Weak`, a mutable collection, a `contract` box — is NOT (a mutable alias exists).
+// `UnsafePtr`, an `Owned`/`Shared`/`Weak`, a mutable collection, a `contract` box — is NOT (a mutable alias exists).
 // Resolves `type` under the caller's current `_typeSubst`/`_nsCtx` (set by computeDeeplyImmutable per class).
 bool CEmitter::fieldTypeDeeplyImmutable(const SharedIdentifier& type) const
 {
@@ -9871,7 +9871,7 @@ bool CEmitter::fieldTypeDeeplyImmutable(const SharedIdentifier& type) const
         return true;
     std::string ct = const_cast<CEmitter*>(this)->cType(type);
     if (isEnum(ct)) return true;
-    return deeplyImmutable(ct);   // a user class -> its computed flag; a Ptr/Owned/Shared/collection -> false
+    return deeplyImmutable(ct);   // a user class -> its computed flag; an UnsafePtr/Owned/Shared/collection -> false
 }
 
 // M6.2: the GREATEST-fixpoint dual of computeReachesPointer(). Seed every `immutable`-qualified type true,
@@ -9938,14 +9938,14 @@ void CEmitter::computeDeeplyImmutable()
         if (inst) _typeSubst.clear();
         unsupported(("`immutable` type `" + ci.name + "` has a mutable member `" + field + "` of type `" + ty
                      + "` — every part of an `immutable` type must itself be deeply immutable (a primitive, "
-                       "`string`, `enum`, or another `immutable` type); it may not hold a `Ptr`, an "
+                       "`string`, `enum`, or another `immutable` type); it may not hold an `UnsafePtr`, an "
                        "`Owned`/`Shared`/`Weak`, or a mutable collection").c_str(),
                     ci.node ? ci.node->line : 0);
     }
 }
 
 // Does `p` name memory that OUTLIVES the call, so a view constructed from it can borrow it? A `ref`/`out`
-// parameter IS the caller's storage; a raw `Ptr<T>` and a view both already point into memory someone else
+// parameter IS the caller's storage; a raw `UnsafePtr<T>` and a view both already point into memory someone else
 // owns. Everything else — an `int64`, a `string`, a by-value value type — is the callee's own frame, and a
 // view over it dangles the moment the constructor returns.
 //
@@ -9958,7 +9958,7 @@ bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& 
     if (p->modifier && p->modifier->value
         && (*p->modifier->value == "ref" || *p->modifier->value == "out")) return true;   // cf. paramByRef
     const std::string& t = *p->type->value;
-    if (t == "Ptr") return true;                     // a raw non-owning pointer into caller memory
+    if (t == "UnsafePtr") return true;                     // a raw non-owning pointer into caller memory
     if (t == selfParam) return true;                 // the pinned self-type — another view of this kind
     return _viewTypeNames.count(t) > 0;              // any other `type view`
 }
@@ -10039,7 +10039,7 @@ void CEmitter::checkViewContractCtors()
                 // is what the author wrote and is stable across instantiations.
                 unsupported(("a `view` (`" + ci.name + "`) borrows memory it is handed, but contract `"
                              + ii.templateKey + "` requires `ctor " + m.name + "` to construct one from parameters "
-                             "that carry no borrow (no `Ptr<T>`, no `ref`, no view) — the view it returned "
+                             "that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — the view it returned "
                              "could only borrow a constructor local, so it would dangle; put this "
                              "conformance on an owning `value` type instead").c_str(),
                             ci.declLine());
@@ -10624,7 +10624,7 @@ bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, 
     return boxStateful;   // a matched, non-Global placement drives the `_ALLOC_` emission path
 }
 
-// If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `Ptr<T>`, return the element's
+// If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `UnsafePtr<T>`, return the element's
 // concrete C-type (resolving `T` under the current instance subst); else "". This is a raw pointer
 // slot (unsafe manual memory) — a container's own buffer — distinct from a collection / user operator[].
 std::string CEmitter::ptrElemType(SharedExpression e)
@@ -10639,16 +10639,16 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     if (!owner) return "";
     for (auto& f : owner->fields)
         if (f.name == *ma->identifier->value && f.type && f.type->value
-            && *f.type->value == "Ptr" && f.type->genericArg)
+            && *f.type->value == "UnsafePtr" && f.type->genericArg)
             return cType(f.type->genericArg);
     return "";
 }
 
-// A bare-LOCAL/param `Ptr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
+// A bare-LOCAL/param `UnsafePtr<T>` element target `buf[i]` (NOT `this.field[i]` — that's ptrElemType above):
 // the element C-type, used ONLY in the assignment store path for an explicit `give`/`copy` raw-slot move
 // into a local pointer. Kept separate from ptrElemType (which also feeds exprClass) so this stays out of
 // exprClass — an UNMARKED local store (`nd[i] = od[j]`, the untracked raw-relocate collections rely on)
-// must keep its plain-C-store semantics. `Ptr<T>` lowers to `T*`, so strip one trailing `*`; bare `Ptr`
+// must keep its plain-C-store semantics. `UnsafePtr<T>` lowers to `T*`, so strip one trailing `*`; bare `UnsafePtr`
 // -> `void*` is not indexable (excluded). Only locals/params live in `_localCTypes`, and a `ref T` param
 // lowers to `T` (no `*`), so no false positives.
 std::string CEmitter::ptrLocalElemType(SharedExpression e)
@@ -10681,7 +10681,7 @@ bool CEmitter::isBaseOf(const std::string&, const std::string&) const { return f
 #endif
 
 // If `cls` implements the prelude `HeapOwner<T>` contract, return the owned element `T` (so `new T(args)`
-// placement-constructs into `cls` via `cls::adopt(Ptr<T>)`); "" otherwise. The element is the contract
+// placement-constructs into `cls` via `cls::adopt(UnsafePtr<T>)`); "" otherwise. The element is the contract
 // instance's type arg. Inert (always "") when no `HeapOwner` is in scope.
 std::string CEmitter::heapOwnerTarget(const std::string& cls)
 {
@@ -11592,7 +11592,7 @@ void CEmitter::analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::
 
 // Construction-model M8b: is a field of concrete type `c` DEFAULT-FILLABLE — i.e. may a ctor leave it
 // unassigned (the compiler supplies its default) rather than requiring an explicit assignment?
-//   - not a user aggregate (primitive, raw `Ptr<T>`, enum): YES — zero is a valid value (deref is `unsafe`).
+//   - not a user aggregate (primitive, raw `UnsafePtr<T>`, enum): YES — zero is a valid value (deref is `unsafe`).
 //   - an intrinsic collection (`List`/`Array`/`String`/`Weak`/…): YES — zero is a valid EMPTY value.
 //   - a user type with an explicit `default` ctor: YES — the default designates a valid zero-arg build.
 //   - otherwise (a value with no `default`, e.g. a stateful `BumpAllocator`): NO — a zero handle is garbage,
@@ -11601,7 +11601,7 @@ void CEmitter::analyzeCtorStmt(SharedStatement st, ClassInfo& owner, const std::
 bool CEmitter::isDefaultFillable(const std::string& c)
 {
     auto it = _classes.find(c);
-    if (it == _classes.end()) return true;                 // primitive / Ptr / enum-not-in-_classes
+    if (it == _classes.end()) return true;                 // primitive / UnsafePtr / enum-not-in-_classes
     ClassInfo& fc = it->second;
     if (fc.isIntrinsicColl) return true;                   // zero = valid empty collection / null Weak
     // Scan `methods` (NOT `ctors`): the `when [A: default]` gate (registerGenericTypeInst) drops a gated-away
@@ -11712,8 +11712,8 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     std::set<std::string> mustAssign;   // force-explicit-field-init: every field, minus the two escape hatches
     // Force-explicit-field-init: a field must be ASSIGNED unless its type carries a default the compiler
     // actually supplies. Precedent is Rust (all fields required), Swift (definite initialization), Zig,
-    // C# structs. The carve-out that goes away is the silent one — a primitive, a raw `Ptr`, or an enum
-    // used to ride on the emitted `= {0}`, so `int32 len;` and `Ptr<T> data;` were *implicitly* 0/null and
+    // C# structs. The carve-out that goes away is the silent one — a primitive, a raw `UnsafePtr`, or an enum
+    // used to ride on the emitted `= {0}`, so `int32 len;` and `UnsafePtr<T> data;` were *implicitly* 0/null and
     // nothing said whether the author meant that. Those must now be spelled.
     //
     // What stays exempt is not a carve-out but a real, checked guarantee:
@@ -11723,14 +11723,14 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
     //     requiring `r.alloc = …` in `empty()` would be unsatisfiable, not merely verbose.
     //
     // Two escape hatches, both explicit and both at the DECLARATION rather than hidden in codegen:
-    //   - a field initializer (`int32 len = 0;` / `Ptr<T> data = null;`) states the default once, at the
+    //   - a field initializer (`int32 len = 0;` / `UnsafePtr<T> data = null;`) states the default once, at the
     //     field, and runs in every ctor — so a container spells its empty state instead of inheriting it;
     //   - `@generate(zero)` blesses a whole data bag's zero state (a transparent all-public `value`, which
     //     therefore owns nothing — so this can never skip an `Owned`/`Shared`).
     for (auto& f : owner.fields) {
         std::string fc = cType(f.type);                                       // resolves a field-`T`/`A` per instance
         bool isOwning = !heapOwnerTarget(fc).empty();                         // Owned/Shared (not Weak)
-        bool bare     = !_classes.count(fc);                                  // primitive / raw `Ptr` / enum
+        bool bare     = !_classes.count(fc);                                  // primitive / raw `UnsafePtr` / enum
         if (isOwning)                      owning.insert(f.name);
         else if (!isDefaultFillable(fc))   noDefault.insert(f.name);          // e.g. a stateful `A alloc`
         if (f.initializer || owner.genZero) continue;                         // declared default / blessed zero bag
@@ -11877,8 +11877,8 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
 }
 
 // Option-B view-ctor escape check. A `type view` ctor is a factory: it builds a local view and RETURNS it
-// (the M8 construction model). The returned view borrows through its `Ptr`/nested-view fields — each must
-// trace to a PARAMETER (a by-value `Ptr`/view param points at caller-owned memory that outlives the call)
+// (the M8 construction model). The returned view borrows through its `UnsafePtr`/nested-view fields — each must
+// trace to a PARAMETER (a by-value `UnsafePtr`/view param points at caller-owned memory that outlives the call)
 // or `this`, never a ctor-LOCAL (whose buffer dies at return -> dangle). Pure structural root-tracing
 // (north star 3e — no lifetime analysis): the ctor-body analog of the emit-time fn check at the ReturnNode,
 // mirroring checkNamedCtorComplete's top-level-only discipline (a borrow assigned only inside a branch is
@@ -11887,9 +11887,9 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
 {
     if (!mnode || !mnode->body || !mnode->body->statements) return;
 
-    std::set<std::string> borrowFields;                      // fields that can dangle: raw `Ptr<T>` or a `type view`
+    std::set<std::string> borrowFields;                      // fields that can dangle: raw `UnsafePtr<T>` or a `type view`
     for (auto& f : owner.fields)
-        if (f.type && f.type->value && (*f.type->value == "Ptr" || isViewCType(cType(f.type))))
+        if (f.type && f.type->value && (*f.type->value == "UnsafePtr" || isViewCType(cType(f.type))))
             borrowFields.insert(f.name);
     if (borrowFields.empty()) return;                        // nothing borrowable -> nothing to check
 
@@ -11903,7 +11903,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
     // dangles exactly as a local would — and no `return` of the view is needed to observe it, because it is
     // the CONSTRUCTOR's frame that died. This test used to be "is it a parameter?", which accepted that.
     // Only a parameter the view could actually borrow FROM counts: a `ref`/`out` (the caller's storage), a
-    // raw `Ptr<T>`, or another view. Same question checkViewContractCtors asks of a contract's ctor slot,
+    // raw `UnsafePtr<T>`, or another view. Same question checkViewContractCtors asks of a contract's ctor slot,
     // so it is the same predicate; the empty `selfParam` is the pinned-contract case, which has no meaning
     // here (a parameter of this view's own type is already matched by `_viewTypeNames`).
     std::set<std::string> params;                            // param names that can carry a borrow
@@ -11945,7 +11945,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
                 unsupported(("a view borrows its buffer, and `" + r + "` is passed BY VALUE — it lives in "
                              "this constructor's own frame and dies when it returns, so the view would "
                              "dangle just as it would over a local. Borrow something that outlives the "
-                             "call: a `ref`/`out` parameter, a `Ptr<T>`, or another view").c_str(), line);
+                             "call: a `ref`/`out` parameter, an `UnsafePtr<T>`, or another view").c_str(), line);
             else
                 unsupported("a view borrows its buffer, so a view constructor may only borrow its "
                             "parameters — returning a view over a local would dangle", line);
@@ -11996,7 +11996,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
 // that is not definitely (unconditionally, top-level) assigned at that point. Sound + conservative — a
 // branch-body assignment doesn't count (mirrors analyzeCtorStmt/checkNamedCtorComplete's discipline). Params
 // are trusted complete (only body-declared locals are tracked). `unsafe { }` is exempt (its raw init dance
-// owns the invariant). `Weak` and raw `Ptr` are never owning, so they are never tracked (box_basic stays legal).
+// owns the invariant). `Weak` and raw `UnsafePtr` are never owning, so they are never tracked (box_basic stays legal).
 void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList params)
 {
     if (!body || !body->statements) return;
@@ -12486,7 +12486,7 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
 {
     if (ci.isExternStruct) return Visibility::Public;
     // A `view` field is always private — like a `resource` it has an encapsulation invariant (its raw
-    // borrowed `Ptr<T>` must not leak into the safe surface, and ptr/len must stay consistent). Expose
+    // borrowed `UnsafePtr<T>` must not leak into the safe surface, and ptr/len must stay consistent). Expose
     // data through methods (`operator[]`, `length`, `iterator`, …). It codegens as a value but is NOT a
     // transparent data-bag like a plain `value`.
     if (ci.isBorrow) {
@@ -13821,7 +13821,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1) {
         SharedExpression a = (*call->args)[0]->expression;
         // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
-        // Ptr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
+        // UnsafePtr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
         // storage by hand, so the hole becomes a live value and its destructor comes back. Restricted to
         // slots so this can't silently resurrect a genuinely moved-from local.
         if (auto* aid = dynamic_cast<IdentifierNode*>(a.get()))
@@ -13871,7 +13871,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return "((" + emitExpression(cond) + ") ? (void)0 : kama_assert_fail(\""
              + cEscapeStringBody(condText) + "\", " + emitExpression(msg) + ", " + fileLit + ", " + lineLit + "))";
     }
-    // `drop(place)` — run the destructor of a place's value (for a library owner over `Ptr<T>` to drop
+    // `drop(place)` — run the destructor of a place's value (for a library owner over `UnsafePtr<T>` to drop
     // its heap pointee before `free`). A no-op when the value's type isn't destructible. The type is
     // resolved via exprClass (so `drop(this.deref())` reaches the pointee `T` through a `ref T` return).
     if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
@@ -14062,15 +14062,15 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             if (!first) s += ", ";
             first = false;
             std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
-            // `const Ptr<T>`/`const Ptr` emits `const T*`/`const void*` (FFI const
+            // `const UnsafePtr<T>`/`const UnsafePtr` emits `const T*`/`const void*` (FFI const
             // pointers — to match C const callback/API signatures). Only pointer types:
             // a `const ref <class>` stays plain (its methods take a non-const `self`).
-            bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "Ptr";
-            // `hardware Ptr<T>` emits `volatile T*` — a pointer to an MMIO register (mirrors `const Ptr<T>`).
-            // `const hardware Ptr<T>` → `const volatile T*` (a read-only status register). Ptr-only.
-            bool hwPtr = p->isHardware && p->type && p->type->value && *p->type->value == "Ptr";
+            bool constPtr = p->isConst && p->type && p->type->value && *p->type->value == "UnsafePtr";
+            // `hardware UnsafePtr<T>` emits `volatile T*` — a pointer to an MMIO register (mirrors `const UnsafePtr<T>`).
+            // `const hardware UnsafePtr<T>` → `const volatile T*` (a read-only status register). UnsafePtr-only.
+            bool hwPtr = p->isHardware && p->type && p->type->value && *p->type->value == "UnsafePtr";
             if (p->isHardware && !hwPtr)
-                unsupported("`hardware` applies only to a `Ptr<T>` parameter (a pointer to an MMIO register)", p->line);
+                unsupported("`hardware` applies only to an `UnsafePtr<T>` parameter (a pointer to an MMIO register)", p->line);
             // a `ref`/`const ref` parameter may not name a smart pointer — you borrow
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
@@ -14227,7 +14227,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         auto rejectOwned = [&](const std::string& cty, const char* where) {
             if (isSmartPtrClass(cty) || ownsByValue(cty))
                 unsupported(("`expose`: `" + cty + "` cannot cross the C-ABI boundary by value (" + where
-                             + ") — pass a `Ptr<T>` or an `extern` struct").c_str(), fn->line);
+                             + ") — pass an `UnsafePtr<T>` or an `extern` struct").c_str(), fn->line);
         };
         rejectOwned(cType(fn->returnType), "return");
         if (fn->parameters)
@@ -14389,7 +14389,7 @@ void CEmitter::emitStruct(ClassInfo& ci)
     for (auto& f : ci.fields) {
         rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.node ? ci.node->line : 0),
                               /*alsoView=*/true);   // a view can't be a field (would dangle) — but a view's OWN
-                                                    // `Ptr<T>`/`int` fields are fine; only view-TYPED fields reject
+                                                    // `UnsafePtr<T>`/`int` fields are fine; only view-TYPED fields reject
         indent(1);
         *_out << cType(f.type) << " " << f.name << ";\n";
         hasMember = true;
@@ -15163,7 +15163,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
     if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL)
         return "kama_string__equals(&" + a + ", " + b + ")";
     std::string ct = cType(ty);
-    if (!_classes.count(ct))                       // primitive / Ptr / enum-not-in-_classes
+    if (!_classes.count(ct))                       // primitive / UnsafePtr / enum-not-in-_classes
         return "(" + a + " == " + b + ")";
     if (!satisfiesBound(ct, "Equatable"))
         unsupported(("`@generate(Equatable)` needs every field to be a primitive/string or a type that "
@@ -15208,7 +15208,7 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
         std::string acc = "self->" + fld.name;
         std::string fh;
         if (fld.type && fld.type->builtInVal == IDENTIFIER_STRING_VAL) fh = "kama_string__hash(&" + acc + ")";
-        else if (!_classes.count(ct))                       // primitive / Ptr — its own value IS the content hash
+        else if (!_classes.count(ct))                       // primitive / UnsafePtr — its own value IS the content hash
             fh = "(uint64_t)(" + acc + ")";
         else {
             if (!satisfiesBound(ct, "Hashable"))
@@ -16339,7 +16339,7 @@ std::string CEmitter::exprClass(SharedExpression e)
             _typeSubst = savedSubst; _nsCtx = savedCtx;
             return isClass(rt) ? rt : "";
         }
-        // A raw `Ptr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
+        // A raw `UnsafePtr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
         // element type, so a `drop`/`copy`/variant hand-off of the element knows what it is.
         std::string pet = ptrElemType(e);
         if (!pet.empty()) return isClass(pet) ? pet : "";
@@ -18127,14 +18127,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     computeDestructible();
     // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
     // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)
-    // dtor would have to free. Reject with guidance toward a raw `Ptr<T>` (a non-owning field). Runs after
+    // dtor would have to free. Reject with guidance toward a raw `UnsafePtr<T>` (a non-owning field). Runs after
     // the fixpoint so a transitively-owning field is caught. (A view in an enum PAYLOAD is caught earlier,
     // at registerGenericTypeInst, where the payload type is substituted concrete.)
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.isBorrow && ci.destructible)
             unsupported(("a `view` (`" + ci.name + "`) borrows and owns nothing — it may not have an owning "
-                         "or resource field (hold a non-owning `Ptr<T>` instead)").c_str(),
+                         "or resource field (hold a non-owning `UnsafePtr<T>` instead)").c_str(),
                         ci.node ? ci.node->line : 0);
     }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
@@ -18266,7 +18266,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (size_t i = 0; i < si.params.size(); ++i) {
             const ParamSig& p = si.params[i];
             // const pointer params -> `const T*` (FFI). className already ends
-            // in `*` for a Ptr<T>/Ptr; a const-ref class param keeps its self mutable.
+            // in `*` for an UnsafePtr<T>/UnsafePtr; a const-ref class param keeps its self mutable.
             bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*';
             bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
             *_out << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "") << p.className << (p.byRef ? "*" : "");
@@ -18445,7 +18445,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
     // its types/impl blocks below — no module emits their bodies. Emit prototype + definition `static inline`
     // in the header HERE (before the generic-fn/collection instances that call them), so a helper the
-    // collections rely on (unwrap a fallible `Optional<Ptr>` → panic-on-OOM) resolves everywhere. Generic
+    // collections rely on (unwrap a fallible `Optional<UnsafePtr>` → panic-on-OOM) resolves everywhere. Generic
     // prelude free fns ride `emitGenericInst`; extern/signature-only ones carry no body.
     if (_preludeUnit && _preludeUnit->codeDeclarationList) {
         _nsCtx = _unitCtx[_preludeUnit.get()];
@@ -18584,29 +18584,29 @@ static bool isConstInitExpr(ExpressionNode* e)
 }
 
 // MCU step 1: emit a module-level `static T name …`. Per-isolate by construction — the KAMA_ISOLATE_LOCAL
-// macro (kama_runtime.h) is `_Thread_local` on native, empty on wasm/embedded. Value/Ptr/InlineArray only;
+// macro (kama_runtime.h) is `_Thread_local` on native, empty on wasm/embedded. Value/UnsafePtr/InlineArray only;
 // no RAII/move tracking (contrast the local-decl path). Emitted before bodies (file-scope def-before-use).
 void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
 {
     if (!mv || !mv->type || !mv->variables) return;
     std::string ty = cType(mv->type);
-    bool isPtr = mv->type->value && *mv->type->value == "Ptr";
-    // `hardware` (MMIO/ISR) is valid on a scalar value (`volatile T`) or a `Ptr<T>` handle (`volatile T*`).
+    bool isPtr = mv->type->value && *mv->type->value == "UnsafePtr";
+    // `hardware` (MMIO/ISR) is valid on a scalar value (`volatile T`) or an `UnsafePtr<T>` handle (`volatile T*`).
     // An InlineArray/collection static with `hardware` has murky element-volatility — reject it in v1.
     if (mv->isHardware && !isPtr && _classes.count(ty) && _classes[ty].isIntrinsicColl) {
-        unsupported("`hardware` applies only to a scalar value or a `Ptr<T>` static (an MMIO register or ISR flag)",
+        unsupported("`hardware` applies only to a scalar value or an `UnsafePtr<T>` static (an MMIO register or ISR flag)",
                     mv->line);
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
-    // Type gate: value / Ptr / InlineArray only. Reject anything that owns memory or needs teardown (v1 has
+    // Type gate: value / UnsafePtr / InlineArray only. Reject anything that owns memory or needs teardown (v1 has
     // no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no heap (collKind Fixed,
     // a value array) — allow them; reject heap collections, smart pointers, destructible and move-only values.
     bool isValueArray = _classes.count(ty) && _classes[ty].collKind == CollKind::Fixed;
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
-        unsupported(("a module `static` must be a value, Ptr, or InlineArray (no destructible resources yet) — `"
+        unsupported(("a module `static` must be a value, UnsafePtr, or InlineArray (no destructible resources yet) — `"
                      + ty + "` owns memory").c_str(), mv->line);
         return;
     }

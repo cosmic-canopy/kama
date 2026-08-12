@@ -4,7 +4,7 @@ Nested generics close with >> and need no external scanner
 
 fn void main()
 {
-    Ptr<Ptr<int32>> p;
+    UnsafePtr<UnsafePtr<int32>> p;
     Map<K, DynamicArray<V>> m;
 }
 

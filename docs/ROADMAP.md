@@ -44,15 +44,14 @@ died on contact — see §2):
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`)** | §2 | ► **NEXT**: source-breaking, so before the tag |
+| **1** | **the unsafe seam — no `null` in safe kama** | §2 | ► **NEXT**: source-breaking, so before the tag |
 | 2 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
 | 3 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
 
-**`Ptr<T>` is still spelled `Ptr<T>`** — the rename to `UnsafePtr<T>` is what item 1 *is*, not something
-already done. 144 uses across `lib/` and `prelude/` today. It is a compiler builtin recognized by the
-*string* `"Ptr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo` — so the
-rename itself is mechanical. **Iterator laundering is no longer part of it**: it shipped separately, because
-the premise that folded the two together turned out to be false (see §2).
+**The raw pointer is now spelled `UnsafePtr<T>`.** It is a compiler builtin recognized by the *string*
+`"UnsafePtr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo`.
+**Iterator laundering was never part of this campaign**: it shipped separately, because the premise that
+folded the two together turned out to be false (see §2).
 
 **The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
 shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
@@ -230,13 +229,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
   container use in a no-heap build), so it is its own campaign.
 
-- **The unsafe seam — `Ptr<T>` -> `UnsafePtr<T>`, and no `null` in safe kama.** Its own campaign, agreed
-  while the `slot` work was in flight (which is where its customers came from: eight buffer-realloc sites
-  now carry `= null` field initializers). Shape: rename the raw pointer to say what it is; an
-  `unsafe UnsafePtr<T> p = null;` field-declaration modifier; `Optional`-returning FFI wrappers;
-  `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
-  compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
-  **Source-breaking**, so before the tag or 2.0.
+- **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
+  flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field
+  initializers). **The rename shipped** — the raw pointer is spelled `UnsafePtr<T>` and says what it is.
+  What is left: an `unsafe UnsafePtr<T> p = null;` field-declaration modifier (new grammar — `unsafe` is
+  statement-only today); `Optional`-returning FFI wrappers; `unsafe { }` around the teardown guards; then
+  ban the `null` token outside `unsafe`. Plus a compiler-emitted debug null trap at the two `_inUnsafe`
+  deref gates. `lib/std/ptr/` is its natural home. **Source-breaking**, so before the tag or 2.0.
   - **It no longer owns iterator laundering — that shipped on its own.** The two were folded together on
     the argument that the honest fix *was* the seam, because making the iterators `type view` "is not a
     local fix": `Iterable<T>.iterator()` returns a *contract value*, so the iterator would box (heap
@@ -559,7 +558,7 @@ across two different targets:
   | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Four AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly); (4) **`-mdouble=64` in the target's `cflags`** — avr-gcc still defaults to a 32-bit `double`, which `kama_runtime.h`'s `_Static_assert` rejects. It is the ONLY target in kama's spectrum that fails those asserts, and the assert is doing its job: without it, `bitcast<uint64>(d)` would pun an 8-byte union member against a 4-byte one and `kama_f64_bits` would `memcpy` 8 bytes out of a 4-byte `double`. A config line, not a language gap. |
 
   **Why kama fits:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the emitted C
-  (greppable no-heap audit); trap lowering is dependency-free; `InlineArray<T,N>`, sized ints, and `unsafe`/`Ptr`
+  (greppable no-heap audit); trap lowering is dependency-free; `InlineArray<T,N>`, sized ints, and `unsafe`/`UnsafePtr`
   FFI already exist. **North star: blink an LED** (the embedded "first triangle"). **Start Cortex-M, not AVR**
   (`zig cc`/clang do `thumbv*-none-eabi` cleanly; pico-sdk is tidy; AVR pain comes later).
 
@@ -680,7 +679,7 @@ polish); the engine *spine* (buffer/pipeline/binding libraries, renderer) is the
     and the `expose` keyword's C-ABI linkage are the *same* kama→host boundary the wasm exports and the scripting
     host (§7) use — so hot-reload needs **no new language surface**. One boundary, three consumers.
   - **Library:** the `dlopen`/`dlsym`/`dlclose` + file-watch + function-pointer rebind loop — pure FFI over
-    `unsafe`/`Ptr`, zero compiler changes. This is the bulk of the feature. (A Windows copy-before-load, so the
+    `unsafe`/`UnsafePtr`, zero compiler changes. This is the bulk of the feature. (A Windows copy-before-load, so the
     on-disk `.dll` can be rebuilt while loaded, is a library concern.)
   - **Engine:** the *data-in-host, code-in-module* architecture (world state lives in the platform-layer arena,
     passed *into* the reloaded module) so a reload doesn't wipe the world. Prior art: Handmade Hero, Our

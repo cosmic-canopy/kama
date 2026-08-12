@@ -19,18 +19,18 @@ export { Channel, Sender, Receiver, SendResult };
 //     }
 //
 // All thread-safety lives in C (kama_channel.h): one mutex serializes send/recv/endpoint-drop, so no
-// atomics are needed. The kama side is a thin `Ptr`-handle library, exactly like the `Isolate` handle.
+// atomics are needed. The kama side is a thin `UnsafePtr`-handle library, exactly like the `Isolate` handle.
 extern "<string.h>";
-extern fn Ptr memset(Ptr p, int32 value, usize n);   // zero the moved-out source so its drop is a no-op
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);   // zero the moved-out source so its drop is a no-op
 
 extern "kama_channel.h";
-extern fn Ptr   kama_channel_new(usize elemSize, usize cap);
-extern fn int32 kama_channel_send(Ptr ch, Ptr elem);
-extern fn int32 kama_channel_recv(Ptr ch, Ptr dst);
-extern fn int32 kama_channel_try_pop(Ptr ch, Ptr dst);         // non-blocking pop, for teardown drain
-extern fn int32 kama_channel_close_sender(Ptr ch);             // returns 1 if this endpoint is the last
-extern fn int32 kama_channel_close_receiver(Ptr ch);           // returns 1 if this endpoint is the last
-extern fn void  kama_channel_free(Ptr ch);                     // called by the last endpoint after draining
+extern fn UnsafePtr   kama_channel_new(usize elemSize, usize cap);
+extern fn int32 kama_channel_send(UnsafePtr ch, UnsafePtr elem);
+extern fn int32 kama_channel_recv(UnsafePtr ch, UnsafePtr dst);
+extern fn int32 kama_channel_try_pop(UnsafePtr ch, UnsafePtr dst);         // non-blocking pop, for teardown drain
+extern fn int32 kama_channel_close_sender(UnsafePtr ch);             // returns 1 if this endpoint is the last
+extern fn int32 kama_channel_close_receiver(UnsafePtr ch);           // returns 1 if this endpoint is the last
+extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the last endpoint after draining
 
 // The outcome of a `send`. `Sent` means the value was delivered (the queue now owns the sole copy).
 // `Undelivered(item)` hands the value BACK to the caller intact — send failed because the receiver is
@@ -42,10 +42,10 @@ type enum SendResult<T> { Sent, Undelivered(T item) }
 // The send endpoint. Move-only; SPSC in M3 (multi-producer `clone()` is a follow-up). Dropping it
 // closes the sender side and wakes a blocked receiver, so `recv` returns `None` once drained.
 type resource Sender<T> {
-    Ptr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
+    UnsafePtr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
-    public ctor make(Ptr handle) { this.handle = handle; }
+    public ctor make(UnsafePtr handle) { this.handle = handle; }
 
     // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
     // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
@@ -57,9 +57,9 @@ type resource Sender<T> {
     // suppressed its drop, so exactly one owning copy survives either way.
     public fn SendResult<T> send(T item) {
         unsafe {
-            int32 r = kama_channel_send(ch: this.handle, elem: cast<Ptr>(addr(of: item)));
+            int32 r = kama_channel_send(ch: this.handle, elem: cast<UnsafePtr>(addr(of: item)));
             if (r == 0) {
-                memset(p: cast<Ptr>(addr(of: item)), value: 0, n: sizeof(T));
+                memset(p: cast<UnsafePtr>(addr(of: item)), value: 0, n: sizeof(T));
                 return SendResult::Sent;
             }
         }
@@ -70,7 +70,7 @@ type resource Sender<T> {
     // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
     // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
     fn int32 tryPopInto(out T item) {
-        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item))); }
+        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item))); }
     }
 
     // Close the sender side. If this is the LAST live endpoint, the queue is now quiescent (the receiver
@@ -94,9 +94,9 @@ type resource Sender<T> {
 
 // The receive endpoint. Move-only. Dropping it closes the receiver side and wakes a blocked sender.
 type resource Receiver<T> {
-    Ptr handle;   // the shared queue; null once moved-from
+    UnsafePtr handle;   // the shared queue; null once moved-from
 
-    public ctor make(Ptr handle) { this.handle = handle; }
+    public ctor make(UnsafePtr handle) { this.handle = handle; }
 
     // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
     // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
@@ -109,14 +109,14 @@ type resource Receiver<T> {
 
     // The `out` boundary over the type-erased C call — the blocking sibling of `tryPopInto`.
     fn int32 recvInto(out T dst) {
-        unsafe { return kama_channel_recv(ch: this.handle, dst: cast<Ptr>(addr(of: dst))); }
+        unsafe { return kama_channel_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst))); }
     }
 
     // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
     // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
     // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
     fn int32 tryPopInto(out T item) {
-        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<Ptr>(addr(of: item))); }
+        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item))); }
     }
 
     // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the
@@ -141,7 +141,7 @@ type resource Receiver<T> {
 // Receiver to drop frees it — so a `Channel` is a thin factory: its own drop does NOT touch the queue
 // (its handle is a non-owning copy). Extract both endpoints before discarding it.
 type resource Channel<T> {
-    Ptr handle;
+    UnsafePtr handle;
 
     public ctor bounded(usize capacity) {
         this.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);

@@ -8,16 +8,16 @@
 // test is "is it a parameter?", and `v` is one — so without this rule the dangling borrow is ACCEPTED.
 //
 // The legal shape is `view_contract_pinned_ok.kama`: the same self-constructing slot, but taking a
-// `Ptr<T>` the returned view can borrow.
+// `UnsafePtr<T>` the returned view can borrow.
 
 type contract FromWide<B is This> for value {
     ctor B fromWide(int64 v);
 }
 
 type view Span implements FromWide<This> {
-    Ptr<int64> p; int32 n;
+    UnsafePtr<int64> p; int32 n;
 
-    public ctor make(Ptr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public ctor make(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }
 }
 

@@ -70,7 +70,7 @@ turbofish `f::<T>()`); **operator overloading** + full static methods; the full
 sorted containers/`View<T>`/`string`, bounds-checked + RAII); the **`give`/`copy`** by-value
 ownership model with compile-time use-after-move checking; **`const`-correctness**; **access
 control** (private-by-default, `public`/`protected`/`friend`); **namespaces** + multi-file
-builds; **C FFI** (`extern`, `Ptr`, raw memory confined to an explicit `unsafe { }` block);
+builds; **C FFI** (`extern`, `UnsafePtr`, raw memory confined to an explicit `unsafe { }` block);
 **function pointers** (`fnptr`, `Type::method`, `BindableFunctionPtr`); **string interpolation**
 + format specifiers; **serialization** (`@generate`, by-value + object graph + polymorphic);
 **shared-nothing concurrency** (isolates, typed channels, structured `scope`, `Atomic<T>`,

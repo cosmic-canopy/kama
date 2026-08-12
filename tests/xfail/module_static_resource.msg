@@ -1,1 +1,1 @@
-must be a value, Ptr, or InlineArray
+must be a value, UnsafePtr, or InlineArray

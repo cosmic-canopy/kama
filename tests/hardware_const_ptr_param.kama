@@ -1,6 +1,6 @@
-// MCU step 2: `const hardware Ptr<T>` lowers to `const volatile T*` — a read-only status register
+// MCU step 2: `const hardware UnsafePtr<T>` lowers to `const volatile T*` — a read-only status register
 // (volatile so each read re-fetches; const so the driver can't write through it).
-fn uint32 peek(const hardware Ptr<uint32> reg) { unsafe { return reg[0]; } }
+fn uint32 peek(const hardware UnsafePtr<uint32> reg) { unsafe { return reg[0]; } }
 
 fn int32 main() {
     uint32 cell = 42;

@@ -1,9 +1,9 @@
 // P3 guard: `.as<T>()` recovers T by COPYING it out of the box, so T must not own resources (a value copy
 // would alias an owning payload → double-free). An error enum that owns a `Shared<Probe>` is rejected.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
-type resource Probe { Ptr p; public Probe(){ unsafe { this.p = malloc(n: 8); } } ~Probe(){ unsafe { free(p: this.p); } } public fn int32 v(){return 1;} }
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+type resource Probe { UnsafePtr p; public Probe(){ unsafe { this.p = malloc(n: 8); } } ~Probe(){ unsafe { free(p: this.p); } } public fn int32 v(){return 1;} }
 type enum LoadError implements Error {
     Missing, Wrapped(Shared<Probe> probe);
 

@@ -6,19 +6,19 @@ import std::collections::{DynamicArray, FixedArray, View};
 export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
-// only `int32` fds, `Ptr` handles, and scalar out-params.
+// only `int32` fds, `UnsafePtr` handles, and scalar out-params.
 extern "kama_os.h";
-extern fn int32  kama_open_read(Ptr<int8> path);
-extern fn int32  kama_open_create(Ptr<int8> path);
-extern fn isize  kama_read(int32 fd, Ptr<uint8> buf, usize n);
-extern fn isize  kama_write(int32 fd, Ptr<uint8> buf, usize n);
+extern fn int32  kama_open_read(UnsafePtr<int8> path);
+extern fn int32  kama_open_create(UnsafePtr<int8> path);
+extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
+extern fn isize  kama_write(int32 fd, UnsafePtr<uint8> buf, usize n);
 extern fn int32  kama_close_fd(int32 fd);
-extern fn int32  kama_fstat_size(int32 fd, Ptr<uint64> outSize, Ptr<int32> outIsDir);
-extern fn int32  kama_path_stat(Ptr<int8> path, Ptr<uint64> outSize, Ptr<int32> outIsDir);
-extern fn int32  kama_unlink(Ptr<int8> path);
-extern fn Ptr    kama_diropen(Ptr<int8> path);
-extern fn string kama_dirnext(Ptr dirp);
-extern fn int32  kama_dirclose(Ptr dirp);
+extern fn int32  kama_fstat_size(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir);
+extern fn int32  kama_path_stat(UnsafePtr<int8> path, UnsafePtr<uint64> outSize, UnsafePtr<int32> outIsDir);
+extern fn int32  kama_unlink(UnsafePtr<int8> path);
+extern fn UnsafePtr    kama_diropen(UnsafePtr<int8> path);
+extern fn string kama_dirnext(UnsafePtr dirp);
+extern fn int32  kama_dirclose(UnsafePtr dirp);
 extern fn int32  kama_last_error();
 extern fn int32  kama_EINTR();
 
@@ -171,7 +171,7 @@ fn Result<Unit, IoError> remove(ref string path) {
 
 // DynamicArray a directory's entries (excluding "." and ".."), each as an owned string.
 fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
-    Ptr dirp = kama_diropen(path: path.cstr());
+    UnsafePtr dirp = kama_diropen(path: path.cstr());
     if (dirp == null) { return Result::Err(error: lastError()); }
     DynamicArray<string> names = DynamicArray.empty();
     while (true) {

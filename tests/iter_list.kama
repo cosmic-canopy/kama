@@ -1,14 +1,14 @@
 // A NON-contiguous container: a singly-linked list whose iterator walks `next` pointers (no index).
 // This is exactly what index-based `foreach` could never do — proving the protocol is iterator-based.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
-type value Node { public int32 val; public Ptr<Node> nextp;
-    public ctor make(int32 v) { this.val = v; this.nextp = cast<Ptr<Node>>(null); }
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+type value Node { public int32 val; public UnsafePtr<Node> nextp;
+    public ctor make(int32 v) { this.val = v; this.nextp = cast<UnsafePtr<Node>>(null); }
 }
 type value DynamicArrayIter implements Iterator<int32> {                       // the iterator IS iterated directly (has next(), no iterator())
-    Ptr<Node> cur;
-    public ctor make(Ptr<Node> head) { this.cur = head; }
+    UnsafePtr<Node> cur;
+    public ctor make(UnsafePtr<Node> head) { this.cur = head; }
     public fn Optional<int32> next() {
         if (this.cur == null) { return Optional::None; }
         unsafe { int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v); }
@@ -16,16 +16,16 @@ type value DynamicArrayIter implements Iterator<int32> {                       /
 }
 fn int32 main() {
     unsafe {
-        Ptr<Node> a = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
-        Ptr<Node> b = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
-        Ptr<Node> c = cast<Ptr<Node>>(malloc(n: sizeof(Node)));
+        UnsafePtr<Node> a = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
+        UnsafePtr<Node> b = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
+        UnsafePtr<Node> c = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
         a[0].val = 3;  a[0].nextp = b;
         b[0].val = 2;  b[0].nextp = c;
-        c[0].val = 1;  c[0].nextp = cast<Ptr<Node>>(null);
+        c[0].val = 1;  c[0].nextp = cast<UnsafePtr<Node>>(null);
         DynamicArrayIter it = DynamicArrayIter.make(head: a);
         int32 sum = 0;
         foreach (int32 x in it) { sum = sum + x; }
-        free(p: cast<Ptr>(a)); free(p: cast<Ptr>(b)); free(p: cast<Ptr>(c));
+        free(p: cast<UnsafePtr>(a)); free(p: cast<UnsafePtr>(b)); free(p: cast<UnsafePtr>(c));
         return sum;   // 6
     }
 }

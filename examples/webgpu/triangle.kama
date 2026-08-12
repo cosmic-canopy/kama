@@ -8,7 +8,7 @@
 //   # open out/triangle.html in a WebGPU-capable browser (Chrome/Edge)
 //
 // It is pure Kama over the WebGPU C API (Emscripten's emdawnwebgpu port): opaque
-// handles are `Ptr`, C structs are `type extern value` (the header owns the real
+// handles are `UnsafePtr`, C structs are `type extern value` (the header owns the real
 // layout — Kama assigns fields by name), and the async adapter/device handshake
 // rides Kama `fnptr` callbacks. App state lives on the heap (Kama has no mutable
 // globals yet) and is threaded through the WebGPU `userdata` pointer.
@@ -21,99 +21,99 @@ extern "<stdlib.h>";
 // The platform seam (std::gpu): surface creation, present, and the per-tick pump — the only
 // web-vs-native differences. Same source builds for `--target wasm` and native (see kama_gpu.h).
 extern "kama_gpu.h";
-extern fn Ptr   kama_gpu_surface(Ptr instance, uint32 width, uint32 height, Ptr<int8> title);
-extern fn void  kama_gpu_present(Ptr surface);
-extern fn int32 kama_gpu_pump(Ptr device);
+extern fn UnsafePtr   kama_gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafePtr<int8> title);
+extern fn void  kama_gpu_present(UnsafePtr surface);
+extern fn int32 kama_gpu_pump(UnsafePtr device);
 
 // ----- libc -----
-extern fn Ptr calloc(usize count, usize size);
+extern fn UnsafePtr calloc(usize count, usize size);
 
 // ----- WebGPU C structs (only the fields we touch; the header owns the layout) -----
-type extern value WGPUStringView { Ptr<int8> data; usize length; }
-type extern value WGPUChainedStruct { Ptr next; int32 sType; }
+type extern value WGPUStringView { UnsafePtr<int8> data; usize length; }
+type extern value WGPUChainedStruct { UnsafePtr next; int32 sType; }
 type extern value WGPUSurfaceConfiguration {
-    Ptr nextInChain; Ptr device; int32 format; uint64 usage;
+    UnsafePtr nextInChain; UnsafePtr device; int32 format; uint64 usage;
     uint32 width; uint32 height; int32 alphaMode; int32 presentMode;
 }
-type extern value WGPUSurfaceTexture { Ptr nextInChain; Ptr texture; int32 status; }
+type extern value WGPUSurfaceTexture { UnsafePtr nextInChain; UnsafePtr texture; int32 status; }
 type extern value WGPUColor { float64 r; float64 g; float64 b; float64 a; }
 type extern value WGPURenderPassColorAttachment {
-    Ptr nextInChain; Ptr view; uint32 depthSlice; Ptr resolveTarget;
+    UnsafePtr nextInChain; UnsafePtr view; uint32 depthSlice; UnsafePtr resolveTarget;
     int32 loadOp; int32 storeOp; WGPUColor clearValue;
 }
 type extern value WGPURenderPassDescriptor {
-    Ptr nextInChain; WGPUStringView label; usize colorAttachmentCount; Ptr colorAttachments;
+    UnsafePtr nextInChain; WGPUStringView label; usize colorAttachmentCount; UnsafePtr colorAttachments;
 }
 
 // --- M2: shader module + render pipeline ---
 type extern value WGPUShaderSourceWGSL { WGPUChainedStruct chain; WGPUStringView code; }
-type extern value WGPUShaderModuleDescriptor { Ptr nextInChain; WGPUStringView label; }
-type extern value WGPUColorTargetState { Ptr nextInChain; int32 format; Ptr blend; uint64 writeMask; }
+type extern value WGPUShaderModuleDescriptor { UnsafePtr nextInChain; WGPUStringView label; }
+type extern value WGPUColorTargetState { UnsafePtr nextInChain; int32 format; UnsafePtr blend; uint64 writeMask; }
 type extern value WGPUVertexState {
-    Ptr nextInChain; Ptr module; WGPUStringView entryPoint;
-    usize constantCount; Ptr constants; usize bufferCount; Ptr buffers;
+    UnsafePtr nextInChain; UnsafePtr module; WGPUStringView entryPoint;
+    usize constantCount; UnsafePtr constants; usize bufferCount; UnsafePtr buffers;
 }
 type extern value WGPUFragmentState {
-    Ptr nextInChain; Ptr module; WGPUStringView entryPoint;
-    usize constantCount; Ptr constants; usize targetCount; Ptr targets;
+    UnsafePtr nextInChain; UnsafePtr module; WGPUStringView entryPoint;
+    usize constantCount; UnsafePtr constants; usize targetCount; UnsafePtr targets;
 }
 type extern value WGPUPrimitiveState {
-    Ptr nextInChain; int32 topology; int32 stripIndexFormat; int32 frontFace; int32 cullMode; uint32 unclippedDepth;
+    UnsafePtr nextInChain; int32 topology; int32 stripIndexFormat; int32 frontFace; int32 cullMode; uint32 unclippedDepth;
 }
-type extern value WGPUMultisampleState { Ptr nextInChain; uint32 count; uint32 mask; uint32 alphaToCoverageEnabled; }
+type extern value WGPUMultisampleState { UnsafePtr nextInChain; uint32 count; uint32 mask; uint32 alphaToCoverageEnabled; }
 type extern value WGPURenderPipelineDescriptor {
-    Ptr nextInChain; WGPUStringView label; Ptr layout;
-    WGPUVertexState vertex; WGPUPrimitiveState primitive; Ptr depthStencil;
-    WGPUMultisampleState multisample; Ptr fragment;
+    UnsafePtr nextInChain; WGPUStringView label; UnsafePtr layout;
+    WGPUVertexState vertex; WGPUPrimitiveState primitive; UnsafePtr depthStencil;
+    WGPUMultisampleState multisample; UnsafePtr fragment;
 }
 
 // --- uniform buffer + bind group (feeds the rotation angle to the shader) ---
-type extern value WGPUBufferDescriptor { Ptr nextInChain; WGPUStringView label; uint64 usage; uint64 size; uint32 mappedAtCreation; }
+type extern value WGPUBufferDescriptor { UnsafePtr nextInChain; WGPUStringView label; uint64 usage; uint64 size; uint32 mappedAtCreation; }
 type extern value WGPUBindGroupEntry {
-    Ptr nextInChain; uint32 binding; Ptr buffer; uint64 offset; uint64 size; Ptr sampler; Ptr textureView;
+    UnsafePtr nextInChain; uint32 binding; UnsafePtr buffer; uint64 offset; uint64 size; UnsafePtr sampler; UnsafePtr textureView;
 }
-type extern value WGPUBindGroupDescriptor { Ptr nextInChain; WGPUStringView label; Ptr layout; usize entryCount; Ptr entries; }
+type extern value WGPUBindGroupDescriptor { UnsafePtr nextInChain; WGPUStringView label; UnsafePtr layout; usize entryCount; UnsafePtr entries; }
 
 // The async callback shapes (message is a WGPUStringView passed by value).
-fnptr void AdapterCb(int32 status, Ptr adapter, WGPUStringView message, Ptr userdata1, Ptr userdata2);
-fnptr void DeviceCb(int32 status, Ptr device, WGPUStringView message, Ptr userdata1, Ptr userdata2);
+fnptr void AdapterCb(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
+fnptr void DeviceCb(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr userdata1, UnsafePtr userdata2);
 
-type extern value WGPURequestAdapterCallbackInfo { Ptr nextInChain; int32 mode; AdapterCb callback; Ptr userdata1; Ptr userdata2; }
-type extern value WGPURequestDeviceCallbackInfo  { Ptr nextInChain; int32 mode; DeviceCb  callback; Ptr userdata1; Ptr userdata2; }
+type extern value WGPURequestAdapterCallbackInfo { UnsafePtr nextInChain; int32 mode; AdapterCb callback; UnsafePtr userdata1; UnsafePtr userdata2; }
+type extern value WGPURequestDeviceCallbackInfo  { UnsafePtr nextInChain; int32 mode; DeviceCb  callback; UnsafePtr userdata1; UnsafePtr userdata2; }
 
 // ----- WebGPU functions -----
-extern fn Ptr  wgpuCreateInstance(Ptr descriptor);
-extern fn void wgpuInstanceRequestAdapter(Ptr instance, Ptr options, WGPURequestAdapterCallbackInfo callbackInfo);
-extern fn void wgpuAdapterRequestDevice(Ptr adapter, Ptr descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
-extern fn Ptr  wgpuDeviceGetQueue(Ptr device);
-extern fn void wgpuSurfaceConfigure(Ptr surface, Ptr config);
-extern fn void wgpuSurfaceGetCurrentTexture(Ptr surface, Ptr surfaceTexture);
-extern fn Ptr  wgpuTextureCreateView(Ptr texture, Ptr descriptor);
-extern fn Ptr  wgpuDeviceCreateCommandEncoder(Ptr device, Ptr descriptor);
-extern fn Ptr  wgpuCommandEncoderBeginRenderPass(Ptr encoder, Ptr descriptor);
-extern fn void wgpuRenderPassEncoderEnd(Ptr renderPassEncoder);
-extern fn Ptr  wgpuCommandEncoderFinish(Ptr encoder, Ptr descriptor);
-extern fn void wgpuQueueSubmit(Ptr queue, usize commandCount, Ptr commands);
-extern fn void wgpuRenderPassEncoderRelease(Ptr renderPassEncoder);
-extern fn void wgpuCommandBufferRelease(Ptr commandBuffer);
-extern fn void wgpuCommandEncoderRelease(Ptr encoder);
-extern fn void wgpuTextureViewRelease(Ptr textureView);
-extern fn void wgpuTextureRelease(Ptr texture);
-extern fn Ptr  wgpuDeviceCreateShaderModule(Ptr device, Ptr descriptor);
-extern fn Ptr  wgpuDeviceCreateRenderPipeline(Ptr device, Ptr descriptor);
-extern fn void wgpuRenderPassEncoderSetPipeline(Ptr renderPassEncoder, Ptr pipeline);
-extern fn void wgpuRenderPassEncoderDraw(Ptr renderPassEncoder, uint32 vertexCount, uint32 instanceCount, uint32 firstVertex, uint32 firstInstance);
-extern fn Ptr  wgpuDeviceCreateBuffer(Ptr device, Ptr descriptor);
-extern fn void wgpuQueueWriteBuffer(Ptr queue, Ptr buffer, uint64 bufferOffset, Ptr data, usize size);
-extern fn Ptr  wgpuRenderPipelineGetBindGroupLayout(Ptr pipeline, uint32 groupIndex);
-extern fn Ptr  wgpuDeviceCreateBindGroup(Ptr device, Ptr descriptor);
-extern fn void wgpuRenderPassEncoderSetBindGroup(Ptr renderPassEncoder, uint32 groupIndex, Ptr group, usize dynamicOffsetCount, Ptr dynamicOffsets);
+extern fn UnsafePtr  wgpuCreateInstance(UnsafePtr descriptor);
+extern fn void wgpuInstanceRequestAdapter(UnsafePtr instance, UnsafePtr options, WGPURequestAdapterCallbackInfo callbackInfo);
+extern fn void wgpuAdapterRequestDevice(UnsafePtr adapter, UnsafePtr descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+extern fn UnsafePtr  wgpuDeviceGetQueue(UnsafePtr device);
+extern fn void wgpuSurfaceConfigure(UnsafePtr surface, UnsafePtr config);
+extern fn void wgpuSurfaceGetCurrentTexture(UnsafePtr surface, UnsafePtr surfaceTexture);
+extern fn UnsafePtr  wgpuTextureCreateView(UnsafePtr texture, UnsafePtr descriptor);
+extern fn UnsafePtr  wgpuDeviceCreateCommandEncoder(UnsafePtr device, UnsafePtr descriptor);
+extern fn UnsafePtr  wgpuCommandEncoderBeginRenderPass(UnsafePtr encoder, UnsafePtr descriptor);
+extern fn void wgpuRenderPassEncoderEnd(UnsafePtr renderPassEncoder);
+extern fn UnsafePtr  wgpuCommandEncoderFinish(UnsafePtr encoder, UnsafePtr descriptor);
+extern fn void wgpuQueueSubmit(UnsafePtr queue, usize commandCount, UnsafePtr commands);
+extern fn void wgpuRenderPassEncoderRelease(UnsafePtr renderPassEncoder);
+extern fn void wgpuCommandBufferRelease(UnsafePtr commandBuffer);
+extern fn void wgpuCommandEncoderRelease(UnsafePtr encoder);
+extern fn void wgpuTextureViewRelease(UnsafePtr textureView);
+extern fn void wgpuTextureRelease(UnsafePtr texture);
+extern fn UnsafePtr  wgpuDeviceCreateShaderModule(UnsafePtr device, UnsafePtr descriptor);
+extern fn UnsafePtr  wgpuDeviceCreateRenderPipeline(UnsafePtr device, UnsafePtr descriptor);
+extern fn void wgpuRenderPassEncoderSetPipeline(UnsafePtr renderPassEncoder, UnsafePtr pipeline);
+extern fn void wgpuRenderPassEncoderDraw(UnsafePtr renderPassEncoder, uint32 vertexCount, uint32 instanceCount, uint32 firstVertex, uint32 firstInstance);
+extern fn UnsafePtr  wgpuDeviceCreateBuffer(UnsafePtr device, UnsafePtr descriptor);
+extern fn void wgpuQueueWriteBuffer(UnsafePtr queue, UnsafePtr buffer, uint64 bufferOffset, UnsafePtr data, usize size);
+extern fn UnsafePtr  wgpuRenderPipelineGetBindGroupLayout(UnsafePtr pipeline, uint32 groupIndex);
+extern fn UnsafePtr  wgpuDeviceCreateBindGroup(UnsafePtr device, UnsafePtr descriptor);
+extern fn void wgpuRenderPassEncoderSetBindGroup(UnsafePtr renderPassEncoder, uint32 groupIndex, UnsafePtr group, usize dynamicOffsetCount, UnsafePtr dynamicOffsets);
 
 // ----- app state (heap; threaded through WebGPU userdata) -----
 type value App {
-    public Ptr instance; public Ptr surface;    public Ptr adapter;
-    public Ptr device;   public Ptr queue;      public Ptr pipeline;
-    public Ptr uniformBuf; public Ptr bindGroup;
+    public UnsafePtr instance; public UnsafePtr surface;    public UnsafePtr adapter;
+    public UnsafePtr device;   public UnsafePtr queue;      public UnsafePtr pipeline;
+    public UnsafePtr uniformBuf; public UnsafePtr bindGroup;
     public int32 ready;  public int32 frame;
 }
 
@@ -125,15 +125,15 @@ fn string triangleWgsl() {
 }
 
 // Build the render pipeline for the triangle (device is ready; format is the surface's).
-fn Ptr makePipeline(Ptr device, int32 format) {
+fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     string wgsl = triangleWgsl();
     WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL();
     src.chain.sType = 2;                 // WGPUSType_ShaderSourceWGSL
     src.code.data = wgsl.cstr();
     src.code.length = cast<usize>(wgsl.length());
     WGPUShaderModuleDescriptor smDesc = WGPUShaderModuleDescriptor();
-    smDesc.nextInChain = cast<Ptr>(addr(of: src));
-    Ptr shader = wgpuDeviceCreateShaderModule(device: device, descriptor: addr(of: smDesc));
+    smDesc.nextInChain = cast<UnsafePtr>(addr(of: src));
+    UnsafePtr shader = wgpuDeviceCreateShaderModule(device: device, descriptor: addr(of: smDesc));
 
     WGPUColorTargetState colorTarget = WGPUColorTargetState();
     colorTarget.format = format;
@@ -145,7 +145,7 @@ fn Ptr makePipeline(Ptr device, int32 format) {
     frag.entryPoint.data = fsEntry.cstr();
     frag.entryPoint.length = cast<usize>(fsEntry.length());
     frag.targetCount = 1;
-    frag.targets = cast<Ptr>(addr(of: colorTarget));
+    frag.targets = cast<UnsafePtr>(addr(of: colorTarget));
 
     string vsEntry = "vs";
     WGPURenderPipelineDescriptor pd = WGPURenderPipelineDescriptor();
@@ -155,14 +155,14 @@ fn Ptr makePipeline(Ptr device, int32 format) {
     pd.primitive.topology = 4;           // WGPUPrimitiveTopology_TriangleList
     pd.multisample.count = 1;
     pd.multisample.mask = 4294967295ui32;    // 0xFFFFFFFF
-    pd.fragment = cast<Ptr>(addr(of: frag));
+    pd.fragment = cast<UnsafePtr>(addr(of: frag));
     return wgpuDeviceCreateRenderPipeline(device: device, descriptor: addr(of: pd));
 }
 
 // (Re)configure the surface for the device. Called once when the device is ready, and again
 // whenever wgpuSurfaceGetCurrentTexture reports the surface is out of date (native swapchains go
 // stale — e.g. after the first present, or on resize — and must be reconfigured to recover).
-fn void configureSurface(Ptr device, Ptr surface) {
+fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
     WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
     cfg.device = device;
     cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm
@@ -175,9 +175,9 @@ fn void configureSurface(Ptr device, Ptr surface) {
 }
 
 // Device is ready: grab the queue, configure the surface for the canvas, go live.
-fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u2) {
+fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
     unsafe {
-        Ptr<App> st = cast<Ptr<App>>(u1);
+        UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
         st[0].device = device;
         st[0].queue = wgpuDeviceGetQueue(device: device);
 
@@ -189,10 +189,10 @@ fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u
         WGPUBufferDescriptor bd = WGPUBufferDescriptor();
         bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08)
         bd.size = 16;
-        Ptr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
+        UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
         st[0].uniformBuf = ubuf;
 
-        Ptr bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline: st[0].pipeline, groupIndex: 0);
+        UnsafePtr bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline: st[0].pipeline, groupIndex: 0);
         WGPUBindGroupEntry entry = WGPUBindGroupEntry();
         entry.binding = 0;
         entry.buffer = ubuf;
@@ -201,7 +201,7 @@ fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u
         WGPUBindGroupDescriptor bgd = WGPUBindGroupDescriptor();
         bgd.layout = bgl;
         bgd.entryCount = 1;
-        bgd.entries = cast<Ptr>(addr(of: entry));
+        bgd.entries = cast<UnsafePtr>(addr(of: entry));
         st[0].bindGroup = wgpuDeviceCreateBindGroup(device: device, descriptor: addr(of: bgd));
 
         st[0].ready = 1;
@@ -209,9 +209,9 @@ fn void onDevice(int32 status, Ptr device, WGPUStringView message, Ptr u1, Ptr u
 }
 
 // Adapter is ready: request a device.
-fn void onAdapter(int32 status, Ptr adapter, WGPUStringView message, Ptr u1, Ptr u2) {
+fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
     unsafe {
-        Ptr<App> st = cast<Ptr<App>>(u1);
+        UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
         st[0].adapter = adapter;
 
         WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo();
@@ -223,24 +223,24 @@ fn void onAdapter(int32 status, Ptr adapter, WGPUStringView message, Ptr u1, Ptr
 }
 
 // One frame: acquire the swapchain texture, clear it to an animated colour, submit.
-fn int32 frameTick(Ptr state) {
+fn int32 frameTick(UnsafePtr state) {
     int32 keep = 1;   // 1 = keep looping; native pump flips it to 0 on window close
     unsafe {
-        Ptr<App> st = cast<Ptr<App>>(state);
+        UnsafePtr<App> st = cast<UnsafePtr<App>>(state);
         if (st[0].ready == 0) { return 1; }         // still initialising
 
-        Ptr surface = st[0].surface;
+        UnsafePtr surface = st[0].surface;
         int32 frame = st[0].frame;
         st[0].frame = frame + 1;
 
         // Spin the triangle: push the current angle into the uniform buffer.
         float32 angle = cast<float32>(frame) * 0.03;
         wgpuQueueWriteBuffer(queue: st[0].queue, buffer: st[0].uniformBuf, bufferOffset: 0,
-                             data: cast<Ptr>(addr(of: angle)), size: 4);
+                             data: cast<UnsafePtr>(addr(of: angle)), size: 4);
 
         WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
         wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
-        Ptr tex = surfTex.texture;
+        UnsafePtr tex = surfTex.texture;
         if (tex == null) {
             // Surface out of date (native swapchains go stale after present/resize) — reconfigure and
             // retry next frame. Still pump so the window stays responsive.
@@ -249,8 +249,8 @@ fn int32 frameTick(Ptr state) {
             return keep;
         }
 
-        Ptr view = wgpuTextureCreateView(texture: tex, descriptor: null);
-        Ptr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
+        UnsafePtr view = wgpuTextureCreateView(texture: tex, descriptor: null);
+        UnsafePtr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
 
         WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
         att.view = view;
@@ -265,15 +265,15 @@ fn int32 frameTick(Ptr state) {
 
         WGPURenderPassDescriptor rp = WGPURenderPassDescriptor();
         rp.colorAttachmentCount = 1;
-        rp.colorAttachments = cast<Ptr>(addr(of: att));
+        rp.colorAttachments = cast<UnsafePtr>(addr(of: att));
 
-        Ptr pass = wgpuCommandEncoderBeginRenderPass(encoder: enc, descriptor: addr(of: rp));
+        UnsafePtr pass = wgpuCommandEncoderBeginRenderPass(encoder: enc, descriptor: addr(of: rp));
         wgpuRenderPassEncoderSetPipeline(renderPassEncoder: pass, pipeline: st[0].pipeline);
         wgpuRenderPassEncoderSetBindGroup(renderPassEncoder: pass, groupIndex: 0, group: st[0].bindGroup, dynamicOffsetCount: 0, dynamicOffsets: null);
         wgpuRenderPassEncoderDraw(renderPassEncoder: pass, vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0);
         wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
-        Ptr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
-        wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<Ptr>(addr(of: cmd)));
+        UnsafePtr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
+        wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<UnsafePtr>(addr(of: cmd)));
         // Present through the seam: a real wgpuSurfacePresent natively, a no-op on the web (the
         // browser auto-presents the canvas each requestAnimationFrame tick — emdawnwebgpu aborts on
         // an explicit present).
@@ -296,25 +296,25 @@ fn int32 frameTick(Ptr state) {
 }
 
 fn int main() {
-    Ptr inst = wgpuCreateInstance(descriptor: null);
+    UnsafePtr inst = wgpuCreateInstance(descriptor: null);
 
     // Heap app-state (zeroed) so it outlives main() once the browser drives the loop.
-    Ptr<App> st = cast<Ptr<App>>(calloc(count: 1, size: sizeof(App)));
+    UnsafePtr<App> st = cast<UnsafePtr<App>>(calloc(count: 1, size: sizeof(App)));
     unsafe { st[0].instance = inst; }
 
     // Surface via the seam: the page's <canvas id="canvas"> on the web, a real 512×512 window
     // natively. Same call, one window/canvas per app — exactly what the triangle needs.
     string title = "kama — triangle";
-    Ptr surface = kama_gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
+    UnsafePtr surface = kama_gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
     unsafe { st[0].surface = surface; }
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.
     WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo();
     ci.mode = 3;                              // WGPUCallbackMode_AllowSpontaneous
     ci.callback = onAdapter;
-    ci.userdata1 = cast<Ptr>(st);
+    ci.userdata1 = cast<UnsafePtr>(st);
     wgpuInstanceRequestAdapter(instance: inst, options: null, callbackInfo: ci);
 
-    run(tick: frameTick, state: cast<Ptr>(st));   // browser-driven render loop
+    run(tick: frameTick, state: cast<UnsafePtr>(st));   // browser-driven render loop
     return 0;
 }

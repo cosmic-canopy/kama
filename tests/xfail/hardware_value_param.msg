@@ -1,1 +1,1 @@
-applies only to a `Ptr<T>` parameter
+applies only to an `UnsafePtr<T>` parameter

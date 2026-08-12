@@ -12,9 +12,9 @@ type contract Zeroed<S is This> for value {
 }
 
 type view Span implements Zeroed<This> {
-    Ptr<int64> p; int32 n;
+    UnsafePtr<int64> p; int32 n;
 
-    public ctor make(Ptr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public ctor make(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public ctor zero() { int64 t = 0i64; this.p = addr(of: t); this.n = 0; }
 }
 

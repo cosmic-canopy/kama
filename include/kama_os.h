@@ -264,7 +264,7 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 }
 
 // ---- readiness poller (select) ---------------------------------------------
-// Same shape + bit convention as the POSIX branch; a heap WSAPOLLFD[] behind a Ptr stores each fd +
+// Same shape + bit convention as the POSIX branch; a heap WSAPOLLFD[] behind an UnsafePtr stores each fd +
 // requested events (WSAPOLLFD is just a convenient {SOCKET, events, revents} record here). The wait()
 // itself uses select(), NOT WSAPoll: WSAPoll mis-handles a *connecting* socket — it can return a socket
 // as ready with revents==0 (or never signal a refused connect), so a caller resolving a non-blocking
@@ -625,7 +625,7 @@ static inline kama_string kama_dirnext(void* dirp) {
 // ---- process (std::process; POSIX fork/exec) -------------------------------
 // A child's argv/envp are built HERE as strdup'd `char*[]` — owned independently of the kama `string` RAII,
 // so they survive across fork even after the parent frees the source strings. kama holds only the opaque
-// vector `Ptr`, `int32` fds/pid, and the `int` wait-status folded to scalar accessors (like `struct stat`).
+// vector `UnsafePtr`, `int32` fds/pid, and the `int` wait-status folded to scalar accessors (like `struct stat`).
 static inline void* kama_argv_new(int32_t n) {
     return calloc((size_t)n + 1, sizeof(char*));           // n slots + NULL terminator, zeroed
 }
@@ -849,7 +849,7 @@ static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  {
 static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close((int)fd); }
 
 // ---- readiness poller (poll(2)) --------------------------------------------
-// A heap `struct pollfd[]` cursor stays OPAQUE to kama (behind a `Ptr`). interest bits: 1=read, 2=write.
+// A heap `struct pollfd[]` cursor stays OPAQUE to kama (behind an `UnsafePtr`). interest bits: 1=read, 2=write.
 // ready bits: 1=readable (incl. hangup/error so the caller reads EOF/err), 2=writable (a connect resolved).
 typedef struct kama__poller { struct pollfd* fds; int len; int cap; } kama__poller;
 static inline void* kama_poller_create(void) {

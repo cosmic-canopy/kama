@@ -6,7 +6,7 @@
 // shared object in the concurrency model (M3). All thread-safety lives HERE, in C: a single
 // pthread_mutex serializes every state transition (send, recv, endpoint-drop), so no atomics are
 // needed — the mutex also serializes liveness + free, so the second endpoint to drop frees the queue
-// race-free. The kama side stays a thin `Ptr`-handle library (Channel/Sender/Receiver), exactly like
+// race-free. The kama side stays a thin `UnsafePtr`-handle library (Channel/Sender/Receiver), exactly like
 // the Isolate handle wraps kama_isolate.h.
 //
 // A pay-for-what-you-use header (like kama_isolate.h) pulled in only by a program that
@@ -35,7 +35,7 @@ typedef struct {
 } kama_channel_t;
 
 // Create a bounded channel over T (elemSize bytes) with `cap` buffered elements (cap >= 1 for M3.1).
-// Returns an opaque handle held by kama as a `Ptr`. Panics on allocation failure (spawn-like: not a
+// Returns an opaque handle held by kama as an `UnsafePtr`. Panics on allocation failure (spawn-like: not a
 // recoverable condition in the M3 surface).
 static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     kama_channel_t* ch = (kama_channel_t*)malloc(sizeof(kama_channel_t));

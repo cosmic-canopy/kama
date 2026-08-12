@@ -6,7 +6,7 @@ background — the graphics "hello triangle", and the first step of the engine t
 ([docs/ENGINE_READINESS.md](../../docs/ENGINE_READINESS.md)).
 
 It is **pure Kama over the WebGPU C API** (Emscripten's `emdawnwebgpu` port): no C glue. Opaque handles
-are `Ptr`, the C descriptor structs are `type extern value` (the header owns the real layout — Kama assigns
+are `UnsafePtr`, the C descriptor structs are `type extern value` (the header owns the real layout — Kama assigns
 fields *by name*, so declaring only the fields you touch is safe), and the async adapter/device handshake
 rides Kama `fnptr` callbacks with app state threaded through the WebGPU `userdata` pointer.
 
@@ -31,11 +31,11 @@ is created against.
 
 | Piece | Kama |
 |---|---|
-| Opaque handles (`WGPUDevice`, `WGPUSurface`, …) | `Ptr` |
+| Opaque handles (`WGPUDevice`, `WGPUSurface`, …) | `UnsafePtr` |
 | C structs (`WGPURenderPassDescriptor`, …) | `type extern value` with only the touched fields; header owns layout |
 | `&descriptor` out/in pointers | `addr(of: x)` |
 | WGSL source / selectors → `WGPUStringView` | `s.cstr()` + `s.length()` |
-| async `RequestAdapter`/`RequestDevice` callbacks | Kama `fnptr`; state via the `userdata` `Ptr` |
+| async `RequestAdapter`/`RequestDevice` callbacks | Kama `fnptr`; state via the `userdata` `UnsafePtr` |
 | the frame loop (browser-driven) | [`std::app`](../../lib/std/app/app.kama)'s `run(tick, state)` |
 
 ## Notes / honest limitations surfaced by this example

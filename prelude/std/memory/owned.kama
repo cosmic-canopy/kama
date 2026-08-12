@@ -11,17 +11,17 @@ export { Owned };
 // letting a boxed object live in a caller-owned arena and be bulk-reclaimed on `reset()`. The allocator
 // is a copyable VALUE handle carried by value (zero-size for `GlobalAllocator`).
 type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T> {
-    Ptr<T> p;
+    UnsafePtr<T> p;
     A alloc;
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). Leaves `alloc`
     // at its default, so it EXISTS only `when [A: default]` (the completeness gate would otherwise — correctly
     // — reject a custom `A` left unassigned; a custom-`A` box comes through `adoptIn`, the placement path).
-    public ctor adopt(Ptr<T> raw) when [A: default] { this.p = raw; return this; }
+    public ctor adopt(UnsafePtr<T> raw) when [A: default] { this.p = raw; return this; }
     // Placement adopt: a raw block that came FROM `allocator`, stored so the dtor releases it through the
     // same handle (the `new(allocator: a) T(...)` path).
-    public ctor adoptIn(Ptr<T> raw, A allocator) { this.p = raw; this.alloc = allocator; return this; }
+    public ctor adoptIn(UnsafePtr<T> raw, A allocator) { this.p = raw; this.alloc = allocator; return this; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
     // zero-initialized/moved-from handle).
-    ~Owned() { unsafe { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); this.alloc.deallocate(pointer: cast<Ptr>(this.p), bytes: sizeof(T)); } } }
+    ~Owned() { unsafe { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } } }
 }

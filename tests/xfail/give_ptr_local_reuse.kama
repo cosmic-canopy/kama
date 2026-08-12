@@ -1,6 +1,6 @@
 // Session E (hardening) work item 1 — move-tracking stays intact on the bare-local raw-slot path:
 // after `buf[0] = give w`, the source `w` is consumed, so using it again is a compile error (proving
-// the new `give`-into-a-bare-`Ptr` path still marks the source moved, exactly like the field path).
+// the new `give`-into-a-bare-`UnsafePtr` path still marks the source moved, exactly like the field path).
 type resource Widget {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
@@ -9,8 +9,8 @@ type resource Widget {
 }
 
 fn int32 main() {
-    Ptr<Widget> buf = null;
-    unsafe { buf = cast<Ptr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)))); }
+    UnsafePtr<Widget> buf = null;
+    unsafe { buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)))); }
     Widget w = Widget.make(id: 42);
     unsafe { buf[0] = give w; }   // consumes w
     return w.get();          // use-after-move -> rejected

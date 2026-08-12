@@ -4,8 +4,8 @@
 // interface-element `Owned<Contract>` (the concrete is built via its named ctor, then boxed behind the vtable).
 import std::memory::{Owned, Shared};
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type value Box {
     int32 v;
@@ -14,10 +14,10 @@ type value Box {
 }
 type contract Shape for both { fn int32 area(); }
 type resource Circle implements Shape {
-    Ptr<int32> buf;
-    public ctor make(int32 r) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } return this; }
+    UnsafePtr<int32> buf;
+    public ctor make(int32 r) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } return this; }
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
-    ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+    ~Circle() { unsafe { free(p: cast<UnsafePtr>(this.buf)); } }
 }
 fn int32 main() {
     Owned<Box>    o = new Box.make(v: 3);       // intrinsic concrete Owned

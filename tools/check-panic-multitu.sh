@@ -30,7 +30,7 @@ KAMA
 cat > "$tmp/main.kama" <<'KAMA'
 import Lib::{boom};
 extern "<unistd.h>";
-extern fn int64 write(int32 fd, Ptr buf, usize n);
+extern fn int64 write(int32 fd, UnsafePtr buf, usize n);
 fn void onPanic() {
     string m = "HANDLER-RAN-CROSS-TU\n";
     unsafe { write(fd: 2, buf: m.cstr(), n: cast<usize>(m.length())); }

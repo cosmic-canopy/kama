@@ -15,7 +15,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    maps, file I/O, and tagged unions in the language first.*
    - *Tied to this:* the built-in containers/smart-pointers are compiler intrinsics with hand-tuned
      **C** runtime bodies. Generics unify the *surface* but keep those C bodies. **Reimplementing them
-     as kama generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`Ptr`)
+     as kama generic library types** (the Rust-`Vec` "unsafe core, safe API" model, in `unsafe`/`UnsafePtr`)
      is a possible *later* step. It buys nothing for runtime performance (monomorphization makes both
      identical) and isn't needed for the language to be complete — its payoff is *this* goal,
      self-hosting (a kama stdlib for a kama compiler). The generics engine is built so this is a
@@ -35,7 +35,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    `Weak<T>`). These are compiler-known intrinsics whose unsafe internals (raw pointers,
    `malloc`/`free`) live ONLY in `kama_runtime.h` — the Rust-`Vec`/Swift-`FixedArray` model: unsafe core, safe
    API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
-   **`unsafe { }`** block + `Ptr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
+   **`unsafe { }`** block + `UnsafePtr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
    (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape, and the safe surface
    never sees it. (Self-hosting the compiler in kama — goal #1 — is the other place a contained escape may
    matter.)
@@ -46,7 +46,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    is a compile error, a `Weak<T>` can only be reached through `tryUpgrade` (whose result forces you to
    handle the dead case), and (with the escape check) a borrow can't dangle. So **`== null` / `!= null` on a
    safe type is a compile error** with guidance — the C habit of null-checking a pointer is both unnecessary
-   and checks the wrong thing here. The `null` literal and nullability are confined to **`Ptr<T>` at the FFI
+   and checks the wrong thing here. The `null` literal and nullability are confined to **`UnsafePtr<T>` at the FFI
    boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
    the null-reference "billion-dollar mistake."
 
@@ -106,7 +106,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    for narrowing. Prefer surfacing intent over inferring it.
    - **Greppable / self-describing syntax.** Every declaration and dangerous operation is marked by a
      keyword or operator you can search for: `fn` on every function/method, `unsafe { }` for raw memory,
-     the `…Ptr`/smart-pointer families for pointers, and `::` for scope resolution vs `.` for instance
+     the `…UnsafePtr`/smart-pointer families for pointers, and `::` for scope resolution vs `.` for instance
      access. Intent is visible to a human, a tool, or an LLM at a glance — no guessing which `Type name(`
      is a declaration vs a call, or which access crosses a namespace vs an object.
 

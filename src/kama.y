@@ -488,7 +488,7 @@ code_declaration
 
 /* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
    (fn/type don't start with it), so no conflict. Reuses `variable_declarators`;
-   const-init + value/Ptr/InlineArray legality are enforced semantically in the emitter. */
+   const-init + value/UnsafePtr/InlineArray legality are enforced semantically in the emitter. */
 module_variable_declaration
   : STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $3, $4); mv->isHardware = ($2 != nullptr); $$ = mv; }
   | attribute_list STATIC hardware_opt type variable_declarators SEMICOLON   { auto mv = std::make_shared<ModuleVariableDeclaration>(SCANNER_CODEGENCONTEXT, $4, $5); mv->isHardware = ($3 != nullptr); mv->attributes = $1; $$ = mv; }   /* `@section(".x") static …` */
@@ -587,7 +587,7 @@ basic_identifier
            close (see kama.l); drop it back now that this `>` closed the list. */
         yyget_extra(scanner)->genericDepth--;
         /* `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
-           single-arg consumer (Ptr/collections/guards) is untouched; multi-arg sites read genericArgs. */
+           single-arg consumer (UnsafePtr/collections/guards) is untouched; multi-arg sites read genericArgs. */
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
         id->genericArgs = $4;
         STAMP_LOC(id, @1);   /* the NAME only — rename must not swallow `<A, B, …>` */
@@ -1734,7 +1734,7 @@ const_opt
   | CONST           { $$ = $1; }
   ;
 /* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
-   modifier) so it appears only where it is meaningful: a module `static` and a `Ptr<T>` parameter. */
+   modifier) so it appears only where it is meaningful: a module `static` and an `UnsafePtr<T>` parameter. */
 hardware_opt
   : /* Nothing */   { $$ = SharedString(); }
   | HARDWARE        { $$ = $1; }

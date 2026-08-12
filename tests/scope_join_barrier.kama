@@ -5,10 +5,10 @@
 import std::concurrent;
 
 type resource Slot {
-    Ptr<int32> cell;
+    UnsafePtr<int32> cell;
     int32 value;
 
-    public ctor make(Ptr<int32> cell, int32 value) {
+    public ctor make(UnsafePtr<int32> cell, int32 value) {
         this.cell = cell;
         this.value = value;
     }

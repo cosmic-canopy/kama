@@ -1,4 +1,4 @@
-// `hardware` applies only to a `Ptr<T>` parameter (a pointer to an MMIO register), not a scalar value —
+// `hardware` applies only to an `UnsafePtr<T>` parameter (a pointer to an MMIO register), not a scalar value —
 // a by-value `int32` has no memory the compiler must treat as volatile. Rejected at emit.
 fn void f(hardware int32 x) { }
 fn int32 main() { return 0; }

@@ -1,21 +1,21 @@
 // A DESTRUCTIBLE implementer owned polymorphically: Box<Shape> drop must run Circle's ~dtor through the
 // vtable's __dtor slot, freeing its heap buffer. ASan/LeakSanitizer-clean == the virtual dtor ran.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type contract Shape for both { fn int32 area(); }
 type resource Circle implements Shape {
-    Ptr<int32> buf;
-    public ctor make(int32 r) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } }
+    UnsafePtr<int32> buf;
+    public ctor make(int32 r) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } }
     public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
-    ~Circle() { unsafe { free(p: cast<Ptr>(this.buf)); } }   // must run via vtbl->__dtor
+    ~Circle() { unsafe { free(p: cast<UnsafePtr>(this.buf)); } }   // must run via vtbl->__dtor
 }
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
-    Ptr<T> p;
-    public ctor adopt(Ptr<T> raw) { this.p = raw; return this; }
+    UnsafePtr<T> p;
+    public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    ~Box() { unsafe { free(p: cast<Ptr>(this.p)); } }
+    ~Box() { unsafe { free(p: cast<UnsafePtr>(this.p)); } }
 }
 fn int32 main() {
     Box<Shape> a = new Circle.make(r: 6);

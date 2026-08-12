@@ -1,5 +1,5 @@
 // `std::ptr::relocate` — the bitwise move-out of raw storage, behind an `out` parameter. It replaces the
-// open-coded `slot T x; Ptr<T> d = addr(of: x); unsafe { d[0] = src[i]; }` that four collections carried,
+// open-coded `slot T x; UnsafePtr<T> d = addr(of: x); unsafe { d[0] = src[i]; }` that four collections carried,
 // which was the only fill a `slot` had that was neither an assignment nor an `out` argument.
 //
 // The source slot is left STALE — the bytes are still there — so the caller must vacate it or the value

@@ -658,9 +658,9 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
     kama_string r; r.data = buf; r.len = self->len; r.cap = self->len + 1; return r;
 }
 // Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
-// iterator hold a borrowed `Ptr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
+// iterator hold a borrowed `UnsafePtr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
 // pieces, without exposing raw allocation to kama source. Declared in the prelude as
-// `extern fn string kama_string_from_raw(Ptr<uint8> base, int32 start, int32 len);`. len<=0 -> "".
+// `extern fn string kama_string_from_raw(UnsafePtr<uint8> base, int32 start, int32 len);`. len<=0 -> "".
 static inline kama_string kama_string_from_raw(const uint8_t* base, int32_t start, int32_t len) {
     kama_string r;
     if (start < 0 || len <= 0) { r.data = NULL; r.len = 0; r.cap = 0; return r; }   // defensive: caller (Split) always passes >=0

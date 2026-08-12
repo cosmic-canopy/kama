@@ -2,8 +2,8 @@ namespace std::collections;
 export { Arena, BumpAllocator };
 
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 // The `Allocator` contract + the default `GlobalAllocator` are FOUNDATIONAL and live in the global
 // prelude (`prelude/global.kama`, beside the other core capability contracts), so both `Owned<T, A>`
@@ -17,10 +17,10 @@ extern fn void free(Ptr p);
 // into this Arena's mutable `offset`, so N containers can draw from ONE arena. The Arena must
 // OUTLIVE every container built from `handle()` — declare it first so it drops last.
 type resource Arena {
-    Ptr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
+    UnsafePtr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
 
     public ctor make(int32 capacity) {
-        unsafe { this.buffer = cast<Ptr<uint8>>(malloc(n: cast<usize>(capacity))); }
+        unsafe { this.buffer = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(capacity))); }
         if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
         this.capacity = capacity; this.offset = 0;
     }
@@ -37,7 +37,7 @@ type resource Arena {
     // containers living in it — the caller drops those first, then resets.
     public fn void reset() { this.offset = 0; }
 
-    ~Arena() { unsafe { free(p: cast<Ptr>(this.buffer)); } }
+    ~Arena() { unsafe { free(p: cast<UnsafePtr>(this.buffer)); } }
 }
 
 // A copyable value handle onto an `Arena`. Stores the buffer base + a raw pointer to the arena's
@@ -46,21 +46,21 @@ type resource Arena {
 // yields `None`); `deallocate` is a no-op (the Arena bulk-frees via `reset()` / its dtor). It NEVER
 // frees the arena buffer.
 type value BumpAllocator implements Allocator {
-    Ptr<uint8> buffer; Ptr<int32> offset; int32 capacity;
+    UnsafePtr<uint8> buffer; UnsafePtr<int32> offset; int32 capacity;
 
-    public ctor make(Ptr<uint8> buffer, Ptr<int32> offset, int32 capacity) {
+    public ctor make(UnsafePtr<uint8> buffer, UnsafePtr<int32> offset, int32 capacity) {
         this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
-    public fn Optional<Ptr> allocate(usize bytes) {
+    public fn Optional<UnsafePtr> allocate(usize bytes) {
         int32 b = cast<int32>(bytes);
         unsafe {
             int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
             if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
             this.offset[0] = o + b;
-            return Optional::Some(value: cast<Ptr>(addr(of: this.buffer[o])));
+            return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
         }
     }
 
-    public fn void deallocate(Ptr pointer, usize bytes) { }           // no-op: the Arena owns the region
+    public fn void deallocate(UnsafePtr pointer, usize bytes) { }           // no-op: the Arena owns the region
 }

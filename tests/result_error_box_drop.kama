@@ -2,10 +2,10 @@
 // then dropping the box must run `Enum__dtor` through the fat-handle vtbl `.__dtor`, dropping the Shared
 // (and freeing the Probe). A leak or double-free surfaces only under container SAN.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 type resource Probe {
-    Ptr p;
+    UnsafePtr p;
     public ctor make() { unsafe { this.p = malloc(n: 32); } }
     ~Probe() { unsafe { free(p: this.p); } }
     public fn int32 live() { return 1; }

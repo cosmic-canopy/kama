@@ -2,21 +2,21 @@
 // Noisy owns a heap buffer freed only in its `~dtor`, so if `drop` didn't run it, LeakSanitizer would
 // catch the leak. ASan-clean == the pointee's destructor ran through the library Box.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type resource Noisy {
-    Ptr<int32> buf;
-    public ctor make(int32 id) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = id; } }
+    UnsafePtr<int32> buf;
+    public ctor make(int32 id) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = id; } }
     public fn int32 val() { unsafe { return this.buf[0]; } }
-    ~Noisy() { unsafe { free(p: cast<Ptr>(this.buf)); } }   // must run, or `buf` leaks
+    ~Noisy() { unsafe { free(p: cast<UnsafePtr>(this.buf)); } }   // must run, or `buf` leaks
 }
 
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
-    Ptr<T> p;
-    public ctor adopt(Ptr<T> raw) { this.p = raw; return this; }
+    UnsafePtr<T> p;
+    public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public fn ref T deref() { unsafe { return this.p[0]; } }
-    ~Box() { unsafe { drop(value: this.deref()); free(p: cast<Ptr>(this.p)); } }
+    ~Box() { unsafe { drop(value: this.deref()); free(p: cast<UnsafePtr>(this.p)); } }
 }
 
 fn int32 main() {

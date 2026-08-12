@@ -4,27 +4,27 @@
 // them). Drives the JS glue on an int32 handle: a WsConnection resource's RAII close would fire on
 // emscripten's main-loop stack unwind and kill the socket mid-test — the connection is owned JS-side here.
 // (WsConnection's API is covered by net_ws_smoke.) The tick's persistent state is one raw heap block (handle
-// + phase + scratch) threaded through the loop's Ptr arg, since the loop is host-driven and kama has no
+// + phase + scratch) threaded through the loop's UnsafePtr arg, since the loop is host-driven and kama has no
 // globals. The socket is CLOSED before quit(): an open handle keeps Node's event loop alive so the process
 // would never actually exit (a game likewise closes its sockets on quit).
 import std::app::{run, TickFn, quit};
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
+extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
-extern fn int32 kama_ws_connect(Ptr<int8> url);
+extern fn int32 kama_ws_connect(UnsafePtr<int8> url);
 extern fn int32 kama_ws_state(int32 h);
-extern fn int32 kama_ws_send(int32 h, Ptr<uint8> buf, usize n);
-extern fn int32 kama_ws_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_ws_send(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_ws_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_ws_close(int32 h);
 
 // Close the socket (drain Node's event loop) then exit with `code`.
 fn void finish(int32 h, int32 code) { kama_ws_close(h: h); quit(code: code); }
 
 // state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16 (send/recv).
-fn int32 tick(Ptr state) {
+fn int32 tick(UnsafePtr state) {
     unsafe {
-        Ptr<int32> hdr = cast<Ptr<int32>>(state);
-        Ptr<uint8> sc  = cast<Ptr<uint8>>(state);
+        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
+        UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
         int32 h = hdr[0];
         hdr[2] = hdr[2] + 1;
         if (hdr[2] > 2000000) { finish(h: h, code: 70); }    // timeout — never completed
@@ -51,14 +51,14 @@ fn int32 tick(Ptr state) {
 
 fn int main() {
     unsafe {
-        Ptr<uint8> block = cast<Ptr<uint8>>(malloc(n: cast<usize>(128)));
-        Ptr<int32> hdr = cast<Ptr<int32>>(cast<Ptr>(block));
+        UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
+        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
         string url = "ws://127.0.0.1:47670";
         int32 h = kama_ws_connect(url: url.cstr());
         if (h < 0) { quit(code: 60); }
         hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
         TickFn t = tick;
-        run(tick: t, state: cast<Ptr>(block));
+        run(tick: t, state: cast<UnsafePtr>(block));
     }
     return 1;
 }

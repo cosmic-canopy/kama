@@ -74,7 +74,7 @@ struct ParamSig {
     // the caller's definite-assignment analysis mark an otherwise-unassigned local live across the call.
     bool        isOut = false;
     bool        isConst = false;   // `const` param — emits `const T*` for FFI pointers
-    bool        isHardware = false; // `hardware Ptr<T>` param — emits `volatile T*` for MMIO
+    bool        isHardware = false; // `hardware UnsafePtr<T>` param — emits `volatile T*` for MMIO
     // The parameter's declaration identifier — the SAME node registerBinding keys its DefSite on, which
     // is what lets a call-site LABEL be indexed as a reference to it (LSP M6 A2). Analysis-only; null for
     // the synthesized signatures of string/collection intrinsics, which have no source declaration.
@@ -230,7 +230,7 @@ struct ClassInfo {
     TypeKind                          kind = TypeKind::Neutral;   // set to value/resource for user types
     // `type view` — a non-escaping, stack-only borrow (C# `ref struct`): codegens like a `value`
     // (inline, owns nothing, no dtor) but the escape checker forbids it as a return/field/collection
-    // element (like a `contract`). It borrows raw `Ptr<T>` it does not own; see isNonEscapingBorrow.
+    // element (like a `contract`). It borrows raw `UnsafePtr<T>` it does not own; see isNonEscapingBorrow.
     bool                              isBorrow = false;
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
@@ -290,7 +290,7 @@ struct ClassInfo {
     // field is a compile error. Distinct from a `const` binding (which permits a mutable alias elsewhere).
     bool                              isImmutableQualified = false;
     // Deeply/transitively immutable (computed): `isImmutableQualified` AND every field/base/variant-payload/
-    // element is itself deeply immutable, with no raw `Ptr`/mutable-`Owned`/mutable collection. Populated by
+    // element is itself deeply immutable, with no raw `UnsafePtr`/mutable-`Owned`/mutable collection. Populated by
     // computeDeeplyImmutable(). A `Shared<T>`/`Weak<T>` over such a `T` is sendable across isolates (its
     // control block uses the ATOMIC refcount flavor; see useAtomicRefcount) and does NOT set reachesSharedWeak.
     bool                              deeplyImmutable = false;
@@ -1227,7 +1227,7 @@ private:
     // a user class/enum/contract name is replaced by its use-site-resolved mangled name (qualifier
     // cleared), recursively for generic args. This lets a cross-module generic instance
     // (`std::memory::Owned<Counter>` used in another file) carry its concrete args through the
-    // template's ctx without the arg's home mangle being stripped. Primitives/`Ptr`/`This` pass through.
+    // template's ctx without the arg's home mangle being stripped. Primitives/`UnsafePtr`/`This` pass through.
     SharedIdentifier absolutizeType(SharedIdentifier t);
     // Generic TYPES: discover `Box<Arg>` uses, build one specialized ClassInfo each, emit under subst.
     void scanTypeForGenericTypes(SharedIdentifier t);
@@ -1237,7 +1237,7 @@ private:
     // Its defaults then fill in at genericTypeMangle / registerGenericTypeInst (empty args).
     bool allTypeParamsDefaulted(const std::string& tmpl) const;
     // True iff a (post-substitution) type arg still carries an UNBOUND type-parameter — a bare name resolving
-    // to no known type (nor a primitive / This / Ptr / usize / isize), recursing into nested generic args.
+    // to no known type (nor a primitive / This / UnsafePtr / usize / isize), recursing into nested generic args.
     // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.
     bool argCarriesUnboundParam(const SharedIdentifier& a);
     std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
@@ -1290,7 +1290,7 @@ private:
     // `A`. Pre-flight only (placementAllocator with emit=false) — the caller re-runs it with emit=true.
     bool ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line);
     // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
-    // placement-construct into `cls` via its `adopt(Ptr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
+    // placement-construct into `cls` via its `adopt(UnsafePtr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
     std::string heapOwnerTarget(const std::string& cls);
     // RAII: while emitting a generic-contract instance's vtbl / a class's impl-vtable for it, bind
     // T->concrete (and its home ctx) so the `T`-typed method sigs resolve — a no-op for a plain
@@ -1493,7 +1493,7 @@ private:
     // triad above). Used by checkChannelSendability to find every `channel<T>` instantiation site.
     std::string _channelTmpl, _senderTmpl, _receiverTmpl;
     // std::concurrent's `Atomic<T>` generic-template key (M6). Captured at collection like the family above;
-    // used to validate the element (integer/`Ptr` scalar only) and to exempt an `Atomic` from the
+    // used to validate the element (integer/`UnsafePtr` scalar only) and to exempt an `Atomic` from the
     // disjoint-borrow rule (several isolates may `ref`-borrow the SAME atomic cell — the sanctioned case).
     std::string _atomicTmpl;
     std::vector<ParamSig> paramSigsOf(SharedParameterList params);
@@ -1540,7 +1540,7 @@ private:
     // Contracts
     bool isInterface(const std::string& name) const { return _interfaces.count(name) != 0; }
     // A non-escaping borrow: a contract (fat-ptr, borrows its object) OR a `type view` (borrows a raw
-    // `Ptr<T>`). Both are rejected as a FIELD or COLLECTION ELEMENT — they'd dangle. (A view may still be
+    // `UnsafePtr<T>`). Both are rejected as a FIELD or COLLECTION ELEMENT — they'd dangle. (A view may still be
     // RETURNED when it borrows `this`/a `ref` param; that is checked per-ReturnNode, not here.)
     bool isNonEscapingBorrow(const std::string& name) const {
         if (isInterface(name)) return true;
@@ -1592,8 +1592,8 @@ private:
     bool exprDiverges(const ASTNode* n) const;          // a `panic(...)` call
     bool hasLoopBreak(const SharedStatement& s) const;  // a `break` escaping THIS loop
     bool isLiteralTrue(const SharedExpression& e) const;
-    std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is Ptr<T>, the element C-type; else ""
-    std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is Ptr<T>, the element C-type; else "" (store-path only)
+    std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
+    std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive
     std::string receiverScalarCType(SharedExpression e); // C scalar type of a primitive receiver place (`p.x`, `arr[i]`), "" if none
     // The exact KAMA type node behind a place expression (local/param/foreach binding, or a field through an
@@ -1847,7 +1847,7 @@ private:
     void        checkNamedCtorComplete(ClassInfo& owner, SharedBlock body);
     void        checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode* mnode);   // a view ctor may only borrow its params
     // Construction-model M8b: a value field may be left unassigned in a ctor iff its type is DEFAULT-FILLABLE
-    // (a primitive / raw `Ptr` — zero is a valid value; an intrinsic collection — zero is a valid empty; or a
+    // (a primitive / raw `UnsafePtr` — zero is a valid value; an intrinsic collection — zero is a valid empty; or a
     // type with an explicit `default` ctor). Otherwise it must be explicitly assigned. `concreteCType` is the
     // field's type ALREADY resolved to its concrete C name (under the active _typeSubst / per instance).
     bool        isDefaultFillable(const std::string& concreteCType);

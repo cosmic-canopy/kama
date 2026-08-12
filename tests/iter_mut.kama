@@ -2,20 +2,20 @@
 // `next()` — mutation persists. (Optional can't carry a place, so mutable is a parallel iterator,
 // Rust's iter()/iter_mut() split.)
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 type value VecIterMut<T> implements IteratorMut<T> {
-    Ptr<T> data; int32 pos; int32 len;
-    public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafePtr<T> data; int32 pos; int32 len;
+    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
     public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
 }
 type resource Vec<T> implements IterableMut<T> {
-    Ptr<T> data; int32 len;
-    public ctor make(int32 n) { this.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
+    UnsafePtr<T> data; int32 len;
+    public ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
     public ref T operator[](int32 i) { unsafe { return this.data[i]; } }
     public fn VecIterMut<T> iterMut() { return VecIterMut.make(data: this.data, len: this.len); }
-    ~Vec() { free(p: cast<Ptr>(this.data)); }
+    ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
 fn int32 main() {
     Vec<int32> v = Vec.make(n: 3);

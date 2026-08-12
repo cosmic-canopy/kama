@@ -1,10 +1,10 @@
 // M6.2: the `immutable` qualifier is a VERIFIED guarantee, not a silent downgrade. A type that carries
-// `immutable` but holds a mutable member — here a raw `Ptr` (equally: an `Owned`/`Shared`/`Weak` or a
+// `immutable` but holds a mutable member — here a raw `UnsafePtr` (equally: an `Owned`/`Shared`/`Weak` or a
 // mutable collection) — is a compile error naming the offending member. This is what makes
 // `Shared<immutable T>` sound to share across isolates: the compiler proved `T` has no mutable alias.
 type immutable value Bad {
     public int32 tag;
-    public Ptr<int32> raw;   // ERROR: a raw pointer is a mutable alias — `Bad` is not deeply immutable
+    public UnsafePtr<int32> raw;   // ERROR: a raw pointer is a mutable alias — `Bad` is not deeply immutable
 }
 
 fn int main() {

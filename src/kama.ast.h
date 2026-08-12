@@ -378,7 +378,7 @@ public:
     SharedIdentifier type;
     SharedIdentifier identifier;
     bool isConst = false;   // `const [ref] T x` — immutable param
-    bool isHardware = false; // `hardware Ptr<T> x` — MMIO register pointer, emits `volatile T*`
+    bool isHardware = false; // `hardware UnsafePtr<T> x` — MMIO register pointer, emits `volatile T*`
     FunctionParameterNode(CodeGenContext& context, SharedModifier modifier, SharedIdentifier type, SharedIdentifier identifier)
         : ASTNode(context),  ExpressionNode(context), modifier(modifier), type(type), identifier(identifier) { }
 };
@@ -466,7 +466,7 @@ public:
 };
 
 // A module-level `static T name = const-expr;` (MCU campaign step 1). Per-isolate by construction —
-// lowered `static KAMA_ISOLATE_LOCAL T …`. Reuses VariableDeclarator; const-init + value/Ptr/InlineArray
+// lowered `static KAMA_ISOLATE_LOCAL T …`. Reuses VariableDeclarator; const-init + value/UnsafePtr/InlineArray
 // legality are enforced semantically in the emitter (there is no grammar-level const check).
 class ModuleVariableDeclaration : public StatementNode {
 public:

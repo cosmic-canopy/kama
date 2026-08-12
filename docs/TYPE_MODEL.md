@@ -88,21 +88,21 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 - An **empty `resource`** (`Token`) is valid: "move" is decoupled from "has-a-dtor." It's the linear
   / capability / witness pattern. (A genuinely-unused one is caught by the general dead-code lint, not
   a special rule.)
-- A non-owning member does **not** make you a resource: a raw `Ptr<T>` (unsafe borrow) or a borrowed
+- A non-owning member does **not** make you a resource: a raw `UnsafePtr<T>` (unsafe borrow) or a borrowed
   `contract` value confers no ownership → still a `value`.
 
 ### `view` — borrows a range it doesn't own, stack-only
 
 A `view` is a **non-owning, second-class borrow** of a contiguous run of memory — a slice / span. The
-flagship is the stdlib `View<T>` (`{ Ptr<T> data; int32 len }`), but the kind is general: an engine can
+flagship is the stdlib `View<T>` (`{ UnsafePtr<T> data; int32 len }`), but the kind is general: an engine can
 declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { ref World w; … }`.
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
 (`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonReader`).
 
 ```kama
 type view View<T> {                               // a slice/span over a buffer it borrows
-    Ptr<T> data; int32 len;                       // fields are private-only (the raw Ptr must not leak)
-    public View(Ptr<T> data, int32 len) { this.data = data; this.len = len; }
+    UnsafePtr<T> data; int32 len;                       // fields are private-only (the raw UnsafePtr must not leak)
+    public View(UnsafePtr<T> data, int32 len) { this.data = data; this.len = len; }
     public ref T operator[](int32 i) { /* bounds-checked */ unsafe { return this.data[i]; } }
 }
 
@@ -111,7 +111,7 @@ uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownershi
 ```
 
 - **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
-  it has an invariant (a borrowed `Ptr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
+  it has an invariant (a borrowed `UnsafePtr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
   `resource` — its **fields are private-only**.
 - **Owns nothing.** A `view` may **not** declare a `~dtor` and may **not** have an owning/resource field
   (that would make it try to free memory it doesn't own) — the compiler rejects both.
@@ -209,7 +209,7 @@ Eight rules make the grid memorable:
    be meaningfully overridden, and public-overridable is bad design. The public polymorphic face is a
    **contract** (or a public non-virtual method). This bakes in **NVI** (Non-Virtual Interface).
 4. **public fields ⟺ `value`**; a `resource` (ownership encapsulated) **and a `view`** (its borrowed
-   raw `Ptr` must not leak) keep fields **private**.
+   raw `UnsafePtr` must not leak) keep fields **private**.
 5. **`~dtor` ⟺ `resource`** (forbidden on a `value` or a `view` — neither owns anything to free).
 6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values and views are sealed → use contracts; a
    contract already *is* the abstraction).

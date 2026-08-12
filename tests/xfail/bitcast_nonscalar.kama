@@ -1,5 +1,5 @@
 // `bitcast<T>` reinterprets numeric SCALARS only — a composite/user target is a compile error (there is no
-// safe same-bits reinterpret of a struct in the safe surface; that lives behind `unsafe`/`Ptr`).
+// safe same-bits reinterpret of a struct in the safe surface; that lives behind `unsafe`/`UnsafePtr`).
 type value Pair { uint32 a; uint32 b; }
 fn int32 main() {
     uint64 bits = cast<uint64>(0);

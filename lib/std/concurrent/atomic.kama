@@ -3,12 +3,12 @@ namespace std::concurrent;
 export { Atomic, MemoryOrder };
 
 // `Atomic<T>` — the ONE sanctioned cross-isolate shared-MUTABLE cell (M6). The concurrency analog of
-// `unsafe {}`/`Ptr`: an opt-in, greppable seam where a value may be read and written concurrently by
+// `unsafe {}`/`UnsafePtr`: an opt-in, greppable seam where a value may be read and written concurrently by
 // several isolates WITHOUT a data race. Everything else in the language is shared-nothing (an isolate owns
 // its state; sharing is by move (`give`) or by immutable `Shared`). When two tasks must touch the SAME
 // mutable location — a counter, a done-flag, a lock-free head pointer — that location is an `Atomic<T>`.
 //
-// `T` is an integer primitive (`int8`…`uint64`, `usize`/`isize`) or `Ptr` — a naturally-aligned lock-free
+// `T` is an integer primitive (`int8`…`uint64`, `usize`/`isize`) or `UnsafePtr` — a naturally-aligned lock-free
 // scalar. A non-scalar element (a `resource`/`value`/contract) is a compile error: atomicity is a hardware
 // property of a machine word, so a struct can't be one cell (compose several `Atomic` fields instead).
 //
@@ -56,12 +56,12 @@ fn int32 orderBits(MemoryOrder o) {
 }
 
 extern "kama_atomic.h";
-extern fn void   kama_atomic_load     (Ptr cell, Ptr dst, usize width, int32 mo);
-extern fn void   kama_atomic_store    (Ptr cell, Ptr val, usize width, int32 mo);
-extern fn void   kama_atomic_swap     (Ptr cell, Ptr val, Ptr dst, usize width, int32 mo);
-extern fn int32  kama_atomic_cas      (Ptr cell, Ptr expected, Ptr desired, usize width, int32 smo, int32 fmo);
-extern fn uint64 kama_atomic_fetch_add(Ptr cell, uint64 delta, usize width, int32 mo);
-extern fn uint64 kama_atomic_fetch_sub(Ptr cell, uint64 delta, usize width, int32 mo);
+extern fn void   kama_atomic_load     (UnsafePtr cell, UnsafePtr dst, usize width, int32 mo);
+extern fn void   kama_atomic_store    (UnsafePtr cell, UnsafePtr val, usize width, int32 mo);
+extern fn void   kama_atomic_swap     (UnsafePtr cell, UnsafePtr val, UnsafePtr dst, usize width, int32 mo);
+extern fn int32  kama_atomic_cas      (UnsafePtr cell, UnsafePtr expected, UnsafePtr desired, usize width, int32 smo, int32 fmo);
+extern fn uint64 kama_atomic_fetch_add(UnsafePtr cell, uint64 delta, usize width, int32 mo);
+extern fn uint64 kama_atomic_fetch_sub(UnsafePtr cell, uint64 delta, usize width, int32 mo);
 
 type resource Atomic<T> {
     T value;   // the one shared cell; naturally aligned (a single-field struct), so the ops are lock-free
@@ -81,14 +81,14 @@ type resource Atomic<T> {
     // The `out` boundary over the type-erased C call: `kama_atomic_load` IS an out-parameter, just spelled
     // `void*`. Naming it that way is what lets the caller's hole be filled the one way a `slot` allows.
     fn void loadInto(MemoryOrder order, out T dst) {
-        unsafe { kama_atomic_load(cell: cast<Ptr>(addr(of: this.value)), dst: cast<Ptr>(addr(of: dst)),
+        unsafe { kama_atomic_load(cell: cast<UnsafePtr>(addr(of: this.value)), dst: cast<UnsafePtr>(addr(of: dst)),
                                   width: sizeof(T), mo: orderBits(o: order)); }
     }
 
     // Atomically replace the value (seq-cst). `storeExplicit` takes a weaker ordering.
     public fn void store(T value) { this.storeExplicit(value: value, order: MemoryOrder::SeqCst); }
     public fn void storeExplicit(T value, MemoryOrder order) {
-        unsafe { kama_atomic_store(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
+        unsafe { kama_atomic_store(cell: cast<UnsafePtr>(addr(of: this.value)), val: cast<UnsafePtr>(addr(of: value)),
                                    width: sizeof(T), mo: orderBits(o: order)); }
     }
 
@@ -100,8 +100,8 @@ type resource Atomic<T> {
         return result;
     }
     fn void swapInto(T value, MemoryOrder order, out T dst) {
-        unsafe { kama_atomic_swap(cell: cast<Ptr>(addr(of: this.value)), val: cast<Ptr>(addr(of: value)),
-                                  dst: cast<Ptr>(addr(of: dst)), width: sizeof(T), mo: orderBits(o: order)); }
+        unsafe { kama_atomic_swap(cell: cast<UnsafePtr>(addr(of: this.value)), val: cast<UnsafePtr>(addr(of: value)),
+                                  dst: cast<UnsafePtr>(addr(of: dst)), width: sizeof(T), mo: orderBits(o: order)); }
     }
 
     // Compare-and-swap: if the cell equals `expected`, store `desired` and return true; otherwise write the
@@ -117,8 +117,8 @@ type resource Atomic<T> {
     }
     public fn bool compareExchangeExplicit(ref T expected, T desired, MemoryOrder success, MemoryOrder failure) {
         int32 ok = 0i32;
-        unsafe { ok = kama_atomic_cas(cell: cast<Ptr>(addr(of: this.value)), expected: cast<Ptr>(addr(of: expected)),
-                                      desired: cast<Ptr>(addr(of: desired)), width: sizeof(T),
+        unsafe { ok = kama_atomic_cas(cell: cast<UnsafePtr>(addr(of: this.value)), expected: cast<UnsafePtr>(addr(of: expected)),
+                                      desired: cast<UnsafePtr>(addr(of: desired)), width: sizeof(T),
                                       smo: orderBits(o: success), fmo: orderBits(o: failure)); }
         return ok != 0i32;
     }
@@ -127,7 +127,7 @@ type resource Atomic<T> {
     public fn T fetchAdd(T delta) { return this.fetchAddExplicit(delta: delta, order: MemoryOrder::SeqCst); }
     public fn T fetchAddExplicit(T delta, MemoryOrder order) {
         uint64 prior = 0ui64;
-        unsafe { prior = kama_atomic_fetch_add(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
+        unsafe { prior = kama_atomic_fetch_add(cell: cast<UnsafePtr>(addr(of: this.value)), delta: cast<uint64>(delta),
                                                width: sizeof(T), mo: orderBits(o: order)); }
         return cast<T>(prior);
     }
@@ -136,7 +136,7 @@ type resource Atomic<T> {
     public fn T fetchSub(T delta) { return this.fetchSubExplicit(delta: delta, order: MemoryOrder::SeqCst); }
     public fn T fetchSubExplicit(T delta, MemoryOrder order) {
         uint64 prior = 0ui64;
-        unsafe { prior = kama_atomic_fetch_sub(cell: cast<Ptr>(addr(of: this.value)), delta: cast<uint64>(delta),
+        unsafe { prior = kama_atomic_fetch_sub(cell: cast<UnsafePtr>(addr(of: this.value)), delta: cast<uint64>(delta),
                                                width: sizeof(T), mo: orderBits(o: order)); }
         return cast<T>(prior);
     }

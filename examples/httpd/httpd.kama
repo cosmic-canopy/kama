@@ -18,7 +18,7 @@ import std::io::{IoError, writeAll};
 import std::collections::{DynamicArray, FixedArray};
 
 extern "<stdio.h>";
-extern fn int32 puts(Ptr<int8> s);
+extern fn int32 puts(UnsafePtr<int8> s);
 
 // ---- small utilities --------------------------------------------------------
 // `envOr(name:, dflt:)` (config lookup with a fallback) is now in the prelude floor — no local getenv shim.
@@ -91,7 +91,7 @@ fn string mimeType(ref string path) {
 // Null-terminate `bytes` and write it to stdout as one line (cross-platform via CRT puts).
 fn void logLine(ref DynamicArray<uint8> bytes) {
     bytes.add(item: cast<uint8>(0));
-    unsafe { puts(s: cast<Ptr<int8>>(addr(of: bytes[0]))); }
+    unsafe { puts(s: cast<UnsafePtr<int8>>(addr(of: bytes[0]))); }
 }
 
 // ---- request handling -------------------------------------------------------

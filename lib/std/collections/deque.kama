@@ -7,8 +7,8 @@ export { Deque };
 // made mid-iteration (a push may have reallocated + re-homed the buffer, so a cursor would dangle). The
 // logical position `pos` maps to the physical slot `(head + pos) % cap` — the ring wraps.
 type view DequeIter<T> implements Iterator<T> {
-    Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<T> data; int32 head; int32 cap; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<T> data, int32 head, int32 cap, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -22,8 +22,8 @@ type view DequeIter<T> implements Iterator<T> {
 
 // A mutable iterator (the `foreach (ref T x in deque)` protocol): hasNext() + a place-returning next().
 type view DequeIterMut<T> implements IteratorMut<T> {
-    Ptr<T> data; int32 head; int32 cap; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<T> data, int32 head, int32 cap, int32 len, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<T> data; int32 head; int32 cap; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<T> data, int32 head, int32 cap, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -44,7 +44,7 @@ type view DequeIterMut<T> implements IteratorMut<T> {
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
 type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
                             Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
-    Ptr<T> data = null; int32 head = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
+    UnsafePtr<T> data = null; int32 head = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
     // `withCapacity` are default-allocator conveniences (custom `A` uses the allocator-taking ctors).
@@ -67,13 +67,13 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
     fn void growTo(int32 nc) {
-        Ptr<T> nd = null;
-        unsafe { nd = cast<Ptr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
-        Ptr<T> od = this.data;
+        UnsafePtr<T> nd = null;
+        unsafe { nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
+        UnsafePtr<T> od = this.data;
         int32 i = 0;
         unsafe { while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; } }
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
         }
         this.data = nd; this.head = 0; this.cap = nc;
     }
@@ -98,7 +98,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     // Move the element at physical slot `idx` OUT of the buffer into a fresh owned local. A direct
     // `T x = d[idx]` is rejected (giving out of an element leaves a moved-from owner); instead relocate
-    // bitwise through raw `Ptr<T>` aliases into a zero-init'd local — the same untracked-move technique
+    // bitwise through raw `UnsafePtr<T>` aliases into a zero-init'd local — the same untracked-move technique
     // DynamicArray.remove uses for `d[i] = d[i+1]`. The caller decrements `len` so the stale slot is never
     // dropped again, and `give`s out the returned local (single ownership preserved).
     fn T takeAt(int32 idx) {
@@ -203,7 +203,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
         }
     }
 }

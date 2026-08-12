@@ -112,7 +112,7 @@ there is nothing to infer from.
 - **`match` is exhaustive and value-producing; there is no `switch`.** Every arm must be covered, and the
   whole construct yields a value.
 - **No `null` in the safe surface.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
-  safe type is a compile error. `null` exists only for `Ptr<T>` at the FFI boundary.
+  safe type is a compile error. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
 - **No exceptions.** A constructor cannot fail — fallible acquisition is a `static`/`ctor` factory
   returning `Result`.
 - **A `string` is UTF-8 bytes.** `length()` is bytes, `s[i]` is a `uint8`, and `.chars()` is the explicit

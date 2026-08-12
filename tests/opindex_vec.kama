@@ -1,15 +1,15 @@
 // A generic, heap-owning, bounds-checked `Vec<T>` written entirely IN kama — the payoff of the
 // stdlib prerequisites: `sizeof(T)` sizes the allocation, `panic`/`assert` guard the bounds, a
-// place-returning `operator[]` gives `v[i] = x`, `Ptr<T>`+`unsafe` back the buffer, RAII frees it.
+// place-returning `operator[]` gives `v[i] = x`, `UnsafePtr<T>`+`unsafe` back the buffer, RAII frees it.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type resource Vec<T> {
-    Ptr<T> data;
+    UnsafePtr<T> data;
     int32 len;
     public ctor make(int32 n) { 
-        this.data = cast<Ptr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
+        this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
         this.len = n;
  }
     public ref T operator[](int32 i) {
@@ -18,7 +18,7 @@ type resource Vec<T> {
         unsafe { return this.data[i]; }
     }
     public fn int32 length() { return this.len; }
-    ~Vec() { free(p: cast<Ptr>(this.data)); }
+    ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
 fn int32 main() {
     Vec<int32> v = Vec.make(n: 3);

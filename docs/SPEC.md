@@ -415,8 +415,8 @@ stay in `std::collections`.
 
 ```kama
 type contract Allocator for value {
-    fn Optional<Ptr> allocate(usize bytes);  // None on OOM/exhaustion — fallible seam (never panics)
-    fn void deallocate(Ptr pointer, usize bytes);
+    fn Optional<UnsafePtr> allocate(usize bytes);  // None on OOM/exhaustion — fallible seam (never panics)
+    fn void deallocate(UnsafePtr pointer, usize bytes);
 }
 ```
 
@@ -424,7 +424,7 @@ The container stores `A alloc` by value and routes every buffer through `this.al
 dispatch is a **direct monomorphized call** (no vtable), so a `GlobalAllocator` (a zero-size handle straight
 onto libc `malloc`/`free`) costs nothing. A **stateful** allocator is a small handle pointing into a
 **caller-owned `Arena`** (one heap buffer, bump-allocated, `reset()` bulk-frees in O(1)); the arena must
-**outlive** the container — a documented contract, not a borrow-checked one (a raw `Ptr` isn't escape-checked
+**outlive** the container — a documented contract, not a borrow-checked one (a raw `UnsafePtr` isn't escape-checked
 and there is no lifetime tracking). Since Kama has no constructor overloading, a stateful allocator arrives via
 a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `alloc` on the value it builds. `Allocator`/`GlobalAllocator` are prelude (global, no import); `Arena` and `BumpAllocator` ship in
 `std::collections`:
@@ -438,7 +438,7 @@ Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handl
 // ... fill/use; xs and m draw from the one arena; their deallocate is a no-op; the Arena frees the buffer.
 ```
 
-**Fallible seam (✅ shipped, MCU step 5).** `allocate` returns `Optional<Ptr>` — `None` on OOM/exhaustion,
+**Fallible seam (✅ shipped, MCU step 5).** `allocate` returns `Optional<UnsafePtr>` — `None` on OOM/exhaustion,
 never panics. Infallible `new` and the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`, `Deque`,
 `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree keep the
 pre-step-5 **panic-on-OOM** behavior (they unwrap the `Optional` via the prelude `unwrapPtr`, panicking on
@@ -510,7 +510,7 @@ edge spelling a stateful `A` is rejected at compile time (deserialize has no all
 The smart-pointer triad `Owned`/`Shared`/`Weak` is **prelude / built-in — always in scope, no `import`**.
 RAII-over-GC *is* the language (every `new T.make(args)` already targets a `HeapOwner`, and the compiler
 special-cases the triad throughout: `HeapOwner`/`Deref`, never-null checks, drop insertion, ctrl-block layout),
-so the ownership triad is as fundamental as `int` or `Ptr` and shouldn't require an import. "Built-in" means
+so the ownership triad is as fundamental as `int` or `UnsafePtr` and shouldn't require an import. "Built-in" means
 **always-available, not rewritten in C**: they stay **kama-defined** (RAII `resource`s over `Deref`/`HeapOwner`,
 refcounting in kama), loaded as part of the prelude like the primitive `Hashable`/`Equatable` conformances.
 
@@ -654,7 +654,7 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 
 **No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
 is always valid: there is nothing to null-check. `== null` / `!= null` on a safe type is a **compile error**
-(the C habit checks the wrong thing here); `null` is only for `Ptr<T>` at the FFI boundary. A `Weak<T>`'s
+(the C habit checks the wrong thing here); `null` is only for `UnsafePtr<T>` at the FFI boundary. A `Weak<T>`'s
 liveness is obtained through `tryUpgrade() -> Optional<Shared<T>>`, whose result forces you to handle the
 dead case.
 
@@ -712,12 +712,12 @@ libraries with `--link`. The FFI boundary is the language's only "unsafe" seam (
 ```kama
 extern "<stdlib.h>";             // every C function comes from an explicit header
 extern "<math.h>";
-extern fn Ptr  malloc(usize n);     // Ptr = void* (opaque pointer/handle); usize = size_t
-extern fn void free(Ptr p);
+extern fn UnsafePtr  malloc(usize n);     // UnsafePtr = void* (opaque pointer/handle); usize = size_t
+extern fn void free(UnsafePtr p);
 extern fn float64 sqrt(float64 x);  // libm auto-links when a program `extern "<math.h>";`s (pay-for-use)
 
 fn int main() {
-    Ptr p = malloc(n: 64);
+    UnsafePtr p = malloc(n: 64);
     if (p == null) { return 1; }  // hold / null-check / compare — but no deref yet
     free(p: p);
     return cast<int>(sqrt(x: 1764.0));   // 42
@@ -731,7 +731,7 @@ an extern function, so there are no redeclaration conflicts; and the runtime hid
 (block-scope declarations), so **no** C function (not even `malloc`) is available without its header — a
 missing include is a plain C error, never a silent guess.
 
-`Ptr` is `void*`; `Ptr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
+`UnsafePtr` is `void*`; `UnsafePtr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
 **no dereference** in kama outside `unsafe`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).
 
@@ -966,7 +966,7 @@ extern "<stdlib.h>";                       // a C #include
 type extern value div_t { int32 quot; int32 rem; }   // bind an external C struct (not re-emitted)
 extern fn div_t div(int32 numer, int32 denom);
 
-extern fn float64 frexp(float64 value, Ptr<int32> exp);
+extern fn float64 frexp(float64 value, UnsafePtr<int32> exp);
 
 fn int main() {
     div_t r = div(numer: 17, denom: 5);    // r.quot=3, r.rem=2  (field access on a C struct)
@@ -1097,7 +1097,7 @@ setLogSink(s: mySink);   // set once at startup, before spawning isolates — li
 ```
 
 Modeled on `setPanicHandler` (a runtime-held slot), **not** a stored `Logger` object: a kama resource can't be
-a module-static and a `Ptr` to an interface isn't dispatchable, so the facade calls the extern
+a module-static and an `UnsafePtr` to an interface isn't dispatchable, so the facade calls the extern
 `kama_log_dispatch`, which invokes the C-held slot (or the built-in console default). On `--target embedded`
 output routes through the same weak `kama_log_sink` as `print` (freestanding, no libc); config falls back to
 the Info default (no argv/env on bare metal).
@@ -1120,13 +1120,13 @@ hygienic, one grammar (the `"${x}"`/`assert`/`print` shape), exactly like Rust `
 
 ### `unsafe { }` — raw pointer memory access
 
-The **only** place kama can touch arbitrary memory through a raw pointer. Raw `Ptr<T>` index/store is a
+The **only** place kama can touch arbitrary memory through a raw pointer. Raw `UnsafePtr<T>` index/store is a
 **compile error outside** an `unsafe { }` block — so the entire dangerous surface is explicit and greppable
 (`grep -rn 'unsafe {'`). Everything else (collections, smart pointers, FFI structs/handles/out-params,
 `addr`) stays safe.
 
 ```kama
-Ptr<int32> p = malloc(n: 16);    // void* -> int32_t* (implicit)
+UnsafePtr<int32> p = malloc(n: 16);    // void* -> int32_t* (implicit)
 unsafe {
     p[0] = 10;  p[1] = 32;       // raw store  (p[0] is *p)
     int32 v = p[0] + p[1];       // raw read
@@ -1134,11 +1134,11 @@ unsafe {
 // p[0] = 1;                     // ERROR outside unsafe: "raw pointer access requires an `unsafe { }` block"
 
 FixedArray<float32> verts = ...;
-Ptr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
+UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs `unsafe`
 ```
 
-`a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `Ptr` is valid only
+`a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `UnsafePtr` is valid only
 while the collection is alive + unmodified, and dereferencing it requires `unsafe`). An unlowered construct
 (including a safety-gate violation) is a **hard build error** — kama never emits incomplete C and claims
 success.
@@ -1256,7 +1256,7 @@ build-time config can't run kama-level code.
 
 ### Writing a collection *in* kama — `sizeof`, `panic`/`assert`, place-returning methods ✅
 
-The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
+The above pieces (a place-returning `operator[]`, `UnsafePtr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
 be written **in the language** rather than baked into the compiler. Three builtins complete the kit:
 
 - **`sizeof(T)` / `alignof(T)`** — the byte size / alignment of a type (a `usize`); both monomorphize, so
@@ -1278,7 +1278,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   `uint8..uint64`/`float32`/`float64`); a width mismatch, a non-scalar, or an operand whose scalar type isn't
   statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun.
   It is the safe-surface primitive for binary formats / hashing / endianness (`std::num` `byteswapF32` rides
-  it); raw-memory reinterpret of composites stays behind `unsafe`/`Ptr`.
+  it); raw-memory reinterpret of composites stays behind `unsafe`/`UnsafePtr`.
 - **`assert(cond:, msg:)` / `debugAssert(cond:, msg:)` / `panic(msg:)`** — a clean **trap** (writes the
   message + `file:line` to stderr, then `abort()` — not UB, the user-facing form of the built-in bounds
   trap). `msg:` is **mandatory** (empty string allowed); a failed `assert` also **auto-appends the
@@ -1291,9 +1291,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
-  library owner over `Ptr<T>` drop its heap pointee before `free`.
-- **`addr(of: place)`** — the address of a place (a field/local/element) as a `Ptr<T>`. Taking an address
-  is safe (a `Ptr` is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
+  library owner over `UnsafePtr<T>` drop its heap pointee before `free`.
+- **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`. Taking an address
+  is safe (an `UnsafePtr` is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
 - **A place-returning method** — `public fn ref T at(usize i) { … }` returns a place, exactly like
   `operator[]`, so `v.at(i) = x` works. A `ref T` result must borrow `this` or a `ref` parameter (never a
@@ -1311,7 +1311,7 @@ right method shape but no `implements` is rejected (explicit over implicit).
 - **mutable** — `foreach (ref T x in v)`: `v` provides `fn <IterMut> iterMut()` whose iterator
   `implements IteratorMut<T>` (`fn bool hasNext()` + a place-returning `fn ref T next()` — Rust's
   `iter()`/`iter_mut()` split; `Optional` can't carry a place, so mutable is a parallel iterator).
-- A borrowing iterator holds a `Ptr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
+- A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
 The prelude contracts (`type contract Iterator<T> for both { fn Optional<T> next(); }` and
 `IteratorMut<T>`) are ordinary monomorphized generic contracts, so they double as a static bound —
@@ -1326,7 +1326,7 @@ counter is bumped on every structural change (`add`), each iterator snapshots it
 The guard lives in `DynamicArray`'s own kama source (not the compiler), so it's a stdlib policy: a hand-rolled
 container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-size and can't reallocate, so they
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
-address of a place as a `Ptr<T>`; safe to take, `unsafe` to deref.)
+address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
 ### Function pointers — `fnptr` ✅
 
@@ -1391,8 +1391,8 @@ name the callback via a header `typedef` and **cast** to it at the edge:
 ```kama
 extern "<stdlib.h>";
 extern "cb.h";   // typedef int (*CompareFn)(const void*, const void*);
-fnptr int32 Comparator(Ptr<int32> a, Ptr<int32> b);
-extern fn void qsort(Ptr buf, usize nmemb, usize size, CompareFn compar);
+fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);
+extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);
 ...
 Comparator c = cmp;
 qsort(buf: a.dataPtr(), nmemb: 4, size: 4, compar: cast<CompareFn>(c));   // cast to the header's fn-ptr type
@@ -1407,14 +1407,14 @@ unmangled** C name (no `Namespace__` prefix — mirroring how `extern` keeps a l
 
 ```kama
 // gameplay.kama — a hot-reload module (note: no `main`)
-expose fn void update(Ptr<World> w, float32 dt) { /* … */ }
+expose fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }
 expose fn int   version() { return 3; }
 ```
 
 - **Native shared library:** `kama build --shared gameplay.kama -o libgameplay.so` (→ `.dylib`/`.dll` per
   platform) builds a `-fPIC -shared -fvisibility=hidden` library where **only** the `expose`d symbols are
   visible. A host `dlopen`s it and `dlsym`s `"update"` / `"version"` — the reload loop
-  (`dlopen`/watch/rebind over `unsafe`/`Ptr`) is an ordinary library, not compiler magic. A `--shared`
+  (`dlopen`/watch/rebind over `unsafe`/`UnsafePtr`) is an ordinary library, not compiler magic. A `--shared`
   module needs no `main`.
 - **WASM:** a normal `kama build --target wasm` run exports each `expose`d function
   (`KAMA_EXPORT` → `EMSCRIPTEN_KEEPALIVE`), callable from JS as `Module._update` — no `--shared` (it is
@@ -1424,7 +1424,7 @@ expose fn int   version() { return 3; }
 - **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected.
 - **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a
   collection (`DynamicArray`/`FixedArray`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
-  refcount state cannot cross a raw C boundary; pass a `Ptr<T>` or an `extern` struct instead.
+  refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead.
 - **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **bare names are unique**
   across the program (they share the C namespace — clashes with libc are yours to avoid, as with `extern`).
 
@@ -1482,9 +1482,9 @@ every function, so declarations are greppable and self-describing:
   check forbids it as a field, a collection element, or an `enum` payload, and allows it as a **return only
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
   lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
-  its fields are **private only** (its raw `Ptr<T>` must not leak). A view's **conformance is checked at the
+  its fields are **private only** (its raw `UnsafePtr<T>` must not leak). A view's **conformance is checked at the
   `implements` site**: it may not implement a contract whose `ctor` slot constructs the implementer from
-  parameters that carry no borrow (no `Ptr<T>`, no `ref`, no view) — such a constructor could only borrow one
+  parameters that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — such a constructor could only borrow one
   of its own locals, so no body could satisfy it. A slot taking something borrowable is fine, and an
   *instance* method returning the self-type is always fine (it borrows the receiver, like `View.slice()`).
   The check is a signature-level pre-filter for what no body could satisfy, not a replacement for the
@@ -1555,7 +1555,7 @@ including deserialization and copying.
 
 ```kama
 type resource Buffer {
-    Ptr<uint8> data = null;                                  // a field default states the empty value
+    UnsafePtr<uint8> data = null;                                  // a field default states the empty value
     int32 size;
     public ctor make(int32 size) { this.size = size; }        // the value under construction is `this`
     public ctor withCapacity(int32 n) { return Buffer.make(size: n); }   // reuse = an ordinary call
@@ -1581,7 +1581,7 @@ Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an own
 - **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor
   (`public Buffer(…)`). Genuine static utilities returning *other* types (`Vec3::dot` → `float`) stay
   `static fn`.
-- **A contract may require a `ctor`** — `type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }`
+- **A contract may require a `ctor`** — `type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }`
   — and generic code bounded by it may construct through the type parameter, monomorphized to the concrete
   implementer. That is why there is **no privileged `Default` contract**: "default construction" is just a
   contract requiring a zero-arg ctor.
@@ -1594,7 +1594,7 @@ kama's answer to "a returned object is always fully initialized" — it is prove
 
 Two escape hatches, both **explicit and at the declaration** rather than hidden in codegen:
 
-- a **field initializer** — `Ptr<T> data = null;`, `int32 len = 0;` — states that field's default once, and
+- a **field initializer** — `UnsafePtr<T> data = null;`, `int32 len = 0;` — states that field's default once, and
   it runs in every ctor (and for a bare local);
 - **`@generate(zero)`** blesses a whole data bag's zero state (a transparent all-public `value`).
 
@@ -1605,7 +1605,7 @@ calls at the fill site. (A generic field could not spell the latter anyway — t
 
 ```kama
 type resource Ring {
-    Ptr<uint8> data = null; int32 len = 0;   // stated defaults — every ctor inherits them
+    UnsafePtr<uint8> data = null; int32 len = 0;   // stated defaults — every ctor inherits them
     int32 cap;                                // no default -> every ctor must assign it
     public ctor withCapacity(int32 cap) { this.cap = cap; }
 }
@@ -2102,7 +2102,7 @@ handles, ring/DMA buffers, flash tables.
 static uint32 tick = 0;                 // deterministic const init at reset
 static bool     data_ready;             // no initializer → zero-init
 static InlineArray<uint8, 256> rx_buf;  // a zero-initialized buffer
-static Ptr<Uart> uart;                  // a peripheral handle (null until assigned)
+static UnsafePtr<Uart> uart;                  // a peripheral handle (null until assigned)
 
 fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolate
 ```
@@ -2113,7 +2113,7 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   a `static` **cannot be seen by another isolate → cannot race**; cross-isolate mutable sharing stays on the
   greppable `Atomic<T>` / shared-region seam (see [Concurrency](#concurrency-)). This unifies the MCU need with the threading
   model: the same declaration is race-free the day it runs multicore (proven ThreadSanitizer-clean).
-- **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `Ptr`, or `InlineArray`**
+- **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `UnsafePtr`, or `InlineArray`**
   (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
   or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or
   const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**.
@@ -2121,7 +2121,7 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is module-private (internal C linkage). A `hardware` static (`static hardware T name`) adds the
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
-  `volatile T*` for a `Ptr<T>` handle. *(Destructible statics are a later MCU step.)*
+  `volatile T*` for an `UnsafePtr<T>` handle. *(Destructible statics are a later MCU step.)*
 
 ### Compile-time constants — `comptime` ✅
 
@@ -2270,7 +2270,7 @@ existing `@name(args)` mechanism, extended from serialization to functions + sta
 `__attribute__((...))` **only** on the declaration it annotates; un-annotated code is byte-identical.
 
 ```kama
-@section(".isr_vector") static hardware Ptr<uint32> vtor;   // -> __attribute__((section(".isr_vector")))
+@section(".isr_vector") static hardware UnsafePtr<uint32> vtor;   // -> __attribute__((section(".isr_vector")))
 
 @interrupt expose fn void on_systick() { … }                // -> __attribute__((interrupt, used))
 ```
@@ -2352,7 +2352,7 @@ and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i
 language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
 `self`: it is used transiently and cannot be stored (there is no `ref`-local/`ref`-field to hold it),
 and a `const` receiver makes it read-only. Bounds safety is the operator's responsibility — a
-`InlineArray`/collection-backed body is auto-checked; a raw `Ptr<T>` body is `unsafe`. The same place-return
+`InlineArray`/collection-backed body is auto-checked; a raw `UnsafePtr<T>` body is `unsafe`. The same place-return
 works for a **named method** — `public fn ref T at(usize i) { … }` — so `v.at(i) = x` too. It also
 works on a **free function** and a **`static` method** — `fn ref int32 at(ref Buf b, usize i) { return
 b.d[i]; }`, called as `at(b: ref b, i: 0) = 5`. Because a free/static function has no `this`, the
@@ -2800,7 +2800,7 @@ closed and empty, which is why dropping the last `Sender` is how a producer sign
 
 **Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
 sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
-`Shared`/`Weak` over a deeply-immutable type. A `view`, a raw `Ptr`, a bare `contract` value, or
+`Shared`/`Weak` over a deeply-immutable type. A `view`, a raw `UnsafePtr`, a bare `contract` value, or
 anything transitively containing one is rejected — with an error naming the offending field, the
 same way the escape check reports. Because it is structural, it cannot be wrong by omission.
 
@@ -3003,7 +3003,7 @@ it and it spins). Fatal conditions (bounds/panic/OOM) route through an overridab
 (default `for(;;) __builtin_trap()`) — provide a strong symbol to blink/reset/breakpoint. Name the board's triple directly
 (`--target thumbv7em-none-eabihf`, with a `cc` that can reach it), and link the object with
 your chip's startup object + linker script (memory map) as a separate step — turnkey triples, linker scripts,
-and vendor HALs are a later milestone. A module `static hardware Ptr<T>` lowers to a `volatile T*` MMIO register,
+and vendor HALs are a later milestone. A module `static hardware UnsafePtr<T>` lowers to a `volatile T*` MMIO register,
 and module `static`s become plain zero-cost `static`s (one core = one isolate).
 
 Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one

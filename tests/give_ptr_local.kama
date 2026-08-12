@@ -1,5 +1,5 @@
 import std::ptr::{relocate};
-// Session E (hardening) work item 1 — `give` a move-only `resource` into a bare `Ptr<T>` LOCAL slot
+// Session E (hardening) work item 1 — `give` a move-only `resource` into a bare `UnsafePtr<T>` LOCAL slot
 // (`buf[0] = give w`), the same raw-slot move already allowed through a FIELD (`this.data[0] = give w`).
 // Proves the store happens (read it back = 42) and the moved source is consumed (its scope dtor is
 // skipped, so no double-drop — ASan-clean; a bare copy would leave `w` live and drop it twice).
@@ -11,13 +11,13 @@ type resource Widget {
 }
 
 fn int32 main() {
-    Ptr<Widget> buf = null;
-    unsafe { buf = cast<Ptr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2))); }
+    UnsafePtr<Widget> buf = null;
+    unsafe { buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2))); }
     Widget w = Widget.make(id: 42);
     unsafe { buf[0] = give w; }               // the bare-local raw-slot MOVE (consumes w)
     slot Widget got;                          // the hole `relocate`'s `out` parameter fills
     relocate(from: buf, at: 0, into: out got);   // untracked raw copy back out of the raw slot
     int32 r = got.get();                      // 42 — proves the give actually stored w's bytes
-    unsafe { free(p: cast<Ptr>(buf)); }
+    unsafe { free(p: cast<UnsafePtr>(buf)); }
     return r;                                 // 42
 }

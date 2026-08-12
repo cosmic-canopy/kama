@@ -5,10 +5,10 @@
 import std::concurrent;
 
 type resource Payload {
-    Ptr<int32> dst;
+    UnsafePtr<int32> dst;
     int32 value;
 
-    public ctor make(Ptr<int32> dst, int32 value) {
+    public ctor make(UnsafePtr<int32> dst, int32 value) {
         this.dst = dst;
         this.value = value;
     }

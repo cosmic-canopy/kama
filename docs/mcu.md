@@ -76,7 +76,7 @@ Board-by-board:
 - **Raspberry Pi Pico / RP2040 (Cortex-M0+).** Use pico-sdk: add the transpiled `app.c` (or the
   `--cc "clang --target=thumbv6m-none-eabi -mcpu=cortex-m0plus"` object) to a pico-sdk CMake project, call
   `kama_main()` from `main()`, `cmake && make`, and flash the `.uf2` by dragging it onto the Pico's mass-storage
-  bootloader (BOOTSEL). Peripheral access is `hardware Ptr<T>` over the RP2040 register map (or FFI to pico-sdk).
+  bootloader (BOOTSEL). Peripheral access is `hardware UnsafePtr<T>` over the RP2040 register map (or FFI to pico-sdk).
 - **STM32 (Cortex-M0/3/4/7).** Use STM32CubeIDE / arm-none-eabi-gcc with the chip's HAL: add the transpiled C,
   call `kama_main()` from `main()`, build, flash with `st-flash` / OpenOCD / the CubeProgrammer. Or reuse this
   repo's flow with a board linker script edited to the chip's memory map.

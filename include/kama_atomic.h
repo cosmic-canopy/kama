@@ -4,7 +4,7 @@
 // kama atomic binding — the FFI boundary for `std::concurrent`'s `Atomic<T>` (M6).
 //
 // `Atomic<T>` is the ONE sanctioned cross-isolate shared-MUTABLE cell — the concurrency analog of
-// `unsafe {}`/`Ptr` (opt-in, greppable, atomics-only). Everything else in the language is shared-nothing;
+// `unsafe {}`/`UnsafePtr` (opt-in, greppable, atomics-only). Everything else in the language is shared-nothing;
 // this seam is where a value may be read/written concurrently by several isolates without a data race.
 //
 // The `Atomic<T>` surface is pure kama (a move-only `resource` holding one inline `T` cell); this header is
@@ -13,7 +13,7 @@
 // typed `__atomic_*_n` compiler builtin — so every op inlines to a lock-free machine instruction for the
 // concrete scalar width (no libatomic dependency). The generic sized `__atomic_load`/`__atomic_store`
 // forms would take a runtime size through this boundary and fall back to libatomic; the width switch keeps
-// it inline. `T` is restricted (by the emitter) to an integer primitive or `Ptr`, so a cell is always a
+// it inline. `T` is restricted (by the emitter) to an integer primitive or `UnsafePtr`, so a cell is always a
 // naturally-aligned lock-free scalar of width 1/2/4/8.
 //
 // Freestanding-friendly: only <stdint.h>. The `__atomic_*` builtins are GCC/Clang intrinsics (no header),
@@ -72,7 +72,7 @@ static inline int32_t kama_atomic_cas(void* cell, void* expected, void* desired,
 
 // ---- fetch-add / fetch-sub: return the PRIOR value, widened to 64 bits -----------------------------------
 // Two's-complement add/sub is signedness-agnostic, so the unsigned-width op is correct for a signed `T`
-// too; the kama surface truncates the returned prior value back to `T`. On a `Ptr` cell this is byte
+// too; the kama surface truncates the returned prior value back to `T`. On an `UnsafePtr` cell this is byte
 // arithmetic over the raw bits — well-defined here, though rarely meaningful (use load/store/CAS instead).
 static inline uint64_t kama_atomic_fetch_add(void* cell, uint64_t delta, size_t width, int32_t mo) {
     switch (width) {

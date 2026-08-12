@@ -20,11 +20,11 @@ type enum Ordering { Less, Equal, Greater }
 // pointers become ordinary kama types over this instead of compiler intrinsics.
 type contract Deref<T> for both { fn ref T deref(); }
 // Heap-owner opt-in: a type implementing HeapOwner<T> can be a `new T(args)` target. `new`
-// placement-constructs T on the heap (0 copies) and hands the raw Ptr<T> to `adopt`, which wraps it.
+// placement-constructs T on the heap (0 copies) and hands the raw UnsafePtr<T> to `adopt`, which wraps it.
 // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
-// Construction-model (M8): `adopt` is a `ctor` — wrapping a raw block IS construction. Storing a `Ptr`
+// Construction-model (M8): `adopt` is a `ctor` — wrapping a raw block IS construction. Storing an `UnsafePtr`
 // is safe (no `unsafe`); only dereferencing is (that lives in `~Owned`/`deref`).
-type contract HeapOwner<T> for resource { ctor adopt(Ptr<T> raw); }
+type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }
 // Ownership capability markers (compiler-recognized). EVERY owning kind is movable — `give` moves it
 // (see TYPE_MODEL.md; there is no `!Movable`). `Copyable` = a public `copy` CTOR; a resource that
 // implements it is ALSO duplicable. A `Copyable(bare: copy)` resource = shared-ownership: a bare
@@ -63,14 +63,14 @@ type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other
 // like the bounds above, so it lives in the global prelude — both the smart-pointer triad and the
 // collections name it, and it survives `--no-std`. `for value` (a cheap copyable handle); INSTANCE
 // methods (unlike `Hasher`'s static finalizer) because a stateful allocator mutates through its stored
-// pointer. FALLIBLE seam (MCU step 5): `allocate` returns `Optional<Ptr>` — `None` on OOM/exhaustion,
+// pointer. FALLIBLE seam (MCU step 5): `allocate` returns `Optional<UnsafePtr>` — `None` on OOM/exhaustion,
 // never panics. Infallible `new`/collections unwrap-or-panic (via `unwrapPtr`) to keep pre-step-5
 // behavior; the ONE non-panic construction entry is `try new` (yields `None`). A no-heap region
 // (`@noheap`/`--no-heap`) rejects this whole path at the allocation-emission site.
 // The concrete STRATEGY types (`Arena`/`BumpAllocator`) stay in `std::collections` (opt-in, not core).
 type contract Allocator for value {
-    fn Optional<Ptr> allocate(usize bytes);
-    fn void deallocate(Ptr pointer, usize bytes);
+    fn Optional<UnsafePtr> allocate(usize bytes);
+    fn void deallocate(UnsafePtr pointer, usize bytes);
 }
 // The base error contract (Model C — Kama's answer to exceptions). Every fallible constructor (eventually
 // every fallible fn) returns `Result<This, Error>`; a concrete error is an ordinary `type enum` that
@@ -309,7 +309,7 @@ type intrinsic <string>  implements Deserialize  { public ctor Result<string, st
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
 // clamped to the available bytes rather than reading past the end.
 type view Chars implements Iterator<char> {
-    Ptr<uint8> data; int32 len; int32 pos;
+    UnsafePtr<uint8> data; int32 len; int32 pos;
     public fn Optional<char> next() {
         if (this.pos >= this.len) { return Optional::None; }
         uint32 c0 = 0; unsafe { c0 = cast<uint32>(this.data[this.pos]); }
@@ -328,14 +328,14 @@ type view Chars implements Iterator<char> {
     }
 }
 // The `.split(separator:)` iterator over a string's UTF-8 bytes. Like `Chars` it borrows the source
-// bytes (a raw `Ptr<uint8>`, so `Split` stays a POD `value` type) — valid while the source string is —
+// bytes (a raw `UnsafePtr<uint8>`, so `Split` stays a POD `value` type) — valid while the source string is —
 // but here it ALSO borrows the separator's bytes, and yields each piece as an OWNED string. The
 // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
 // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
 // separators yield "" pieces; an empty separator yields the whole string once.
-extern fn string kama_string_from_raw(Ptr<uint8> src, int32 start, int32 len);
+extern fn string kama_string_from_raw(UnsafePtr<uint8> src, int32 start, int32 len);
 type view Split implements Iterator<string> {
-    Ptr<uint8> data; int32 len; Ptr<uint8> sep; int32 seplen; int32 pos; bool done;
+    UnsafePtr<uint8> data; int32 len; UnsafePtr<uint8> sep; int32 seplen; int32 pos; bool done;
     public fn Optional<string> next() {
         if (this.done) { return Optional::None; }
         if (this.seplen == 0) {
@@ -372,10 +372,10 @@ type view Split implements Iterator<string> {
 // the kama_runtime.h helpers, exactly like kama_string_from_raw above.
 extern fn int32  kama_args_count();
 extern fn string kama_args_at(int32 i);
-extern fn bool   kama_program_invocation(Ptr<string> dst);
-extern fn bool   kama_program_name(Ptr<string> dst);
-extern fn bool   kama_program_path(Ptr<string> dst);
-extern fn bool   kama_env_lookup(Ptr<int8> name, Ptr<string> dst);
+extern fn bool   kama_program_invocation(UnsafePtr<string> dst);
+extern fn bool   kama_program_name(UnsafePtr<string> dst);
+extern fn bool   kama_program_path(UnsafePtr<string> dst);
+extern fn bool   kama_env_lookup(UnsafePtr<int8> name, UnsafePtr<string> dst);
 type value Args implements Iterator<string> {
     int32 pos;
     public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
@@ -472,7 +472,7 @@ fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handle
 // Each reads its own `s` by borrow (`cstr()`/`length()`) — it never re-passes the string by value, so there
 // is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
 // string is passed with `copy`/`give` like anywhere else in the value model.
-extern fn void kama_print_write(int32 fd, Ptr<int8> bytes, usize len);
+extern fn void kama_print_write(int32 fd, UnsafePtr<int8> bytes, usize len);
 extern fn void kama_print_nl(int32 fd);
 fn void print(string s)    { unsafe { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); } }
 fn void eprint(string s)   { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); } }
@@ -484,33 +484,33 @@ fn void eprintln(string s) { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), l
 // so the bare types are unchanged and pay nothing at runtime (the field carries no state — an empty
 // struct). Concrete impls live at the end of the prelude, after the contracts they satisfy.
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 type value GlobalAllocator implements Allocator {
     // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
     // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
     // the nameless primary until M8d removes it.
     public default ctor make() { return this; }
-    public fn Optional<Ptr> allocate(usize bytes) {
-        Ptr p = null;
+    public fn Optional<UnsafePtr> allocate(usize bytes) {
+        UnsafePtr p = null;
         unsafe { p = malloc(n: bytes); }
         if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
         return Optional::Some(value: p);
     }
-    public fn void deallocate(Ptr pointer, usize bytes) { unsafe { free(p: pointer); } }
+    public fn void deallocate(UnsafePtr pointer, usize bytes) { unsafe { free(p: pointer); } }
 }
 
 // Infallible-allocation adapter (MCU step 5): unwrap a fallible allocation, panicking on OOM. This
 // preserves the pre-step-5 panic-on-OOM behavior for `new`/collections while the `Allocator` contract
 // itself became fallible. The ONE non-panic construction entry is `try new` (yields `None`);
 // `--no-heap`/`@noheap` reject the whole allocation path at the emission site. NON-generic on purpose:
-// it takes the already-produced `Optional<Ptr>` (a concrete type — `Ptr` is `void*`), so it monomorphizes
+// it takes the already-produced `Optional<UnsafePtr>` (a concrete type — `UnsafePtr` is `void*`), so it monomorphizes
 // trivially and is callable from inside the generic collections (where inferring a generic `<A>` helper
-// from a type-param-typed `this.alloc` is not supported). The dead `:= cast<Ptr>(0)` after `panic`
+// from a type-param-typed `this.alloc` is not supported). The dead `:= cast<UnsafePtr>(0)` after `panic`
 // satisfies the value-arm checker (`panic` traps first, so it never runs).
-fn Ptr unwrapPtr(Optional<Ptr> o) {
-    return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<Ptr>(0); } };
+fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
+    return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<UnsafePtr>(0); } };
 }
 
 // ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────
@@ -536,8 +536,8 @@ extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
 // generic — unavailable this early (the prelude is collected before any std module), so the sink is backed by
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
-extern fn void kama_str_push(Ptr<string> buf, ref string src);
-extern fn string kama_str_take(Ptr<string> buf);
+extern fn void kama_str_push(UnsafePtr<string> buf, ref string src);
+extern fn string kama_str_take(UnsafePtr<string> buf);
 type contract Format for both { fn void format(ref Formatter f); }
 // The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes
 // its decimal/UTF-8 text via a runtime formatter, whose bytes are appended to the single backing buffer, so a
@@ -585,11 +585,11 @@ type intrinsic <string>  implements Format { public fn void format(ref Formatter
 // function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts
 // (stripIndent), or bind holes as out-of-band `?` params (sql, injection-safe by construction). The compiler
 // materializes this over two borrowed C arrays (invariant: partCount() == holeCount() + 1) and constructs it
-// ONLY in emitted code — there is no kama ctor. The `Ptr` fields are borrows: `Template` owns nothing.
+// ONLY in emitted code — there is no kama ctor. The `UnsafePtr` fields are borrows: `Template` owns nothing.
 type value Template {
-    Ptr<string> _parts;
+    UnsafePtr<string> _parts;
     int32 _nparts;
-    Ptr<string> _holes;
+    UnsafePtr<string> _holes;
     int32 _nholes;
     public fn int32 partCount() { return this._nparts; }
     public fn int32 holeCount() { return this._nholes; }

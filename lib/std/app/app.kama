@@ -12,11 +12,11 @@ export { run, TickFn, quit };
 // `arg`, since the loop is host-driven on the web). On the web run() does NOT return — the loop is driven by
 // the host and the tick ends the program itself when its work is done.
 extern "kama_app.h";
-fnptr int32 TickFn(Ptr state);
-extern fn void kama_run_loop(TickFn tick, Ptr state);
+fnptr int32 TickFn(UnsafePtr state);
+extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
 extern fn void kama_app_exit(int32 code);
 
-fn void run(TickFn tick, Ptr state) { kama_run_loop(tick: tick, state: state); }
+fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
 
 // Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored
 // while the run loop keeps the runtime alive, so this forces a true shutdown; on native it is exit().

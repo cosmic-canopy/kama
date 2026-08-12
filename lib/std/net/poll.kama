@@ -7,14 +7,14 @@ export { Poller, Interest, Ready };
 // Readiness notification over many sockets (poll(2) / WSAPoll) — the game-SERVER selector. A client with one
 // or a few connections just drains each non-blocking socket; a server multiplexing hundreds waits here once
 // and services whoever is ready. Native only (the browser event loop IS the selector on the web). The
-// underlying pollfd[] stays opaque in C behind a Ptr.
+// underlying pollfd[] stays opaque in C behind an UnsafePtr.
 extern "kama_os.h";
-extern fn Ptr   kama_poller_create();
-extern fn void  kama_poller_add(Ptr p, isize fd, int32 interest);
-extern fn void  kama_poller_remove(Ptr p, isize fd);
-extern fn int32 kama_poller_wait(Ptr p, int32 timeoutMs);
-extern fn int32 kama_poller_ready(Ptr p, isize fd);
-extern fn void  kama_poller_free(Ptr p);
+extern fn UnsafePtr   kama_poller_create();
+extern fn void  kama_poller_add(UnsafePtr p, isize fd, int32 interest);
+extern fn void  kama_poller_remove(UnsafePtr p, isize fd);
+extern fn int32 kama_poller_wait(UnsafePtr p, int32 timeoutMs);
+extern fn int32 kama_poller_ready(UnsafePtr p, isize fd);
+extern fn void  kama_poller_free(UnsafePtr p);
 
 // What to watch a socket for. Feed a socket's rawHandle() to add().
 type enum Interest { Read, Write, ReadWrite }
@@ -29,11 +29,11 @@ type value Ready {
 
 // A readiness set. Move-only; frees its C cursor on drop (RAII).
 type resource Poller {
-    Ptr state;
-    private ctor make(Ptr state) { this.state = state; }
+    UnsafePtr state;
+    private ctor make(UnsafePtr state) { this.state = state; }
 
     public ctor Result<Poller, IoError> create() {
-        Ptr s = kama_poller_create();
+        UnsafePtr s = kama_poller_create();
         if (s == null) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Poller.make(state: s));
     }

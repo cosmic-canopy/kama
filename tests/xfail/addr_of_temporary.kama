@@ -4,6 +4,6 @@
 // below used to compile, and only the C compiler complained — about generated code.
 fn int32 five() { return 5; }
 fn int main() {
-    Ptr<int32> p = addr(of: five());   // ERROR: not a place
+    UnsafePtr<int32> p = addr(of: five());   // ERROR: not a place
     unsafe { return p[0]; }
 }

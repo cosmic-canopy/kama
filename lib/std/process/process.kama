@@ -19,15 +19,15 @@ export { Command, Process, ExitStatus, Output, Stdio };
 
 extern "kama_os.h";
 // argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
-// survives the source kama-string RAII across fork). kama holds only the opaque `Ptr` + scalars.
-extern fn Ptr   kama_argv_new(int32 n);
-extern fn void  kama_argv_set(Ptr v, int32 i, Ptr<int8> s);
-extern fn void  kama_argv_free(Ptr v);
-extern fn Ptr   kama_envp_build(Ptr overrides, int32 clear);
+// survives the source kama-string RAII across fork). kama holds only the opaque `UnsafePtr` + scalars.
+extern fn UnsafePtr   kama_argv_new(int32 n);
+extern fn void  kama_argv_set(UnsafePtr v, int32 i, UnsafePtr<int8> s);
+extern fn void  kama_argv_free(UnsafePtr v);
+extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
-extern fn int32 kama_pipe(Ptr<int32> outRd, Ptr<int32> outWr);
-extern fn int32 kama_proc_spawn(Ptr argv, Ptr envp, Ptr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, Ptr<isize> outHandle, Ptr<int32> outPid);
-extern fn int32 kama_proc_wait(isize handle, Ptr<int32> outStatus, int32 flags);
+extern fn int32 kama_pipe(UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
+extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafePtr<int8> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
+extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
 extern fn int32 kama_proc_exited(int32 st);
 extern fn int32 kama_proc_exit_code(int32 st);
 extern fn int32 kama_proc_signaled(int32 st);
@@ -38,11 +38,11 @@ extern fn int32 kama_kill(isize handle, int32 sig);
 extern fn void  kama_proc_detach(isize handle);
 // Concurrent stdout+stderr drain to EOF (POSIX: poll; Windows: two threads) — see kama_os.h. Fills two heap
 // buffers the caller copies out then frees with kama_free. Keeps run()'s kama one platform-neutral path.
-// `Ptr<Ptr<uint8>>`, not `Ptr<Ptr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
+// `UnsafePtr<UnsafePtr<uint8>>`, not `UnsafePtr<UnsafePtr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
 // `void**` — a real -Wincompatible-pointer-types on every `run()` build. An FFI declaration has to
 // name the C type exactly; nothing else checks it.
-extern fn int32 kama_capture2(int32 outFd, int32 errFd, Ptr<Ptr<uint8>> outBuf, Ptr<usize> outLen, Ptr<Ptr<uint8>> errBuf, Ptr<usize> errLen);
-extern fn void  kama_free(Ptr p);
+extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen);
+extern fn void  kama_free(UnsafePtr p);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
 extern fn int32 kama_SIGTERM();
@@ -90,9 +90,9 @@ fn ExitStatus statusOf(int32 st) {
 }
 
 // Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
-fn Ptr buildArgv(ref string program, ref DynamicArray<string> args) {
+fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
     int32 n = 1 + args.length();
-    Ptr v = kama_argv_new(n: n);
+    UnsafePtr v = kama_argv_new(n: n);
     kama_argv_set(v: v, i: 0, s: program.cstr());
     int32 i = 0;
     while (i < args.length()) {
@@ -104,26 +104,26 @@ fn Ptr buildArgv(ref string program, ref DynamicArray<string> args) {
 
 // Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
 // merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
-fn Ptr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
+fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
     int32 n = keys.length();
-    Ptr ov = kama_argv_new(n: n);
+    UnsafePtr ov = kama_argv_new(n: n);
     int32 i = 0;
     while (i < n) {
         string kv = keys[i] + "=" + vals[i];
         kama_argv_set(v: ov, i: i, s: kv.cstr());
         i = i + 1;
     }
-    Ptr envp = kama_envp_build(overrides: ov, clear: clear ? 1 : 0);
+    UnsafePtr envp = kama_envp_build(overrides: ov, clear: clear ? 1 : 0);
     kama_argv_free(v: ov);
     return envp;
 }
 
 // Copy `n` bytes out of a raw heap buffer (produced by kama_capture2) into an owned DynamicArray<uint8>.
 // The caller frees the source buffer with kama_free afterwards.
-fn DynamicArray<uint8> bytesFromRaw(Ptr raw, usize n) {
+fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
     int32 c = cast<int32>(n);
     DynamicArray<uint8> a = DynamicArray.withCapacity(capacity: c);
-    Ptr<uint8> src = cast<Ptr<uint8>>(raw);
+    UnsafePtr<uint8> src = cast<UnsafePtr<uint8>>(raw);
     int32 i = 0;
     while (i < c) { unsafe { a.add(item: src[i]); } i = i + 1; }
     return give a;
@@ -234,8 +234,8 @@ type resource Command {
         int32 childOut = match (this.outCfg) { case Inherit: -1; case _: outGive.rawFd(); };
         int32 childErr = match (this.errCfg) { case Inherit: -1; case _: errGive.rawFd(); };
 
-        Ptr argv = buildArgv(program: ref this.program, args: ref this.args);
-        Ptr envp = null;
+        UnsafePtr argv = buildArgv(program: ref this.program, args: ref this.args);
+        UnsafePtr envp = null;
         if (this.envClear || this.envKeys.length() > 0) {
             envp = buildEnvp(clear: this.envClear, keys: ref this.envKeys, vals: ref this.envVals);
         }
@@ -265,8 +265,8 @@ type resource Command {
             case Ok(value: pr): { := give pr; }
             case Err(error: e): { return Result::Err(error: e); }
         };
-        Ptr<uint8> outRaw = null; usize outLen = 0;
-        Ptr<uint8> errRaw = null; usize errLen = 0;
+        UnsafePtr<uint8> outRaw = null; usize outLen = 0;
+        UnsafePtr<uint8> errRaw = null; usize errLen = 0;
         int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
                                  outBuf: addr(of: outRaw), outLen: addr(of: outLen),
                                  errBuf: addr(of: errRaw), errLen: addr(of: errLen));

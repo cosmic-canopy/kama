@@ -1,12 +1,12 @@
-// The stdlib shape: a heap-owning `resource` over a raw `Ptr` buffer defines a place-returning
+// The stdlib shape: a heap-owning `resource` over a raw `UnsafePtr` buffer defines a place-returning
 // `operator[]` (bounds are the author's responsibility inside `unsafe`), with RAII freeing the buffer.
 // This is what lets a `Vec`-like collection be written IN kama.
 extern "<stdlib.h>";
-extern fn Ptr<int32> malloc(usize n);
-extern fn void free(Ptr<int32> p);
+extern fn UnsafePtr<int32> malloc(usize n);
+extern fn void free(UnsafePtr<int32> p);
 
 type resource IntVec {
-    Ptr<int32> data;
+    UnsafePtr<int32> data;
     int32 len;
     public ctor make(int32 n) {
         this.data = malloc(n: cast<usize>(n) * 4);

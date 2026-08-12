@@ -5,27 +5,27 @@
 // async handshake complete. Raw glue on int32 handles; both peers closed before quit.
 import std::app::{run, TickFn, quit};
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
+extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
 extern fn int32 kama_rtc_create();
 extern fn int32 kama_rtc_datachannel(int32 h, int32 unreliable);
 extern fn int32 kama_rtc_offer(int32 h);
 extern fn int32 kama_rtc_answer(int32 h);
-extern fn int32 kama_rtc_local_sdp(int32 h, Ptr<uint8> buf, usize n);
-extern fn int32 kama_rtc_set_remote(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_rtc_local_sdp(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_rtc_set_remote(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn int32 kama_rtc_dc_state(int32 h);
-extern fn int32 kama_rtc_send(int32 h, Ptr<uint8> buf, usize n);
-extern fn int32 kama_rtc_recv(int32 h, Ptr<uint8> buf, usize n);
+extern fn int32 kama_rtc_send(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_rtc_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_rtc_close(int32 h);
 
 fn void finish(int32 a, int32 b, int32 code) { kama_rtc_close(h: a); kama_rtc_close(h: b); quit(code: code); }
 
 // state block: int32 header [A, B, phase, ticks] at bytes 0..15; SDP scratch at offset 64 (4 KB); datagram
 // scratch at offset 4200.
-fn int32 tick(Ptr state) {
+fn int32 tick(UnsafePtr state) {
     unsafe {
-        Ptr<int32> hdr = cast<Ptr<int32>>(state);
-        Ptr<uint8> buf = cast<Ptr<uint8>>(state);
+        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
+        UnsafePtr<uint8> buf = cast<UnsafePtr<uint8>>(state);
         int32 a = hdr[0];
         int32 b = hdr[1];
         hdr[3] = hdr[3] + 1;
@@ -72,8 +72,8 @@ fn int32 tick(Ptr state) {
 
 fn int main() {
     unsafe {
-        Ptr<uint8> block = cast<Ptr<uint8>>(malloc(n: cast<usize>(8192)));
-        Ptr<int32> hdr = cast<Ptr<int32>>(cast<Ptr>(block));
+        UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(8192)));
+        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
         int32 a = kama_rtc_create();
         int32 b = kama_rtc_create();
         if ((a < 0) || (b < 0)) { quit(code: 60); }        // no RTCPeerConnection
@@ -83,7 +83,7 @@ fn int main() {
         if (of != 0) { quit(code: 62); }
         hdr[0] = a; hdr[1] = b; hdr[2] = 0; hdr[3] = 0;
         TickFn t = tick;
-        run(tick: t, state: cast<Ptr>(block));
+        run(tick: t, state: cast<UnsafePtr>(block));
     }
     return 1;
 }

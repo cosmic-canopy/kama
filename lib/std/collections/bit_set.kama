@@ -2,7 +2,7 @@ namespace std::collections;
 export { BitSet, BitSetIter };
 
 extern "<string.h>";
-extern fn Ptr memset(Ptr p, int32 value, usize n);
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs.setBits())`), ascending.
 // It borrows the word buffer + snapshots the mutation counter and rejects a structural change (a grow, which
@@ -10,8 +10,8 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // Setting/clearing a bit IN PLACE keeps the buffer stable, so it does not invalidate a walk in flight. The scan
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
 type view BitSetIter implements Iterator<int32> {
-    Ptr<uint64> words; int32 wordCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<uint64> words; int32 wordCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public fn Optional<int32> next() {
@@ -36,7 +36,7 @@ type view BitSetIter implements Iterator<int32> {
 // out-of-range bit are a no-op / `false` (never grow). `capacity()` reports the addressable bit range (word
 // count × 64, ≥ the highest set bit). A move-only value that owns its buffer, but Copyable via a deep word copy.
 type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) {
-    Ptr<uint64> words = null; int32 wordCount = 0; int32 mods = 0; A alloc;
+    UnsafePtr<uint64> words = null; int32 wordCount = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
     // A bare `BitSet<A> s;` zero-inits the primitive fields (words=null, wordCount=0, mods=0) and default-fills
@@ -191,22 +191,22 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
     fn void growTo(int32 nc) {
-        Ptr<uint64> nw = null;
+        UnsafePtr<uint64> nw = null;
         unsafe {
-            nw = cast<Ptr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
-            memset(p: cast<Ptr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
+            nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
+            memset(p: cast<UnsafePtr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
         }
         int32 i = 0;
         unsafe { while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; } }
         if (this.wordCount > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
         }
         this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
     }
 
     ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator
         if (this.wordCount > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<Ptr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
+            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
         }
     }
 }

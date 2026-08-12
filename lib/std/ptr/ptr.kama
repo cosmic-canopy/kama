@@ -1,7 +1,7 @@
 namespace std::ptr;
 
 // Raw pointer operations — the unsafe half of memory handling, kept apart from `std::memory`, which is the
-// OWNING half (`Owned`/`Shared`/`Weak`). A `Ptr<T>` names storage nobody owns and nothing tracks, so
+// OWNING half (`Owned`/`Shared`/`Weak`). An `UnsafePtr<T>` names storage nobody owns and nothing tracks, so
 // everything here is a manual move: the compiler will not drop what these functions leave behind, and it is
 // the caller's job to make sure the source is never dropped again.
 //
@@ -15,10 +15,10 @@ export { relocate };
 // Move `from[at]` OUT of raw storage into `into`, bitwise. The source slot is left STALE — it still holds
 // the bytes, so the caller must vacate it (tombstone the entry, decrement the length) or the value will be
 // dropped twice. `into` is an `out` parameter, so the caller declares a `slot` and the fill is proven here.
-fn void relocate<T>(Ptr<T> from, int32 at, out T into) {
+fn void relocate<T>(UnsafePtr<T> from, int32 at, out T into) {
     debugAssert(cond: from != null, msg: "relocate: null source buffer");
     unsafe {
-        Ptr<T> d = addr(of: into);
+        UnsafePtr<T> d = addr(of: into);
         d[0] = from[at];
     }
 }

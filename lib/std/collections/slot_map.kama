@@ -17,8 +17,8 @@ type value Handle {
 // yields each value BY VALUE (a copy). Rejects a structural change (insert/remove) made mid-iteration via the
 // `mods` snapshot — same contract as `MapValueIter`.
 type view SlotMapValueIter<V> implements Iterator<V> {
-    Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -38,8 +38,8 @@ type view SlotMapValueIter<V> implements Iterator<V> {
 // type — the borrow that lets a SlotMap of move-only values be walked + mutated in place. `hasNext()` advances
 // to the next OCCUPIED slot (idempotent) and runs the invalidation check; `next()` hands out the `ref V`.
 type view SlotMapValueIterMut<V> implements IteratorMut<V> {
-    Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
-    public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
+    public ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -68,12 +68,12 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 // — a removed slot (now even) or a reused slot (now a higher odd) both mismatch. `slotCount` is the high-water
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
 type resource SlotMap<V, A: Allocator = GlobalAllocator> {
-    Ptr<V> values = null; Ptr<uint32> gens = null; Ptr<int32> freeList = null;
+    UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<int32> freeList = null;
     int32 slotCount = 0; int32 freeLen = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `SlotMap<V, A> r;`
-    // zero-inits the primitive/`Ptr` fields and default-fills `alloc` — the M8d.1 gate proves completeness.
+    // zero-inits the primitive/`UnsafePtr` fields and default-fills `alloc` — the M8d.1 gate proves completeness.
     public default ctor empty() when [A: default] { }
     public ctor withCapacity(int32 capacity) when [A: default] { this.reserve(n: capacity); }
 
@@ -157,7 +157,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     }
 
     // Move the value at `slot` OUT of the buffer into a fresh owned local (the slot is left stale — the caller
-    // vacates it). Bitwise-relocate through raw `Ptr<V>` aliases into a zero-init'd local, then `give` — the
+    // vacates it). Bitwise-relocate through raw `UnsafePtr<V>` aliases into a zero-init'd local, then `give` — the
     // move-out idiom `Map.takeVal` / `DynamicArray.takeAt` use.
     fn V takeVal(int32 at) {
         slot V x;                                          // the hole `relocate`'s `out` parameter fills
@@ -194,11 +194,11 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
     fn void growTo(int32 nc) {
-        Ptr<V> nv = null; Ptr<uint32> ng = null; Ptr<int32> nf = null;
+        UnsafePtr<V> nv = null; UnsafePtr<uint32> ng = null; UnsafePtr<int32> nf = null;
         unsafe {
-            nv = cast<Ptr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
-            ng = cast<Ptr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));
-            nf = cast<Ptr<int32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32))));
+            nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
+            ng = cast<UnsafePtr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));
+            nf = cast<UnsafePtr<int32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32))));
         }
         int32 i = 0;
         unsafe {
@@ -208,9 +208,9 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         }
         if (this.cap > 0) {
             unsafe {
-                this.alloc.deallocate(pointer: cast<Ptr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
             }
         }
         this.values = nv; this.gens = ng; this.freeList = nf; this.cap = nc;
@@ -226,9 +226,9 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         }
         if (this.cap > 0) {
             unsafe {
-                this.alloc.deallocate(pointer: cast<Ptr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-                this.alloc.deallocate(pointer: cast<Ptr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
             }
         }
     }

@@ -2,14 +2,14 @@
 // is the sole owner and drops it once. ASan-clean == no leak, no double-free across the move-out.
 import std::memory::{Owned};
 extern "<stdlib.h>";
-extern fn Ptr malloc(usize n);
-extern fn void free(Ptr p);
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
 
 type resource Cell {
-    Ptr<int32> buf;
-    public ctor make(int32 v) { unsafe { this.buf = cast<Ptr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
+    UnsafePtr<int32> buf;
+    public ctor make(int32 v) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }
     public fn int32 get() { unsafe { return this.buf[0]; } }
-    ~Cell() { unsafe { free(p: cast<Ptr>(this.buf)); } }
+    ~Cell() { unsafe { free(p: cast<UnsafePtr>(this.buf)); } }
 }
 fn Owned<Cell> make(int32 v) { return new Cell.make(v: v); }
 fn int32 main() { Owned<Cell> a = make(v: 42); return a.get(); }

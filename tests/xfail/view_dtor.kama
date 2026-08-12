@@ -1,3 +1,3 @@
 // A view borrows and owns nothing — it may not declare a destructor.
-type view Bad { Ptr<int32> p; public ctor make(Ptr<int32> p){ this.p = p; } ~Bad(){ } }
+type view Bad { UnsafePtr<int32> p; public ctor make(UnsafePtr<int32> p){ this.p = p; } ~Bad(){ } }
 fn int32 main() { return 0; }
