@@ -578,6 +578,22 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // (`_genericTypeParams`); a generic FUNCTION keeps its params on the AST node alone, and `_typeSubst`
     // is empty here, so without this every `T` in every generic signature would be reported as unknown.
     std::set<std::string> tp;
+    // The const generic params of that same declaration (`constParams` is a SUBSET of `typeParams`, so
+    // `tp` holds these names too — this says which of them bind a VALUE rather than a type).
+    //
+    // A const param is resolved by `emitExpression` ahead of every runtime name (see the identifier
+    // branch), so a parameter, field or local of the same name is not a second binding — it is a
+    // silently discarded one. Before this rule, `fn int32 f<const F: int32>(int32 F) { return F; }`
+    // compiled clean and `f::<16>(F: 3)` returned 16. The name is therefore reserved for the whole
+    // declaration, which is the answer kama already gives for every other shadowing (`emitDeclarator`)
+    // and which makes the precedence question moot.
+    std::set<std::string> cp;
+    auto constParamShadow = [&](const char* kind, const SharedIdentifier& id) {
+        if (!id || !id->value || !cp.count(*id->value)) return;
+        unsupported((std::string(kind) + " `" + *id->value + "` shadows the const generic parameter of "
+                     "the same name, which binds a compile-time value for this whole declaration and "
+                     "outranks every runtime name — rename it").c_str(), id->line);
+    };
     auto check = [&](const SharedIdentifier& t, const char* what) {
         if (!t || !t->value) return;
         // `This` is resolved against the enclosing type, which is not on the stack during this pass —
@@ -585,12 +601,21 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         // `Base` is resolved against that type's BASE, so it is not on the stack here either; a `Base` in
         // a type that has none is still caught, just later, where the enclosing type is known.
         if (*t->value == "This" || *t->value == "Base") return;
+        // A const param names a value, so a TYPE position naming one is a mistake, not a binding —
+        // `fn int32 f<const N: int32>(N x)` used to emit a bare `N` into C and die there. Only the type
+        // HEAD reaches here: `checkTypeResolves` bails on `genericArg`, so `InlineArray<int32, N>` — the
+        // legitimate ARGUMENT position — is untouched.
+        if (cp.count(*t->value)) {
+            unsupported(("`" + *t->value + "` is a const generic parameter — a value, not a type — so "
+                         + what + " cannot name it").c_str(), t->line);
+            return;
+        }
         if (tp.count(*t->value)) return;
         checkTypeResolves(t, cType(t), what, t->line);
     };
     auto checkParams = [&](const SharedParameterList& params, const char* what) {
         if (!params) return;
-        for (auto& p : *params) if (p) check(p->type, what);
+        for (auto& p : *params) if (p) { check(p->type, what); constParamShadow("parameter", p->identifier); }
     };
     // `self` is the C name of the receiver pointer, so a parameter of that name inside a type body
     // redeclares it. Checked here rather than in the emitter so an uninstantiated generic type is covered
@@ -611,15 +636,22 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // Resolved through the emitter's own resolver, at the DECLARATION's namespace, so an import, a
     // per-symbol alias and a `using` all count as visible — and via the Impl form, because recording a
     // reference from a name that is not a type reference would pollute the LSP index.
-    auto bindTypeParams = [&](const SharedStringList& names, int line, const char* what) {
+    //
+    // A const generic parameter arrives here too — `constParams` is a subset of `typeParams` — and it
+    // binds its name just as firmly, so it keeps the same rule and only the noun changes.
+    auto bindTypeParams = [&](const SharedStringList& names, const SharedStringList& constNames,
+                              int line, const char* what) {
         tp.clear();
+        cp.clear();
+        if (constNames) for (auto& n : *constNames) if (n) cp.insert(*n);
         if (!names) return;
         for (auto& n : *names) if (n) {
             tp.insert(*n);
             std::string k = resolveUserNameImpl(*n, SharedStringList());
             if (_classes.count(k) || _enums.count(k) || _interfaces.count(k)
                 || _genericTypes.count(k) || _genericContracts.count(k))
-                unsupported(("type parameter `" + *n + "` of " + what + " shadows the type of the same "
+                unsupported(((cp.count(*n) ? "const generic parameter `" : "type parameter `") + *n
+                             + "` of " + what + " shadows the type of the same "
                              "name, which is then unreachable in this declaration — rename the parameter")
                                 .c_str(), line);
         }
@@ -636,15 +668,21 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // passes such a name through verbatim as the literal C spelling. That is the FFI seam
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
                 if (isExtern(fn)) continue;
-                bindTypeParams(fn->typeParams, fn->name ? fn->name->line : fn->line, "a function");
+                bindTypeParams(fn->typeParams, fn->constParams,
+                               fn->name ? fn->name->line : fn->line, "a function");
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
                 checkReturns(fn, nullptr, "function");
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
-                bindTypeParams(cd->typeParams, cd->name ? cd->name->line : cd->line, "a type");
+                bindTypeParams(cd->typeParams, cd->constParams,
+                               cd->name ? cd->name->line : cd->line, "a type");
                 if (cd->members) for (auto& m : *cd->members) {
                     if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
                         check(fld->type, "a field");
+                        // A field of the const param's name would make `exprClass`'s bare-field path and
+                        // the const arm in `emitExpression` disagree about what `F` means.
+                        if (fld->declarators) for (auto& d : *fld->declarators)
+                            if (d) constParamShadow("field", d->name);
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
@@ -658,15 +696,18 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                             check(od->returnType, "a return type");
                             check(od->param1Type, "a parameter");
                             check(od->param2Type, "a parameter");
+                            constParamShadow("parameter", od->param1Name);
+                            constParamShadow("parameter", od->param2Name);
                         }
                     }
                 }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
-                bindTypeParams(ed->typeParams, ed->identifier ? ed->identifier->line : ed->line, "an enum");
+                bindTypeParams(ed->typeParams, ed->constParams,
+                               ed->identifier ? ed->identifier->line : ed->line, "an enum");
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
-                tp.clear();   // a `type intrinsic` block declares no type params of its own
+                tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
                 if (ii->members) for (auto& m : *ii->members)
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
@@ -1645,8 +1686,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             }
         }
         // A const generic parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
-        // with its declared width. A compile-time binder outranks every runtime name, and nothing else
-        // may bind the name anyway (a param/field/local that shadows one is rejected at its declaration).
+        // with its declared width. A compile-time binder outranks every runtime name, so this arm sits
+        // ahead of the ref-param, field and local paths — and nothing else may bind the name, which is
+        // what makes that outranking safe rather than silent. The three rejections that hold it up:
+        // a parameter or field of the same name at `checkDeclaredTypes` (`constParamShadow`, which
+        // reaches an uninstantiated generic too), a local at `emitDeclarator`'s shadowing block, and a
+        // write at `checkConstWrite`. Each is pinned by a `tests/xfail/constparam_*` fixture.
         if (!v->qualifier || v->qualifier->empty()) {
             std::string cpv = constParamCValue(nm);
             if (!cpv.empty()) return cpv;
@@ -2782,6 +2827,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (nm == "self" && _currentClass)
                         unsupported("`self` names the receiver inside a type body — the kama spelling is "
                                     "`this`; rename this local", n->line);
+                    checkConstParamBinder(nm, "local", n->line);
                     if (_paramNames.count(nm))
                         unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n->line);
                     else {
@@ -3492,6 +3538,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+        // Ahead of the iterator/collection split below, so BOTH shapes are covered by the one check.
+        if (fe->name && fe->name->value)
+            checkConstParamBinder(*fe->name->value, "`foreach` variable", fe->name->line);
         line(n->line); indent(depth);
         std::string itCls = exprClass(fe->expression);
         // A user type (not a built-in collection) iterates via the iterator protocol (structural).
@@ -10915,6 +10964,27 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
     return false;
 }
 
+// A body-level binder may not take a const generic parameter's name. `emitExpression` resolves a const
+// param ahead of every runtime name, so the binder is not shadowing it — it is being silently discarded,
+// and the reads inside it quietly become the const. Measured, before this rule: a `foreach (int32 F in
+// [1,2,3])` summing `F` gave 48 rather than 6, and a `case A(v: F): F` arm gave 16 rather than the 3 in
+// the payload. Both compiled CLEAN.
+//
+// The parameter and field spellings are rejected earlier, at the declaration (`checkDeclaredTypes`), so
+// an uninstantiated generic is covered. A binder lives in a body, and a body is walked per instantiation
+// — which is exactly where `_constSubst` is bound, so this is the right and only place for it.
+//
+// Note this is narrower than kama's general shadowing ban: `foreach` and `match` binders are exempt from
+// that ban today, and for an ordinary name the exemption is harmless (the inner binding wins, which is
+// what the author wrote). It is only a const param that gets discarded instead of shadowed. Widening the
+// general ban to these two binders is a separate question and deliberately not answered here.
+void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, int srcLine)
+{
+    if (nm.empty() || !_constSubst.count(nm)) return;
+    unsupported((std::string(kind) + " `" + nm + "` shadows a const generic parameter — rename it").c_str(),
+                srcLine);
+}
+
 // writing TO or THROUGH a `const` binding is a hard error (deep const, so
 // `c.field = …` / `c[i] = …` are caught too), and a `const` data member may only be
 // written in the constructor.
@@ -10922,7 +10992,15 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
     std::string root = rootBinding(target);
-    if (rootIsConst(root))
+    // A const generic parameter is a compile-time value, not storage — `F = 3` used to emit
+    // `((int32_t)16) = 3` and die in clang against generated code. Reported here rather than through
+    // `_constLocals` so the message fits an integer binder (the deep-const wording below is about
+    // reaching THROUGH a binding, which this one has no inside to reach) — and because this one helper
+    // is on every write path there is: assignment, compound assignment, `++`/`--`, and `ref`/`out` args.
+    if (!root.empty() && _constSubst.count(root))
+        unsupported(("cannot assign to `" + root + "` — it is a const generic parameter, a compile-time "
+                     "value fixed at instantiation").c_str(), srcLine);
+    else if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
                      "binding nor anything reached through it may be mutated)").c_str(), srcLine);
     else if (!_inNamedCtorBody && isConstFieldWrite(target))
@@ -12438,6 +12516,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // LSP index: the binding's own node (parallel list, same order) carries the span.
                 if (a->bindingIds && i < a->bindingIds->size())
                     registerBinding((*a->bindingIds)[i].get(), SymKind::Local);
+                checkConstParamBinder(bn, "`match` binding",
+                                      (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
+                                          ? (*a->bindingIds)[i]->line : a->line);
                 const FieldInfo& pf = vc->payload[slotOf[i]];
                 // The LABEL names the variant's field, so it is a reference to that field's declaration —
                 // hover, go-to-definition and rename all reach it, the same as any other named use.

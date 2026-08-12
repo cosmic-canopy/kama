@@ -1810,6 +1810,9 @@ private:
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
+    // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
+    // name of a const generic param bound in this instantiation — see the definition for why.
+    void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction
     // Never-null definite assignment for `Owned`/`Shared` fields (Stage 1): each must be set before the
     // ctor returns and never read before it is set. `Weak` is exempt (nullable). v1 = straight-line.

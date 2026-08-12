@@ -1,0 +1,11 @@
+// A local may not take a const generic parameter's name — the same rule kama already applies to a
+// local shadowing a parameter, an enclosing local or a field (tests/xfail/shadow_*.kama). This file
+// compiled CLEAN and returned 17 (`16 + 1`) rather than the 6 the local says.
+//
+// Unlike the parameter and field spellings, this one is caught in the BODY, and a body is walked per
+// instantiation — so the fixture has to instantiate. That matches the three `shadow_*` guards.
+fn int32 f<const F: int32>(int32 x) {
+    int32 F = 5;   // ERROR: the local shadows the const generic param `F`
+    return F + x;
+}
+fn int32 main() { return f::<16>(x: 1); }

@@ -1,0 +1,11 @@
+// A const generic parameter names a VALUE, so a type position naming one is a mistake, not a binding.
+// This used to emit a bare `N` into the generated C and die there as "unknown type name 'N'" — the
+// last silent-clang-error in this family.
+//
+// Only the type HEAD is rejected: `checkTypeResolves` bails on a node with generic arguments, so the
+// legitimate ARGUMENT position — `InlineArray<int32, N>` in tests/constgen_fn_over_n.kama — is
+// untouched by this rule.
+fn int32 f<const N: int32>(N x) {   // ERROR: `N` is a value, not a type
+    return 1;
+}
+fn int32 main() { return f::<16>(x: 1); }

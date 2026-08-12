@@ -1,0 +1,13 @@
+// A `match` payload binding may not take a const generic parameter's name. This file compiled CLEAN
+// and returned 16 — the const param — rather than the 3 the payload carries.
+//
+// Same family as constparam_shadow_foreach.kama: these two binders sit outside kama's general
+// shadowing ban, which is harmless for an ordinary name and silently wrong for a const param.
+type enum Tag { A(int32 v), B }
+fn int32 f<const F: int32>(Tag t) {
+    return match (t) {
+        case A(v: F): F;   // ERROR: the payload binding shadows the const generic param `F`
+        case B: 0;
+    };
+}
+fn int32 main() { return f::<16>(t: Tag::A(v: 3)); }
