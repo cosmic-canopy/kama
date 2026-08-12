@@ -42,8 +42,18 @@ fn int32 useBee() { Bee b = Bee.of(y: 2); return b.y; }
 EOF
 cat > "$tmp/my/mod/b.kama" <<'EOF'
 namespace my::mod;
-export { Bee };
+export { Bee, Cee };
 type value Bee { public int32 y; public ctor of(int32 y) { this.y = y; } }
+type value Cee { public int32 z; public ctor of(int32 z) { this.z = z; } }
+EOF
+# The other half, and the one with no import to hang resolution off: SPEC says "files of one directory
+# share a namespace, so a sibling is reachable unqualified with no `import` at all". `c.kama` uses `Cee`
+# that way. It is the shape lib/std/math/mat.kama has — which reported 202 unknown-type errors when
+# checked alone, purely because nothing pinned its siblings.
+cat > "$tmp/my/mod/c.kama" <<'EOF'
+namespace my::mod;
+export { useCee };
+fn int32 useCee() { Cee c = Cee.of(z: 5); return c.z; }
 EOF
 cat > "$tmp/app.kama" <<'EOF'
 import my::mod::{Aye, useBee};
@@ -65,6 +75,15 @@ fi
 if grep -q "cannot resolve module" "$tmp/check.out"; then
     echo "check-self-import: FAIL — a self-import resolved from the wrong root (searched <dir>/my/mod, not <dir>)" >&2
     cat "$tmp/check.out" >&2
+    exit 1
+fi
+
+# 2b. The bare-name half: a member file that names a sibling with NO import at all. There is no import
+#     for resolution to hang off, so this fails unless the loader pulls the module for a namespaced input.
+if ! "$KAMA" check "$tmp/my/mod/c.kama" > "$tmp/checkc.out" 2>&1; then
+    echo "check-self-import: FAIL — a member file naming a sibling WITHOUT an import did not check standalone" >&2
+    echo "  (SPEC: files of one directory share a namespace, so a sibling is reachable unqualified)" >&2
+    cat "$tmp/checkc.out" >&2
     exit 1
 fi
 

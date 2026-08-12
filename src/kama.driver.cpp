@@ -942,28 +942,51 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // input IS a member file: `kama check`, and therefore the language server on 8 of the 47 stdlib files
     // and on any multi-file module a user writes.
     //
-    // This is the partial state the comment above already describes, applied to the one entry point that
-    // was still asserting `whole`. Pruning is unaffected: `provided` is the same mechanism a pruned module
-    // uses, a symbol list that IS covered still short-circuits, and re-resolving dedups on `seen`.
+    // A CLI input is loaded entire, so it contributes `whole` — and when the input is one FILE of a
+    // multi-file module, the loop below MAKES that true by loading the module's other files. It has to:
+    // "files of one directory share a namespace, so a sibling is reachable unqualified with no `import`
+    // at all" (SPEC, Modules / namespaces). Those references are not import edges, so nothing pins the
+    // siblings and there is no import for resolution to hang off — which is exactly the case SPEC answers
+    // with "anything the resolver does not fully understand loads the WHOLE module".
     //
-    // A BARE import is the exception, and it has to be — "satisfied only by a `whole` module" is the rule
-    // the comment above states, and a CLI input is no longer `whole`. But the command line IS the whole
-    // module as far as a bare import can tell: `import Physics;` in one input, `namespace Physics` in
-    // another, which is what tests/ns_basic.d does. Letting that re-resolve loaded the same source a
-    // second time under a different path spelling and the link failed on duplicate symbols — on Linux
-    // only, because a case-insensitive host dedups the two spellings and macOS never saw it. So bare
-    // imports keep exactly their old behaviour, tracked separately from a genuinely-whole module.
-    std::set<std::string> providedCliNs;   // namespaces a CLI input contributes — satisfies a BARE import
-    for (auto& in : cliInputs) {
-        std::string abs = absolutePath(in);
+    // Without it, analysing one member file saw only that file: `lib/std/math/mat.kama` names `Vec2`/`Vec4`
+    // from its sibling `vec.kama` and reported 202 unknown-type errors, and a file that self-imports a
+    // sibling reported "module does not export X". Builds were never affected — reached through a consumer
+    // the module resolves as a foreign import and loads whole — so what this fixes is every command whose
+    // INPUT is a member file: `kama check`, and therefore the language server.
+    //
+    // SAME DIRECTORY AND SAME NAMESPACE, which is narrower than it looks and deliberately so. Directory,
+    // because that is what a module is; the repo has four namespace NAMES living in more than one
+    // directory (`shapes`, `geo`, `Graphics`, `lib` — unrelated fixture modules that merely share a name)
+    // and merging those would be wrong. Namespace, because a directory may hold files that are not one
+    // module: tests/query holds five programs in one directory, each with its OWN namespace and two of
+    // them declaring `main`, and pulling those together would be a duplicate-`main` error.
+    //
+    // Cost is bounded and paid only where it buys something: the scan runs only for an input that declares
+    // a namespace — a program entry does not, including the one `kama seed` generates, so an ordinary build
+    // pays nothing. Worst case in this repo is std::collections' 14 files, measured at ~10 ms, one-time.
+    // `kama lsp` pays it once per session rather than per keystroke: the M5.2 parse cache is keyed on
+    // path+mtime+size, and a sibling does not change while you type in another file.
+    for (size_t ci = 0; ci < cliInputs.size(); ++ci) {
+        std::string abs = absolutePath(cliInputs[ci]);
         if (!seen.insert(abs).second) continue;
-        SharedCompilationUnit u = parseFile(in);
+        SharedCompilationUnit u = parseFile(cliInputs[ci]);
         if (!u) return false;
         units.push_back(u); paths.push_back(abs);
         std::string k = unitNsKey(u);
-        if (k.empty()) continue;
-        providedCliNs.insert(k);
-        for (auto& n : u->topLevelNames) provided[k].insert(n);
+        if (k.empty()) continue;                 // no namespace: file-private, it IS its own module
+        providedWhole.insert(k);
+        for (auto& sib : listKamaFiles(dirName(cliInputs[ci]))) {
+            std::string sabs = absolutePath(sib);
+            if (seen.count(sabs)) continue;      // the input itself, or another input, or already loaded
+            // A sibling that does not parse is left to whoever asks for it directly: it may be unrelated
+            // to this module (a different namespace), and failing the analysis of the file the user DID
+            // ask about, because of a file they did not, would trade one broken command for two.
+            SharedCompilationUnit su = parseFile(sib);
+            if (!su || unitNsKey(su) != k) continue;
+            seen.insert(sabs);
+            units.push_back(su); paths.push_back(sabs);
+        }
     }
     for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
         // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
@@ -983,10 +1006,6 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     if (sym && sym->identifier && sym->identifier->value)
                         wanted.push_back(*sym->identifier->value);   // the module-side name, never the alias
             if (providedWhole.count(key)) continue;           // already in the compilation, entire
-            // A bare import names nothing, so it cannot be checked against `provided`; the command line
-            // having contributed this namespace is the only answer available, and it is the one that held
-            // before CLI inputs became partial. A SYMBOL-LIST import falls through to the coverage check.
-            if (wanted.empty() && providedCliNs.count(key)) continue;
             if (!wanted.empty()) {
                 auto pit = provided.find(key);
                 if (pit != provided.end()) {
@@ -998,18 +1017,6 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             bool reserved = (segs[0] == "std" || segs[0] == "core");
             std::vector<std::string> roots;
             if (!reserved) {
-                // A SELF-import — a file importing a sibling from inside its OWN namespace — resolves from
-                // the ancestor the namespace path hangs off, not from the file's own directory. A file at
-                // `<root>/my/mod/a.kama` in `namespace my::mod` needs `<root>`, i.e. `here` with one
-                // component dropped per namespace segment; searching `here` itself looks for
-                // `my/mod/my/mod` and reports "cannot resolve module". `std::`/`core::` never need this —
-                // they are reserved and resolve from stdlibDir — which is why the stdlib's 8 self-importing
-                // files worked while a user's module did not.
-                if (key == unitNsKey(units[i])) {
-                    std::string anc = here;
-                    for (size_t k = 0; k < segs.size(); ++k) anc = dirName(anc);
-                    roots.push_back(anc);
-                }
                 roots.push_back(here);
                 for (auto& r : extraRoots) roots.push_back(r);
                 // Declared package deps resolve via the materialized view — and ONLY via it, so an
