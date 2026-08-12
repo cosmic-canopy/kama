@@ -41,8 +41,9 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **stdlib parity M2b / M2c** | §3 | ► **NEXT** |
-| 2 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — now carries the un-escape-checked view iterators | §2 | source-breaking, so before the tag |
+| **1** | **borrow-escape gaps — two are observable use-after-free today** | §2 | ► **NEXT**: correctness before surface area |
+| 2 | stdlib parity M2b / M2c | §3 | ↓ |
+| 3 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns the deepest of the three gaps | §2 | source-breaking, so before the tag |
 
 **The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
 shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
@@ -227,15 +228,38 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
   compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
   **Source-breaking**, so before the tag or 2.0.
-  - **It also owns the un-escape-checked view iterators**, found while scoping the view-escape check.
-    `ViewIter<T>` / `ViewIterMut<T>` (`lib/std/collections/view.kama`) are `type value`, not `type view`,
-    yet each holds the borrowed raw `Ptr<T>` plus a length — so `View.iterator()` hands a borrow out
-    through a type the escape checker does not treat as one, and it could be stored in a field and dangle.
-    Making them views is **not** a local fix: `Iterable<T>.iterator()` returns a *contract value*, so the
-    iterator would be **boxed** — heap ownership of a borrow — which would reject `View<T>`'s own
-    conformance and break `sort` and every in-place algorithm riding on it. It belongs here because the
-    honest fix is the seam itself (a borrowed `UnsafePtr<T>` that says what it is), not a kind swap.
+  - **It also owns the iterator-laundering gap** (gap 3 of the borrow-escape set below). Scoping it showed
+    it is **not** a `ViewIter` defect: *every* iterator in `lib/std/collections/` holds a raw `Ptr` and all
+    of them are storable in a field. What makes `ViewIter`/`ViewIterMut` the right thread is that they alone
+    **launder a rule the language otherwise enforces** — a `View<T>` may not be stored in a field, but its
+    iterator, holding the same pointer, may. (For an owning container the container itself is storable, so
+    its iterator grants no new reach.) They are also, with `FixedArrayIter`, the only iterators carrying no
+    `modsp`/`modsAt` fail-fast — and that counter is **not** a fix for this anyway, since it is itself a
+    `Ptr` into the container: after a free, reading it *is* the use-after-free. It catches modification
+    while alive, never destruction. Making them `type view` is not a local fix either
+    (`Iterable<T>.iterator()` returns a *contract value*, so the iterator boxes — heap ownership of a borrow
+    — rejecting `View<T>`'s own conformance and breaking `sort`). It belongs here because the honest fix is
+    the seam itself: a borrowed pointer type that *says* it is borrowed, not a kind swap on two structs.
     Recorded as a known limitation in [SPEC.md](SPEC.md) meanwhile.
+
+- **Borrow-escape gaps — three of them, two producing an observable use-after-free today.** Found while
+  closing the derived view-escape check; scheduled ahead of stdlib parity because they are correctness.
+  Each was verified by running, not by reading: `kama check` reports OK, `kama build` succeeds, and the
+  binary reads stomped or freed memory.
+  1. **A view constructor may borrow a BY-VALUE parameter.** `checkViewCtorEscape`'s root test is
+     `params.count(r) > 0`, whose comment claims "only a parameter names memory that outlives the call" —
+     false for a by-value parameter, which lives in the callee's own dying frame. No `return` of the view is
+     needed; the dangle happens in the caller because the *constructor's* frame died. Fix: narrow the test to
+     a parameter the view could borrow *from* (`ref`/`out`, a view, a `Ptr<T>`) by reusing
+     `CEmitter::paramCanCarryBorrow`, which already exists and is tested. Smallest of the three; expected
+     zero blast radius (`View<T>`'s own `ctor make(Ptr<T>, int32)` stays legal).
+  2. **The `export { … }` manifest is not enforced for QUALIFIED references.** [SPEC.md](SPEC.md) says a
+     non-exported top-level `type`/`fn` is "invisible to other modules" and names only the import form as
+     rejected — and only that half holds. `import std::collections::{ViewIter}` errors; a qualified
+     `std::collections::ViewIter<int32>` is accepted. Not `ViewIter`-specific (`DequeIter` too). This is the
+     reachability gate for gap 3 from user code, and a negative doc claim with **no `xfail`**. Measure the
+     in-tree blast radius before implementing — that number decides small fix vs. its own campaign.
+  3. **Iterator laundering** — see the unsafe-seam bullet above, which owns it.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler

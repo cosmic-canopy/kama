@@ -283,10 +283,12 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
 - *Known limitation:* a view is invalidated if the backing `DynamicArray` is **resized** (`add`/`reserve`)
   while the view is live — the same contract as a C++ `span`/iterator; not enforced (no lifetime tracking).
-- *Known limitation:* an iterator over a view (`ViewIter<T>`, `ViewIterMut<T>`) is a `type value` holding the
-  borrowed pointer, not a `type view`, so it is **not** itself escape-checked — it could be stored and
-  outlive its buffer. Again the C++ iterator contract. Tracked with the unsafe seam in
-  [ROADMAP.md](ROADMAP.md) §2.
+- *Known limitation:* an **iterator is not escape-checked**. Every collection iterator — `ViewIter<T>` and
+  `ViewIterMut<T>` included — is a `type value` holding a borrowed raw pointer, so it can be stored in a
+  field and outlive its buffer. Again the C++ iterator contract. For a view this is also a *laundering* path:
+  a `View<T>` may not be stored in a field, but its iterator, holding the same pointer, may. The mods-counter
+  fail-fast that the growable containers carry does not help — it points into the container too. Tracked with
+  the unsafe seam in [ROADMAP.md](ROADMAP.md) §2.
 
 ### Hash maps & sets (`std::collections`) ✅
 
