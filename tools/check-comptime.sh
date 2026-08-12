@@ -49,4 +49,37 @@ if [ -f "$FE" ]; then
     fi
 fi
 
-echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted; foreach over a constant is warning-free)"
+# 4. M7 LAYOUT ASSERTS — the aggregate lowering of `comptime assert` is INVISIBLE to the exit-code suite.
+#    tests/comptime_assert_layout.kama passes as a fixture whether or not a single `_Static_assert` was
+#    emitted: nothing it returns depends on them. So the property is asserted on the transpiled C, the same
+#    way the baked CRC table above is. Both halves matter — that the asserts are THERE, and that a
+#    scalar predicate kama can answer itself does NOT become one (it would move a diagnostic the LSP can
+#    see to one it cannot, which is the whole reason the two lowerings are split).
+LA="$ROOT/tests/comptime_assert_layout.kama"
+if [ -f "$LA" ]; then
+    lac="$tmp/layout.c"
+    "$KAMA" transpile "$LA" -o "$lac" >/dev/null
+
+    # the aggregate cases reached C, with kama's message carried through as the assert text
+    for want in 'sizeof(std__math__Vec4)) == (16)' '_Alignof(std__math__Vec4)' 'sizeof(size_t)'; do
+        if ! grep -qF "_Static_assert((" "$lac" || ! grep -qF "$want" "$lac"; then
+            echo "check-comptime: FAIL — no emitted _Static_assert matching '$want' (M7 aggregate lowering did not fire?)" >&2
+            grep -c '_Static_assert' "$lac" >&2 || true
+            exit 1
+        fi
+    done
+
+    # a scalar predicate is answered BY KAMA and must not reach C. `sizeof(int32)` folds (M6), so if the
+    # scalar fixture emitted an assert at all, the lowering rule picked the wrong side.
+    SA="$ROOT/tests/comptime_assert_scalar.kama"
+    if [ -f "$SA" ]; then
+        sac="$tmp/scalar.c"
+        "$KAMA" transpile "$SA" -o "$sac" >/dev/null
+        if grep -q '_Static_assert' "$sac"; then
+            echo "check-comptime: FAIL — a foldable scalar `comptime assert` emitted a _Static_assert; it must be answered by kama (so `kama check` and the LSP see it)" >&2
+            grep '_Static_assert' "$sac" | head -3 >&2; exit 1
+        fi
+    fi
+fi
+
+echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted; foreach over a constant is warning-free; M7 layout asserts lowered to C, scalar ones not)"

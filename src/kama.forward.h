@@ -24,6 +24,7 @@ class IsolateNode;
 class ScopeNode;
 class ParallelForNode;
 class AsmNode;
+class ComptimeAssertNode;
 class VariableDeclarator;
 class LocalVariableDeclaration;
 class ModuleVariableDeclaration;

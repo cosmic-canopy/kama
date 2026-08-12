@@ -1657,6 +1657,10 @@
           "named": true
         },
         {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
+        {
           "type": "continue_statement",
           "named": true
         },
@@ -1979,6 +1983,10 @@
       "required": false,
       "types": [
         {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
+        {
           "type": "constant_declaration",
           "named": true
         },
@@ -2004,6 +2012,32 @@
         },
         {
           "type": "operator_declaration",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "comptime_assert_statement",
+    "named": true,
+    "fields": {
+      "callee": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "argument_list",
           "named": true
         }
       ]
@@ -2606,6 +2640,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
         {
           "type": "constant_declaration",
           "named": true
@@ -4100,6 +4138,10 @@
       "required": false,
       "types": [
         {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
+        {
           "type": "constant_declaration",
           "named": true
         },
@@ -4207,6 +4249,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
         {
           "type": "constant_declaration",
           "named": true
@@ -5539,6 +5585,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "comptime_assert_statement",
+          "named": true
+        },
         {
           "type": "enum_declaration",
           "named": true

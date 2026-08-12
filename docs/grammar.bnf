@@ -89,6 +89,7 @@ code_declaration
   : function_declaration
   | type_declaration
   | module_variable_declaration
+  | comptime_assert_statement      /* `comptime assert(…)` as a top-level declaration (M7) */
   ;
 
 /* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
@@ -550,6 +551,20 @@ embedded_statement
   | scope_statement
   | parallel_for_statement
   | asm_statement
+  | comptime_assert_statement      /* a ClassMemberDeclarationNode IS a StatementNode */
+  ;
+  /* `comptime assert(cond: …, msg: "…");` — a compile-time assertion (const-generics M7). Valid here,
+     at module scope (`code_declaration`) and at type-member scope (`constant_declaration`).
+
+     The callee is spelled out as `name ( args )` rather than reusing `invocation_expression` because
+     the trailing LPAREN is what keeps this LALR(1)-clean: after `COMPTIME IDENTIFIER` the parser must
+     choose between reducing to `qualified_identifier` (the `comptime <type> <name>` declaration) and
+     `qualified_identifier_no_generic` (a call). Spelling the `(` inline decides it with one token —
+     `invocation_expression` here costs 9 shift/reduce conflicts. `assert` deliberately stays an
+     IDENTIFIER rather than becoming a keyword (that would break the runtime `assert` builtin, the
+     tmLanguage keyword list, and check-syntax-drift); the emitter checks the name. */
+comptime_assert_statement
+  : COMPTIME qualified_identifier_no_generic LPAREN argument_list_opt RPAREN SEMICOLON
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -1101,6 +1116,11 @@ class_member_declarations
   ;
 class_member_declaration
   : constant_declaration
+    /* `comptime assert(…)` as a type member (M7). The `modifiers_opt` prefix is NOT decoration: every
+       other member arm starts with it, so without it the parser must choose between reducing an empty
+       modifiers_opt and shifting COMPTIME — 9 shift/reduce conflicts. An assert has no visibility, so a
+       non-empty list is rejected by the emitter rather than parsed away. */
+  | modifiers_opt comptime_assert_statement
   | field_declaration
   | method_declaration
   | operator_declaration

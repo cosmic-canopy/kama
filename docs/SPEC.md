@@ -1251,7 +1251,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   choice, not a language guarantee (1 on AVR; `_Alignof(double)` is 4 on i386). Both keep working
   everywhere a runtime value works. The premises the fold rests on (`CHAR_BIT == 8`, and `float`/`double`
   at 4/8) are `_Static_assert`ed in `kama_runtime.h`, so the C compiler verifies them for the real target
-  on every build.
+  on every build. What kama will not fold, **[`comptime assert`](#compile-time-assertions--comptime-assert-)**
+  lets you assert anyway — it hands an aggregate/`alignof` predicate to the C compiler as a `_Static_assert`.
 - **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
@@ -1263,7 +1264,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   message + `file:line` to stderr, then `abort()` — not UB, the user-facing form of the built-in bounds
   trap). `msg:` is **mandatory** (empty string allowed); a failed `assert` also **auto-appends the
   condition's source text** (`assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (f.kama:12)`).
-  `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on. For
+  `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on.
+  For a premise that can be settled before the program runs, use
+  **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For
   a *bug that can't continue*; recoverable errors use `Result<T, E>`. A custom fatal handler (for a shipped
   game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** — it runs for cleanup/exhibition,
   then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.) The
@@ -2185,6 +2188,51 @@ type value Palette {
   diagnostic — so the same inputs always bake the same output.
 - **Bounded.** A step budget (and call-depth cap) guarantees a runaway comptime fn can't hang the compiler
   (as C++ constexpr-steps / Zig `@setEvalBranchQuota`); exceeding it is a clean diagnostic naming the fn.
+
+### Compile-time assertions — `comptime assert` ✅
+
+A **`comptime assert(cond:, msg:)`** states a premise the build must satisfy. It takes the same arguments
+as the runtime [`assert`](#writing-a-collection-in-kama--sizeof-panicassert-place-returning-methods-) —
+`msg:` mandatory, the condition's source text auto-appended to the diagnostic — and only the `comptime`
+marker differs, because only *when* it is checked differs. It emits no runtime code: an assertion that
+holds costs nothing, and one that fails is a build error rather than a trap.
+
+```kama
+comptime assert(cond: sizeof(int32) * 8 == 32, msg: "int32 must be 32 bits");   // module scope
+
+type value Fixed<const F: int32> {
+    comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit the backing");
+}
+
+comptime assert(cond: sizeof(Vertex) == 20, msg: "vertex buffer stride");       // a layout claim
+
+fn void render() {
+    comptime assert(cond: sizeof(float64) == 8, msg: "float64 is 8 bytes");     // and inside a body
+}
+```
+
+- **Three scopes: module, type member, statement.** A `comptime assert` in a **generic** — type or
+  function — is checked **once per instantiation**, with that instance's arguments bound, so the failure
+  names the use site (`assertion failed: F > 0 && F < 32 … [with F = 40]`). That is what lets a generic
+  reject a bad argument instead of miscompiling. A member assert has no visibility: `public` on one is an
+  error.
+- **`msg:` must be a plain string LITERAL** — stricter than the runtime `assert`, which takes any string
+  expression. The reason is the second lowering below, whose message has to be a literal; one rule for
+  both beats a rule that changes with the predicate.
+- **One surface, two lowerings.** Which one applies is decided by the predicate, not by the author:
+  - **kama answers it** when the predicate folds — literals, `comptime` constants, const generic
+    parameters, `sizeof` of a fixed-width scalar, and arithmetic/comparison/logic over those. The failure
+    is an ordinary kama diagnostic, so **`kama check` and the LSP report it**.
+  - **The C compiler answers it** when the predicate turns on a layout fact kama deliberately does not
+    model — an aggregate's `sizeof`, any `alignof`, `sizeof(usize)`. kama emits a C11 `_Static_assert`
+    carrying the message, and the target's real ABI decides. This needs no layout model in kama, which is
+    exactly why `sizeof` folds only for fixed-width scalars.
+  - Anything else — a predicate naming a runtime value, or mixing a layout fact with one — is an error.
+- **⚠️ The caveat, and it is the price of the split: the layout form fails at BUILD, not at `kama check`.**
+  The C compiler is what rejects it, and `kama check` runs no C compiler — so **the LSP cannot show it**.
+  A scalar predicate has no such gap. Prefer the scalar form when a claim can be stated either way.
+- **Not a `debugAssert`.** There is no release-stripped variant, because there is nothing to strip: a
+  compile-time assertion never reaches the running program.
 
 **MCU codegen attributes (step 4)** — `@interrupt` and `@section(".x")` are declaration attributes (the
 existing `@name(args)` mechanism, extended from serialization to functions + statics). Each emits a C

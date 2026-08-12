@@ -1010,6 +1010,19 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
     if (auto* v = dynamic_cast<Float32Node*>(n)) { char b[64]; std::snprintf(b, sizeof b, "%g", (double)v->value); return b; }
     if (auto* v = dynamic_cast<StringNode*>(n))  return "\"" + (v->value ? *v->value : std::string()) + "\"";
 
+    // `sizeof(T)` / `alignof(T)` — the operand is a TYPE, not an expression, so nothing else here reaches
+    // it. A layout condition is almost entirely made of these (M7's `comptime assert`), and without this
+    // arm the auto-stringified condition came out as " == 16".
+    if (auto* v = dynamic_cast<SizeofNode*>(n)) {
+        std::string t;
+        if (v->type) {
+            if (v->type->qualifier) for (auto& q : *v->type->qualifier) if (q) t += *q + "::";
+            if (v->type->value) t += *v->type->value;
+        }
+        if (t.empty()) return "";
+        return (v->isAlign ? "alignof(" : "sizeof(") + t + ")";
+    }
+
     if (auto* v = dynamic_cast<BinaryExpressionNode*>(n))
         return unparseExpr(v->LHS) + " " + binaryOperator(v->token) + " " + unparseExpr(v->RHS);
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n))
@@ -2759,6 +2772,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // ops); lowers to the volatile + memory-clobber form so it is never elided/reordered.
     if (auto* a = dynamic_cast<AsmNode*>(n)) {
         emitAsm(a, depth);
+        return;
+    }
+
+    // `comptime assert(cond:, msg:)` (M7) — checked here, emits no runtime code. Inside a generic body this
+    // runs once per instantiation, with `_constSubst`/`_typeSubst` already bound by emitGenericInst.
+    if (auto* ca = dynamic_cast<ComptimeAssertNode*>(n)) {
+        emitComptimeAssert(ca);
         return;
     }
 
@@ -5585,6 +5605,182 @@ void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifi
     // Phrased to read after the "unsupported " prefix `unsupported()` prints.
     unsupported(("const generic argument for `" + param + "` — it does not fold to a compile-time integer; "
                  + why).c_str(), arg->constArgValue->line);
+}
+
+// --- `comptime assert(cond:, msg:)` — const-generics M7 --------------------------------------------------
+//
+// One surface, TWO lowerings, and the rule below is what picks between them. The split exists because M6
+// drew `sizeof`'s fold boundary at fixed-width scalars: kama owns what the LANGUAGE fixes and never what
+// the ABI decides, since clang — not kama — lays out aggregates. So a predicate kama can answer, kama
+// answers (a real diagnostic, visible to `kama check` and the LSP); a predicate that turns on a layout fact
+// kama deliberately does not model is handed to the C compiler as a C11 `_Static_assert`. That is what
+// makes M6's narrow fold cost nothing: the cases it refuses are exactly the cases clang is the authority on.
+
+// Does this predicate turn on a `sizeof`/`alignof` that kama cannot fold? If so it must go to C — asking
+// the interpreter first would only produce M6's "does not fold" diagnostic for a question that HAS a right
+// answer on the target. Every `alignof`, `sizeof` of an aggregate, and `sizeof(usize)` lands here.
+bool CEmitter::ctaNeedsCLowering(SharedExpression e)
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    if (auto* s = dynamic_cast<SizeofNode*>(n)) {
+        int64_t sz;
+        return s->isAlign || !scalarByteSize(s->type, sz);
+    }
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return ctaNeedsCLowering(u->expression);
+    if (auto* c = dynamic_cast<CastNode*>(n))                  return ctaNeedsCLowering(c->unaryExpression);
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n))      return ctaNeedsCLowering(b->LHS) || ctaNeedsCLowering(b->RHS);
+    if (auto* l = dynamic_cast<LogicalAndOrNode*>(n))          return ctaNeedsCLowering(l->LHS) || ctaNeedsCLowering(l->RHS);
+    return false;
+}
+
+// Render a layout predicate as a C constant expression. Returns false for any leaf that is not a pure
+// layout/constant fact — a runtime value, a call, a field read — which is what keeps this from silently
+// emitting a `_Static_assert` over something clang would reject for a different reason entirely.
+bool CEmitter::ctaRenderC(SharedExpression e, std::string& out)
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    // Anything that folds in kama renders as its VALUE — an integer literal, a `comptime` constant, a const
+    // generic parameter, `sizeof` of a fixed-width scalar, arithmetic over those. One arm covers them all
+    // because they all route through constValue, and baking the value keeps the emitted C independent of
+    // whether the name is even visible at that point in the generated file.
+    int64_t v;
+    if (constValue(e, v)) { out = std::to_string(v); return true; }
+    if (auto* s = dynamic_cast<SizeofNode*>(n)) {
+        SharedIdentifier t = deepSubstType(s->type);   // so `sizeof(T)` works inside a generic instance
+        if (!t) return false;
+        std::string ct = cType(t);
+        if (ct.empty()) return false;
+        out = (s->isAlign ? "_Alignof(" : "sizeof(") + ct + ")";
+        return true;
+    }
+    if (auto* c = dynamic_cast<CastNode*>(n)) return ctaRenderC(c->unaryExpression, out);
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        std::string s;
+        if (!ctaRenderC(u->expression, s)) return false;
+        const char* op = u->token == PLUS  ? "+" : u->token == MINUS       ? "-"
+                       : u->token == TILDE ? "~" : u->token == EXCLAMATION ? "!" : nullptr;
+        if (!op) return false;
+        out = std::string(op) + "(" + s + ")";
+        return true;
+    }
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
+        std::string l, r;
+        if (!ctaRenderC(b->LHS, l) || !ctaRenderC(b->RHS, r)) return false;
+        std::string op = binaryOperator(b->token);
+        if (op == "/*?op*/") return false;
+        out = "(" + l + ") " + op + " (" + r + ")";
+        return true;
+    }
+    if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
+        std::string a, b;
+        if (!ctaRenderC(l->LHS, a) || !ctaRenderC(l->RHS, b)) return false;
+        out = "(" + a + ") " + (l->token == ANDAND ? "&&" : "||") + " (" + b + ")";
+        return true;
+    }
+    return false;
+}
+
+// The whole statement, at every scope it is legal in. Called from emitStatement (function bodies), from
+// emitModuleContent (module scope) and from the per-class walks (type-member scope) — including the
+// per-instantiation one, which is why a failure inside a generic names the instance that failed.
+void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
+{
+    if (!a) return;
+    if (a->modifiers && !a->modifiers->empty()) {
+        unsupported("visibility on a `comptime assert` — an assertion is not a member anything can reach",
+                    a->line);
+        return;
+    }
+    // The grammar accepts any callee here on purpose: the trailing `(` is what keeps the production
+    // LALR(1)-clean against `comptime <type> <name>`, so the name is checked where a real diagnostic can
+    // be written rather than as a parse error that could only say "syntax error".
+    const std::string name = (a->callee && a->callee->value) ? *a->callee->value : std::string();
+    const bool bare = (!a->callee || !a->callee->qualifier || a->callee->qualifier->empty());
+    if (!bare || name != "assert") {
+        unsupported(("compile-time statement `comptime " + (name.empty() ? std::string("?") : name)
+                     + "(...)` — the only one is `comptime assert(cond: …, msg: \"…\")`").c_str(), a->line);
+        return;
+    }
+    SharedExpression cond, msg;
+    if (a->args) for (auto& ar : *a->args) {
+        if (!ar || !ar->name || !ar->name->value) continue;
+        if      (*ar->name->value == "cond") cond = ar->expression;
+        else if (*ar->name->value == "msg")  msg  = ar->expression;
+    }
+    if (!cond) { unsupported("`comptime assert` requires `cond:`", a->line); return; }
+    if (!msg)  { unsupported("`comptime assert` requires `msg:` (use `msg: \"\"` for none)", a->line); return; }
+    // A LITERAL, not any string expression — the runtime `assert` accepts the latter, but C11
+    // `_Static_assert` needs a literal, and one rule across both lowerings beats a rule that changes
+    // depending on which one the predicate happens to take.
+    auto* lit = dynamic_cast<StringNode*>(msg.get());
+    if (!lit || !lit->value) {
+        unsupported("`msg:` on a `comptime assert` — it must be a plain string LITERAL (no interpolation): "
+                    "the aggregate form lowers to a C11 `_Static_assert`, whose message is a literal",
+                    a->line);
+        return;
+    }
+    const std::string condText = unparseExpr(cond);
+    const std::string message  = *lit->value;
+
+    // --- lowering 2: a layout fact only the target knows -> let the C compiler answer it ---
+    if (ctaNeedsCLowering(cond)) {
+        std::string c;
+        if (!ctaRenderC(cond, c)) {
+            unsupported(("`comptime assert` predicate `" + condText + "` mixes a layout fact "
+                         "(`sizeof`/`alignof` of an aggregate) with something that is not a compile-time "
+                         "constant — a layout assertion may only combine `sizeof`/`alignof`, literals and "
+                         "`comptime` constants").c_str(), a->line);
+            return;
+        }
+        // Both halves are optional: `msg: ""` is allowed, and unparseExpr returns "" for a form it does
+        // not render. Joining unconditionally produced a dangling "— " in the C compiler's own output.
+        std::string note = message.empty() ? condText
+                         : condText.empty() ? message
+                                            : (message + " — " + condText);
+        std::string s = "_Static_assert(" + c + ", \"kama: " + cEscapeStringBody(note) + " ("
+                      + cEscapeStringBody(_sourcePath) + ":" + std::to_string(a->line) + ")\");\n";
+        // One instantiation's worth is enough: a generic type's members are re-walked per instance, and a
+        // monomorph reached twice would otherwise repeat its assert verbatim. Keyed on the emitted text, so
+        // two DIFFERENT instances (`Fixed<16>` / `Fixed<24>`) still each get theirs.
+        if (_staticAsserts.insert(s).second) _fileScopeHelpers.push_back(s);
+        return;
+    }
+
+    // --- lowering 1: kama can answer it, so kama answers it ---
+    // Through the comptime interpreter, not constValue: `constValue` is deliberately an integer-SIZE fold
+    // whose `default: return false` arms drop every comparison and logical operator, while ctEvalExpr
+    // already produces a CTValue::Bool for all of them.
+    _ctSteps = 0; _ctDepth = 0; _ctFailed = false; _ctCurrentOwner.clear();
+    CTEnv env;
+    CTValue v;
+    if (!ctEvalExpr(cond, env, v)) return;    // ctEvalExpr has already reported precisely why
+    if (v.kind != CTValue::Bool) {
+        ctFail(("`comptime assert` condition `" + condText + "` is not a boolean").c_str(), a->line);
+        return;
+    }
+    if (v.i == 0) {
+        // Name the instantiation. The assert's own line is the same for every instance of a generic, so
+        // without the bindings a failure says WHAT broke but not WHICH use site broke it — and finding
+        // that by hand is the whole cost this milestone exists to remove.
+        std::string binds;
+        for (auto& kv : _constSubst)
+            binds += (binds.empty() ? "" : ", ") + kv.first + " = " + std::to_string(kv.second.value);
+        ctFail(("assertion failed: " + (condText.empty() ? std::string("<condition>") : condText)
+                + (message.empty() ? std::string() : " — " + message)
+                + (binds.empty()   ? std::string() : " [with " + binds + "]")).c_str(), a->line);
+    }
+}
+
+// Every `comptime assert` declared directly in a type body, under whatever substitution is bound now. For a
+// generic that is one call per instantiation (see emitGenericTypeInst), which is the entire point: the
+// predicate is checked against the arguments the use site actually passed.
+void CEmitter::emitComptimeAssertsIn(ClassDeclarationNode* cd)
+{
+    if (!cd || !cd->members) return;
+    for (auto& m : *cd->members)
+        if (auto* a = dynamic_cast<ComptimeAssertNode*>(m.get())) emitComptimeAssert(a);
 }
 
 // Bind one instantiation's parameters. A const param binds a VALUE plus the width it was declared with;
@@ -15593,6 +15789,9 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
     _emitStaticClass = true;
+    // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
+    // bound — so `Fixed<24>` can fail while `Fixed<16>` passes, and the diagnostic names which.
+    if (phase == 0 && tmplIt != _genericTypes.end()) emitComptimeAssertsIn(tmplIt->second.node);
     if      (phase == 0) { emitStruct(ci); }   // forward typedef now emitted in the phase-(a) loop
     else if (phase == 1) emitClassPrototypes(ci);
     // Interface vtables BEFORE method bodies: a generic instance's own method may upcast `this` to a contract
@@ -18256,6 +18455,18 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
 
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitClassInterfaceVtables(*ci);
+    // M7 `comptime assert` at module scope, and in the body of a NON-generic type. A generic type's are
+    // checked per instantiation instead (emitGenericTypeInst), since that is where its const arguments are
+    // bound. Neither emits runtime code — a false one is a diagnostic, a layout one a `_Static_assert`
+    // queued into _fileScopeHelpers, which is flushed below before any body that could reference it.
+    for (auto& decl : *unit->codeDeclarationList) {
+        if (auto* ca = dynamic_cast<ComptimeAssertNode*>(decl.get())) { emitComptimeAssert(ca); continue; }
+        auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
+        if (cd && !(cd->typeParams && !cd->typeParams->empty())) {
+            ScopedStr _ts(_thisType, qualify(cd->name && cd->name->value ? *cd->name->value : std::string()));
+            emitComptimeAssertsIn(cd);
+        }
+    }
     // class definitions, then free-function definitions.
     for (auto& decl : *unit->codeDeclarationList)
         if (ClassInfo* ci = classOf(decl.get())) emitClassDefinitions(*ci);
@@ -18313,6 +18524,9 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // conformance registry and their bodies emitted just above; nothing at this top-level site.
         } else if (dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             // MCU step 1: module-level `static` — already emitted into `moduleStatics` (flushed before bodies).
+        } else if (dynamic_cast<ComptimeAssertNode*>(decl.get())) {
+            // M7: checked in the `comptime assert` loop above; it produces a diagnostic or a queued
+            // `_Static_assert`, never a top-level definition.
         } else if (decl) {
             unsupported("top-level declaration", decl->line);
             *_out << "\n";

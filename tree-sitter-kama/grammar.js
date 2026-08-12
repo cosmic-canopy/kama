@@ -169,6 +169,7 @@ module.exports = grammar({
         $.intrinsic_declaration,
         $.enum_declaration,
         $.module_variable_declaration,
+        $.comptime_assert_statement,
       ),
 
     // ── Type declarations ───────────────────────────────────────────────────────────────────────────
@@ -423,6 +424,7 @@ module.exports = grammar({
         $.constructor_declaration,
         $.destructor_declaration,
         $.friend_declaration,
+        $.comptime_assert_statement,
       ),
 
     constant_declaration: ($) =>
@@ -611,6 +613,7 @@ module.exports = grammar({
         $.scope_statement,
         $.parallel_for_statement,
         $.asm_statement,
+        $.comptime_assert_statement,
       ),
 
     // C-style: `int32 i = 0, j;`. There is no `let`/`var`.
@@ -767,6 +770,18 @@ module.exports = grammar({
 
     // Exactly ONE string-literal operand, and it is embedded assembly — never interpolated.
     asm_statement: ($) => seq('asm', '(', field('code', $.string_literal), ')', ';'),
+
+    // kama.y `comptime_assert_statement`. `comptime assert(cond: …, msg: "…");` — a compile-time
+    // assertion (M7), legal at module, type-member and statement scope. `assert` is an ordinary
+    // IDENTIFIER, not a keyword (the runtime `assert` builtin is spelled the same way), so the callee is
+    // matched as one rather than as a literal token.
+    comptime_assert_statement: ($) =>
+      seq(
+        'comptime',
+        field('callee', $.identifier),
+        $.argument_list,
+        ';',
+      ),
 
     // ── match ───────────────────────────────────────────────────────────────────────────────────────
     // kama.y:561 — both a statement (value discarded, trailing `;`) and an expression. Arms use a COLON;

@@ -531,7 +531,15 @@ fi
 #     language server can do.
 # So: every positive fixture must pass `check`, and every negative fixture must fail it. `check` does no C
 # compilation, so this is cheap and target-independent — it runs on every leg.
-analysis_skip() {   # fixtures where `check` legitimately cannot match `build` — currently NONE
+analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
+    # M7: a `comptime assert` over an AGGREGATE's layout lowers to a C11 `_Static_assert`, because kama
+    # does not model struct layout — clang does. So the rejection comes from the C compiler, which `check`
+    # never runs. This is not the hazard the leg guards against (a diagnostic kama COULD give and drops on
+    # the check path); it is the documented cost of letting the target answer a target question, and the
+    # docs say so at the surface. Adding an entry here is a deliberate act — read the note above first.
+    case "$1" in
+        comptime_assert_layout_false) return 0 ;;
+    esac
     return 1
 }
 # This leg is ONE assertion, not one per fixture. It re-checks every fixture the suite already built, so

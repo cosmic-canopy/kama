@@ -1155,6 +1155,12 @@ private:
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
     bool scalarByteSize(SharedIdentifier type, int64_t& out);  // `sizeof(T)` for a fixed-width scalar T
+    // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
+    void emitComptimeAssert(ComptimeAssertNode* a);
+    void emitComptimeAssertsIn(ClassDeclarationNode* cd);      // the type-member form, under the live binding
+    bool ctaNeedsCLowering(SharedExpression e);                // predicate turns on a layout fact kama can't fold
+    bool ctaRenderC(SharedExpression e, std::string& out);     // -> a C constant expression for _Static_assert
+    std::set<std::string> _staticAsserts;                      // emitted-text dedupe (a monomorph is re-walked)
     void rejectUnfoldableConstArg(const std::string& param, SharedIdentifier arg);  // a VALUE arg that won't fold
     std::set<const void*> _badConstArgs;   // arg nodes already reported — binding is re-run per discovery pass
     // Bind one instantiation's parameters: a const param binds a VALUE (+ its declared width) in

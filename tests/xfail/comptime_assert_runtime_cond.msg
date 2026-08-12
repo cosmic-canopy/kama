@@ -1,0 +1,1 @@
+a compile-time expression reads only `comptime` constants

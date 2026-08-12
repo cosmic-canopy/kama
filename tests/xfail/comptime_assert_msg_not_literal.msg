@@ -1,0 +1,1 @@
+it must be a plain string LITERAL

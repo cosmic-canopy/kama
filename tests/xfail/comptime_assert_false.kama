@@ -1,0 +1,6 @@
+// M7: a `comptime assert` whose predicate folds and is FALSE is a kama diagnostic — not a warning, not a
+// runtime trap. It carries the message, the auto-stringified condition (the same `unparseExpr` the runtime
+// `assert` uses), and the source position, and it is structured, so `kama check` and the LSP report it too.
+comptime assert(cond: sizeof(int32) == 8, msg: "int32 must be 8 bytes");
+
+fn int32 main() { return 0; }

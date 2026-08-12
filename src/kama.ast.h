@@ -900,6 +900,28 @@ public:
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
 };
 
+// `comptime assert(cond: …, msg: "…");` — a compile-time assertion (const-generics M7). Valid at
+// module, type-member and statement scope, which is why it derives from ClassMemberDeclarationNode:
+// that already IS a StatementNode, so one node reaches all three positions.
+//
+// Inside a generic it is checked once per instantiation (with `_constSubst`/`_typeSubst` bound), so a
+// failure names the use site. Two lowerings under one surface: a predicate that folds is answered by
+// kama; a pure layout predicate over an aggregate's `sizeof`/`alignof` — which kama deliberately
+// cannot fold — becomes a C11 `_Static_assert` and clang answers it.
+//
+// The parser accepts ANY bare/qualified callee here: the trailing `(` is what keeps the production
+// LALR(1)-clean against `comptime <type> <name>`, so the name check belongs in the emitter, where a
+// real diagnostic can be written. `assert` stays an ordinary identifier, never a keyword.
+class ComptimeAssertNode : public ClassMemberDeclarationNode {
+public:
+    SharedIdentifier   callee;      // must be the bare name `assert` — checked in the emitter
+    SharedArgumentList args;        // `cond:` (a predicate) and `msg:` (a string LITERAL), both mandatory
+    SharedModifierList modifiers;   // only ever non-empty at member scope; an assert has no visibility
+    ComptimeAssertNode(CodeGenContext& context, SharedIdentifier callee, SharedArgumentList args)
+        : ASTNode(context), ClassMemberDeclarationNode(context)
+        , callee(callee), args(args) { }
+};
+
 // `friend <accessor>(member, …);` (or `friend <accessor>;` = all privates): the
 // OWNING class grants the named accessor (a class / free function / Class::method) access
 // to the named private members. Owner-granted, narrow, greppable.

@@ -377,7 +377,7 @@ struct kamayystype {
 %type <intrinsictargets> intrinsic_target_list
 %type <statement> marked_intrinsic_declaration
 %type <classbasedecl> class_base_opt class_base
-%type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration
+%type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration comptime_assert_statement
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
 %type <classmemberdecllist> class_body class_member_declarations_opt class_member_declarations
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
@@ -483,6 +483,7 @@ code_declaration
   : function_declaration
   | type_declaration
   | module_variable_declaration
+  | comptime_assert_statement   { $$ = $1; }   /* `comptime assert(…)` as a top-level declaration (M7) */
   ;
 
 /* Module-level mutable static (MCU campaign step 1). `STATIC` is a unique prefix at top level
@@ -1049,6 +1050,20 @@ embedded_statement
   | scope_statement
   | parallel_for_statement
   | asm_statement
+  | comptime_assert_statement   { $$ = $1; }   /* a ClassMemberDeclarationNode IS a StatementNode */
+  ;
+  /* `comptime assert(cond: …, msg: "…");` — a compile-time assertion (const-generics M7). Valid here,
+     at module scope (`code_declaration`) and at type-member scope (`constant_declaration`).
+
+     The callee is spelled out as `name ( args )` rather than reusing `invocation_expression` because
+     the trailing LPAREN is what keeps this LALR(1)-clean: after `COMPTIME IDENTIFIER` the parser must
+     choose between reducing to `qualified_identifier` (the `comptime <type> <name>` declaration) and
+     `qualified_identifier_no_generic` (a call). Spelling the `(` inline decides it with one token —
+     `invocation_expression` here costs 9 shift/reduce conflicts. `assert` deliberately stays an
+     IDENTIFIER rather than becoming a keyword (that would break the runtime `assert` builtin, the
+     tmLanguage keyword list, and check-syntax-drift); the emitter checks the name. */
+comptime_assert_statement
+  : COMPTIME qualified_identifier_no_generic LPAREN argument_list_opt RPAREN SEMICOLON   { $$ = std::make_shared<ComptimeAssertNode>(SCANNER_CODEGENCONTEXT, $2, $4); }
   ;
 arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
@@ -1669,6 +1684,11 @@ class_member_declarations
   ;
 class_member_declaration
   : constant_declaration   { $$ = $1; }
+    /* `comptime assert(…)` as a type member (M7). The `modifiers_opt` prefix is NOT decoration: every
+       other member arm starts with it, so without it the parser must choose between reducing an empty
+       modifiers_opt and shifting COMPTIME — 9 shift/reduce conflicts. An assert has no visibility, so a
+       non-empty list is rejected by the emitter rather than parsed away. */
+  | modifiers_opt comptime_assert_statement   { auto a = std::static_pointer_cast<ComptimeAssertNode>($2); a->modifiers = $1; $$ = a; }
   | field_declaration   { $$ = $1; }
   | method_declaration   { $$ = $1; }
   | operator_declaration   { $$ = $1; }

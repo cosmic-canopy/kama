@@ -1,0 +1,13 @@
+// M7, and the CAVEAT that comes with its second lowering. This predicate is over an aggregate's layout,
+// which kama deliberately does not model (M6: kama emits C, clang lays out the structs), so it lowers to
+// a C11 `_Static_assert` and CLANG rejects it — with kama's own message carried through as the assert
+// text, so the diagnostic still names the claim and its source line.
+//
+// The consequence, which the docs state plainly: this form fails at BUILD, not at `kama check`. The LSP
+// cannot see it. That is why this fixture is enrolled in run_tests.sh's `analysis_skip` — every other
+// xfail is cross-checked for `check`/`build` agreement, and this one legitimately cannot agree.
+import std::math::{Vec4};
+
+comptime assert(cond: sizeof(Vec4) == 15, msg: "Vec4 is not 15 bytes");
+
+fn int32 main() { return 0; }

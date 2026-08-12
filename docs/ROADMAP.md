@@ -171,26 +171,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of a future
   generic `Fixed<intBits, fracBits>` (§1).
 
-- **Layout control + layout verification (`@align(N)` / `@packed` / an aggregate layout assert)** — kama can
-  *know* a type's size and alignment at runtime and *fold* `sizeof` for a fixed-width scalar (M6), but it can
-  neither **control** an aggregate's layout nor **verify** one at build time. The only codegen attributes that
-  exist are `@interrupt` and `@section`. Both gaps matter to the two tracks that care about layout — an engine
-  (SIMD/cache-line alignment, a GPU vertex or `std140` uniform stride) and MCU (a packed MMIO register block
-  or wire struct).
+- **Layout CONTROL (`@align(N)` / `@packed`)** — kama can now *know*, *fold* and *assert* a type's layout
+  (`sizeof` folding for fixed-width scalars, and `comptime assert` for everything else — both in
+  [SPEC.md](SPEC.md#compile-time-assertions--comptime-assert-)), but it still cannot **control** an
+  aggregate's layout. The only codegen attributes that exist are `@interrupt` and `@section`. The gap
+  matters to the two tracks that care about layout — an engine (SIMD/cache-line alignment, a GPU vertex or
+  `std140` uniform stride) and MCU (a packed MMIO register block or wire struct).
 
-  **Neither needs a layout model in kama** — that is the point, and the reason this is small. kama does not own
-  layout (it emits C; the C compiler lays the structs out), and it should not acquire a second source of truth
-  that can silently disagree per target. Both lower as passthrough, the shape `@section` already has:
-  - **Control:** `@align(N)` / `@packed` → `__attribute__((aligned(N)))` / `((packed))`.
-  - **Verification:** the aggregate case of `comptime assert(pred, "msg")` lowers to C11 `_Static_assert`.
-    One surface, two lowerings: a predicate over fixed-width scalars folds in kama and yields a kama
-    diagnostic that `kama check` and the LSP can see; a predicate over an aggregate's `sizeof`/`alignof`
-    lowers to the C and clang answers it at build time. The caveat is exactly that split — the aggregate
-    form is invisible to `kama check`, so it fails at build, not at check.
-
-  Prompted by finding that SPEC's `Vec4` = 16 B / `Mat4` = 4×`Vec4` claim — the WebGPU vertex stride, and what
-  makes the release-build auto-vectorization valid — had no guard of any kind. `tests/math_layout.kama` now
-  pins it at runtime on three ABIs, which is the cheap half; the `_Static_assert` form is the durable one.
+  **It needs no layout model in kama** — that is the point, and the reason it is small. kama does not own
+  layout (it emits C; the C compiler lays the structs out), and it should not acquire a second source of
+  truth that can silently disagree per target. It lowers as passthrough, the shape `@section` already has:
+  `@align(N)` / `@packed` → `__attribute__((aligned(N)))` / `((packed))`. Verification shipped first
+  deliberately: asserting a layout is what makes changing one safe.
 
 - **Per-target primitive availability — considered, deliberately NOT built.** *If a target genuinely cannot
   supply a primitive, reject its uses with a kama diagnostic rather than a C-level assert.* The reasoning, so

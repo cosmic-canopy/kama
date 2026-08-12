@@ -245,8 +245,11 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             if (it != env.vars.end()) { out = it->second; return true; }
             if (ctResolveConst(std::static_pointer_cast<IdentifierNode>(e), out)) return true;
         }
+        // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
+        // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
         return ctFail(("unknown identifier `" + (id->value ? *id->value : std::string("?"))
-                       + "` — a comptime fn reads only its params, locals, and `comptime` constants").c_str(), e->line);
+                       + "` — a compile-time expression reads only `comptime` constants, const generic "
+                         "parameters, and (inside a `comptime fn`) that function's params and locals").c_str(), e->line);
     }
 
     // --- cast ---

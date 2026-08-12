@@ -1,0 +1,15 @@
+// M7: inside a generic, the predicate is checked ONCE PER INSTANTIATION — so `Fx<16>` is fine and
+// `Fx<40>` is not, from one assert written once. The `[with F = 40]` in the diagnostic is load-bearing:
+// the assert's own line is identical for every instance, so without the bindings the message would say
+// what broke but never which use site broke it.
+type value Fx<const F: int32> {
+    comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit an int32 backing");
+    public int32 raw;
+    public ctor of(int32 raw) { this.raw = raw; }
+}
+
+fn int32 main() {
+    Fx<16> good = Fx::<16>.of(raw: 1);   // this instantiation is fine
+    Fx<40> bad  = Fx::<40>.of(raw: 2);   // this one is not
+    return good.raw + bad.raw;
+}

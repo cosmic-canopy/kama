@@ -1,0 +1,7 @@
+// M7: `msg:` must be a plain string LITERAL, which is stricter than the runtime `assert` (that one takes
+// any string expression). The reason is the other lowering: a layout predicate becomes a C11
+// `_Static_assert`, whose message has to be a literal. One rule across both lowerings beats a rule that
+// changes depending on which one the predicate happens to take.
+comptime assert(cond: sizeof(int32) == 4, msg: "a" + "b");
+
+fn int32 main() { return 0; }

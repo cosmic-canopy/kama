@@ -1,0 +1,35 @@
+// M7: `comptime assert(cond:, msg:)` — the lowering kama answers itself. A predicate built from things
+// the LANGUAGE fixes (a literal, a `comptime` constant, `sizeof` of a fixed-width scalar) folds through
+// the comptime interpreter, so a false one is a kama diagnostic that `kama check` and the LSP can see.
+//
+// The arg shape is the shipped runtime `assert(cond:, msg:)` deliberately — one concept, one call shape,
+// with only the `comptime` marker to say WHEN it runs. `msg:` is mandatory here too, but must be a plain
+// string LITERAL: the other lowering is a C11 `_Static_assert`, whose message has to be one.
+//
+// All three scopes appear below, because each reaches the emitter through a different site: module scope
+// via the top-level declaration walk, type-member scope via the per-class walk, and a function body via
+// emitStatement. None of them emits any runtime code — a `comptime assert` that holds is free.
+
+comptime int32 CAP = 8;
+
+comptime assert(cond: sizeof(int32) * 8 == 32, msg: "int32 must be 32 bits");
+comptime assert(cond: CAP > 4 && CAP < 16,     msg: "CAP is out of range");
+comptime assert(cond: sizeof(float64) == sizeof(uint64), msg: "float64 and uint64 must pun");
+
+type value Cfg {
+    public comptime int32 UNIT = 4;
+    // reads a type-associated `comptime` through `Type::NAME`, from inside that type's own body
+    comptime assert(cond: Cfg::UNIT == 4, msg: "UNIT must be 4");
+}
+
+fn int32 main() {
+    comptime assert(cond: sizeof(float64) - sizeof(float32) == 4, msg: "float widths");
+    comptime assert(cond: !(sizeof(char) == 1), msg: "char is a codepoint, not a byte");
+
+    // and one in a nested block, to pin that it is an ordinary statement rather than a
+    // declaration-position-only form
+    if (CAP > 0) {
+        comptime assert(cond: sizeof(int8) == 1, msg: "int8 is one byte");
+    }
+    return CAP + Cfg::UNIT;   // 8 + 4
+}

@@ -1,0 +1,7 @@
+// M7: `comptime assert(...)` is the ONLY compile-time statement. The grammar accepts any callee after
+// `comptime` because the trailing `(` is what keeps the production LALR(1)-clean against the
+// `comptime <type> <name>` declaration — so the name check lives in the emitter, where the diagnostic can
+// say what the one legal spelling is instead of "syntax error".
+comptime check(cond: sizeof(int32) == 4, msg: "not a thing");
+
+fn int32 main() { return 0; }

@@ -1,0 +1,48 @@
+// M7's second lowering: a predicate over an AGGREGATE's `sizeof`/`alignof` cannot fold in kama — M6 drew
+// that line deliberately, because kama emits C and clang, not kama, lays out the structs. So instead of
+// refusing the question, `comptime assert` hands it to the C compiler as a C11 `_Static_assert`. kama
+// acquires no layout model, and the answer is the real target's.
+//
+// This is the build-time half of tests/math_layout.kama, which pins the same SPEC claim (`Vec4` = 16 B,
+// `Mat4` = 64 B — the WebGPU vertex stride, and what makes the release build's auto-vectorization valid).
+// Both are kept on purpose: the runtime fixture proves it on three ABIs by RUNNING, this one proves it
+// without a process to run, which is the only form an MCU register-block layout can use.
+//
+// The emitted `_Static_assert` lines are what tools/check-comptime.sh greps for — an exit code cannot see
+// them, so a fixture alone would not prove this lowering happened at all.
+//
+// ⚠️ The caveat that comes with this lowering: it is invisible to `kama check`. A false one fails the
+// BUILD, not the check, so the LSP cannot show it. tests/xfail/comptime_assert_layout_false.kama pins
+// that, and is enrolled in run_tests.sh's `analysis_skip` for exactly this reason.
+
+import std::math::{Vec2, Vec3, Vec4, Mat4};
+
+comptime assert(cond: sizeof(Vec2) == 8,  msg: "Vec2 is 2 x float32, contiguous");
+comptime assert(cond: sizeof(Vec3) == 12, msg: "Vec3 is 3 x float32, contiguous");
+comptime assert(cond: sizeof(Vec4) == 16, msg: "Vec4 is the WebGPU vertex stride");
+comptime assert(cond: sizeof(Mat4) == 4 * sizeof(Vec4), msg: "Mat4 is 4 x Vec4, no column padding");
+
+// Alignment NEVER folds in kama (it is an ABI choice, not a language guarantee — 1 on AVR), so an
+// `alignof` predicate always takes this lowering, even over a scalar.
+comptime assert(cond: alignof(Vec4) == alignof(float32), msg: "an over-aligned Vec4 would pad Mat4");
+
+// `usize` is the M6 trap — it looks primitive and is what `sizeof` RETURNS, but maps to C `size_t`
+// (4 bytes on wasm32, 8 on x86_64). kama refuses to fold it; the C compiler answers it per target.
+comptime assert(cond: sizeof(usize) >= 4, msg: "a pointer-sized integer is at least 32 bits");
+
+// Mixing a foldable scalar with an aggregate: the whole predicate goes to C, with the foldable half
+// baked to its value.
+comptime assert(cond: sizeof(Vec4) == 4 * sizeof(float32), msg: "Vec4 has no padding");
+
+// A type asserting its OWN layout, from inside its own body — the register-block / vertex-buffer shape.
+@generate(of)
+type value Vertex {
+    public Vec3 pos;
+    public Vec2 uv;
+    comptime assert(cond: sizeof(Vertex) == 20, msg: "vertex buffer stride");
+}
+
+fn int32 main() {
+    Vertex v = Vertex.of(pos: Vec3.of(x: 1.0f32, y: 2.0f32, z: 3.0f32), uv: Vec2.of(x: 4.0f32, y: 5.0f32));
+    return cast<int32>(sizeof(Vec4)) + cast<int32>(v.uv.x);   // 16 + 4
+}

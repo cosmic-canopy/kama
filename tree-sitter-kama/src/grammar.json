@@ -299,6 +299,10 @@
         {
           "type": "SYMBOL",
           "name": "module_variable_declaration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "comptime_assert_statement"
         }
       ]
     },
@@ -1811,6 +1815,10 @@
         {
           "type": "SYMBOL",
           "name": "friend_declaration"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "comptime_assert_statement"
         }
       ]
     },
@@ -3040,6 +3048,10 @@
         {
           "type": "SYMBOL",
           "name": "asm_statement"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "comptime_assert_statement"
         }
       ]
     },
@@ -3849,6 +3861,31 @@
         {
           "type": "STRING",
           "value": ")"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "comptime_assert_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "comptime"
+        },
+        {
+          "type": "FIELD",
+          "name": "callee",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "argument_list"
         },
         {
           "type": "STRING",

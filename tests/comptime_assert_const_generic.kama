@@ -1,0 +1,48 @@
+// M7 + M4/M5: a `comptime assert` inside a generic is checked ONCE PER INSTANTIATION, with that
+// instance's const arguments bound. This is the milestone's reason for existing: it is what lets a
+// generic reject a bad argument at the use site instead of miscompiling or trusting a comment.
+//
+// Both binders are covered because they bind through different code paths — a generic FUNCTION binds in
+// emitGenericInst, a generic TYPE in emitGenericTypeInst, and only the second was the M4 blocker.
+//
+// A failing instantiation is pinned by tests/xfail/comptime_assert_generic_false.kama, which also proves
+// the diagnostic names WHICH instance failed (`[with F = 40]`) — the assert's own line is identical for
+// every instance, so without the bindings the message would not locate the use site.
+
+fn int32 idN<const N: int32>() {
+    comptime assert(cond: N > 0 && N < 64, msg: "N must be a positive shift amount");
+    return N;
+}
+
+type value Fx<const F: int32> {
+    // The invariant a generic `Fixed<B, const F>` needs (M8/M9): a Q-format's fractional bits must fit
+    // its backing width. Stated once, checked per instantiation.
+    comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit an int32 backing");
+    public int32 raw;
+    public ctor of(int32 raw) { this.raw = raw; }
+    public fn int32 toWhole() { return this.raw >> F; }
+}
+
+// A const param and a type param in one list — the assert must not disturb the type binding beside it.
+type value Buf<T, const N: int32> {
+    comptime assert(cond: N > 0, msg: "a buffer needs at least one slot");
+    public InlineArray<T, N> a;
+    public ctor make(InlineArray<T, N> a) { this.a = a; }
+    public fn int32 size() { return N; }
+}
+
+fn int32 main() {
+    int32 n = 0;
+    if (idN::<3>() == 3)   { n = n + 1; }
+    if (idN::<16>() == 16) { n = n + 1; }      // a second instantiation binds its OWN N
+
+    Fx<16> a = Fx::<16>.of(raw: 65536);        // 1.0 in Q16.16
+    Fx<8>  b = Fx::<8>.of(raw: 512);           // 2.0 in Q8   — a different F, same assert
+    if (a.toWhole() == 1) { n = n + 1; }
+    if (b.toWhole() == 2) { n = n + 1; }
+
+    InlineArray<int32, 3> v = [1, 2, 3];
+    Buf<int32, 3> buf = Buf::<int32, 3>.make(a: v);
+    if (buf.size() == 3) { n = n + 1; }
+    return n;   // 5
+}

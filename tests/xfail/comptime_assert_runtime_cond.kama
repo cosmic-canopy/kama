@@ -1,0 +1,8 @@
+// M7: the predicate is a COMPILE-TIME expression. A runtime local has no value when the assert is
+// checked, so naming one is an error rather than a silently-skipped check — the failure mode a
+// preprocessor-style `#if` would have.
+fn int32 main() {
+    int32 x = 5;
+    comptime assert(cond: x > 0, msg: "x must be positive");
+    return x;
+}
