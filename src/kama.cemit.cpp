@@ -611,6 +611,30 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             return;
         }
         if (tp.count(*t->value)) return;
+        // Module privacy for a QUALIFIED type reference. The `import a::b::{X}` form is enforced at the
+        // import (see collectProgram), but the qualified spelling reached the same symbol unchecked — so
+        // `std::collections::ViewIter<int32>` could name a type its module deliberately does not export,
+        // which is how a borrowed iterator became storable outside the module that owns it. SPEC calls a
+        // non-exported top-level declaration "invisible to other modules"; this is the half that was
+        // missing from making that true.
+        //
+        // Same-module references are untouched: a directory module's files share one namespace and refer
+        // to each other by design (a bare sibling name is the idiomatic spelling). Only a resolved USER
+        // declaration is checked — an unresolved name is someone else's diagnostic, and an FFI/extern
+        // name is a literal C spelling, not a module symbol.
+        if (t->qualifier && !t->qualifier->empty()) {
+            const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
+            const size_t cut = key.rfind("__");
+            const std::string mod = cut == std::string::npos ? std::string() : key.substr(0, cut);
+            const bool isUserDecl = _classes.count(key) || _enums.count(key) || _interfaces.count(key)
+                                 || _genericTypes.count(key) || _genericContracts.count(key)
+                                 || _sigs.count(key);
+            if (isUserDecl && !mod.empty() && mod != _nsCtx.scope && !_exported.count(key))
+                unsupported(("`" + *t->value + "` is not exported by its module, so " + what
+                             + " cannot name it — a qualified spelling reaches no further than an "
+                             "`import`, which would report the same thing. Add it to that module's "
+                             "`export { … };` if it is meant to be public").c_str(), t->line);
+        }
         checkTypeResolves(t, cType(t), what, t->line);
     };
     auto checkParams = [&](const SharedParameterList& params, const char* what) {

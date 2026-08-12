@@ -1,0 +1,20 @@
+// A module's `export { … };` manifest is its public surface, and SPEC calls a non-exported top-level
+// declaration "invisible to other modules". The `import` form always enforced that; a QUALIFIED spelling
+// did not, so the same symbol was reachable by naming it the long way:
+//
+//     import std::collections::{ViewIter};        // error: does not export `ViewIter`
+//     std::collections::ViewIter<int32> it;       // ACCEPTED, before this rule
+//
+// `lib/std/collections/view.kama` says `export { View };` — the iterators are deliberately internal, and
+// this is the loophole that let one be stored outside the module that owns it.
+//
+// Same-module references are unaffected: a directory module's files share one namespace and name each
+// other directly, which is the idiomatic spelling, not a workaround.
+import std::collections::{DynamicArray, View};
+
+type value Keeper {
+    public std::collections::ViewIter<int32> it;
+    public ctor make(std::collections::ViewIter<int32> it) { this.it = it; }
+}
+
+fn int32 main() { return 0; }

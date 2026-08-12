@@ -254,14 +254,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   check; scheduled ahead of stdlib parity because they are correctness. The third (a view constructor
   borrowing a by-value parameter — an observable use-after-free) **shipped**; `xfail/view_ctor_over_byval_param`
   pins it.
-  1. **The `export { … }` manifest is not enforced for QUALIFIED references.** [SPEC.md](SPEC.md) says a
-     non-exported top-level `type`/`fn` is "invisible to other modules" and names only the import form as
-     rejected — and only that half holds. `import std::collections::{ViewIter}` errors; a qualified
-     `std::collections::ViewIter<int32>` is accepted. Not `ViewIter`-specific (`DequeIter` too). This is the
-     reachability gate for the laundering gap from user code, and a negative doc claim with **no `xfail`**.
-     Measure the in-tree blast radius before implementing — that number decides small fix vs. its own campaign.
+  1. **`export { … }` enforcement for qualified references — TYPE positions done, EXPRESSION positions
+     left.** A qualified spelling used to reach a symbol its module does not export, which is how a
+     borrowed iterator became storable outside the module owning it. Now enforced in `checkDeclaredTypes`,
+     which covers every *type* position — field, parameter, return, local declaration — and that is the
+     half the laundering gap needed. **Still open: an expression position**, e.g. calling
+     `std::collections::ViewIter.make(…)` directly. Same seat cannot serve it (that pass walks declared
+     types, not expressions); it wants the equivalent gate on the qualified-call path. In-tree blast
+     radius was **zero** for the type half and is expected to be zero for the rest — nothing in `lib/`,
+     `tests/`, `examples/` or `bench/` names a non-exported symbol across modules.
   2. **Iterator laundering** — see the unsafe-seam bullet above, which owns it. Storing an iterator past its
-     container's life is an observable use-after-free that nothing rejects.
+     container's life is an observable use-after-free that nothing rejects. Item 1 removed the easy
+     *reachability* from user code; it did not fix the underlying hole, and does nothing inside `std`.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler
