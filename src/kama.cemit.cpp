@@ -406,10 +406,19 @@ bool CEmitter::isTypeParamName(const std::string& n) const
 // generic instances and defaulted-generic bare names WITHOUT re-deriving cType's special cases here (the
 // first cut did re-derive them and promptly flagged `UnsafePtr`). Type params / FFI extern names are excluded
 // explicitly (see isTypeParamName / _externNames).
+//
+// A GENERIC head reaches here too. It used to bail outright on `genericArg`, which meant
+// `Nonexistent<int32> a;` passed `kama check` clean while the bare `Nonexistent a;` was reported — the
+// spelling with the *more* type information got the *less* checking. That same hole is what let the old
+// `Ptr<T>` spelling survive `check` after the rename. No re-derivation is needed to close it: `cType` maps a
+// resolved generic to its mangled instance, so the `cTypeResult != name` guard below already lets every
+// known one through, and only an unresolved head comes back as its own bare spelling. The generic ARGUMENT
+// is still not walked here — `InlineArray<int32, N>`'s `N` is a const-generic value, and the argument
+// position has its own checks.
 void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                                  const char* what, int line)
 {
-    if (!type || !type->value || type->genericArg || type->builtInVal != 0) return;
+    if (!type || !type->value || type->builtInVal != 0) return;
     const std::string& name = *type->value;
     if (cTypeResult != name) return;                  // cType mapped it somewhere -> known
     const std::string& ty = name;

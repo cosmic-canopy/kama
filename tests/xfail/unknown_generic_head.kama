@@ -1,0 +1,18 @@
+// An unknown type is reported wherever a declaration names one — and that has to include a GENERIC head.
+// It did not: `checkTypeResolves` bailed outright on `genericArg`, so
+//
+//     Nonexistent  a;          // reported: unknown type
+//     Nonexistent<int32> a;    // ACCEPTED, before this rule
+//
+// The spelling carrying MORE type information got LESS checking, and the mistake surfaced later as a clang
+// 'undeclared identifier' against generated code. It is also what let the old `Ptr<T>` spelling survive
+// `kama check` after the rename to `UnsafePtr<T>`.
+//
+// The generic ARGUMENT is deliberately still not walked here: `InlineArray<int32, N>`'s `N` is a
+// const-generic value, not a type, and the argument position has its own checks.
+type value Holder {
+    public Nonexistent<int32> a;
+    public ctor make() { this.a = 0; }
+}
+
+fn int32 main() { return 0; }
