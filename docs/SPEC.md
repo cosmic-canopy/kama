@@ -3010,6 +3010,19 @@ traps (`integer-divide-by-zero`, `shift-exponent`, `float-cast-overflow`, `signe
 `__builtin_trap`, no sanitizer runtime) are on in **every** build; signed overflow additionally wraps
 (`-fwrapv`) in release.
 
+**One UBSan sub-check is permanently exempt: `function`.** A kama program built under
+`-fsanitize=undefined` should add `-fno-sanitize=function`, as the test suite does. This is a **deliberate,
+permanent exemption**, not a workaround for an unfixed defect. Contract, vtable and `fnptr` dispatch store
+every slot as `Ret (*)(void* self, …)` and call the concrete `Ret C__m(C* self, …)` through it. That
+type-erased `self` is ABI-identical — it is how essentially all C object dispatch works, GObject and COM
+included — but the `function` sub-check enforces exact function-pointer *type identity*, so it would flag
+every contract call in a correct program. Every other UBSan check (integer overflow, null, bounds,
+alignment, …) and all of ASan stay on. The exemption costs no real coverage: the emitter generates both
+sides of a slot from one declaration, so a genuine signature mismatch fails to compile rather than
+reaching a sanitizer. Making the pointer types exact would mean emitting a cast-and-call thunk per slot,
+which buys nothing and adds an indirection to every dynamic call — expressly the wrong trade for the
+embedded and hot-path targets.
+
 ## Reserved keywords not yet implemented 🚧
 
 One keyword has **reserved surface not yet implemented** — using it is a **hard error** (never a silent no-op):

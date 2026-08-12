@@ -236,7 +236,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
   compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
   **Source-breaking**, so before the tag or 2.0.
-  - **It also owns the iterator-laundering gap** (gap 3 of the borrow-escape set below). Scoping it showed
+  - **It OWNS the iterator-laundering gap** — folded in with the user 2026-08-12 rather than run as its own
+    campaign, because the honest fix is the seam and doing them apart designs the same thing twice.
+    Scoping it showed
     it is **not** a `ViewIter` defect: *every* iterator in `lib/std/collections/` holds a raw `Ptr` and all
     of them are storable in a field. What makes `ViewIter`/`ViewIterMut` the right thread is that they alone
     **launder a rule the language otherwise enforces** — a `View<T>` may not be stored in a field, but its
@@ -254,18 +256,27 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   check; scheduled ahead of stdlib parity because they are correctness. The third (a view constructor
   borrowing a by-value parameter — an observable use-after-free) **shipped**; `xfail/view_ctor_over_byval_param`
   pins it.
-  1. **`export { … }` enforcement for qualified references — TYPE positions done, EXPRESSION positions
-     left.** A qualified spelling used to reach a symbol its module does not export, which is how a
-     borrowed iterator became storable outside the module owning it. Now enforced in `checkDeclaredTypes`,
-     which covers every *type* position — field, parameter, return, local declaration — and that is the
-     half the laundering gap needed. **Still open: an expression position**, e.g. calling
-     `std::collections::ViewIter.make(…)` directly. Same seat cannot serve it (that pass walks declared
-     types, not expressions); it wants the equivalent gate on the qualified-call path. In-tree blast
-     radius was **zero** for the type half and is expected to be zero for the rest — nothing in `lib/`,
-     `tests/`, `examples/` or `bench/` names a non-exported symbol across modules.
-  2. **Iterator laundering** — see the unsafe-seam bullet above, which owns it. Storing an iterator past its
-     container's life is an observable use-after-free that nothing rejects. Item 1 removed the easy
-     *reachability* from user code; it did not fix the underlying hole, and does nothing inside `std`.
+  1. **`export { … }` enforcement for qualified references — PARTIAL, and here is the exact line.**
+     A qualified spelling used to reach a symbol its module does not export (`std::collections::ViewIter`),
+     which is how a borrowed iterator became storable outside the module owning it. Now enforced in
+     `checkDeclaredTypes`.
+
+     | position | status | verified |
+     |---|---|---|
+     | field · parameter · return type | **enforced** | `xfail/export_qualified_ref` |
+     | **local variable declaration** | **NOT enforced** | `std::collections::ViewIter<int32> it = v.iterator();` passes |
+     | expression only, never naming the type | **NOT enforced** | `v.iterator().next()` passes |
+
+     **What is left is consistency, not soundness.** The escaping vectors are closed — a field and a return
+     type are both checked — and a local is scope-bound. Closing the local case means a recursive statement
+     walk in `checkDeclaredTypes`, which today does not descend into function bodies at all and has no
+     existing walker to reuse; that is the bulk of the remaining work. In-tree blast radius was **zero** for
+     the shipped half and is expected to stay zero — nothing in `lib/`, `tests/`, `examples/` or `bench/`
+     names a non-exported symbol across modules.
+  2. **Iterator laundering — FOLDED into the unsafe seam** (decided with the user 2026-08-12). It is not a
+     separate campaign: the honest fix *is* the seam, so doing them apart would design the same thing
+     twice. See the unsafe-seam bullet above, which now owns it. Item 1 removed the easy *reachability*
+     from user code; it did not fix the underlying hole, and does nothing inside `std`.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler
@@ -472,10 +483,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   and real: a genuine slot/signature mismatch is not caught *by UBSan* (the emitter builds both sides, so
   one usually fails to compile). If that coverage is ever wanted back, the route is emitting a per-slot
   typed thunk — `static Ret C__m__thunk(void* self, …)` that casts and calls — which makes the pointer
-  types exact and lets the check be re-enabled. **The open decision for 1.0 is which end state to pick** —
-  emit the thunks, or declare the exemption permanent and say so in the docs. *Silently* off is the wrong
-  answer either way, which is why this entry exists; but it is a documentation/coverage call, not a bug.
-  Older text here read as though a defect were being masked. It is not.
+  types exact and lets the check be re-enabled — but that buys nothing (the emitter generates both sides
+  of a slot from one declaration, so a real mismatch fails to compile) and adds an indirection to every
+  dynamic call, which is the wrong trade for the embedded and hot-path targets. **DECIDED 2026-08-12: the
+  exemption is permanent, and [SPEC.md](SPEC.md) now says so** in the numeric-safety/sanitizer section,
+  including the guidance that a user building under `-fsanitize=undefined` should pass
+  `-fno-sanitize=function`. Closed — kept here only so it is not re-diagnosed as a hole a third time.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way to do
   a thing," and **named parameters** already cover the disambiguation overloading is usually reached for.
   **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by operand
