@@ -41,13 +41,12 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **Campaign 2 — const generics on types** | §1.2.1 | ► **NEXT** |
-| 2 | Campaign 3 — derived view-escape check | §1.2.2 | ↓ |
-| 3 | stdlib parity M2b / M2c | §3 | |
+| **1** | **Derived view-escape check** | §1.2 | ► **NEXT** |
+| 2 | stdlib parity M2b / M2c | §3 | ↓ |
 
-**Full generic specialization is a declared non-goal** and no longer sits at the head of this table —
-the reasoning is in §2, and the three defects that scoping it exposed have shipped. What was four
-campaigns is three.
+**Full generic specialization is a declared non-goal** — the reasoning is in §2, and the three defects that
+scoping it exposed have shipped. What was four campaigns is two, and one of those is done: **const generics
+shipped**, `std::num::Fixed<B, const F>` with it.
 
 Mandatory braces **shipped** (record in [SPEC.md](SPEC.md#control-flow-)) — the last breaking source change
 before the tag. It used to sit here paired with `kama fmt`, on the argument that the formatter was its
@@ -87,31 +86,12 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **The CONTRACT MODEL — two campaigns left**, briefed in
-   [design/contract-model.md](design/contract-model.md) (**read its *Status* section first** — several
-   design points were revised once the code existed; delete the file when the last campaign ships).
-   Campaign 1 **shipped** — what the language now *is* lives in [SPEC.md](SPEC.md). The planned second
-   campaign, full generic specialization, is a **declared non-goal** (§2). Run the rest in order, each
-   its own session, **before M2b**:
-   1. **Const generics on types — the LANGUAGE half is done; what is left is the stdlib payload.** Both
-      compiler blockers (a const param unreadable as a value, in a function and on a type) are closed,
-      along with const-param name reservation, `sizeof` folding, and `comptime assert` — all now in
-      [SPEC.md](SPEC.md). The remaining work is the type the campaign exists to build:
-      - **`FixedBacking<B>` contract + `type intrinsic` impls** in `lib/std/num/`. ⚠️ `int64` is
-        deliberately **not** a backing — the widening accumulator is `int64` and there is no `int128`.
-      - **Generic `Fixed<B: FixedBacking<B>, const F: int32>`, deleting `Fixed16_16`.** The backing is
-        **PASSED, not computed**: kama has no type-level computation, and the "map `I+F` onto a backing
-        width" selection this entry used to call for was **considered and rejected** — Rust's `fixed`
-        and C++'s `fixed_point<Rep,Exponent>` both pass storage explicitly; only Ada and Zig compute it,
-        each with a dedicated language mechanism kama does not want. `FixedBacking<B>` is a BOUND, not a
-        use-site spelling — the `<B>` is the pinned self-type, exactly `T: Comparable<T>`.
-        `tests/generic_ops_contracts.kama` already passes at this shape, so the design is proven.
-      - **Docs.** SPEC's Generics section still has no const-generic bullet, and `docs/SPEC.md`'s claim
-        that a contract has no ctor is contradicted by `tests/contract_requires_ctor.kama`.
-
-      `Real` conformance stays **out of scope** — 21 Q-format transcendentals is a numerical-methods
-      project, not this campaign.
-   2. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
+2. **The CONTRACT MODEL — one campaign left: the derived view-escape check**, briefed in
+   [design/view-escape-check.md](design/view-escape-check.md) (delete the file when it ships). Reject a
+   `view` that `implements` a contract it cannot satisfy — nothing verifies that today. Run it **before M2b**.
+   Two of the four planned campaigns are behind it: campaign 1 (the contract model) and campaign 3 (const
+   generics) both **shipped**, and what the language now *is* lives in [SPEC.md](SPEC.md); full generic
+   specialization is a **declared non-goal** (§2).
 
 3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
    [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
@@ -167,11 +147,10 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-- **`Fixed16_16` does not implement `Real`.** A contract requires *every* method, so conformance means
-  writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q16.16 — CORDIC and
-  polynomial-approximation work, a numerical-methods project rather than a library chore. It is the
-  obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of the
-  generic `Fixed<B: FixedBacking<B>, const F: int32>` that replaces it (§1).
+- **`Fixed<B, const F>` does not implement `Real`.** A contract requires *every* method, so conformance
+  means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
+  CORDIC and polynomial-approximation work, a numerical-methods project rather than a library chore. It is
+  the obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`).
 
 - **Layout CONTROL (`@align(N)` / `@packed`)** — kama can now *know*, *fold* and *assert* a type's layout
   (`sizeof` folding for fixed-width scalars, and `comptime assert` for everything else — both in
@@ -425,6 +404,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
+- **A FALLIBLE ctor on a generic instance has no static result type.** `callReturnTypeRaw` now resolves a
+  dot-on-type ctor call on a generic receiver (so a method chains off `Fixed::<int32, 16>.fromInt(…)`), but
+  only for an INFALLIBLE ctor, whose result is the instance itself. A fallible one declares
+  `ctor Result<T, E> open(…)`, and rendering that needs the owning instance's type args bound — a binding
+  this path does not do. So `match (Reader::<int32>.open(…))` still wants a typed local first, while the
+  concrete `match (Reader.open(…))` does not. The binding pattern exists twice already in
+  `callReturnTypeRaw`; the work is factoring it out rather than adding a third copy.
 - **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
   used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
   *different* ceilings that want separate fixes:

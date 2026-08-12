@@ -8747,7 +8747,7 @@ bool CEmitter::isCopyable(const std::string& cls) const
 // container case): a primitive or a `value` is copyable (bitwise), a `resource` only if it implements
 // Copyable. For any other contract: the concrete class must nominally implement it.
 // The name a bare contract is RECORDED under for type `t` once that contract pins its parameter:
-// `Equatable` on `Fixed16_16` is `Equatable_Fixed16_16`. The compiler names these contracts bare in
+// `Equatable` on `Duration` is `Equatable_Duration`. The compiler names these contracts bare in
 // several places that have no source AST to hang a `<This>` on — operator lowering (`==` -> `equals`),
 // `@generate(Equatable, Hashable)`, the `when [T: Equatable]` gate — and after the pin a bare name
 // matches no recorded conformance. Unpinned contracts (`Hashable`, `Format`, `Iterator`) come back
@@ -9197,7 +9197,7 @@ void CEmitter::linkBases()
         SharedIdentifierList ifaceNodes = (ci.node && ci.node->baseTypes) ? ci.node->baseTypes->interfaces
                                                                           : SharedIdentifierList();
         // A PINNED contract's argument is `This`, and it has to mangle to THIS class — `Comparable<This>`
-        // on `Fixed16_16` names `Comparable_Fixed16_16`. Without the binding it mangles the literal word
+        // on `Duration` names `Comparable_Duration`. Without the binding it mangles the literal word
         // and the conformance is filed under a key nothing can ever look up.
         ScopedStr  _ts(_thisType, ci.name);
         ScopedThis _tt(_typeSubst, synthId(ci.name));

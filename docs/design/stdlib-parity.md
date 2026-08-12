@@ -56,8 +56,8 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 >
 > ✅ **The conformance mechanism M2a leaned on has since been replaced.** `Real`, `FromStr` and
 > `FromStrRadix` exist as contracts only because an intrinsic had no way to declare conformance; it now
-> has one (`type intrinsic <…> implements C`), and the retroactive block is gone —
-> [contract-model.md](contract-model.md), campaign 1, complete.
+> has one (`type intrinsic <…> implements C`), and the retroactive block is gone — the contract-model
+> campaign is complete, and what the language now *is* lives in [SPEC.md](../SPEC.md).
 
 ## Why this campaign exists
 

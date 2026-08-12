@@ -852,13 +852,21 @@ stance below). Every predicate is **false** for a non-ASCII codepoint rather tha
 `toLower`/`toUpper` return one unchanged — so they can never corrupt one. Free functions rather than
 methods because `char` and `uint32` share a C type and the conformance registry cannot hold both.
 
-**Fixed-point — `Fixed16_16`.** A signed 16.16 `type value` in the same module, for FPU-less targets and for
-exact fractional arithmetic: `+ - * /` through operator overloading (multiply and divide widen through
-`int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating `satAdd`/`satSub`/`satMul`.
-The base operators trap on overflow like every other integer op above; the `sat*` forms clamp. Pure
-library, no compiler support. (It is being replaced by a generic
-`Fixed<B: FixedBacking<B>, const F: int32>` — see [ROADMAP.md](ROADMAP.md) §1, and
-[MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.)
+**Fixed-point — `Fixed<B, const F>`.** A signed binary fixed-point `type value` in the same module, for
+FPU-less targets and for exact fractional arithmetic: `+ - * /` through operator overloading (multiply and
+divide widen through `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating
+`satAdd`/`satSub`/`satMul`. The base operators trap on overflow like every other integer op above; the
+`sat*` forms clamp. Pure library, no compiler support.
+
+Both halves of the format are parameters. `B` is the **backing integer**, bounded by the `FixedBacking<B>`
+contract (`int8`/`int16`/`int32`; `int64` cannot be one, because `wide()` widens *into* an `int64` and there
+is no `int128`), and `F` is the fraction count as a **const generic parameter** — so `Fixed<int32, 16>` is
+the classic Q16.16 and `Fixed<int16, 8>` is Q8.8. The backing is *passed*, not computed from a bit count:
+kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
+explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8, 16>`)
+is a compile error, from one [`comptime assert`](#compile-time-assertions--comptime-assert-) in the type's
+own body reading `sizeof(B)` — not a rule the compiler knows about this type. See
+[MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
@@ -1466,8 +1474,9 @@ every function, so declarations are greppable and self-describing:
   lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
   its fields are **private only** (its raw `Ptr<T>` must not leak). The flagship is the stdlib `View<T>`; the
   kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings* for `View<T>`.
-- **`type contract Name { … }`** — a public-only guarantee (an interface); methods only, no bodies, no
-  fields, no ctor/dtor. Types satisfy it via `implements`; it may refine another with `implements` too
+- **`type contract Name { … }`** — a public-only guarantee (an interface); signatures only, no bodies, no
+  fields, no dtor. A `ctor` **may** be required (a conformer has to supply that constructor), which is what
+  lets a bound construct: `T.fromStr(s: …)`. Types satisfy it via `implements`; it may refine another with `implements` too
   (`type contract Animated for both implements Drawable { … }` — a conformer must supply Drawable's methods
   as well, and dispatch through `Animated` reaches them).
 - **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
@@ -1915,8 +1924,11 @@ handle or a scope-local borrow; an un-owned contract value can't be stored — s
 
 ## Contracts ✅
 
-A **`contract`** is a public-only guarantee — "some type satisfying this contract." It has methods only: no
-bodies, no fields, no ctor/dtor.
+A **`contract`** is a public-only guarantee — "some type satisfying this contract." It carries signatures
+only: no bodies, no fields, no dtor. Besides methods it may require a **`ctor`** or a **`static fn`**, which
+is how a bound gets to *construct* rather than only to call — `ctor T fromWide(int64 v)` on
+`std::num::FixedBacking` is what lets generic fixed-point arithmetic narrow back to its backing type
+(`tests/contract_requires_ctor.kama`).
 
 ```kama
 type contract Shape { fn int64 area(); }               // a public guarantee (a "type placeholder")
@@ -2364,6 +2376,33 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param value;
   because it's monomorphized, those calls are **static direct calls** (zero cost, no vtable). Each concrete
   type argument is checked to satisfy its bounds, else a clean compile error.
+- **Const generic parameters** — a parameter may be a **value** instead of a type: `const N: int32`, in the
+  same parameter list, supplied at the same use sites. Inside the declaration it reads as an ordinary value
+  of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:
+  ```kama
+  type value Fixed<B: FixedBacking<B>, const F: int32> {          // storage AND fraction, both parameters
+      comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8, msg: "…");
+      public B raw;
+      public fn int32 toInt() { return cast<int32>(this.raw.wide() / (1i64 << F)); }   // F is a value here
+  }
+  fn int32 shifted<const S: int32>(int32 x) { return x << S; }
+
+  Fixed<int32, 16> q = Fixed::<int32, 16>.one();   // Q16.16; `Fixed<int8, 16>` is a compile error
+  int32 y = shifted::<3>(x: 2);                    // a turbofish carries a const argument too
+  ```
+  - The parameter's **type is declared** and the argument must be a compile-time constant — a literal or a
+    parenthesized expression, so a negative one is written `f::<(-1)>()`. An argument that does not fit its
+    declared type is an error, not a wrap.
+  - The **name is reserved for the whole declaration**: a parameter, field, local, `foreach` variable or
+    `match` binding may not reuse it, and it cannot be assigned to. The value is resolved ahead of every
+    runtime name, so a rebinding would be discarded rather than shadowed — the one case kama's general
+    shadowing rules do not already cover.
+  - Const parameters pair with **[`comptime assert`](#compile-time-assertions--comptime-assert-)**, which is
+    checked once per instantiation with that instance's arguments bound: a generic states its own invariant
+    over its own parameters, and a bad instantiation is rejected at the use site, naming the arguments that
+    broke it. `sizeof` folding (above) is what lets that invariant mention a type parameter's width.
+  - A generic **`enum`** may not declare members at all, so a const parameter there could never be read;
+    the kind still accepts one for parity with the other type kinds.
 - **`This`** — the self-type. Inside a type's **own** body it is that type (`fn This clone()`,
   `implements Comparable<This>`) and needs no declaration, because nothing is erased there. A **contract**
   may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
@@ -2371,7 +2410,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   ```kama
   type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }
 
-  type value Fixed16_16 implements Comparable<This> { … }   // conformance: always `This`
+  type value Duration implements Comparable<This> { … }     // conformance: always `This`
   fn T maxOf<T: Comparable<T>>(T a, T b) { … }              // bound: the bound's own parameter
   Comparable<int32> c = 3;                                  // use as a type: a concrete name
   ```
