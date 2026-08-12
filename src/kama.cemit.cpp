@@ -11839,12 +11839,26 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
             borrowFields.insert(f.name);
     if (borrowFields.empty()) return;                        // nothing borrowable -> nothing to check
 
-    std::set<std::string> params;                            // param names -> roots that outlive the call
-    if (mnode->params) for (auto& p : *mnode->params)
-        if (p->identifier && p->identifier->value) params.insert(*p->identifier->value);
     // This check runs ONLY for a ctor, and a ctor's `this` is the view being built — its storage is the
-    // returned value, so a pointer into it dangles just as a pointer into a local does. Only a parameter
-    // names memory that outlives the call.
+    // returned value, so a pointer into it dangles just as a pointer into a local does. That leaves the
+    // parameters as the only candidate roots, but NOT all of them: a BY-VALUE parameter (`int64 v`) is the
+    // callee's own frame, dead the moment the constructor returns, so
+    //
+    //     public ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
+    //
+    // dangles exactly as a local would — and no `return` of the view is needed to observe it, because it is
+    // the CONSTRUCTOR's frame that died. This test used to be "is it a parameter?", which accepted that.
+    // Only a parameter the view could actually borrow FROM counts: a `ref`/`out` (the caller's storage), a
+    // raw `Ptr<T>`, or another view. Same question checkViewContractCtors asks of a contract's ctor slot,
+    // so it is the same predicate; the empty `selfParam` is the pinned-contract case, which has no meaning
+    // here (a parameter of this view's own type is already matched by `_viewTypeNames`).
+    std::set<std::string> params;                            // param names that can carry a borrow
+    std::set<std::string> allParams;                         // every param name — only to tell the two failures apart
+    if (mnode->params) for (auto& p : *mnode->params)
+        if (p->identifier && p->identifier->value) {
+            allParams.insert(*p->identifier->value);
+            if (paramCanCarryBorrow(p.get(), std::string())) params.insert(*p->identifier->value);
+        }
     auto safeRoot = [&](const std::string& r) { return params.count(r) > 0; };
 
     std::set<std::string> viewLocals;                        // locals of THIS view type (the object being built)
@@ -11862,14 +11876,23 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
         return {*id->value, *ma->identifier->value};
     };
 
-    // Every borrow field of `key` must trace to a parameter; an unset one traces nowhere and is rejected.
+    // Every borrow field of `key` must trace to a borrowable parameter; an unset one traces nowhere and is
+    // rejected. The two ways to fail want DIFFERENT messages: telling an author who borrowed `int64 v` that
+    // a constructor "may only borrow its parameters" describes what they already did, and sends them
+    // looking in the wrong place.
     auto checkBorrows = [&](const std::string& key, int line) {
         auto& roots = borrowRoot[key];
         for (auto& f : owner.fields) {
             if (!borrowFields.count(f.name)) continue;
             auto it = roots.find(f.name);
             std::string r = it == roots.end() ? "" : it->second;   // an unset borrow field -> "" -> reject
-            if (!safeRoot(r))
+            if (safeRoot(r)) continue;
+            if (allParams.count(r))
+                unsupported(("a view borrows its buffer, and `" + r + "` is passed BY VALUE — it lives in "
+                             "this constructor's own frame and dies when it returns, so the view would "
+                             "dangle just as it would over a local. Borrow something that outlives the "
+                             "call: a `ref`/`out` parameter, a `Ptr<T>`, or another view").c_str(), line);
+            else
                 unsupported("a view borrows its buffer, so a view constructor may only borrow its "
                             "parameters — returning a view over a local would dangle", line);
         }

@@ -1,0 +1,23 @@
+// The sibling of `view_ctor_over_local.kama`. A view constructor may only borrow a parameter that
+// OUTLIVES the call — and a by-value parameter does not: `v` lives in this constructor's own frame and
+// dies when it returns, exactly like a local.
+//
+// This was ACCEPTED until the by-value case was measured: the root test was merely "is it a parameter?",
+// and `v` is one. It is a real use-after-free, not a theoretical one, and it needs no `return` of the
+// view to observe — it is the CONSTRUCTOR's frame that died, so `s` below dangles inside `main`:
+//
+//     Span s = Span.over(v: 12345i64);
+//     int64 junk = noise(a: 7i64, b: 9i64);   // stomps the dead frame
+//     s.first()                               // read garbage; the binary exited 1
+//
+// The legal shape is `View<T>`'s own `ctor make(Ptr<T> data, int32 len)` — a `Ptr<T>` parameter points at
+// memory the caller owns, so the view may borrow it.
+
+type view Span {
+    Ptr<int64> p; int32 n;
+
+    public ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
+    public fn int64 first() { unsafe { return this.p[0]; } }
+}
+
+fn int32 main() { return 0; }

@@ -242,24 +242,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the seam itself: a borrowed pointer type that *says* it is borrowed, not a kind swap on two structs.
     Recorded as a known limitation in [SPEC.md](SPEC.md) meanwhile.
 
-- **Borrow-escape gaps — three of them, two producing an observable use-after-free today.** Found while
-  closing the derived view-escape check; scheduled ahead of stdlib parity because they are correctness.
-  Each was verified by running, not by reading: `kama check` reports OK, `kama build` succeeds, and the
-  binary reads stomped or freed memory.
-  1. **A view constructor may borrow a BY-VALUE parameter.** `checkViewCtorEscape`'s root test is
-     `params.count(r) > 0`, whose comment claims "only a parameter names memory that outlives the call" —
-     false for a by-value parameter, which lives in the callee's own dying frame. No `return` of the view is
-     needed; the dangle happens in the caller because the *constructor's* frame died. Fix: narrow the test to
-     a parameter the view could borrow *from* (`ref`/`out`, a view, a `Ptr<T>`) by reusing
-     `CEmitter::paramCanCarryBorrow`, which already exists and is tested. Smallest of the three; expected
-     zero blast radius (`View<T>`'s own `ctor make(Ptr<T>, int32)` stays legal).
-  2. **The `export { … }` manifest is not enforced for QUALIFIED references.** [SPEC.md](SPEC.md) says a
+- **Borrow-escape gaps — two left, both verified by running.** Found while closing the derived view-escape
+  check; scheduled ahead of stdlib parity because they are correctness. The third (a view constructor
+  borrowing a by-value parameter — an observable use-after-free) **shipped**; `xfail/view_ctor_over_byval_param`
+  pins it.
+  1. **The `export { … }` manifest is not enforced for QUALIFIED references.** [SPEC.md](SPEC.md) says a
      non-exported top-level `type`/`fn` is "invisible to other modules" and names only the import form as
      rejected — and only that half holds. `import std::collections::{ViewIter}` errors; a qualified
      `std::collections::ViewIter<int32>` is accepted. Not `ViewIter`-specific (`DequeIter` too). This is the
-     reachability gate for gap 3 from user code, and a negative doc claim with **no `xfail`**. Measure the
-     in-tree blast radius before implementing — that number decides small fix vs. its own campaign.
-  3. **Iterator laundering** — see the unsafe-seam bullet above, which owns it.
+     reachability gate for the laundering gap from user code, and a negative doc claim with **no `xfail`**.
+     Measure the in-tree blast radius before implementing — that number decides small fix vs. its own campaign.
+  2. **Iterator laundering** — see the unsafe-seam bullet above, which owns it. Storing an iterator past its
+     container's life is an observable use-after-free that nothing rejects.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler
@@ -409,12 +403,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
-- **`kama check <file>` on a single member of a DIRECTORY module reports false errors.** Sibling units in the
-  same namespace are not loaded for a bare single-file check, so `kama check lib/std/math/quat.kama` reports
-  `Vec3`/`Mat4` as unknown — they live in `vec.kama`/`mat.kama` under the same `namespace std::math`. Harmless
-  for the language server (it resolves the whole program from the manifest) and for any file reached through
-  an import, but it makes single-file `check` unusable as a lint over a directory module, which is how the
-  stdlib is laid out. Fix = widen a bare `check`'s unit set to the target's own namespace directory.
 - **`std::net` — IPv6 and UDP multicast.** `IpAddr` has a `V4` arm only ([`lib/std/net/addr.kama`]), left
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
