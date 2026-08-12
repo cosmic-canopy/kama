@@ -1,0 +1,21 @@
+// The sibling of `view_contract_ctor_escape.kama`, for the other way a self-constructing slot is spelled.
+// An INFALLIBLE `ctor` slot names no return type at all — but a `ctor` constructs the implementer either
+// way, so it is in scope just the same. `zero()` takes no parameters whatsoever, which makes it the purest
+// form of the rule: there is nothing for the returned view to borrow, so it could only point at a
+// constructor local.
+//
+// (Both diagnostics fire here — this one at the `implements`, and checkViewCtorEscape at the body. The
+// declaration-site one names the cause: no body could have satisfied this conformance.)
+
+type contract Zeroed<S is This> for value {
+    ctor zero();
+}
+
+type view Span implements Zeroed<This> {
+    Ptr<int64> p; int32 n;
+
+    public ctor make(Ptr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public ctor zero() { int64 t = 0i64; this.p = addr(of: t); this.n = 0; }
+}
+
+fn int32 main() { return 0; }

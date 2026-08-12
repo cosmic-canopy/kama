@@ -41,12 +41,14 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **Derived view-escape check** | §1.2 | ► **NEXT** |
-| 2 | stdlib parity M2b / M2c | §3 | ↓ |
+| **1** | **stdlib parity M2b / M2c** | §3 | ► **NEXT** |
+| 2 | the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — now carries the un-escape-checked view iterators | §2 | source-breaking, so before the tag |
 
-**Full generic specialization is a declared non-goal** — the reasoning is in §2, and the three defects that
-scoping it exposed have shipped. What was four campaigns is two, and one of those is done: **const generics
-shipped**, `std::num::Fixed<B, const F>` with it.
+**The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
+shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
+view-escape check** — and full generic specialization is a **declared non-goal**, reasoned out in §2, where
+the three defects that scoping it exposed are also recorded as shipped. What the language *is* now lives in
+[SPEC.md](SPEC.md).
 
 Mandatory braces **shipped** (record in [SPEC.md](SPEC.md#control-flow-)) — the last breaking source change
 before the tag. It used to sit here paired with `kama fmt`, on the argument that the formatter was its
@@ -86,14 +88,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
    output today; streaming a running child's stdout as it arrives is the piece left.
-2. **The CONTRACT MODEL — one campaign left: the derived view-escape check**, briefed in
-   [design/view-escape-check.md](design/view-escape-check.md) (delete the file when it ships). Reject a
-   `view` that `implements` a contract it cannot satisfy — nothing verifies that today. Run it **before M2b**.
-   Two of the four planned campaigns are behind it: campaign 1 (the contract model) and campaign 3 (const
-   generics) both **shipped**, and what the language now *is* lives in [SPEC.md](SPEC.md); full generic
-   specialization is a **declared non-goal** (§2).
-
-3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
+2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
    [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
    regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager. No new language
@@ -120,7 +115,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
      recorded here — a connect/accept timeout: `net_addr_ctor` opens no socket at all and cost the same
      40 s as `net_refused`. Defender exclusion on the runner temp dir is the cheapest untried lever.
      Platform record: [platforms/windows.md](platforms/windows.md).
-4. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
+3. **MCU toolchain packaging — polish.** The turnkey Cortex-M path ships and is QEMU-proven
    ([mcu.md](mcu.md)). What is left: more board presets (STM32/Pico), vendor-HAL glue, and a real-hardware
    flash pass — detail in §5 (embedded "Toolchain / build" row).
 
@@ -232,6 +227,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
   compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
   **Source-breaking**, so before the tag or 2.0.
+  - **It also owns the un-escape-checked view iterators**, found while scoping the view-escape check.
+    `ViewIter<T>` / `ViewIterMut<T>` (`lib/std/collections/view.kama`) are `type value`, not `type view`,
+    yet each holds the borrowed raw `Ptr<T>` plus a length — so `View.iterator()` hands a borrow out
+    through a type the escape checker does not treat as one, and it could be stored in a field and dangle.
+    Making them views is **not** a local fix: `Iterable<T>.iterator()` returns a *contract value*, so the
+    iterator would be **boxed** — heap ownership of a borrow — which would reject `View<T>`'s own
+    conformance and break `sort` and every in-place algorithm riding on it. It belongs here because the
+    honest fix is the seam itself (a borrowed `UnsafePtr<T>` that says what it is), not a kind swap.
+    Recorded as a known limitation in [SPEC.md](SPEC.md) meanwhile.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler

@@ -283,6 +283,10 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
 - *Known limitation:* a view is invalidated if the backing `DynamicArray` is **resized** (`add`/`reserve`)
   while the view is live — the same contract as a C++ `span`/iterator; not enforced (no lifetime tracking).
+- *Known limitation:* an iterator over a view (`ViewIter<T>`, `ViewIterMut<T>`) is a `type value` holding the
+  borrowed pointer, not a `type view`, so it is **not** itself escape-checked — it could be stored and
+  outlive its buffer. Again the C++ iterator contract. Tracked with the unsafe seam in
+  [ROADMAP.md](ROADMAP.md) §2.
 
 ### Hash maps & sets (`std::collections`) ✅
 
@@ -1472,8 +1476,16 @@ every function, so declarations are greppable and self-describing:
   check forbids it as a field, a collection element, or an `enum` payload, and allows it as a **return only
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
   lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
-  its fields are **private only** (its raw `Ptr<T>` must not leak). The flagship is the stdlib `View<T>`; the
-  kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings* for `View<T>`.
+  its fields are **private only** (its raw `Ptr<T>` must not leak). A view's **conformance is checked at the
+  `implements` site**: it may not implement a contract whose `ctor` slot constructs the implementer from
+  parameters that carry no borrow (no `Ptr<T>`, no `ref`, no view) — such a constructor could only borrow one
+  of its own locals, so no body could satisfy it. A slot taking something borrowable is fine, and an
+  *instance* method returning the self-type is always fine (it borrows the receiver, like `View.slice()`).
+  The check is a signature-level pre-filter for what no body could satisfy, not a replacement for the
+  body-level escape check; it is also necessarily partial, since a **marker** contract declares no slots at
+  all (its factory lives in the impl) and stays caught later, at the boxing site. The flagship is the stdlib
+  `View<T>`; the kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings*
+  for `View<T>`.
 - **`type contract Name { … }`** — a public-only guarantee (an interface); signatures only, no bodies, no
   fields, no dtor. A `ctor` **may** be required (a conformer has to supply that constructor), which is what
   lets a bound construct: `T.fromStr(s: …)`. Types satisfy it via `implements`; it may refine another with `implements` too

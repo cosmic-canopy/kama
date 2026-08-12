@@ -1408,6 +1408,11 @@ private:
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
     void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
+    // A `type view` may not implement a contract whose `ctor` slot constructs the implementer out of
+    // parameters that carry no borrow — such a view could only borrow a constructor local. Rejected at the
+    // `implements`, because no body can satisfy it.
+    void checkViewContractCtors();
+    bool paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const;
     // M6.2: greatest-fixpoint dual of computeReachesPointer — mark every deeply/transitively immutable type
     // (the `immutable` qualifier verified) and error on a qualified type with a mutable part. A `Shared`/`Weak`
     // over such a T is sendable across isolates and uses the atomic refcount flavor.

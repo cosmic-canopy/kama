@@ -1,0 +1,24 @@
+// A `type view` borrows — it can only ever point at memory it was HANDED. A contract slot that
+// CONSTRUCTS the implementer fixes the parameter list at the CONTRACT, where the author has no idea a
+// view might implement it, and `fromWide` hands the view nothing borrowable: an `int64` by value, whose
+// storage dies when the constructor returns. No body can satisfy the conformance, so it is rejected at
+// the `implements` rather than at whichever body is eventually written.
+//
+// The body below is what makes the rule necessary rather than merely tidy. checkViewCtorEscape's root
+// test is "is it a parameter?", and `v` is one — so without this rule the dangling borrow is ACCEPTED.
+//
+// The legal shape is `view_contract_pinned_ok.kama`: the same self-constructing slot, but taking a
+// `Ptr<T>` the returned view can borrow.
+
+type contract FromWide<B is This> for value {
+    ctor B fromWide(int64 v);
+}
+
+type view Span implements FromWide<This> {
+    Ptr<int64> p; int32 n;
+
+    public ctor make(Ptr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }
+}
+
+fn int32 main() { return 0; }

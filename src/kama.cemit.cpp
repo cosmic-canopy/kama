@@ -9890,6 +9890,110 @@ void CEmitter::computeDeeplyImmutable()
     }
 }
 
+// Does `p` name memory that OUTLIVES the call, so a view constructed from it can borrow it? A `ref`/`out`
+// parameter IS the caller's storage; a raw `Ptr<T>` and a view both already point into memory someone else
+// owns. Everything else — an `int64`, a `string`, a by-value value type — is the callee's own frame, and a
+// view over it dangles the moment the constructor returns.
+//
+// Matches the SOURCE spelling on purpose: this runs with `_typeSubst` empty, so cType() on an
+// unsubstituted contract type parameter resolves nothing useful. `_viewTypeNames` holds bare source names
+// for exactly this kind of check.
+bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const
+{
+    if (!p || !p->type || !p->type->value) return false;
+    if (p->modifier && p->modifier->value
+        && (*p->modifier->value == "ref" || *p->modifier->value == "out")) return true;   // cf. paramByRef
+    const std::string& t = *p->type->value;
+    if (t == "Ptr") return true;                     // a raw non-owning pointer into caller memory
+    if (t == selfParam) return true;                 // the pinned self-type — another view of this kind
+    return _viewTypeNames.count(t) > 0;              // any other `type view`
+}
+
+// A `type view` may only ever point at memory it was HANDED. A contract slot that CONSTRUCTS the
+// implementer (`ctor B fromWide(int64 v)` on `FixedBacking<B is This>`) fixes that parameter list at the
+// CONTRACT, where the author has no idea a view might implement it — and if no parameter carries a borrow,
+// then every view such a constructor could return borrows one of its own locals and dangles. No body can
+// satisfy the conformance, so reject it at the `implements` instead of at whichever body is eventually
+// written.
+//
+// This closes a real hole rather than restating one. checkViewCtorEscape's `safeRoot` is merely "is it a
+// parameter?", so a view ctor borrowing a BY-VALUE parameter is accepted today even though that storage
+// dies at return:
+//     public ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }   // accepted before this rule
+// Tightening `safeRoot` instead would report at a body line and tell the author to "borrow a parameter"
+// when they already did; the declaration-site rule names the actual cause.
+//
+// Deliberately NARROW — the neighbouring shapes are already rejected, and duplicating them here would be
+// dead code (each verified by probe, not by reading):
+//   * an INSTANCE method returning the self-type (`fn T sqrt()` on `Real<T is This>`, `View.slice()`)
+//     borrows its receiver and is always legal;
+//   * `Owned<Self>`/`Shared<Self>` in any slot -> registerGenericTypeInst's view-as-generic-argument guard,
+//     reached through registerGenericContractInst's transitive scanTypeForCollections ("can't be a
+//     collection element");
+//   * `Result<Self, E>` -> the same function's enum-payload guard ("can't be an `enum` payload").
+//
+// KNOWN GAPS, both narrower than they look. linkContracts merges only into `_interfaces`, so a pinned
+// (hence generic) contract's REFINED parent slots never reach `ii.methods` and are not seen here. And a
+// `static fn` slot returning the self-type is not seen either (InterfaceMethod records no `isStatic`) — but
+// no class can DEFINE a self-returning `static fn` (collectClasses calls that a constructor), so such a
+// slot is unsatisfiable by every type, not just by a view.
+void CEmitter::checkViewContractCtors()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.isBorrow) continue;                                    // views only
+        for (auto& base : ci.interfaces) {
+            auto it = _interfaces.find(base);
+            if (it == _interfaces.end()) continue;                     // a base class / unresolved
+            InterfaceInfo& ii = it->second;
+            // Only a PINNED parameter can name the implementer: a contract signature may not say `This`
+            // (see collectInterfaces), so an unpinned contract can never require a self-returning slot.
+            if (ii.pinnedParam < 0 || ii.templateKey.empty()) continue;
+            auto pp = _genericContractParams.find(ii.templateKey);
+            if (pp == _genericContractParams.end()) continue;
+            size_t p = (size_t)ii.pinnedParam;
+            if (p >= pp->second.size() || p >= ii.typeArgs.size()) continue;
+            // A generic contract INSTANCE copies the template's methods verbatim, so their signatures still
+            // spell the raw parameter name (`B`), never the substituted argument.
+            const std::string& selfParam = pp->second[p];
+            // ...and the pin must actually be bound to THIS class. A generic view's `implements` is resolved
+            // by registerGenericTypeInst, which never runs resolveInterfaceNames' "the pinned argument must
+            // be `This`" rule — so `implements FixedBacking<int8>` on a view is reachable, and its slots
+            // produce an int8 rather than a view. Nothing to reject there.
+            SharedIdentifier selfArg = ii.typeArgs[p];
+            if (!selfArg || !selfArg->value || *selfArg->value != ci.name) continue;
+
+            for (auto& m : ii.methods) {
+                if (!m.isCtor) continue;                               // an instance method borrows `this`
+                // A `ctor` slot ALWAYS produces the implementer, whether it spells that return type
+                // (`ctor B fromWide(…)`) or omits it, which is how an infallible one is written
+                // (`ctor copy(ref T source)`). Both construct a self, so both are in scope; only a slot
+                // naming some OTHER type is not. A wrapped return (`Owned<B>`, `Result<B, E>`) is already
+                // rejected upstream — see the comment above.
+                if (m.returnType && m.returnType->value) {
+                    if (m.returnType->genericArg) continue;
+                    if (*m.returnType->value != selfParam) continue;
+                }
+
+                bool borrowable = false;
+                if (m.params)
+                    for (auto& mp : *m.params)
+                        if (paramCanCarryBorrow(mp.get(), selfParam)) { borrowable = true; break; }
+                if (borrowable) continue;
+
+                // Name the TEMPLATE, not the mangled instance — `FromWide`, not `FromWide_F4_Span`, which
+                // is what the author wrote and is stable across instantiations.
+                unsupported(("a `view` (`" + ci.name + "`) borrows memory it is handed, but contract `"
+                             + ii.templateKey + "` requires `ctor " + m.name + "` to construct one from parameters "
+                             "that carry no borrow (no `Ptr<T>`, no `ref`, no view) — the view it returned "
+                             "could only borrow a constructor local, so it would dangle; put this "
+                             "conformance on an owning `value` type instead").c_str(),
+                            ci.declLine());
+            }
+        }
+    }
+}
+
 // Reject every `channel<T>` (`Channel`/`Sender`/`Receiver` instance) whose element T transitively reaches
 // a non-atomic shared refcount — its cross-isolate copy would race the `Shared`/`Weak` counter. Names the
 // offending field, mirroring the escape-check style. Runs after computeReachesSharedWeak, when all channel
@@ -17978,6 +18082,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                              "`for value` — a resource can't implement it").c_str(), ci.node ? ci.node->line : 0);
         }
     }
+
+    // A `view` may not promise a contract that requires it to be CONSTRUCTED out of nothing borrowable.
+    // After the kind gate, so a view failing a `for resource` clause hears that first — it is the more
+    // fundamental problem, and the two would otherwise both fire on one declaration.
+    checkViewContractCtors();
 
     // Validate export manifests: a name in `export { … };` must be a real top-level declaration in
     // that same file (catches typos + enforces per-file surfaces for directory-modules).
