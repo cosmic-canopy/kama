@@ -15990,21 +15990,34 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
         // constructed type — an infallible ctor returns the enclosing type by value — so an of/make
         // result is first-class in operand position (operators, ref-arg hoist, arg upcast), exactly like
         // the nameless inline ctor (Q3 below) it replaces. Concrete receiver only (a generic template
-        // needs an instance, which operand position lacks). #M8d.2
+        // needs an instance, which operand position lacks — unless a TURBOFISH states it, which is what
+        // `dotOnTypeInstance` recovers). #M8d.2
+        //
+        // The generic case matters because without it a method can never be chained off a generic ctor:
+        // `Fixed::<int32, 16>.fromInt(n: 3).toInt()` classed its receiver as "" and died as "method call
+        // on unresolved receiver", while the same call on a non-generic type worked. That is a silent
+        // regression for any type that becomes generic, which is exactly what `Fixed16_16` just did.
         std::string dotTy;
-        if (isTypeReceiver(ma, dotTy) && _classes.count(dotTy)) {
-            auto cit = _classes[dotTy].ctors.find(method);
-            if (cit != _classes[dotTy].ctors.end()) {
-                // Infallible: the ctor yields the enclosing type by value.
-                if (!cit->second.isFallible) return dotTy;
-                // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
-                // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
-                // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
-                // what made an inline fallible ctor unusable as a subject. Now that construction has one
-                // spelling, that gap would leave the pattern unwritable.
-                if (cit->second.returnType) {
-                    std::string rc = cType(cit->second.returnType);
-                    return rc;
+        if (isTypeReceiver(ma, dotTy)) {
+            std::string inst = dotOnTypeInstance(ma, dotTy);
+            auto ci = _classes.find(inst);
+            if (ci != _classes.end()) {
+                auto cit = ci->second.ctors.find(method);
+                if (cit != ci->second.ctors.end()) {
+                    // Infallible: the ctor yields the enclosing type by value.
+                    if (!cit->second.isFallible) return inst;
+                    // A FALLIBLE ctor on a generic instance keeps the old "" answer: rendering its declared
+                    // `Result<T, E>` needs the owning instance's type args bound, which this path does not.
+                    if (inst != dotTy) return "";
+                    // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
+                    // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
+                    // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
+                    // what made an inline fallible ctor unusable as a subject. Now that construction has one
+                    // spelling, that gap would leave the pattern unwritable.
+                    if (cit->second.returnType) {
+                        std::string rc = cType(cit->second.returnType);
+                        return rc;
+                    }
                 }
             }
         }
@@ -16984,6 +16997,27 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
     return false;
 }
 
+// Which INSTANCE does a dot-on-type receiver name? `isTypeReceiver` answers with the bare template for a
+// generic (`Pair`), which is not in `_classes` — its specializations are. Resolve the instance the same two
+// ways the `::` static-factory path does: an explicit turbofish (`Pair::<int32>.make()`, or the ctor's own
+// `Pair.make::<int32>()`), or inference from the enclosing typed position (`Pair<int32> q = Pair.make(…)`).
+// Returns `typeName` unchanged for a concrete type, and for a generic whose instance cannot be pinned down —
+// callers distinguish by whether the result is in `_classes`. #M7-E2/E3
+std::string CEmitter::dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName)
+{
+    if (!recv || _classes.count(typeName) || !_genericTypeParams.count(typeName)) return typeName;
+    IdentifierNode* rid = dynamic_cast<IdentifierNode*>(recv->expression.get());
+    if (rid && rid->genericArgs)                                 // receiver turbofish `Type::<T>.make` (canonical)
+        return genericTypeMangle(typeName, rid->genericArgs);
+    if (recv->identifier && recv->identifier->genericArgs)        // method turbofish `Type.make::<T>` (ctor-own generics)
+        return genericTypeMangle(typeName, recv->identifier->genericArgs);
+    if (!_variantTargetType.empty()) {
+        auto of = _genericTypeInstOf.find(_variantTargetType);
+        if (of != _genericTypeInstOf.end() && of->second == typeName) return _variantTargetType;
+    }
+    return typeName;
+}
+
 // `Type.name(args)` — a dot-on-type constructor call (the receiver names a TYPE, per `isTypeReceiver`).
 // Distinct from `Type::staticFn()` (a static fn stays `::`) and `Enum::Variant` (stays `::`): dot-on-type
 // is the constructor spelling, so it resolves ONLY to a registered `ctor`. Reaches the SAME C as the M2
@@ -16998,22 +17032,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                         && static_cast<IdentifierNode*>(recv->expression.get())->value)
                         ? *static_cast<IdentifierNode*>(recv->expression.get())->value : typeName;
     // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
-    // Resolve the concrete instance the same two ways the `::` static-factory path does — from an explicit
-    // turbofish (`Pair.make::<int32>()`) or by inference from the enclosing typed position
-    // (`Pair<int32> q = Pair.make(...)`, via `_variantTargetType` + `_genericTypeInstOf`). #M7-E2/E3
-    std::string tn = typeName;
-    if (!_classes.count(tn) && _genericTypeParams.count(tn)) {
-        IdentifierNode* rid = dynamic_cast<IdentifierNode*>(recv->expression.get());
-        if (rid && rid->genericArgs)                              // receiver turbofish `Type::<T>.make` (canonical)
-            tn = genericTypeMangle(tn, rid->genericArgs);
-        else if (recv->identifier && recv->identifier->genericArgs)  // method turbofish `Type.make::<T>` (ctor-own generics)
-            tn = genericTypeMangle(tn, recv->identifier->genericArgs);
-        else if (!_variantTargetType.empty()) {
-            auto of = _genericTypeInstOf.find(_variantTargetType);
-            if (of != _genericTypeInstOf.end() && of->second == tn)
-                tn = _variantTargetType;
-        }
-    }
+    std::string tn = dotOnTypeInstance(recv, typeName);
     // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block
     // (`type intrinsic <int32> implements Deserialize`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.

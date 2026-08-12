@@ -1624,6 +1624,7 @@ private:
     void             checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
+    std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName); // X::<A>.name -> the instance
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
     void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
                                    ObjectCreationNode* oc, int lineNo, int depth);
