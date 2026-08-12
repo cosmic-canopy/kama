@@ -4462,8 +4462,9 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         };
         if (cd->members)
             for (auto& m : *cd->members) {
-                // a `contract` is a public guarantee: methods only, no bodies, no fields, no
-                // ctor/dtor (it holds no state and constructs nothing).
+                // a `contract` is a public guarantee: signatures only, no bodies, no fields, no
+                // dtor (it holds no state and destroys nothing). A `ctor` IS allowed — it is what lets a
+                // bound construct (`T.fromStr(s: …)`), and it registers as an `isCtor` slot below.
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                     if (md->body)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())

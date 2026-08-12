@@ -133,8 +133,9 @@ type contract Drawable for both { fn void draw(); }
 type contract Animated for both implements Drawable { fn void step(float dt); }   // refines: requires Drawable + more
 ```
 
-- All methods are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies
-  (no default methods, v1), no ctor/dtor.
+- All members are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies
+  (no default methods, v1), no dtor. Besides methods a contract may require a **`ctor`** or a
+  **`static fn`**, which is how a bound gets to *construct* rather than only to call.
 - **Explicit** satisfaction only (a type declares it satisfies a contract) — never structural/implicit.
 - **Granularity:** keep contracts small; an API requires the **narrowest** one it needs. Contracts
   **refine** each other (capability layering) *without* class inheritance.
@@ -212,8 +213,8 @@ Eight rules make the grid memorable:
 5. **`~dtor` ⟺ `resource`** (forbidden on a `value` or a `view` — neither owns anything to free).
 6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values and views are sealed → use contracts; a
    contract already *is* the abstraction).
-7. **`contract`** = all-public methods, no fields, no bodies, no ctor/dtor; may refine other
-   contracts. `friend` grants apply as elsewhere.
+7. **`contract`** = all-public signatures (methods, and optionally a `ctor`/`static fn` requirement),
+   no fields, no bodies, no dtor; may refine other contracts. `friend` grants apply as elsewhere.
 8. **`view`** codegens like a `value` (inline, bit-copied, sealed, no `~dtor`) but adds two guards:
    **private-only fields** and the **second-class borrow** rule — a parameter/local/return-that-borrows-
    `this`, never a field, collection element, or `enum` payload (see the `view` section above).
