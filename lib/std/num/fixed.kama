@@ -1,56 +1,70 @@
 namespace std::num;
 
-// Signed 16.16 fixed-point (`Fixed16_16` — the name leaves `Fixed` free for a future generic
-// `Fixed<intBits, fracBits>`, which would subsume this one rather than sit beside it) — the no-FPU answer for audio / DSP / sensor math on cores without an FPU
-// (Cortex-M0, AVR). A `value` (stack, copied, no alloc) wrapping one `int32 raw` = the real number * 65536.
-// Integer part is [-32768, 32767]; fractional resolution is 1/65536 (~1.5e-5). Pure library over the shipped
-// operator overloading — no compiler support needed; the emitted C is plain integer arithmetic (no libcalls).
+// Signed binary fixed-point — the no-FPU answer for audio / DSP / sensor math on cores without an FPU
+// (Cortex-M0, AVR). A `value` (stack, copied, no alloc) wrapping one backing integer `raw` = the real
+// number * 2^F. `Fixed<int32, 16>` is the classic Q16.16: integer part [-32768, 32767], fractional
+// resolution 1/65536 (~1.5e-5). Pure library over the shipped operator overloading — no compiler support
+// needed; the emitted C is plain integer arithmetic (no libcalls).
+//
+// Both halves of the format are parameters, and neither is a name:
+//
+//  * `B` is the STORAGE, and it is passed rather than computed. kama has no type-level computation, and
+//    acquiring some to map a bit count onto a width would be out of proportion to one type — Rust's
+//    `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage explicitly for the same reason. What `B`
+//    must supply is stated once, as the `FixedBacking` bound (backing.kama), so the arithmetic below is
+//    written once at no width in particular.
+//  * `F` is the fraction, a CONST GENERIC parameter — an ordinary value inside these bodies, which is why
+//    the scale is `1 << F` here and was a literal `65536` at eight sites in the Fixed16_16 this replaces.
+//
+// The pairing of the two is the part a comment cannot enforce, so it does not have to: the `comptime
+// assert` below is checked once per instantiation, against the backing's own width, and `Fixed<int8, 16>`
+// is a compile error naming both halves. That check is two general language features composing
+// (`sizeof` folding and `comptime assert`), not a rule about this type.
 //
 // Overflow follows the language default: the base `+ - * /` operators TRAP on overflow in debug builds (a
 // fixed-point overflow is a real bug in value math). The `sat*` methods are the explicit never-trap
 // alternative (they clamp to the representable range). Model twin: std::time::Duration.
-export { Fixed16_16 };
+export { Fixed };
 
-@generate(of)
-type value Fixed16_16 implements Equatable<This>, Comparable<This> {
-    public int32 raw;   // real value * 65536
+type value Fixed<B: FixedBacking<B>, const F: int32> implements Equatable<This>, Comparable<This> {
+    comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8,
+                    msg: "a Q-format's fractional bits must fit its backing and leave the sign bit");
 
-    public ctor fromInt(int32 n)       { return Fixed16_16.of(raw: n * 65536i32); }   // traps if |n| >= 32768 (out of range)
-    public ctor one()                  { return Fixed16_16.of(raw: 65536i32); }
-    public ctor fromFloat(float64 x)   { return Fixed16_16.of(raw: cast<int32>(x * 65536.0f64)); }
-    public ctor fromFloat32(float32 x) { return Fixed16_16.of(raw: cast<int32>(x * 65536.0f32)); }
+    public B raw;   // the real value * 2^F
 
-    public fn int32   toInt()     { return this.raw / 65536i32; }   // truncates toward zero
-    public fn float64 toFloat()   { return cast<float64>(this.raw) / 65536.0f64; }
-    public fn float32 toFloat32() { return cast<float32>(this.raw) / 65536.0f32; }
+    public ctor of(B raw)              { this.raw = raw; }
+    public ctor fromInt(int32 n)       { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(n) << F)); }   // traps if out of range
+    public ctor one()                  { return Fixed::<B, F>.of(raw: B.fromWide(v: 1i64 << F)); }
+    public ctor fromFloat(float64 x)   { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(x * cast<float64>(1i64 << F)))); }
+    public ctor fromFloat32(float32 x) { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(x * cast<float32>(1i64 << F)))); }
 
-    public Fixed16_16 operator+(Fixed16_16 r) { return Fixed16_16.of(raw: this.raw + r.raw); }
-    public Fixed16_16 operator-(Fixed16_16 r) { return Fixed16_16.of(raw: this.raw - r.raw); }
-    public Fixed16_16 operator-()         { return Fixed16_16.of(raw: -this.raw); }
-    // mul/div widen through int64 to re-scale exactly; the final narrowing cast is the overflow signal.
-    public Fixed16_16 operator*(Fixed16_16 r) { return Fixed16_16.of(raw: cast<int32>((cast<int64>(this.raw) * cast<int64>(r.raw)) >> 16i64)); }
-    public Fixed16_16 operator/(Fixed16_16 r) { return Fixed16_16.of(raw: cast<int32>((cast<int64>(this.raw) << 16i64) / cast<int64>(r.raw))); }
+    // Divide rather than shift: a right shift floors, and `toInt` truncates toward zero, so the two
+    // disagree on every negative fraction (-1.5 is -1, not -2).
+    public fn int32   toInt()     { return cast<int32>(this.raw.wide() / (1i64 << F)); }
+    public fn float64 toFloat()   { return cast<float64>(this.raw.wide()) / cast<float64>(1i64 << F); }
+    public fn float32 toFloat32() { return cast<float32>(this.raw.wide()) / cast<float32>(1i64 << F); }
+
+    // Every operator is the same three steps — widen into the accumulator, do the arithmetic at width,
+    // narrow back. The narrowing cast inside `fromWide` is the overflow signal.
+    public This operator+(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: this.raw.wide() + r.raw.wide())); }
+    public This operator-(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: this.raw.wide() - r.raw.wide())); }
+    public This operator-()       { return Fixed::<B, F>.of(raw: B.fromWide(v: 0i64 - this.raw.wide())); }
+    // mul/div re-scale as well as widen: a product carries 2F fractional bits, a quotient none.
+    public This operator*(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
+    public This operator/(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: (this.raw.wide() << F) / r.raw.wide())); }
 
     // Comparison comes from the contracts, not from `operator==` & co. — `==`/`!=` call `equals`,
-    // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Fixed16_16 a `Map` key (with `Hashable`)
+    // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Fixed a `Map` key (with `Hashable`)
     // and a `SortedSet`/`PriorityQueue` element, which the raw operators never did.
-    public fn bool equals(ref Fixed16_16 other) { return this.raw == other.raw; }
-    public fn Ordering compareTo(ref Fixed16_16 other) {
-        if (this.raw < other.raw) { return Ordering::Less; }
-        if (this.raw > other.raw) { return Ordering::Greater; }
+    public fn bool equals(ref This other) { return this.raw.wide() == other.raw.wide(); }
+    public fn Ordering compareTo(ref This other) {
+        if (this.raw.wide() < other.raw.wide()) { return Ordering::Less; }
+        if (this.raw.wide() > other.raw.wide()) { return Ordering::Greater; }
         return Ordering::Equal;
     }
 
-    // Saturating variants — never trap: compute in int64, clamp to the int32 range, narrow.
-    public fn Fixed16_16 satAdd(Fixed16_16 r) { return Fixed16_16.of(raw: clampToI32(v: cast<int64>(this.raw) + cast<int64>(r.raw))); }
-    public fn Fixed16_16 satSub(Fixed16_16 r) { return Fixed16_16.of(raw: clampToI32(v: cast<int64>(this.raw) - cast<int64>(r.raw))); }
-    public fn Fixed16_16 satMul(Fixed16_16 r) { return Fixed16_16.of(raw: clampToI32(v: (cast<int64>(this.raw) * cast<int64>(r.raw)) >> 16i64)); }
-}
-
-// Clamp an int64 into the int32 range (bounds written as literals, matching std::num::limits). Not exported —
-// an internal helper for the saturating ops.
-fn int32 clampToI32(int64 v) {
-    int64 lo = 0i64 - 2147483648i64;   // int32Min
-    int64 hi = 2147483647i64;          // int32Max
-    return cast<int32>(v < lo ? lo : (v > hi ? hi : v));
+    // Saturating variants — never trap: the accumulator is the same, only the narrowing differs.
+    public fn This satAdd(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() + r.raw.wide())); }
+    public fn This satSub(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() - r.raw.wide())); }
+    public fn This satMul(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
 }

@@ -1,0 +1,38 @@
+// std::num::Fixed at backings and fractions OTHER than Q16.16 — what the generic buys over the
+// hand-rolled Fixed16_16 it replaces. tests/num_fixed.kama is the Q16.16 oracle; this one proves the
+// scale really comes from the instantiation rather than from a constant that happens to be 65536.
+//
+// Three instantiations, three different scales, two different backings — and Q8.8 in an int16 is the case
+// that matters most: it is a 16-bit type, so any accumulator that stayed int32-shaped would be visible
+// here and nowhere else.
+import std::num::{Fixed};
+fn int32 main() {
+    int32 r = 0;
+
+    // Q8.8 in an int16: scale 256, range [-128, 128), resolution 1/256.
+    Fixed<int16, 8> q88one  = Fixed::<int16, 8>.one();
+    Fixed<int16, 8> q88half = Fixed::<int16, 8>.fromFloat(x: 0.5f64);
+    Fixed<int16, 8> q88_3   = Fixed::<int16, 8>.fromInt(n: 3);
+    if (q88one.raw == 256i16)                            { r = r + 1; }
+    if (q88half.raw == 128i16)                           { r = r + 1; }
+    if ((q88_3 * q88half).toFloat() == 1.5f64)           { r = r + 1; }   // widens through int64, re-scales by 8
+    if ((q88_3 / Fixed::<int16, 8>.fromInt(n: 2)).toFloat() == 1.5f64)  { r = r + 1; }
+    if (q88_3.toInt() == 3)                              { r = r + 1; }
+    // int16 saturation is the backing's own bound, not int32's.
+    if (Fixed::<int16, 8>.of(raw: 32767i16).satAdd(r: q88one).raw == 32767i16) { r = r + 1; }
+
+    // Q4.4 in an int8: the narrowest backing, scale 16, range [-8, 8).
+    Fixed<int8, 4> q44 = Fixed::<int8, 4>.fromInt(n: 2);
+    if (q44.raw == 32i8)                                 { r = r + 1; }
+    if (q44.toInt() == 2)                                { r = r + 1; }
+    if (Fixed::<int8, 4>.of(raw: 127i8).satMul(r: Fixed::<int8, 4>.fromInt(n: 4)).raw == 127i8) { r = r + 1; }
+
+    // The SAME value at two scales is two different raw words — the point of the const parameter.
+    if (Fixed::<int32, 16>.one().raw == 65536i32)        { r = r + 1; }
+    if (Fixed::<int32, 8>.one().raw == 256i32)           { r = r + 1; }   // same backing, different F
+
+    // Comparison still comes from the contracts, at an instance the Q16.16 fixture never builds.
+    if (Fixed::<int16, 8>.fromInt(n: 2) < q88_3)         { r = r + 1; }
+
+    return r;   // 12
+}

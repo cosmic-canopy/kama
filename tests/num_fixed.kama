@@ -1,19 +1,35 @@
-// std::num::Fixed16_16 signed 16.16 fixed-point — exact-value checks (fixed-point is exact for representable
-// values, so no float tolerance needed; assert .raw / .toInt() directly). Sums to 42 like num_ops.kama.
-import std::num::{Fixed16_16};
+// std::num::Fixed at Q16.16 — exact-value checks (fixed-point is exact for representable values, so no
+// float tolerance needed; assert .raw / .toInt() directly). Sums to 42 like num_ops.kama.
+//
+// Every value and every expected result here is unchanged from when this type was a hand-rolled
+// `Fixed16_16` with `65536` inlined at eight sites; only the spelling is `Fixed::<int32, 16>` now, and
+// the repeated constructions are bound to locals because the generic spelling is long. Still returning 42
+// is what says the generic re-derives exactly what the hand-rolled one did. The generic's OWN behaviour —
+// a second backing, a second F, the bad-pairing rejection — is tests/num_fixed_generic.kama.
+import std::num::{Fixed};
 fn int main() {
+    Fixed<int32, 16> one  = Fixed::<int32, 16>.one();
+    Fixed<int32, 16> f1   = Fixed::<int32, 16>.fromInt(n: 1);
+    Fixed<int32, 16> f2   = Fixed::<int32, 16>.fromInt(n: 2);
+    Fixed<int32, 16> f3   = Fixed::<int32, 16>.fromInt(n: 3);
+    Fixed<int32, 16> f4   = Fixed::<int32, 16>.fromInt(n: 4);
+    Fixed<int32, 16> f5   = Fixed::<int32, 16>.fromInt(n: 5);
+    Fixed<int32, 16> f6   = Fixed::<int32, 16>.fromInt(n: 6);
+    Fixed<int32, 16> f12  = Fixed::<int32, 16>.fromInt(n: 12);
+
     int32 r = 0;
-    if (Fixed16_16.fromFloat(x: 0.5f64).raw == 32768i32)                              { r = r + 4; }   // 0.5 * 65536
-    if (Fixed16_16.one().raw == 65536i32)                                             { r = r + 4; }
-    if (Fixed16_16.fromInt(n: 3) == Fixed16_16.fromInt(n: 1) + Fixed16_16.fromInt(n: 2))      { r = r + 4; }
-    if ((Fixed16_16.fromInt(n: 5) - Fixed16_16.fromInt(n: 2)).toInt() == 3)               { r = r + 4; }
-    if ((Fixed16_16.fromFloat(x: 1.5f64) * Fixed16_16.fromFloat(x: 2.0f64)) == Fixed16_16.fromInt(n: 3)) { r = r + 4; }  // 1.5*2.0=3.0
-    if ((Fixed16_16.fromInt(n: 6) / Fixed16_16.fromInt(n: 2)) == Fixed16_16.fromInt(n: 3))    { r = r + 4; }
-    if ((-Fixed16_16.fromInt(n: 4)).toInt() == 0 - 4)                                 { r = r + 4; }
-    if (Fixed16_16.fromInt(n: 2) < Fixed16_16.fromInt(n: 3))                              { r = r + 4; }
-    if (Fixed16_16.fromFloat(x: 2.5f64).toFloat() == 2.5f64)                          { r = r + 4; }   // 2.5 is exact in 16.16
-    if (Fixed16_16.fromInt(n: 3).satMul(r: Fixed16_16.fromInt(n: 4)) == Fixed16_16.fromInt(n: 12)) { r = r + 4; }   // in-range: == operator*
+    if (Fixed::<int32, 16>.fromFloat(x: 0.5f64).raw == 32768i32)      { r = r + 4; }   // 0.5 * 65536
+    if (one.raw == 65536i32)                                          { r = r + 4; }
+    if (f3 == f1 + f2)                                                { r = r + 4; }
+    if ((f5 - f2).toInt() == 3)                                       { r = r + 4; }
+    if ((Fixed::<int32, 16>.fromFloat(x: 1.5f64)
+       * Fixed::<int32, 16>.fromFloat(x: 2.0f64)) == f3)              { r = r + 4; }   // 1.5 * 2.0 = 3.0
+    if ((f6 / f2) == f3)                                              { r = r + 4; }
+    if ((-f4).toInt() == 0 - 4)                                       { r = r + 4; }
+    if (f2 < f3)                                                      { r = r + 4; }
+    if (Fixed::<int32, 16>.fromFloat(x: 2.5f64).toFloat() == 2.5f64)  { r = r + 4; }   // 2.5 is exact in 16.16
+    if (f3.satMul(r: f4) == f12)                                      { r = r + 4; }   // in range: same as operator*
     // saturating: int32Max + 1 clamps (never traps) instead of overflowing.
-    if (Fixed16_16.of(raw: 2147483647i32).satAdd(r: Fixed16_16.one()).raw == 2147483647i32) { r = r + 2; }
+    if (Fixed::<int32, 16>.of(raw: 2147483647i32).satAdd(r: one).raw == 2147483647i32) { r = r + 2; }
     return r;   // 42
 }
