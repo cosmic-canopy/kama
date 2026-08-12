@@ -469,6 +469,7 @@ Three claims that sounded right and are **false**:
 
 ```
 contract model  ->  const generics  ->  view-escape check
+   (COMPLETE)         (M8-M10 left)      (not started)
 ```
 
 It was four. **Full specialization is a declared non-goal** — the record, and the reasoning, are in
@@ -488,41 +489,47 @@ Build the design above. Open questions:
    intrinsic). The existing duplicate/clobber checks already have the right shape.
 4. ~~**Migration**~~ — **done (M4)**; the measured outcome is under *Remaining*.
 
-### 2 · Const generics → `Fixed<intBits, fracBits>`
+### 2 · Const generics → `Fixed<B: FixedBacking<B>, const F: int32>`
 
-Blocked today by three things, two of which are compiler bugs in their own right.
+> ⚠️ **This campaign has its OWN M-numbering (M0–M11), which is not campaign 1's.** Both have an "M6" and
+> they are different milestones. Campaign 1's are in *Status* above; these are below.
 
-> **Re-measured 2026-08-11** (while scoping the campaign that became a non-goal), and blockers 1 and 2 are
-> **not** the two independent bugs they read as. They are one symptom — *a const param cannot be used as a
-> value* — reached by two different routes, and the symptom is **wider than "on types"**. Both spellings
-> below die in the C compiler with **no kama diagnostic**:
->
-> ```kama
-> fn int32 shifted<const F: int32>(int32 x) { return x >> F; }        // -> undeclared identifier 'F'
-> type value Fixed<const F: int32> { public fn int32 whole() { return this.raw >> F; } }   // same
-> ```
->
-> - On a **function**, `constParams` *is* read (four sites in `kama.cemit.cpp` build `_constSubst`), so
->   blocker 1 does not apply — and it still fails, because `emitExpression`'s identifier branch never
->   consults `_constSubst`. That is blocker 2 alone.
-> - On a **type**, blocker 1 applies *first*: nothing reads `ClassDeclarationNode::constParams`, so
->   `_constSubst` is never populated at all. Blocker 2 is then unreachable for types until 1 is fixed.
-> - The *instance* monomorphizes correctly either way (`Fixed<8>`, `Fixed::<8>.of(raw: 256)`), because
->   mangling reads the type **argument**, not the param list. That is exactly why the gap stayed hidden.
->
-> So the order is forced: fix 1, then 2, and expect 2 to fix the function case at the same time.
+**The language half is DONE — the compiler no longer blocks anything here.** All three items this section
+used to list as blockers are closed, and the third was closed by *deciding against it*:
 
-1. `ClassDeclarationNode::constParams` is **populated by the grammar and never read** by the emitter —
-   const params on *types* are parse-only plumbing. (`FunctionDeclarationNode::constParams` *is* read.)
-2. A const param **cannot be a runtime value**: `emitExpression`'s identifier branch never consults
-   `_constSubst`, so `this.raw >> F` emits an undeclared C identifier and dies in the C compiler **with
-   no kama diagnostic**. Silent bad codegen — worth fixing regardless of `Fixed`, and it hits **functions
-   as well as types**.
-3. No **type-level selection** to map `I+F` onto a backing width, and no "next wider type" for the
-   multiply. This is the genuine design question.
+| was | now |
+|---|---|
+| `ClassDeclarationNode::constParams` had no reader, so `_constSubst` was never populated for a type | **M4** — a const param on a TYPE binds like one on a function |
+| `emitExpression`'s identifier branch never consulted `_constSubst`, so `this.raw >> F` emitted an undeclared C identifier with **no kama diagnostic** | **M1–M3** — a const param reads as a value; the silent-bad-codegen path is gone |
+| "no type-level selection to map `I+F` onto a backing width" — *called the genuine design question* | **rejected, not built** — see below |
 
-(`@generate(of)` is also rejected on generic types, which `Fixed16_16` uses — but that is fixable in
-kama source by hand-writing a ctor.) `Fixed16_16` keeps its name meanwhile precisely to reserve `Fixed`.
+Also shipped along the way, because scoping this kept turning up defects: a const param's name is reserved
+for its whole declaration (**M5**), `sizeof` folds for fixed-width scalars (**M6**), `comptime assert` with
+its two lowerings (**M7**), and an out-of-range integer literal is an error (**M11**). What each of those
+*is* now lives in [SPEC.md](../SPEC.md); this file does not restate it.
+
+**The backing type is PASSED, not computed.** kama has no type-level computation of any kind, and acquiring
+one for this is out of proportion to the payload. Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>`
+both pass storage explicitly; only Ada and Zig compute it, each through a dedicated language mechanism.
+`FixedBacking<B>` is a **bound**, not a use-site spelling — the `<B>` is the pinned self-type, exactly
+`T: Comparable<T>` (`lib/std/collections/sort.kama:21`).
+
+**What is left, in order:**
+
+- **M8 — the `FixedBacking<B>` contract + `type intrinsic` impls**, in `lib/std/num/`. ⚠️ `int64` is
+  deliberately **not** a backing: the widening accumulator for the multiply is `int64` and there is no
+  `int128`.
+- **M9 — the generic `Fixed`, and `Fixed16_16` is DELETED, not aliased** (kama has no type aliases; `as`
+  only rebinds an imported name). `Fixed16_16` kept its name until now precisely to reserve `Fixed`.
+- **M10 — docs.** SPEC's Generics section has no const-generic bullet at all.
+
+`tests/generic_ops_contracts.kama` is already the M9 shape and **passes**: a generic `type value` with
+`operator+`/`-`, pinned `Equatable<This>`/`Comparable<This>`, arithmetic widened through a contract method
+on its own type parameter, at two instantiations — including a `ctor T fromWide(int64 v)` required by the
+contract and called through the bounded parameter. So the design is proven before M8 starts.
+
+**`Real` conformance stays out of scope** — 21 Q-format transcendentals is a numerical-methods project.
+(`@generate(of)` is rejected on generic types, which `Fixed16_16` uses; hand-write the ctor in M9.)
 
 ### 3 · Derived view-escape check
 

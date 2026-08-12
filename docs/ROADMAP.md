@@ -93,22 +93,24 @@ Everything else here is library or toolchain work that does **not** gate the tag
    Campaign 1 **shipped** — what the language now *is* lives in [SPEC.md](SPEC.md). The planned second
    campaign, full generic specialization, is a **declared non-goal** (§2). Run the rest in order, each
    its own session, **before M2b**:
-   1. **Const generics on types.** Three blockers, two of them compiler bugs in their own right, and
-      the "const param cannot be a runtime value" one is **wider than it was written down as** — it hits
-      *functions* too, not only types:
-      - `fn int32 shifted<const F: int32>(int32 x) { return x >> F; }` builds `_constSubst` (a
-        function's `constParams` *is* read) and still emits `use of undeclared identifier 'F'`, because
-        `emitExpression`'s identifier branch never consults it.
-      - `type value Fixed<const F: int32>` fails the same way for a *second, distinct* reason:
-        `ClassDeclarationNode::constParams` has no reader at all, so `_constSubst` is never populated.
-        The instance still monomorphizes correctly, because mangling reads the type ARGUMENT rather
-        than that list — which is why the gap hid.
-      - No **type-level selection** to map `I+F` onto a backing width, and no "next wider type" for the
-        multiply. The genuine design question.
+   1. **Const generics on types — the LANGUAGE half is done; what is left is the stdlib payload.** Both
+      compiler blockers (a const param unreadable as a value, in a function and on a type) are closed,
+      along with const-param name reservation, `sizeof` folding, and `comptime assert` — all now in
+      [SPEC.md](SPEC.md). The remaining work is the type the campaign exists to build:
+      - **`FixedBacking<B>` contract + `type intrinsic` impls** in `lib/std/num/`. ⚠️ `int64` is
+        deliberately **not** a backing — the widening accumulator is `int64` and there is no `int128`.
+      - **Generic `Fixed<B: FixedBacking<B>, const F: int32>`, deleting `Fixed16_16`.** The backing is
+        **PASSED, not computed**: kama has no type-level computation, and the "map `I+F` onto a backing
+        width" selection this entry used to call for was **considered and rejected** — Rust's `fixed`
+        and C++'s `fixed_point<Rep,Exponent>` both pass storage explicitly; only Ada and Zig compute it,
+        each with a dedicated language mechanism kama does not want. `FixedBacking<B>` is a BOUND, not a
+        use-site spelling — the `<B>` is the pinned self-type, exactly `T: Comparable<T>`.
+        `tests/generic_ops_contracts.kama` already passes at this shape, so the design is proven.
+      - **Docs.** SPEC's Generics section still has no const-generic bullet, and `docs/SPEC.md`'s claim
+        that a contract has no ctor is contradicted by `tests/contract_requires_ctor.kama`.
 
-      Both value-use failures surface as a raw clang error with **no kama diagnostic**, so this is
-      silent bad codegen and worth fixing regardless of `Fixed`. Unblocks `Fixed16_16` →
-      `Fixed<intBits, fracBits>`.
+      `Real` conformance stays **out of scope** — 21 Q-format transcendentals is a numerical-methods
+      project, not this campaign.
    2. **Derived view-escape check** — reject a `view` implementing a contract it cannot satisfy.
 
 3. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
@@ -168,8 +170,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **`Fixed16_16` does not implement `Real`.** A contract requires *every* method, so conformance means
   writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q16.16 — CORDIC and
   polynomial-approximation work, a numerical-methods project rather than a library chore. It is the
-  obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of a future
-  generic `Fixed<intBits, fracBits>` (§1).
+  obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of the
+  generic `Fixed<B: FixedBacking<B>, const F: int32>` that replaces it (§1).
 
 - **Layout CONTROL (`@align(N)` / `@packed`)** — kama can now *know*, *fold* and *assert* a type's layout
   (`sizeof` folding for fixed-width scalars, and `comptime assert` for everything else — both in

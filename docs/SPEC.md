@@ -856,7 +856,8 @@ methods because `char` and `uint32` share a C type and the conformance registry 
 exact fractional arithmetic: `+ - * /` through operator overloading (multiply and divide widen through
 `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating `satAdd`/`satSub`/`satMul`.
 The base operators trap on overflow like every other integer op above; the `sat*` forms clamp. Pure
-library, no compiler support. (A generic `Fixed<intBits, fracBits>` stays optional — see
+library, no compiler support. (It is being replaced by a generic
+`Fixed<B: FixedBacking<B>, const F: int32>` — see [ROADMAP.md](ROADMAP.md) §1, and
 [MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.)
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
