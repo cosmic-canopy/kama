@@ -44,16 +44,15 @@ died on contact — see §2):
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`) — owns #2** | §2 | ► **NEXT**: source-breaking, so before the tag |
-| 2 | iterator laundering — an observable use-after-free | §2 | folded into #1; the honest fix *is* the seam |
-| 3 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
-| 4 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
+| **1** | **the unsafe seam (`Ptr<T>` → `UnsafePtr<T>`)** | §2 | ► **NEXT**: source-breaking, so before the tag |
+| 2 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
+| 3 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
 
 **`Ptr<T>` is still spelled `Ptr<T>`** — the rename to `UnsafePtr<T>` is what item 1 *is*, not something
 already done. 144 uses across `lib/` and `prelude/` today. It is a compiler builtin recognized by the
 *string* `"Ptr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo` — so the
-rename itself is mechanical; the campaign's only new semantics is telling a **borrowed** raw pointer from an
-**owned** one, which is what closes #2.
+rename itself is mechanical. **Iterator laundering is no longer part of it**: it shipped separately, because
+the premise that folded the two together turned out to be false (see §2).
 
 **The contract-model arc is closed.** Of the four campaigns the 2026-08-04 design review scheduled, three
 shipped — the contract model, **const generics** (`std::num::Fixed<B, const F>` with it), and the **derived
@@ -238,31 +237,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `unsafe { }` around the teardown guards; then ban the `null` token outside `unsafe`. Plus a
   compiler-emitted debug null trap at the two `_inUnsafe` deref gates. `lib/std/ptr/` is its natural home.
   **Source-breaking**, so before the tag or 2.0.
-  - **It OWNS the iterator-laundering gap** — folded in with the user 2026-08-12 rather than run as its own
-    campaign, because the honest fix is the seam and doing them apart designs the same thing twice.
-    Scoping it showed
-    it is **not** a `ViewIter` defect: *every* iterator in `lib/std/collections/` holds a raw `Ptr` and all
-    of them are storable in a field. What makes `ViewIter`/`ViewIterMut` the right thread is that they alone
-    **launder a rule the language otherwise enforces** — a `View<T>` may not be stored in a field, but its
-    iterator, holding the same pointer, may. (For an owning container the container itself is storable, so
-    its iterator grants no new reach.) They are also, with `FixedArrayIter`, the only iterators carrying no
-    `modsp`/`modsAt` fail-fast — and that counter is **not** a fix for this anyway, since it is itself a
-    `Ptr` into the container: after a free, reading it *is* the use-after-free. It catches modification
-    while alive, never destruction. Making them `type view` is not a local fix either
-    (`Iterable<T>.iterator()` returns a *contract value*, so the iterator boxes — heap ownership of a borrow
-    — rejecting `View<T>`'s own conformance and breaking `sort`). It belongs here because the honest fix is
-    the seam itself: a borrowed pointer type that *says* it is borrowed, not a kind swap on two structs.
-    Recorded as a known limitation in [SPEC.md](SPEC.md) meanwhile.
-
-- **Borrow-escape gaps — one left.** Found while closing the derived view-escape check; scheduled ahead of
-  stdlib parity because they are correctness. Two of the three shipped — a view constructor borrowing a
-  by-value parameter (`xfail/view_ctor_over_byval_param`) and `export { … }` enforcement for qualified
-  references, now covering every position that NAMES a type (`xfail/export_qualified_ref`,
-  `xfail/export_qualified_ref_local`). What is left is **iterator laundering**, and it is **FOLDED into the
-  unsafe seam** (decided with the user 2026-08-12) — not a separate campaign, because the honest fix *is*
-  the seam and doing them apart would design the same thing twice. See the unsafe-seam bullet above, which
-  now owns it. The export rule removed the easy *reachability* from user code; it did not fix the underlying
-  hole, and does nothing inside `std`.
+  - **It no longer owns iterator laundering — that shipped on its own.** The two were folded together on
+    the argument that the honest fix *was* the seam, because making the iterators `type view` "is not a
+    local fix": `Iterable<T>.iterator()` returns a *contract value*, so the iterator would box (heap
+    ownership of a borrow), rejecting `View<T>`'s conformance and taking `sort` with it. **That premise was
+    wrong.** `foreach` never dispatches through the contract — `emitForeachIterator` resolves
+    `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, and `sort` takes a `View<T>`
+    directly, not an `Iterable`. Nothing boxes on that path, so all 19 borrowing iterators became `type view`
+    with **zero compiler changes**. What is left for the seam is what it was always really about: saying that
+    a raw pointer is raw.
 
 - **`kama check` does not type-check expressions — so it reports OK on code that will not build.**
   `int32 x = "oops";` passes `check` and exits 0; only `kama build` rejects it, via the C compiler

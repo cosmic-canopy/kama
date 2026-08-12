@@ -283,12 +283,16 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
 - *Known limitation:* a view is invalidated if the backing `DynamicArray` is **resized** (`add`/`reserve`)
   while the view is live — the same contract as a C++ `span`/iterator; not enforced (no lifetime tracking).
-- *Known limitation:* an **iterator is not escape-checked**. Every collection iterator — `ViewIter<T>` and
-  `ViewIterMut<T>` included — is a `type value` holding a borrowed raw pointer, so it can be stored in a
-  field and outlive its buffer. Again the C++ iterator contract. For a view this is also a *laundering* path:
-  a `View<T>` may not be stored in a field, but its iterator, holding the same pointer, may. The mods-counter
-  fail-fast that the growable containers carry does not help — it points into the container too. Tracked with
-  the unsafe seam in [ROADMAP.md](ROADMAP.md) §2.
+- **A borrowing iterator is itself a view.** Every collection iterator — `ViewIter`/`ViewIterMut`,
+  `DynamicArrayIter`, `MapValueIter`, `BitSetIter`, the `string` iterators `Chars`/`Split`, all of them — is
+  declared `type view`, so it obeys the same escape rules as the `View<T>` above: a local or a by-value
+  parameter, returnable from the container's own `iterator()`/`values()` (it borrows `this`), and **never** a
+  field, a collection element or an `enum` payload. That closes the *laundering* path, where a `View<T>`
+  could not be stored in a field but its iterator, holding the same pointer, could. It costs nothing at the
+  use site: `foreach` resolves `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, so
+  a view-kind iterator is never widened to a contract value. The mods-counter fail-fast the growable
+  containers carry is unrelated and was never a substitute — it points into the container too, so reading it
+  after a free *is* the use-after-free.
 
 ### Hash maps & sets (`std::collections`) ✅
 

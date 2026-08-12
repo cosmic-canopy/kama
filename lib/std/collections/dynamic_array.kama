@@ -6,7 +6,7 @@ export { DynamicArray };
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
-type value DynamicArrayIter<T> implements Iterator<T> {
+type view DynamicArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
@@ -21,7 +21,7 @@ type value DynamicArrayIter<T> implements Iterator<T> {
 
 // A mutable iterator (the `foreach (ref T x in list)` protocol): hasNext() + a place-returning next().
 // The invalidation check lives in hasNext() (it runs before each next()).
-type value DynamicArrayIterMut<T> implements IteratorMut<T> {
+type view DynamicArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<T> data, int32 len, Ptr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;

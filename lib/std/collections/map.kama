@@ -16,7 +16,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
 // so it exists only for a `Copyable` key. Like `DynamicArrayIter` it snapshots the map's mutation counter and
 // rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
-type value MapKeyIter<K> implements Iterator<K> {
+type view MapKeyIter<K> implements Iterator<K> {
     Ptr<K> keys; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<K> keys, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
@@ -38,7 +38,7 @@ type value MapKeyIter<K> implements Iterator<K> {
 // A by-value iterator over a map's VALUES (`foreach (V v in map.values())`), present only for a Copyable
 // value. Like `MapKeyIter` it borrows the value + state buffers, walks only FULL slots, yields each value BY
 // VALUE (a copy), and rejects a structural change made mid-iteration via the `mods` snapshot.
-type value MapValueIter<V> implements Iterator<V> {
+type view MapValueIter<V> implements Iterator<V> {
     Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
@@ -61,7 +61,7 @@ type value MapValueIter<V> implements Iterator<V> {
 // the next FULL slot (idempotent) and runs the mid-iteration invalidation check; `next()` hands out the
 // `ref V` at that slot. Same borrow safety as `DynamicArrayIterMut` (the ref may not escape; a structural
 // change is caught).
-type value MapValueIterMut<V> implements IteratorMut<V> {
+type view MapValueIterMut<V> implements IteratorMut<V> {
     Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
@@ -95,7 +95,7 @@ type resource Entry<K, V> {
 // BOTH key and value are Copyable — the pair analogue of `MapKeyIter`/`MapValueIter`. It borrows the key +
 // value + state buffers, walks only FULL slots, yields each pair BY VALUE (a deep copy of both), and rejects
 // a structural change made mid-iteration via the `mods` snapshot.
-type value MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
+type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
     Ptr<K> keys; Ptr<V> vals; Ptr<uint8> state; int32 cap; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<K> keys, Ptr<V> vals, Ptr<uint8> state, int32 cap, Ptr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.vals = vals; this.state = state; this.cap = cap; this.pos = 0;

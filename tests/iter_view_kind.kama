@@ -1,0 +1,38 @@
+// A borrowing iterator is a `type view`, and this pins what that must NOT cost. The escape rules bite only
+// in storage positions; every legitimate use of an iterator is a local, a by-value parameter, or a return
+// that borrows `this` — none of which a view forbids.
+//
+// Worth pinning explicitly because the shapes below are the ones a stricter view rule would break first,
+// and because the design was previously believed to be impossible: the claim was that a view-kind iterator
+// would have to BOX, since `Iterable<T>.iterator()` returns a contract value. It does not — `foreach`
+// resolves `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, so nothing is ever
+// widened to a contract value on this path.
+import std::collections::{Map, MapValueIter, DynamicArray, View, sort};
+
+// A view-kind iterator as a by-value parameter, behind a generic contract bound.
+fn int32 total<I: Iterator<int32>>(I it) {
+    int32 sum = 0;
+    foreach (int32 v in it) { sum = sum + v; }
+    return sum;
+}
+
+fn int32 main() {
+    Map<int32, int32> m = Map.withCapacity(capacity: 8);
+    m.put(key: 1, value: 10);
+    m.put(key: 2, value: 20);
+    MapValueIter<int32> mi = m.values();      // a LOCAL of iterator type — always fine
+    int32 a = total(it: mi);                  // ... and passed down by value
+
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 4);
+    d.add(item: 3);
+    d.add(item: 4);
+    int32 b = 0;
+    foreach (int32 v in d) { b = b + v; }     // the ordinary foreach surface, unchanged
+
+    View<int32> v = d.view();
+    int32 c = 0;
+    foreach (int32 x in v) { c = c + x; }     // a view's own iterator — the laundering pair
+    sort(items: v);                           // `sort` takes a View directly and still does
+
+    return a + b + c;                         // 30 + 7 + 7 (an exit code, so keep it under 256)
+}

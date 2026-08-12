@@ -16,7 +16,7 @@ type value Handle {
 // Copyable value. It borrows the value + generation buffers, walks only OCCUPIED slots (odd generation), and
 // yields each value BY VALUE (a copy). Rejects a structural change (insert/remove) made mid-iteration via the
 // `mods` snapshot — same contract as `MapValueIter`.
-type value SlotMapValueIter<V> implements Iterator<V> {
+type view SlotMapValueIter<V> implements Iterator<V> {
     Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
@@ -37,7 +37,7 @@ type value SlotMapValueIter<V> implements Iterator<V> {
 // A mutable iterator over a slot map's live VALUES (`foreach (ref V v in sm.valuesMut())`), for ANY value
 // type — the borrow that lets a SlotMap of move-only values be walked + mutated in place. `hasNext()` advances
 // to the next OCCUPIED slot (idempotent) and runs the invalidation check; `next()` hands out the `ref V`.
-type value SlotMapValueIterMut<V> implements IteratorMut<V> {
+type view SlotMapValueIterMut<V> implements IteratorMut<V> {
     Ptr<V> values; Ptr<uint32> gens; int32 slotCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<V> values, Ptr<uint32> gens, int32 slotCount, Ptr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;

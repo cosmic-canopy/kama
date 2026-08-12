@@ -1,0 +1,33 @@
+// A borrowing iterator is a VIEW, so it may not be stored in a field. This is the laundering case SPEC
+// used to record as a known limitation: a `View<T>` may not be a field, but its iterator — holding the
+// same borrowed pointer — could be, and every collection iterator had the same shape.
+//
+// The repro this replaces was not theoretical. `MapValueIter` is exported, so no qualified-spelling trick
+// was needed; the program below compiled clean, `kama check` said OK, and running it read a DEAD STACK
+// FRAME (`leak`'s, where the `Map` lived). AddressSanitizer:
+//
+//     ERROR: AddressSanitizer: stack-buffer-overflow ... READ of size 4
+//       #0 std__collections__MapValueIter_int32__next
+//
+// The `modsp` modification counter is NOT what catches this — it is a pointer into the same dead frame,
+// so reading it *is* the use-after-free. It happened to fail fast here; after the storage is reused it
+// reads back a matching count and the program proceeds on freed memory.
+import std::collections::{Map, MapValueIter};
+
+type value Keeper {
+    public MapValueIter<int32> it;
+    public ctor make(MapValueIter<int32> it) { this.it = it; }
+}
+
+fn Keeper leak() {
+    Map<int32, int32> m = Map.withCapacity(capacity: 8);
+    m.put(key: 1, value: 111);
+    return Keeper.make(it: m.values());   // `m` dies here; the iterator keeps its pointer
+}
+
+fn int32 main() {
+    Keeper k = leak();
+    int32 sum = 0;
+    foreach (int32 v in k.it) { sum = sum + v; }
+    return sum;
+}

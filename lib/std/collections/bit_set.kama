@@ -9,7 +9,7 @@ extern fn Ptr memset(Ptr p, int32 value, usize n);
 // reallocates + re-homes the buffer) made mid-iteration — the same contract as the other collections' iterators.
 // Setting/clearing a bit IN PLACE keeps the buffer stable, so it does not invalidate a walk in flight. The scan
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
-type value BitSetIter implements Iterator<int32> {
+type view BitSetIter implements Iterator<int32> {
     Ptr<uint64> words; int32 wordCount; int32 pos; Ptr<int32> modsp; int32 modsAt;
     public ctor make(Ptr<uint64> words, int32 wordCount, Ptr<int32> modsp, int32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;

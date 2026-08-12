@@ -308,7 +308,7 @@ type intrinsic <string>  implements Deserialize  { public ctor Result<string, st
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is
 // clamped to the available bytes rather than reading past the end.
-type value Chars implements Iterator<char> {
+type view Chars implements Iterator<char> {
     Ptr<uint8> data; int32 len; int32 pos;
     public fn Optional<char> next() {
         if (this.pos >= this.len) { return Optional::None; }
@@ -334,7 +334,7 @@ type value Chars implements Iterator<char> {
 // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
 // separators yield "" pieces; an empty separator yields the whole string once.
 extern fn string kama_string_from_raw(Ptr<uint8> src, int32 start, int32 len);
-type value Split implements Iterator<string> {
+type view Split implements Iterator<string> {
     Ptr<uint8> data; int32 len; Ptr<uint8> sep; int32 seplen; int32 pos; bool done;
     public fn Optional<string> next() {
         if (this.done) { return Optional::None; }

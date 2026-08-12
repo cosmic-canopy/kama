@@ -1,0 +1,15 @@
+// The other half of the same rule: a borrowing iterator may be RETURNED only when it borrows `this` or a
+// `ref` parameter — which is exactly what a container's own `values()`/`iterator()` does. Handing one back
+// over a LOCAL container dangles the moment the function returns.
+//
+// This is the escape vector that made the field case reachable in the first place: without it, a caller
+// could launder the borrow through a return value instead.
+import std::collections::{Map, MapValueIter};
+
+fn MapValueIter<int32> overLocal() {
+    Map<int32, int32> m = Map.withCapacity(capacity: 8);
+    m.put(key: 1, value: 111);
+    return m.values();
+}
+
+fn int32 main() { return 0; }

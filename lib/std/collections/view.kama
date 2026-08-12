@@ -6,7 +6,7 @@ export { View };
 // FIXED borrow, so — unlike the growable containers — there is no `mods` counter to snapshot (nothing
 // structural can change under it; the borrowed buffer's owner is responsible for not resizing while a
 // view is live). Mirrors `FixedArrayIter`.
-type value ViewIter<T> implements Iterator<T> {
+type view ViewIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
@@ -17,7 +17,7 @@ type value ViewIter<T> implements Iterator<T> {
 }
 
 // A mutable iterator (the `foreach (ref T x in view)` protocol): hasNext() + a place-returning next().
-type value ViewIterMut<T> implements IteratorMut<T> {
+type view ViewIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }

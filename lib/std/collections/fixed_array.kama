@@ -6,7 +6,7 @@ extern "<string.h>";
 extern fn Ptr memset(Ptr p, int32 value, usize n);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
-type value FixedArrayIter<T> implements Iterator<T> {
+type view FixedArrayIter<T> implements Iterator<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn Optional<T> next() {
@@ -17,7 +17,7 @@ type value FixedArrayIter<T> implements Iterator<T> {
 }
 
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
-type value FixedArrayIterMut<T> implements IteratorMut<T> {
+type view FixedArrayIterMut<T> implements IteratorMut<T> {
     Ptr<T> data; int32 pos; int32 len;
     public ctor make(Ptr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
