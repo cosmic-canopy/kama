@@ -8,6 +8,15 @@ VS Code additionally has a packaged extension ([`editor/vscode/`](../editor/vsco
 highlighting, F5 debugging and a build-configuration picker. Everything else on this page is configuration
 you paste into your own dotfiles.
 
+The extension also gives `.kama` its own **file icon** in the Explorer, in VS Code and VSCodium alike. It is
+contributed as a *language* icon (`contributes.languages[].icon`), not as a file icon *theme*, and that
+distinction is the whole design: a theme would replace whichever icon set you already run, whereas a
+language icon is a fallback the active theme uses only where it has no entry of its own for `.kama` — which
+Seti, the default in both editors, does not have. A theme can decline them with
+`"showLanguageModeIcons": false`; Seti does not set it, so the icon appears out of the box. One asset serves
+light and dark themes because the artwork is red ink and the pick is negative space, so it takes on the
+Explorer's own background rather than carrying a field of its own.
+
 **The supported set is these eight editors** — VS Code, Neovim, Vim (coc.nvim), Emacs (eglot), Sublime Text,
 Helix, Kate and Zed. That list is the commitment, and `tools/check-editors.sh` fails the build if any of them
 loses its section here: dropping an editor has to be a deliberate diff, never a silence.

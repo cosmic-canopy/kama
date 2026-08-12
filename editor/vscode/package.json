@@ -24,7 +24,12 @@
         "id": "kama",
         "aliases": ["kama", "Kama"],
         "extensions": [".kama"],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "comment-icon": "The Explorer file icon. A LANGUAGE icon, not an icon THEME, deliberately: a theme would replace whatever the user already runs, while this is a fallback the active theme uses when it has no entry of its own for .kama — which Seti, the VS Code and VSCodium default, does not. Themes may opt out with `showLanguageModeIcons: false`; Seti does not set it, so this shows. Same file for light and dark: the artwork is red ink and the pick is NEGATIVE SPACE, so it takes the Explorer background either way (icons/kama-file.png is icon.png with the black field keyed to alpha — the marketplace icon itself is opaque and would be a black square on a light theme).",
+        "icon": {
+          "light": "./icons/kama-file.png",
+          "dark": "./icons/kama-file.png"
+        }
       }
     ],
     "grammars": [

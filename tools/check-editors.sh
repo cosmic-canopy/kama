@@ -134,5 +134,30 @@ grep -qF -- 'hx --grammar build' "$DOC" || bad "docs/editors.md no longer tells 
 #    that makes the whole design work.
 grep -qF -- 'kama.local.json' "$DOC" || bad "docs/editors.md no longer documents kama.local.json as the build-configuration channel"
 
+# 8. The Explorer file icon. Three things have to hold together and each fails silently on its own: the
+#    manifest has to REFERENCE an icon, the referenced file has to EXIST (a broken path just shows the
+#    generic file glyph — VS Code logs nothing an author would notice), and the PNG has to carry an ALPHA
+#    channel. The last one is the subtle one and the reason this check exists: the marketplace icon is
+#    opaque red-on-BLACK, so pointing the language icon at an icon without alpha renders a black square in
+#    the Explorer on every light theme. The shipped icon is that artwork with the black field keyed out,
+#    which also turns the pick into negative space so ONE file is right on light and dark.
+MANIFEST="$ROOT/editor/vscode/package.json"
+ICON="$ROOT/editor/vscode/icons/kama-file.png"
+grep -qF -- '"icon"' "$MANIFEST" || bad "editor/vscode/package.json no longer contributes a language icon for .kama"
+grep -qF -- 'icons/kama-file.png' "$MANIFEST" || bad "editor/vscode/package.json no longer points at icons/kama-file.png"
+if [ ! -f "$ICON" ]; then
+    bad "editor/vscode/icons/kama-file.png is missing — the manifest references it and VS Code falls back to the generic file glyph in silence"
+else
+    # PNG layout: 8-byte signature, then the IHDR chunk (4 length + 4 type + width 4 + height 4 + bit
+    # depth 1 + COLOUR TYPE 1), which puts the colour type at byte offset 25. 6 is truecolour+alpha and
+    # 4 is greyscale+alpha; 0/2/3 carry no transparency at all.
+    ctype=$(od -An -tu1 -j25 -N1 "$ICON" | tr -d ' \n')
+    case "$ctype" in
+        4|6) ;;
+        *)   bad "editor/vscode/icons/kama-file.png has PNG colour type $ctype (no alpha) — it will render as a black square on light themes" ;;
+    esac
+fi
+grep -qiF -- 'file icon' "$DOC" || bad "docs/editors.md no longer documents the .kama file icon"
+
 [ "$fail" = 0 ] || { echo "check-editors: see docs/editors.md" >&2; exit 1; }
-echo "check-editors: PASS (8 editors documented, 7 configured, 3 watcher globs agree in server + VS Code client, Zed extension agrees with its docs)"
+echo "check-editors: PASS (8 editors documented, 7 configured, 3 watcher globs agree in server + VS Code client, Zed extension agrees with its docs, .kama file icon present with alpha)"

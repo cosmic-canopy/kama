@@ -171,6 +171,22 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of a future
   generic `Fixed<intBits, fracBits>` (§1).
 
+- **A member file that references a sibling BY BARE NAME is not checkable alone.** Checking one file of a
+  multi-file module loads only that file, so a same-namespace reference that needs no `import` has nothing
+  to drive the sibling's load: `lib/std/math/mat.kama` has no imports at all and names `Vec2`/`Vec4` from
+  `vec.kama`, and `kama check` on it alone reports **202** phantom errors. Also `math/vec.kama` (5, it calls
+  `sqrt` from `scalar.kama`) and `math/quat.kama` (38). Builds are unaffected — a consumer's import loads
+  the module whole — so this is a `kama check` and **language server** defect: those files are a wall of red
+  in the editor.
+
+  The self-IMPORT half of this is fixed (`tools/check-self-import.sh`): a CLI input now contributes the
+  names it declares rather than claiming its whole namespace, so an `import my::mod::{X}` from inside
+  `namespace my::mod` resolves. The bare-name half needs a different trigger, because there is no import to
+  hang resolution off. The obvious fix — when a CLI input declares a namespace, also load the other files
+  in its directory — is plausible but not free: it changes which units an ordinary `kama build <file>`
+  pulls in whenever the entry file declares a namespace, so it wants its own look at the closure-pruning
+  numbers rather than a drive-by.
+
 - **Layout control + layout verification (`@align(N)` / `@packed` / an aggregate layout assert)** — kama can
   *know* a type's size and alignment at runtime and *fold* `sizeof` for a fixed-width scalar (M6), but it can
   neither **control** an aggregate's layout nor **verify** one at build time. The only codegen attributes that
