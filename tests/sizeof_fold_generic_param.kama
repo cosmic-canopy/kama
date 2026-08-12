@@ -1,0 +1,19 @@
+// M6: `sizeof(T)` folds through a BOUND type parameter inside a generic instance — the operand is resolved
+// through _typeSubst before its width is read, the same hop cType and mangleElem make. This is the shape
+// M9's `Fixed<B: FixedBacking<B>, const F: int32>` needs: `sizeof(B) * 8` is how a generic checks that its
+// backing type is wide enough for its own fraction bits.
+type value Box<T> {
+    public T v;
+    public ctor Box(T v) { this.v = v; }
+    // the width of the backing type, computed inside the generic and correct per instantiation
+    public static fn int32 widthBits() { return cast<int32>(sizeof(T)) * 8; }
+}
+
+fn int32 main() {
+    // one generic, three instantiations, three different folds
+    int32 w8  = Box::<uint8>::widthBits();     //  8
+    int32 w32 = Box::<int32>::widthBits();     // 32
+    int32 w64 = Box::<float64>::widthBits();   // 64
+    Box<int32> b = Box::<int32>.Box(v: 7);     // the instance still works normally
+    return w8 + w32 + w64 + b.v;               // 8 + 32 + 64 + 7 = 111
+}

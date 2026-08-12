@@ -1240,9 +1240,18 @@ build-time config can't run kama-level code.
 The above pieces (a place-returning `operator[]`, `Ptr<T>` + `unsafe`, generics, RAII) let a `Vec`/matrix
 be written **in the language** rather than baked into the compiler. Three builtins complete the kit:
 
-- **`sizeof(T)` / `alignof(T)`** — the compile-time byte size / alignment of a type (a `usize`); both
-  monomorphize, so `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`, and `alignof(T)` (→ C
-  `_Alignof`) serves aligned DMA buffers / register-block layout asserts. Both fold in const-init contexts.
+- **`sizeof(T)` / `alignof(T)`** — the byte size / alignment of a type (a `usize`); both monomorphize, so
+  `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`, and `alignof(T)` (→ C `_Alignof`) serves aligned
+  DMA buffers / register-block layout asserts. **`sizeof` folds to a compile-time constant for a
+  fixed-width scalar** — `int8`…`int64`, `uint8`…`uint64`, `char`, `float32`, `float64`, including through
+  a bound type parameter (`sizeof(T) * 8` inside a generic) — so it can drive a `comptime` initializer or a
+  const-generic argument. It does **not** fold for anything whose size the target decides rather than the
+  language: `usize`/`isize` (C `size_t` — 4 bytes on wasm32/thumbv6m, 8 on x86_64), `bool`, `string`, and
+  user aggregates, whose layout belongs to the C compiler. **`alignof` never folds** — alignment is an ABI
+  choice, not a language guarantee (1 on AVR; `_Alignof(double)` is 4 on i386). Both keep working
+  everywhere a runtime value works. The premises the fold rests on (`CHAR_BIT == 8`, and `float`/`double`
+  at 4/8) are `_Static_assert`ed in `kama_runtime.h`, so the C compiler verifies them for the real target
+  on every build.
 - **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
@@ -2113,7 +2122,9 @@ fn void demo() {
   (`public`/`private`/`protected`, default private for a `value`) — a private one is usable only inside the
   type's own code, the same rule and diagnostic as a private field. A **local** `comptime` is scoped to its
   function or block.
-- **Initializer must fold** — a literal, `sizeof`/`alignof`, const arithmetic, or another `comptime`. A
+- **Initializer must fold** — a literal, `sizeof` of a fixed-width scalar (**not** `alignof`, and not
+  `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, or another
+  `comptime`. A
   `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message
   points you back to `const` for a runtime-initialized immutable). A plain `const` *local* whose initializer
   happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs

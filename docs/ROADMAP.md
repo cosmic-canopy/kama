@@ -171,6 +171,41 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`), and of a future
   generic `Fixed<intBits, fracBits>` (§1).
 
+- **Layout control + layout verification (`@align(N)` / `@packed` / an aggregate layout assert)** — kama can
+  *know* a type's size and alignment at runtime and *fold* `sizeof` for a fixed-width scalar (M6), but it can
+  neither **control** an aggregate's layout nor **verify** one at build time. The only codegen attributes that
+  exist are `@interrupt` and `@section`. Both gaps matter to the two tracks that care about layout — an engine
+  (SIMD/cache-line alignment, a GPU vertex or `std140` uniform stride) and MCU (a packed MMIO register block
+  or wire struct).
+
+  **Neither needs a layout model in kama** — that is the point, and the reason this is small. kama does not own
+  layout (it emits C; the C compiler lays the structs out), and it should not acquire a second source of truth
+  that can silently disagree per target. Both lower as passthrough, the shape `@section` already has:
+  - **Control:** `@align(N)` / `@packed` → `__attribute__((aligned(N)))` / `((packed))`.
+  - **Verification:** the aggregate case of `comptime assert(pred, "msg")` lowers to C11 `_Static_assert`.
+    One surface, two lowerings: a predicate over fixed-width scalars folds in kama and yields a kama
+    diagnostic that `kama check` and the LSP can see; a predicate over an aggregate's `sizeof`/`alignof`
+    lowers to the C and clang answers it at build time. The caveat is exactly that split — the aggregate
+    form is invisible to `kama check`, so it fails at build, not at check.
+
+  Prompted by finding that SPEC's `Vec4` = 16 B / `Mat4` = 4×`Vec4` claim — the WebGPU vertex stride, and what
+  makes the release-build auto-vectorization valid — had no guard of any kind. `tests/math_layout.kama` now
+  pins it at runtime on three ABIs, which is the cheap half; the `_Static_assert` form is the durable one.
+
+- **Per-target primitive availability — considered, deliberately NOT built.** *If a target genuinely cannot
+  supply a primitive, reject its uses with a kama diagnostic rather than a C-level assert.* The reasoning, so
+  it is not re-derived: (1) it would not replace `kama_runtime.h`'s asserts, which answer "did the C compiler
+  deliver my premise **on this build**, with this `--cc` and these flags" — the only mechanism that catches a
+  wrong flag or a changed toolchain default, since kama accepts arbitrary triples and any `--cc`; a kama-side
+  availability table is a second assumption about the toolchain, not a verification of it. (2) The motivating
+  case is not real: AVR *has* `float64`, behind `-mdouble=64`. (3) The cost is a stdlib and source-language
+  fork — `float64` appears in 8 `lib/std` files including `fmt/fmt.kama`, both serializers, `math/scalar`,
+  `time` and `num/endian`, and a bare `1.0` **is** a `float64`, so banning the type makes `1.0` an error.
+  (4) Rust, Zig and Go all guarantee a 64-bit IEEE float on every supported target; C guarantees `double`
+  exists while permitting 32 bits — the exact hole the assert plugs. No mainstream language bans a float type
+  per target. If a real case ever appears, the mechanism is the existing `@compileFor` decl-level prune plus a
+  tag-type boundary, not a use-site predicate on primitives.
+
 - **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
   (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
   callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
@@ -540,7 +575,7 @@ across two different targets:
   | Piece | What's needed |
   |---|---|
   | **Toolchain / build** | The turnkey Cortex-M path ships and is QEMU-proven ([mcu.md](mcu.md)). **Remaining:** more board presets (STM32/Pico), vendor-HAL glue (pico-sdk / esp-idf), a real-hardware flash pass, and (optional) folding the two-step link into `kama build --target <board>`. Arduino `setup()`/`loop()` is a later HAL nicety. |
-  | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Three AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly). A bounded follow-on when demand warrants. |
+  | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Four AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly); (4) **`-mdouble=64` in the target's `cflags`** — avr-gcc still defaults to a 32-bit `double`, which `kama_runtime.h`'s `_Static_assert` rejects. It is the ONLY target in kama's spectrum that fails those asserts, and the assert is doing its job: without it, `bitcast<uint64>(d)` would pun an 8-byte union member against a 4-byte one and `kama_f64_bits` would `memcpy` 8 bytes out of a 4-byte `double`. A config line, not a language gap. |
 
   **Why kama fits:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the emitted C
   (greppable no-heap audit); trap lowering is dependency-free; `InlineArray<T,N>`, sized ints, and `unsafe`/`Ptr`
@@ -555,9 +590,10 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
   ship, but *host-order* serialization helpers need a compile-time endianness fact pure kama arithmetic can't
   observe — a natural `@compileFor`-style built-in flag (`LITTLE_ENDIAN`/`BIG_ENDIAN`). Every current target is
   little-endian, so this is deferred until a big-endian target appears.
-- **`comptime fn` nice-to-haves (deferred).** `sizeof`/`alignof` and named-arg reorder *inside* a comptime fn
-  body; a **local** `comptime T X = f();` initialized by a comptime-fn call (module + type-associated const
-  forms ship); a per-fn `@steps(…)` budget override; dual-use fallback emission.
+- **`comptime fn` nice-to-haves (deferred).** Named-arg reorder *inside* a comptime fn body; a **local**
+  `comptime T X = f();` initialized by a comptime-fn call (module + type-associated const forms ship); a
+  per-fn `@steps(…)` budget override; dual-use fallback emission. (`sizeof` inside a comptime fn body ships
+  with M6 — `alignof` does not, and that is now a rule rather than a gap: see §2's layout entry.)
 - **Platform tag-type compilation.** The `@compileFor`-gated contract-impl seam is the sanctioned platform-variance
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.

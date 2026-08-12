@@ -1,0 +1,24 @@
+// docs/SPEC.md states that the math value types have a "SIMD-ready contiguous layout" — `Vec4` = 16 B,
+// `Mat4` = 4x`Vec4` — and the claim is load-bearing: it is the WebGPU vertex/uniform buffer stride, and it
+// is what lets a --release build auto-vectorize the elementwise ops. Nothing anywhere checked it. A field
+// added to Vec4, or a type widened to float64, would silently change every GPU upload stride and every
+// serialized frame, and every existing fixture would still pass.
+//
+// This is a *runtime* check (sizeof on an aggregate stays a C sizeof — kama does not model struct layout,
+// the C compiler does). It runs on native, ASan and wasm, so it pins the claim on three ABIs.
+import std::math::{Vec2, Vec3, Vec4, Mat4};
+
+fn int32 main() {
+    // the contiguous-layout claim: no padding, so each vector is exactly its float32 count
+    if (sizeof(Vec2) != 8)  { return 1; }    // 2 x float32
+    if (sizeof(Vec3) != 12) { return 2; }    // 3 x float32
+    if (sizeof(Vec4) != 16) { return 3; }    // 4 x float32  <- the SPEC number
+    if (sizeof(Mat4) != 64) { return 4; }    // 4 x Vec4, no per-column padding
+
+    // alignment must not exceed the element's — an over-aligned Vec4 would pad Mat4's columns apart
+    if (alignof(Vec4) != alignof(float32)) { return 5; }
+
+    // and the premise underneath all of it, which kama_runtime.h also asserts at compile time
+    if (sizeof(float32) != 4) { return 6; }
+    return 0;
+}

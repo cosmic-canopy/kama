@@ -1154,6 +1154,9 @@ private:
     // integer literal, or a const-param identifier bound in the current instantiation via _constSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
+    bool scalarByteSize(SharedIdentifier type, int64_t& out);  // `sizeof(T)` for a fixed-width scalar T
+    void rejectUnfoldableConstArg(const std::string& param, SharedIdentifier arg);  // a VALUE arg that won't fold
+    std::set<const void*> _badConstArgs;   // arg nodes already reported — binding is re-run per discovery pass
     // Bind one instantiation's parameters: a const param binds a VALUE (+ its declared width) in
     // _constSubst, every other param binds a type in _typeSubst. Clears both first — this IS the
     // binding, not an addition to one. `constTypes` is parallel to `params` (null = a type param).

@@ -1,0 +1,1 @@
+does not fold to a compile-time integer

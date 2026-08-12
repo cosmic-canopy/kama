@@ -1,0 +1,13 @@
+// The defect M6 exists to close. `idN::<(sizeof(Blk))>()` PARSES — the grammar accepts any parenthesized
+// expression as a const argument — then fails to fold, because kama does not model aggregate layout (the C
+// compiler does). Before M6 the binder fell through and bound the const param `N` as a TYPE, so `N` reached
+// the emitted C undeclared: clang reported "use of undeclared identifier 'N'" against generated code, and
+// kama said nothing at all. Same silent-miscompile family as the M1-M5 const-generic holes.
+//
+// The rule is not "sizeof never folds in a const argument" — `sizeof(int32)` there is fine (see
+// tests/sizeof_fold_const_generic.kama). It is that the OPERAND must be a fixed-width scalar.
+type value Blk { public uint64 wide; public uint8 narrow; }
+
+fn int32 idN<const N: int32>() { return N; }
+
+fn int32 main() { return idN::<(sizeof(Blk))>(); }

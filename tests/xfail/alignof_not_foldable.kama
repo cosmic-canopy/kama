@@ -1,0 +1,11 @@
+// `alignof` shares its AST node with `sizeof`, but deliberately does NOT fold, and this fixture is what
+// makes that a claim rather than prose. `sizeof(int32) == 4` follows from a language guarantee plus one
+// premise kama_runtime.h asserts (CHAR_BIT == 8). Alignment has no such premise — it is an ABI CHOICE that
+// legitimately differs per target: 4 on x86_64/aarch64/wasm32/thumb, but 1 on AVR, and `_Alignof(double)`
+// is 4 on i386. kama has no per-target ABI model and deliberately does not want one.
+//
+// `alignof` still works everywhere a runtime value works — see tests/alignof_basic.kama. It just cannot
+// reach a position that requires a compile-time constant.
+comptime int32 A = alignof(int32);
+
+fn int32 main() { return A; }

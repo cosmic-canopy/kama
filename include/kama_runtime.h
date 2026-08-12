@@ -9,6 +9,20 @@
 #include <stdint.h>    // int32_t … (types only — no callable C functions)
 #include <stdbool.h>   // bool       (type only)
 #include <stddef.h>    // size_t, NULL (types only)
+#include <limits.h>    // CHAR_BIT   (freestanding header — C11 §4.6, so MCU-safe)
+
+// The premises kama's scalar sizes rest on, checked by the C compiler for the ACTUAL target on every
+// build. kama folds `sizeof` for fixed-width scalars (CEmitter::scalarByteSize) and hardcodes the same
+// widths in two other places — `emitBitcast`'s union type-pun table and the kama_f32_bits/kama_f64_bits
+// reinterprets below, which the binary serializer's wire format depends on. Those were silent
+// assumptions; these three lines make them verified facts. kama accepts arbitrary triples and any `--cc`
+// you hand it, so a per-build assert is the only thing that can police a wrong flag or a changed
+// toolchain default — a curated target list cannot.
+_Static_assert(CHAR_BIT == 8,       "kama: a byte must be 8 bits — scalar sizeof folding assumes it "
+                                    "(ISO C fixes int32_t at 32 BITS; sizeof counts chars)");
+_Static_assert(sizeof(float)  == 4, "kama: float32 maps to C float and must be 4 bytes");
+_Static_assert(sizeof(double) == 8, "kama: float64 maps to C double and must be 8 bytes "
+                                    "(avr-gcc defaults to -mdouble=32 — build that target with -mdouble=64)");
 
 // A fatal path NEVER RETURNS, and the C compiler has to be told so — otherwise a kama function whose last
 // statement is `panic(msg: …)` looks like it falls off the end, and clang's -Werror=return-type rejects it

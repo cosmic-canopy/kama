@@ -1,0 +1,24 @@
+// M6: `sizeof` folds to a compile-time integer for a fixed-width scalar, so it reaches every position that
+// REQUIRES a constant. Before M6 the fold did not exist (constValue had no SizeofNode arm), so each of these
+// died in the comptime interpreter with "unsupported expression" — while docs/SPEC.md claimed they folded.
+// The three `comptime` scopes are exercised because each registers through a different site.
+comptime int32 WORD = sizeof(int64);              // module-level  -> 8
+comptime int32 BITS = sizeof(int32) * 8;          // const arithmetic over a fold -> 32
+
+type value Cfg {
+    public comptime int32 UNIT = sizeof(uint16);  // type-associated, read as `Cfg::UNIT` -> 2
+}
+
+// and inside a `comptime fn` body, which reaches the interpreter rather than the constValue fast path
+comptime fn int32 wordBits() { return cast<int32>(sizeof(int64)) * 8; }
+comptime int32 WORD_BITS = wordBits();            // -> 64
+
+fn int32 main() {
+    comptime int32 LOCAL = sizeof(float64) - sizeof(float32);   // function-local -> 8 - 4 = 4
+    // every fixed-width scalar: the widths are language guarantees (the width is in the name), which is
+    // exactly why they may fold at all. kama_runtime.h asserts the premises they rest on.
+    int32 all = cast<int32>(sizeof(int8))  + cast<int32>(sizeof(int16))                       //  1 +  2
+              + cast<int32>(sizeof(uint32)) + cast<int32>(sizeof(uint64))                     //  4 +  8
+              + cast<int32>(sizeof(char));                                                    //  4  = 19
+    return WORD + BITS + WORD_BITS + Cfg::UNIT + LOCAL + all;                          // 8+32+64+2+4+19
+}

@@ -1,0 +1,17 @@
+// M6: `sizeof` folds in a const-generic ARGUMENT, so a type's width can drive monomorphization. This is
+// also the fixture for the defect that motivated the milestone: `idN::<(sizeof(int32))>()` parsed, failed
+// to fold, and bound `N` as a TYPE — emitting an undeclared `N` into the generated C, reported by clang,
+// with no kama diagnostic at all. The negative half lives in tests/xfail/sizeof_const_generic_unfoldable.
+// (Parens are the one spelling for a computed const argument, as in `InlineArray<T, (N+1)>`; the bare
+// `::<sizeof(int32)>` form stays a parse error deliberately.)
+fn int32 idN<const N: int32>() { return N; }
+
+fn int32 main() {
+    int32 a = idN::<(sizeof(int32))>();            // 4
+    int32 b = idN::<(sizeof(uint16) * 8)>();       // 16 — const arithmetic over the fold
+    // a size position: the fold drives both the type's length and the fill count
+    InlineArray<int32, (sizeof(int64))> buf = [3; (sizeof(int64))];
+    int32 t = 0;
+    foreach (int32 e in buf) { t = t + e; }        // 8 slots of 3 = 24
+    return a + b + t + cast<int32>(buf.length());  // 4 + 16 + 24 + 8 = 52
+}

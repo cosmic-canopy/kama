@@ -5420,6 +5420,40 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 // ---- Collections -----------------------------------------------------
 
 // ---- Const generics --------------------------------------------------
+// M6: `sizeof(T)` in BYTES for a fixed-width scalar T — the compiler's only type-size knowledge, and
+// deliberately the smallest set it can justify. kama does not own struct layout (it emits C; the C
+// compiler lays out the aggregates), so it may fold only what the LANGUAGE fixes, never what the ABI
+// decides:
+//   int8..int64 / uint8..uint64 / char  ISO C11 §7.20.1.1 pins the exact-width types at N bits with no
+//                                       padding; sizeof counts chars, so this also needs CHAR_BIT == 8
+//   float32 / float64                   `float`/`double` at 4/8 — an ABI convention (ISO C's Annex F is
+//                                       optional), already relied on by emitBitcast and kama_f32_bits
+// All three premises are `_Static_assert`ed in kama_runtime.h and checked by the C compiler for the real
+// target on every build, so the fold is verified rather than assumed.
+//
+// Everything else stays a C `sizeof` passthrough: `bool` (implementation-defined size), `string`/`void`/
+// user aggregates (layout is the C compiler's), and — the one that looks like it belongs — `usize`/
+// `isize`, which map to `size_t` and are genuinely target-dependent (4 on wasm32/thumbv6m, 8 on x86_64).
+// `alignof` never folds at all: alignment is an ABI CHOICE with no premise to assert (1 on AVR, and
+// _Alignof(double) is 4 on i386), which is why the caller checks isAlign before reaching here.
+bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
+{
+    if (!type) return false;
+    // The _typeSubst hop comes FIRST, exactly as in cType/mangleElem: inside a monomorph a parameter's
+    // type node is still the unsubstituted `T`, so `sizeof(B)` in a generic instance needs resolving
+    // before the token is read. This is what makes M9's `sizeof(B) * 8` fold.
+    SharedIdentifier t = deepSubstType(type);
+    if (!t || t->genericArg) return false;   // a generic instance is an aggregate — not ours to size
+    switch (t->builtInVal) {
+        case IDENTIFIER_INT8_VAL:  case IDENTIFIER_UINT8_VAL:                             out = 1; return true;
+        case IDENTIFIER_INT16_VAL: case IDENTIFIER_UINT16_VAL:                            out = 2; return true;
+        case IDENTIFIER_INT32_VAL: case IDENTIFIER_UINT32_VAL: case IDENTIFIER_CHAR_VAL:
+        case IDENTIFIER_FLOAT32_VAL:                                                      out = 4; return true;
+        case IDENTIFIER_INT64_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_FLOAT64_VAL: out = 8; return true;
+        default: return false;
+    }
+}
+
 // The compile-time integer value of a const generic argument expression: an integer literal (any
 // width), or a const-param identifier bound to a value in the current instantiation (`N` -> 4). This
 // is the value half of the monomorphization — the parallel of resolving a bound type-param.
@@ -5441,6 +5475,13 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
     // computed size (`Fixed<T, N+1>`, `2*N`). Recurses through the same shape `isConstInitExpr` permits.
     if (auto* c = dynamic_cast<CastNode*>(n))
         return constValue(c->unaryExpression, out);   // integer casts are value-preserving for the int64 fold
+    // M6: `sizeof(T)` for a fixed-width scalar. One arm serves every consumer, because they all route
+    // here — module/type/local `comptime`, a const-generic argument (via constArgN), an InlineArray size,
+    // a `[v; N]` fill count — and the binary recursion below gives `sizeof(int32) * 8` for free.
+    if (auto* s = dynamic_cast<SizeofNode*>(n)) {
+        if (s->isAlign) return false;   // alignment is an ABI choice kama has no premise to fold — see scalarByteSize
+        return scalarByteSize(s->type, out);
+    }
     if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         int64_t v;
         if (!constValue(u->expression, v)) return false;
@@ -5504,6 +5545,48 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
     return false;
 }
 
+// The `sizeof`/`alignof` inside a const-argument expression, if any — so the diagnostic below can name the
+// reason the fold failed instead of stating a generic rule. Walks the shape constValue itself recurses.
+static SizeofNode* findSizeof(ExpressionNode* e)
+{
+    if (!e) return nullptr;
+    if (auto* s = dynamic_cast<SizeofNode*>(e)) return s;
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(e)) return findSizeof(u->expression.get());
+    if (auto* c = dynamic_cast<CastNode*>(e))                  return findSizeof(c->unaryExpression.get());
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(e)) {
+        if (auto* l = findSizeof(b->LHS.get())) return l;
+        return findSizeof(b->RHS.get());
+    }
+    return nullptr;
+}
+
+// M6: a const-generic argument the author wrote as a VALUE which does not fold to a compile-time integer.
+// Before M6 this fell through to the `_typeSubst` arm below and bound the const param as a TYPE, so the
+// param's name reached the emitted C undeclared — clang reported it and kama said nothing at all
+// (`idN::<(sizeof(Blk))>()`). Gated on `constArgValue`, which the grammar sets exactly on the `literal` and
+// `( expression )` arms (kama.y:607-608): a value argument can never be a type substitution, so failing to
+// fold is unambiguously an error. A BARE identifier argument is deliberately left alone — it is a type name
+// until proven otherwise, and that path is what every existing generic relies on.
+void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifier arg)
+{
+    if (!arg || !arg->constArgValue) return;
+    // Report each offending argument ONCE. An instantiation's params are re-bound on every discovery pass
+    // (bindInstParams has three call sites), so without this the same line prints three times.
+    if (!_badConstArgs.insert(arg->constArgValue.get()).second) return;
+    SizeofNode* sz = findSizeof(arg->constArgValue.get());
+    std::string why =
+        (sz && sz->isAlign) ? "`alignof` does not fold — alignment is a target ABI property, not a language "
+                              "guarantee (1 on AVR, and `_Alignof(double)` is 4 on i386)"
+      : (sz)               ? "`sizeof` folds only for fixed-width scalars (`int8`..`int64`, `uint8`..`uint64`, "
+                             "`char`, `float32`, `float64`) — `usize`/`isize`, `bool`, `string` and user types "
+                             "have target- or layout-dependent size"
+                           : "it must be an integer literal, a const parameter, a `comptime` constant, or "
+                             "arithmetic over those";
+    // Phrased to read after the "unsupported " prefix `unsupported()` prints.
+    unsupported(("const generic argument for `" + param + "` — it does not fold to a compile-time integer; "
+                 + why).c_str(), arg->constArgValue->line);
+}
+
 // Bind one instantiation's parameters. A const param binds a VALUE plus the width it was declared with;
 // every other param binds a type. One loop, so the two maps can never disagree about which is which.
 void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdentifierList& constTypes,
@@ -5520,7 +5603,8 @@ void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdenti
         SharedIdentifier ct = (constTypes && i < constTypes->size()) ? (*constTypes)[i] : SharedIdentifier();
         int64_t v;
         if (ct && constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = ct->builtInVal; _constSubst[pn] = b; }
-        else                             _typeSubst[pn] = args[i];
+        else { if (ct) rejectUnfoldableConstArg(pn, args[i]);   // a const param whose VALUE arg won't fold
+               _typeSubst[pn] = args[i]; }
     }
 }
 
@@ -5534,6 +5618,7 @@ void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector
         if (!cts[i]) continue;                       // a type param — already bound in _typeSubst
         int64_t v;
         if (constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; _constSubst[ps[i]] = b; }
+        else rejectUnfoldableConstArg(ps[i], args[i]);
     }
 }
 
@@ -16563,6 +16648,9 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
 std::string CEmitter::emitBitcast(BitcastNode* v)
 {
     // (byte width, C scalar type) for a supported numeric-scalar token; width 0 => unsupported.
+    // The float rows assume `float`/`double` are 4/8 bytes — if that were false this would approve a pun
+    // between differently-sized union members. Not an assumption any more: kama_runtime.h asserts it (with
+    // CHAR_BIT == 8, which the integer rows need) for the real target on every build.
     auto scalar = [](int tok) -> std::pair<int, std::string> {
         switch (tok) {
             case IDENTIFIER_INT8_VAL:    return {1, "int8_t"};

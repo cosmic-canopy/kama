@@ -219,6 +219,25 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (auto* v = dynamic_cast<BooleanNode*>(n)) { out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false; out.i = v->value ? 1 : 0; return true; }
     if (auto* v = dynamic_cast<CharNode*>(n))    { out = CTValue{}; out.width = 32; out.isSigned = false; out.i = (int64_t)v->value; return true; }
 
+    // --- sizeof(T) for a fixed-width scalar (M6) ---
+    // constValue already folds this on the fast path; the interpreter needs its own arm for the cases
+    // that reach here instead — a `comptime fn` body, and a deferred module constant whose initializer
+    // mixes `sizeof` with a comptime-fn call (`comptime int32 X = round8(sizeof(int32));`). `sizeof`
+    // yields a `usize`, so the value is unsigned 64. `alignof` is deliberately not folded — see
+    // CEmitter::scalarByteSize for why there is no premise to fold it against.
+    if (auto* s = dynamic_cast<SizeofNode*>(n)) {
+        int64_t sz;
+        if (s->isAlign || !scalarByteSize(s->type, sz))
+            return ctFail(s->isAlign
+                          ? "`alignof` does not fold — alignment is a target ABI property, not a language "
+                            "guarantee (use it in a runtime position)"
+                          : "`sizeof` folds only for fixed-width scalars (`int8`..`int64`, `uint8`..`uint64`, "
+                            "`char`, `float32`, `float64`) — `usize`, `bool`, `string` and user types have "
+                            "target- or layout-dependent size", e->line);
+        out = CTValue{}; out.width = 64; out.isSigned = false; out.i = sz;
+        return true;
+    }
+
     // --- identifier: a local frame var, else a module/type comptime constant ---
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) {
