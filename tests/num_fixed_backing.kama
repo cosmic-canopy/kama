@@ -1,0 +1,39 @@
+// std::num::FixedBacking — the storage seam `Fixed<B, const F>` widens through, exercised on its own.
+// Deliberately does NOT mention `Fixed`: if this fixture went through the type, a bug in the generic
+// could mask a bug in the contract (and vice versa), and the contract is meant to stand alone — a user
+// type may implement it without ever touching `Fixed`.
+//
+// A contract is a SCOPE: its methods are not part of the primitive's own API, so `(42i32).wide()` is an
+// error and every call below goes through a BOUND. `narrow`/`saturate` need explicit instantiation
+// because `B` appears only in the return type — the same shape as `parse::<int32>` over `FromStr`.
+import std::num::{FixedBacking};
+
+fn int64 widen<B: FixedBacking<B>>(B b)      { return b.wide(); }
+fn B narrow<B: FixedBacking<B>>(int64 v)     { return B.fromWide(v: v); }
+fn B saturate<B: FixedBacking<B>>(int64 v)   { return B.clampWide(v: v); }
+
+fn int32 main() {
+    int32 n = 0;
+
+    // widen: one body, inferred at two widths
+    if (widen(b: 42i32) == 42i64)                    { n = n + 1; }
+    if (widen(b: 7i16) == 7i64)                      { n = n + 1; }
+    if (widen(b: 0i8 - 5i8) == 0i64 - 5i64)          { n = n + 1; }   // sign-extends, not zero-extends
+
+    // fromWide: the round trip is exact for anything the width holds
+    if (narrow::<int32>(v: 42i64) == 42i32)          { n = n + 1; }
+    if (narrow::<int16>(v: widen(b: 300i16)) == 300i16) { n = n + 1; }
+
+    // clampWide: saturates at each width's own bounds rather than wrapping or trapping
+    if (saturate::<int8>(v: 1000i64) == 127i8)                            { n = n + 1; }
+    if (saturate::<int8>(v: 0i64 - 1000i64) == 0i8 - 127i8 - 1i8)         { n = n + 1; }
+    if (saturate::<int16>(v: 100000i64) == 32767i16)                      { n = n + 1; }
+    if (saturate::<int16>(v: 0i64 - 100000i64) == 0i16 - 32767i16 - 1i16) { n = n + 1; }
+    if (saturate::<int32>(v: 10000000000i64) == 2147483647i32)            { n = n + 1; }
+    if (saturate::<int32>(v: 0i64 - 10000000000i64) == 0i32 - 2147483647i32 - 1i32) { n = n + 1; }
+
+    // in range, clampWide is the identity — the saturating path must not perturb ordinary values
+    if (saturate::<int16>(v: 1234i64) == 1234i16)    { n = n + 1; }
+
+    return n;   // 12
+}

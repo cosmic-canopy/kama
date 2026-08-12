@@ -1,0 +1,66 @@
+namespace std::num;
+
+// The storage seam for fixed-point: what a `Fixed<B, const F>` needs of its backing integer `B`. Three
+// operations, because that is all Q-format arithmetic asks of its storage — widen into an accumulator,
+// narrow back, and narrow back with saturation. Everything else (the scaling, the operators, the
+// comparisons) is written once in `Fixed` and is width-independent.
+//
+// This is the mechanism that replaces "the width is in the name". `clampToI32` used to live privately in
+// fixed.kama, hard-wired to one width; `std::num::ops` still spells `clampI32`/`clampI64` per width. A
+// contract with a `type intrinsic` conformance per width is kama's answer to that shape (the same one
+// `Real` uses in std::math::scalar, and `FromStr` in std::fmt::parse) — one block per target, because each
+// body carries its own range limits and there is no shared body for a set form to hold.
+//
+// Exported so a user type can join: `type value MyRep implements FixedBacking<This> { … }` makes it a legal
+// `Fixed` backing without touching the stdlib.
+export { FixedBacking };
+
+type contract FixedBacking<B is This> for value {
+    fn int64 wide();              // widen into the accumulator
+    ctor B fromWide(int64 v);     // narrow back — the cast TRAPS on overflow, like every base operator
+    ctor B clampWide(int64 v);    // narrow back saturating — never traps; what the `sat*` ops need
+}
+
+// Which integers are backings, and which are deliberately not:
+//
+// * `int64` is NOT a backing, and cannot be. The accumulator `wide()` widens INTO is `int64`, and kama has
+//   no `int128` — so an int64-backed multiply has nowhere to compute its intermediate product. This is a
+//   real limit of the design, not an omission.
+// * The unsigned widths are NOT backings, and that is a scope line rather than a technical one. `uint8`,
+//   `uint16` and `uint32` all widen into `int64` losslessly, so they would work; but Q-format is signed by
+//   convention, and `Fixed`'s unary minus and its saturating ops are written for a signed range. Adding
+//   them later is additive and breaks nothing.
+//
+// The bounds below are written as literals per width, matching std::num::limits (and the same choice
+// std::fmt::parse makes for its per-width range limits) — a conformance body that reached for a helper
+// would just move the width back into a name.
+
+type intrinsic <int8> implements FixedBacking<This> {
+    public fn int64 wide() { return cast<int64>(this); }
+    public ctor int8 fromWide(int64 v) { return cast<int8>(v); }
+    public ctor int8 clampWide(int64 v) {
+        int64 lo = 0i64 - 128i64;          // int8Min
+        int64 hi = 127i64;                 // int8Max
+        return cast<int8>(v < lo ? lo : (v > hi ? hi : v));
+    }
+}
+
+type intrinsic <int16> implements FixedBacking<This> {
+    public fn int64 wide() { return cast<int64>(this); }
+    public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
+    public ctor int16 clampWide(int64 v) {
+        int64 lo = 0i64 - 32768i64;        // int16Min
+        int64 hi = 32767i64;               // int16Max
+        return cast<int16>(v < lo ? lo : (v > hi ? hi : v));
+    }
+}
+
+type intrinsic <int32> implements FixedBacking<This> {
+    public fn int64 wide() { return cast<int64>(this); }
+    public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
+    public ctor int32 clampWide(int64 v) {
+        int64 lo = 0i64 - 2147483648i64;   // int32Min
+        int64 hi = 2147483647i64;          // int32Max
+        return cast<int32>(v < lo ? lo : (v > hi ? hi : v));
+    }
+}

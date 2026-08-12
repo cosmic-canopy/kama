@@ -1,0 +1,13 @@
+// `int64` is deliberately NOT a `FixedBacking`, and it cannot be: `wide()` widens INTO an int64
+// accumulator so a backing's products fit, and kama has no `int128`. The omission is easy to read as an
+// oversight — a later reader adding `type intrinsic <int64> implements FixedBacking<This>` would compile,
+// and then every int64-backed multiply would silently overflow its own accumulator. This fixture is what
+// makes the omission a claim instead of a comment.
+import std::num::{FixedBacking};
+
+fn int64 widen<B: FixedBacking<B>>(B b) { return b.wide(); }
+
+fn int32 main() {
+    int64 x = 42i64;
+    return cast<int32>(widen(b: x));   // ERROR: int64 does not satisfy bound FixedBacking
+}
