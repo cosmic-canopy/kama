@@ -1023,15 +1023,37 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
         return (v->isAlign ? "alignof(" : "sizeof(") + t + ")";
     }
 
-    if (auto* v = dynamic_cast<BinaryExpressionNode*>(n))
-        return unparseExpr(v->LHS) + " " + binaryOperator(v->token) + " " + unparseExpr(v->RHS);
-    if (auto* v = dynamic_cast<LogicalAndOrNode*>(n))
-        return unparseExpr(v->LHS) + (v->token == ANDAND ? " && " : " || ") + unparseExpr(v->RHS);
+    // `cast<T>(e)` — a const-generic bound's width check reads `F < cast<int32>(sizeof(B)) * 8`, so a
+    // conversion sits in the middle of exactly the conditions this function exists to render.
+    if (auto* v = dynamic_cast<CastNode*>(n)) {
+        std::string t, e = unparseExpr(v->unaryExpression);
+        if (v->type) {
+            if (v->type->qualifier) for (auto& q : *v->type->qualifier) if (q) t += *q + "::";
+            if (v->type->value) t += *v->type->value;
+        }
+        if (t.empty() || e.empty()) return "";
+        return "cast<" + t + ">(" + e + ")";
+    }
+
+    // The composite arms below propagate emptiness rather than splicing it: an unrendered child used to
+    // leave a HOLE in the middle of the text (`F <  * 8`), which reads as a compiler bug rather than as
+    // the documented degrade-to-"assertion failed". The access/invocation arms already did this.
+    if (auto* v = dynamic_cast<BinaryExpressionNode*>(n)) {
+        std::string l = unparseExpr(v->LHS), r = unparseExpr(v->RHS);
+        if (l.empty() || r.empty()) return "";
+        return l + " " + binaryOperator(v->token) + " " + r;
+    }
+    if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
+        std::string l = unparseExpr(v->LHS), r = unparseExpr(v->RHS);
+        if (l.empty() || r.empty()) return "";
+        return l + (v->token == ANDAND ? " && " : " || ") + r;
+    }
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         const char* op = v->token == EXCLAMATION ? "!" : v->token == TILDE ? "~"
                        : v->token == MINUS ? "-" : v->token == PLUS ? "+" : "";
-        if (!*op) return "";
-        return op + unparseExpr(v->expression);
+        std::string e = unparseExpr(v->expression);
+        if (!*op || e.empty()) return "";
+        return op + e;
     }
     if (auto* v = dynamic_cast<MemberAccessNode*>(n)) {
         std::string base = v->expression ? unparseExpr(v->expression)
@@ -1044,7 +1066,12 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
         std::string base = v->expression ? unparseExpr(v->expression)
                          : (v->identifier && v->identifier->value ? *v->identifier->value : "");
         std::string idx;
-        if (v->expressionlist) for (auto& e : *v->expressionlist) { if (!idx.empty()) idx += ", "; idx += unparseExpr(e); }
+        if (v->expressionlist) for (auto& e : *v->expressionlist) {
+            std::string s = unparseExpr(e);
+            if (s.empty()) return "";
+            if (!idx.empty()) idx += ", ";
+            idx += s;
+        }
         if (base.empty()) return "";
         return base + "[" + idx + "]";
     }
@@ -1053,9 +1080,10 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
         std::string args;
         if (v->args) for (auto& a : *v->args) {
             if (!a) continue;
-            if (!args.empty()) args += ", ";
             std::string an = a->name && a->name->value ? *a->name->value : "";
             std::string av = unparseExpr(a->expression);
+            if (av.empty()) return "";
+            if (!args.empty()) args += ", ";
             args += an.empty() ? av : (an + ": " + av);
         }
         if (callee.empty()) return "";
@@ -5764,7 +5792,17 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
         // Name the instantiation. The assert's own line is the same for every instance of a generic, so
         // without the bindings a failure says WHAT broke but not WHICH use site broke it — and finding
         // that by hand is the whole cost this milestone exists to remove.
+        // TYPE bindings first, then const ones. A width check reads `F < sizeof(B) * 8`, so naming only
+        // the const half says `[with F = 16]` and leaves the reader to work out which `B` it was paired
+        // with — which is the half of a bad pairing that is actually hard to see from the use site.
+        // A generic TYPE keeps every parameter in _typeSubst, const ones included (bindInstParams), so a
+        // const name has to be skipped here or it prints twice — once with no type to render.
         std::string binds;
+        for (auto& kv : _typeSubst) {
+            if (_constSubst.count(kv.first) || !kv.second) continue;
+            std::string t = qualifiedName(kv.second);
+            if (!t.empty()) binds += (binds.empty() ? "" : ", ") + kv.first + " = " + t;
+        }
         for (auto& kv : _constSubst)
             binds += (binds.empty() ? "" : ", ") + kv.first + " = " + std::to_string(kv.second.value);
         ctFail(("assertion failed: " + (condText.empty() ? std::string("<condition>") : condText)

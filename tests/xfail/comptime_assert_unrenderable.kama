@@ -1,0 +1,12 @@
+// `unparseExpr` renders a failing condition back to kama source, and returns "" for a form it does not
+// cover — a documented degrade to a bare "assertion failed". That contract only ever held at the TOP of
+// the expression: a composite arm spliced an unrendered CHILD straight into its output, so an uncovered
+// subexpression left a HOLE in the middle of the text (` == 6`) rather than degrading. A hole reads as a
+// compiler bug, and it hides which half of the condition the reader should be looking at.
+//
+// A ternary is the cheapest form the renderer does not cover, and it is a stand-in: the point is the
+// degrade, not this operator. If a `?:` arm is ever added, keep the fixture and pick another.
+fn int32 main() {
+    comptime assert(cond: (2 > 1 ? 5 : 6) == 6, msg: "a condition the renderer cannot spell");
+    return 0;
+}

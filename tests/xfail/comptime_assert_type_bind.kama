@@ -1,0 +1,20 @@
+// A width check reads `F < sizeof(T) * 8`, and it is the PAIRING that is wrong, not either half — so a
+// failure has to name both. Two things this pins, each of which was missing:
+//
+//  * the condition text renders the `cast`. `unparseExpr` had no arm for it, and a composite arm spliced
+//    the empty result straight into the middle, so this message used to read `F <  * 8` — which looks
+//    like a compiler bug rather than like a failing assert.
+//  * the bindings name the TYPE argument too. Only `_constSubst` was reported, so the reader got
+//    `[with F = 16]` and was left to work out which `T` it had been paired with — which, at a use site
+//    several files from the declaration, is the expensive half.
+type value W<T, const F: int32> {
+    comptime assert(cond: F > 0 && F < cast<int32>(sizeof(T)) * 8, msg: "a width check");
+    public T v;
+    public ctor of(T v) { this.v = v; }
+}
+
+fn int32 main() {
+    W<int32, 16> ok  = W::<int32, 16>.of(v: 1i32);   // 16 < 32 — fine
+    W<int8, 16>  bad = W::<int8, 16>.of(v: 1i8);     // 16 < 8 is false
+    return cast<int32>(ok.v) + cast<int32>(bad.v);
+}
