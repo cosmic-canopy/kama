@@ -44,10 +44,14 @@ died on contact — see §2):
 
 | # | work | where | why here |
 |---|---|---|---|
-| **0** | **SPIKE — can safe kama produce UB?** | §2 | ► **NEXT**: two use-after-frees are already proven; the boundary is the 1.0 story |
-| 1 | the unsafe seam — no `null` in safe kama | §2 | source-breaking, so before the tag |
-| 2 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
-| 3 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
+| **1** | **gate `extern fn` calls + narrow the `unsafe` definite-assignment clear** | §2 | ► **NEXT**: a double-free with zero `unsafe` in the program is the sharpest 1.0 blocker, and the DA clear must be narrowed before anything pushes more code into `unsafe` |
+| 2 | **contain `UnsafePtr`** — produced/handled only inside `unsafe` | §2 | source-breaking, so before the tag; subsumes the forged-`View` OOB, the `addr` dangling factory, and `null` leakage |
+| 3 | mark the stdlib `const fn`, then view-borrow exclusion | §2 | pure annotation first; it is the prerequisite that closes reseat/resize/aliasing/`reserve` as one family |
+| 4 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; also what makes the six `null` positions look clean |
+| 5 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
+
+The boundary **spike is done** — every entry above came out of it, and the `Optional<UnsafePtr<T>>`
+campaign came out of the list (§2 records why: nothing null-shaped reaches a binary).
 
 **The raw pointer is now spelled `UnsafePtr<T>`.** It is a compiler builtin recognized by the *string*
 `"UnsafePtr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo`.
@@ -230,48 +234,77 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
   container use in a no-heap build), so it is its own campaign.
 
-- **The safety/unsafe boundary — a SPIKE, then whatever it finds.** The intended guarantee is that danger
-  is isolated behind `unsafe`: nothing in safe kama should be able to produce UB, and a bug inside an
-  `unsafe` block is library-author territory. **That guarantee does not hold today.** A boundary hole is
-  exactly this shape — a sequence of *safe*-API calls, no `unsafe` anywhere in the user's program, that
-  reaches UB inside `std`'s unsafe internals. "The bug is in std's `unsafe`" is not a defense.
+- **The safety/unsafe boundary — SWEPT. The seam is in the wrong place, and that is the real finding.**
+  The intended guarantee is that danger is isolated behind `unsafe`: nothing in safe kama should be able
+  to produce UB, and a bug inside an `unsafe` block is library-author territory. Every claim below was
+  produced by compiling and running a probe under ASan/UBSan, never by reading — repros in the commit
+  that lands this.
 
-  **Two are proven, both use-after-free, neither visible without a sanitizer** (`./dev test` is green on
-  both; `kama check` says OK on both). The view escape rules stop a borrow being **stored** somewhere that
-  outlives its owner — neither of these is a store in that sense.
+  **The root cause, which subsumes most of the individual holes.** GOALS §3a says the safe surface never
+  sees a raw pointer and that `unsafe { }` + `UnsafePtr<T>` guard the FFI boundary. In fact **only the
+  dereference operator `p[i]` is gated** (`src/kama.cemit.cpp:1993`, `:2037`). Safe kama may freely
+  *produce* a raw pointer (`addr(of:)` — explicitly ungated at `:13885`; `dataPtr()`, public on
+  `DynamicArray`/`FixedArray`; `cast<UnsafePtr<T>>` of anything, including an integer), *store* it in a
+  field, and **call arbitrary C with it** — `extern fn` calls are not gated at all. So:
 
-  1. **Resize invalidation.** The container is alive; its buffer moves out from under the view.
-     ```kama
-     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
-     d.add(item: 10);
-     View<int32> v = d.view();
-     d.add(item: 20); d.add(item: 30); d.add(item: 40);   // grows -> realloc
-     return v[0];                                          // heap-use-after-free
-     ```
-     The collection *iterators* survive this because they carry a modification counter that fail-fasts;
-     `View<T>` has none. **That asymmetry is a symptom, not the fix** — a runtime fail-fast is still UB that
-     we happened to notice, and it cannot help at all once the container itself is gone (the counter lives
-     in the container). If a view can be obtained, the invalidation must be *rejected*, not detected.
-  2. **Reseating across scopes.** The borrow outlives its owner by way of an assignment.
-     ```kama
-     View<int32> v = outer.view();
-     { DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 2); v = inner.view(); }
-     return v[0];                                          // heap-use-after-free
-     ```
-     The escape checker treats a local as safe **because a local is frame-bound**, which assumes a frame is
-     one scope. An assignment to an outer-scope local *is* a store into something that outlives the
-     borrowed thing. ⚠️ *"A local is scope-bound, therefore safe"* is load-bearing in more than one rule —
-     anything resting on it wants a nested-block probe.
+  ```kama
+  extern "<stdlib.h>";
+  extern fn UnsafePtr malloc(usize n);
+  extern fn void free(UnsafePtr p);
+  fn int32 main() {
+      UnsafePtr q = malloc(n: cast<usize>(64));
+      free(p: q); free(p: q);        // ASan: attempting double-free. NO `unsafe` in this program.
+      return 0;
+  }
+  ```
+  and, with the only `unsafe` being an idiomatic "unsafe core, safe API" accessor a library author would
+  reasonably write:
+  ```kama
+  type value Cell { UnsafePtr<int32> p;
+      public ctor make(UnsafePtr<int32> p) { this.p = p; }
+      public fn int32 get() { unsafe { return this.p[0]; } }
+  }
+  Cell c = Cell.make(p: addr(of: seed));
+  { int32 tmp = 1234; c = Cell.make(p: addr(of: tmp)); }
+  return c.get();                     // ASan: stack-use-after-scope
+  ```
+  No `View` is involved in the second — the whole `type view` escape apparatus that GOALS §3c says makes
+  a borrow unable to dangle is simply bypassed by a plain `type value` with a raw field.
 
-  **Spike first**, sweeping the whole surface (bounds, uninitialized reads, moves, races, aliasing, type
-  confusion, `match` payload borrows, dangling place-returns), and **classify each finding**: fixable within
-  RAII + borrow checking + a stricter rule, or needing real lifetime tracking — which kama deliberately does
-  not do, and which therefore makes a finding a *decision* rather than a defect.
+  **The distinction that decides each remedy:** *could a library author have prevented it with the tools
+  kama gives them?* If yes it is an stdlib defect — fix the library, add a fixture, the language design
+  is fine. If no it is a language hole and needs a compiler rule before the tag.
 
-  Candidate fixes already scoped for the two above: apply the existing borrow-root computation
-  (`viewReturnRoot`/`borrowArgRoot`, wired to returns only) at a view *assignment*, comparing declaration
-  depth; and mark the stdlib `const fn` — **used zero times in `lib/` + `prelude/` today** — so a
-  view-borrow exclusion rule can tell `d.length()` from `d.add()`.
+  | # | finding | class | size |
+  |---|---|---|---|
+  | 1 | **`extern fn` calls are ungated** — double-free, zero `unsafe` | language | S–M |
+  | 2 | **`addr(of:)` + an `UnsafePtr` field** = general dangling-pointer factory (`stack-use-after-scope`) | language | L |
+  | 3 | **`View::<T>.make` is a `public ctor`** taking a raw pointer + a *trusted* length; `operator[]` bounds-checks against the supplied `len` → `heap-buffer-overflow`. No fixture ever called it | both | M |
+  | 4 | **view reseat** — nested block, loop body, **and through a `ref View<T>` parameter** → UAF. The `ref`-param form crosses a function boundary, so an intra-function depth check is *not enough* | language | S–M |
+  | 5 | **resize invalidation** — `View` over a `DynamicArray` that grows → UAF | language | M |
+  | 6 | **aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)` → UAF. Nothing checks two arguments of one call for aliasing | language | M |
+  | 7 | **`reserve()` reallocs without bumping `mods`** in `DynamicArray`, `Deque`, `Map`, `SlotMap` → UAF under a live iterator | stdlib | S |
+  | 8 | **the compile-time foreach-invalidation guard is dead code** — `:17611` requires `isIntrinsicColl`, which admits only `string`/`BindableFunctionPtr`/`InlineArray`, none of which has an `add`. Zero fixtures expect its diagnostic | language | S–M |
+  | 9 | **one `unsafe { }` disables definite assignment for the whole function** (`:12146`, `:12160`, `:12501`) — an unfilled `out` param passes `check`; the caller reads uninitialized memory. Not a safe-surface hole, but a hole in the *`unsafe` contract* | language | M |
+  | 10 | **an uninstantiated generic body gets no analysis at all** — unsafe gate, escape check, moves, definite assignment all deferred to instantiation. A package author ships `check`-green code and consumers get the errors | language, not UB | M |
+  | 11 | narrowing `cast<int8>(300)` → 44, silently. No check, no fixture | wart | S |
+
+  **Confirmed defended, by probe not assumption:** every arithmetic class (div0, mod0, `INT_MIN/-1`,
+  shift width, float-cast, signed overflow — trapped in *every* build, `-fwrapv` in release); bounds on
+  array/list/string/substring/view-index/view-slice/negative-index; dangling place-returns; use-after-move
+  in a loop; the `export` rule under nesting; `parallel_for`'s write-capture rule, which sees a write made
+  through a captured raw pointer; and `unsafe` does **not** leak into a generic body.
+
+  **Ordering, and why.** ① **gate `extern fn` calls** and ② **contain `UnsafePtr`** — an `UnsafePtr`-typed
+  expression may only be produced or handled inside `unsafe { }`, staying legal as a private field and a
+  parameter type. That pair is what the original design intent actually asked for, and it subsumes
+  findings 1–3 and much of `null` (see below). ⚠️ **Finding 9 must be fixed first or alongside**, because
+  containment pushes *more* code into `unsafe` blocks and would widen it. Then the borrow work: mark the
+  stdlib `const fn` (**used zero times in `lib/`+`prelude/` today**, and enforced on both sides already —
+  `:14903` and `:17626`), which is the prerequisite for a view-borrow exclusion rule that can tell
+  `d.length()` from `d.add()` and closes 5–8 as a family. Blast radius for containment, measured: 379
+  `extern fn` declarations whose call sites need marking, ~47 `addr(of:)` lines in `lib/`+`prelude/`, 4
+  `dataPtr()` call sites, and one wrapped line per MMIO assignment on the MCU path.
 
 - **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
   flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field
@@ -282,6 +315,37 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   What is left: a compiler-emitted **debug null trap** at the two `_inUnsafe` deref gates
   (`src/kama.cemit.cpp`, the raw index read and store), and `Optional`-returning **FFI wrappers** in
   `lib/std/ptr/`, its natural home.
+
+  **⚠️ Measured by the boundary sweep: there is no memory-safety justification left for going further,
+  and specifically not for the `Optional<UnsafePtr<T>>` proposal.** Three things came back from probing:
+
+  - **Nothing null-shaped reaches a binary.** Dereferencing an `UnsafePtr` already requires `unsafe`, so
+    null-deref UB is already inside the region the guarantee concedes. The type-keyed rule leaves **six**
+    positions uncovered — call argument, `return null`, `Optional::Some(value: null)`, a module static, a
+    field lvalue, an element lvalue — and all six pass `kama check`, but **clang rejects every one**
+    (`error: incompatible pointer to integer conversion … from 'void *'`). They are therefore an instance
+    of the tracked *"`kama check` does not type-check expressions"* gap, landing on the LSP and on an AI
+    agent verifying its work — not on a shipped program.
+  - **`Optional` has no unwrap, and one cannot be added today.** `match` is the only way to open it —
+    there is no `?` operator and **no method on `Optional`**, because a generic enum is a
+    monomorphization template and rejects members (`src/kama.cemit.cpp:10267`). `unwrapPtr` is monomorphic
+    for exactly that reason, and the compiler emits calls to it directly into C at **nine** sites, so its
+    signature is a hard dependency of the `new`/`try new` lowering. Pervasive absence without an
+    ergonomic unwrap means a `match` at every one of ~30 stdlib sites.
+  - **The niche optimization is not a layout tweak.** `Optional<T>` is tag-then-union
+    (`emitVariantStruct`, `:14472`) with no layout special-casing anywhere; the tagged shape is
+    constructed and destructured *literally, by field name*, at ~25 emission sites. (One genuine upside if
+    it were ever done: `Some` is tag 0, which today forces an explicit reset of zero-initialized
+    `Optional` fields at `:15387` — `NULL == None` would delete that.)
+
+  **So: `UnsafePtr` containment, above, is the cheaper and more direct route to the same goal.** Every
+  genuine `null` in the tree (75/75) targets an `UnsafePtr`; if `UnsafePtr` can only be handled inside
+  `unsafe`, `null` is confined by construction — no `Optional`, no niche opt, no unwrap ergonomic, no
+  token deletion, no `tree-sitter` change. What remains worth doing on its own schedule is the honest FFI
+  surface: only **8** extern declarations return a genuinely nullable pointer (`malloc` ×3,
+  `kama_poller_create`, `kama_diropen`, `kama_channel_new`, `kama_argv_new`, `kama_envp_build`) —
+  `fopen`/`dlopen`/`getenv`/`realloc`/`mmap` are not declared at all, since kama routes them through
+  `kama_*` seams that already return `bool` + an out-param or a `Result`.
 
   **The `unsafe UnsafePtr<T> p = null;` field modifier and the token-level `null` ban are dropped**, and the
   reason is worth keeping: both existed to force raw-pointer declarations to be greppable, and the rename
