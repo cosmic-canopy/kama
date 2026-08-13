@@ -1486,12 +1486,12 @@ every function, so declarations are greppable and self-describing:
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
   lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
   its fields are **private only** (its raw `UnsafePtr<T>` must not leak). A view's **conformance is checked at the
-  `implements` site**: it may not implement a contract whose `ctor` slot constructs the implementer from
+  `implements` site**: it may not implement a contract whose `ctor` **member** constructs the implementer from
   parameters that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — such a constructor could only borrow one
-  of its own locals, so no body could satisfy it. A slot taking something borrowable is fine, and an
+  of its own locals, so no body could satisfy it. A member taking something borrowable is fine, and an
   *instance* method returning the self-type is always fine (it borrows the receiver, like `View.slice()`).
   The check is a signature-level pre-filter for what no body could satisfy, not a replacement for the
-  body-level escape check; it is also necessarily partial, since a **marker** contract declares no slots at
+  body-level escape check; it is also necessarily partial, since a **marker** contract declares no members at
   all (its factory lives in the impl) and stays caught later, at the boxing site. The flagship is the stdlib
   `View<T>`; the kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings*
   for `View<T>`.
@@ -1688,7 +1688,9 @@ not from a funnel). Constructor **overloading** is a standing non-goal — named
 ## Uninitialized storage — `slot` ✅
 
 A `slot` names the storage an **`out` parameter is about to fill** — declared externally so the reader can
-see the scope the value will live in. That is the whole of it, and it is the only kind of local a kama
+see the scope the value will live in. **`slot` means only this.** A contract's requirements are its
+**members**, never its "slots"; the one other place the word is load-bearing is the emitted **vtable slot**,
+which is always spelled with `vtable`/`vtbl`. That is the whole of it, and it is the only kind of local a kama
 program may leave without a value:
 
 ```kama
@@ -2443,8 +2445,8 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   the C compiler could not see. A pinned parameter is a real type argument that resolves identically on
   both sides, which is what lets `Comparable`, `Equatable` and `Real` be contract values at all.
 
-  `is` is an **identity** constraint and gets its own slot rather than joining the `:` bound list, which
-  holds contracts. At most one parameter may be pinned, it must come first, and the operand is `This` —
+  `is` is an **identity** constraint and gets its own grammar position rather than joining the `:` bound
+  list, which holds contracts. At most one parameter may be pinned, it must come first, and the operand is `This` —
   `<T is Widget>` (a subtype bound) is not a thing kama has. Chosen over `Self` to pair with the `this`
   value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
