@@ -1,0 +1,24 @@
+// `null` is only for `UnsafePtr<T>` at the FFI boundary. The `== null` rule has always said that a safe
+// type is never null; nothing said the same about PUTTING one there, so every line below passed
+// `kama check` clean and exited 0, then failed in the C compiler as an incompatible-pointer conversion
+// against generated code:
+//
+//     int32 a = null;      ->  int32_t a = NULL;
+//     Thing t = null;      ->  t = NULL;            (assigning to a struct from void*)
+//     string s = null;     ->  s = NULL;
+//
+// The rule is keyed on the DECLARED type, not on inference — `null`'s legality is a property of the slot,
+// which is what makes it checkable without an expression type checker. An unresolved or FFI type name is
+// deliberately left alone: a C typedef for a pointer is a legitimate `null` target and this pass cannot
+// tell one from a typo.
+type value Thing {
+    public int32 x;
+    public string s = null;      // a field default
+    public ctor make() { this.x = 0; }
+}
+
+fn int32 main() {
+    int32 a = null;              // a primitive local
+    UnsafePtr<int32> ok = null;  // ... and the one spelling that IS allowed
+    return 0;
+}

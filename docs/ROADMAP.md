@@ -231,11 +231,21 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 - **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
   flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field
-  initializers). **The rename shipped** — the raw pointer is spelled `UnsafePtr<T>` and says what it is.
-  What is left: an `unsafe UnsafePtr<T> p = null;` field-declaration modifier (new grammar — `unsafe` is
-  statement-only today); `Optional`-returning FFI wrappers; `unsafe { }` around the teardown guards; then
-  ban the `null` token outside `unsafe`. Plus a compiler-emitted debug null trap at the two `_inUnsafe`
-  deref gates. `lib/std/ptr/` is its natural home. **Source-breaking**, so before the tag or 2.0.
+  initializers). **Two thirds shipped**: the raw pointer is spelled `UnsafePtr<T>`, and `null` is now
+  rejected for every safe type in the STORE direction (declaration, field default, assignment) as it always
+  was for `== null` — which is what "no `null` in safe kama" was actually asking for.
+
+  What is left: a compiler-emitted **debug null trap** at the two `_inUnsafe` deref gates
+  (`src/kama.cemit.cpp`, the raw index read and store), and `Optional`-returning **FFI wrappers** in
+  `lib/std/ptr/`, its natural home.
+
+  **The `unsafe UnsafePtr<T> p = null;` field modifier and the token-level `null` ban are dropped**, and the
+  reason is worth keeping: both existed to force raw-pointer declarations to be greppable, and the rename
+  already did that by the type's own name. The `null` rule that shipped is keyed on the **declared type**
+  instead of on lexical context, which is strictly better — it needs no new grammar, no `unsafe { }` around
+  a declaration (which would change its scope), and its blast radius across `lib/` and `prelude/` was
+  **zero**, because every real `null` in the tree already targets an `UnsafePtr`. Reopen only if a case
+  appears that the type-keyed rule cannot express.
   - **It no longer owns iterator laundering — that shipped on its own.** The two were folded together on
     the argument that the honest fix *was* the seam, because making the iterators `type view` "is not a
     local fix": `Iterable<T>.iterator()` returns a *contract value*, so the iterator would box (heap

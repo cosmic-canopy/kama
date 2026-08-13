@@ -1,0 +1,14 @@
+// The store direction, for an assignment rather than a declaration. A bare local is resolved through its
+// DECLARED type node rather than through `exprClass`, because `exprClass` is empty for a primitive — so
+// `int32 a; a = null;` would otherwise slip this check exactly as it slips the `== null` one.
+type value Thing { public int32 x; public ctor make() { this.x = 0; } }
+
+fn int32 main() {
+    Thing t = Thing.make();
+    int32 a = 1;
+    UnsafePtr<int32> p = null;
+    t = null;
+    a = null;
+    p = null;      // allowed — an `UnsafePtr` is the one slot `null` belongs in
+    return 0;
+}

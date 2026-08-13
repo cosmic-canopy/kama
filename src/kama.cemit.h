@@ -1586,6 +1586,9 @@ private:
     // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
     // clause alone, without the resolution half. Caller owns `_nsCtx`.
     void checkQualifiedExport(const SharedIdentifier& t, const char* what);
+    // `null` into a slot whose declared type is a safe kama type — rejected. The sibling of the `== null`
+    // rule, for the STORE direction. `whereClause` completes "so ___ cannot be `null`".
+    void rejectNullInit(SharedIdentifier declType, SharedExpression init, const char* what, int line);
     // Fall-off-the-end analysis: a non-void function must return on every path (or diverge).
     void checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what);
     bool alwaysExits(const SharedStatement& s) const;   // provably returns or diverges (one-sided: no => "cannot prove")

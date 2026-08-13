@@ -394,6 +394,28 @@ bool CEmitter::isTypeParamName(const std::string& n) const
     return false;
 }
 
+// `null` STORED into a declared slot. The `== null` / `!= null` rule (see the BinaryExpressionNode arm)
+// has always said that a safe type is never null; nothing said the same about putting one there, so
+// `int32 x = null;`, `Thing t = null;` and `string s = null;` all passed `kama check` clean and exit 0, and
+// failed later in the C compiler as an incompatible-pointer conversion against generated code.
+//
+// Deliberately keyed on the DECLARED type, not on inference: `null`'s legality is a property of the slot,
+// which makes this checkable without an expression type checker. Deliberately conservative about what
+// counts as safe — a class, contract, enum or builtin primitive. An unresolved or FFI name is left alone,
+// because a C typedef for a pointer (`CompareFn cb = null;`) is a legitimate FFI spelling and this pass
+// cannot tell one from a typo.
+void CEmitter::rejectNullInit(SharedIdentifier declType, SharedExpression init, const char* what, int line)
+{
+    if (!init || !dynamic_cast<NullNode*>(init.get())) return;
+    if (!declType || !declType->value) return;
+    const std::string ty = cType(declType);
+    const bool safe = declType->builtInVal != 0 || isClass(ty) || isInterface(ty) || isEnum(ty);
+    if (!safe) return;
+    unsupported(("`" + *declType->value + "` is never null in safe code, so " + what
+                 + " cannot be `null` — `null` is only for `UnsafePtr<T>` at the FFI boundary. Use a "
+                 "zero value, or `Optional<T>` to model absence").c_str(), line);
+}
+
 // A type name in a DECLARATION that resolved to nothing. `cType` hands an unresolved name straight back
 // (see resolveUserName's "caller handles" tail), and until now no caller did — so a misspelled or
 // unimported type sailed through analysis and only failed later in the C compiler, as a confusing
@@ -742,7 +764,8 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                         // A field of the const param's name would make `exprClass`'s bare-field path and
                         // the const arm in `emitExpression` disagree about what `F` means.
                         if (fld->declarators) for (auto& d : *fld->declarators)
-                            if (d) constParamShadow("field", d->name);
+                            if (d) { constParamShadow("field", d->name);
+                                     rejectNullInit(fld->type, d->initializer, "a field", fld->line); }
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
@@ -1910,6 +1933,30 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
         checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
+        // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
+        // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
+        // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
+        // `UnsafePtr`/FFI slot, which is the one place `null` belongs.
+        if (v->token == EQ && dynamic_cast<NullNode*>(v->expression.get())) {
+            // A bare local goes through its DECLARED type node, which is the only route that also covers a
+            // primitive — `exprClass` is empty for `int32`, so `int32 a; a = null;` would slip the class
+            // check exactly as it slips the `== null` one.
+            SharedIdentifier lt;
+            if (auto* id = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
+                if (id->value && (!id->qualifier || id->qualifier->empty())) {
+                    auto it = _localTypeNodes.find(*id->value);
+                    if (it != _localTypeNodes.end()) lt = it->second;
+                }
+            if (lt) {
+                rejectNullInit(lt, v->expression, "it", v->line);
+            } else {
+                std::string lc = exprClass(v->unaryExpression);
+                if (!lc.empty())
+                    unsupported(("'" + lc + "' is never null in safe code, so it cannot be assigned `null` "
+                                 "— `null` is only for `UnsafePtr<T>` at the FFI boundary. Use a zero value, "
+                                 "or `Optional<T>` to model absence").c_str(), v->line);
+            }
+        }
         // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {
             std::string coll, recvExpr, idx;
@@ -2894,6 +2941,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
+            if (lvd && lvd->variables)
+                for (auto& d : *lvd->variables)
+                    if (d) rejectNullInit(declType, d->initializer, "a local", n->line);
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {
