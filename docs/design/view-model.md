@@ -112,6 +112,20 @@ statement-scoped temporary in argument position, **all 12 non-test sites are una
 bindings need a block. If `borrow` is the sole path, those 12 move too. Recommend allowing the temporary;
 its window is provably the statement.
 
+> **ECS settles this.** [tests/ecs_pattern.kama](../../tests/ecs_pattern.kama) is the data-oriented shape
+> the language is meant to carry, and every one of its three system call sites is already a temporary:
+> ```kama
+> fn void integrate(View<Transform> xs, float32 dt) { foreach (ref Transform t in xs) { … } }
+> integrate(xs: xf.view(), dt: 2.0f32);          // :74
+> integratePar(xs: xf.view(), dt: 0.0f32);       // :75  — parallel_for inside
+> tickAll::<Timer>(items: ts.view());            // :81  — generic over a contract bound
+> ```
+> A system is a free function over a `View<T>` parameter, and `foreach`/`parallel_for` inside it is already
+> a lexical block. **With temporaries allowed, ECS changes by zero lines.** Without them, the idiom becomes
+> nested `borrow` blocks — and a multi-component SoA system
+> (`movement(t: transforms.view(), v: velocities.view())`) would need one level of nesting per component
+> array, which is the shape that gets written most often in a real engine.
+
 **C. How does the compiler mint one?** `borrow d as v { … }` must make `d` unusable inside the block. Three
 candidate mechanisms — shadow the name outright, mark the binding `const` for the extent, or mark it
 *borrowed* with a dedicated diagnostic. The third gives the best error message; the first is the least code.
@@ -131,9 +145,23 @@ anything**, since `tools/check-ecs-zero-dispatch.sh` guards that loop.
 honest measure of what the model is missing. Spike D covers ~9; the parallel-array and ring-buffer cases
 need an answer that is not "keep using `UnsafePtr`", or an explicit decision that they stay unsafe internals.
 
-**F. Does anything legitimately want a view to outlive a block?** The corpus says no (table above). Re-ask
-once a game engine and real user code exist — this is the assumption most likely to be invalidated by
-adoption, so it is worth a note in SPEC saying it was a measured decision rather than an oversight.
+**F. Does anything legitimately want a view to outlive a block?** The corpus says no (table above), and the
+two workloads most likely to break it do not:
+
+- **ECS** — see spike B. Systems take a `View<T>` *parameter* and iterate it inside `foreach`/`parallel_for`;
+  the owning `DynamicArray`s live in the world, not the systems. That is the standard architecture (Bevy
+  hands a system its queries per run), so the model matches rather than fights it. Archetype/chunk
+  iteration is `slice()` — deriving from a view, which is free.
+- **WebGPU** — [examples/webgpu/triangle.kama](../../examples/webgpu/triangle.kama) holds **no kama `View`
+  at all**. GPU work is FFI work: `wgpuQueueWriteBuffer(data: cast<UnsafePtr>(addr(of: angle)), size: 4)`
+  hands C a raw address plus a length. Under `UnsafePtr` containment that line moves inside `unsafe { }`,
+  which is the correct marking — it is a genuine, short-lived FFI hand-off, and a good illustration that
+  containment marks such code rather than banning it. The place a view *would* appear is a mapped buffer
+  range, which this example never uses; if it ever does, map/unmap is **inherently** a lexical window, so
+  the design fits it.
+
+The residual risk is an **async** mapped range — a window opened by a callback and closed later, which no
+lexical block can span. kama has no async/await today, so it does not arise; re-ask if one lands.
 
 ## Definition of done
 
