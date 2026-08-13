@@ -44,7 +44,8 @@ died on contact — see §2):
 
 | # | work | where | why here |
 |---|---|---|---|
-| **1** | **the unsafe seam — no `null` in safe kama** | §2 | ► **NEXT**: source-breaking, so before the tag |
+| **0** | **SPIKE — can safe kama produce UB?** | §2 | ► **NEXT**: two use-after-frees are already proven; the boundary is the 1.0 story |
+| 1 | the unsafe seam — no `null` in safe kama | §2 | source-breaking, so before the tag |
 | 2 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; a cheap route exists |
 | 3 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
 
@@ -228,6 +229,49 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   The real change is to make `GlobalAllocator` growth an error under the flag, leaving containers usable
   only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
   container use in a no-heap build), so it is its own campaign.
+
+- **The safety/unsafe boundary — a SPIKE, then whatever it finds.** The intended guarantee is that danger
+  is isolated behind `unsafe`: nothing in safe kama should be able to produce UB, and a bug inside an
+  `unsafe` block is library-author territory. **That guarantee does not hold today.** A boundary hole is
+  exactly this shape — a sequence of *safe*-API calls, no `unsafe` anywhere in the user's program, that
+  reaches UB inside `std`'s unsafe internals. "The bug is in std's `unsafe`" is not a defense.
+
+  **Two are proven, both use-after-free, neither visible without a sanitizer** (`./dev test` is green on
+  both; `kama check` says OK on both). The view escape rules stop a borrow being **stored** somewhere that
+  outlives its owner — neither of these is a store in that sense.
+
+  1. **Resize invalidation.** The container is alive; its buffer moves out from under the view.
+     ```kama
+     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
+     d.add(item: 10);
+     View<int32> v = d.view();
+     d.add(item: 20); d.add(item: 30); d.add(item: 40);   // grows -> realloc
+     return v[0];                                          // heap-use-after-free
+     ```
+     The collection *iterators* survive this because they carry a modification counter that fail-fasts;
+     `View<T>` has none. **That asymmetry is a symptom, not the fix** — a runtime fail-fast is still UB that
+     we happened to notice, and it cannot help at all once the container itself is gone (the counter lives
+     in the container). If a view can be obtained, the invalidation must be *rejected*, not detected.
+  2. **Reseating across scopes.** The borrow outlives its owner by way of an assignment.
+     ```kama
+     View<int32> v = outer.view();
+     { DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 2); v = inner.view(); }
+     return v[0];                                          // heap-use-after-free
+     ```
+     The escape checker treats a local as safe **because a local is frame-bound**, which assumes a frame is
+     one scope. An assignment to an outer-scope local *is* a store into something that outlives the
+     borrowed thing. ⚠️ *"A local is scope-bound, therefore safe"* is load-bearing in more than one rule —
+     anything resting on it wants a nested-block probe.
+
+  **Spike first**, sweeping the whole surface (bounds, uninitialized reads, moves, races, aliasing, type
+  confusion, `match` payload borrows, dangling place-returns), and **classify each finding**: fixable within
+  RAII + borrow checking + a stricter rule, or needing real lifetime tracking — which kama deliberately does
+  not do, and which therefore makes a finding a *decision* rather than a defect.
+
+  Candidate fixes already scoped for the two above: apply the existing borrow-root computation
+  (`viewReturnRoot`/`borrowArgRoot`, wired to returns only) at a view *assignment*, comparing declaration
+  depth; and mark the stdlib `const fn` — **used zero times in `lib/` + `prelude/` today** — so a
+  view-borrow exclusion rule can tell `d.length()` from `d.add()`.
 
 - **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
   flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field

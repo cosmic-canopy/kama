@@ -281,8 +281,6 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
-- *Known limitation:* a view is invalidated if the backing `DynamicArray` is **resized** (`add`/`reserve`)
-  while the view is live — the same contract as a C++ `span`/iterator; not enforced (no lifetime tracking).
 - **A borrowing iterator is itself a view.** Every collection iterator — `ViewIter`/`ViewIterMut`,
   `DynamicArrayIter`, `MapValueIter`, `BitSetIter`, the `string` iterators `Chars`/`Split`, all of them — is
   declared `type view`, so it obeys the same escape rules as the `View<T>` above: a local or a by-value
