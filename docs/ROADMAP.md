@@ -46,7 +46,7 @@ died on contact — see §2):
 |---|---|---|---|
 | **1** | **gate `extern fn` calls + narrow the `unsafe` definite-assignment clear** | §2 | ► **NEXT**: a double-free with zero `unsafe` in the program is the sharpest 1.0 blocker, and the DA clear must be narrowed before anything pushes more code into `unsafe` |
 | 2 | **contain `UnsafePtr`** — produced/handled only inside `unsafe` | §2 | source-breaking, so before the tag; subsumes the forged-`View` OOB, the `addr` dangling factory, and `null` leakage |
-| 3 | mark the stdlib `const fn`, then view-borrow exclusion | §2 | pure annotation first; it is the prerequisite that closes reseat/resize/aliasing/`reserve` as one family |
+| 3 | **finish the view model** — see [design/view-model.md](design/view-model.md) | §2 | lexical borrow closes reseat/resize/aliasing/forged-view as one family; measured cost is 17 fixture sites and nothing else |
 | 4 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; also what makes the six `null` positions look clean |
 | 5 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
 
@@ -294,6 +294,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   array/list/string/substring/view-index/view-slice/negative-index; dangling place-returns; use-after-move
   in a loop; the `export` rule under nesting; `parallel_for`'s write-capture rule, which sees a write made
   through a captured raw pointer; and `unsafe` does **not** leak into a generic body.
+
+  **`type view` is the unfinished design under 3–6, and it has its own brief:
+  [design/view-model.md](design/view-model.md).** The short version: a view answers *which* container it
+  windows and *how long* the window stays open, and kama **documents the type-system answer while
+  implementing the programmer-promises one**. The fix is lexical — `foreach` is already that shape. Cost,
+  measured: of 60 `.view()`/`.slice()` sites, all 12 outside `tests/` are statement-scoped temporaries,
+  there are **zero** long-lived views in `lib/`/`prelude/`/`examples/`/`bench/`, and `examples/webgpu`
+  holds no kama `View` at all. Of Rust's four borrow abilities, three cost kama nothing it uses; the
+  fourth — storing a borrow in a struct — is *already* forbidden and worked around **25 times** with
+  borrowed raw-pointer fields across 18 `type view` declarations, which is finding ⑧'s shape.
 
   **Ordering, and why.** ① **gate `extern fn` calls** and ② **contain `UnsafePtr`** — an `UnsafePtr`-typed
   expression may only be produced or handled inside `unsafe { }`, staying legal as a private field and a
