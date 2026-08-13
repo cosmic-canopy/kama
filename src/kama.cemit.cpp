@@ -394,6 +394,28 @@ bool CEmitter::isTypeParamName(const std::string& n) const
     return false;
 }
 
+// The type a `null` is being measured against, when that type can never BE null — "" when `null` is
+// legitimate there. Both null rules key on this.
+//
+// A bare local resolves through `_localTypeNodes`, its DECLARED type node, and only then falls back to
+// `exprClass`. That order is the whole point: `exprClass` is **empty for a primitive**, so an `int32`
+// looks exactly like an `UnsafePtr` to it — which is why `int32 a; if (a == null)` slipped the `== null`
+// rule for as long as that rule has existed.
+std::string CEmitter::neverNullType(SharedExpression e)
+{
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get()))
+        if (id->value && (!id->qualifier || id->qualifier->empty())) {
+            auto it = _localTypeNodes.find(*id->value);
+            if (it != _localTypeNodes.end() && it->second && it->second->value) {
+                const SharedIdentifier& t = it->second;
+                const std::string ct = cType(t);
+                if (t->builtInVal != 0 || isClass(ct) || isInterface(ct) || isEnum(ct)) return *t->value;
+                return std::string();          // an UnsafePtr / FFI slot — `null` belongs here
+            }
+        }
+    return exprClass(e);
+}
+
 // `null` STORED into a declared slot. The `== null` / `!= null` rule (see the BinaryExpressionNode arm)
 // has always said that a safe type is never null; nothing said the same about putting one there, so
 // `int32 x = null;`, `Thing t = null;` and `string s = null;` all passed `kama check` clean and exit 0, and
@@ -1907,9 +1929,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             bool lNull = dynamic_cast<NullNode*>(v->LHS.get()) != nullptr;
             bool rNull = dynamic_cast<NullNode*>(v->RHS.get()) != nullptr;
             if (lNull != rNull) {
-                std::string oc = exprClass((lNull ? v->RHS : v->LHS));
+                std::string oc = neverNullType(lNull ? v->RHS : v->LHS);
                 if (!oc.empty())
-                    unsupported(("'" + oc + "' is never null in safe code — don't null-check it "
+                    unsupported(("`" + oc + "` is never null in safe code — don't null-check it "
                                  "(a `Weak` uses `tryUpgrade`; `null` is only for `UnsafePtr<T>` at the FFI boundary)").c_str(),
                                 v->line);
             }
@@ -1938,24 +1960,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
         // `UnsafePtr`/FFI slot, which is the one place `null` belongs.
         if (v->token == EQ && dynamic_cast<NullNode*>(v->expression.get())) {
-            // A bare local goes through its DECLARED type node, which is the only route that also covers a
-            // primitive — `exprClass` is empty for `int32`, so `int32 a; a = null;` would slip the class
-            // check exactly as it slips the `== null` one.
-            SharedIdentifier lt;
-            if (auto* id = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
-                if (id->value && (!id->qualifier || id->qualifier->empty())) {
-                    auto it = _localTypeNodes.find(*id->value);
-                    if (it != _localTypeNodes.end()) lt = it->second;
-                }
-            if (lt) {
-                rejectNullInit(lt, v->expression, "it", v->line);
-            } else {
-                std::string lc = exprClass(v->unaryExpression);
-                if (!lc.empty())
-                    unsupported(("'" + lc + "' is never null in safe code, so it cannot be assigned `null` "
-                                 "— `null` is only for `UnsafePtr<T>` at the FFI boundary. Use a zero value, "
-                                 "or `Optional<T>` to model absence").c_str(), v->line);
-            }
+            std::string lc = neverNullType(v->unaryExpression);
+            if (!lc.empty())
+                unsupported(("`" + lc + "` is never null in safe code, so it cannot be assigned `null` "
+                             "— `null` is only for `UnsafePtr<T>` at the FFI boundary. Use a zero value, "
+                             "or `Optional<T>` to model absence").c_str(), v->line);
         }
         // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {

@@ -654,12 +654,13 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 
 **No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
 is always valid: there is nothing to null-check. `null` is only for `UnsafePtr<T>` at the FFI boundary, and
-that holds in **both directions** — a safe type can neither be *compared* to `null` (`== null` / `!= null`
-is a compile error; the C habit checks the wrong thing here) nor *set* to it. `int32 x = null;`,
-`Thing t = null;`, a `string` field defaulted to `null`, and `x = null` on any of them are all rejected;
-model absence with `Optional<T>`, or use a zero value. The rule reads the **declared type**, so it applies
-to primitives too — an unresolved or FFI type name is left alone, since a C typedef for a pointer is a
-legitimate `null` target. A `Weak<T>`'s liveness is obtained through `tryUpgrade() -> Optional<Shared<T>>`,
+that holds in **both directions** and for **every** other type — a safe type can neither be *compared* to
+`null` (`== null` / `!= null` is a compile error; the C habit checks the wrong thing here) nor *set* to it.
+`int32 x = null;`, `Thing t = null;`, a `string` field defaulted to `null`, `x = null` and `x == null` on
+any of them are all rejected; model absence with `Optional<T>`, or use a zero value. The rule reads the
+**declared type**, so it covers primitives — and it does not care whether you are inside `unsafe { }`,
+which changes what may be *dereferenced*, not what may be null. An unresolved or FFI type name is left
+alone, since a C typedef for a pointer is a legitimate `null` target. A `Weak<T>`'s liveness is obtained through `tryUpgrade() -> Optional<Shared<T>>`,
 whose result forces you to handle the dead case.
 
 Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names the *object* (`ref T`,

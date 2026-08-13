@@ -1589,6 +1589,10 @@ private:
     // `null` into a slot whose declared type is a safe kama type — rejected. The sibling of the `== null`
     // rule, for the STORE direction. `whereClause` completes "so ___ cannot be `null`".
     void rejectNullInit(SharedIdentifier declType, SharedExpression init, const char* what, int line);
+    // The type `e` is declared as, when that type can never BE null; "" when `null` is legitimate there.
+    // Resolves a bare local through its DECLARED type node before falling back to `exprClass`, which is
+    // empty for a primitive and so cannot tell an `int32` from an `UnsafePtr`.
+    std::string neverNullType(SharedExpression e);
     // Fall-off-the-end analysis: a non-void function must return on every path (or diverge).
     void checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationNode* md, const char* what);
     bool alwaysExits(const SharedStatement& s) const;   // provably returns or diverges (one-sided: no => "cannot prove")

@@ -1,0 +1,22 @@
+// The COMPARE direction, completing what `null_safe_declaration` and `null_safe_assignment` do for the
+// store direction. `== null` / `!= null` on a safe type has been an error for a long time — but the rule
+// keyed on `exprClass`, which is **empty for a primitive**, so an `int32` looked exactly like an
+// `UnsafePtr` to it:
+//
+//     int32 a = 1;
+//     if (a == null) { ... }        // ACCEPTED, before this rule
+//
+// A bare local now resolves through its DECLARED type node first, and only falls back to `exprClass`.
+// `null` is only for `UnsafePtr<T>`, and that holds for every type — including the primitives, and
+// including inside an `unsafe { }` block, which changes what you may DEREFERENCE, not what may be null.
+type value Thing { public int32 x; public ctor make() { this.x = 0; } }
+
+fn int32 main() {
+    int32 a = 1;
+    UnsafePtr<int32> p = null;
+    unsafe {
+        if (a == null) { return 1; }    // still an error INSIDE unsafe
+        if (p != null) { return 2; }    // allowed — an `UnsafePtr` is the one thing that can be null
+    }
+    return 0;
+}
