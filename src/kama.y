@@ -732,8 +732,10 @@ intrinsic_members
       $1->sections->push_back(sec); $$ = $1; }
   ;
 
-/* Kind-gate on a `type contract`: `for value | resource | both` (also `value, resource`). MANDATORY on a
-   contract (enforced by the emitter), forbidden on value/resource. Kind words are contextual identifiers. */
+/* Kind gate on a `type contract`: `for value, view` — a COMMA LIST of kind words meaning "any of these"
+   may implement it. There is no `|` alternative here and never was, whatever older comments spelled.
+   MANDATORY on a contract (enforced by the emitter), forbidden on value/resource. Kind words are
+   contextual identifiers, so the list is IDENTIFIERs and the emitter decides which are legal. */
 for_kinds_opt
   : /* Nothing */   { $$ = std::make_shared<StringList>(); }
   | FOR kind_name_list   { $$ = $2; }
@@ -917,7 +919,7 @@ type_param
        NOT a `bound_list` entry: a bound holds a CONTRACT (a non-contract there is already a hard error),
        so admitting `This` would cost an exception plus a hand-rejection of `T: This + Contract`. Its own
        slot keeps that rule intact and makes `T is This + Contract` ungrammatical rather than diagnosed.
-       `is` is a CONTEXTUAL identifier, like the `for value|resource|both` kind words — it reserves nothing.
+       `is` is a CONTEXTUAL identifier, like the `for value, resource` kind words — it reserves nothing.
        Two IDENTIFIERs in a row are unambiguous here: every other arm takes `:`, `=`, `,` or `>` next. */
   | IDENTIFIER IDENTIFIER type_name
       { if (*$2 != "is") yyerror(&@2, scanner, "expected `is` or `:` after a type parameter name");
@@ -1883,7 +1885,7 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
 {
     auto n = std::make_shared<ClassDeclarationNode>(context, modifiers, head, base, body);
     n->typeKind   = typeKind;
-    n->forKinds   = forKinds;   // `for value|resource|both` — mandatory on a `type contract`, else empty
+    n->forKinds   = forKinds;   // `for value, resource` — mandatory on a `type contract`, else empty
     n->attributes = attributes; // `@generate(...)` etc. (null when the un-attributed alternative was used)
     if (head->genericArgs && !head->genericArgs->empty()) {
         n->typeParams   = std::make_shared<StringList>();

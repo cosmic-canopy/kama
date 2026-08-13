@@ -217,7 +217,8 @@ module.exports = grammar({
     intrinsic_section: ($) =>
       seq(field('targets', $.intrinsic_targets), '{', repeat($._class_member), '}'),
 
-    // kama.y:267 — `for value | resource | both` on a contract. Kind words again, contextual.
+    // kama.y:735 — `for value, view` on a contract: a COMMA LIST, no `|` alternative. Kind words again,
+    // contextual.
     for_kinds: ($) => seq('for', commaSep1($.kind_name)),
     kind_name: ($) => $.identifier,
 

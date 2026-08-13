@@ -417,6 +417,27 @@ struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedPa
                          // The declaration's NAME identifier, for the reference index (M6 B3c). Null for
                          // the operator arm, which has no name node — as MethodInfo::node already is.
                          SharedIdentifier nameId; };
+// The kinds that may `implements` a contract — its `for` clause (`type contract C for value, view`).
+// A BITMASK, not a set<string>: the gate is a test in the inner loop of a `_classes × interfaces`
+// sweep, the domain is CLOSED at five, and the clause has to render back into a diagnostic in a
+// FIXED order — a set would print it alphabetically and silently reorder under any widening.
+//
+// `contract` is deliberately absent. A contract implementing a contract is REFINEMENT — a different
+// axis, spelled by `implements` on the contract itself and handled by linkContracts().
+enum ImplKind : unsigned {
+    IK_Value     = 1u << 0,
+    IK_Resource  = 1u << 1,
+    IK_View      = 1u << 2,
+    IK_Enum      = 1u << 3,
+    IK_Intrinsic = 1u << 4,
+};
+// The ONE word<->bit table, read forward by the name gate (word -> bit, 0 for a non-kind word) and
+// backward by the diagnostics (mask -> "value, view"), both in declaration order. A single-bit mask
+// therefore renders as the bare kind noun, and a clause renders exactly as it should be written.
+// Defined in kama.cemit.cpp.
+unsigned    kamaImplKindBit(const std::string& word);
+std::string kamaImplKindListText(unsigned mask);
+
 struct InterfaceInfo {
     std::string                  name;
     std::vector<InterfaceMethod> methods;
@@ -427,9 +448,11 @@ struct InterfaceInfo {
     // resolves to its fully-qualified, monomorphized C name in the vtbl slot + the `C__as_I` cast.
     // (Generic contracts stash the whole NsCtx via _genericContractCtx; non-generic ones carry it here.)
     std::map<std::string, std::string> symbolAliases;
-    // Kind-gate (`for value|resource|both`): which kinds may `implements` this contract. Both true = `both`.
-    bool                         allowsValue = false;
-    bool                         allowsResource = false;
+    // Kind gate (`for value, resource, view, enum, intrinsic`): which kinds may `implements` this
+    // contract, as ImplKind bits. 0 means the clause was missing or malformed — ALREADY DIAGNOSED at
+    // the declaration, so every enforcement site reads 0 as "say nothing". That one convention is what
+    // stops a single bad contract from making each of its implementers report a second, invented reason.
+    unsigned                     implKinds = 0;
     // Refined parent contracts (`type contract Animated implements Drawable`) — resolved names. Their methods
     // are merged into `methods` by linkContracts() so vtable/conformance/dispatch see the full slot set.
     std::vector<std::string>     refines;
@@ -1273,6 +1296,11 @@ private:
     // (a template). Bound-checking matches by method NAME, which is type-parameter-independent, so it
     // reads either table through this one accessor. Returns nullptr for an unknown name.
     const std::vector<InterfaceMethod>* contractMethods(const std::string& name);
+    // A resolved contract's `for`-clause mask. Same two-table shape as contractMethods(), and for the
+    // same reason: a generic contract's INSTANCE is minted lazily, so a lookup can run before the mint
+    // and has to reach the template. A MANGLED instance name (`Real_double`) is a key in neither table
+    // until then, hence `tmplHint` — the pre-mangle base the caller already has. 0 = not kind-gated.
+    unsigned implKindsOf(const std::string& contract, const std::string& tmplHint = std::string());
     // If `cls` implements the prelude `Deref<T>` contract, the pointee class `T` (auto-deref target);
     // "" otherwise. Nominal — the `implements Deref<T>` is the opt-in gate. Inert when no Deref is in scope.
     std::string derefTarget(const std::string& cls);

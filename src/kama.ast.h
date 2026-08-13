@@ -872,7 +872,7 @@ public:
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typeDefaults; // per-param default type (`= DefaultHasher`) parallel to typeParams; null entry = no default
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
-    SharedStringList forKinds;     // `type contract X for value|resource|both` — which kinds may implement it
+    SharedStringList forKinds;     // `type contract X for value, view` — the COMMA LIST of kinds that may implement it
     SharedAttributeList attributes;  // `@generate(...)` etc. (null when none); serialization metadata
     ClassDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
                         SharedIdentifier name,

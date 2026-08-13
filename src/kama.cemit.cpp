@@ -4559,19 +4559,23 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
         ii.symbolAliases = _nsCtx.symbolAliases;   // so contract sigs can name imported/library-generic types
         ii.node = cd;                              // decl site for the LSP def-site table (unused by emission)
-        // Kind-gate: `for value|resource|both` is MANDATORY on a contract — the designer must state which
-        // kinds may implement it (`both` / listing both = either).
+        // Kind gate: `for <kinds>` is MANDATORY on a contract — the designer must state which kinds may
+        // implement it. The clause is a COMMA LIST meaning "any of these" (`for value, view`); there is
+        // no `|` alternative in the grammar (kama.y kind_name_list), whatever older messages implied.
         if (cd->forKinds) for (auto& k : *cd->forKinds) {
             if (!k) continue;
-            if      (*k == "value")    ii.allowsValue = true;
-            else if (*k == "resource") ii.allowsResource = true;
-            else if (*k == "both")     { ii.allowsValue = true; ii.allowsResource = true; }
-            else unsupported(("a contract's `for` clause takes `value`, `resource`, or `both` — not `"
-                              + *k + "`").c_str(), cd->line);
+            if (unsigned bit = kamaImplKindBit(*k)) { ii.implKinds |= bit; continue; }
+            if (*k == "both") { ii.implKinds |= IK_Value | IK_Resource; continue; }   // retired in C3
+            unsupported(("a contract's `for` clause takes `value`, `resource`, `view`, `enum` or "
+                         "`intrinsic` — not `" + *k + "`").c_str(), cd->line);
         }
-        if (!ii.allowsValue && !ii.allowsResource)
+        // Keyed on the CLAUSE being absent, not on the mask being empty. A clause that was written and
+        // then rejected word-by-word has already been told what is wrong; a second "you didn't declare
+        // any" stacked on top of that points the reader away from the actual mistake.
+        if (!cd->forKinds || cd->forKinds->empty())
             unsupported(("contract `" + *cd->name->value + "` must declare which kinds may implement it: "
-                         "`type contract " + *cd->name->value + " for value|resource|both { … }`").c_str(), cd->line);
+                         "`type contract " + *cd->name->value + " for value, resource { … }` — any of "
+                         "`value`, `resource`, `view`, `enum`, `intrinsic`").c_str(), cd->line);
         // A contract signature may not name `This` — see the method arm below for why. Shared by the
         // method and operator arms, since `This operator+(This rhs)` is the same shape as a method.
         auto namesThis = [](SharedIdentifier t) {
@@ -4916,9 +4920,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             else unsupported(("unknown type kind `" + *cd->typeKind
                               + "` — expected `value`, `resource`, `view`, or `contract`").c_str(), cd->line);
         }
-        // A `for value|resource|both` clause gates a CONTRACT's implementers — meaningless on a value/resource.
+        // A `for <kinds>` clause gates a CONTRACT's implementers — meaningless on a value/resource.
         if (cd->forKinds && !cd->forKinds->empty())
-            unsupported("a `for value|resource|both` clause applies only to a `type contract`", cd->line);
+            unsupported("a `for` clause applies only to a `type contract` — it names the kinds that may "
+                        "implement it, and a value/resource implements rather than being implemented", cd->line);
 
         // FFI: an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
@@ -6892,6 +6897,26 @@ const std::vector<InterfaceMethod>* CEmitter::contractMethods(const std::string&
     auto gt = _genericContracts.find(name);
     if (gt != _genericContracts.end()) return &gt->second.methods;
     return nullptr;
+}
+
+// A resolved contract's `for`-clause mask — the two-table lookup contractMethods() above does, plus the
+// template hint. The hint is not belt-and-braces: resolveInterfaceNames only MANGLES a pinned generic
+// contract (`Real<This>` on `float64` -> `Real_double`); minting the instance into _interfaces happens
+// at the scanTypeForGenericContracts call sites, none of which walk an IntrinsicImplNode. So a bare
+// find("Real_double") from applyIntrinsicImpl misses, and a gate that misses passes silently.
+unsigned CEmitter::implKindsOf(const std::string& contract, const std::string& tmplHint)
+{
+    auto it = _interfaces.find(contract);
+    if (it != _interfaces.end()) return it->second.implKinds;
+    auto gt = _genericContracts.find(contract);
+    if (gt != _genericContracts.end()) return gt->second.implKinds;
+    if (!tmplHint.empty()) {
+        auto ht = _genericContracts.find(tmplHint);
+        if (ht != _genericContracts.end()) return ht->second.implKinds;
+        auto hi = _interfaces.find(tmplHint);
+        if (hi != _interfaces.end()) return hi->second.implKinds;
+    }
+    return 0;   // a base class, an unresolved name, or a contract whose clause was already diagnosed
 }
 
 // register the specialized instance for a generic-contract reference `Iterator<Arg>` (mirrors
@@ -17854,6 +17879,30 @@ void CEmitter::checkNamelessNewBanned(ObjectCreationNode* oc, int line)
 // one definition. Built-in TARGET names are deliberately NOT here: they are CLI shortcuts for a triple
 // family and never become flags, so `@compileFor(MACOS)` should indeed be rejected in favour of
 // `@compileFor(OS_MACOS)`, which is the fact rather than the spelling.
+// The contract `for` clause's kind words. One table, read both directions (see kama.cemit.h), so the
+// set of legal words and the order a clause renders in cannot drift apart.
+namespace {
+struct KindWord { const char* word; unsigned bit; };
+static const KindWord kKindWords[] = {
+    { "value", IK_Value }, { "resource", IK_Resource }, { "view", IK_View },
+    { "enum",  IK_Enum  }, { "intrinsic", IK_Intrinsic },
+};
+}
+
+unsigned kamaImplKindBit(const std::string& word)
+{
+    for (auto& kw : kKindWords) if (word == kw.word) return kw.bit;
+    return 0;
+}
+
+std::string kamaImplKindListText(unsigned mask)
+{
+    std::string out;
+    for (auto& kw : kKindWords)
+        if (mask & kw.bit) { if (!out.empty()) out += ", "; out += kw.word; }
+    return out;
+}
+
 bool kamaIsBuildConfigFlag(const std::string& n)
 {
     if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP") return true;
@@ -17969,6 +18018,18 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         kept.push_back(decl);
     }
     unit->codeDeclarationList->swap(kept);
+}
+
+// The kind a `_classes` entry implements AS, as a `for`-clause bit. 0 means "no `type <kind>` word
+// produced this" — an intrinsic collection (INCLUDING `kama_string`, whose ClassInfo comes from the
+// collection registrar and never gets a `kind`), a smart pointer. Those are not user-declared kinds and
+// have nothing to gate; a primitive's conformances come from `type intrinsic` and are judged there,
+// which is the only site that knows their origin and the only one with a line number for them.
+static unsigned implementerKind(const ClassInfo& ci)
+{
+    if (ci.kind == TypeKind::Value)    return IK_Value;
+    if (ci.kind == TypeKind::Resource) return IK_Resource;
+    return 0;
 }
 
 void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnits)
@@ -18211,20 +18272,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     checkChannelSendability();    // reject `channel<T>` whose T reaches a non-atomic shared refcount
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
 
-    // Contract kind-gate enforcement: a class may `implements` a contract only if its kind (value/resource)
-    // is permitted by the contract's `for` clause.
+    // Contract kind-gate enforcement: a type may `implements` a contract only if its kind is named by
+    // that contract's `for` clause. Covers the kinds that own a `_classes` entry.
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.kind != TypeKind::Value && ci.kind != TypeKind::Resource) continue;
+        unsigned k = implementerKind(ci);
+        if (!k) continue;
+        const std::string kw = kamaImplKindListText(k);
         for (auto& base : ci.interfaces) {
-            auto it = _interfaces.find(base);
-            if (it == _interfaces.end()) continue;   // a base class / unresolved — not a kind-gated contract
-            if (ci.kind == TypeKind::Value && !it->second.allowsValue)
-                unsupported(("`" + kv.first + "` is a `value`, but contract `" + base + "` is declared "
-                             "`for resource` — a value can't implement it").c_str(), ci.node ? ci.node->line : 0);
-            if (ci.kind == TypeKind::Resource && !it->second.allowsResource)
-                unsupported(("`" + kv.first + "` is a `resource`, but contract `" + base + "` is declared "
-                             "`for value` — a resource can't implement it").c_str(), ci.node ? ci.node->line : 0);
+            unsigned allowed = implKindsOf(base);
+            if (!allowed || (allowed & k)) continue;   // 0 = a base class, unresolved, or already diagnosed
+            unsupported(("`" + kv.first + "` is a `" + kw + "`, but contract `" + base
+                         + "` is declared `for " + kamaImplKindListText(allowed) + "` — a "
+                         + kw + " can't implement it").c_str(), ci.declLine());
         }
     }
 
