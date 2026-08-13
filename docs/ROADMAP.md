@@ -42,16 +42,20 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 Ordered by severity, after an audit that probed each claim rather than re-reading it (two tracked entries
 died on contact — see §2):
 
-| # | work | where | why here |
-|---|---|---|---|
-| **1** | **gate `extern fn` calls + narrow the `unsafe` definite-assignment clear** | §2 | ► **NEXT**: a double-free with zero `unsafe` in the program is the sharpest 1.0 blocker, and the DA clear must be narrowed before anything pushes more code into `unsafe` |
-| 2 | **contain `UnsafePtr`** — produced/handled only inside `unsafe` | §2 | source-breaking, so before the tag; subsumes the forged-`View` OOB, the `addr` dangling factory, and `null` leakage |
-| 3 | **finish the view model** — see [design/view-model.md](design/view-model.md) | §2 | lexical borrow closes reseat/resize/aliasing/forged-view as one family; measured cost is 17 fixture sites and nothing else |
-| 4 | `kama check` does not type-check expressions | §2 | it is what lets other defects reach `build`; also what makes the six `null` positions look clean |
-| 5 | stdlib parity M2b / M2c | §3 | ↓ surface area, once correctness is done |
+| # | work | closes | where | why here |
+|---|---|---|---|---|
+| **1** | **the unsafe seam — `unsafe fn` replaces `unsafe { }`, private-only, `extern` is unsafe, `UnsafePtr` contained** | ①②⑨ | [design/unsafe-seam.md](design/unsafe-seam.md) | ► **NEXT**: a double-free with zero `unsafe` in the program is the sharpest 1.0 blocker. Function-level `unsafe` fixes ⑨ *by construction* — a function-wide relaxation is correct when `unsafe` **is** the function — and makes a public `UnsafePtr` signature impossible |
+| 2 | **the view model** — lexical borrow + `Viewable` opt-in | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag; measured cost is 17 fixture sites and nothing else. Depends on 1 (a view's ctor is a private `unsafe fn`) |
+| 3 | mark the stdlib `const fn` | prerequisite | §2 | pure annotation, no compiler change; **0 uses today** though enforced on both sides. Needed by ⑤/⑥/⑧ to tell `d.length()` from `d.add()` |
+| 4 | **stdlib + guard cleanup** — `reserve` bumps `mods`; revive or retire the dead `foreach` guard; the missing `xfail`s | ⑦⑧ | §2 | small and independent; ⑧'s guard has *zero* fixtures and neither raw-pointer gate is pinned |
+| 5 | `kama check` does not type-check expressions | ⑩ + the 6 `null` positions | §2 | one root cause: an uninstantiated generic body gets **no** analysis, and the `null` positions only look clean because `check` never types them |
+| 6 | **test-infra gaps the spike walked into** | — | §2 | `tests/trap/` is skipped entirely on the san/wasm/Windows legs, and **no leg runs MSan** — which is exactly why ⑨ was invisible |
+| 7 | narrowing `cast<int8>(300)` → 44, silently | ⑪ | §2 | a wart, not a safety hole; decide the semantics + fixture |
+| 8 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
-The boundary **spike is done** — every entry above came out of it, and the `Optional<UnsafePtr<T>>`
-campaign came out of the list (§2 records why: nothing null-shaped reaches a binary).
+**The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
+came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
+confines `null` for free, since all 75 genuine `null` tokens target one.
 
 **The raw pointer is now spelled `UnsafePtr<T>`.** It is a compiler builtin recognized by the *string*
 `"UnsafePtr"` at ten sites in `src/kama.cemit.cpp` — no keyword, no grammar rule, no `ClassInfo`.
@@ -305,16 +309,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   fourth — storing a borrow in a struct — is *already* forbidden and worked around **25 times** with
   borrowed raw-pointer fields across 18 `type view` declarations, which is finding ⑧'s shape.
 
-  **Ordering, and why.** ① **gate `extern fn` calls** and ② **contain `UnsafePtr`** — an `UnsafePtr`-typed
-  expression may only be produced or handled inside `unsafe { }`, staying legal as a private field and a
-  parameter type. That pair is what the original design intent actually asked for, and it subsumes
-  findings 1–3 and much of `null` (see below). ⚠️ **Finding 9 must be fixed first or alongside**, because
-  containment pushes *more* code into `unsafe` blocks and would widen it. Then the borrow work: mark the
-  stdlib `const fn` (**used zero times in `lib/`+`prelude/` today**, and enforced on both sides already —
-  `:14903` and `:17626`), which is the prerequisite for a view-borrow exclusion rule that can tell
-  `d.length()` from `d.add()` and closes 5–8 as a family. Blast radius for containment, measured: 379
-  `extern fn` declarations whose call sites need marking, ~47 `addr(of:)` lines in `lib/`+`prelude/`, 4
-  `dataPtr()` call sites, and one wrapped line per MMIO assignment on the MCU path.
+  **The remedy is `unsafe fn`, and it has its own brief:
+  [design/unsafe-seam.md](design/unsafe-seam.md).** `unsafe` moves from the block to the function:
+  `unsafe fn` replaces `unsafe { }`, **only a private function may be unsafe**, an `extern fn` is unsafe and
+  callable only from one, and `UnsafePtr` may only be produced or handled inside one — so **no public
+  signature can mention it**. The API boundary becomes the safety boundary.
+
+  That subsumes an earlier draft of this campaign, which kept blocks and bolted on a separate type-position
+  containment rule. Function-level `unsafe` is better on four counts, the first decisive: **it fixes finding
+  ⑨ by construction.** ⑨ is a bug only because the relaxation's scope (the function) does not match the
+  construct's scope (the block); when `unsafe` *is* the function, function-wide relaxation is correct and
+  the mismatch cannot exist. It also makes `public fn UnsafePtr<T> dataPtr()` illegal by construction, is
+  greppable at the declaration (GOALS §5), and removes the ctor-walk trap where wrapping an assignment in
+  `unsafe` made a real escape hole look closed.
+
+  Blast radius, measured: **165** `unsafe { }` blocks in `lib/`+`prelude/`, of which **61** sit directly in
+  a `public fn`/`public ctor` and need a private helper extracted (the `get_unchecked` shape); **379**
+  `extern fn` declarations whose call sites need an enclosing `unsafe fn`; **~47** `addr(of:)` lines; 4
+  `dataPtr()` call sites; one wrapped line per MMIO assignment. The tradeoff accepted deliberately is
+  granularity — an `unsafe fn` relaxes for its whole body — which is tolerable precisely because such
+  functions are small and private by construction.
 
 - **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
   flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field

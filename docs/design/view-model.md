@@ -102,10 +102,28 @@ unrelated.
 
 ## Open spikes — the tuning still to do
 
-**A. How does a type opt in?** A `Viewable` contract is the shape, but its signature is open: does it
-declare an element type only, or must it hand the compiler a root it can name? Whatever it is, it must make
-a free constructor impossible — the forged-view OOB (finding ③) has to die by construction, not by a
-`friend` grant patched onto a leaky ctor.
+**A. How does a type opt in?** The working sketch, and it hangs together:
+
+- A view has **one ctor, taking the `Viewable` host** — never a raw pointer and a length. That is what kills
+  the forged-view OOB (finding ③) *by construction* rather than by a `friend` grant patched onto a leaky
+  ctor. `View.make(UnsafePtr, int32)` simply ceases to exist.
+- **`Viewable` tags the host and grants the view access to nominated private fields.** kama already has the
+  mechanism — `friend Type { members };` — so this is a contract that implies a friend grant, not new
+  machinery.
+- **`Viewable` carries the minting call** in its interface (`fn View<T> view()`), so "how you get a view" is
+  one named thing. It must resolve *structurally*, not through contract dispatch, or it boxes — `foreach`
+  already does exactly that for `iterator()`/`iterMut()` (`emitForeachIterator`), which is the precedent.
+
+Two consequences to settle:
+
+1. **The view's ctor touches the host's `UnsafePtr` fields**, so it must be a private `unsafe fn` under
+   [unsafe-seam.md](unsafe-seam.md). That is the correct coupling — minting a window *is* the unsafe act,
+   performed once, in one audited place, instead of 25 raw fields scattered across 18 types.
+2. **Do NOT parameterise the view by its host** (`View<T, Host>`). Binding the host into the type would give
+   "which" for free, but it infects every signature — `read(into: View<uint8>)` across `std::net`/`io`/`fs`
+   and all of `sort` would have to name a host — and pushed to soundness it converges on lifetimes with
+   extra steps, which GOALS §3e declines. Keep `View<T>`: `Viewable` supplies *no forging*, lexical scope
+   supplies *how long*. That division is the whole design.
 
 **B. Temporary, or block-only?** This single question decides the corpus cost. If `.view()` survives as a
 statement-scoped temporary in argument position, **all 12 non-test sites are unaffected** and only local
@@ -131,15 +149,30 @@ candidate mechanisms — shadow the name outright, mark the binding `const` for 
 *borrowed* with a dedicated diagnostic. The third gives the best error message; the first is the least code.
 Also open: does `foreach` become sugar for `borrow`, or stay a parallel construct?
 
-**D. Composition — may a `View<T>` be a field of a `type view`?** Sound without lifetimes: the outer view is
-already escape-restricted, so the inner one inherits that bound, and indexing gains a bounds check instead
-of a raw deref. **Recommend relaxing the rule but not scheduling the refactor.** Measured honestly, it fits
-only ~9 of the 18 iterators — `Map`/`SlotMap` hold parallel arrays sharing one `cap`, so views would store
-the length 2–3×, and `Deque` is a ring buffer a contiguous view cannot model. Each of the 9 drops one
-pointer, not all of them (`modsp` points at a single `int32`, not a range). And `next()` currently skips
-bounds checking because the loop already proved `pos < len`; going through `View.operator[]` re-checks.
-`-O3` will likely fold that, debug will not — **measure it on the `foreach` path before converting
-anything**, since `tools/check-ecs-zero-dispatch.sh` guards that loop.
+**D. Composition — "view-in-view" was the wrong framing; it is NOT an independent decision.** Dropped as a
+standalone item.
+
+Ask what the nested view windows. In `MyIter<T> { View<T> src; int32 pos; }`, `src` is *not* a window into
+`MyIter` — `MyIter` is not a thing one can window. Both are windows onto the same container. So the field is
+not a nested view at all: **it is the outer view's representation**, and "an iterator is a view plus a
+cursor" already said that. Calling it composition conflated *being* a window with *how a window is
+implemented*.
+
+Genuine nesting does exist and is already allowed: `v.slice(...)` is a sub-window whose extent is contained
+in its parent's, returned as a value rather than stored.
+
+So the question collapses into spike A: **is `View<T>` itself `Viewable`?** It arguably already is — it
+hands out `ViewIter`/`ViewIterMut` and implements `Iterable`/`IterableMut` — in which case `ViewIter`
+windows a `View`, which transitively windows the container, and the chain of custody is well-formed. Decide
+it there, not separately.
+
+The measurement stands and still argues against a refactor: it would fit only ~9 of the 18 iterators
+(`Map`/`SlotMap` hold parallel arrays sharing one `cap`, so views would store the length 2–3×; `Deque` is a
+ring buffer a contiguous view cannot model), each of the 9 drops one pointer rather than all of them
+(`modsp` points at a single `int32`, not a range), and `next()` currently skips bounds checking because the
+loop already proved `pos < len` — `View.operator[]` would re-check. `-O3` will likely fold that, debug will
+not. **Measure on the `foreach` path before converting anything**, since
+`tools/check-ecs-zero-dispatch.sh` guards that loop.
 
 **E. What does a library author write instead of a raw pointer?** The 25 borrowed raw-pointer fields are the
 honest measure of what the model is missing. Spike D covers ~9; the parallel-array and ring-buffer cases
