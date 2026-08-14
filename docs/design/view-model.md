@@ -23,7 +23,10 @@ while the window is open. It does not exist independently — it is always *pair
 looks into. **A borrowing iterator is a view**: not by analogy but literally, since `b743f80` made all
 17 of them `type view`. An iterator is a window plus a cursor.
 
-(A *generating* iterator — `Args`, `IntRange` — borrows nothing and is correctly a `type value`. The
+(A *generating* iterator — `Args` is the only one in the tree; `IntRange` was cited in an earlier draft
+and does not exist — borrows nothing and is correctly a `type value`. The test is whether it holds a
+pointer into memory it does not own: `Chars` holds `UnsafePtr<uint8> data`, `Args` holds an `int32`
+cursor and copies each arg out. The
 distinction matters when spelling the contracts; see [SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-).)
 
 ## The two questions a view type must answer
@@ -294,6 +297,45 @@ equally. That is contained by the unsafe seam (every touch is inside an `unsafe 
 this brief. Worth stating plainly: per-field is not a weakening. It offers the same guarantee as the
 stricter rule against the same adversary, and accepts three sites the stricter rule rejects.
 
+### ⚠️ Two things this rule leaves undecided — settle them BEFORE writing code
+
+The per-field rule replaced the whole-`this` one late, and it is stated only for the shape the four sites
+actually use: a **direct field of `this`**, borrowed by name. Two questions its surface raises have no
+answer yet, and both are cheaper to decide now than to discover mid-implementation.
+
+**1. How deep is a "place"?** `borrow this.buf as v` freezes `this.buf`. What about:
+
+- **a nested path** — `borrow this.inner.buf as v`. Is the frozen place `this.inner.buf`, or all of
+  `this.inner`? Freezing the leaf is more permissive and matches the disjointness argument (two fields of
+  `inner` cannot overlap either); freezing the whole subobject is simpler to implement and to explain.
+  Note the rule must at least reject writing `this.inner` *itself* while a view into `this.inner.buf` is
+  open, since replacing the subobject destroys the buffer.
+- **a field reached through a call** — `borrow this.slot().buf as v` is not a place at all, so presumably
+  it is simply rejected (mint only from a *named* path). Say so explicitly; it is the same "no
+  statement-scoped temporary" instinct applied to the host rather than the view.
+- **an element** — `borrow this.items[i] as v`. The index is a runtime value, so no static rule can say
+  which element is frozen. Likely answer: reject, and require the caller bind the element first. That
+  wants a fixture either way.
+
+The corpus does not force the answer — all four field mints are one level deep (`this.scratch`,
+`this.buf`) — so this is a design choice, not a measurement.
+
+**2. `this` must not escape the block, and "escape" is not yet defined.** `helper(w: ref this)` inside a
+`borrow this.buf as v` hands the callee the ability to name `this.buf` with no further indirection, which
+is finding ⑥ one level up. Passing `this` or `ref this` out has to be rejected — but the same reasoning
+extends to handing out anything the callee can reach `this.buf` through, and the boundary is unclear:
+
+- `ref this` / `this` as an argument — clearly rejected.
+- `ref this.buf` — already dead, since the host is unnameable.
+- **`ref this.otherField`** — is that fine? Under disjointness it should be, but only if the callee cannot
+  get from `otherField` back to the container. In safe kama it cannot; through a stored `UnsafePtr` it can,
+  which is the unsafe-seam residual above rather than a new hole.
+- a **closure or `fnptr` capturing `this`** — kama has `Bindable`/`fnptr` carrying an object, so this is a
+  real path, not hypothetical.
+
+Deciding this is what makes the `borrow` diagnostic writable — *"`this` is borrowed by `v` for this
+block"* is the same UX argument the host-unnameable section makes, and it needs the same precision.
+
 ## ECS, and what the corpus says
 
 [tests/ecs_pattern.kama](../../tests/ecs_pattern.kama) is the data-oriented shape the language is meant to
@@ -353,6 +395,7 @@ that kama picked (c) and the rules match it. SPEC gains a **Views** section with
 mint/derive/pass/store table. Every negative claim has an `xfail`: mint outside a `borrow`/`foreach`;
 naming the host inside a `borrow`; mutating the container inside a `foreach` body (finding ⑧'s missing
 fixture); calling a non-`const fn` on `this` ITSELF inside `borrow this.f as v` (a call on a DIFFERENT
-field is legal — see *Field mints*); naming `this`/`ref this` inside such a block; `View.make` no longer existing;
+field is legal — see *Field mints*); passing `this`/`ref this` out of such a block (scope per *Two things
+this rule leaves undecided*); `View.make` no longer existing;
 `View.over` outside a `Viewable.view()` body; a `Viewable` conformance whose `view()` is missing; and
 `borrow` over a temporary. Then this file is deleted.
