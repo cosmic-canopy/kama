@@ -159,22 +159,24 @@
 #    ^^^^^ source.kama entity.name.type.kama
 #         ^^ source.kama
 >
->    public fn string message() { return "lvl"; }
+>    public const fn string message() { return "lvl"; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama
 #          ^ source.kama
-#           ^^ source.kama keyword.other.kama
-#             ^ source.kama
-#              ^^^^^^ source.kama storage.type.primitive.kama
-#                    ^ source.kama
-#                     ^^^^^^^ source.kama entity.name.function.kama
-#                            ^^^^^ source.kama
-#                                 ^^^^^^ source.kama keyword.control.kama
-#                                       ^ source.kama
-#                                        ^ source.kama string.quoted.double.kama
-#                                         ^^^ source.kama string.quoted.double.kama
-#                                            ^ source.kama string.quoted.double.kama
-#                                             ^^^^ source.kama
+#           ^^^^^ source.kama keyword.other.modifier.kama
+#                ^ source.kama
+#                 ^^ source.kama keyword.other.kama
+#                   ^ source.kama
+#                    ^^^^^^ source.kama storage.type.primitive.kama
+#                          ^ source.kama
+#                           ^^^^^^^ source.kama entity.name.function.kama
+#                                  ^^^^^ source.kama
+#                                       ^^^^^^ source.kama keyword.control.kama
+#                                             ^ source.kama
+#                                              ^ source.kama string.quoted.double.kama
+#                                               ^^^ source.kama string.quoted.double.kama
+#                                                  ^ source.kama string.quoted.double.kama
+#                                                   ^^^^ source.kama
 >}
 #^^ source.kama
 >

@@ -2,6 +2,6 @@
 type enum Bad implements Error {
     A, B;
     int32 count;
-    public fn string message() { return "x"; }
+    public const fn string message() { return "x"; }
 }
 fn int32 main() { return 0; }

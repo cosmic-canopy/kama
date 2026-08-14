@@ -8,7 +8,7 @@ import std::memory::{Owned, Shared};
 type enum ShapeErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 
 type contract Shape for value { fn int32 area(); }

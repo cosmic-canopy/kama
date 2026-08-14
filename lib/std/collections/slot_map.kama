@@ -89,8 +89,8 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
         this.reserve(n: capacity);
     }
 
-    public fn int32 length() { return this.len; }
-    public fn bool isEmpty() { return this.len == 0; }
+    public const fn int32 length() { return this.len; }
+    public const fn bool isEmpty() { return this.len == 0; }
 
     // Grow the three parallel buffers so at least `n` slots fit without a later reallocation (a no-op if
     // already big enough). Lets a caller who knows the size up front skip the incremental doublings.
@@ -117,12 +117,12 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator> {
     }
 
     // True iff `h` still points at its original occupant — index in range AND the slot's generation unchanged.
-    unsafe fn bool valid(Handle h) {
+    unsafe const fn bool valid(Handle h) {
         if (h.index < 0 || h.index >= this.slotCount) { return false; }
         uint32 g = this.gens[h.index];
         return g == h.generation;   // handle stamps are odd, so a match implies the slot is still occupied
     }
-    public fn bool contains(Handle handle) { return this.valid(h: handle); }
+    public const fn bool contains(Handle handle) { return this.valid(h: handle); }
 
     // Deep-copy a stored value through a typed `ref V` (a raw-buffer `copy this.values[i]` would drop the copy
     // marker and alias — see `Map.cloneVal`).

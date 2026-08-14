@@ -5,7 +5,7 @@ import std::memory::{Owned};
 type enum BoxErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 type value Box {
     int32 v;

@@ -4,12 +4,12 @@
 type enum IoError implements Error {
     NotFound, Other(int32 code);
 
-    public fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "io"; }; }
+    public const fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "io"; }; }
 }
 type enum ParseError implements Error {
     Bad, Eof;
 
-    public fn string message() { return match (this) { case Bad: "bad"; case Eof: "eof"; }; }
+    public const fn string message() { return match (this) { case Bad: "bad"; case Eof: "eof"; }; }
 }
 
 fn Result<int32, Owned<Error>> f(int32 w) {

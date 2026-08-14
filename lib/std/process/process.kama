@@ -62,7 +62,7 @@ type enum Stdio { Inherit, Piped, Null }
 type value ExitStatus {
     public int32 code;
     public int32 signal;
-    public fn bool success() { return this.signal == 0 && this.code == 0; }
+    public const fn bool success() { return this.signal == 0 && this.code == 0; }
 }
 
 // The captured result of `run()`: the finished status plus the fully-drained stdout/stderr bytes. Move-only
@@ -77,7 +77,7 @@ type resource Output {
     public ctor make(ExitStatus status, DynamicArray<uint8> stdout, DynamicArray<uint8> stderr) {
         this.st = status; this.outBytes = give stdout; this.errBytes = give stderr;
     }
-    public fn ExitStatus status() { return this.st; }
+    public const fn ExitStatus status() { return this.st; }
     public fn ref DynamicArray<uint8> stdout() { return this.outBytes; }
     public fn ref DynamicArray<uint8> stderr() { return this.errBytes; }
 }
@@ -303,7 +303,7 @@ type resource Process {
     }
 
     // The child's process id (Rust `.id()`).
-    public fn int32 id() { return this.pid; }
+    public const fn int32 id() { return this.pid; }
 
     // Borrow the parent-side pipe ends (meaningful only when that stream was Piped — else it's a File{0}
     // sentinel over stdin/stdout, so don't read/write a non-Piped stream). Write to stdin(), read stdout()/

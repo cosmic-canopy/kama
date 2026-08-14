@@ -4,7 +4,7 @@
 type enum IoError implements Error {
     NotFound, Other(int32 code);
 
-    public fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "oth"; }; }
+    public const fn string message() { return match (this) { case NotFound: "nf"; case Other(code: c): "oth"; }; }
 }
 fn Result<int32, Owned<Error>> f(int32 which) {
     if (which == 0) { return Result::Ok(value: 9); }

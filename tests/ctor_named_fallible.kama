@@ -4,7 +4,7 @@
 type enum PercentErr implements Error {
     OutOfRange;
 
-    public fn string message() { return "out of range"; }
+    public const fn string message() { return "out of range"; }
 }
 type value Percent {
     public int32 v;

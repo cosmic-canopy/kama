@@ -8,7 +8,7 @@ import std::memory::{Owned, Shared};
 type enum GaugeErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 
 type resource Gauge {

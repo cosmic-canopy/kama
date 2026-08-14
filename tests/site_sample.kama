@@ -21,7 +21,7 @@ type value Steel
 type enum ForgeError implements Error {
     TooFewFolds;
 
-    public fn string message() { return "a blade needs at least 8 folds"; }
+    public const fn string message() { return "a blade needs at least 8 folds"; }
 }
 
 

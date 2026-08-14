@@ -9,7 +9,7 @@ type enum Tag { Red, Blue }
 type enum MakeErr implements Error {
     TooBig;
 
-    public fn string message() { return "too big"; }
+    public const fn string message() { return "too big"; }
 }
 
 type value Cell implements Spawnable {

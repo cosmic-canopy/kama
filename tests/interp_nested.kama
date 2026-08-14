@@ -7,7 +7,7 @@
 type value Pt implements Format {
     public int32 x; public int32 y;
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
-    public fn void format(ref Formatter f) {
+    public const fn void format(ref Formatter f) {
         f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
         f.writeStr(s: ","); f.writeI64(v: cast<int64>(this.y)); f.writeStr(s: ")");
     }
@@ -17,7 +17,7 @@ type value Seg implements Format {
     public Pt a; public Pt b;
     public ctor make(Pt a, Pt b) { this.a = a; this.b = b; return this; }
     // writes the INNER values into the caller's sink — no intermediate string anywhere
-    public fn void format(ref Formatter f) {
+    public const fn void format(ref Formatter f) {
         f.writeStr(s: "[");
         this.a.format(f: ref f);
         f.writeStr(s: "->");

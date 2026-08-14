@@ -126,7 +126,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     }
 
     // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller.
-    public fn isize rawHandle() { return this.fd; }
+    public const fn isize rawHandle() { return this.fd; }
 
     // The test is `>= 0`, not `> 0` — the explicit `isize fd = -1` states the empty niche, so fd 0 is an
     // ownable descriptor rather than a second sentinel (same reconcile as std::fs::File's `~File`).
@@ -180,7 +180,7 @@ type resource TcpListener {
     }
 
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
-    public fn isize rawHandle() { return this.fd; }
+    public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
 }

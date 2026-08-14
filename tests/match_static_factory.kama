@@ -4,7 +4,7 @@
 type enum WidgetErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 type resource Widget {
     int32 id;

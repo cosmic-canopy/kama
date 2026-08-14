@@ -44,13 +44,13 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf; this.alloc = allocator;
     }
 
-    public fn int32 keyCount() { return this.keys.length(); }
-    public fn bool isLeaf() { return this.leaf; }
-    public fn bool full() { return this.keys.length() >= 11; }      // 2B-1
+    public const fn int32 keyCount() { return this.keys.length(); }
+    public const fn bool isLeaf() { return this.leaf; }
+    public const fn bool full() { return this.keys.length() >= 11; }      // 2B-1
 
     // Three-way compare through a `ref K` receiver so a primitive key's scalar intrinsic conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
-    fn Ordering cmpKeys(ref K a, ref K b) { return a.compareTo(other: b); }
+    const fn Ordering cmpKeys(const ref K a, const ref K b) { return a.compareTo(other: b); }
     fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
     fn K cloneKey(ref K k) when [K: Copyable<K>] { return copy k; }
 
@@ -71,7 +71,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
 
     // --- read paths ---
-    public fn bool contains(ref K key) {
+    public const fn bool contains(const ref K key) {
         int32 i = 0; int32 n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -269,7 +269,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
 
     // --- delete helpers (each delegates to the backing DynamicArray's tested move-out / shift) ---
-    fn int32 kidCount() { return this.kids.length(); }
+    const fn int32 kidCount() { return this.kids.length(); }
     fn Owned<BTreeNode<K,V,A>, A> takeFirstKid() { return this.kids.remove(index: 0); }
     fn Owned<BTreeNode<K,V,A>, A> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
     // Remove + return THIS node's own last (resp. first) pair — the value by return, the key via out-pointer
@@ -430,9 +430,9 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
     // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
-    fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
+    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
         int32 i = 0; int32 n = this.keys.length();
         while (i < n) {
             if (!this.leaf) {
@@ -489,9 +489,9 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         this.root = give r;
     }
 
-    public fn int32 length() { return this.len; }
-    public fn bool isEmpty() { return this.len == 0; }
-    public fn bool contains(ref K key) { return this.root.contains(key: key); }
+    public const fn int32 length() { return this.len; }
+    public const fn bool isEmpty() { return this.len == 0; }
+    public const fn bool contains(const ref K key) { return this.root.contains(key: key); }
     public fn Optional<V> get(ref K key) when [V: Copyable<V>] { return this.root.get(key: key); }
     public fn ref V getRef(ref K key) { return this.root.getRef(key: key); }
 

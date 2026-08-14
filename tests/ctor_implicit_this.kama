@@ -9,7 +9,7 @@ import std::memory::{Owned};
 type enum E implements Error {
     Bad;
 
-    public fn string message() { return "bad"; }
+    public const fn string message() { return "bad"; }
 }
 
 type value Cell { int32 v; public ctor of(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }

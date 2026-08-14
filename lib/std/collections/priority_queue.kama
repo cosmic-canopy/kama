@@ -54,14 +54,14 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
         this.maxOrder = maxOrder;
     }
 
-    public fn int32 length() { return this.data.length(); }
-    public fn bool isEmpty() { return this.data.length() == 0; }
+    public const fn int32 length() { return this.data.length(); }
+    public const fn bool isEmpty() { return this.data.length() == 0; }
 
     // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
     // max-heap the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
     // receiver is a nameable ref that resolves `compareTo` for a primitive's intrinsic conformance AND a user element (like
     // `DynamicArray.indexOf`'s `equals`); a raw `data[i]` isn't a nameable receiver.
-    fn bool higher(ref T a, ref T b) {
+    const fn bool higher(const ref T a, const ref T b) {
         Ordering o = a.compareTo(other: b);
         return match (o) {
             case Less:    !this.maxOrder;   // a < b sits higher in a MIN-heap
@@ -115,7 +115,7 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
 
     // Look at the root WITHOUT removing it — a copy (present only for a Copyable element), the value analogue
     // of `pop`. For a move-only element borrow it instead via `peekRef`.
-    public fn Optional<T> peek() when [T: Copyable<T>] {
+    public const fn Optional<T> peek() when [T: Copyable<T>] {
         if (this.data.length() == 0) { return Optional::None; }
         return Optional::Some(value: copy this.data[0]);
     }

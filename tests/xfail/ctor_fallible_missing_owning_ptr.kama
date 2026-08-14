@@ -4,7 +4,7 @@ import std::memory::{Owned};
 type enum HolderErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } }
 type resource Holder {

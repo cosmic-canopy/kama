@@ -6,7 +6,7 @@
 type enum PointErr implements Error {
     NegativeX;
 
-    public fn string message() { return "negative x"; }
+    public const fn string message() { return "negative x"; }
 }
 type value Point {
     int32 x;

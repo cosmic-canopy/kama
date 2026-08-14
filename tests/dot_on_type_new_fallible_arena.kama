@@ -9,7 +9,7 @@ import std::collections::{Arena, BumpAllocator};
 type enum OpenErr implements Error {
     Negative;
 
-    public fn string message() { return "negative"; }
+    public const fn string message() { return "negative"; }
 }
 
 type value Gauge {

@@ -13,7 +13,7 @@ type resource Probe {
 type enum LoadError implements Error {
     Missing, Wrapped(Shared<Probe> probe);
 
-    public fn string message() { return match (this) { case Missing: "m"; case Wrapped(probe: p): "w"; }; }
+    public const fn string message() { return match (this) { case Missing: "m"; case Wrapped(probe: p): "w"; }; }
 }
 fn Result<int32, Owned<Error>> load(bool ok) {
     if (ok) { return Result::Ok(value: 5); }

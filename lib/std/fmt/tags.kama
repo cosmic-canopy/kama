@@ -55,7 +55,7 @@ type resource SqlQuery {
         this.text = give text; this.params = give params;
     }
     public fn ref string queryText() { return this.text; }
-    public fn int32 paramCount() { return this.params.length(); }
+    public const fn int32 paramCount() { return this.params.length(); }
     public fn ref string param(int32 at) { return this.params[at]; }
 }
 

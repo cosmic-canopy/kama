@@ -8,7 +8,7 @@
 type enum IoError implements Error {
     NotFound, Other(int32 code);
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case NotFound: "nf";       // 2
             case Other(code: c): "other";    // 5
@@ -18,7 +18,7 @@ type enum IoError implements Error {
 type enum ParseError implements Error {
     BadToken, Eof;
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case BadToken: "bad";      // 3
             case Eof:      "eof";      // 3

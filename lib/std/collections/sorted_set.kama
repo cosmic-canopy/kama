@@ -20,14 +20,14 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
-    public fn bool contains(ref K key) { return this.m.contains(key: key); }
+    public const fn bool contains(const ref K key) { return this.m.contains(key: key); }
     // `SortedMap.remove` returns the removed value (`Optional<Unit>` here); a set reports presence as a bool.
     public fn bool remove(ref K key) {
         Optional<Unit> hit = this.m.remove(key: key);
         return match (hit) { case Some(value: u): true; case None: false; };
     }
-    public fn int32 length() { return this.m.length(); }
-    public fn bool isEmpty() { return this.m.isEmpty(); }
+    public const fn int32 length() { return this.m.length(); }
+    public const fn bool isEmpty() { return this.m.isEmpty(); }
     public fn void clear() { this.m.clear(); }
 
     // Ordered queries + iteration forward to the backing map's key views.
@@ -42,7 +42,7 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
 
     // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
-    fn Result<Unit, Owned<Error>> serElem(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
         DynamicArray<K> es = this.m.keys();
         w.beginArray(count: cast<usize>(es.length()));

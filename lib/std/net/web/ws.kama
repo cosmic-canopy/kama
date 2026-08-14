@@ -35,7 +35,7 @@ type resource WsConnection implements ReliableStream, Reader, Writer {
         return Result::Ok(value: WsConnection.make(handle: h));
     }
 
-    public unsafe fn WsState state() {
+    public unsafe const fn WsState state() {
         int32 s = kama_ws_state(h: this.handle);
         if (s == 0) { return WsState::Connecting; }
         if (s == 1) { return WsState::Open; }

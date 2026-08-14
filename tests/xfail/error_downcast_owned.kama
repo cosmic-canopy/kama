@@ -7,7 +7,7 @@ type resource Probe { UnsafePtr p; public unsafe Probe(){ this.p = malloc(n: 8);
 type enum LoadError implements Error {
     Missing, Wrapped(Shared<Probe> probe);
 
-    public fn string message(){ return "x"; }
+    public const fn string message(){ return "x"; }
 }
 fn Result<int32, Owned<Error>> mk() { Shared<Probe> sp = new Probe(); return Result::Err(error: LoadError::Wrapped(probe: give sp)); }
 fn int32 peek(Owned<Error> e) { return match (e.as<LoadError>()) { case Some(value: x): 1; case None: 0; }; }   // ERROR: LoadError owns resources

@@ -4,7 +4,7 @@
 type value Glyph implements Format {
     public char ch;
     public ctor make(char c) { this.ch = c; return this; }
-    public fn void format(ref Formatter f) { f.writeChar(c: this.ch); }
+    public const fn void format(ref Formatter f) { f.writeChar(c: this.ch); }
 }
 
 fn int main() {

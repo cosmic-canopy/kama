@@ -185,10 +185,10 @@ type resource JsonWriter<W: Writer> implements Serializer {
     }
 
     // --- sticky error queries (mirror of JsonReader) ---
-    public fn bool failed() { return this.err; }
+    public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
-    public fn SerError errorCode() { return this.code; }
+    public const fn SerError errorCode() { return this.code; }
 }
 
 // Serialize any `Serialize` value to a JSON string. Takes the value behind the `Serialize` interface
@@ -458,7 +458,7 @@ type resource JsonReader implements Deserializer {
         else if (c == 110ui8) { bool n = this.readNull(); }
         else { string t = this.numToken(); }
     }
-    public fn bool failed() { return this.err; }
+    public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }   // the generated enum deserialize flags an unknown tag
 
     // --- graph (object-table) reads: the deserialize twin of writeRef/beginGraph/beginTableEntry/… ---
@@ -498,7 +498,7 @@ type resource JsonReader implements Deserializer {
     // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `decode` surfaces it instead of
     // the generic `Malformed`.
     public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public fn DeError errorCode() { return this.code; }
+    public const fn DeError errorCode() { return this.code; }
 }
 
 // Deserialize a JSON string into a `Deserialize` type — the one-liner entry. Name the target with turbofish:

@@ -7,7 +7,7 @@ import std::memory::{Owned};
 type enum BufferErr implements Error {
     BadSize;
 
-    public fn string message() { return "bad size"; }
+    public const fn string message() { return "bad size"; }
 }
 type resource Buffer {
     int32 size;

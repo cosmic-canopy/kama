@@ -45,7 +45,7 @@ type resource File implements Reader, Writer {
 
     // The raw descriptor (for a readiness Poller etc.), mirroring TcpStream.rawHandle(). Borrow-only — the
     // File still owns the fd and closes it on drop.
-    public fn int32 rawFd() { return this.fd; }
+    public const fn int32 rawFd() { return this.fd; }
 
     // Close the descriptor NOW (idempotent) instead of waiting for drop — e.g. to send EOF down a pipe
     // (std::process closeStdin). Zeroes the fd so the destructor's `fd > 0` guard won't double-close.

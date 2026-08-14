@@ -18,7 +18,7 @@ type enum Reading {
 type enum DiskError implements Error {
     Full(int32 bytes), Missing;
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case Full(bytes: b): "full";   // 4
             case Missing:        "gone";   // 4

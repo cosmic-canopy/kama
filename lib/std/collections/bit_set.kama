@@ -62,25 +62,25 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     }
 
     // Bits currently addressable without a grow (word count × 64) — capacity, not the highest set bit.
-    public fn int32 capacity() { return this.wordCount * 64; }
+    public const fn int32 capacity() { return this.wordCount * 64; }
 
     // Count of set bits (population count) — a Kernighan `x & (x - 1)` fold per word (no `__builtin_popcountll`).
-    fn int32 popcount(uint64 x) { int32 c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
-    public unsafe fn int32 count() {
+    const fn int32 popcount(uint64 x) { int32 c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
+    public unsafe const fn int32 count() {
         int32 total = 0; int32 i = 0;
         while (i < this.wordCount) { total = total + this.popcount(x: this.words[i]); i = i + 1; }
         return total;
     }
 
     // True iff no bit is set (every word is zero).
-    public unsafe fn bool isEmpty() {
+    public unsafe const fn bool isEmpty() {
         int32 i = 0;
         while (i < this.wordCount) { if (this.words[i] != 0ui64) { return false; } i = i + 1; }
         return true;
     }
 
     // Read bit `index`; an out-of-range bit is simply unset (`false`), never a grow.
-    public unsafe fn bool test(int32 index) {
+    public unsafe const fn bool test(int32 index) {
         if (index < 0) { return false; }
         int32 w = index >> 6;
         if (w >= this.wordCount) { return false; }
@@ -139,7 +139,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     }
 
     // True iff every set bit of this is also set in `other` (this ⊆ other).
-    public unsafe fn bool isSubsetOf(ref BitSet<A> other) {
+    public unsafe const fn bool isSubsetOf(const ref BitSet<A> other) {
         int32 i = 0;
         while (i < this.wordCount) {
             if ((this.words[i] & (~ other.rawWord(i: i))) != 0ui64) { return false; }
@@ -172,8 +172,8 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // --- internals ---
     // Word accessors used by the set-algebra ops + copy to reach ANOTHER BitSet without touching its private
     // fields cross-instance (a method call on `other`, like `Equatable.equals(other)`, is the safe pattern).
-    fn int32 rawWordCount() { return this.wordCount; }
-    unsafe fn uint64 rawWord(int32 i) { if (i < 0 || i >= this.wordCount) { return 0ui64; } return this.words[i]; }
+    const fn int32 rawWordCount() { return this.wordCount; }
+    unsafe const fn uint64 rawWord(int32 i) { if (i < 0 || i >= this.wordCount) { return 0ui64; } return this.words[i]; }
     unsafe fn void rawSetWord(int32 i, uint64 value) { this.words[i] = value; }
 
     // Ensure word `wordIndex` is addressable, growing (doubling) if needed.

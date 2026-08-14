@@ -81,7 +81,7 @@ type contract Allocator for value {
 // model). `for value, resource, enum` — an error may be any of the three; every one in tree today is an enum. `message()` gives every error a uniform,
 // dynamically-dispatched description; branch on the specific kind by recovering the concrete enum with
 // `error.as<ConcreteError>()`. Language-level, so it lives in the prelude and survives `--no-std`.
-type contract Error for value, resource, enum { fn string message(); }
+type contract Error for value, resource, enum { const fn string message(); }
 // Primitive conformances (pure-kama, NO compiler blessing) — hosted here so `string`/`int32` satisfy the
 // standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,
@@ -208,14 +208,14 @@ type contract Serializer for resource {
     // STICKY error model (mirror of Deserializer): a write that can't proceed — an I/O sink error, or a
     // value the format can't represent (`NaN`/`Inf` in JSON) — sets `failed()` and records a `SerError`.
     // A fallible `serialize` writes bare (no per-write branching) and checks `failed()` once at the end.
-    fn bool failed(); fn void fail(); fn void failWith(SerError e); fn SerError errorCode();
+    const fn bool failed(); fn void fail(); fn void failWith(SerError e); const fn SerError errorCode();
 }
 // SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
 // fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
 type enum SerError implements Error {
     NotRepresentable, IoError;
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case NotRepresentable:  "value not representable in this format";
             case IoError:           "serialization i/o error";
@@ -235,7 +235,7 @@ type contract Serialize for value, resource, enum, intrinsic { const fn Result<U
 type enum DeError implements Error {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId;
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case Malformed:            "malformed input";
             case UnexpectedEnd:        "unexpected end of input";
@@ -253,14 +253,14 @@ type contract Deserializer for resource {
     fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();
     fn float32 readF32(); fn float64 readF64();
     fn bool readBool(); fn char readChar(); fn string readString();
-    fn bool readNull(); fn void skipValue(); fn bool failed(); fn void fail();
+    fn bool readNull(); fn void skipValue(); const fn bool failed(); fn void fail();
     // Graph (object-table) reads — the deserialize twin of the Serializer's writeRef/beginGraph/…: `beginGraph`
     // consumes `{"root":id,"objects":` (bookmarking the objects `{` for the two-pass rewind) and returns the
     // root id; `rewindGraph` re-enters that table for pass 2; `readRef` reads a bare id; `endGraph` closes the
     // envelope; `failWith` records a specific DeError (so a dangling ref surfaces `UnresolvedReference`, not the
     // generic `Malformed`). A non-graph backend can no-op these.
     fn uint64 beginGraph(); fn void rewindGraph(); fn uint64 entryKey(); fn uint64 readRef();
-    fn void endGraph(); fn void failWith(DeError e); fn DeError errorCode();
+    fn void endGraph(); fn void failWith(DeError e); const fn DeError errorCode();
 }
 // A marker contract (like Movable): the `@generate(Deserialize)` codegen supplies the static factory
 // `deserialize(ref Deserializer) -> Result<This, DeError>` as an injected conformance, and `tryParse<T: Deserialize>`
@@ -539,9 +539,9 @@ extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // Amortized-growth byte append onto the buffer (kama_runtime.h). `DynamicArray` is a std::collections library
 // generic — unavailable this early (the prelude is collected before any std module), so the sink is backed by
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
-extern fn void kama_str_push(UnsafePtr<string> buf, ref string src);
+extern fn void kama_str_push(UnsafePtr<string> buf, const ref string src);
 extern fn string kama_str_take(UnsafePtr<string> buf);
-type contract Format for value, resource, intrinsic { fn void format(ref Formatter f); }
+type contract Format for value, resource, intrinsic { const fn void format(ref Formatter f); }
 // The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes
 // its decimal/UTF-8 text via a runtime formatter, whose bytes are appended to the single backing buffer, so a
 // whole nested value materializes in ONE growing allocation rather than one per `+`.
@@ -549,7 +549,7 @@ type resource Formatter {
     string buf;
     public ctor make() { this.buf = ""; }
     // Append a string's UTF-8 bytes verbatim (borrowed — reads the fat pointer, doesn't dup the bytes).
-    public unsafe fn void writeStr(ref string s) { kama_str_push(buf: addr(of: this.buf), src: s); }
+    public unsafe fn void writeStr(const ref string s) { kama_str_push(buf: addr(of: this.buf), src: s); }
     public unsafe fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }
     public unsafe fn void writeU64(uint64 v)  { string t = kama_fmt_u64(v: v);  this.writeStr(s: ref t); }
     public unsafe fn void writeF64(float64 v) { string t = kama_fmt_f64(v: v);  this.writeStr(s: ref t); }
@@ -573,16 +573,16 @@ type resource Formatter {
 // `char` renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an
 // interpolation hole, so the two agree whether the value arrives directly or through a `<T: Format>` bound.
 type intrinsic <int8, int16, int32, int64> implements Format {
-    public fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); }
+    public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); }
 }
 type intrinsic <uint8, uint16, uint32, uint64> implements Format {
-    public fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); }
+    public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); }
 }
-type intrinsic <float32> implements Format { public fn void format(ref Formatter f) { f.writeF32(v: this); } }
-type intrinsic <float64> implements Format { public fn void format(ref Formatter f) { f.writeF64(v: this); } }
-type intrinsic <bool>    implements Format { public fn void format(ref Formatter f) { f.writeBool(v: this); } }
-type intrinsic <char>    implements Format { public fn void format(ref Formatter f) { f.writeChar(c: this); } }
-type intrinsic <string>  implements Format { public fn void format(ref Formatter f) { f.writeStr(s: this); } }
+type intrinsic <float32> implements Format { public const fn void format(ref Formatter f) { f.writeF32(v: this); } }
+type intrinsic <float64> implements Format { public const fn void format(ref Formatter f) { f.writeF64(v: this); } }
+type intrinsic <bool>    implements Format { public const fn void format(ref Formatter f) { f.writeBool(v: this); } }
+type intrinsic <char>    implements Format { public const fn void format(ref Formatter f) { f.writeChar(c: this); } }
+type intrinsic <string>  implements Format { public const fn void format(ref Formatter f) { f.writeStr(s: this); } }
 
 // A tagged string `html"…${x}…"` hands its trusted literal PARTS and its rendered HOLE values to a tag
 // function `fn R name(ref Template t)` — kept SEPARATE so the tag can escape holes (html), dedent parts
@@ -594,10 +594,10 @@ type value Template {
     int32 _nparts;
     UnsafePtr<string> _holes;
     int32 _nholes;
-    public fn int32 partCount() { return this._nparts; }
-    public fn int32 holeCount() { return this._nholes; }
+    public const fn int32 partCount() { return this._nparts; }
+    public const fn int32 holeCount() { return this._nholes; }
     // The i-th literal part / rendered hole, as a fresh owned copy (the backing bytes are borrowed, so a copy
     // is what a tag can keep, iterate, or `give` onward).
-    public unsafe fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return copy this._parts[at]; }
-    public unsafe fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return copy this._holes[at]; }
+    public unsafe const fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return copy this._parts[at]; }
+    public unsafe const fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return copy this._holes[at]; }
 }

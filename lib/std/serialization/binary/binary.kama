@@ -120,10 +120,10 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void endGraph() { this.byte(b: 17ui8); this.byte(b: 23ui8); }   // table obj-end + graph-end
 
     // --- sticky error queries ---
-    public fn bool failed() { return this.err; }
+    public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
-    public fn SerError errorCode() { return this.code; }
+    public const fn SerError errorCode() { return this.code; }
 }
 
 // A KBIN reader over an owned byte buffer, implementing Deserializer with a STICKY error flag (a malformed
@@ -226,7 +226,7 @@ type resource BinaryReader implements Deserializer {
         else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }
     }
-    public fn bool failed() { return this.err; }
+    public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
 
     // --- graph (object-table) reads — the twin of writeRef/beginGraph/beginTableEntry/… ---
@@ -241,7 +241,7 @@ type resource BinaryReader implements Deserializer {
     public fn uint64 readRef() { this.expectTag(t: 22ui8); return this.getU(n: 8); }
     public fn void endGraph() { this.expectTag(t: 23ui8); }   // the table obj-end was consumed by moreFields
     public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public fn DeError errorCode() { return this.code; }
+    public const fn DeError errorCode() { return this.code; }
 }
 
 // Serialize any `Serialize` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a

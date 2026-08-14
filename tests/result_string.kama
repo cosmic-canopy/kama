@@ -1,7 +1,7 @@
 type enum DescribeErr implements Error {
     Fail;
 
-    public fn string message() { return "fail"; }
+    public const fn string message() { return "fail"; }
 }
 fn int describe(int32 code)
 {

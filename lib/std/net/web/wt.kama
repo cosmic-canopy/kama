@@ -33,7 +33,7 @@ type resource WtConnection implements DatagramSocket {
         return Result::Ok(value: WtConnection.make(handle: h));
     }
 
-    public unsafe fn WtState state() {
+    public unsafe const fn WtState state() {
         int32 s = kama_wt_state(h: this.handle);
         if (s == 0) { return WtState::Connecting; }
         if (s == 1) { return WtState::Connected; }

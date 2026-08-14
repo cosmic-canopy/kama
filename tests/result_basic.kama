@@ -1,7 +1,7 @@
 type enum DivErr implements Error {
     DivByZero;
 
-    public fn string message() { return "div by zero"; }
+    public const fn string message() { return "div by zero"; }
 }
 fn int divide(int32 a, int32 b)
 {

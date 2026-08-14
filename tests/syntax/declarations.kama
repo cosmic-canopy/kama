@@ -39,7 +39,7 @@ type enum Level implements Error {
     Warn,
     Fatal;
 
-    public fn string message() { return "lvl"; }
+    public const fn string message() { return "lvl"; }
 }
 
 // `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.

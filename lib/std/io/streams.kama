@@ -98,7 +98,7 @@ type resource StringWriter implements Writer {
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // How many bytes have accumulated so far.
-    public fn int32 length() { return this.buf.length(); }
+    public const fn int32 length() { return this.buf.length(); }
 
     // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
     public unsafe fn string finish() {
