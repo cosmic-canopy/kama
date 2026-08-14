@@ -2,9 +2,9 @@
 // so reads/writes through it are real MMIO accesses.
 static hardware UnsafePtr<uint32> reg;
 
-fn int32 main() {
+unsafe fn int32 main() {
     uint32 cell = 7;
     reg = addr(of: cell);
-    unsafe { reg[0] = 42; }
-    unsafe { return cast<int32>(reg[0]); }   // 42
+    reg[0] = 42;
+    return cast<int32>(reg[0]);   // 42
 }

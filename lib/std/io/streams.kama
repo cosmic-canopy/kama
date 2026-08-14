@@ -101,9 +101,9 @@ type resource StringWriter implements Writer {
     public fn int32 length() { return this.buf.length(); }
 
     // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
-    public fn string finish() {
+    public unsafe fn string finish() {
         if (this.buf.length() == 0) { return ""; }
-        unsafe { return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: cast<int32>(this.buf.length())); }
+        return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: cast<int32>(this.buf.length()));
     }
 
     // Move the accumulated bytes out as a raw `DynamicArray<uint8>`, leaving the writer empty. The byte-oriented

@@ -8,10 +8,10 @@ type resource Widget {
     ~Widget() { }
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     UnsafePtr<Widget> buf = null;
-    unsafe { buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)))); }
+    buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget))));
     Widget w = Widget.make(id: 42);
-    unsafe { buf[0] = give w; }   // consumes w
+    buf[0] = give w;   // consumes w
     return w.get();          // use-after-move -> rejected
 }

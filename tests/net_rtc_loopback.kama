@@ -22,47 +22,45 @@ fn void finish(int32 a, int32 b, int32 code) { kama_rtc_close(h: a); kama_rtc_cl
 
 // state block: int32 header [A, B, phase, ticks] at bytes 0..15; SDP scratch at offset 64 (4 KB); datagram
 // scratch at offset 4200.
-fn int32 tick(UnsafePtr state) {
-    unsafe {
-        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
-        UnsafePtr<uint8> buf = cast<UnsafePtr<uint8>>(state);
-        int32 a = hdr[0];
-        int32 b = hdr[1];
-        hdr[3] = hdr[3] + 1;
-        if (hdr[3] > 5000000) { finish(a: a, b: b, code: 70); }        // timeout
-        int32 phase = hdr[2];
-        if (phase == 0) {                                              // A's offer ready -> give to B, B answers
-            int32 len = kama_rtc_local_sdp(h: a, buf: addr(of: buf[64]), n: cast<usize>(4096));
+unsafe fn int32 tick(UnsafePtr state) {
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
+    UnsafePtr<uint8> buf = cast<UnsafePtr<uint8>>(state);
+    int32 a = hdr[0];
+    int32 b = hdr[1];
+    hdr[3] = hdr[3] + 1;
+    if (hdr[3] > 5000000) { finish(a: a, b: b, code: 70); }        // timeout
+    int32 phase = hdr[2];
+    if (phase == 0) {                                              // A's offer ready -> give to B, B answers
+        int32 len = kama_rtc_local_sdp(h: a, buf: addr(of: buf[64]), n: cast<usize>(4096));
+        if (len > 0) {
+            kama_rtc_set_remote(h: b, buf: addr(of: buf[64]), n: cast<usize>(len));
+            kama_rtc_answer(h: b);
+            hdr[2] = 1;
+        }
+    } else {
+        if (phase == 1) {                                          // B's answer ready -> give to A
+            int32 len = kama_rtc_local_sdp(h: b, buf: addr(of: buf[64]), n: cast<usize>(4096));
             if (len > 0) {
-                kama_rtc_set_remote(h: b, buf: addr(of: buf[64]), n: cast<usize>(len));
-                kama_rtc_answer(h: b);
-                hdr[2] = 1;
+                kama_rtc_set_remote(h: a, buf: addr(of: buf[64]), n: cast<usize>(len));
+                hdr[2] = 2;
             }
         } else {
-            if (phase == 1) {                                          // B's answer ready -> give to A
-                int32 len = kama_rtc_local_sdp(h: b, buf: addr(of: buf[64]), n: cast<usize>(4096));
-                if (len > 0) {
-                    kama_rtc_set_remote(h: a, buf: addr(of: buf[64]), n: cast<usize>(len));
-                    hdr[2] = 2;
+            if (phase == 2) {                                      // wait for both channels open, then send
+                int32 sa = kama_rtc_dc_state(h: a);
+                int32 sb = kama_rtc_dc_state(h: b);
+                if ((sa == 3) || (sb == 3)) { finish(a: a, b: b, code: 71); }
+                if ((sa == 1) && (sb == 1)) {
+                    buf[4200] = cast<uint8>(10); buf[4201] = cast<uint8>(20);
+                    buf[4202] = cast<uint8>(30); buf[4203] = cast<uint8>(40);
+                    if (kama_rtc_send(h: a, buf: addr(of: buf[4200]), n: cast<usize>(4)) != 0) { finish(a: a, b: b, code: 72); }
+                    hdr[2] = 3;
                 }
-            } else {
-                if (phase == 2) {                                      // wait for both channels open, then send
-                    int32 sa = kama_rtc_dc_state(h: a);
-                    int32 sb = kama_rtc_dc_state(h: b);
-                    if ((sa == 3) || (sb == 3)) { finish(a: a, b: b, code: 71); }
-                    if ((sa == 1) && (sb == 1)) {
-                        buf[4200] = cast<uint8>(10); buf[4201] = cast<uint8>(20);
-                        buf[4202] = cast<uint8>(30); buf[4203] = cast<uint8>(40);
-                        if (kama_rtc_send(h: a, buf: addr(of: buf[4200]), n: cast<usize>(4)) != 0) { finish(a: a, b: b, code: 72); }
-                        hdr[2] = 3;
-                    }
-                } else {                                              // receive the echo at B, verify
-                    int32 n = kama_rtc_recv(h: b, buf: addr(of: buf[4200]), n: cast<usize>(64));
-                    if (n == 4) {
-                        bool ok = (cast<int32>(buf[4200]) == 10) && (cast<int32>(buf[4201]) == 20)
-                               && (cast<int32>(buf[4202]) == 30) && (cast<int32>(buf[4203]) == 40);
-                        if (ok) { finish(a: a, b: b, code: 55); } else { finish(a: a, b: b, code: 73); }
-                    }
+            } else {                                              // receive the echo at B, verify
+                int32 n = kama_rtc_recv(h: b, buf: addr(of: buf[4200]), n: cast<usize>(64));
+                if (n == 4) {
+                    bool ok = (cast<int32>(buf[4200]) == 10) && (cast<int32>(buf[4201]) == 20)
+                           && (cast<int32>(buf[4202]) == 30) && (cast<int32>(buf[4203]) == 40);
+                    if (ok) { finish(a: a, b: b, code: 55); } else { finish(a: a, b: b, code: 73); }
                 }
             }
         }
@@ -70,20 +68,18 @@ fn int32 tick(UnsafePtr state) {
     return 1;
 }
 
-fn int main() {
-    unsafe {
-        UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(8192)));
-        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
-        int32 a = kama_rtc_create();
-        int32 b = kama_rtc_create();
-        if ((a < 0) || (b < 0)) { quit(code: 60); }        // no RTCPeerConnection
-        int32 dc = kama_rtc_datachannel(h: a, unreliable: 1);
-        if (dc != 0) { quit(code: 61); }
-        int32 of = kama_rtc_offer(h: a);
-        if (of != 0) { quit(code: 62); }
-        hdr[0] = a; hdr[1] = b; hdr[2] = 0; hdr[3] = 0;
-        TickFn t = tick;
-        run(tick: t, state: cast<UnsafePtr>(block));
-    }
+unsafe fn int main() {
+    UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(8192)));
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
+    int32 a = kama_rtc_create();
+    int32 b = kama_rtc_create();
+    if ((a < 0) || (b < 0)) { quit(code: 60); }        // no RTCPeerConnection
+    int32 dc = kama_rtc_datachannel(h: a, unreliable: 1);
+    if (dc != 0) { quit(code: 61); }
+    int32 of = kama_rtc_offer(h: a);
+    if (of != 0) { quit(code: 62); }
+    hdr[0] = a; hdr[1] = b; hdr[2] = 0; hdr[3] = 0;
+    TickFn t = tick;
+    run(tick: t, state: cast<UnsafePtr>(block));
     return 1;
 }

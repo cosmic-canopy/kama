@@ -9,10 +9,10 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 type view FixedArrayIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
-    public fn Optional<T> next() {
+    public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
-        unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the array keeps its element)
+        return Optional::Some(value: copy this.data[p]);   // yield a COPY (the array keeps its element)
     }
 }
 
@@ -21,7 +21,7 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
-    public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
+    public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
@@ -40,14 +40,12 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
     // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
     // leaves a null buffer so the dtor's guard skips a deallocate.
-    fn void allocBuffer(int32 size) {
+    unsafe fn void allocBuffer(int32 size) {
         if (size > 0) {
-            unsafe {
-                this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
-                memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
-            }
+            this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
+            memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
         } else {
-            unsafe { this.data = cast<UnsafePtr<T>>(cast<usize>(0)); }
+            this.data = cast<UnsafePtr<T>>(cast<usize>(0));
         }
         this.size = size;
     }
@@ -62,9 +60,9 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
 
     public fn int32 length() { return this.size; }
 
-    public ref T operator[](int32 i) {
+    public unsafe ref T operator[](int32 i) {
         if (i < 0 || i >= this.size) { panic(msg: "FixedArray index out of bounds"); }
-        unsafe { return this.data[i]; }
+        return this.data[i];
     }
 
     // The safe FixedArray->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
@@ -74,10 +72,10 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
     public fn View<T> view() { return View::<T>.make(data: this.data, len: this.size); }
-    public fn View<T> slice(int32 from, int32 count) {
+    public unsafe fn View<T> slice(int32 from, int32 count) {
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
         if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
-        unsafe { return View::<T>.make(data: addr(of: this.data[from]), len: count); }
+        return View::<T>.make(data: addr(of: this.data[from]), len: count);
     }
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
@@ -120,11 +118,11 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         return Result::Ok(value: Unit::Unit);
     }
 
-    ~FixedArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
+    unsafe ~FixedArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
         int32 i = 0;
         while (i < this.size) { drop(value: this[i]); i = i + 1; }
         if (this.size > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T)); }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T));
         }
     }
 }

@@ -120,12 +120,12 @@ fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArr
 
 // Copy `n` bytes out of a raw heap buffer (produced by kama_capture2) into an owned DynamicArray<uint8>.
 // The caller frees the source buffer with kama_free afterwards.
-fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
+unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
     int32 c = cast<int32>(n);
     DynamicArray<uint8> a = DynamicArray.withCapacity(capacity: c);
     UnsafePtr<uint8> src = cast<UnsafePtr<uint8>>(raw);
     int32 i = 0;
-    while (i < c) { unsafe { a.add(item: src[i]); } i = i + 1; }
+    while (i < c) { a.add(item: src[i]); i = i + 1; }
     return give a;
 }
 

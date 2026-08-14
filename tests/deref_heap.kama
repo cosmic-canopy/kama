@@ -13,11 +13,11 @@ type value Point {
 
 type resource OwnPoint implements Deref<Point> {
     UnsafePtr<Point> p;
-    public ctor make(Point v) { 
-        unsafe { this.p = cast<UnsafePtr<Point>>(malloc(n: sizeof(Point))); this.p[0] = v; }
+    public unsafe ctor make(Point v) { 
+        this.p = cast<UnsafePtr<Point>>(malloc(n: sizeof(Point))); this.p[0] = v;
  }
-    public fn ref Point deref() { unsafe { return this.p[0]; } }   // place into the heap object
-    ~OwnPoint() { unsafe { free(p: cast<UnsafePtr>(this.p)); } }
+    public unsafe fn ref Point deref() { return this.p[0]; }   // place into the heap object
+    unsafe ~OwnPoint() { free(p: cast<UnsafePtr>(this.p)); }
 }
 
 fn int32 main() {

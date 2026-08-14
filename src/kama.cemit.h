@@ -1104,7 +1104,7 @@ private:
     // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
     std::string emitCondition(SharedExpression cond);
     int                _curLine = 0;                   // last source line seen (conditional-drop diagnostics)
-    bool               _inUnsafe = false;             // inside an `unsafe { }` block
+    bool               _inUnsafe = false;             // the ENCLOSING FUNCTION is an `unsafe fn`
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
     // A `ctor` names the value it is building with `this`, but a ctor is a static factory with no `self`

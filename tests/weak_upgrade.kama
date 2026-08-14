@@ -9,20 +9,16 @@ type resource RcWeak<T> {
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
-    public fn Optional<Rc<T>> tryUpgrade() {
-        unsafe {
-            if (this.c[0].strong > 0) {
-                this.c[0].strong = this.c[0].strong + 1;
-                return Optional::Some(value: Rc.make(p: this.p, c: this.c));   // fresh ctor -> no marker
-            }
+    public unsafe fn Optional<Rc<T>> tryUpgrade() {
+        if (this.c[0].strong > 0) {
+            this.c[0].strong = this.c[0].strong + 1;
+            return Optional::Some(value: Rc.make(p: this.p, c: this.c));   // fresh ctor -> no marker
         }
         return Optional::None;
     }
-    ~RcWeak() {
-        unsafe {
-            this.c[0].weak = this.c[0].weak - 1;
-            if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
-        }
+    unsafe ~RcWeak() {
+        this.c[0].weak = this.c[0].weak - 1;
+        if (this.c[0].strong == 0 && this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
     }
 }
 
@@ -30,28 +26,26 @@ type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
-    public ctor adopt(UnsafePtr<T> raw) {
+    public unsafe ctor adopt(UnsafePtr<T> raw) {
         UnsafePtr<Ctrl> ctrl = null;
-        unsafe { ctrl = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0; }
+        ctrl = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0;
         return Rc.make(p: raw, c: ctrl);                                     // fresh ctor -> no marker
     }
-    public fn ref T deref() { unsafe { return this.p[0]; } }
-    public ctor copy(ref Rc<T> source) {
-        unsafe { source.c[0].strong = source.c[0].strong + 1; }
+    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe ctor copy(ref Rc<T> source) {
+        source.c[0].strong = source.c[0].strong + 1;
         return Rc.make(p: source.p, c: source.c);                               // retain
     }
-    public fn RcWeak<T> downgrade() {
-        unsafe { this.c[0].weak = this.c[0].weak + 1; }
+    public unsafe fn RcWeak<T> downgrade() {
+        this.c[0].weak = this.c[0].weak + 1;
         return RcWeak.make(p: this.p, c: this.c);
     }
-    ~Rc() {
-        unsafe {
-            this.c[0].strong = this.c[0].strong - 1;
-            if (this.c[0].strong == 0) {
-                drop(value: this.deref());
-                free(p: cast<UnsafePtr>(this.p));
-                if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
-            }
+    unsafe ~Rc() {
+        this.c[0].strong = this.c[0].strong - 1;
+        if (this.c[0].strong == 0) {
+            drop(value: this.deref());
+            free(p: cast<UnsafePtr>(this.p));
+            if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); }
         }
     }
 }

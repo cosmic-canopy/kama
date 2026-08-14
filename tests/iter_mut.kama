@@ -8,12 +8,12 @@ type value VecIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
-    public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
+    public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 type resource Vec<T> implements IterableMut<T> {
     UnsafePtr<T> data; int32 len;
     public ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
-    public ref T operator[](int32 i) { unsafe { return this.data[i]; } }
+    public unsafe ref T operator[](int32 i) { return this.data[i]; }
     public fn VecIterMut<T> iterMut() { return VecIterMut.make(data: this.data, len: this.len); }
     ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }

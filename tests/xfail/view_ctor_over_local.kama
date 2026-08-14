@@ -4,10 +4,10 @@
 // (This is exactly the footgun the sound escape check closes — a view ctor is NOT blindly trusted.)
 type view Span {
     UnsafePtr<int32> p; int32 n;
-    public ctor make() {
+    public unsafe ctor make() {
         int32 buf = 7;
         this.n = 1;
-        unsafe { this.p = addr(of: buf); }   // borrows a LOCAL -> would dangle
+        this.p = addr(of: buf);   // borrows a LOCAL -> would dangle
     }
 }
 fn int32 main() { Span s = Span.make(); return s.n; }

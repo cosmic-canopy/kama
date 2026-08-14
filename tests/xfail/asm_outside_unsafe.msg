@@ -1,1 +1,1 @@
-inline `asm(...)` must be inside an `unsafe { }` block
+inline `asm(...)` must be inside an `unsafe fn`

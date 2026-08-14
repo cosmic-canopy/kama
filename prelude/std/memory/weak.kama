@@ -26,26 +26,22 @@ type resource Weak<T, A: Allocator = GlobalAllocator> implements Copyable<This>(
     UnsafePtr<Ctrl> c;
     A alloc;
     public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }
-    public ctor copy(ref Weak<T, A> source) {                                     // Copyable -> another weak handle
-        unsafe { kama_ctrl_retain_weak(c: cast<UnsafePtr>(source.c), atomic: __kama_ctrl_atomic()); }
+    public unsafe ctor copy(ref Weak<T, A> source) {                                     // Copyable -> another weak handle
+        kama_ctrl_retain_weak(c: cast<UnsafePtr>(source.c), atomic: __kama_ctrl_atomic());
         return Weak.make(p: source.p, c: source.c, alloc: source.alloc);
     }
-    public fn Optional<Shared<T, A>> tryUpgrade() {
-        unsafe {
-            // atomic-safe upgrade: a CAS loop when atomic (a plain strong>0 test-then-inc would race a
-            // concurrent last drop), a guarded increment when plain. Non-zero == a strong ref was acquired.
-            if (kama_ctrl_try_upgrade(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                return Optional::Some(value: Shared.make(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
-            }
+    public unsafe fn Optional<Shared<T, A>> tryUpgrade() {
+        // atomic-safe upgrade: a CAS loop when atomic (a plain strong>0 test-then-inc would race a
+        // concurrent last drop), a guarded increment when plain. Non-zero == a strong ref was acquired.
+        if (kama_ctrl_try_upgrade(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
+            return Optional::Some(value: Shared.make(p: this.p, c: this.c, alloc: this.alloc));   // cross-type ctor
         }
         return Optional::None;
     }
-    ~Weak() {
-        unsafe {
-            if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
-                if (kama_ctrl_release_weak(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
-                    this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));
-                }
+    unsafe ~Weak() {
+        if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
+            if (kama_ctrl_release_weak(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
+                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.c), bytes: sizeof(Ctrl));
             }
         }
     }

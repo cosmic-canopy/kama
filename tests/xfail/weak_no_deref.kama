@@ -6,15 +6,15 @@ type value Counter { public int32 n; public ctor make(int32 s){ this.n=s; } publ
 type resource RcWeak<T> {
     UnsafePtr<T> p; UnsafePtr<Ctrl> c;
     public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }
-    ~RcWeak() { unsafe { this.c[0].weak = this.c[0].weak - 1; } }
+    unsafe ~RcWeak() { this.c[0].weak = this.c[0].weak - 1; }
 }
 type resource Rc<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p; UnsafePtr<Ctrl> c;
     public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }
-    public ctor adopt(UnsafePtr<T> raw) { UnsafePtr<Ctrl> k = null; unsafe { k = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; } return Rc.make(p: raw, c: k); }
-    public fn ref T deref() { unsafe { return this.p[0]; } }
-    public fn RcWeak<T> downgrade() { unsafe { this.c[0].weak = this.c[0].weak + 1; } return RcWeak.make(p: this.p, c: this.c); }
-    ~Rc() { unsafe { this.c[0].strong = this.c[0].strong - 1; } }
+    public unsafe ctor adopt(UnsafePtr<T> raw) { UnsafePtr<Ctrl> k = null; k = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); k[0].strong = 1; k[0].weak = 0; return Rc.make(p: raw, c: k); }
+    public unsafe fn ref T deref() { return this.p[0]; }
+    public unsafe fn RcWeak<T> downgrade() { this.c[0].weak = this.c[0].weak + 1; return RcWeak.make(p: this.p, c: this.c); }
+    unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; }
 }
 fn int32 main() {
     Rc<Counter> a = new Counter.make(s: 5);

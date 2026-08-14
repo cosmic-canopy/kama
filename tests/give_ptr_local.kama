@@ -10,14 +10,14 @@ type resource Widget {
     ~Widget() { }
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     UnsafePtr<Widget> buf = null;
-    unsafe { buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2))); }
+    buf = cast<UnsafePtr<Widget>>(malloc(n: cast<usize>(sizeof(Widget)) * cast<usize>(2)));
     Widget w = Widget.make(id: 42);
-    unsafe { buf[0] = give w; }               // the bare-local raw-slot MOVE (consumes w)
+    buf[0] = give w;               // the bare-local raw-slot MOVE (consumes w)
     slot Widget got;                          // the hole `relocate`'s `out` parameter fills
     relocate(from: buf, at: 0, into: out got);   // untracked raw copy back out of the raw slot
     int32 r = got.get();                      // 42 — proves the give actually stored w's bytes
-    unsafe { free(p: cast<UnsafePtr>(buf)); }
+    free(p: cast<UnsafePtr>(buf));
     return r;                                 // 42
 }

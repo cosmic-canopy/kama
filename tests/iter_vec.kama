@@ -6,16 +6,16 @@ extern fn void free(UnsafePtr p);
 type value VecIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
-    public fn Optional<T> next() {
+    public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
-        unsafe { return Optional::Some(value: this.data[p]); }
+        return Optional::Some(value: this.data[p]);
     }
 }
 type resource Vec<T> implements Iterable<T> {
     UnsafePtr<T> data; int32 len;
     public ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
-    public ref T operator[](int32 i) { unsafe { return this.data[i]; } }
+    public unsafe ref T operator[](int32 i) { return this.data[i]; }
     public fn VecIter<T> iterator() { return VecIter.make(data: this.data, len: this.len); }
     ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }

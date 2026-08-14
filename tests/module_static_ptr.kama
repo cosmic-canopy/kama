@@ -1,8 +1,8 @@
 // MCU step 1: an `UnsafePtr` static (a peripheral handle) — zero-inits to null, then holds an assigned address.
 static UnsafePtr<int32> target;
 
-fn int32 main() {
+unsafe fn int32 main() {
     int32 x = 42;
     target = addr(of: x);
-    unsafe { return target[0]; }   // 42
+    return target[0];   // 42
 }

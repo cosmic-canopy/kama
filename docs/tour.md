@@ -421,9 +421,10 @@ kama compiles *to* C, so interoperating with it is direct rather than a foreign-
 extern fn void kama_trace(int code);
 ```
 
-Pointers and raw memory exist, and they are confined to an `unsafe { }` block you can grep for.
-That block is the seam: inside it you are writing C semantics with kama syntax, and outside it the
-ownership rules hold.
+Pointers and raw memory exist, and they are confined to an `unsafe fn` you can grep for. The
+marked function is the seam: inside it you are writing C semantics with kama syntax, and outside it the
+ownership rules hold. `unsafe` means what C# means by it — it marks the *body*, so calling such a
+function is unrestricted and `public unsafe fn` is the ordinary shape.
 
 ## Where it runs
 

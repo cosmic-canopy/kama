@@ -3,7 +3,7 @@
 // `addr` handler (the guard above it was identical and returned first), so it had never fired: the call
 // below used to compile, and only the C compiler complained — about generated code.
 fn int32 five() { return 5; }
-fn int main() {
+unsafe fn int main() {
     UnsafePtr<int32> p = addr(of: five());   // ERROR: not a place
-    unsafe { return p[0]; }
+    return p[0];
 }

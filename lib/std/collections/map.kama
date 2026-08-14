@@ -24,12 +24,12 @@ type view MapKeyIter<K> implements Iterator<K> {
     // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
     // (its element class is unknown, so the `copy` marker is dropped and it aliases). Same trick as `get`.
     fn K cloneKey(ref K k) { return copy k; }
-    public fn Optional<K> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+    public unsafe fn Optional<K> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             int32 p = this.pos; this.pos = this.pos + 1;
-            uint8 s = 0ui8; unsafe { s = this.state[p]; }
-            if (s == 1ui8) { unsafe { return Optional::Some(value: this.cloneKey(k: this.keys[p])); } }
+            uint8 s = this.state[p];
+            if (s == 1ui8) { return Optional::Some(value: this.cloneKey(k: this.keys[p])); }
         }
         return Optional::None;
     }
@@ -45,12 +45,12 @@ type view MapValueIter<V> implements Iterator<V> {
     }
     // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
     fn V cloneVal(ref V v) { return copy v; }
-    public fn Optional<V> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+    public unsafe fn Optional<V> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             int32 p = this.pos; this.pos = this.pos + 1;
-            uint8 s = 0ui8; unsafe { s = this.state[p]; }
-            if (s == 1ui8) { unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[p])); } }
+            uint8 s = this.state[p];
+            if (s == 1ui8) { return Optional::Some(value: this.cloneVal(v: this.vals[p])); }
         }
         return Optional::None;
     }
@@ -66,16 +66,16 @@ type view MapValueIterMut<V> implements IteratorMut<V> {
     public ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
-    public fn bool hasNext() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+    public unsafe fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
-            uint8 s = 0ui8; unsafe { s = this.state[this.pos]; }
+            uint8 s = this.state[this.pos];
             if (s == 1ui8) { return true; }            // stop AT the full slot (idempotent — next() consumes it)
             this.pos = this.pos + 1;
         }
         return false;
     }
-    public fn ref V next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.vals[p]; } }
+    public unsafe fn ref V next() { int32 p = this.pos; this.pos = this.pos + 1; return this.vals[p]; }
 }
 
 // A key-value pair yielded by entry iteration. The map has no tuple type, so this is the named pair the
@@ -105,14 +105,14 @@ type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
     // marker and aliases (unknown element class), so route through `ref K`/`ref V` (see `Map.cloneVal`).
     fn K cloneKey(ref K k) { return copy k; }
     fn V cloneVal(ref V v) { return copy v; }
-    public fn Optional<Entry<K,V>> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); } }
+    public unsafe fn Optional<Entry<K,V>> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
             int32 p = this.pos; this.pos = this.pos + 1;
-            uint8 s = 0ui8; unsafe { s = this.state[p]; }
+            uint8 s = this.state[p];
             if (s == 1ui8) {
-                unsafe { return Optional::Some(value: Entry.make(key: this.cloneKey(k: this.keys[p]),
-                                                                 value: this.cloneVal(v: this.vals[p]))); }
+                return Optional::Some(value: Entry.make(key: this.cloneKey(k: this.keys[p]),
+                                                        value: this.cloneVal(v: this.vals[p])));
             }
         }
         return Optional::None;
@@ -186,13 +186,13 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
-    fn int32 slotOf(ref K key) {
+    unsafe fn int32 slotOf(ref K key) {
         if (this.cap == 0) { return 0 - 1; }
         int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
         while (true) {
-            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            uint8 s = this.state[i];
             if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
-            if (s == 1ui8) { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { return i; } } }
+            if (s == 1ui8) { if (this.eqKeys(a: this.keys[i], b: key)) { return i; } }
             i = i + 1; if (i >= this.cap) { i = 0; }
         }
         return 0 - 1;
@@ -209,23 +209,23 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
-    public ctor copy(ref Map<K,V,H,A> source) when [K: Copyable<K>, V: Copyable<V>] {
+    public unsafe ctor copy(ref Map<K,V,H,A> source) when [K: Copyable<K>, V: Copyable<V>] {
         this.alloc = source.alloc;                  // copy the allocator handle (a value) — same arena
         int32 i = 0;
         while (i < source.cap) {
-            uint8 s = 0ui8; unsafe { s = source.state[i]; }
+            uint8 s = source.state[i];
             if (s == 1ui8) {
-                unsafe { this.put(key: source.cloneKey(k: source.keys[i]), value: source.cloneVal(v: source.vals[i])); }
+                this.put(key: source.cloneKey(k: source.keys[i]), value: source.cloneVal(v: source.vals[i]));
             }
             i = i + 1;
         }
         return this;
     }
 
-    public fn Optional<V> get(ref K key) when [V: Copyable<V>] {
+    public unsafe fn Optional<V> get(ref K key) when [V: Copyable<V>] {
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
-        unsafe { return Optional::Some(value: this.cloneVal(v: this.vals[i])); }   // hand back a copy; map keeps its own
+        return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // hand back a copy; map keeps its own
     }
 
     // Borrow the stored value for `key` IN PLACE (any V, no Copyable bound) — the read/mutate accessor that
@@ -234,10 +234,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // out of bounds — hence the explicit `getRef` name, not `operator[]` (which would hide the can-fail nature).
     // The returned `ref V` may not escape and dangles if held across a `put` that rehashes — the same borrow
     // boundary as an array `ref` held across `add`→realloc (the deliberate no-borrow-checker tradeoff).
-    public fn ref V getRef(ref K key) {
+    public unsafe fn ref V getRef(ref K key) {
         int32 i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRef: absent key"); }
-        unsafe { return this.vals[i]; }
+        return this.vals[i];
     }
 
     // `foreach (V v in map.values())` — a by-value value iterator (present only for a Copyable value), the
@@ -264,28 +264,26 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // existing key stays, so the incoming key and the old value are dropped. The probe loop only LOCATES
     // the slot; the moves (`give`) happen after it, since `give` inside a loop is rejected (it could
     // re-move on a later iteration — here the loop can't, but the check is conservative).
-    public fn void put(K key, V value) {
+    public unsafe fn void put(K key, V value) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
         int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
         int32 chosen = 0 - 1;                                                   // the chosen slot (set = loop done)
         int32 free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
         while (chosen < 0) {
-            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            uint8 s = this.state[i];
             if (s == 0ui8) { chosen = free >= 0 ? free : i; }                  // EMPTY — key is new
             else if (s == 2ui8) { if (free < 0) { free = i; } }              // TOMB — remember, keep probing
-            else { unsafe { if (this.eqKeys(a: this.keys[i], b: key)) { chosen = i; overwrite = true; } } }
+            else { if (this.eqKeys(a: this.keys[i], b: key)) { chosen = i; overwrite = true; } }
             if (chosen < 0) { i = i + 1; if (i >= this.cap) { i = 0; } }
         }
         if (overwrite) {                                                     // replace the stored (equal) key + value
-            unsafe {
-                drop(value: this.keys[chosen]); drop(value: this.vals[chosen]);
-                this.keys[chosen] = give key; this.vals[chosen] = give value;
-            }
+            drop(value: this.keys[chosen]); drop(value: this.vals[chosen]);
+            this.keys[chosen] = give key; this.vals[chosen] = give value;
             this.mods = this.mods + 1;
         } else {
             if (free >= 0) { this.tombs = this.tombs - 1; }                   // reclaiming a tombstone
-            unsafe { this.keys[chosen] = give key; this.vals[chosen] = give value; this.state[chosen] = 1ui8; }
+            this.keys[chosen] = give key; this.vals[chosen] = give value; this.state[chosen] = 1ui8;
             this.len = this.len + 1; this.mods = this.mods + 1;
         }
     }
@@ -294,12 +292,12 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // the slot becomes a tombstone so other keys' probe runs stay intact. Discard the result to just delete —
     // the returned `Optional<V>` drops the value cleanly (a move-out-then-drop, ASan-clean). Reclaiming the
     // value (`match`) hands the caller its ownership, so a Map of move-only values is fully symmetric.
-    public fn Optional<V> remove(ref K key) {
+    public unsafe fn Optional<V> remove(ref K key) {
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
-        unsafe { drop(value: this.keys[i]); }         // key dropped (lookup `key` is a borrow, not stored)
+        drop(value: this.keys[i]);         // key dropped (lookup `key` is a borrow, not stored)
         V v = this.takeVal(at: i);                  // value relocated OUT (the slot is now stale)
-        unsafe { this.state[i] = 2ui8; }              // tombstone so the stale slot is never dropped again
+        this.state[i] = 2ui8;              // tombstone so the stale slot is never dropped again
         this.len = this.len - 1; this.tombs = this.tombs + 1; this.mods = this.mods + 1;
         return Optional::Some(value: give v);
     }
@@ -314,11 +312,11 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return give x;
     }
 
-    public fn void clear() {
+    public unsafe fn void clear() {
         int32 i = 0;
         while (i < this.cap) {
-            unsafe { if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
-                     this.state[i] = 0ui8; }
+            if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
+            this.state[i] = 0ui8;
             i = i + 1;
         }
         this.len = 0; this.tombs = 0; this.mods = this.mods + 1;
@@ -343,33 +341,27 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // RELOCATED bitwise into the fresh buffers — a move, not a copy or a drop — then the old buffers are
     // freed raw (no per-slot dtor: ownership already left them). Mirrors `DynamicArray`'s realloc relocation.
     // `nc` must be a power of two ≥ the live count (callers: `grow` doubles, `reserve` rounds up).
-    fn void growTo(int32 nc) {
+    unsafe fn void growTo(int32 nc) {
         UnsafePtr<K> nk = null; UnsafePtr<V> nv = null; UnsafePtr<uint8> ns = null;
-        unsafe {
-            nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
-            nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
-            ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
-            memset(p: cast<UnsafePtr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
-        }
+        nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K))));
+        nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
+        ns = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8))));
+        memset(p: cast<UnsafePtr>(ns), value: 0, n: cast<usize>(nc) * sizeof(uint8));   // tag buffer starts all-EMPTY
         int32 i = 0;
         while (i < this.cap) {
-            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            uint8 s = this.state[i];
             if (s == 1ui8) {
                 int32 j = 0;
-                unsafe {
-                    j = cast<int32>(this.hashKey(k: this.keys[i]) & cast<uint64>(nc - 1));   // nc is a power of two
-                    while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
-                    nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
-                }
+                j = cast<int32>(this.hashKey(k: this.keys[i]) & cast<uint64>(nc - 1));   // nc is a power of two
+                while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
+                nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
             }
             i = i + 1;
         }
         if (this.cap > 0) {
-            unsafe {
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
-            }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
         }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
     }
@@ -380,23 +372,19 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
     fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
     fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    public unsafe fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
         while (i < this.cap) {
-            uint8 s = 0ui8; unsafe { s = this.state[i]; }
+            uint8 s = this.state[i];
             if (s == 1ui8) {
                 w.beginObject();
                 w.fieldName(name: "key");
-                unsafe {
-                    Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
-                    match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-                }
+                Result<Unit, Owned<Error>> __sk = this.serKey(k: this.keys[i], w: w);
+                match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
                 w.fieldName(name: "value");
-                unsafe {
-                    Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
-                    match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-                }
+                Result<Unit, Owned<Error>> __sv = this.serVal(v: this.vals[i], w: w);
+                match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
                 w.endObject();
             }
             i = i + 1;
@@ -422,18 +410,16 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return Result::Ok(value: give this);
     }
 
-    ~Map() {   // drop each live key + value, then free the three buffers
+    unsafe ~Map() {   // drop each live key + value, then free the three buffers
         int32 i = 0;
         while (i < this.cap) {
-            unsafe { if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); } }
+            if (this.state[i] == 1ui8) { drop(value: this.keys[i]); drop(value: this.vals[i]); }
             i = i + 1;
         }
         if (this.cap > 0) {
-            unsafe {
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
-                this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
-            }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
         }
     }
 }

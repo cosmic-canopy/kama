@@ -1,11 +1,11 @@
 // M17: the safe FixedArray->pointer bridge (dataPtr() needs no unsafe); deref needs unsafe.
 import std::collections::{FixedArray};
-fn int main()
+unsafe fn int main()
 {
     FixedArray<int32> a = FixedArray.make(size: 3);
     a[0] = 40; a[1] = 1; a[2] = 1;
     UnsafePtr<int32> p = a.dataPtr();        // safe to obtain
     int32 s = 0;
-    unsafe { s = p[0] + p[1] + p[2]; } // raw read needs unsafe
+    s = p[0] + p[1] + p[2]; // raw read needs unsafe
     return s;   // 42
 }

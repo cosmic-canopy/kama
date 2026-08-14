@@ -164,7 +164,7 @@ type resource BinaryReader implements Deserializer {
         return v;
     }
     fn void expectTag(uint8 t) { if (this.next() != t) { this.err = true; } }
-    fn string readStr() {
+    unsafe fn string readStr() {
         this.expectTag(t: 15ui8);
         if (this.err) { return ""; }
         int32 n = cast<int32>(this.getU(n: 4));
@@ -172,7 +172,7 @@ type resource BinaryReader implements Deserializer {
         if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
         int32 start = this.pos;
         this.pos = this.pos + n;
-        unsafe { return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n); }
+        return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
     }
 
     // --- structural (Deserializer) ---

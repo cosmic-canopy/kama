@@ -14,8 +14,8 @@ type resource Payload {
     }
 
     // Write the value through the slot — runs on the isolate's own thread.
-    public fn void run() {
-        unsafe { this.dst[0] = this.value; }
+    public unsafe fn void run() {
+        this.dst[0] = this.value;
     }
 }
 

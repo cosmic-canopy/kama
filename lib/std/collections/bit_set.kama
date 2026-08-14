@@ -14,12 +14,12 @@ type view BitSetIter implements Iterator<int32> {
     public ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
-    public fn Optional<int32> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "BitSet modified during iteration"); } }
+    public unsafe fn Optional<int32> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "BitSet modified during iteration"); }
         int32 total = this.wordCount * 64;
         while (this.pos < total) {
             int32 w = this.pos >> 6; int32 b = this.pos & 63;
-            uint64 word = 0ui64; unsafe { word = this.words[w]; }
+            uint64 word = this.words[w];
             uint64 rest = word >> cast<uint64>(b);
             if (rest == 0ui64) { this.pos = (w + 1) << 6; continue; }   // no more set bits in this word — skip its tail
             if ((rest & 1ui64) == 1ui64) { int32 idx = this.pos; this.pos = this.pos + 1; return Optional::Some(value: idx); }
@@ -66,86 +66,84 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
 
     // Count of set bits (population count) — a Kernighan `x & (x - 1)` fold per word (no `__builtin_popcountll`).
     fn int32 popcount(uint64 x) { int32 c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
-    public fn int32 count() {
+    public unsafe fn int32 count() {
         int32 total = 0; int32 i = 0;
-        unsafe { while (i < this.wordCount) { total = total + this.popcount(x: this.words[i]); i = i + 1; } }
+        while (i < this.wordCount) { total = total + this.popcount(x: this.words[i]); i = i + 1; }
         return total;
     }
 
     // True iff no bit is set (every word is zero).
-    public fn bool isEmpty() {
+    public unsafe fn bool isEmpty() {
         int32 i = 0;
-        unsafe { while (i < this.wordCount) { if (this.words[i] != 0ui64) { return false; } i = i + 1; } }
+        while (i < this.wordCount) { if (this.words[i] != 0ui64) { return false; } i = i + 1; }
         return true;
     }
 
     // Read bit `index`; an out-of-range bit is simply unset (`false`), never a grow.
-    public fn bool test(int32 index) {
+    public unsafe fn bool test(int32 index) {
         if (index < 0) { return false; }
         int32 w = index >> 6;
         if (w >= this.wordCount) { return false; }
-        uint64 word = 0ui64; unsafe { word = this.words[w]; }
+        uint64 word = this.words[w];
         return ((word >> cast<uint64>(index & 63)) & 1ui64) == 1ui64;
     }
 
     // Set bit `index` to 1, growing the buffer if the bit lies past the current capacity.
-    public fn void set(int32 index) {
+    public unsafe fn void set(int32 index) {
         int32 w = index >> 6; this.ensureWords(wordIndex: w);
-        unsafe { this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63)); }
+        this.words[w] = this.words[w] | (1ui64 << cast<uint64>(index & 63));
     }
 
     // Clear bit `index` to 0; an out-of-range bit is already clear (no-op, no grow).
-    public fn void clear(int32 index) {
+    public unsafe fn void clear(int32 index) {
         if (index < 0) { return; }
         int32 w = index >> 6;
         if (w >= this.wordCount) { return; }
-        unsafe { this.words[w] = this.words[w] & (~(1ui64 << cast<uint64>(index & 63))); }
+        this.words[w] = this.words[w] & (~(1ui64 << cast<uint64>(index & 63)));
     }
 
     // Flip bit `index`; flipping an out-of-range (0) bit sets it, so this can grow.
-    public fn void toggle(int32 index) {
+    public unsafe fn void toggle(int32 index) {
         int32 w = index >> 6; this.ensureWords(wordIndex: w);
-        unsafe { this.words[w] = this.words[w] ^ (1ui64 << cast<uint64>(index & 63)); }
+        this.words[w] = this.words[w] ^ (1ui64 << cast<uint64>(index & 63));
     }
 
     // Clear every bit (keeps the buffer). A structural change to the live contents, so it invalidates any
     // in-flight `setBits()` iterator.
-    public fn void clearAll() {
+    public unsafe fn void clearAll() {
         int32 i = 0;
-        unsafe { while (i < this.wordCount) { this.words[i] = 0ui64; i = i + 1; } }
+        while (i < this.wordCount) { this.words[i] = 0ui64; i = i + 1; }
         this.mods = this.mods + 1;
     }
 
     // In-place set union: this |= other. Grows to cover `other`'s words; `other`'s absent (higher) words are 0.
     // The operand shares this BitSet's allocator TYPE `A` (set algebra only READS `other`, so no allocation
     // crosses — it's purely a type-naming constraint; mixing a Global and an Arena BitSet isn't supported).
-    public fn void unionWith(ref BitSet<A> other) {
+    public unsafe fn void unionWith(ref BitSet<A> other) {
         int32 ow = other.rawWordCount();
         if (ow > 0) { this.ensureWords(wordIndex: ow - 1); }
         int32 i = 0;
-        unsafe { while (i < ow) { this.words[i] = this.words[i] | other.rawWord(i: i); i = i + 1; } }
+        while (i < ow) { this.words[i] = this.words[i] | other.rawWord(i: i); i = i + 1; }
     }
 
     // In-place set intersection: this &= other. Own words past `other`'s range mask against 0 (get cleared).
-    public fn void intersectWith(ref BitSet<A> other) {
+    public unsafe fn void intersectWith(ref BitSet<A> other) {
         int32 i = 0;
-        unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & other.rawWord(i: i); i = i + 1; } }
+        while (i < this.wordCount) { this.words[i] = this.words[i] & other.rawWord(i: i); i = i + 1; }
     }
 
     // In-place set difference: this &= ~other. Only own words that overlap `other` change.
-    public fn void differenceWith(ref BitSet<A> other) {
+    public unsafe fn void differenceWith(ref BitSet<A> other) {
         int32 i = 0;
-        unsafe { while (i < this.wordCount) { this.words[i] = this.words[i] & (~ other.rawWord(i: i)); i = i + 1; } }
+        while (i < this.wordCount) { this.words[i] = this.words[i] & (~ other.rawWord(i: i)); i = i + 1; }
     }
 
     // True iff every set bit of this is also set in `other` (this ⊆ other).
-    public fn bool isSubsetOf(ref BitSet<A> other) {
+    public unsafe fn bool isSubsetOf(ref BitSet<A> other) {
         int32 i = 0;
-        unsafe {
-            while (i < this.wordCount) {
-                if ((this.words[i] & (~ other.rawWord(i: i))) != 0ui64) { return false; }
-                i = i + 1;
-            }
+        while (i < this.wordCount) {
+            if ((this.words[i] & (~ other.rawWord(i: i))) != 0ui64) { return false; }
+            i = i + 1;
         }
         return true;
     }
@@ -161,12 +159,12 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
 
     // Deep-copy into an independent buffer (bare `give` still MOVES). uint64 is always Copyable, so a BitSet
     // is unconditionally Copyable — a plain word-for-word buffer clone.
-    public ctor copy(ref BitSet<A> source) {
+    public unsafe ctor copy(ref BitSet<A> source) {
         this.alloc = source.alloc;                    // copy the allocator handle (a value) — same arena
         if (source.wordCount > 0) {
             this.growTo(nc: source.wordCount);
             int32 i = 0;
-            unsafe { while (i < source.wordCount) { this.rawSetWord(i: i, value: source.words[i]); i = i + 1; } }
+            while (i < source.wordCount) { this.rawSetWord(i: i, value: source.words[i]); i = i + 1; }
         }
         return this;
     }
@@ -175,8 +173,8 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Word accessors used by the set-algebra ops + copy to reach ANOTHER BitSet without touching its private
     // fields cross-instance (a method call on `other`, like `Equatable.equals(other)`, is the safe pattern).
     fn int32 rawWordCount() { return this.wordCount; }
-    fn uint64 rawWord(int32 i) { if (i < 0 || i >= this.wordCount) { return 0ui64; } unsafe { return this.words[i]; } }
-    fn void rawSetWord(int32 i, uint64 value) { unsafe { this.words[i] = value; } }
+    unsafe fn uint64 rawWord(int32 i) { if (i < 0 || i >= this.wordCount) { return 0ui64; } return this.words[i]; }
+    unsafe fn void rawSetWord(int32 i, uint64 value) { this.words[i] = value; }
 
     // Ensure word `wordIndex` is addressable, growing (doubling) if needed.
     fn void ensureWords(int32 wordIndex) {
@@ -190,23 +188,21 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // Grow the word buffer to `nc` words via `this.alloc`. `allocate` returns UNINITIALIZED bytes, so the
     // buffer is `memset` to zero (the grown tail must start clear); the live words are copied over and the old
     // buffer released. A relocation, so it bumps `mods` (invalidates iterators).
-    fn void growTo(int32 nc) {
+    unsafe fn void growTo(int32 nc) {
         UnsafePtr<uint64> nw = null;
-        unsafe {
-            nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
-            memset(p: cast<UnsafePtr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
-        }
+        nw = cast<UnsafePtr<uint64>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint64))));
+        memset(p: cast<UnsafePtr>(nw), value: 0, n: cast<usize>(nc) * sizeof(uint64));
         int32 i = 0;
-        unsafe { while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; } }
+        while (i < this.wordCount) { nw[i] = this.words[i]; i = i + 1; }
         if (this.wordCount > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64));
         }
         this.words = nw; this.wordCount = nc; this.mods = this.mods + 1;
     }
 
-    ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator
+    unsafe ~BitSet() {   // uint64 words need no per-element drop — just release the buffer via the allocator
         if (this.wordCount > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64)); }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.words), bytes: cast<usize>(this.wordCount) * sizeof(uint64));
         }
     }
 }

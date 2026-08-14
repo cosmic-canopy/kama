@@ -61,7 +61,7 @@ fn Holder makeHolder() { return Holder.zero(); }
 // members, and immediately reads one — so a probe at the column just after each `.` proves the walker
 // descended into that statement kind. A miss here is silent in every other test: it just means fewer
 // suggestions. (scanStmtForCollections has under-scanned `unsafe` and `scope` since it was written.)
-fn int32 statements(int32 n) {
+unsafe fn int32 statements(int32 n) {
     Cell inBlock = Cell.zero();
     int32 total = inBlock.value;
     {
@@ -93,10 +93,8 @@ fn int32 statements(int32 n) {
         Cell inForeach = Cell.zero();
         total = total + each.value + inForeach.value;
     }
-    unsafe {
-        Cell inUnsafe = Cell.zero();
-        total = total + inUnsafe.value;
-    }
+    Cell inUnsafe = Cell.zero();
+    total = total + inUnsafe.value;
     scope {
         Cell inScope = Cell.zero();
         total = total + inScope.value;

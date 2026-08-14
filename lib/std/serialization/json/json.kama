@@ -253,9 +253,9 @@ type resource JsonReader implements Deserializer {
         if (c >= 65ui8 && c <= 70ui8) { return c - 65ui8 + 10ui8; }  // A-F
         this.err = true; return 0ui8;
     }
-    fn string bytesToString(ref DynamicArray<uint8> b) {
+    unsafe fn string bytesToString(ref DynamicArray<uint8> b) {
         if (cast<int32>(b.length()) == 0) { return ""; }
-        unsafe { return kama_string_from_raw(src: addr(of: b[0]), start: 0, len: cast<int32>(b.length())); }
+        return kama_string_from_raw(src: addr(of: b[0]), start: 0, len: cast<int32>(b.length()));
     }
 
     // --- structural (Deserializer) ---

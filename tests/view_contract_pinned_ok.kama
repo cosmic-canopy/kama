@@ -21,23 +21,21 @@ type view Span implements Windowed<This> {
 
     public ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public fn int32 length() { return this.n; }
-    public fn int64 at(int32 i) { unsafe { return this.p[i]; } }
+    public unsafe fn int64 at(int32 i) { return this.p[i]; }
     // Returns a view over `this`'s buffer — roots at `this`, so the return escape check accepts it.
-    public fn Span rest() { unsafe { return Span.over(p: addr(of: this.p[1]), n: this.n - 1); } }
+    public unsafe fn Span rest() { return Span.over(p: addr(of: this.p[1]), n: this.n - 1); }
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     int32 r = 0;
 
     DynamicArray<int64> a = DynamicArray.empty();
     a.add(item: 7i64); a.add(item: 8i64); a.add(item: 9i64);
 
-    unsafe {
-        Span s = Span.over(p: addr(of: a[0]), n: 3);
-        if (s.length() == 3 && s.at(i: 0) == 7i64) { r = r + 1; }        // 1
-        Span t = s.rest();
-        if (t.length() == 2 && t.at(i: 0) == 8i64) { r = r + 1; }        // 2
-    }
+    Span s = Span.over(p: addr(of: a[0]), n: 3);
+    if (s.length() == 3 && s.at(i: 0) == 7i64) { r = r + 1; }        // 1
+    Span t = s.rest();
+    if (t.length() == 2 && t.at(i: 0) == 8i64) { r = r + 1; }        // 2
 
     // The unpinned-contract path is untouched: `View<T>` implements `Iterable<T>`/`IterableMut<T>`.
     DynamicArray<int32> b = DynamicArray.empty();

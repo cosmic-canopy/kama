@@ -5,11 +5,11 @@ import std::collections::{FixedArray};
 extern "csum.h";   // int32_t csum(const int32_t* a, int32_t n);
 extern fn int32 csum(const UnsafePtr<int32> data, int32 n);
 
-fn int main()
+unsafe fn int main()
 {
     FixedArray<int32> a = FixedArray.make(size: 4);
     a[0] = 9; a[1] = 13; a[2] = 7; a[3] = 13;
     int32 s = 0;
-    unsafe { s = csum(data: a.dataPtr(), n: 4); }   // 9+13+7+13 = 42, no cast at the const-ptr edge
+    s = csum(data: a.dataPtr(), n: 4);   // 9+13+7+13 = 42, no cast at the const-ptr edge
     return s;
 }

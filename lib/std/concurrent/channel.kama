@@ -55,13 +55,11 @@ type resource Sender<T> {
     // destroy the caller's resource) — instead we `give` it back in `Undelivered(item)` so the caller
     // owns it again and can re-route or drop it cleanly. The caller's `give` at the call site already
     // suppressed its drop, so exactly one owning copy survives either way.
-    public fn SendResult<T> send(T item) {
-        unsafe {
-            int32 r = kama_channel_send(ch: this.handle, elem: cast<UnsafePtr>(addr(of: item)));
-            if (r == 0) {
-                memset(p: cast<UnsafePtr>(addr(of: item)), value: 0, n: sizeof(T));
-                return SendResult::Sent;
-            }
+    public unsafe fn SendResult<T> send(T item) {
+        int32 r = kama_channel_send(ch: this.handle, elem: cast<UnsafePtr>(addr(of: item)));
+        if (r == 0) {
+            memset(p: cast<UnsafePtr>(addr(of: item)), value: 0, n: sizeof(T));
+            return SendResult::Sent;
         }
         return SendResult::Undelivered(item: give item);
     }
@@ -69,8 +67,8 @@ type resource Sender<T> {
     // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
     // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
     // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
-    fn int32 tryPopInto(out T item) {
-        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item))); }
+    unsafe fn int32 tryPopInto(out T item) {
+        return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item)));
     }
 
     // Close the sender side. If this is the LAST live endpoint, the queue is now quiescent (the receiver
@@ -108,15 +106,15 @@ type resource Receiver<T> {
     }
 
     // The `out` boundary over the type-erased C call — the blocking sibling of `tryPopInto`.
-    fn int32 recvInto(out T dst) {
-        unsafe { return kama_channel_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst))); }
+    unsafe fn int32 recvInto(out T dst) {
+        return kama_channel_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)));
     }
 
     // The `out` boundary over the type-erased C call: `dst` IS an out-parameter, spelled `void*` across
     // the FFI. It writes only on success and reports that in the return, so the caller branches on that;
     // `addr(of: item)` here satisfies the fill obligation unconditionally, as it always did.
-    fn int32 tryPopInto(out T item) {
-        unsafe { return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item))); }
+    unsafe fn int32 tryPopInto(out T item) {
+        return kama_channel_try_pop(ch: this.handle, dst: cast<UnsafePtr>(addr(of: item)));
     }
 
     // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the

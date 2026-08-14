@@ -524,7 +524,6 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
         if (b->statements) for (auto& st : *b->statements) if (alwaysExits(st)) return true;
         return false;
     }
-    if (auto* u = dynamic_cast<UnsafeNode*>(n)) return alwaysExits(u->body);   // `unsafe { … }` always runs
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) return alwaysExits(sc->body);  // `scope { … }` always runs
     // An `if` only guarantees an exit when BOTH arms do — a bare `if` may fall through by design.
     if (auto* f = dynamic_cast<IfNode*>(n))
@@ -578,7 +577,6 @@ bool CEmitter::hasLoopBreak(const SharedStatement& s) const
         if (b->statements) for (auto& st : *b->statements) if (hasLoopBreak(st)) return true;
         return false;
     }
-    if (auto* u = dynamic_cast<UnsafeNode*>(n)) return hasLoopBreak(u->body);
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) return hasLoopBreak(sc->body);
     if (auto* f = dynamic_cast<IfNode*>(n)) return hasLoopBreak(f->ifStatement) || hasLoopBreak(f->elseStatement);
     if (auto* m = dynamic_cast<MatchNode*>(n)) {
@@ -1996,13 +1994,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string rhs = emitExpression(v->expression);
                 return "(" + place + " " + assignmentOperator(v->token) + " (" + rhs + "))";
             }
-            // Raw pointer store `p[i] = v` — only inside `unsafe { }`.
+            // Raw pointer store `p[i] = v` — only inside an `unsafe fn`.
             SharedExpression recv = ea->expression ? ea->expression
                                   : std::static_pointer_cast<ExpressionNode>(ea->identifier);
             std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                              ? emitExpression((*ea->expressionlist)[0]) : "0";
             if (!_inUnsafe) {
-                unsupported("raw pointer access requires an `unsafe { }` block", ea->line);
+                unsupported("raw pointer access requires an `unsafe fn`", ea->line);
                 return "0";
             }
             return "((" + emitExpression(recv) + ")[" + ridx + "] "
@@ -2040,13 +2038,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         }
         // A user place-returning `operator[]`: read the value out of the place.
         if (indexesUserOp(ea)) return emitPlace(expr);
-        // Raw pointer read `p[i]` — only inside `unsafe { }`.
+        // Raw pointer read `p[i]` — only inside an `unsafe fn`.
         SharedExpression recv = ea->expression ? ea->expression
                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
         std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                          ? emitExpression((*ea->expressionlist)[0]) : "0";
         if (!_inUnsafe) {
-            unsupported("raw pointer access requires an `unsafe { }` block", ea->line);
+            unsupported("raw pointer access requires an `unsafe fn`", ea->line);
             return "0";
         }
         return "(" + emitExpression(recv) + ")[" + ridx + "]";
@@ -2509,8 +2507,6 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             scanE(fe->expression);
             if (fe->name && fe->name->value) bodyLocal.insert(*fe->name->value);
             scanS(fe->body);
-        } else if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
-            scanS(u->body);
         } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
             scanE(r->expression);
         }
@@ -2699,11 +2695,11 @@ std::string CEmitter::emitCondition(SharedExpression cond)
 
 // `asm("...")` (MCU 6a) — lower to `__asm__ __volatile__("<text>" : : : "memory")`. Always volatile (never
 // elided/reordered) and always a full memory clobber (so `cpsid i`/`dsb`/`dmb` order memory correctly by
-// default). Requires an enclosing `unsafe { }` — the same `_inUnsafe` gate as raw pointer index/store.
+// default). Requires an enclosing `unsafe fn` — the same `_inUnsafe` gate as raw pointer index/store.
 void CEmitter::emitAsm(AsmNode* a, int depth)
 {
     if (!_inUnsafe) {
-        unsupported("inline `asm(...)` must be inside an `unsafe { }` block", a->line);
+        unsupported("inline `asm(...)` must be inside an `unsafe fn`", a->line);
         return;
     }
     const std::string& s = a->code ? *a->code : std::string();
@@ -2895,16 +2891,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    // `unsafe { ... }`: permit raw pointer index/store inside; otherwise a
-    // plain scoped block. The single, explicit, greppable unsafe surface.
-    if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
-        bool prev = _inUnsafe;
-        _inUnsafe = true;
-        emitStatement(u->body, depth);   // the BlockNode -> a normal scoped { … }
-        _inUnsafe = prev;
-        return;
-    }
-
     // `scope { ... }` — structured concurrency (M4): a task scope that joins every child `spawn`ed
     // inside it at the closing brace, before any local dtor (join-before-drop).
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
@@ -2926,7 +2912,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         return;
     }
 
-    // `asm("...")` — inline assembly (MCU 6a). Requires `unsafe { }` (same greppable seam as raw pointer
+    // `asm("...")` — inline assembly (MCU 6a). Requires an `unsafe fn` (same greppable seam as raw pointer
     // ops); lowers to the volatile + memory-clobber form so it is never elided/reordered.
     if (auto* a = dynamic_cast<AsmNode*>(n)) {
         emitAsm(a, depth);
@@ -12010,12 +11996,6 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
             walk(wh->whileStatement, false);
         } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
-        } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
-            // `unsafe { }` is not a BRANCH — it is unconditional, so a field assigned inside one at the
-            // top level of a ctor is assigned on every path. This matters now that every field must be
-            // assigned: a raw-handle type does its `r.buf = malloc(…)` precisely inside `unsafe`, and
-            // treating that as conditional would reject the very idiom the rule exists to make safe.
-            walk(un->body, topLevel);
         }
         // (for/foreach/match: not modeled — a returned bare-incomplete local through them stays conservative)
     };
@@ -12153,8 +12133,18 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
 // safe code (M3 zero-inits a bare destructible local, so an owning pointer starts null). Flag any such READ
 // that is not definitely (unconditionally, top-level) assigned at that point. Sound + conservative — a
 // branch-body assignment doesn't count (mirrors analyzeCtorStmt/checkNamedCtorComplete's discipline). Params
-// are trusted complete (only body-declared locals are tracked). `unsafe { }` is exempt (its raw init dance
-// owns the invariant). `Weak` and raw `UnsafePtr` are never owning, so they are never tracked (box_basic stays legal).
+// are trusted complete (only body-declared locals are tracked). `Weak` and raw `UnsafePtr` are never owning,
+// so they are never tracked (box_basic stays legal).
+//
+// An `unsafe fn` relaxes LOCALS but NOT `out` parameters, and that split is load-bearing. Relaxation exists
+// because a raw store is invisible to this walker, so an unsafe body's own initialization dance would
+// otherwise read as a use-before-assign. Filling an `out`, by contrast, is a contract with the CALLER — and
+// under this model safe code may call an `unsafe fn` freely, so relaxing `out` would hand every caller a
+// hole full of uninitialized stack. That was finding 9: a top-level `unsafe { }` used to `unassigned.clear()`
+// for the WHOLE function, and `verifyOutsAssigned` returned early, so an unfilled `out` passed `kama check`.
+// The bug was that the relaxation's scope (the function) did not match the construct's (the block). Now that
+// `unsafe` IS the function, function-wide relaxation of locals is correct BY CONSTRUCTION — and the `out`
+// half simply stops being relaxed at all.
 void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList params)
 {
     if (!body || !body->statements) return;
@@ -12179,7 +12169,7 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     // optional) or reading a non-owning field of it (`result.alloc`) is safe. A PRIMITIVE slot has no such
     // fill and stays strictly read-before-assign.
     std::set<std::string> slotClassDecls;
-    bool inUnsafe = false;
+    const bool inUnsafe = _inUnsafe;   // the ENCLOSING FUNCTION is `unsafe` (set by the caller)
 
     // An `out` parameter is the one param that is NOT trusted complete: it arrives as a hole the callee
     // owes a value to. Track it exactly like a bare owning local (reads are flagged) and additionally
@@ -12247,7 +12237,8 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
     // Every `out` parameter must be filled on the path reaching this point (a return, or falling off the
     // end). Reported per-parameter so a two-`out` function names the one actually missing.
     auto verifyOutsAssigned = [&](int line) {
-        if (inUnsafe) return;
+        // NOT exempt in an `unsafe fn` — see the split above. A raw fill still counts: `addr(of: dst)`
+        // marks the target assigned, which is how `Atomic.loadInto`'s type-erased C call satisfies this.
         for (auto& o : outParams)
             if (unassigned.count(o))
                 unsupported(("`out` parameter '" + o + "' is not assigned on every path before this "
@@ -12587,11 +12578,6 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             }
             if (!ctorHandoff) scan(ret->expression);
             verifyOutsAssigned(ret->line);
-        } else if (auto* un = dynamic_cast<UnsafeNode*>(n)) {
-            bool save = inUnsafe; inUnsafe = true;
-            walk(un->body, topLevel);
-            inUnsafe = save;
-            if (topLevel) unassigned.clear();                // trust the unsafe dance initialized what it touched
         } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& s : *blk->statements) walk(s, topLevel);
         } else if (dynamic_cast<ExpressionStatementNode*>(n)) {

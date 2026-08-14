@@ -12,11 +12,11 @@ type view DequeIter<T> implements Iterator<T> {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
         this.modsp = modsp; this.modsAt = modsAt;
     }
-    public fn Optional<T> next() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); } }
+    public unsafe fn Optional<T> next() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); }
         if (this.pos >= this.len) { return Optional::None; }
         int32 idx = (this.head + this.pos) % this.cap; this.pos = this.pos + 1;
-        unsafe { return Optional::Some(value: copy this.data[idx]); }   // yield a COPY (the deque keeps its element)
+        return Optional::Some(value: copy this.data[idx]);   // yield a COPY (the deque keeps its element)
     }
 }
 
@@ -27,13 +27,13 @@ type view DequeIterMut<T> implements IteratorMut<T> {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
         this.modsp = modsp; this.modsAt = modsAt;
     }
-    public fn bool hasNext() {
-        unsafe { if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); } }
+    public unsafe fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); }
         return this.pos < this.len;
     }
-    public fn ref T next() {
+    public unsafe fn ref T next() {
         int32 idx = (this.head + this.pos) % this.cap; this.pos = this.pos + 1;
-        unsafe { return this.data[idx]; }
+        return this.data[idx];
     }
 }
 
@@ -66,32 +66,32 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     // Relinearize into a fresh `nc`-slot buffer: the wrapped window becomes a flat 0..len run at the front.
     // Element relocation goes through LOCAL pointer aliases (`nd[i] = od[…]` is a raw bitwise move that
     // leaves no owner holding a moved-from slot), the same technique DynamicArray.remove uses.
-    fn void growTo(int32 nc) {
+    unsafe fn void growTo(int32 nc) {
         UnsafePtr<T> nd = null;
-        unsafe { nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T)))); }
+        nd = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(T))));
         UnsafePtr<T> od = this.data;
         int32 i = 0;
-        unsafe { while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; } }
+        while (i < this.len) { nd[i] = od[(this.head + i) % this.cap]; i = i + 1; }
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }
         this.data = nd; this.head = 0; this.cap = nc;
     }
     fn void ensureOne() { if (this.len == this.cap) { this.growTo(nc: this.cap == 0 ? 4 : this.cap * 2); } }
 
     // Append at the back — the common enqueue.
-    public fn void pushBack(T item) {
+    public unsafe fn void pushBack(T item) {
         this.ensureOne();
         int32 idx = (this.head + this.len) % this.cap;
-        unsafe { this.data[idx] = give item; }   // relocate the element into the fresh slot (raw move)
+        this.data[idx] = give item;   // relocate the element into the fresh slot (raw move)
         this.len = this.len + 1;
         this.mods = this.mods + 1;
     }
     // Prepend at the front — step `head` back one (wrapping) and drop the element in.
-    public fn void pushFront(T item) {
+    public unsafe fn void pushFront(T item) {
         this.ensureOne();
         this.head = (this.head + this.cap - 1) % this.cap;
-        unsafe { this.data[this.head] = give item; }
+        this.data[this.head] = give item;
         this.len = this.len + 1;
         this.mods = this.mods + 1;
     }
@@ -128,10 +128,10 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     public fn int32 length() { return this.len; }
 
     // Logical index [0..len) front-to-back, bounds-checked — `dq[0]` is the front, `dq[len-1]` the back.
-    public ref T operator[](int32 i) {
+    public unsafe ref T operator[](int32 i) {
         if (i < 0 || i >= this.len) { panic(msg: "Deque index out of bounds"); }
         int32 idx = (this.head + i) % this.cap;
-        unsafe { return this.data[idx]; }
+        return this.data[idx];
     }
 
     // The by-value `foreach (T x in deque)` yields COPIES, so it exists only for a Copyable element.
@@ -199,11 +199,11 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         return Result::Ok(value: give this);
     }
 
-    ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator
+    unsafe ~Deque() {   // drop each live element (a no-op for a value), then release the buffer via the allocator
         int32 i = 0;
         while (i < this.len) { drop(value: this[i]); i = i + 1; }
         if (this.cap > 0) {
-            unsafe { this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T)); }
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }
     }
 }

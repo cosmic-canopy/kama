@@ -16,44 +16,40 @@ extern fn void  kama_wt_close(int32 h);
 fn void finish(int32 h, int32 code) { kama_wt_close(h: h); quit(code: code); }
 
 // state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16.
-fn int32 tick(UnsafePtr state) {
-    unsafe {
-        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
-        UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
-        int32 h = hdr[0];
-        hdr[2] = hdr[2] + 1;
-        if (hdr[2] > 2000000) { finish(h: h, code: 70); }    // timeout
-        int32 st = kama_wt_state(h: h);
-        if (st == 3) { finish(h: h, code: 71); }             // closed/failed
-        if (hdr[1] == 0) {
-            if (st == 1) {                                   // Connected -> send a datagram
-                sc[16] = cast<uint8>(10); sc[17] = cast<uint8>(20);
-                sc[18] = cast<uint8>(30); sc[19] = cast<uint8>(40);
-                if (kama_wt_send(h: h, buf: addr(of: sc[16]), n: cast<usize>(4)) != 0) { finish(h: h, code: 72); }
-                hdr[1] = 1;
-            }
-        } else {
-            int32 n = kama_wt_recv(h: h, buf: addr(of: sc[16]), n: cast<usize>(64));
-            if (n == 4) {
-                bool ok = (cast<int32>(sc[16]) == 10) && (cast<int32>(sc[17]) == 20)
-                       && (cast<int32>(sc[18]) == 30) && (cast<int32>(sc[19]) == 40);
-                if (ok) { finish(h: h, code: 55); } else { finish(h: h, code: 73); }
-            }
+unsafe fn int32 tick(UnsafePtr state) {
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(state);
+    UnsafePtr<uint8> sc  = cast<UnsafePtr<uint8>>(state);
+    int32 h = hdr[0];
+    hdr[2] = hdr[2] + 1;
+    if (hdr[2] > 2000000) { finish(h: h, code: 70); }    // timeout
+    int32 st = kama_wt_state(h: h);
+    if (st == 3) { finish(h: h, code: 71); }             // closed/failed
+    if (hdr[1] == 0) {
+        if (st == 1) {                                   // Connected -> send a datagram
+            sc[16] = cast<uint8>(10); sc[17] = cast<uint8>(20);
+            sc[18] = cast<uint8>(30); sc[19] = cast<uint8>(40);
+            if (kama_wt_send(h: h, buf: addr(of: sc[16]), n: cast<usize>(4)) != 0) { finish(h: h, code: 72); }
+            hdr[1] = 1;
+        }
+    } else {
+        int32 n = kama_wt_recv(h: h, buf: addr(of: sc[16]), n: cast<usize>(64));
+        if (n == 4) {
+            bool ok = (cast<int32>(sc[16]) == 10) && (cast<int32>(sc[17]) == 20)
+                   && (cast<int32>(sc[18]) == 30) && (cast<int32>(sc[19]) == 40);
+            if (ok) { finish(h: h, code: 55); } else { finish(h: h, code: 73); }
         }
     }
     return 1;
 }
 
-fn int main() {
-    unsafe {
-        UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
-        UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
-        string url = "https://127.0.0.1:47680/echo";
-        int32 h = kama_wt_connect(url: url.cstr());
-        if (h < 0) { quit(code: 60); }
-        hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
-        TickFn t = tick;
-        run(tick: t, state: cast<UnsafePtr>(block));
-    }
+unsafe fn int main() {
+    UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
+    UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
+    string url = "https://127.0.0.1:47680/echo";
+    int32 h = kama_wt_connect(url: url.cstr());
+    if (h < 0) { quit(code: 60); }
+    hdr[0] = h; hdr[1] = 0; hdr[2] = 0;
+    TickFn t = tick;
+    run(tick: t, state: cast<UnsafePtr>(block));
     return 1;
 }

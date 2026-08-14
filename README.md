@@ -27,7 +27,7 @@ the browser as WebAssembly.
   the safe surface — heap and buffers are reached only through **smart pointers**
   (`Owned`/`Shared`/`Weak`) and **collections** (`FixedArray`/`DynamicArray`/`string`), all bounds-checked
   and RAII-managed. Use-after-move is a compile error. Raw pointers live only inside an
-  explicit, greppable `unsafe { }` block at the C/FFI seam.
+  explicit, greppable `unsafe fn` at the C/FFI seam.
 - **Ownership is the type axis.** Every type is a `type value` (owns nothing, copies), a
   `type resource` (owns/has identity, moves), or a `type contract` (an interface). One
   greppable `type` marker, parallel to `fn`.

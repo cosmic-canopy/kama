@@ -6,7 +6,7 @@ type value Square { int32 s; public ctor make(int32 s){this.s=s;} }   // does NO
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p;
     public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
-    public fn ref T deref() { unsafe { return this.p[0]; } }
-    ~Box() { unsafe { free(p: cast<UnsafePtr>(this.p)); } }
+    public unsafe fn ref T deref() { return this.p[0]; }
+    unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
 fn int32 main() { Box<Shape> b = new Square.make(s: 4); return 0; }   // ERROR: Square does not implement Shape

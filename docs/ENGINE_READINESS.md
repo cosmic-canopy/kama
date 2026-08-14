@@ -32,7 +32,7 @@ The entire language feature set is complete. In place today:
   `virtual`/`abstract`/`final` resource kinds; `friend`); **multi-file builds + private-by-default
   namespaces**.
 - **C FFI** (`extern` functions **and** structs, `extern "<header>"` includes, opaque `UnsafePtr<T>`, `addr(of:)`,
-  `--link`) with raw pointers confined to an explicit **`unsafe { }`** block at the FFI boundary; **function
+  `--link`) with raw pointers confined to an explicit **`unsafe fn`** at the FFI boundary; **function
   pointers** (`fnptr` free + `BindableFunctionPtr` bound).
 - **Native + WASM**, debug/release, `#line` source debugging. The *safe* surface stays pointer-free; heap is
   reached only through safe abstractions.

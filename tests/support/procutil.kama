@@ -26,14 +26,14 @@ fn string argAt(int32 i) {
 }
 
 // Parse a non-negative decimal string (the numeric subcommand args are always well-formed digits here).
-fn int32 parseIntArg(string s) {
+unsafe fn int32 parseIntArg(string s) {
     int32 n = s.length();
     UnsafePtr<int8> p = s.cstr();
     int32 v = 0;
     int32 i = 0;
     while (i < n) {
         int8 c = 0;
-        unsafe { c = p[i]; }
+        c = p[i];
         v = v * 10 + (cast<int32>(c) - 48);
         i = i + 1;
     }

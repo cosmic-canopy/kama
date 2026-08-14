@@ -14,12 +14,12 @@ extern fn void free(UnsafePtr p);
 type resource Tracked {
     UnsafePtr<int32> tally;   // non-owning: a shared drop counter living in main
     public ctor make(UnsafePtr<int32> tally) { this.tally = tally; }
-    ~Tracked() { unsafe { this.tally[0] = this.tally[0] + 1; } }
+    unsafe ~Tracked() { this.tally[0] = this.tally[0] + 1; }
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     UnsafePtr<int32> tally = null;
-    unsafe { tally = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0; }
+    tally = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0;
     {
         Channel<Owned<Tracked>> ch = Channel.bounded(capacity: 4);
         Sender<Owned<Tracked>>   tx = ch.sender();
@@ -32,6 +32,6 @@ fn int32 main() {
         // to close must drain all three (dropping each Owned<Tracked> → Tracked bumps the tally).
     }
     int32 n = 0;
-    unsafe { n = tally[0]; free(p: cast<UnsafePtr>(tally)); }
+    n = tally[0]; free(p: cast<UnsafePtr>(tally));
     return n;   // 3 iff every abandoned item was drained-and-dropped
 }

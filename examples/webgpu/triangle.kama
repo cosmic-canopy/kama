@@ -175,138 +175,132 @@ fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
 }
 
 // Device is ready: grab the queue, configure the surface for the canvas, go live.
-fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
-    unsafe {
-        UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
-        st[0].device = device;
-        st[0].queue = wgpuDeviceGetQueue(device: device);
+unsafe fn void onDevice(int32 status, UnsafePtr device, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
+    UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
+    st[0].device = device;
+    st[0].queue = wgpuDeviceGetQueue(device: device);
 
-        configureSurface(device: device, surface: st[0].surface);
+    configureSurface(device: device, surface: st[0].surface);
 
-        st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
+    st[0].pipeline = makePipeline(device: device, format: 27);   // BGRA8Unorm
 
-        // Uniform buffer (holds the rotation angle) + a bind group over the pipeline's auto layout.
-        WGPUBufferDescriptor bd = WGPUBufferDescriptor();
-        bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08)
-        bd.size = 16;
-        UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
-        st[0].uniformBuf = ubuf;
+    // Uniform buffer (holds the rotation angle) + a bind group over the pipeline's auto layout.
+    WGPUBufferDescriptor bd = WGPUBufferDescriptor();
+    bd.usage = 72;                    // WGPUBufferUsage_Uniform (0x40) | CopyDst (0x08)
+    bd.size = 16;
+    UnsafePtr ubuf = wgpuDeviceCreateBuffer(device: device, descriptor: addr(of: bd));
+    st[0].uniformBuf = ubuf;
 
-        UnsafePtr bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline: st[0].pipeline, groupIndex: 0);
-        WGPUBindGroupEntry entry = WGPUBindGroupEntry();
-        entry.binding = 0;
-        entry.buffer = ubuf;
-        entry.offset = 0;
-        entry.size = 16;
-        WGPUBindGroupDescriptor bgd = WGPUBindGroupDescriptor();
-        bgd.layout = bgl;
-        bgd.entryCount = 1;
-        bgd.entries = cast<UnsafePtr>(addr(of: entry));
-        st[0].bindGroup = wgpuDeviceCreateBindGroup(device: device, descriptor: addr(of: bgd));
+    UnsafePtr bgl = wgpuRenderPipelineGetBindGroupLayout(pipeline: st[0].pipeline, groupIndex: 0);
+    WGPUBindGroupEntry entry = WGPUBindGroupEntry();
+    entry.binding = 0;
+    entry.buffer = ubuf;
+    entry.offset = 0;
+    entry.size = 16;
+    WGPUBindGroupDescriptor bgd = WGPUBindGroupDescriptor();
+    bgd.layout = bgl;
+    bgd.entryCount = 1;
+    bgd.entries = cast<UnsafePtr>(addr(of: entry));
+    st[0].bindGroup = wgpuDeviceCreateBindGroup(device: device, descriptor: addr(of: bgd));
 
-        st[0].ready = 1;
-    }
+    st[0].ready = 1;
 }
 
 // Adapter is ready: request a device.
-fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
-    unsafe {
-        UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
-        st[0].adapter = adapter;
+unsafe fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message, UnsafePtr u1, UnsafePtr u2) {
+    UnsafePtr<App> st = cast<UnsafePtr<App>>(u1);
+    st[0].adapter = adapter;
 
-        WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo();
-        ci.mode = 3;              // WGPUCallbackMode_AllowSpontaneous
-        ci.callback = onDevice;
-        ci.userdata1 = u1;
-        wgpuAdapterRequestDevice(adapter: adapter, descriptor: null, callbackInfo: ci);
-    }
+    WGPURequestDeviceCallbackInfo ci = WGPURequestDeviceCallbackInfo();
+    ci.mode = 3;              // WGPUCallbackMode_AllowSpontaneous
+    ci.callback = onDevice;
+    ci.userdata1 = u1;
+    wgpuAdapterRequestDevice(adapter: adapter, descriptor: null, callbackInfo: ci);
 }
 
 // One frame: acquire the swapchain texture, clear it to an animated colour, submit.
-fn int32 frameTick(UnsafePtr state) {
+unsafe fn int32 frameTick(UnsafePtr state) {
     int32 keep = 1;   // 1 = keep looping; native pump flips it to 0 on window close
-    unsafe {
-        UnsafePtr<App> st = cast<UnsafePtr<App>>(state);
-        if (st[0].ready == 0) { return 1; }         // still initialising
+    UnsafePtr<App> st = cast<UnsafePtr<App>>(state);
+    if (st[0].ready == 0) { return 1; }         // still initialising
 
-        UnsafePtr surface = st[0].surface;
-        int32 frame = st[0].frame;
-        st[0].frame = frame + 1;
+    UnsafePtr surface = st[0].surface;
+    int32 frame = st[0].frame;
+    st[0].frame = frame + 1;
 
-        // Spin the triangle: push the current angle into the uniform buffer.
-        float32 angle = cast<float32>(frame) * 0.03;
-        wgpuQueueWriteBuffer(queue: st[0].queue, buffer: st[0].uniformBuf, bufferOffset: 0,
-                             data: cast<UnsafePtr>(addr(of: angle)), size: 4);
+    // Spin the triangle: push the current angle into the uniform buffer.
+    float32 angle = cast<float32>(frame) * 0.03;
+    wgpuQueueWriteBuffer(queue: st[0].queue, buffer: st[0].uniformBuf, bufferOffset: 0,
+                         data: cast<UnsafePtr>(addr(of: angle)), size: 4);
 
-        WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
-        wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
-        UnsafePtr tex = surfTex.texture;
-        if (tex == null) {
-            // Surface out of date (native swapchains go stale after present/resize) — reconfigure and
-            // retry next frame. Still pump so the window stays responsive.
-            configureSurface(device: st[0].device, surface: surface);
-            keep = kama_gpu_pump(device: st[0].device);
-            return keep;
-        }
-
-        UnsafePtr view = wgpuTextureCreateView(texture: tex, descriptor: null);
-        UnsafePtr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
-
-        WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
-        att.view = view;
-        att.depthSlice = 4294967295ui32;   // WGPU_DEPTH_SLICE_UNDEFINED
-        att.loadOp = 2;                // WGPULoadOp_Clear
-        att.storeOp = 1;               // WGPUStoreOp_Store
-        // Full-range RGB sweep with phase offsets — an obvious colour cycle (~3.3s).
-        att.clearValue.r = cast<float64>(frame % 200) / 200.0;
-        att.clearValue.g = cast<float64>((frame + 66) % 200) / 200.0;
-        att.clearValue.b = cast<float64>((frame + 133) % 200) / 200.0;
-        att.clearValue.a = 1.0;
-
-        WGPURenderPassDescriptor rp = WGPURenderPassDescriptor();
-        rp.colorAttachmentCount = 1;
-        rp.colorAttachments = cast<UnsafePtr>(addr(of: att));
-
-        UnsafePtr pass = wgpuCommandEncoderBeginRenderPass(encoder: enc, descriptor: addr(of: rp));
-        wgpuRenderPassEncoderSetPipeline(renderPassEncoder: pass, pipeline: st[0].pipeline);
-        wgpuRenderPassEncoderSetBindGroup(renderPassEncoder: pass, groupIndex: 0, group: st[0].bindGroup, dynamicOffsetCount: 0, dynamicOffsets: null);
-        wgpuRenderPassEncoderDraw(renderPassEncoder: pass, vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0);
-        wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
-        UnsafePtr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
-        wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<UnsafePtr>(addr(of: cmd)));
-        // Present through the seam: a real wgpuSurfacePresent natively, a no-op on the web (the
-        // browser auto-presents the canvas each requestAnimationFrame tick — emdawnwebgpu aborts on
-        // an explicit present).
-        kama_gpu_present(surface: surface);
-
-        // Release this frame's transient objects. GetCurrentTexture hands back a ref we own,
-        // so release `tex` too (matches Emscripten's reference; the surface keeps its own ref) —
-        // else it leaks a swapchain texture every frame.
-        wgpuRenderPassEncoderRelease(renderPassEncoder: pass);
-        wgpuCommandBufferRelease(commandBuffer: cmd);
-        wgpuCommandEncoderRelease(encoder: enc);
-        wgpuTextureViewRelease(textureView: view);
-        wgpuTextureRelease(texture: tex);
-
-        // Pump the platform: native drains window events + polls the device and returns 0 when the
-        // window is closed (ending std::app's `while(tick())`); the web is a no-op that returns 1.
+    WGPUSurfaceTexture surfTex = WGPUSurfaceTexture();
+    wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
+    UnsafePtr tex = surfTex.texture;
+    if (tex == null) {
+        // Surface out of date (native swapchains go stale after present/resize) — reconfigure and
+        // retry next frame. Still pump so the window stays responsive.
+        configureSurface(device: st[0].device, surface: surface);
         keep = kama_gpu_pump(device: st[0].device);
+        return keep;
     }
+
+    UnsafePtr view = wgpuTextureCreateView(texture: tex, descriptor: null);
+    UnsafePtr enc = wgpuDeviceCreateCommandEncoder(device: st[0].device, descriptor: null);
+
+    WGPURenderPassColorAttachment att = WGPURenderPassColorAttachment();
+    att.view = view;
+    att.depthSlice = 4294967295ui32;   // WGPU_DEPTH_SLICE_UNDEFINED
+    att.loadOp = 2;                // WGPULoadOp_Clear
+    att.storeOp = 1;               // WGPUStoreOp_Store
+    // Full-range RGB sweep with phase offsets — an obvious colour cycle (~3.3s).
+    att.clearValue.r = cast<float64>(frame % 200) / 200.0;
+    att.clearValue.g = cast<float64>((frame + 66) % 200) / 200.0;
+    att.clearValue.b = cast<float64>((frame + 133) % 200) / 200.0;
+    att.clearValue.a = 1.0;
+
+    WGPURenderPassDescriptor rp = WGPURenderPassDescriptor();
+    rp.colorAttachmentCount = 1;
+    rp.colorAttachments = cast<UnsafePtr>(addr(of: att));
+
+    UnsafePtr pass = wgpuCommandEncoderBeginRenderPass(encoder: enc, descriptor: addr(of: rp));
+    wgpuRenderPassEncoderSetPipeline(renderPassEncoder: pass, pipeline: st[0].pipeline);
+    wgpuRenderPassEncoderSetBindGroup(renderPassEncoder: pass, groupIndex: 0, group: st[0].bindGroup, dynamicOffsetCount: 0, dynamicOffsets: null);
+    wgpuRenderPassEncoderDraw(renderPassEncoder: pass, vertexCount: 3, instanceCount: 1, firstVertex: 0, firstInstance: 0);
+    wgpuRenderPassEncoderEnd(renderPassEncoder: pass);
+    UnsafePtr cmd = wgpuCommandEncoderFinish(encoder: enc, descriptor: null);
+    wgpuQueueSubmit(queue: st[0].queue, commandCount: 1, commands: cast<UnsafePtr>(addr(of: cmd)));
+    // Present through the seam: a real wgpuSurfacePresent natively, a no-op on the web (the
+    // browser auto-presents the canvas each requestAnimationFrame tick — emdawnwebgpu aborts on
+    // an explicit present).
+    kama_gpu_present(surface: surface);
+
+    // Release this frame's transient objects. GetCurrentTexture hands back a ref we own,
+    // so release `tex` too (matches Emscripten's reference; the surface keeps its own ref) —
+    // else it leaks a swapchain texture every frame.
+    wgpuRenderPassEncoderRelease(renderPassEncoder: pass);
+    wgpuCommandBufferRelease(commandBuffer: cmd);
+    wgpuCommandEncoderRelease(encoder: enc);
+    wgpuTextureViewRelease(textureView: view);
+    wgpuTextureRelease(texture: tex);
+
+    // Pump the platform: native drains window events + polls the device and returns 0 when the
+    // window is closed (ending std::app's `while(tick())`); the web is a no-op that returns 1.
+    keep = kama_gpu_pump(device: st[0].device);
     return keep;
 }
 
-fn int main() {
+unsafe fn int main() {
     UnsafePtr inst = wgpuCreateInstance(descriptor: null);
 
     // Heap app-state (zeroed) so it outlives main() once the browser drives the loop.
     UnsafePtr<App> st = cast<UnsafePtr<App>>(calloc(count: 1, size: sizeof(App)));
-    unsafe { st[0].instance = inst; }
+    st[0].instance = inst;
 
     // Surface via the seam: the page's <canvas id="canvas"> on the web, a real 512×512 window
     // natively. Same call, one window/canvas per app — exactly what the triangle needs.
     string title = "kama — triangle";
     UnsafePtr surface = kama_gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
-    unsafe { st[0].surface = surface; }
+    st[0].surface = surface;
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.
     WGPURequestAdapterCallbackInfo ci = WGPURequestAdapterCallbackInfo();

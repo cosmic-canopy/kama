@@ -103,7 +103,7 @@ It is kama's answer to a **safe span without a borrow checker** — the same sha
 type view View<T> {                               // a slice/span over a buffer it borrows
     UnsafePtr<T> data; int32 len;                       // fields are private-only (the raw UnsafePtr must not leak)
     public View(UnsafePtr<T> data, int32 len) { this.data = data; this.len = len; }
-    public ref T operator[](int32 i) { /* bounds-checked */ unsafe { return this.data[i]; } }
+    public unsafe ref T operator[](int32 i) { /* bounds-checked */ return this.data[i]; }
 }
 
 DynamicArray<float32> verts = …;

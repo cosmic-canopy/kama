@@ -12,10 +12,10 @@ type resource Vec<T> {
         this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
         this.len = n;
  }
-    public ref T operator[](int32 i) {
+    public unsafe ref T operator[](int32 i) {
         if (i < 0) { panic(msg: "Vec: negative index"); }
         assert(cond: i < this.len, msg: "");
-        unsafe { return this.data[i]; }
+        return this.data[i];
     }
     public fn int32 length() { return this.len; }
     ~Vec() { free(p: cast<UnsafePtr>(this.data)); }

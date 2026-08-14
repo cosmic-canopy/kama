@@ -19,8 +19,8 @@ extern fn void free(UnsafePtr p);
 type resource Arena {
     UnsafePtr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
 
-    public ctor make(int32 capacity) {
-        unsafe { this.buffer = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(capacity))); }
+    public unsafe ctor make(int32 capacity) {
+        this.buffer = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(capacity)));
         if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
         this.capacity = capacity; this.offset = 0;
     }
@@ -37,7 +37,7 @@ type resource Arena {
     // containers living in it — the caller drops those first, then resets.
     public fn void reset() { this.offset = 0; }
 
-    ~Arena() { unsafe { free(p: cast<UnsafePtr>(this.buffer)); } }
+    unsafe ~Arena() { free(p: cast<UnsafePtr>(this.buffer)); }
 }
 
 // A copyable value handle onto an `Arena`. Stores the buffer base + a raw pointer to the arena's
@@ -52,14 +52,12 @@ type value BumpAllocator implements Allocator {
         this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
-    public fn Optional<UnsafePtr> allocate(usize bytes) {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
         int32 b = cast<int32>(bytes);
-        unsafe {
-            int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
-            if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
-            this.offset[0] = o + b;
-            return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
-        }
+        int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
+        if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
+        this.offset[0] = o + b;
+        return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
     }
 
     public fn void deallocate(UnsafePtr pointer, usize bytes) { }           // no-op: the Arena owns the region

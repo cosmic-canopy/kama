@@ -8,15 +8,13 @@
 //
 // A bare local now resolves through its DECLARED type node first, and only falls back to `exprClass`.
 // `null` is only for `UnsafePtr<T>`, and that holds for every type — including the primitives, and
-// including inside an `unsafe { }` block, which changes what you may DEREFERENCE, not what may be null.
+// including inside an `unsafe fn`, which changes what you may DEREFERENCE, not what may be null.
 type value Thing { public int32 x; public ctor make() { this.x = 0; } }
 
-fn int32 main() {
+unsafe fn int32 main() {
     int32 a = 1;
     UnsafePtr<int32> p = null;
-    unsafe {
-        if (a == null) { return 1; }    // still an error INSIDE unsafe
-        if (p != null) { return 2; }    // allowed — an `UnsafePtr` is the one thing that can be null
-    }
+    if (a == null) { return 1; }    // still an error INSIDE unsafe
+    if (p != null) { return 2; }    // allowed — an `UnsafePtr` is the one thing that can be null
     return 0;
 }

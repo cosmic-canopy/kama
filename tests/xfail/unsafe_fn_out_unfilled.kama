@@ -1,0 +1,22 @@
+// Finding 9, closed by construction. `unsafe` used to be a BLOCK, and a top-level one did
+// `unassigned.clear()` for the WHOLE function while `verifyOutsAssigned` returned early — so an `unsafe fn`
+// that never filled its `out` parameter passed `kama check`, and the caller read uninitialized stack.
+//
+// The relaxation's scope (the function) did not match the construct's scope (the block). Now that `unsafe`
+// IS the function, the split is explicit and deliberate: an `unsafe fn` relaxes LOCALS — a raw store is
+// invisible to the definite-assignment walker, so an unsafe body's own init dance would otherwise read as
+// use-before-assign — but it does NOT relax `out`. Filling an `out` is a contract with the CALLER, and safe
+// code may call an `unsafe fn` freely, so relaxing it would reopen the hole for every caller at once.
+extern fn UnsafePtr malloc(usize n);
+
+unsafe fn void fill(out int32 dst) {
+    UnsafePtr<int32> scratch = cast<UnsafePtr<int32>>(malloc(n: cast<usize>(4)));
+    scratch[0] = 1;      // a raw store the DA walker cannot see — this is exactly why LOCALS relax
+    // `dst` is never assigned. Rejected.
+}
+
+fn int32 main() {
+    slot int32 v;
+    fill(dst: out v);
+    return v;
+}

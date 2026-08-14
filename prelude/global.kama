@@ -310,9 +310,9 @@ type intrinsic <string>  implements Deserialize  { public ctor Result<string, st
 // clamped to the available bytes rather than reading past the end.
 type view Chars implements Iterator<char> {
     UnsafePtr<uint8> data; int32 len; int32 pos;
-    public fn Optional<char> next() {
+    public unsafe fn Optional<char> next() {
         if (this.pos >= this.len) { return Optional::None; }
-        uint32 c0 = 0; unsafe { c0 = cast<uint32>(this.data[this.pos]); }
+        uint32 c0 = cast<uint32>(this.data[this.pos]);
         uint32 cp = c0; int32 n = 1;
         if (c0 >= 240ui32) { cp = c0 & 7ui32; n = 4; }
         else if (c0 >= 224ui32) { cp = c0 & 15ui32; n = 3; }
@@ -320,7 +320,7 @@ type view Chars implements Iterator<char> {
         if (this.pos + n > this.len) { n = this.len - this.pos; }
         int32 i = 1;
         while (i < n) {
-            uint32 cc = 0; unsafe { cc = cast<uint32>(this.data[this.pos + i]); }
+            uint32 cc = cast<uint32>(this.data[this.pos + i]);
             cp = (cp << 6ui32) | (cc & 63ui32); i = i + 1;
         }
         this.pos = this.pos + n;
@@ -336,7 +336,7 @@ type view Chars implements Iterator<char> {
 extern fn string kama_string_from_raw(UnsafePtr<uint8> src, int32 start, int32 len);
 type view Split implements Iterator<string> {
     UnsafePtr<uint8> data; int32 len; UnsafePtr<uint8> sep; int32 seplen; int32 pos; bool done;
-    public fn Optional<string> next() {
+    public unsafe fn Optional<string> next() {
         if (this.done) { return Optional::None; }
         if (this.seplen == 0) {
             this.done = true;
@@ -347,7 +347,7 @@ type view Split implements Iterator<string> {
             bool m = true; int32 k = 0;
             while (k < this.seplen) {
                 uint8 a = 0ui8; uint8 b = 0ui8;
-                unsafe { a = this.data[i + k]; b = this.sep[k]; }
+                a = this.data[i + k]; b = this.sep[k];
                 if (a != b) { m = false; break; }
                 k = k + 1;
             }
@@ -400,10 +400,10 @@ fn Args args() { return Args.make(); }
 // bare `app` when found via PATH), or None if unavailable (bare-metal firmware). The unmodified string, for
 // fidelity/logging or code ported from Go/Rust; use programName() for a display name, programPath() for the
 // real binary location.
-fn Optional<string> programInvocation() {
+unsafe fn Optional<string> programInvocation() {
     string val = "";
     bool found = false;
-    unsafe { found = kama_program_invocation(dst: addr(of: val)); }
+    found = kama_program_invocation(dst: addr(of: val));
     if (found) { return Optional::Some(value: give val); }
     return Optional::None;
 }
@@ -411,40 +411,40 @@ fn Optional<string> programInvocation() {
 // `.\app.exe` -> `app.exe`). This is what usage/error messages print and what a busybox-style multi-call
 // binary dispatches on. `None` only where there is no argv[0] (bare-metal firmware). Spoofable (it is
 // whatever the caller put in argv[0]) — for the reliable binary location use programPath().
-fn Optional<string> programName() {
+unsafe fn Optional<string> programName() {
     string val = "";
     bool found = false;
-    unsafe { found = kama_program_name(dst: addr(of: val)); }
+    found = kama_program_name(dst: addr(of: val));
     if (found) { return Optional::Some(value: give val); }
     return Optional::None;
 }
 // The OS-resolved absolute path to the running executable — reliable for locating sibling files or
 // re-exec'ing (unlike argv[0], it is queried from the OS, not the caller). `None` where there is no such
 // notion or no portable query: wasm (a JS/browser host), bare-metal firmware, or an unsupported platform.
-fn Optional<string> programPath() {
+unsafe fn Optional<string> programPath() {
     string val = "";
     bool found = false;
-    unsafe { found = kama_program_path(dst: addr(of: val)); }
+    found = kama_program_path(dst: addr(of: val));
     if (found) { return Optional::Some(value: give val); }
     return Optional::None;
 }
 // The value of environment variable `name`, or None if unset. `envOr` is sugar for the fallback case.
-fn Optional<string> env(string name) {
+unsafe fn Optional<string> env(string name) {
     if (name.length() == 0) { return Optional::None; }   // guard: cstr() of an empty/borrowed string may be NULL
     string val = "";
     bool found = false;
-    unsafe { found = kama_env_lookup(name: name.cstr(), dst: addr(of: val)); }
+    found = kama_env_lookup(name: name.cstr(), dst: addr(of: val));
     if (found) { return Optional::Some(value: give val); }
     return Optional::None;
 }
 // Calls the runtime seam directly (rather than moving a string out of env()'s Optional, which the
 // ownership model disallows — a payload can be read/`copy`d but not `give`n out of an enum); `give val`
 // moves the fresh LOCAL out, no copy on the hit path.
-fn string envOr(string name, string dflt) {
+unsafe fn string envOr(string name, string dflt) {
     if (name.length() == 0) { return give dflt; }
     string val = "";
     bool found = false;
-    unsafe { found = kama_env_lookup(name: name.cstr(), dst: addr(of: val)); }
+    found = kama_env_lookup(name: name.cstr(), dst: addr(of: val));
     if (found) { return give val; }
     return give dflt;
 }
@@ -474,10 +474,10 @@ fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handle
 // string is passed with `copy`/`give` like anywhere else in the value model.
 extern fn void kama_print_write(int32 fd, UnsafePtr<int8> bytes, usize len);
 extern fn void kama_print_nl(int32 fd);
-fn void print(string s)    { unsafe { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); } }
-fn void eprint(string s)   { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); } }
-fn void println(string s)  { unsafe { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); } }
-fn void eprintln(string s) { unsafe { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); } }
+unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
+unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
+unsafe fn void println(string s)  { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); }
+unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); }
 
 // The default allocator (satisfies `Allocator`): a zero-size handle straight onto libc malloc/free. The
 // M8 default `A: Allocator = GlobalAllocator` fills it in for `Owned<T>` / `DynamicArray<T>` / `Map<K,V>`,
@@ -492,13 +492,13 @@ type value GlobalAllocator implements Allocator {
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with
     // the nameless primary until M8d removes it.
     public default ctor make() { return this; }
-    public fn Optional<UnsafePtr> allocate(usize bytes) {
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
         UnsafePtr p = null;
-        unsafe { p = malloc(n: bytes); }
+        p = malloc(n: bytes);
         if (cast<usize>(p) == cast<usize>(0)) { return Optional::None; }
         return Optional::Some(value: p);
     }
-    public fn void deallocate(UnsafePtr pointer, usize bytes) { unsafe { free(p: pointer); } }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes) { free(p: pointer); }
 }
 
 // Infallible-allocation adapter (MCU step 5): unwrap a fallible allocation, panicking on OOM. This
@@ -546,7 +546,7 @@ type resource Formatter {
     string buf;
     public ctor make() { this.buf = ""; }
     // Append a string's UTF-8 bytes verbatim (borrowed — reads the fat pointer, doesn't dup the bytes).
-    public fn void writeStr(ref string s) { unsafe { kama_str_push(buf: addr(of: this.buf), src: s); } }
+    public unsafe fn void writeStr(ref string s) { kama_str_push(buf: addr(of: this.buf), src: s); }
     public fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }
     public fn void writeU64(uint64 v)  { string t = kama_fmt_u64(v: v);  this.writeStr(s: ref t); }
     public fn void writeF64(float64 v) { string t = kama_fmt_f64(v: v);  this.writeStr(s: ref t); }
@@ -560,7 +560,7 @@ type resource Formatter {
     public fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     public fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).
-    public fn string finish() { unsafe { return kama_str_take(buf: addr(of: this.buf)); } }
+    public unsafe fn string finish() { return kama_str_take(buf: addr(of: this.buf)); }
 }
 // Primitive conformances (pure-kama, like the Hashable/Comparable ones above) — every scalar and `string`
 // renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an import.
@@ -595,6 +595,6 @@ type value Template {
     public fn int32 holeCount() { return this._nholes; }
     // The i-th literal part / rendered hole, as a fresh owned copy (the backing bytes are borrowed, so a copy
     // is what a tag can keep, iterate, or `give` onward).
-    public fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } unsafe { return copy this._parts[at]; } }
-    public fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } unsafe { return copy this._holes[at]; } }
+    public unsafe fn string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return copy this._parts[at]; }
+    public unsafe fn string hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return copy this._holes[at]; }
 }

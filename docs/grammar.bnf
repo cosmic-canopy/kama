@@ -566,7 +566,6 @@ embedded_statement
   | iteration_statement
   | jump_statement
   | arm_value_statement
-  | unsafe_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
@@ -590,9 +589,6 @@ arm_value_statement
     /* `:= expr;` — the value a match arm's block produces (assigned out to whatever the match is bound
        to). A distinct statement (not a jump); the emitter requires it be the arm block's last statement. */
   : WALRUS expression SEMICOLON
-  ;
-unsafe_statement
-  : UNSAFE block
   ;
   /* `asm("wfi");` — inline assembly (MCU step 6a). One string-literal operand; lowers to
      `__asm__ __volatile__("<text>" : : : "memory")`. The emitter requires an enclosing `unsafe `

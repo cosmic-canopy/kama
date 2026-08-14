@@ -13,7 +13,7 @@ type resource Slot {
         this.value = value;
     }
 
-    public fn void run() { unsafe { this.cell[0] = this.value; } }
+    public unsafe fn void run() { this.cell[0] = this.value; }
 }
 
 fn void writer(Slot s) { s.run(); }

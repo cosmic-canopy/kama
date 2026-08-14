@@ -5,14 +5,14 @@
 // hosted behavior is unchanged, so this asserts a deterministic exit code like any other fixture.
 static hardware UnsafePtr<uint32> gpio_odr;   // -> volatile uint32* : real MMIO writes, never elided
 
-fn int32 main() {
+unsafe fn int32 main() {
     uint32 led = 0;                     // stands in for the peripheral register on the host
     gpio_odr = addr(of: led);
 
     int32 blinks = 0;
     while (blinks < 21) {
-        unsafe { gpio_odr[0] = gpio_odr[0] ^ 1; }   // toggle the LED bit
+        gpio_odr[0] = gpio_odr[0] ^ 1;   // toggle the LED bit
         blinks = blinks + 1;
     }
-    unsafe { return cast<int32>(gpio_odr[0]) + blinks; }   // 21 toggles -> bit=1; 1 + 21 = 22
+    return cast<int32>(gpio_odr[0]) + blinks;   // 21 toggles -> bit=1; 1 + 21 = 22
 }

@@ -397,14 +397,7 @@ public:
 
 // `unsafe { ... }` — a scoped block inside which raw pointer index/store is
 // permitted. The single, explicit, greppable unsafe surface of the language.
-class UnsafeNode : public StatementNode {
-public:
-    SharedStatement body;   // a BlockNode
-    UnsafeNode(CodeGenContext& context, SharedStatement body)
-        : ASTNode(context),  StatementNode(context), body(body) { }
-};
-
-// `asm("...")` — inline assembly (MCU step 6a). Statement-only; requires an enclosing `unsafe { }`.
+// `asm("...")` — inline assembly (MCU step 6a). Statement-only; requires an enclosing `unsafe fn`.
 // Lowers to `__asm__ __volatile__(<text> : : : "memory")` — always volatile + a full compiler memory
 // barrier (so `cpsid i`/`dsb`/`dmb` are correct by default). One literal operand; no interpolation.
 class AsmNode : public StatementNode {

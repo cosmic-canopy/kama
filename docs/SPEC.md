@@ -25,7 +25,7 @@ borrow — a slice/span), or `type contract` (an interface).
 | `void` | `void` |
 | user `type value`/`type resource` | `struct` (value semantics) |
 
-No raw arrays and **no raw pointers — by design** (raw memory access is confined to `unsafe { }` at the FFI
+No raw arrays and **no raw pointers — by design** (raw memory access is confined to `unsafe fn` at the FFI
 boundary). Collections are generic library types.
 
 ### Numeric literals
@@ -656,7 +656,7 @@ that holds in **both directions** and for **every** other type — a safe type c
 `null` (`== null` / `!= null` is a compile error; the C habit checks the wrong thing here) nor *set* to it.
 `int32 x = null;`, `Thing t = null;`, a `string` field defaulted to `null`, `x = null` and `x == null` on
 any of them are all rejected; model absence with `Optional<T>`, or use a zero value. The rule reads the
-**declared type**, so it covers primitives — and it does not care whether you are inside `unsafe { }`,
+**declared type**, so it covers primitives — and it does not care whether you are inside an `unsafe fn`,
 which changes what may be *dereferenced*, not what may be null. An unresolved or FFI type name is left
 alone, since a C typedef for a pointer is a legitimate `null` target. A `Weak<T>`'s liveness is obtained through `tryUpgrade() -> Optional<Shared<T>>`,
 whose result forces you to handle the dead case.
@@ -735,7 +735,7 @@ an extern function, so there are no redeclaration conflicts; and the runtime hid
 missing include is a plain C error, never a silent guess.
 
 `UnsafePtr` is `void*`; `UnsafePtr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
-**no dereference** in kama outside `unsafe`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
+**no dereference** in kama outside an `unsafe fn`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).
 
 ### Math (`std::math`) ✅
@@ -962,7 +962,7 @@ Windows (Winsock + CRT) both ship; under wasm the virtual FS works, sockets need
 `-lws2_32` on Windows (pay-for-use, like `-lm` for `<math.h>`). `examples/httpd/` is a ~200-line static-file
 HTTP server built on these three modules.
 
-**FFI data — all controlled, no `unsafe` needed:**
+**FFI data — all controlled, no `unsafe fn` needed:**
 
 ```kama
 extern "<stdlib.h>";                       // a C #include
@@ -984,7 +984,7 @@ kama uses its fields (all public, the C layout) but never re-emits it (so no red
 the literal C name. It has no ctor; construct it either by binding a struct-returning C fn (`div(...)`
 above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
 (unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a
-real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe`. `s.cstr()` yields a C
+real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields a C
 `const char*`.
 
 ### Command-line arguments + environment ✅
@@ -1121,32 +1121,56 @@ now automatic at every recognized call site. To make a whole subsystem *physical
 config, gate its declarations with `@compileFor(FLAG)`. This is an **AST lowering, not a preprocessor** — typed,
 hygienic, one grammar (the `"${x}"`/`assert`/`print` shape), exactly like Rust `log`/`tracing`.
 
-### `unsafe { }` — raw pointer memory access
+### `unsafe fn` — raw pointer memory access
 
 The **only** place kama can touch arbitrary memory through a raw pointer. Raw `UnsafePtr<T>` index/store is a
-**compile error outside** an `unsafe { }` block — so the entire dangerous surface is explicit and greppable
-(`grep -rn 'unsafe {'`). Everything else (collections, smart pointers, FFI structs/handles/out-params,
-`addr`) stays safe.
+**compile error outside** an `unsafe fn` — so the entire dangerous surface is explicit and greppable, and
+greppable *at the declaration* (`grep -rn 'unsafe fn'`) rather than buried in a body. Everything else
+(collections, smart pointers, FFI structs/handles/out-params, `addr`) stays safe.
+
+**`unsafe` marks the BODY, not the caller.** This is C#'s meaning of the word, not Rust's: it says *this
+function does dangerous things inside*, so **calling an `unsafe fn` is unrestricted** and its visibility is
+ordinary. `public unsafe fn` is the common shape, not a contradiction — the function's *signature* is the
+safe boundary, so a caller needs no permission. There is no propagation and no caller obligation. (Rust's
+`unsafe fn` means the opposite — *calling this is dangerous, the caller must uphold an invariant* — which is
+what forces containment there. kama does not take that meaning.)
+
+It is markable wherever a body exists: a method, a `ctor`, a destructor, an `operator`, and a free function.
+It is **rejected where no body exists** — on a type, on a field, on an `abstract` method, and on a `contract`
+member — because there is nothing there to be unsafe. A contract member is a *conduit*: the implementation
+whose signature names `UnsafePtr` must itself be an `unsafe fn`, and a caller cannot invoke the member
+without holding an `UnsafePtr`. That is what keeps `A: Allocator` a perfectly safe **bound** while
+`allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
 
 ```kama
-UnsafePtr<int32> p = malloc(n: 16);    // void* -> int32_t* (implicit)
-unsafe {
+unsafe fn int32 sum(UnsafePtr<int32> p) {
     p[0] = 10;  p[1] = 32;       // raw store  (p[0] is *p)
-    int32 v = p[0] + p[1];       // raw read
+    return p[0] + p[1];          // raw read
 }
-// p[0] = 1;                     // ERROR outside unsafe: "raw pointer access requires an `unsafe { }` block"
+
+fn int32 caller(UnsafePtr<int32> p) {
+    return sum(p: p);            // calling an unsafe fn needs no ceremony — the signature is the boundary
+    // p[0] = 1;                 // ERROR here: "raw pointer access requires an `unsafe fn`"
+}
 
 FixedArray<float32> verts = ...;
 UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
-// ... pass (data, n) to a C upload fn; dereferencing `data` still needs `unsafe`
+// ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
+**Definite assignment inside an `unsafe fn`: locals relax, `out` parameters do not.** The split is
+load-bearing. Relaxation exists because a raw store is invisible to the definite-assignment walker, so an
+unsafe body's own initialization dance would otherwise read as a use-before-assign. Filling an `out`, by
+contrast, is a contract with the *caller* — and since safe code may call an `unsafe fn` freely, relaxing it
+would hand every caller a hole full of uninitialized stack. A raw fill still counts: `addr(of: dst)` marks
+its target assigned, which is how a type-erased C call satisfies the rule.
+
 `a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `UnsafePtr` is valid only
-while the collection is alive + unmodified, and dereferencing it requires `unsafe`). An unlowered construct
+while the collection is alive + unmodified, and dereferencing it requires an `unsafe fn`). An unlowered construct
 (including a safety-gate violation) is a **hard build error** — kama never emits incomplete C and claims
 success.
 
-Moving an **owned** value into a raw slot uses `give`: `unsafe { buf[i] = give w; }` stores the bytes and
+Moving an **owned** value into a raw slot uses `give`: `buf[i] = give w;` (inside an `unsafe fn`) stores the bytes and
 **consumes** `w` (its scope-drop is skipped — a use-after-move is a compile error), the one marker that
 carries ownership across into unsafe manual storage. An *unmarked* `slot[i] = x` is a plain bitwise store
 (the untracked raw-relocate a container uses internally, e.g. moving elements between buffers). Getting a
@@ -1167,21 +1191,23 @@ Some operations have **no C-level equivalent**: `wfi`/`wfe` (idle-sleep), `cpsid
 emits them directly.
 
 ```kama
-unsafe { asm("wfi"); }                 // -> __asm__ __volatile__("wfi" : : : "memory");
-unsafe { asm("cpsid i\n\tdsb"); }      // multiple instructions in one \n-separated string
+unsafe fn void idle() {
+    asm("wfi");                        // -> __asm__ __volatile__("wfi" : : : "memory");
+    asm("cpsid i\n\tdsb");             // multiple instructions in one \n-separated string
+}
 ```
 
 - **A statement** taking exactly **one string literal** (no interpolation — the text must be literal).
-- **Requires `unsafe { }`.** Inline asm is the ultimate raw operation, so it lives in the same explicit,
-  greppable seam as raw-pointer access. `asm(...)` outside `unsafe` is a hard build error
-  (*"inline `asm(...)` must be inside an `unsafe { }` block"*).
+- **Requires an `unsafe fn`.** Inline asm is the ultimate raw operation, so it lives in the same explicit,
+  greppable seam as raw-pointer access. `asm(...)` outside one is a hard build error
+  (*"inline `asm(...)` must be inside an `unsafe fn`"*).
 - **Always volatile + a memory clobber.** Every `asm(...)` lowers to `__asm__ __volatile__("…" : : :
   "memory")` — never optimized away or reordered, and **also a full compiler memory barrier**, so
   `cpsid i`/`dsb`/`dmb` are correct by default (without the clobber the compiler could hoist memory ops
   across them — a silent footgun). A `nop` delay with a memory clobber is harmless. There is no
   non-volatile / no-clobber form (one way, safe default).
 - **Portability is yours.** The text is target-specific; like FFI, `asm(...)` breaks "runs anywhere C
-  runs." It is allowed anywhere inside `unsafe` (not gated to `--target embedded`).
+  runs." It is allowed anywhere inside an `unsafe fn` (not gated to `--target embedded`).
 - Curated named helpers (`wfi()`, `disable_interrupts()`, `barrier()`) are an ordinary **library** built
   on this primitive — the unsafe-core / safe-API-as-library model. Extended asm with operand constraints
   and `@naked` functions are tracked follow-ons.
@@ -1464,7 +1490,7 @@ if (n > 100) { return 4; } else if (n > 10) { return 3; } else { return 0; }
 ```
 
 That `if` **is** the branch — it cannot grow a sibling statement the way a bare body can — and requiring
-`else { if (…) { … } }` would nest every chain for no safety gain. `unsafe`, `scope`, `parallel_for` and
+`else { if (…) { … } }` would nest every chain for no safety gain. `scope`, `parallel_for` and
 `match` are unaffected: they already require a block (a `match` arm's `case P: expr;` is an expression, not
 a statement body).
 
@@ -2871,7 +2897,7 @@ non-contiguous container such as a `Map` has no `.view()` and is rejected.
 ### The three sharing seams ✅
 
 Cross-isolate state is confined to three greppable seams, the same way raw memory is confined to
-`unsafe { }`:
+`unsafe fn`:
 
 | Seam | Meaning | Native | wasm | Bare metal |
 | --- | --- | --- | --- | --- |

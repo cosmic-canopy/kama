@@ -1447,8 +1447,6 @@ void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out
     };
     if (auto* b = dynamic_cast<BlockNode*>(n)) {
         if (b->statements) for (auto& st : *b->statements) collectBindings(st, out, stmtOnly);
-    } else if (auto* u = dynamic_cast<UnsafeNode*>(n)) {
-        collectBindings(u->body, out, stmtOnly);
     } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
         collectBindings(sc->body, out, stmtOnly);
     } else if (auto* i = dynamic_cast<IfNode*>(n)) {

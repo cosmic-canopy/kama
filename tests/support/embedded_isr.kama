@@ -5,8 +5,8 @@
 // gives the handler a bare symbol the vector table can name; `used` (added automatically) survives --gc-sections.
 @section(".isr_vector") static hardware UnsafePtr<uint32> vtor;   // vector-table base pinned to a fixed section
 
-@interrupt expose fn void on_systick() {
-    unsafe { vtor[0] = vtor[0] + 1; }   // service the tick through the MMIO handle
+@interrupt expose unsafe fn void on_systick() {
+    vtor[0] = vtor[0] + 1;   // service the tick through the MMIO handle
 }
 
 fn int32 main() { return 0; }

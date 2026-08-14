@@ -6,8 +6,8 @@ type value Counter { public int32 n; public ctor make(int32 s) { this.n = s; } p
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p;
     public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
-    public fn ref T deref() { unsafe { return this.p[0]; } }
-    ~Box() { unsafe { free(p: cast<UnsafePtr>(this.p)); } }
+    public unsafe fn ref T deref() { return this.p[0]; }
+    unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
 fn int32 main() {
     Box<Counter> a = new Counter.make(s: 7);

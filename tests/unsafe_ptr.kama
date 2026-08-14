@@ -1,18 +1,16 @@
-// M17: raw pointer write/read through a malloc'd buffer, gated by `unsafe { }`.
+// M17: raw pointer write/read through a malloc'd buffer, gated by `unsafe fn`.
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 
-fn int main()
+unsafe fn int main()
 {
     UnsafePtr<int32> p = malloc(n: 16);   // void* -> int32_t* (implicit in C)
     if (p == null) { return 1; }
     int32 s = 0;
-    unsafe {
-        p[0] = 10;
-        p[1] = 32;
-        s = p[0] + p[1];
-    }
+    p[0] = 10;
+    p[1] = 32;
+    s = p[0] + p[1];
     free(p: p);
     return s;   // 42
 }

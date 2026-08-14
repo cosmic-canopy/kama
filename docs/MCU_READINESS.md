@@ -21,7 +21,7 @@ A surprising amount of the bare-metal core is already in place:
 
 - **Fixed-width scalar types** — `int8..int64`, `uint8..uint64`, `usize`, `float32/float64`, `bool`, `char` map
   straight to `<stdint.h>` types. No hidden width, no boxing.
-- **A pointer-free *safe* surface + an explicit `unsafe { }` FFI boundary** — `UnsafePtr<T>`, `addr(of: place)`,
+- **A pointer-free *safe* surface + an explicit `unsafe fn` FFI boundary** — `UnsafePtr<T>`, `addr(of: place)`,
   `extern` functions **and** `extern` structs, `extern "<header>"` includes. This is exactly the shape MMIO
   register access needs (an `extern value` register block + an `UnsafePtr` to its base), with all raw access greppable.
 - **No `null` in the safe surface** and **RAII destructors** — deterministic teardown with no GC, no finalizer
@@ -61,7 +61,7 @@ mile of the no-heap story.**
 |---|---|---|---|
 | **The no-heap story: fallible allocation + a heap-free subset** | ✅ **SHIPPED (step 5).** The `Allocator` seam is **fallible** (`allocate -> Optional<UnsafePtr>`, `None` on OOM — never panics); `new`/collections unwrap-or-panic (prelude `unwrapPtr`), **`try new -> Optional<Owned<T>>`** is the non-panic construction entry, and direct `allocate` callers `match` on `None`. The compiler-checkable subset is a per-region **`@noheap`** fn attribute + a whole-program **`--no-heap`** flag: every emitter-visible allocation is a compile error via one gate (`rejectIfNoHeap`). Fixtures: `tests/alloc_frame_arena.kama` (graceful arena exhaustion + `@noheap` hot loop), `tests/noheap_ok.kama`, `tests/xfail/noheap_{new,try_new,interp}.kama`, `tools/check-noheap.sh`. | done |
 | **Linker-section / placement attributes** | ✅ **SHIPPED (step 4).** `@section(".name")` on a module static or a function → `__attribute__((section(".name")))` — const tables in flash, ISR vectors in a fixed section, DMA buffers in a RAM bank. (AVR `PROGMEM` is `@section` + the AVR toolchain, later.) Fixtures `tests/support/embedded_section.kama` (freestanding-object build) + `embedded_isr.kama`. | done |
-| **Inline assembly / intrinsics** | ✅ **SHIPPED (step 6a)** — `asm("…")` inside `unsafe { }` lowers to `__asm__ __volatile__("…" : : : "memory")` (always volatile + a full compiler memory barrier). Fixture `tests/asm_nop.kama` (runs on the host); ARM mnemonics (`wfi`/`cpsid i`/`dsb`) transpile-grep-verified in `tools/check-embedded.sh`. | `WFI`/`WFE`, memory barriers (`DMB`/`DSB`), `cpsid i` (disable interrupts), cycle-exact delays. Curated named helpers (`wfi()`, `disable_interrupts()`) are a thin follow-on library over the primitive. | done |
+| **Inline assembly / intrinsics** | ✅ **SHIPPED (step 6a)** — `asm("…")` inside an `unsafe fn` lowers to `__asm__ __volatile__("…" : : : "memory")` (always volatile + a full compiler memory barrier). Fixture `tests/asm_nop.kama` (runs on the host); ARM mnemonics (`wfi`/`cpsid i`/`dsb`) transpile-grep-verified in `tools/check-embedded.sh`. | `WFI`/`WFE`, memory barriers (`DMB`/`DSB`), `cpsid i` (disable interrupts), cycle-exact delays. Curated named helpers (`wfi()`, `disable_interrupts()`) are a thin follow-on library over the primitive. | done |
 | **Panic/trap policy hook** | ✅ **DONE (step 3)** — under `KAMA_TARGET_EMBEDDED`, bounds/panic/OOM route through one overridable weak `kama_panic_handler` (default `for(;;) __builtin_trap()`); a strong user symbol redirects to blink/reset/breakpoint. No fd 2 / `abort` dependency. | **S** |
 
 ## Tier 2 — Ergonomics & toolchain (nice-to-have; much is library/FFI, not language)
@@ -100,7 +100,7 @@ mile of the no-heap story.**
 5. **Fallible `allocate -> Optional<UnsafePtr>`** + `try new` + the checkable `@noheap`/`--no-heap` subset ✅
    **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP §5). Also serves
    game-engine frame allocators / real-time audio, not only MCU.
-6. **Inline asm / intrinsics** — ✅ **SHIPPED (step 6a, `4811d23`).** `asm("...")` inside `unsafe { }`
+6. **Inline asm / intrinsics** — ✅ **SHIPPED (step 6a, `4811d23`).** `asm("...")` inside an `unsafe fn`
    lowers to `__asm__ __volatile__("..." : : : "memory")` (always volatile + a full compiler memory
    barrier); fixtures `tests/asm_nop.kama` + `tests/support/embedded_asm.kama` (transpile-grep in
    `tools/check-embedded.sh`). See [KEYWORDS.md](KEYWORDS.md) (`asm`) and [SPEC.md](SPEC.md).

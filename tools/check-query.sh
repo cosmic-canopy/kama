@@ -546,42 +546,42 @@ FIXTURE="$ROOT/tests/query/complete.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M4.0 completion context (lexical scan)"
-expect --complete 112:21 -- "trigger=dot recv=c "                    # c.|value
-expect --complete 114:27 -- "trigger=dot recv=h.cell "               # h.cell.|value — a chained receiver
-expect --complete 115:33 -- "trigger=dot recv=makeHolder() "         # a CALL receiver, canonicalized to `()`
-expect --complete 119:30 -- "trigger=dot recv=cells[] "              # an INDEX receiver, canonicalized to `[]`
-expect --complete 121:27 -- "trigger=dot recv=owned "                # a smart-pointer receiver
-expect --complete 136:24 -- "trigger=scope recv=Level "              # Level::|High
-expect --complete 136:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
-expect --complete 124:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
-expect --complete 124:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
+expect --complete 110:21 -- "trigger=dot recv=c "                    # c.|value
+expect --complete 112:27 -- "trigger=dot recv=h.cell "               # h.cell.|value — a chained receiver
+expect --complete 113:33 -- "trigger=dot recv=makeHolder() "         # a CALL receiver, canonicalized to `()`
+expect --complete 117:30 -- "trigger=dot recv=cells[] "              # an INDEX receiver, canonicalized to `[]`
+expect --complete 119:27 -- "trigger=dot recv=owned "                # a smart-pointer receiver
+expect --complete 134:24 -- "trigger=scope recv=Level "              # Level::|High
+expect --complete 134:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
+expect --complete 122:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
+expect --complete 122:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
 expect --complete 15:12  -- "trigger=import-path recv=std "          # import std::|collections
 expect --complete 15:26  -- "trigger=import-symbol recv=std::collections "   # import …::{|DynamicArray}
 # Literals and comments hold no code — and an interpolation HOLE does, so it must still complete.
-expect --complete 125:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
-expect --complete 127:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
-expect --complete 128:15 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a /* block */
-expect --complete 126:30 -- "trigger=dot recv=c "                    # inside "interp ${c.|value} hole"
+expect --complete 123:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
+expect --complete 125:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
+expect --complete 126:15 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a /* block */
+expect --complete 124:30 -- "trigger=dot recv=c "                    # inside "interp ${c.|value} hole"
 
 # ---------------------------------------------------------------------------------------------------
 # M4.1 — member completion after `.`. Output is one `kind<TAB>label<TAB>detail` line per candidate.
 echo "check-query: M4.1 member completion (receivers)"
-expect --complete 112:21 -- "field	value	int32"                     # c.| — a public field, with its type
-expect --complete 112:21 -- "method	doubled	fn int32 doubled()"       # ... and its methods
-reject --complete 112:21 -- "secret"                                  # ... but NEVER a private one from outside
-expect --complete 114:27 -- "field	value	int32"                     # h.cell.| — chained through a field's type
-expect --complete 115:33 -- "field	cell	Cell"                       # makeHolder().| — a call's return type
-expect --complete 116:40 -- "field	value	int32"                     # makeHolder().get().| — a CALLED tail segment
-expect --complete 119:30 -- "method	doubled	fn int32 doubled()"       # cells[0].| — a generic instance's ELEMENT
-expect --complete 121:27 -- "method	read	fn int32 read()"            # owned.| — through Owned<Node>'s Deref
-expect --complete 120:33 -- "ctor	make	fn Node make(tag: int32)"     # Node.| — a TYPE receiver offers ctors
-reject --complete 121:27 -- "ctor"                                    # ... and an INSTANCE receiver never does
+expect --complete 110:21 -- "field	value	int32"                     # c.| — a public field, with its type
+expect --complete 110:21 -- "method	doubled	fn int32 doubled()"       # ... and its methods
+reject --complete 110:21 -- "secret"                                  # ... but NEVER a private one from outside
+expect --complete 112:27 -- "field	value	int32"                     # h.cell.| — chained through a field's type
+expect --complete 113:33 -- "field	cell	Cell"                       # makeHolder().| — a call's return type
+expect --complete 114:40 -- "field	value	int32"                     # makeHolder().get().| — a CALLED tail segment
+expect --complete 117:30 -- "method	doubled	fn int32 doubled()"       # cells[0].| — a generic instance's ELEMENT
+expect --complete 119:27 -- "method	read	fn int32 read()"            # owned.| — through Owned<Node>'s Deref
+expect --complete 118:33 -- "ctor	make	fn Node make(tag: int32)"     # Node.| — a TYPE receiver offers ctors
+reject --complete 119:27 -- "ctor"                                    # ... and an INSTANCE receiver never does
 expect --complete 53:16  -- "method	size	fn int32 size()"            # item.| where `T: Sized` — via the BOUND
 
 echo "check-query: M4.1 generic-instance substitution + visibility"
 # A generic instance's members are stored with the TEMPLATE's spellings; they must read as the INSTANCE's.
-expect --complete 118:10 -- "method	add	fn void add(item: Cell)"      # DynamicArray<Cell>.add takes a Cell, not a T
-expect --complete 118:10 -- "method	pop	fn Optional<Cell> pop()"      # ... including a nested generic return
+expect --complete 116:10 -- "method	add	fn void add(item: Cell)"      # DynamicArray<Cell>.add takes a Cell, not a T
+expect --complete 116:10 -- "method	pop	fn Optional<Cell> pop()"      # ... including a nested generic return
 # Inside a method, `this.` sees what THAT type may see — private included, inherited protected included,
 # a base class's privates never.
 expect --complete 23:44  -- "field	secret	int32"                     # own private field, from inside
@@ -600,9 +600,8 @@ expect --complete 84:29  -- "field	value	int32"    # do/while
 expect --complete 88:30  -- "field	value	int32"    # for
 expect --complete 94:29  -- "field	value	int32"    # the foreach BINDING
 expect --complete 94:47  -- "field	value	int32"    # a local inside the foreach body
-expect --complete 98:33  -- "field	value	int32"    # unsafe
-expect --complete 102:32 -- "field	value	int32"    # scope
-expect --complete 105:70 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
+expect --complete 100:32 -- "field	value	int32"    # scope
+expect --complete 103:70 -- "field	value	int32"    # a match arm's payload binding (type from the variant case)
 
 # A type may declare a FIELD and a METHOD under one name (std::process::Command has both spellings of
 # `args`). Which one a path segment names depends on whether the source CALLED it — resolving `this.args.`
@@ -622,41 +621,41 @@ expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int
 # emitter rejects it), so there are exactly two answers.
 FIXTURE="$ROOT/tests/query/complete.kama"
 echo "check-query: M4.2 completion after \`::\`"
-expect --complete 136:24 -- "enum-member	High"          # Level::| — a plain enum's members
-expect --complete 136:24 -- "enum-member	Low"
-expect --complete 104:37 -- "variant	Some	(value: T)"   # Optional::| — a generic variant's cases + payload
-expect --complete 104:37 -- "variant	None"
-expect --complete 151:28 -- "method	zero	fn int32 zero()"   # Stat::| — a static method
-expect --complete 151:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (the `::` bridge reaches them)
-expect --complete 151:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
+expect --complete 134:24 -- "enum-member	High"          # Level::| — a plain enum's members
+expect --complete 134:24 -- "enum-member	Low"
+expect --complete 102:37 -- "variant	Some	(value: T)"   # Optional::| — a generic variant's cases + payload
+expect --complete 102:37 -- "variant	None"
+expect --complete 149:28 -- "method	zero	fn int32 zero()"   # Stat::| — a static method
+expect --complete 149:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (the `::` bridge reaches them)
+expect --complete 149:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
 # A NAMESPACE head lists what that namespace declares, one level deep.
-expect --complete 153:33 -- "type	Cell"
-expect --complete 153:33 -- "contract	Sized"
-expect --complete 153:33 -- "function	blend"
-reject --complete 153:33 -- "DynamicArray"                  # ... never another namespace's symbols
+expect --complete 151:33 -- "type	Cell"
+expect --complete 151:33 -- "contract	Sized"
+expect --complete 151:33 -- "function	blend"
+reject --complete 151:33 -- "DynamicArray"                  # ... never another namespace's symbols
 
 # ---------------------------------------------------------------------------------------------------
 # M4.3 — bare names. The flooding guard is the whole milestone: `_classes` and `_funcs` span the entire
 # import closure, so `bareNameOf` is the exact INVERSE of resolveUserNameImpl's lookup order and anything
 # it cannot spell must not appear.
 echo "check-query: M4.3 names in scope"
-expect --complete 164:4 -- "local	near	Cell"                 # locals, with their declared types
-expect --complete 164:4 -- "param	seed	int32"                # ... and parameters
-expect --complete 164:4 -- "type	Cell"                       # a type declared in this file
-expect --complete 164:4 -- "type	DynamicArray"               # ... one reached through an import
-expect --complete 164:4 -- "function	print	fn void print(s: string)"   # the always-in-scope FLOOR
-expect --complete 164:4 -- "function	args	fn Args args()"
-expect --complete 164:4 -- "function	main	fn int32 main()"    # `main` is the one name the resolver rewrites
-expect --complete 164:4 -- "keyword	foreach"                  # the lexer's own keyword table
+expect --complete 162:4 -- "local	near	Cell"                 # locals, with their declared types
+expect --complete 162:4 -- "param	seed	int32"                # ... and parameters
+expect --complete 162:4 -- "type	Cell"                       # a type declared in this file
+expect --complete 162:4 -- "type	DynamicArray"               # ... one reached through an import
+expect --complete 162:4 -- "function	print	fn void print(s: string)"   # the always-in-scope FLOOR
+expect --complete 162:4 -- "function	args	fn Args args()"
+expect --complete 162:4 -- "function	main	fn int32 main()"    # `main` is the one name the resolver rewrites
+expect --complete 162:4 -- "keyword	foreach"                  # the lexer's own keyword table
 # The C-ABI plumbing behind the floor is spellable but is NOT language surface. A user's own extern is.
-expect --complete 164:4 -- "function	myOwnFfi"
-reject --complete 164:4 -- "	free	"
-reject --complete 164:4 -- "kama_args_at"
-reject --complete 164:4 -- "kama_ctrl_release_strong"
-reject --complete 164:4 -- "kama_main"                        # ... and never a mangled spelling
+expect --complete 162:4 -- "function	myOwnFfi"
+reject --complete 162:4 -- "	free	"
+reject --complete 162:4 -- "kama_args_at"
+reject --complete 162:4 -- "kama_ctrl_release_strong"
+reject --complete 162:4 -- "kama_main"                        # ... and never a mangled spelling
 # A deeper namespace than any `using` reaches is unspellable here, mangled instances doubly so.
-reject --complete 164:4 -- "DynamicArray_"
-reject --complete 164:4 -- "collections__"
+reject --complete 162:4 -- "DynamicArray_"
+reject --complete 162:4 -- "collections__"
 # Inside a method a field is spellable bare — which is exactly why a local may not shadow one.
 expect --complete 23:38 -- "field	secret	int32"               # own private field
 expect --complete 23:38 -- "method	size	fn int32 size()"
@@ -678,34 +677,34 @@ expect --complete 15:26 -- "type	Deque	std::collections"
 # M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the
 # always-in-scope floor is otherwise undiscoverable, since there is no module to import that would list it.
 echo "check-query: M4.8 global:: completion"
-expect --complete 170:12 -- "function	println	fn void println(s: string)"   # the floor
-expect --complete 170:12 -- "function	args	fn Args args()"
-expect --complete 170:12 -- "type	Optional"
-reject --complete 170:12 -- "	Cell	"          # ... never a namespaced symbol, even this file's own
-reject --complete 170:12 -- "	blend	"
-reject --complete 170:12 -- "keyword"           # ... and `global::while` is not a thing
-reject --complete 170:12 -- "kama_args_at"      # ... nor the C-ABI plumbing behind the floor
+expect --complete 168:12 -- "function	println	fn void println(s: string)"   # the floor
+expect --complete 168:12 -- "function	args	fn Args args()"
+expect --complete 168:12 -- "type	Optional"
+reject --complete 168:12 -- "	Cell	"          # ... never a namespaced symbol, even this file's own
+reject --complete 168:12 -- "	blend	"
+reject --complete 168:12 -- "keyword"           # ... and `global::while` is not a thing
+reject --complete 168:12 -- "kama_args_at"      # ... nor the C-ABI plumbing behind the floor
 
 # ---------------------------------------------------------------------------------------------------
 # M4.4 — signature help + argument labels. kama has NO positional arguments (kama.y's `argument`
 # productions are all `IDENTIFIER COLON …`), so "which parameter am I on" and "what labels may I type"
 # are one question with one answer.
 echo "check-query: M4.4 signature help"
-expect --sighelp 124:27 -- "sig=blend(lo: int32, hi: int32) -> int32 active=0"
-expect --sighelp 124:34 -- "active=1"                                  # ... the next slot
-expect --sighelp 118:14 -- "sig=cells.add(item: Cell)"                 # a generic INSTANCE's method: T -> Cell
-expect --sighelp 104:42 -- "sig=Optional::Some(value: T)"              # a variant case, payload as labels
-expect --sighelp 151:33 -- "sig=Stat::zero() -> int32 active=-1"       # a static with no parameters
-expect --sighelp 154:24 -- "sig=Stat.of(n: int32) -> Stat"             # a named ctor, dot-on-type
-expect --sighelp 137:52 -- "sig=measure(item: T) -> int32"             # a generic free fn
-expect --sighelp 123:36 -- "sig=derived.total() -> int32"              # reached THROUGH Owned<Derived>'s Deref
-expect --sighelp 164:4  -- "no signature"                              # not inside a call at all
+expect --sighelp 122:27 -- "sig=blend(lo: int32, hi: int32) -> int32 active=0"
+expect --sighelp 122:34 -- "active=1"                                  # ... the next slot
+expect --sighelp 116:14 -- "sig=cells.add(item: Cell)"                 # a generic INSTANCE's method: T -> Cell
+expect --sighelp 102:42 -- "sig=Optional::Some(value: T)"              # a variant case, payload as labels
+expect --sighelp 149:33 -- "sig=Stat::zero() -> int32 active=-1"       # a static with no parameters
+expect --sighelp 152:24 -- "sig=Stat.of(n: int32) -> Stat"             # a named ctor, dot-on-type
+expect --sighelp 135:52 -- "sig=measure(item: T) -> int32"             # a generic free fn
+expect --sighelp 121:36 -- "sig=derived.total() -> int32"              # reached THROUGH Owned<Derived>'s Deref
+expect --sighelp 162:4  -- "no signature"                              # not inside a call at all
 
 echo "check-query: M4.4 argument-label completion"
-expect --complete 124:27 -- "label	lo:	int32"                        # an empty slot admits every label
-expect --complete 124:27 -- "label	hi:	int32"
-expect --complete 124:34 -- "label	hi:	int32"
-reject --complete 124:34 -- "label	lo:"                              # ... but never one already supplied
+expect --complete 122:27 -- "label	lo:	int32"                        # an empty slot admits every label
+expect --complete 122:27 -- "label	hi:	int32"
+expect --complete 122:34 -- "label	hi:	int32"
+reject --complete 122:34 -- "label	lo:"                              # ... but never one already supplied
 
 # ---------------------------------------------------------------------------------------------------
 # M6 A2 — NAMED-ARGUMENT LABELS are references to the callee's parameter.

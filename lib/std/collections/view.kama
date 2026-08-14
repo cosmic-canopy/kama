@@ -9,10 +9,10 @@ export { View };
 type view ViewIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
-    public fn Optional<T> next() {
+    public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
-        unsafe { return Optional::Some(value: copy this.data[p]); }   // yield a COPY (the view owns nothing)
+        return Optional::Some(value: copy this.data[p]);   // yield a COPY (the view owns nothing)
     }
 }
 
@@ -21,7 +21,7 @@ type view ViewIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
-    public fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; unsafe { return this.data[p]; } }
+    public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
 // A non-owning, stack-only borrow of a contiguous run of `T` — a slice / span (= C++ `std::span`, Rust
@@ -39,9 +39,9 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
     public fn int32 length() { return this.len; }
     public fn bool  isEmpty() { return this.len == 0; }
 
-    public ref T operator[](int32 i) {
+    public unsafe ref T operator[](int32 i) {
         if (i < 0 || i >= this.len) { panic(msg: "View index out of bounds"); }
-        unsafe { return this.data[i]; }
+        return this.data[i];
     }
 
     // The by-value `foreach (T x in view)` yields COPIES, so it exists only for a Copyable element.
@@ -59,14 +59,14 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
     // a local, relocate `d[j]` into slot `i`, then `give` the local into slot `j` — and the two raw
     // stores go through a LOCAL `UnsafePtr<T>` alias, because a `this.data[i] = …` would route the element
     // through the move tracker and be rejected.
-    public fn void swap(int32 i, int32 j) {
+    public unsafe fn void swap(int32 i, int32 j) {
         if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "View.swap index out of bounds"); }
         if (i == j) { return; }
         slot T tmp;
         relocate(from: this.data, at: i, into: out tmp);   // move d[i] OUT (slot i now stale)
         UnsafePtr<T> d = this.data;
-        unsafe { d[i] = d[j]; }                            // relocate d[j] into slot i via a local alias
-        unsafe { this.data[j] = give tmp; }                // tracked hand-off of tmp into slot j
+        d[i] = d[j];                            // relocate d[j] into slot i via a local alias
+        this.data[j] = give tmp;                // tracked hand-off of tmp into slot j
     }
 
     // Reverse the borrowed range in place. `sort` + `reverse` is how a descending order is spelled, so
@@ -79,9 +79,9 @@ type view View<T> implements IterableMut<T>, Iterable<T> when [T: Copyable<T>] {
 
     // A sub-view `[from, from+count)` of this view — bounds-checked, zero copy. Returning it borrows
     // `this` (the view), which itself borrows the underlying buffer, so it's escape-safe.
-    public fn View<T> slice(int32 from, int32 count) {
+    public unsafe fn View<T> slice(int32 from, int32 count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "View.slice out of bounds"); }
         if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
-        unsafe { return View::<T>.make(data: addr(of: this.data[from]), len: count); }
+        return View::<T>.make(data: addr(of: this.data[from]), len: count);
     }
 }

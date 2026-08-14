@@ -13,8 +13,8 @@ type resource Payload {
         this.value = value;
     }
 
-    public fn void run() {
-        unsafe { this.dst[0] = this.value; }
+    public unsafe fn void run() {
+        this.dst[0] = this.value;
     }
 }
 

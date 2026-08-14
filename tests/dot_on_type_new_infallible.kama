@@ -15,9 +15,9 @@ type value Box {
 type contract Shape for resource { fn int32 area(); }
 type resource Circle implements Shape {
     UnsafePtr<int32> buf;
-    public ctor make(int32 r) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; } return this; }
-    public fn int32 area() { unsafe { return this.buf[0] * this.buf[0]; } }
-    ~Circle() { unsafe { free(p: cast<UnsafePtr>(this.buf)); } }
+    public unsafe ctor make(int32 r) { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = r; return this; }
+    public unsafe fn int32 area() { return this.buf[0] * this.buf[0]; }
+    unsafe ~Circle() { free(p: cast<UnsafePtr>(this.buf)); }
 }
 fn int32 main() {
     Owned<Box>    o = new Box.make(v: 3);       // intrinsic concrete Owned

@@ -6,8 +6,8 @@ extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 type resource Probe {
     UnsafePtr p;
-    public ctor make() { unsafe { this.p = malloc(n: 32); } }
-    ~Probe() { unsafe { free(p: this.p); } }
+    public unsafe ctor make() { this.p = malloc(n: 32); }
+    unsafe ~Probe() { free(p: this.p); }
     public fn int32 live() { return 1; }
 }
 type enum LoadError implements Error {

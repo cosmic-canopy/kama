@@ -9,23 +9,21 @@ type value Node { public int32 val; public UnsafePtr<Node> nextp;
 type value DynamicArrayIter implements Iterator<int32> {                       // the iterator IS iterated directly (has next(), no iterator())
     UnsafePtr<Node> cur;
     public ctor make(UnsafePtr<Node> head) { this.cur = head; }
-    public fn Optional<int32> next() {
+    public unsafe fn Optional<int32> next() {
         if (this.cur == null) { return Optional::None; }
-        unsafe { int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v); }
+        int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v);
     }
 }
-fn int32 main() {
-    unsafe {
-        UnsafePtr<Node> a = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
-        UnsafePtr<Node> b = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
-        UnsafePtr<Node> c = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
-        a[0].val = 3;  a[0].nextp = b;
-        b[0].val = 2;  b[0].nextp = c;
-        c[0].val = 1;  c[0].nextp = cast<UnsafePtr<Node>>(null);
-        DynamicArrayIter it = DynamicArrayIter.make(head: a);
-        int32 sum = 0;
-        foreach (int32 x in it) { sum = sum + x; }
-        free(p: cast<UnsafePtr>(a)); free(p: cast<UnsafePtr>(b)); free(p: cast<UnsafePtr>(c));
-        return sum;   // 6
-    }
+unsafe fn int32 main() {
+    UnsafePtr<Node> a = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
+    UnsafePtr<Node> b = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
+    UnsafePtr<Node> c = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
+    a[0].val = 3;  a[0].nextp = b;
+    b[0].val = 2;  b[0].nextp = c;
+    c[0].val = 1;  c[0].nextp = cast<UnsafePtr<Node>>(null);
+    DynamicArrayIter it = DynamicArrayIter.make(head: a);
+    int32 sum = 0;
+    foreach (int32 x in it) { sum = sum + x; }
+    free(p: cast<UnsafePtr>(a)); free(p: cast<UnsafePtr>(b)); free(p: cast<UnsafePtr>(c));
+    return sum;   // 6
 }

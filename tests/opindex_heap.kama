@@ -8,12 +8,12 @@ extern fn void free(UnsafePtr<int32> p);
 type resource IntVec {
     UnsafePtr<int32> data;
     int32 len;
-    public ctor make(int32 n) {
+    public unsafe ctor make(int32 n) {
         this.data = malloc(n: cast<usize>(n) * 4);
         this.len = n;
-        unsafe { int32 i = 0; while (i < n) { this.data[i] = 0; i = i + 1; } }
+        int32 i = 0; while (i < n) { this.data[i] = 0; i = i + 1; }
     }
-    public ref int32 operator[](int32 i) { unsafe { return this.data[i]; } }
+    public unsafe ref int32 operator[](int32 i) { return this.data[i]; }
     public fn int32 length() { return this.len; }
     ~IntVec() { free(p: this.data); }
 }
