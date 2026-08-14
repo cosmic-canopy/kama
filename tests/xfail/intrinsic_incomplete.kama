@@ -1,5 +1,5 @@
 // Declaring the contract obliges the block to supply every method it requires.
-type contract C for value { fn int32 f(); fn int32 g(); }
+type contract C for value, intrinsic { fn int32 f(); fn int32 g(); }
 type intrinsic <int32> implements C {
     public fn int32 f() { return 1; }
 }

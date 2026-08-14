@@ -10,7 +10,7 @@
 // The rejected counterpart is `xfail/view_contract_ctor_escape.kama`.
 import std::collections::{DynamicArray, View};
 
-type contract Windowed<S is This> for value {
+type contract Windowed<S is This> for value, view {
     fn int32 length();
     fn S rest();                             // instance method: borrows the receiver — always legal
     ctor S over(UnsafePtr<int64> p, int32 n);      // a self-constructing ctor WITH a borrow source — legal

@@ -1,6 +1,6 @@
 // With two contracts in one block a method's contract would be ambiguous.
-type contract A for value { fn int32 f(); }
-type contract B for value { fn int32 g(); }
+type contract A for value, intrinsic { fn int32 f(); }
+type contract B for value, intrinsic { fn int32 g(); }
 type intrinsic <int32> implements A, B {
     public fn int32 f() { return 1; }
     public fn int32 g() { return 2; }

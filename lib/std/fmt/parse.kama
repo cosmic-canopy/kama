@@ -93,7 +93,7 @@ fn Result<uint64, ParseError> parseUnsigned(ref string s, uint64 posLimit, uint6
 // `parse` — decimal, every numeric primitive plus `bool`.
 // ---------------------------------------------------------------------------------------------------
 
-type contract FromStr for both { }
+type contract FromStr for intrinsic { }
 
 type intrinsic <int8> implements FromStr {
     public ctor Result<int8, ParseError> fromStr(ref string s) {
@@ -187,7 +187,7 @@ fn Result<T, ParseError> parse<T: FromStr>(ref string s) { return T.fromStr(s: s
 // prefix too would be a second way to say the same thing.
 // ---------------------------------------------------------------------------------------------------
 
-type contract FromStrRadix for both { }
+type contract FromStrRadix for intrinsic { }
 
 type intrinsic <int8> implements FromStrRadix {
     public ctor Result<int8, ParseError> fromStrRadix(ref string s, uint64 radix) {

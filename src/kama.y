@@ -383,7 +383,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt hardware_opt method_name
+%type <string> const_opt hardware_opt method_name kind_name
 
 %start compilation_unit
 
@@ -741,8 +741,18 @@ for_kinds_opt
   | FOR kind_name_list   { $$ = $2; }
   ;
 kind_name_list
-  : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
-  | kind_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; }
+  : kind_name   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
+  | kind_name_list COMMA kind_name   { $1->push_back($3); $$ = $1; }
+  ;
+/* A kind word. `value`/`resource`/`view`/`intrinsic` are contextual IDENTIFIERs, but `enum` is a
+   reserved KEYWORD — it predates the `type` marker (GOALS §3c) — so it can never arrive as one, and
+   `for value, enum` was a PARSE error, not an emitter rejection. This arm is the whole cost of that
+   asymmetry: ENUM already carries its own text (`%token <string>`, and SAVE_TOKEN runs before the
+   keyword lookup), so it needs no synthesized string, and it costs zero conflicts — nothing else can
+   follow `for` here. Which words are LEGAL stays the emitter's call, as with every other kind word. */
+kind_name
+  : IDENTIFIER   { $$ = $1; }
+  | ENUM         { $$ = $1; }
   ;
 /* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
    (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */

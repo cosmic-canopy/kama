@@ -1,0 +1,9 @@
+// The other arm of the gate: a `resource` implementing a `for value` contract. The value->for-resource
+// direction had a fixture (contract_kind_gate); this one never did.
+type contract Rankable for value { fn int32 rank(); }
+type resource Handle implements Rankable {
+    int32 fd;
+    public ctor make(int32 fd) { this.fd = fd; }
+    public fn int32 rank() { return this.fd; }
+}
+fn int32 main() { return 0; }

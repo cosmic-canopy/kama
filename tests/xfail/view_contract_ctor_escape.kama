@@ -10,7 +10,7 @@
 // The legal shape is `view_contract_pinned_ok.kama`: the same self-constructing slot, but taking a
 // `UnsafePtr<T>` the returned view can borrow.
 
-type contract FromWide<B is This> for value {
+type contract FromWide<B is This> for value, view {
     ctor B fromWide(int64 v);
 }
 

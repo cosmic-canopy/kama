@@ -61,7 +61,7 @@ extern fn float64 kama_hypot(float64 x, float64 y);   extern fn float32 kama_hyp
 
 // The per-width dispatch seam, and the extension point: one method per operation, because that method
 // IS the per-type body. `implements Real for MyType { … }` and every function below works on it.
-type contract Real<T is This> for value {
+type contract Real<T is This> for value, intrinsic {
     fn T sqrt();  fn T cbrt();  fn T sin();   fn T cos();   fn T tan();
     fn T asin();  fn T acos();  fn T atan();  fn T exp();   fn T log();
     fn T log2();  fn T log10(); fn T floor(); fn T ceil();  fn T round();

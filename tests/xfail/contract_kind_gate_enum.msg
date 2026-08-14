@@ -1,0 +1,1 @@
+is an `enum`, but contract `Drawable` is declared `for value`

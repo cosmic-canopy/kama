@@ -7,7 +7,7 @@
 // (Both diagnostics fire here — this one at the `implements`, and checkViewCtorEscape at the body. The
 // declaration-site one names the cause: no body could have satisfied this conformance.)
 
-type contract Zeroed<S is This> for value {
+type contract Zeroed<S is This> for value, view {
     ctor zero();
 }
 

@@ -1,0 +1,1 @@
+is a `view`, but contract `Drawable` is declared `for value`

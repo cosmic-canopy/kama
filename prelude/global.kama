@@ -18,7 +18,7 @@ type enum Ordering { Less, Equal, Greater }
 // Auto-deref opt-in: a type implementing Deref<T> forwards member access to its pointee `T`
 // (`ptr.method()`/`ptr.field` -> the T). The contract is the gate (explicit, nominal); the smart
 // pointers become ordinary kama types over this instead of compiler intrinsics.
-type contract Deref<T> for both { fn ref T deref(); }
+type contract Deref<T> for value, resource { fn ref T deref(); }
 // Heap-owner opt-in: a type implementing HeapOwner<T> can be a `new T(args)` target. `new`
 // placement-constructs T on the heap (0 copies) and hands the raw UnsafePtr<T> to `adopt`, which wraps it.
 // `new` stays valid ONLY into such an owner, so it can never leak a bare raw pointer.
@@ -49,14 +49,14 @@ type contract Copyable<T is This> for resource { ctor copy(ref T source); }
 // operator member — those are concrete-type ergonomics; these two are the operators a generic bound
 // must be able to NAME. Primitives are untouched: an all-primitive comparison keeps the built-in C
 // operator, so `float` keeps exact IEEE semantics and pays nothing.
-type contract Hashable for both { fn uint64 hash(); }
-type contract Equatable<T is This> for both { fn bool equals(ref T other); }
+type contract Hashable for value, resource, enum, intrinsic { fn uint64 hash(); }
+type contract Equatable<T is This> for value, resource, enum, intrinsic { fn bool equals(ref T other); }
 // Total ordering opt-in (nominal, like Equatable) — the bound for sorted containers (`SortedMap`/`SortedSet`,
 // B-tree) and `PriorityQueue` (binary heap). `compareTo` returns `Ordering`, three-way in ONE call (no
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
 // key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive conformances
 // below make every int/float/string universally comparable.
-type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }
+type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }
 // The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
 // `&Bump`, Zig `std.mem.Allocator`). An `Owned<T, A>` box or a container carries `A alloc` BY VALUE and
 // routes every allocation through `this.alloc.allocate(...)` / `this.alloc.deallocate(...)`. FOUNDATIONAL
@@ -78,7 +78,7 @@ type contract Allocator for value {
 // model). `for both` — an error may be a value/enum or a resource. `message()` gives every error a uniform,
 // dynamically-dispatched description; branch on the specific kind by recovering the concrete enum with
 // `error.as<ConcreteError>()`. Language-level, so it lives in the prelude and survives `--no-std`.
-type contract Error for both { fn string message(); }
+type contract Error for value, resource, enum { fn string message(); }
 // Primitive conformances (pure-kama, NO compiler blessing) — hosted here so `string`/`int32` satisfy the
 // standard bounds UNIVERSALLY (a `<T: Equatable>` bound, `DynamicArray<int32>.contains`, an int-keyed
 // `Map`) without importing `std::collections`. `hash()` returns a CHEAP CONTENT hash (identity for integers,
@@ -176,14 +176,14 @@ type intrinsic <string> implements Comparable<This> {
 // (`ref T`) so `foreach (ref T x in c)` can write through it (Optional can't carry a place, so the
 // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
 // `iterator()` / `iterMut()` factory method.
-type contract Iterator<T> for both { fn Optional<T> next(); }
-type contract IteratorMut<T> for both { fn bool hasNext(); fn ref T next(); }
+type contract Iterator<T> for value, view { fn Optional<T> next(); }
+type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(); }
 // Container-side opt-in: a type that `implements Iterable<T>` hands out a by-value iterator via a
 // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`
 // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
 // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
-type contract Iterable<T> for both { fn Iterator<T> iterator(); }
-type contract IterableMut<T> for both { fn IteratorMut<T> iterMut(); }
+type contract Iterable<T> for resource, view { fn Iterator<T> iterator(); }
+type contract IterableMut<T> for resource, view { fn IteratorMut<T> iterMut(); }
 // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
 // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
 // (std::json, …) implements; `Serialize` is what a `@generate(Serialize)` type gets (compiler-synthesized)
@@ -221,7 +221,7 @@ type enum SerError implements Error {
 }
 // A fallible METHOD (not a ctor — write produces nothing, so `Result<Unit, …>`; read constructs a `T`, so
 // `Result<This, …>`). The ONE principled read/write asymmetry. Boxed `Owned<Error>` currency, same as read.
-type contract Serialize for both { fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w); }
+type contract Serialize for value, resource, enum, intrinsic { fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w); }
 // Deserialization: `Deserializer` is the pluggable input source (a backend's reader implements it, using
 // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserialize`
@@ -263,7 +263,7 @@ type contract Deserializer for resource {
 // `deserialize(ref Deserializer) -> Result<This, DeError>` as an injected conformance, and `tryParse<T: Deserialize>`
 // calls `T.deserialize(...)` statically. Kept method-less so its signature needn't name `This` in a
 // return position (which the generic-instance machinery can't resolve outside a type).
-type contract Deserialize for both { }
+type contract Deserialize for value, resource, enum, intrinsic { }
 // Primitive Serialize/Deserialize conformances (pure-kama, like the Hashable/Equatable ones above) — so
 // EVERY type is a uniform serialization participant and a collection's generic element write
 // (`this[i].serialize(w)`) / read (`T.deserialize(r)`) composes for a scalar element with no compiler
@@ -538,7 +538,7 @@ extern fn string kama_fmt_u64_width(uint64 v, int32 width, int32 flags);
 // an owned `string` grown in place instead, which keeps ordinary string RAII (no custom destructor needed).
 extern fn void kama_str_push(UnsafePtr<string> buf, ref string src);
 extern fn string kama_str_take(UnsafePtr<string> buf);
-type contract Format for both { fn void format(ref Formatter f); }
+type contract Format for value, resource, intrinsic { fn void format(ref Formatter f); }
 // The growable UTF-8 sink — write your pieces in, `finish()` hands back the owned string. Each scalar becomes
 // its decimal/UTF-8 text via a runtime formatter, whose bytes are appended to the single backing buffer, so a
 // whole nested value materializes in ONE growing allocation rather than one per `+`.

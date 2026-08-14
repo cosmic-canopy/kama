@@ -14,7 +14,7 @@ export { Order, sort, sortUnstable, sortWith, sortUnstableWith,
 
 // The ordering seam. `Comparable` gives a type its ONE natural order; `Order<T>` supplies any other,
 // and a comparator may hold fields — that is what replaces a capturing closure here.
-type contract Order<T> for both { fn Ordering compare(ref T a, ref T b); }
+type contract Order<T> for value { fn Ordering compare(ref T a, ref T b); }
 
 // The natural order as an `Order<T>`, so every algorithm below is written ONCE against the contract and
 // the `Comparable` entry points are two-line delegations.

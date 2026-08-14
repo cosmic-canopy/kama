@@ -1,0 +1,1 @@
+is an `intrinsic`, but contract `Weighable` is declared `for value`

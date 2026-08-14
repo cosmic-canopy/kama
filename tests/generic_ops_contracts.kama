@@ -12,7 +12,7 @@
 //
 // This is also the shape `Fixed<B, const F>` needs: widen through the parameter's contract, do the
 // arithmetic at width, narrow back.
-type contract Widen<T is This> for value {
+type contract Widen<T is This> for value, intrinsic {
     fn int64 wide();
     ctor T fromWide(int64 v);
 }

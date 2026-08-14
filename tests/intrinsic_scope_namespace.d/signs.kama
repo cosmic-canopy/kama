@@ -5,7 +5,7 @@ export { Marker, viaSigns };
 // map, so two contracts supplying the same method name to one type still collide. Giving a contract its own
 // method scope is the contract-as-scope rule, which is a later milestone — what this fixture asserts is
 // that the CONTRACTS are distinct, not that their methods are namespaced.
-type contract Marker for value { fn int32 sign(); }
+type contract Marker for value, intrinsic { fn int32 sign(); }
 
 type intrinsic <int32> implements Marker {
     public fn int32 sign() { return 29; }

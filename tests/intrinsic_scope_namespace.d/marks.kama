@@ -4,7 +4,7 @@ export { Marker, viaMarks };
 // One of TWO contracts named `Marker`. Its identity is (namespace, name), not name — so `int32` may
 // conform to this one and to demo::signs::Marker at the same time, and a bound on one is NOT satisfied
 // by a conformance to the other.
-type contract Marker for value { fn int32 mark(); }
+type contract Marker for value, intrinsic { fn int32 mark(); }
 
 type intrinsic <int32, int64> implements Marker {
     public fn int32 mark() { return 11; }

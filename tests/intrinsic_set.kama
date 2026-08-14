@@ -10,8 +10,8 @@
 // The per-target override is intrinsic_specialized.kama; the scoping guarantees are
 // intrinsic_scope_namespace.d / intrinsic_scope_package.d.
 
-type contract Weighable for value { fn int32 weight(); }
-type contract Near<T is This> for value { fn bool close(ref T other); }
+type contract Weighable for value, intrinsic { fn int32 weight(); }
+type contract Near<T is This> for value, intrinsic { fn bool close(ref T other); }
 
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Weighable {
     public fn int32 weight() { return cast<int32>(this); }

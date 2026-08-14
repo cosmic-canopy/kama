@@ -10460,6 +10460,18 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         std::vector<std::string> names(1, *(*ifaces)[0]->value);
         resolveInterfaceNames(names, ifaces);
         const std::string& contract = names[0];
+        // Kind gate, the `intrinsic` arm. This is the ONLY site that can apply it: a primitive's
+        // conformance lands in _primConformances, which the `_classes` sweep never sees, and `string`'s
+        // lands on the kama_string ClassInfo, which that sweep deliberately skips (a collection has no
+        // `kind`) so it is not mistaken for a `value`. Here the ORIGIN is known — it is a `type
+        // intrinsic` block — and `n->line` is the only usable line number for one.
+        // Inside the per-target loop, so `<int8, int16, …>` names each target, and before
+        // injectImplMethods, so the reason arrives ahead of the completeness noise it would cause.
+        unsigned allowed = implKindsOf(contract, *(*ifaces)[0]->value);
+        if (allowed && !(allowed & IK_Intrinsic))
+            unsupported(("`" + *tgt->value + "` is an `intrinsic`, but contract `" + contract
+                         + "` is declared `for " + kamaImplKindListText(allowed)
+                         + "` — an intrinsic can't implement it").c_str(), n->line);
         ClassInfo* tcip = nullptr;
         auto ti = _classes.find(ctKey);
         if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
@@ -18027,6 +18039,12 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
 // which is the only site that knows their origin and the only one with a line number for them.
 static unsigned implementerKind(const ClassInfo& ci)
 {
+    // isBorrow BEFORE the Value test, and this ordering is the whole design: a `type view` is registered
+    // as TypeKind::Value on purpose (collectClasses), because it genuinely copies like one and that
+    // mapping governs the layout/copy/pass path. Only the conformance gate has to tell them apart, so
+    // it keys on the flag and :4914 stays exactly as it is.
+    if (ci.isBorrow)                   return IK_View;
+    if (ci.isVariant)                  return IK_Enum;    // a `type enum` promoted to a tagged class
     if (ci.kind == TypeKind::Value)    return IK_Value;
     if (ci.kind == TypeKind::Resource) return IK_Resource;
     return 0;
@@ -18278,12 +18296,19 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         ClassInfo& ci = kv.second;
         unsigned k = implementerKind(ci);
         if (!k) continue;
-        const std::string kw = kamaImplKindListText(k);
+        const std::string kw  = kamaImplKindListText(k);
+        const std::string art = (k == IK_Enum || k == IK_Intrinsic) ? "an " : "a ";
         for (auto& base : ci.interfaces) {
             unsigned allowed = implKindsOf(base);
             if (!allowed || (allowed & k)) continue;   // 0 = a base class, unresolved, or already diagnosed
-            unsupported(("`" + kv.first + "` is a `" + kw + "`, but contract `" + base
-                         + "` is declared `for " + kamaImplKindListText(allowed) + "` — a "
+            // Name the TEMPLATE, not the mangled instance (`Windowed`, not `Windowed_F4_Span`): it is
+            // what the author wrote and it is stable across instantiations. checkViewContractCtors made
+            // the same call for the same reason.
+            auto bi = _interfaces.find(base);
+            const std::string& shown = (bi != _interfaces.end() && !bi->second.templateKey.empty())
+                                       ? bi->second.templateKey : base;
+            unsupported(("`" + kv.first + "` is " + art + "`" + kw + "`, but contract `" + shown
+                         + "` is declared `for " + kamaImplKindListText(allowed) + "` — " + art
                          + kw + " can't implement it").c_str(), ci.declLine());
         }
     }

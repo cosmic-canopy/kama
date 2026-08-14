@@ -15,7 +15,7 @@ namespace std::num;
 // `Fixed` backing without touching the stdlib.
 export { FixedBacking };
 
-type contract FixedBacking<B is This> for value {
+type contract FixedBacking<B is This> for value, intrinsic {
     fn int64 wide();              // widen into the accumulator
     ctor B fromWide(int64 v);     // narrow back — the cast TRAPS on overflow, like every base operator
     ctor B clampWide(int64 v);    // narrow back saturating — never traps; what the `sat*` ops need

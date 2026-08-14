@@ -1,0 +1,6 @@
+// A `type intrinsic` block was never kind-checked: a primitive's conformance lands in _primConformances,
+// which the `_classes` sweep never sees. It is gated at the block instead, which is where the origin is
+// known and where the only usable line number for a primitive is.
+type contract Weighable for value { fn int32 weight(); }
+type intrinsic <int8, int16> implements Weighable { public fn int32 weight() { return 1; } }
+fn int32 main() { return 0; }

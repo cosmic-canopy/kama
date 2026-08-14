@@ -1,0 +1,1 @@
+is a `resource`, but contract `Rankable` is declared `for value`

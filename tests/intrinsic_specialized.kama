@@ -6,7 +6,7 @@
 // targets and is written once, while `tag` differs per target and is written per target. Splitting the set
 // into four blocks would force `scale` to be copied four times.
 
-type contract Tagged for value {
+type contract Tagged for value, intrinsic {
     fn int32 tag();
     fn int32 scale();
 }

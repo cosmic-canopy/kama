@@ -4,7 +4,7 @@
 // they claim the SAME pair, is rejected with a message naming both (tools/check-packages.sh).
 import weights::{heaviness};
 
-type contract Tagged for value { fn int32 tag(); }
+type contract Tagged for value, intrinsic { fn int32 tag(); }
 
 type intrinsic <int32> implements Tagged { public fn int32 tag() { return 30; } }
 

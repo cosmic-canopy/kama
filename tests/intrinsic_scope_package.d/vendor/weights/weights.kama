@@ -4,7 +4,7 @@ export { Weighable, heaviness };
 // A DEPENDENCY conforms `int32` to a contract it owns. Nothing about that is local to this package —
 // the conformance is visible program-wide, which is exactly why a second claim on the same
 // (type, contract) pair has to be an error that names both packages.
-type contract Weighable for value { fn int32 weight(); }
+type contract Weighable for value, intrinsic { fn int32 weight(); }
 
 type intrinsic <int32> implements Weighable { public fn int32 weight() { return 12; } }
 

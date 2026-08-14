@@ -1,0 +1,8 @@
+// An `enum` is a kind the gate used to skip entirely: a conforming enum is promoted to a ClassInfo whose
+// `kind` is Neutral, so the value/resource guard walked past it and any contract admitted any enum.
+type contract Drawable for value { fn int32 draw(); }
+type enum Color implements Drawable {
+    Red, Green;
+    public fn int32 draw() { return 1; }
+}
+fn int32 main() { return 0; }
