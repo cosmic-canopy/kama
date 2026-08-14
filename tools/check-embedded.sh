@@ -93,7 +93,7 @@ if [ ! -s "$secobj" ]; then
 fi
 
 # 4. MCU STEP 6a — inline assembly. `wfi`/`cpsid i`/`dsb` are ARM-only (the x86 host can't assemble them),
-#    so we assert the emitted-C SHAPE: `asm("...")` inside `unsafe { }` lowers to the volatile + memory-
+#    so we assert the emitted-C SHAPE: `asm("...")` inside an `unsafe fn` lowers to the volatile + memory-
 #    clobber form, with multi-instruction strings correctly C-escaped (`\n`). Same transpile-grep rationale
 #    as @interrupt above.
 ASM="$ROOT/tests/support/embedded_asm.kama"

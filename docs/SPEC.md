@@ -1158,6 +1158,42 @@ UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
+#### What requires an `unsafe fn` — the decision table
+
+**One rule, and it keys on the TYPE, not the spelled token: an expression, declaration, or binding whose
+type IS or CONTAINS `UnsafePtr<T>` may only occur inside an `unsafe fn`.** Plus one more: **calling an
+`extern fn` requires one too.**
+
+| construct | example | verdict |
+|---|---|---|
+| declare an `UnsafePtr` **field** | `UnsafePtr<T> data;` | **legal** — every container and every `type extern value` depends on it |
+| module **static** of `UnsafePtr` type | `static hardware UnsafePtr<uint32> gpio;` | **legal** — the MCU path depends on it |
+| **read or write** such a field or static | `this.data` | `unsafe fn` only |
+| a **local** of raw-pointer type | `UnsafePtr<T> p = …;` | `unsafe fn` only |
+| a **signature** naming `UnsafePtr` | `fn UnsafePtr<T> dataPtr()` | legal **iff the function is `unsafe`** |
+| a **contract MEMBER** naming it | `ctor adopt(UnsafePtr<T> raw)` | legal, **no marker** — bodiless; implementer and caller are each forced by their own types |
+| bind one **without spelling it** | `match (a.allocate(…)) { case Some(value: p): … }` | `unsafe fn` only — the rule reads the **type** |
+| a **call whose result** is raw | `kfree(p: make())` | `unsafe fn` only |
+| `addr(of: x)` | `gpio = addr(of: led);` | `unsafe fn` only — it *produces* a raw pointer |
+| `cast<UnsafePtr<T>>(…)` | `cast<UnsafePtr>(0x40021000)` | `unsafe fn` only; stays possible for MMIO |
+| compare against `null` | `if (this.handle != null)` | `unsafe fn` only — it reads a raw-typed place |
+| **declare** an `extern fn` | `extern fn int32 abs(int32)` | no marker — bodiless |
+| **call** an `extern fn`, **scalar-only included** | `kama_close_socket(fd: fd)` | `unsafe fn` only |
+| inline `asm(…)` | | `unsafe fn` only |
+| **call** an `unsafe fn` | | unrestricted |
+
+Two of these are worth their own sentence, because the obvious weaker version of each is wrong.
+
+**The rule reads the type because a token rule leaks.** `match (a.allocate(bytes: n)) { case Some(value:
+p): … }` binds an `UnsafePtr` and never spells the word — the payload's declared type is the template's
+`T`. Before the type-keyed rule existed, that shape compiled into a double free with zero `unsafe` tokens
+in the function.
+
+**`extern` has no scalar exemption.** `extern fn int32 kama_close_socket(isize fd)` names no pointer and is
+a double-close primitive by effect; 87 of the 188 stdlib extern declarations are pointer-free. Danger at
+this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it
+can — so a type-based carve-out would look like a rule and behave like a hole.
+
 **Definite assignment inside an `unsafe fn`: locals relax, `out` parameters do not.** The split is
 load-bearing. Relaxation exists because a raw store is invisible to the definite-assignment walker, so an
 unsafe body's own initialization dance would otherwise read as a use-before-assign. Filling an `out`, by

@@ -42,15 +42,16 @@ The sections below are organized by *topic*, not by sequence. This is the sequen
 Ordered by **dependency first, then severity**, after an audit that probed each claim rather than
 re-reading it (two tracked entries died on contact — see §2, and three more claims died while the design
 was being closed: the `for` clause's kind set, `unsafe`'s containment rule, and `Viewable`'s `friend`
-grant). Item 2 is a small prerequisite that sits ahead of larger work it unblocks:
+grant). **The unsafe seam shipped** — `unsafe fn` replaced `unsafe { }`, `extern` is gated at the call, and
+`UnsafePtr` is contained; findings ①②⑨ are closed, and what the language now IS lives in
+[SPEC.md](SPEC.md#unsafe-fn--raw-pointer-memory-access) and [GOALS.md](GOALS.md). Item 1 is a small prerequisite that sits ahead of larger work it unblocks:
 
 | # | work | closes | where | why here |
 |---|---|---|---|---|
-| **1** | **the unsafe seam — `unsafe fn` replaces `unsafe { }`.** `unsafe` marks the BODY (C#'s meaning, not Rust's), calling is unrestricted, `extern` is gated at the *call*, and `UnsafePtr` may only be produced/handled/**named** by an `unsafe fn` | ①②⑨ | [design/unsafe-seam.md](design/unsafe-seam.md) | a double-free with zero `unsafe` in the program is the sharpest 1.0 blocker. Function-level `unsafe` fixes ⑨ *by construction* — a function-wide relaxation is correct when `unsafe` **is** the function |
-| 2 | mark the stdlib `const fn` | prerequisite | §2 | pure annotation, no compiler change; **0 uses today** though enforced on both sides. Now a **hard prerequisite of 3**, not an independent item: 4 of the 8 non-test view mints are on a *field*, and banning the place `this.buf` does not stop `this.someMethod()` reallocating it |
-| 3 | **the view model** — `borrow` is the only mint; `foreach` IS a borrow scope | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag; measured cost is 8 mint sites outside `tests/`. **Depends on 2** (the stdlib `const fn` marking). It no longer depends on 1 — a view's mint is an intrinsic, not a ctor |
-| 4 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by 3 (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
-| 5 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
+| **1** | mark the stdlib `const fn` | prerequisite | §2 | pure annotation, no compiler change; **0 uses today** though enforced on both sides. Now a **hard prerequisite of 2**, not an independent item: 4 of the 8 non-test view mints are on a *field*, and banning the place `this.buf` does not stop `this.someMethod()` reallocating it |
+| 2 | **the view model** — `borrow` is the only mint; `foreach` IS a borrow scope | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag; measured cost is 8 mint sites outside `tests/`. **Depends on 1** (the stdlib `const fn` marking). It never depended on the unsafe seam — a view's mint is an intrinsic, not a ctor |
+| 3 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by 2 (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
+| 4 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
 **The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
 came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
@@ -237,18 +238,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
   container use in a no-heap build), so it is its own campaign.
 
-- **The safety/unsafe boundary — SWEPT. The seam is in the wrong place, and that is the real finding.**
+- **The safety/unsafe boundary — SWEPT, and the seam has since been MOVED (findings 1, 2, 9 closed).**
   The intended guarantee is that danger is isolated behind `unsafe`: nothing in safe kama should be able
-  to produce UB, and a bug inside an `unsafe` block is library-author territory. Every claim below was
+  to produce UB, and a bug inside an `unsafe fn` is library-author territory. Every claim below was
   produced by compiling and running a probe under ASan/UBSan, never by reading — repros in the commit
   that lands this.
 
-  **The root cause, which subsumes most of the individual holes.** GOALS §3a says the safe surface never
-  sees a raw pointer and that `unsafe { }` + `UnsafePtr<T>` guard the FFI boundary. In fact **only the
-  dereference operator `p[i]` is gated** (`src/kama.cemit.cpp:1993`, `:2037`). Safe kama may freely
-  *produce* a raw pointer (`addr(of:)` — explicitly ungated at `:13885`; `dataPtr()`, public on
-  `DynamicArray`/`FixedArray`; `cast<UnsafePtr<T>>` of anything, including an integer), *store* it in a
-  field, and **call arbitrary C with it** — `extern fn` calls are not gated at all. So:
+  **The root cause, which subsumed most of the individual holes — now CLOSED by the unsafe seam
+  (findings 1, 2 and 9).** GOALS §3a said the safe surface never sees a raw pointer and that `unsafe { }`
+  + `UnsafePtr<T>` guard the FFI boundary. In fact **only the dereference operator `p[i]` was gated**.
+  Safe kama could freely *produce* a raw pointer (`addr(of:)`, a public `dataPtr()`, `cast<UnsafePtr<T>>`
+  of an integer), *store* it in a field, and **call arbitrary C with it** — `extern fn` calls were not
+  gated at all. Both programs below compiled; both are now rejected at compile time, by four independent
+  rules in the first case. What the seam IS now lives in [SPEC.md](SPEC.md) and [GOALS.md](GOALS.md);
+  what is left below is findings 3–8, 10 and 11.
 
   ```kama
   extern "<stdlib.h>";
@@ -265,7 +268,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   ```kama
   type value Cell { UnsafePtr<int32> p;
       public ctor make(UnsafePtr<int32> p) { this.p = p; }
-      public fn int32 get() { unsafe { return this.p[0]; } }
+      public unsafe fn int32 get() { return this.p[0]; }
   }
   Cell c = Cell.make(p: addr(of: seed));
   { int32 tmp = 1234; c = Cell.make(p: addr(of: tmp)); }
@@ -280,15 +283,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   | # | finding | class | size |
   |---|---|---|---|
-  | 1 | **`extern fn` calls are ungated** — double-free, zero `unsafe` | language | S–M |
-  | 2 | **`addr(of:)` + an `UnsafePtr` field** = general dangling-pointer factory (`stack-use-after-scope`) | language | L |
+  | ~~1~~ | ~~`extern fn` calls are ungated — double-free, zero `unsafe`~~ — **CLOSED**: calling an `extern fn` needs an `unsafe fn`, no scalar exemption | language | — |
+  | ~~2~~ | ~~`addr(of:)` + an `UnsafePtr` field = general dangling-pointer factory~~ — **CLOSED**: `UnsafePtr` is contained; producing, holding and propagating one all need an `unsafe fn` | language | — |
   | 3 | **`View::<T>.make` is a `public ctor`** taking a raw pointer + a *trusted* length; `operator[]` bounds-checks against the supplied `len` → `heap-buffer-overflow`. No fixture ever called it | both | M |
   | 4 | **view reseat** — nested block, loop body, **and through a `ref View<T>` parameter** → UAF. The `ref`-param form crosses a function boundary, so an intra-function depth check is *not enough* | language | S–M |
   | 5 | **resize invalidation** — `View` over a `DynamicArray` that grows → UAF | language | M |
   | 6 | **aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)` → UAF. Nothing checks two arguments of one call for aliasing | language | M |
   | 7 | **`reserve()` reallocs without bumping `mods`** in `DynamicArray`, `Deque`, `Map`, `SlotMap` → UAF under a live iterator | stdlib | S |
   | 8 | **the compile-time foreach-invalidation guard is dead code** — `:17611` requires `isIntrinsicColl`, which admits only `string`/`BindableFunctionPtr`/`InlineArray`, none of which has an `add`. Zero fixtures expect its diagnostic | language | S–M |
-  | 9 | **one `unsafe { }` disables definite assignment for the whole function** (`:12146`, `:12160`, `:12501`) — an unfilled `out` param passes `check`; the caller reads uninitialized memory. Not a safe-surface hole, but a hole in the *`unsafe` contract* | language | M |
+  | ~~9~~ | ~~one `unsafe { }` disables definite assignment for the whole function~~ — **CLOSED by construction**: `unsafe` IS the function now, so relaxing locals is correct, and `out` params stopped being relaxed at all | language | — |
   | 10 | **an uninstantiated generic body gets no analysis at all** — unsafe gate, escape check, moves, definite assignment all deferred to instantiation. A package author ships `check`-green code and consumers get the errors | language, not UB | M |
   | 11 | narrowing `cast<int8>(300)` → 44, silently. No check, no fixture | wart | S |
 
@@ -312,40 +315,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   iterators plus `View<T>` itself), of which 11 are `modsp` mutation counters and **26** are borrowed data
   pointers. That is finding ②'s shape.
 
-  **The remedy is `unsafe fn`, and it has its own brief:
-  [design/unsafe-seam.md](design/unsafe-seam.md).** `unsafe` moves from the block to the function, in
-  **C#'s** sense — *this body does dangerous things* — not Rust's *calling this is dangerous*. So:
-  `unsafe fn` replaces `unsafe { }`; an `unsafe fn` is **callable from anywhere**, because its signature is
-  the safe boundary; visibility is ordinary; an `extern fn` carries no marker but may only be **called**
-  from an `unsafe fn`; and any expression, declaration or binding **whose TYPE is or contains `UnsafePtr`**
-  may only occur inside one. One rule covers body and signature. It keys on the **type, not the spelled
-  token** — `match (a.allocate(…)) { case Some(value: p): … }` binds an `UnsafePtr` without naming it.
-
-  That subsumes two earlier drafts — one that kept blocks with a separate type-position containment rule,
-  and one that adopted C#'s meaning while applying Rust's containment (private-only, unsafe-calls-unsafe) on
-  top. Function-level `unsafe` **fixes finding ⑨ by construction**: ⑨ is a bug only because the
-  relaxation's scope (the function) does not match the construct's scope (the block), and when `unsafe` *is*
-  the function, function-wide relaxation is correct. It is greppable at the declaration (GOALS §5), and it
-  removes the ctor-walk trap where wrapping an assignment in `unsafe` made a real escape hole look closed.
-  Two repairs come with it: DA relaxes **locals but not `out` params** (otherwise ⑨ returns the moment safe
-  code may call an unsafe fn), and there is **no scalar-only extern exemption** (`kama_close_socket(isize)`
-  is scalar-typed and a double-free primitive).
-
-  ⚠️ **"No public signature can mention `UnsafePtr`" was measured FALSE** — a contract is public-only, and
-  `HeapOwner<T> { ctor adopt(UnsafePtr<T> raw); }` plus `Allocator`'s `allocate`/`deallocate` both name one (contract MEMBERS — not the `slot` keyword).
-  Neither is fixable by redesign (an allocator cannot avoid naming raw memory), so the promise is restated
-  honestly: the safe surface never *silently* exposes a raw pointer. Those members take **no marker** — a slot
-  is bodiless, like an `extern fn` — and need no call rule: the implementer is forced `unsafe` by its own
-  signature, and a caller cannot invoke one without handling an `UnsafePtr`-typed value. `A: Allocator`
-  stays a perfectly safe bound, which is what lets every container keep it.
-
-  Blast radius, measured: **165** `unsafe { }` blocks in `lib/`+`prelude/`; **379** `extern fn`
-  declarations, whose **274** call sites in `lib/`+`prelude/` sit **201 inside a `public fn`/`ctor`**, 73 in
-  free functions and **0** in private/protected; **133** `addr(of:)` lines corpus-wide; 4 `dataPtr()` call
-  sites; one wrapped line per MMIO assignment. Net, **241 of 712 public members — 34% of the public stdlib
-  API — gain the `unsafe` keyword**, against a stdlib that contains **5** private members today. Those 241
-  touch raw memory already, so the marker relocates existing unsafety to the declaration rather than adding
-  any; the rejected alternative would have required a private helper extracted from every one of them.
+  **The remedy shipped: `unsafe fn`.** `unsafe` now marks the BODY (C#'s meaning, not Rust's), calling one
+  is unrestricted, `extern` is gated at the CALL, and any expression, declaration or binding whose TYPE is
+  or contains `UnsafePtr` may only occur inside one. Findings 1, 2 and 9 are closed; the record is in
+  [SPEC.md](SPEC.md#what-requires-an-unsafe-fn--the-decision-table) and [GOALS.md](GOALS.md) §3a.
 
 - **The unsafe seam — no `null` in safe kama.** Its own campaign, agreed while the `slot` work was in
   flight (which is where its customers came from: eight buffer-realloc sites now carry `= null` field
@@ -391,8 +364,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   **The `unsafe UnsafePtr<T> p = null;` field modifier and the token-level `null` ban are dropped**, and the
   reason is worth keeping: both existed to force raw-pointer declarations to be greppable, and the rename
   already did that by the type's own name. The `null` rule that shipped is keyed on the **declared type**
-  instead of on lexical context, which is strictly better — it needs no new grammar, no `unsafe { }` around
-  a declaration (which would change its scope), and its blast radius across `lib/` and `prelude/` was
+  instead of on lexical context, which is strictly better — it needs no new grammar and no lexical region
+  around a declaration, and its blast radius across `lib/` and `prelude/` was
   **zero**, because every real `null` in the tree already targets an `UnsafePtr`. Reopen only if a case
   appears that the type-keyed rule cannot express.
   - **It no longer owns iterator laundering — that shipped on its own.** The two were folded together on

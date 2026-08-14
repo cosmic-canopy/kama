@@ -36,9 +36,24 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    `malloc`/`free`) live ONLY in `kama_runtime.h` — the Rust-`Vec`/Swift-`FixedArray` model: unsafe core, safe
    API. Indexing is **bounds-checked** (traps, not UB). The one deliberately contained exception is the
    **`unsafe fn`** + `UnsafePtr<T>` at the **FFI boundary**: a narrow, greppable seam for talking to C
-   (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape, and the safe surface
-   never sees it. (Self-hosting the compiler in kama — goal #1 — is the other place a contained escape may
-   matter.)
+   (GPU/OS APIs — the whole point of transpiling to C), never general-purpose escape. (Self-hosting the
+   compiler in kama — goal #1 — is the other place a contained escape may matter.)
+
+   **Stated precisely, because the stronger form is false and was measured false: the safe surface never
+   *silently* exposes a raw pointer.** It cannot promise never to *name* one. A contract is public by
+   definition, and two of kama's own extension points name `UnsafePtr` in a member — `HeapOwner<T>`'s
+   `ctor adopt(UnsafePtr<T> raw)`, the `new T(…)` hook, and `Allocator`'s `allocate`/`deallocate`, which
+   every container takes as `A: Allocator = GlobalAllocator`. An allocator cannot be expressed without
+   naming raw memory, so this is not fixable by redesign. What holds instead is greppability at the
+   declaration: **every position where a raw pointer is produced, handled, or named is marked `unsafe`
+   there**, so `grep -rn 'unsafe '` is a complete inventory. A contract MEMBER carries no marker and needs
+   none — it is a conduit, closed at both ends by its own types: the implementer is forced `unsafe` by its
+   own signature, and a caller cannot invoke it without holding an `UnsafePtr`. That is what keeps
+   `A: Allocator` a perfectly safe **bound**.
+
+   Concretely, this costs **235 of 787 public stdlib members — 30%** reading `public unsafe fn`. That is
+   the honest price and it is deliberate: those members touch raw memory today, so the marker relocates
+   existing unsafety to the declaration rather than adding any.
 
 3b. **No null in the safe surface.** A stack value, an `Owned<T>`/`Shared<T>`, a `ref`/`out` borrow, and a
    contract value are **always valid** — there is nothing to null-check. Absence is encoded in the
@@ -47,7 +62,8 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    handle the dead case), and (with the escape check) a borrow can't dangle. So **`== null` / `!= null` on a
    safe type is a compile error** with guidance — the C habit of null-checking a pointer is both unnecessary
    and checks the wrong thing here. The `null` literal and nullability are confined to **`UnsafePtr<T>` at the FFI
-   boundary** (checked inside `unsafe`), where you genuinely talk to C. This is the deliberate avoidance of
+   boundary** (which only an `unsafe fn` may hold), where you genuinely talk to C. Confining the type
+   confines the token: all 75 genuine `null` tokens in the corpus target an `UnsafePtr`. This is the deliberate avoidance of
    the null-reference "billion-dollar mistake."
 
 3c. **Ownership is the type axis — `value` / `resource` / `view` / `contract`.** kama organizes types by

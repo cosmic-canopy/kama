@@ -5,9 +5,13 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
 > Written out of the safety/unsafe boundary spike (`0addb7c`). Every number below was measured, not
 > estimated; the eleven findings it refers to are in [ROADMAP.md](../ROADMAP.md) §2. Companion briefs:
-> [unsafe-seam.md](unsafe-seam.md). Its other prerequisite — the contract `for` clause, without which
-> `Viewable` and the iterator contracts cannot be spelled — has **shipped**
+> the **unsafe seam**, which has since **shipped**
+> ([SPEC.md](../SPEC.md#what-requires-an-unsafe-fn--the-decision-table)) — `unsafe` marks the body, an
+> `extern` call is gated, and `UnsafePtr` is contained. Its other prerequisite — the contract `for` clause,
+> without which `Viewable` and the iterator contracts cannot be spelled — has **shipped** too
 > ([SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-)).
+>
+> The remaining prerequisite is **marking the stdlib `const fn`** ([ROADMAP.md](../ROADMAP.md) row 1).
 
 ## The model, in one paragraph
 
@@ -172,8 +176,9 @@ The `view()` member resolves **structurally**, not through contract dispatch, or
 1. **`View.over(base:count:)` is an intrinsic, not a ctor**, legal in exactly two positions: the body of a
    `Viewable<T>.view()` conformance, and `View`'s own `slice`. **`View` declares no ctor at all** —
    `View.make(UnsafePtr, int32)` ceases to exist — so a forged view is *unrepresentable* rather than
-   discouraged. That is what actually kills finding ③, and it is needed precisely because under
-   [unsafe-seam.md](unsafe-seam.md)'s model a public ctor would otherwise be callable from safe code.
+   discouraged. That is what actually kills finding ③, and it is needed precisely because under the
+   shipped unsafe seam's model — where calling an `unsafe fn` is unrestricted — a public ctor would
+   otherwise be callable from safe code.
 2. **`.view()` may appear only as the subject of a `borrow`/`foreach`.** The member is public so `borrow` can
    resolve it; a direct `View<T> v = xf.view();` is the mint-outside-a-window error. The minting rule is
    enforced at the call site, not at the declaration.
@@ -282,8 +287,8 @@ lexical block can span. kama has no async/await today, so it does not arise; re-
 Closes, from the eleven: **③** (no forgeable `View.over` — views only come from a `Viewable`), **④**
 (nothing outlives the block to reseat onto), **⑤**, **⑥**, and **⑧** (retired, not revived).
 
-⚠️ **Does not close, and must not be assumed to:** **①/②** need the `UnsafePtr` naming rule, which is
-[unsafe-seam.md](unsafe-seam.md). **⑨** is that brief's too. **⑦** (`reserve()` reallocs without bumping
+⚠️ **Does not close, and must not be assumed to:** **①/②/⑨** are **already closed** by the shipped unsafe
+seam, not by this brief — do not re-derive them here. **⑦** (`reserve()` reallocs without bumping
 `mods`) is *de-fanged* here — the container is unnameable during iteration, so the exploit path closes
 lexically — but the counter is still simply wrong, and it remains a real stdlib fix covering what the
 lexical rule cannot see. **⑩** (uninstantiated generic bodies unchecked) and **⑪** (silent narrowing cast)
