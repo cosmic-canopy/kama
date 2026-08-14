@@ -1,7 +1,7 @@
 // M27c-1 — a contract BOUND on a generic FUNCTION: `<T: Weighable>` lets the body call the contract
 // method `weight()` on a type-param value. Monomorphization emits a STATIC `Rock__weight(&a)` (zero
 // cost, no vtable). Enforcement: the concrete `Rock` must satisfy `Weighable`.
-type contract Weighable for both { fn int32 weight(); }
+type contract Weighable for value { fn int32 weight(); }
 type value Rock implements Weighable {
     int32 g;
     public ctor make(int32 g) { this.g = g; }

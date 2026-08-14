@@ -13,7 +13,7 @@
 // not from a hardcoded backend name — and they are spelled as a flag and its negation because that is
 // what makes them exhaustive AND mutually exclusive. `HOSTED` would not do: emscripten has a libc, so
 // it is hosted too, and both impls would survive the wasm build.
-type contract Clock for both { fn int32 tick(); }
+type contract Clock for value { fn int32 tick(); }
 
 @compileFor(!ARCH_WASM32)
 type value NativeClock implements Clock {

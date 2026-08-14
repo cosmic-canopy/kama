@@ -1,6 +1,6 @@
 // A concrete class can't be passed by `ref`/`out` to an interface parameter — it would
 // need a throwaway temp (reseat would be lost). Bind it to the interface first.
-type contract Shape for both { fn int64 area(); }
+type contract Shape for value { fn int64 area(); }
 type value Circle implements Shape {
     int64 r;
     public ctor make(int64 r) { this.r = r; }

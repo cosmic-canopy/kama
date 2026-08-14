@@ -1,7 +1,7 @@
 import std::memory::{Owned};
 // M26g — `Owned<I>` owns a concrete class that SATISFIES the interface. Boxing a class that does
 // not implement the interface is a compile error (there'd be no valid vtable to dispatch through).
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 type value Blob { int32 n; public ctor make(int32 n){ this.n = n; } }   // does NOT implement Shape
 fn int32 main() {
     Owned<Shape> s = new Blob.make(n: 5);   // ERROR: Blob does not implement Shape

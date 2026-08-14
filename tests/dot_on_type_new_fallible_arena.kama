@@ -21,7 +21,7 @@ type value Gauge {
     public fn int32 get() { return this.v; }
 }
 
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;

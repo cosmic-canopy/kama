@@ -5,7 +5,7 @@
 //
 // Covers all four positions in one file: the declaration, a conformance (`<This>`), a bound (`<T: C<T>>`),
 // and a use as a type (`C<Widget>` as a local and as a parameter). Returns 42.
-type contract Weighable<T is This> for both { fn int32 weigh(ref T other); }
+type contract Weighable<T is This> for value { fn int32 weigh(ref T other); }
 
 type value Widget implements Weighable<This> {
     public int32 w;

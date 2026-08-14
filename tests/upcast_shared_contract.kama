@@ -4,7 +4,7 @@ import std::collections::{DynamicArray};
 // handle (Liskov "is a"). `Shared<Sq> a` widens to `Shared<Shape> s` (retain — one shared
 // control block, contract dispatch through the fat handle), and `Owned<Sq>` widens to
 // `Owned<Shape>` (move). Each concrete object is freed exactly once at scope end.
-type contract Shape for both { fn int32 area(); }
+type contract Shape for resource { fn int32 area(); }
 
 type resource Sq implements Shape {
     DynamicArray<int32> side;                                  // owns heap -> destructible

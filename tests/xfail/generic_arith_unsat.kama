@@ -1,5 +1,5 @@
 // M31c — the bound is enforced: a type without `operator+` cannot satisfy `Arithmetic`.
-type contract Arithmetic for both { This operator+(This rhs); }
+type contract Arithmetic for value { This operator+(This rhs); }
 
 type value Plain {
     public int32 v;

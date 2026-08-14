@@ -2,7 +2,7 @@
 // dot-on-type; `::` is ALWAYS scope resolution. Each spelling below is the only one that compiles for
 // its case — the rejections are xfail/scope_op_on_ctor (a ctor via `::`) and xfail/dot_on_type_not_ctor
 // (a static fn via `.`). Returns 42.
-type contract Spawnable for both { }
+type contract Spawnable for value { }
 
 type enum Tag { Red, Blue }
 

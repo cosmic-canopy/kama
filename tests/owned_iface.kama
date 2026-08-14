@@ -5,7 +5,7 @@ import std::memory::{Owned};
 // polymorphically through the vtable; dropping the handle destroys the concrete object via the
 // vtable's `__dtor` slot (so a destructible impl's own heap is freed) then frees it. Move-only, like
 // `Owned<T>`. ASan-clean: the destructible `Square`'s `DynamicArray` is freed exactly once.
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value, resource { fn int32 area(); }
 type value Rect implements Shape {
     int32 w; int32 h;
     public ctor make(int32 w, int32 h) { this.w = w; this.h = h; }

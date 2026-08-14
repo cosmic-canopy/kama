@@ -6,7 +6,7 @@ import std::serialization::binary::{encode, decode};
 import std::collections::{DynamicArray};
 import std::memory::{Shared};
 
-type contract Shape for both { fn int32 area(); }
+type contract Shape for resource { fn int32 area(); }
 
 @generate(Serialize, Deserialize)
 type resource Sq implements Shape {

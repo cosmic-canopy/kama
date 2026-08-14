@@ -2,7 +2,7 @@ import std::memory::{Shared, Owned};
 import std::collections::{DynamicArray};
 // give/copy markers + reassignment on upcasts. `copy` retains, `give` moves; a Shared reseat
 // releases its old pointee. Derived owns heap so ASan proves refcounts + moves are exact.
-type contract Draw for both { fn int32 v(); }
+type contract Draw for resource { fn int32 v(); }
 type resource Dot implements Draw {
     DynamicArray<int32> h;
     public ctor make(int32 x) { this.h.add(item: x); }

@@ -1,0 +1,4 @@
+// `both` named an arbitrary pair the moment there were more than two kinds — GOALS §3c names six, five of
+// which can implement a contract. It is retired, and the message says what to write instead.
+type contract Drawable for both { fn int32 draw(); }
+fn int32 main() { return 0; }

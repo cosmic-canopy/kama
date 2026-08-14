@@ -5,8 +5,9 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
 > Written out of the safety/unsafe boundary spike (`0addb7c`). Every number below was measured, not
 > estimated; the eleven findings it refers to are in [ROADMAP.md](../ROADMAP.md) §2. Companion briefs:
-> [contract-kinds.md](contract-kinds.md) (**a prerequisite** — `Viewable` and the iterator contracts
-> cannot be spelled without it) · [unsafe-seam.md](unsafe-seam.md).
+> [unsafe-seam.md](unsafe-seam.md). Its other prerequisite — the contract `for` clause, without which
+> `Viewable` and the iterator contracts cannot be spelled — has **shipped**
+> ([SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-)).
 
 ## The model, in one paragraph
 
@@ -16,7 +17,7 @@ looks into. **A borrowing iterator is a view**: not by analogy but literally, si
 17 of them `type view`. An iterator is a window plus a cursor.
 
 (A *generating* iterator — `Args`, `IntRange` — borrows nothing and is correctly a `type value`. The
-distinction matters when spelling the contracts; see [contract-kinds.md](contract-kinds.md).)
+distinction matters when spelling the contracts; see [SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-).)
 
 ## The two questions a view type must answer
 
@@ -304,7 +305,7 @@ not. **Measure on the `foreach` path before converting anything**, since
 
 ## Definition of done
 
-[contract-kinds.md](contract-kinds.md) has shipped (this cannot be spelled before it). GOALS §3c states
+the contract `for` clause has shipped, so this can now be spelled. GOALS §3c states
 that kama picked (c) and the rules match it. SPEC gains a **Views** section with the window model and the
 mint/derive/pass/store table. Every negative claim has an `xfail`: mint outside a `borrow`/`foreach`;
 naming the host inside a `borrow`; mutating the container inside a `foreach` body (finding ⑧'s missing

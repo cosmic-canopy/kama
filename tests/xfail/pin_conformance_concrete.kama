@@ -2,7 +2,7 @@
 // one always-correct spelling, `This`. Naming the type concretely is rejected rather than accepted-when-
 // equal, so every conformance reads the same; it is also the only spelling the intrinsic SET form can
 // write, where one block serves many types.
-type contract Weighable<T is This> for both { fn int32 weigh(ref T other); }
+type contract Weighable<T is This> for value { fn int32 weigh(ref T other); }
 
 type value Widget implements Weighable<Widget> {
     public int32 w;

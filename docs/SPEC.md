@@ -136,7 +136,7 @@ Rendering a value as text goes through **one** contract, `Format` (prelude, so i
 survives `--no-std`) — the display twin of `Serialize`:
 
 ```kama
-type contract Format for both { fn void format(ref Formatter f); }
+type contract Format for value, resource, intrinsic { fn void format(ref Formatter f); }
 ```
 
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
@@ -300,8 +300,8 @@ thin wrapper over `Map<K, Unit, H, A>`), over a key `K: Hashable + Equatable` (t
 allocator — see "Custom allocators" below). These two key contracts are in the **prelude**:
 
 ```kama
-type contract Hashable  for both { fn uint64 hash(); }
-type contract Equatable<T is This> for both { fn bool equals(ref T other); }
+type contract Hashable  for value, resource, enum, intrinsic { fn uint64 hash(); }
+type contract Equatable<T is This> for value, resource, enum, intrinsic { fn bool equals(ref T other); }
 ```
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
@@ -316,7 +316,7 @@ cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` c
 in `std::collections`). `string` declares `Equatable` with an empty body, satisfied by its built-in `equals`; each
 integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
-`type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }` (returning the prelude enum
+`type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
 `type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
@@ -1210,7 +1210,7 @@ and platform (`WASM`/`NATIVE`/`WINDOWS`/…) are the **same primitive**: a decl-
   mechanism, not a second platform system.
 
 ```kama
-type contract Clock for both { fn int32 tick(); }
+type contract Clock for value { fn int32 tick(); }
 @compileFor(NATIVE) type value NativeClock implements Clock { ... }   // native build keeps this
 @compileFor(WASM)   type value WasmClock   implements Clock { ... }   // wasm build keeps this
 ```
@@ -1316,7 +1316,7 @@ right method shape but no `implements` is rejected (explicit over implicit).
   `iter()`/`iter_mut()` split; `Optional` can't carry a place, so mutable is a parallel iterator).
 - A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
-The prelude contracts (`type contract Iterator<T> for both { fn Optional<T> next(); }` and
+The prelude contracts (`type contract Iterator<T> for value, view { fn Optional<T> next(); }` and
 `IteratorMut<T>`) are ordinary monomorphized generic contracts, so they double as a static bound —
 `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct `Concrete__next`) or a dynamic fat-pointer value
 `Iterator<int32> it` (vtable). `foreach` uses the same `implements`, checked nominally.
@@ -1495,11 +1495,12 @@ every function, so declarations are greppable and self-describing:
   all (its factory lives in the impl) and stays caught later, at the boxing site. The flagship is the stdlib
   `View<T>`; the kind is general (`type view StridedView<T>`, `Grid2D<T>`, …). See *Collections & strings*
   for `View<T>`.
-- **`type contract Name { … }`** — a public-only guarantee (an interface); signatures only, no bodies, no
-  fields, no dtor. A `ctor` **may** be required (a conformer has to supply that constructor), which is what
-  lets a bound construct: `T.fromStr(s: …)`. Types satisfy it via `implements`; it may refine another with `implements` too
-  (`type contract Animated for both implements Drawable { … }` — a conformer must supply Drawable's methods
-  as well, and dispatch through `Animated` reaches them).
+- **`type contract Name for <kinds> { … }`** — a public-only guarantee (an interface); signatures only, no
+  bodies, no fields, no dtor. A `ctor` **may** be required (a conformer has to supply that constructor),
+  which is what lets a bound construct: `T.fromStr(s: …)`. Types satisfy it via `implements`; it may refine
+  another with `implements` too (`type contract Animated for value, resource implements Drawable { … }` — a
+  conformer must supply Drawable's methods as well, and dispatch through `Animated` reaches them).
+  The **`for` clause is mandatory** and names which kinds may implement the contract — see below.
 - **`type enum Name { … }`** — a plain set of variants or a tagged union. See *Enums & `match`* below; it
   takes the same `implements` clause as every other kind.
 - **`type intrinsic <targets> implements C { … }`** — the kind a **primitive** is. It declares nothing new;
@@ -1511,6 +1512,36 @@ The full model + rationale is in [TYPE_MODEL.md](TYPE_MODEL.md). The kind words 
 remain ordinary identifiers everywhere else (`int32 value = 5;`). `enum` is the one kind word that IS a
 reserved keyword, for the historical reason that it predates the `type` marker; that costs nothing, since
 nothing else could be spelled there. Only `type` and `enum` are keywords.
+
+### The contract `for` clause — which kinds may implement it ✅
+
+A `type contract` **must** declare its implementers: `type contract C for <kinds> { … }`. The clause takes
+any combination of the **five implementable kinds**, comma-separated, meaning *any of these*:
+
+```kama
+type contract Rankable for value;                                  // one kind
+type contract Iterator<T> for value, view;                         // a borrowing iterator is a view,
+                                                                   //   a generating one is a value
+type contract Hashable for value, resource, enum, intrinsic;       // anything that can be a Map key
+```
+
+`contract` is **not** among them: a contract implementing a contract is *refinement*, a different axis,
+already spelled by `implements` on the contract itself. The separator is a comma and only a comma — `+`
+was rejected because it means **conjunction** in a generic bound (`<K: Hashable + Equatable>` = satisfy
+all) and would mean **disjunction** here, one symbol with opposite senses.
+
+Every kind is enforced, and each is judged as what it was declared, not as what it lowers to: a
+`type view` codegens like a `value` (same layout, same copy) but implements as a **view**, so a contract
+that does not name `view` rejects it. `@generate`-synthesized conformances go through the same gate — a
+`@generate(Serialize) type value` needs `Serialize` to name `value`.
+
+Widening a clause is a **non-breaking** change and narrowing one is not, so state the kinds a contract is
+*for*, not merely the ones implementing it today: the clause is a design statement, and a set narrowed to
+the current corpus is easily narrower than the contract's audience. `Real` names `value` alongside
+`intrinsic` for exactly that reason — nothing but `float32`/`float64` implements it yet, and a
+user-defined soft-float value type is what it exists for.
+
+*(`for both` is gone. It named an arbitrary pair the moment there were more than two kinds.)*
 
 ```kama
 type value Counter {
@@ -2011,7 +2042,7 @@ prelude's per-primitive impls collapse from 64 blocks to roughly 8. Inside the b
 being decorated, resolved per member of the set.
 
 ```kama
-type contract Hashable for both { fn uint64 hash(); }
+type contract Hashable for value, resource, enum, intrinsic { fn uint64 hash(); }
 
 type intrinsic <string> implements Hashable {        // a primitive gains a contract, in pure kama
     public fn uint64 hash() {
@@ -2431,7 +2462,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
 
   ```kama
-  type contract Comparable<T is This> for both { fn Ordering compareTo(ref T other); }
+  type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }
 
   type value Duration implements Comparable<This> { … }     // conformance: always `This`
   fn T maxOf<T: Comparable<T>>(T a, T b) { … }              // bound: the bound's own parameter
@@ -2452,7 +2483,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
   arithmetic over any conforming type at zero cost:
   ```kama
-  type contract Arithmetic<T is This> for both { T operator+(T rhs); }
+  type contract Arithmetic<T is This> for value { T operator+(T rhs); }
   fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }   // `a + b` -> static Concrete__op_add(&a, b)
   ```
   The concrete type declares `implements Arithmetic<This>` (bounds are nominal), and `a + b` in the monomorphized

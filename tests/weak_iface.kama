@@ -5,7 +5,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 type value Ctrl { public int32 strong; public int32 weak; }
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 type value Circle implements Shape { int32 r; public ctor make(int32 r){ this.r=r; } public fn int32 area(){return this.r*this.r;} }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s=s; } public fn int32 area(){return this.s*this.s;} }
 

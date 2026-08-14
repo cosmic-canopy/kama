@@ -852,14 +852,14 @@ if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; f
 echo 'check-query: M6 B3c contract methods'
 # From the CONTRACT's declaration: the contract, both implementations, both direct calls, the fat-pointer
 # call. Renaming any one of them has to move all six or the program stops compiling.
-expect --refs 10:42 -- "dispatch.kama:10:42"    # the contract declaration
-expect --refs 10:42 -- "dispatch.kama:15:20"    # Cat's implementation
-expect --refs 10:42 -- "dispatch.kama:20:20"    # Dog's implementation
-expect --refs 10:42 -- "dispatch.kama:34:21"    # c.speak() — a concrete call
-expect --refs 10:42 -- "dispatch.kama:34:33"    # d.speak() — the other concrete call
-expect --refs 10:42 -- "dispatch.kama:38:26"    # s.speak() — through the fat pointer
+expect --refs 10:43 -- "dispatch.kama:10:43"    # the contract declaration
+expect --refs 10:43 -- "dispatch.kama:15:20"    # Cat's implementation
+expect --refs 10:43 -- "dispatch.kama:20:20"    # Dog's implementation
+expect --refs 10:43 -- "dispatch.kama:34:21"    # c.speak() — a concrete call
+expect --refs 10:43 -- "dispatch.kama:34:33"    # d.speak() — the other concrete call
+expect --refs 10:43 -- "dispatch.kama:38:26"    # s.speak() — through the fat pointer
 # ...and the same set from ONE implementation, which is the direction the rename actually comes from.
-expect --refs 15:20 -- "dispatch.kama:10:42"
+expect --refs 15:20 -- "dispatch.kama:10:43"
 expect --refs 15:20 -- "dispatch.kama:20:20"
 expect --refs 15:20 -- "dispatch.kama:38:26"
 # Go-to-definition does NOT collapse onto the contract: a concrete-typed call lands on THAT type's
@@ -867,8 +867,8 @@ expect --refs 15:20 -- "dispatch.kama:38:26"
 # This is the whole reason the group is a separate relation rather than a shared def-site.
 expect --def 34:21 -- "dispatch.kama:15:20"
 expect --def 34:33 -- "dispatch.kama:20:20"
-expect --def 38:26 -- "dispatch.kama:10:42"
-expect --type 10:42 -- "method speak"
+expect --def 38:26 -- "dispatch.kama:10:43"
+expect --type 10:43 -- "method speak"
 
 # M6 B3h — a generic ARGUMENT is a reference to the type it names. `Speaker` inside `Owned<Speaker>`
 # resolves in mangleElem and nowhere else, and mangleElem passed no `site`, so renaming the contract

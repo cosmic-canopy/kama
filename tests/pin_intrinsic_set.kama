@@ -4,7 +4,7 @@
 //
 // The impl body still spells `This`: at a declaration the implementing type is statically known, which is
 // exactly where `This` is legal. It is a USE site that must name the type. Returns 42.
-type contract Weighable<T is This> for both { fn int32 weigh(ref T other); }
+type contract Weighable<T is This> for intrinsic { fn int32 weigh(ref T other); }
 
 type intrinsic <int8, int16, int32> implements Weighable<This> {
     public fn int32 weigh(ref This other) { return cast<int32>(this) + cast<int32>(other); }

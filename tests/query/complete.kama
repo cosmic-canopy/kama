@@ -14,7 +14,7 @@ namespace completeprobe;
 
 import std::collections::{DynamicArray};
 
-type contract Sized for both { fn int32 size(); }
+type contract Sized for value { fn int32 size(); }
 
 type value Cell implements Sized {
     public int32 value;

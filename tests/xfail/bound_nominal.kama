@@ -3,7 +3,7 @@
 // `weight()` method but never says `implements Weighable`, so a coincidental method-name match is no
 // longer enough — it is rejected at instantiation (explicit over implicit). Add `implements Weighable`
 // to the type to fix. (Before this, the bound was checked structurally and this compiled.)
-type contract Weighable for both { fn int32 weight(); }
+type contract Weighable for value { fn int32 weight(); }
 type value Rock {
     public int32 g;
     public ctor make(int32 g) { this.g = g; }

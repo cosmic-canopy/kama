@@ -129,8 +129,8 @@ is the abstract thing: a public-only guarantee a type promises to satisfy. A typ
 are just "its API."
 
 ```kama
-type contract Drawable for both { fn void draw(); }
-type contract Animated for both implements Drawable { fn void step(float dt); }   // refines: requires Drawable + more
+type contract Drawable for value, resource { fn void draw(); }
+type contract Animated for value, resource implements Drawable { fn void step(float dt); }   // refines: requires Drawable + more
 ```
 
 - All members are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies

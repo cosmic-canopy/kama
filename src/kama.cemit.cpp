@@ -4565,9 +4565,16 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (cd->forKinds) for (auto& k : *cd->forKinds) {
             if (!k) continue;
             if (unsigned bit = kamaImplKindBit(*k)) { ii.implKinds |= bit; continue; }
-            if (*k == "both") { ii.implKinds |= IK_Value | IK_Resource; continue; }   // retired in C3
-            unsupported(("a contract's `for` clause takes `value`, `resource`, `view`, `enum` or "
-                         "`intrinsic` — not `" + *k + "`").c_str(), cd->line);
+            // `both` named an arbitrary pair the moment there were more than two kinds, and 96 uses
+            // showed it was being reached for as a default rather than chosen. Its own message, because
+            // "not a kind word" would be true but useless to someone migrating.
+            if (*k == "both")
+                unsupported(("`for both` is retired — a contract names its kinds: `type contract "
+                             + *cd->name->value + " for value, resource`, plus `view`, `enum` or "
+                             "`intrinsic` if those implement it too").c_str(), cd->line);
+            else
+                unsupported(("a contract's `for` clause takes `value`, `resource`, `view`, `enum` or "
+                             "`intrinsic` — not `" + *k + "`").c_str(), cd->line);
         }
         // Keyed on the CLAUSE being absent, not on the mask being empty. A clause that was written and
         // then rejected word-by-word has already been told what is wrong; a second "you didn't declare

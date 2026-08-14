@@ -1,7 +1,7 @@
 // A3 — an inline STACK ctor of a concrete passed to a BY-VALUE contract parameter (`useShape(a: Square(7))`
 // where `useShape(Shape a)`). Materialized into a temp and passed as a fat-pointer borrow; the caller owns
 // the temp. Previously required binding to a local first.
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
 fn int32 useShape(Shape a) { return a.area(); }
 fn int32 main() { return useShape(a: Square.make(s: 7)); }

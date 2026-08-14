@@ -1,6 +1,6 @@
 import std::memory::{Owned};
 // B4 — inline `new Concrete` as an Owned<Contract> arg (fat box passed by value; callee drops via vtable).
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
 fn int32 take(Owned<Shape> c) { return c.area(); }
 fn int32 main() { return take(c: new Square.make(s: 7)); }

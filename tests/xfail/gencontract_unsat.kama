@@ -1,7 +1,7 @@
 // A type argument that does NOT satisfy a generic-contract bound is rejected at instantiation.
 // `Widget` has no `compareTo`, so it cannot satisfy `Comparable<int32>`. The bound is checked by
 // method NAME against the contract TEMPLATE — no `Comparable<int32>` instance is even needed.
-type contract Comparable<T> for both { fn int32 compareTo(T other); }
+type contract Comparable<T> for value { fn int32 compareTo(T other); }
 
 type value Widget {
     int32 id;

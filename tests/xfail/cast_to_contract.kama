@@ -4,7 +4,7 @@
 // This used to emit `((Shape)(c))` and reach the C compiler, which rejected it as "used type 'struct Shape'
 // where arithmetic or pointer type is required". Silent bad codegen: kama said nothing, and the error named
 // a mangled C type the user never wrote.
-type contract Shape for both { fn int64 area(); }
+type contract Shape for value { fn int64 area(); }
 
 type value Circle implements Shape {
     int64 r;

@@ -5,7 +5,7 @@
 // optimizer devirtualize the call away, which is what the earlier variant inadvertently measured.
 import std::collections::{DynamicArray};
 import std::memory::{Owned};
-type contract Shape for both { fn int64 area(); }
+type contract Shape for resource { fn int64 area(); }
 type resource Circle implements Shape
 {
     int64 r;

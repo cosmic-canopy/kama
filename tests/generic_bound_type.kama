@@ -2,7 +2,7 @@
 // method call `x.weight()` on a T PARAMETER (static dispatch after monomorphization). Enforcement:
 // `Scale<Rock>` requires Rock to satisfy Weighable. (T is a method param, not a by-value field — a
 // generic instance holding a user value-type BY VALUE is a separate pre-existing emit-order gap.)
-type contract Weighable for both { fn int32 weight(); }
+type contract Weighable for value { fn int32 weight(); }
 type value Rock implements Weighable {
     int32 g;
     public ctor make(int32 g) { this.g = g; }

@@ -1,14 +1,44 @@
-// Contract kind-gating: a `for resource` contract is implementable by a resource; a `for value` one by a value.
+// Contract kind-gating: the `for` clause is a COMMA LIST of the five implementable kinds, meaning "any of
+// these may implement me". A single kind pins one (`for resource`); a list admits each one it names. All
+// five are exercised here — `view`, `enum` and `intrinsic` had no spelling at all until the clause learned
+// them, and rode in on the value path. The negative direction lives in tests/xfail/contract_kind_gate*.
 type contract Drawable for resource { fn int32 draw(); }
 type contract Rankable for value    { fn int32 rank(); }
+type contract Sized    for value, view, enum, intrinsic { fn int32 size(); }
+
 type resource Sprite implements Drawable {
     int32 z;
     public ctor make(int32 z) { this.z = z; }
     public fn int32 draw() { return this.z; }
 }
-type value Card implements Rankable {
+type value Card implements Rankable, Sized {
     int32 r;
     public ctor make(int32 r) { this.r = r; }
     public fn int32 rank() { return this.r; }
+    public fn int32 size() { return 1; }
 }
-fn int32 main() { Sprite s = Sprite.make(z: 10); Card c = Card.make(r: 32); return s.draw() + c.rank(); }
+// A view: owns nothing, borrows the caller's buffer. TypeKind::Value drives its layout, but the gate
+// keys on `isBorrow`, so `Sized` has to name `view` for this to be admitted at all.
+type view Window implements Sized {
+    UnsafePtr<int32> data; int32 len;
+    public ctor make(UnsafePtr<int32> data, int32 len) { this.data = data; this.len = len; }
+    public fn int32 size() { return this.len; }
+}
+type enum Shade implements Sized {
+    Light, Dark;
+    public fn int32 size() { return 2; }
+}
+// A primitive declares its own conformance — the kind `int32` IS. Gated at the block, not at the sweep.
+type intrinsic <int8, int16> implements Sized { public fn int32 size() { return 4; } }
+
+// A contract-supplied method on a primitive is reached the only way it can be — through a generic bound.
+fn int32 sizeOf<T: Sized>(T x) { return x.size(); }
+
+fn int32 main() {
+    Sprite s = Sprite.make(z: 10);
+    Card   c = Card.make(r: 32);
+    Shade  d = Shade::Dark;
+    int8   b = 0ui8;
+    // 10 + 32 = 42; the rest cancel: 1 (Card) + 2 (Shade) + 4 (int8) = 7, minus 7.
+    return s.draw() + c.rank() + c.size() + d.size() + sizeOf(x: b) - 7;
+}

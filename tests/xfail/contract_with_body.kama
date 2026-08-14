@@ -1,3 +1,3 @@
 // M26h — a `contract` method is a guarantee, not an implementation (no body).
-type contract Bad for both { fn int32 area() { return 5; } }
+type contract Bad for value { fn int32 area() { return 5; } }
 fn int32 main() { return 0; }

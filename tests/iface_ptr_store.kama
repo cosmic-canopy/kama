@@ -6,7 +6,7 @@ import std::memory::{Owned, Shared};
 // field's owner drops it in RAII order. (A `DynamicArray<Shared<Shape> >` now works too — the collection
 // drops each stored handle in RAII order; see `list_shared_iface`. Only the `>>` split, dropping the
 // space, remains as a later ergonomic slice.)
-type contract Shape for both { fn int32 area(); }
+type contract Shape for resource { fn int32 area(); }
 type resource Sq implements Shape {
     DynamicArray<int32> side;
     public ctor make(int32 s) { this.side.add(item: s); }

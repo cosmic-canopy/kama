@@ -4,7 +4,7 @@
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
-type contract Shape for both { fn int32 area(); }
+type contract Shape for resource { fn int32 area(); }
 type resource Cell implements Shape {
     UnsafePtr<int32> buf;
     public ctor make(int32 v) { unsafe { this.buf = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); this.buf[0] = v; } }

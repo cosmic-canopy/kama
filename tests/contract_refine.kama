@@ -2,8 +2,8 @@ import std::memory::{Shared};
 // A `contract` refining a `contract` (`implements`): the refining contract's vtable / dispatch / conformance
 // include the parent's slots. Drawable <- Animated. Call a refined (Drawable) method + an own method through
 // both a borrowed contract value and an owning Shared<Animated> handle.
-type contract Drawable for both { fn int32 area(); }
-type contract Animated for both implements Drawable { fn int32 step(); }
+type contract Drawable for resource { fn int32 area(); }
+type contract Animated for resource implements Drawable { fn int32 step(); }
 type resource Sprite implements Animated {
     int32 s;
     public ctor make(int32 s) { this.s = s; }

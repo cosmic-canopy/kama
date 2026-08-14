@@ -1,0 +1,4 @@
+// A word in the `for` clause that is not a kind. Kind words are contextual IDENTIFIERs, so the parser
+// cannot reject this — the emitter is the only thing that knows which words are legal.
+type contract Drawable for frobnicate { fn int32 draw(); }
+fn int32 main() { return 0; }

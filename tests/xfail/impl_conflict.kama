@@ -2,7 +2,7 @@
 // directly visible, so kama needs no orphan rule to forbid it in advance — the claim is simply rejected
 // where it is written. The same check guards the enum and `type intrinsic` spellings
 // (tests/xfail/intrinsic_dup.kama); this is the class arm.
-type contract Weighable for both { fn int32 weight(); }
+type contract Weighable for value { fn int32 weight(); }
 
 type value Widget implements Weighable, Weighable {
     public int32 w;

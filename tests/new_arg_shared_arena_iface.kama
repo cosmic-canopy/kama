@@ -5,7 +5,7 @@
 import std::memory::{Shared};
 import std::collections::{Arena, BumpAllocator};
 
-type contract Shape for both { fn int32 area(); }
+type contract Shape for value { fn int32 area(); }
 
 type value Circle implements Shape {
     int32 r;

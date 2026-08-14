@@ -6,7 +6,7 @@ import std::memory::{Shared};
 // because the inner `Shared_IShape` is registered before the outer `DynamicArray` (was outer-first -> the
 // list silently leaked its elements). Each Sq is freed exactly once -> ASan-clean is the real proof.
 // (Written with no space in `Shared<Shape>>` — the `>>` lexer split handles the nested close.)
-type contract Shape for both { fn int32 area(); }
+type contract Shape for resource { fn int32 area(); }
 type resource Sq implements Shape {
     DynamicArray<int32> side;                                          // owns heap -> destructible impl
     public ctor make(int32 s) { this.side.add(item: s); }

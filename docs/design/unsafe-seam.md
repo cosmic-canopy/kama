@@ -5,7 +5,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
 > Written out of the safety/unsafe boundary spike (`0addb7c`); findings ①–⑪ are in
 > [ROADMAP.md](../ROADMAP.md) §2. Companion briefs: [view-model.md](view-model.md) ·
-> [contract-kinds.md](contract-kinds.md).
+> the contract `for` clause, now shipped ([SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-)).
 
 ## The problem, measured
 

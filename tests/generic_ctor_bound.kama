@@ -1,7 +1,7 @@
 // M8a.2: generic code constructs a `T` through a contract-required ctor. `T: Something` guarantees
 // `ctor something(int32)`, so `T.something(seed)` in a generic fn lowers, per monomorphization, to the
 // concrete implementer's ctor (`Widget__something` / `Gizmo__something`) — no `Default` contract needed.
-type contract Something for both { ctor something(int32 someval); }
+type contract Something for value { ctor something(int32 someval); }
 
 type value Widget implements Something {
     public int32 v;

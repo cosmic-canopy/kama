@@ -1,7 +1,7 @@
 // M31c — operators in a `contract` are a BOUND for generic math. `Arithmetic` declares
 // `This operator+(This rhs)`; a `sum<T: Arithmetic<T>>` monomorphizes `a + b` to a STATIC
 // `Vec2__op_add(&a, b)` — zero-cost, reusing M27's bound + `This` machinery.
-type contract Arithmetic<T is This> for both { T operator+(T rhs); }
+type contract Arithmetic<T is This> for value { T operator+(T rhs); }
 
 @generate(of)
 type value Vec2 implements Arithmetic<This> {

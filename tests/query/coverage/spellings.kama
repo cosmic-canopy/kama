@@ -15,7 +15,7 @@ type enum Color { Red, Green, Blue }
 
 type enum Shape { Circle(int32 r), Empty }
 
-type contract Area for both { fn int32 area(); }
+type contract Area for value { fn int32 area(); }
 
 type virtual(maxDepth: 1) resource Base {
     int32 tag;
@@ -84,7 +84,7 @@ fn int32 main() {
 //
 // APPENDED, not inserted: tools/check-query.sh asserts hardcoded line:column coordinates into this
 // buffer, so adding a construct anywhere above shifts every one of them.
-type contract Sizable<T is This> for both { fn int32 cmp(ref T other); }
+type contract Sizable<T is This> for value { fn int32 cmp(ref T other); }
 
 type value Coin implements Sizable<This> {
     public int32 v;

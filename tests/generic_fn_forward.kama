@@ -6,7 +6,7 @@
 // active substitution, so `T` was bound to itself and `mangleElem` recursed on its own result until the
 // stack died; nothing in lib/, prelude/ or tests/ used the shape, so it went unnoticed. The fix defers an
 // argument that is still unbound and re-walks each generic function body once per instantiation.
-type contract Show<T> for both { fn int32 show(ref T x); }
+type contract Show<T> for value { fn int32 show(ref T x); }
 
 type value Doubler<T: Comparable<T>> implements Show<T> {
     public ctor make() { }

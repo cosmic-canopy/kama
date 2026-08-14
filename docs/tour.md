@@ -245,7 +245,7 @@ A `contract` is an interface. It states which kinds may implement it, which keep
 guarantee from silently requiring a heap allocation:
 
 ```kama
-type contract Shape for both { fn int64 area(); }
+type contract Shape for value, resource { fn int64 area(); }
 
 type value Circle implements Shape
 {

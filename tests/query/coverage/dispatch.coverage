@@ -4,8 +4,8 @@
 8:26 DynamicArray ref:generic-type
 10:5 contract -
 10:14 Speaker decl:contract
-10:26 both -
-10:42 speak decl:method
+10:26 value -
+10:43 speak decl:method
 12:5 value -
 12:11 Cat decl:value
 12:26 Speaker ref:contract

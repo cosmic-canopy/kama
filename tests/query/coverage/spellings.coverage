@@ -9,8 +9,8 @@
 16:35 Empty decl:enum-member
 18:5 contract -
 18:14 Area decl:contract
-18:23 both -
-18:39 area decl:method
+18:23 value -
+18:40 area decl:method
 20:13 maxDepth -
 20:26 resource -
 20:35 Base decl:resource
@@ -156,10 +156,10 @@
 87:22 T -
 87:24 is -
 87:27 This -
-87:37 both -
-87:53 cmp decl:method
-87:61 T unresolved
-87:63 other -
+87:37 value -
+87:54 cmp decl:method
+87:62 T unresolved
+87:64 other -
 89:5 value -
 89:11 Coin decl:value
 89:27 Sizable ref:contract
