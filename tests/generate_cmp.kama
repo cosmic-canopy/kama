@@ -27,8 +27,8 @@ type resource Swatch {
 type value Session {
     public int32 id;
     public int32 nonce;      // deliberately outside identity
-    public fn bool equals(ref Session other) { return this.id == other.id; }
-    public fn uint64 hash() { return cast<uint64>(this.id); }
+    public const fn bool equals(const ref Session other) { return this.id == other.id; }
+    public const fn uint64 hash() { return cast<uint64>(this.id); }
 }
 
 fn int32 main() {

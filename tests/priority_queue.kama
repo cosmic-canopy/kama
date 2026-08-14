@@ -11,8 +11,8 @@ fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: 
 type resource Task implements Comparable<This> {
     int32 prio;
     public ctor make(int32 prio) { this.prio = prio; }
-    public fn int32 priority() { return this.prio; }
-    public fn Ordering compareTo(ref Task other) {
+    public const fn int32 priority() { return this.prio; }
+    public const fn Ordering compareTo(const ref Task other) {
         int32 mine = this.prio; int32 theirs = other.priority();   // named receivers (a primitive rvalue can't be one)
         return cmp(a: mine, b: theirs);
     }

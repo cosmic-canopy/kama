@@ -34,6 +34,9 @@ type contract Movable for resource { }
 // every other factory (M8e had already ruled that shape out for a self-returning `static fn`; this was
 // the last member that escaped it by taking `self`). The source is BORROWED (`ref This`) — copying
 // never consumes it. Emitted C is unchanged (`X__copy(X* source)`), so `copy x` lowers as before.
+// The borrow is deliberately MUTABLE, unlike `Equatable`/`Comparable`'s `const ref`: a RETAINING copy
+// (`Shared`, `Weak`, a library `Rc`) bumps a refcount reached through the source, so `const ref` here
+// would be a promise the shipped implementations break on their first line.
 type contract Copyable<T is This> for resource { ctor copy(ref T source); }
 // Hashing + equality opt-in (the `Map`/`Set` key protocol, nominal). A generic bound `<K: Hashable +
 // Equatable>` is NOMINAL — the type must DECLARE `implements` (a coincidental method set isn't enough).
@@ -49,14 +52,14 @@ type contract Copyable<T is This> for resource { ctor copy(ref T source); }
 // operator member — those are concrete-type ergonomics; these two are the operators a generic bound
 // must be able to NAME. Primitives are untouched: an all-primitive comparison keeps the built-in C
 // operator, so `float` keeps exact IEEE semantics and pays nothing.
-type contract Hashable for value, resource, enum, intrinsic { fn uint64 hash(); }
-type contract Equatable<T is This> for value, resource, enum, intrinsic { fn bool equals(ref T other); }
+type contract Hashable for value, resource, enum, intrinsic { const fn uint64 hash(); }
+type contract Equatable<T is This> for value, resource, enum, intrinsic { const fn bool equals(const ref T other); }
 // Total ordering opt-in (nominal, like Equatable) — the bound for sorted containers (`SortedMap`/`SortedSet`,
 // B-tree) and `PriorityQueue` (binary heap). `compareTo` returns `Ordering`, three-way in ONE call (no
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
 // key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive conformances
 // below make every int/float/string universally comparable.
-type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }
+type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }
 // The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
 // `&Bump`, Zig `std.mem.Allocator`). An `Owned<T, A>` box or a container carries `A alloc` BY VALUE and
 // routes every allocation through `this.alloc.allocate(...)` / `this.alloc.deallocate(...)`. FOUNDATIONAL
@@ -98,7 +101,7 @@ type contract Error for value, resource, enum { fn string message(); }
 // `implements`. That was the last conformance in the language a type did not declare for itself.
 type intrinsic <string> implements Equatable<This> { }
 type intrinsic <string> implements Hashable {
-    public fn uint64 hash() {
+    public const fn uint64 hash() {
         uint64 h = 2166136261ui64;
         int32 i = 0;
         while (i < cast<int32>(this.length())) {
@@ -115,7 +118,7 @@ type intrinsic <string> implements Hashable {
 // consecutive slots, which open addressing handles fine, and `FastHasher` can be selected to skip
 // splitmix entirely for such keys.
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Hashable {
-    public fn uint64 hash() { return cast<uint64>(this); }
+    public const fn uint64 hash() { return cast<uint64>(this); }
 }
 // Floats join the `Equatable` set (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
 // `DynamicArray<float*>.contains` work — but they are NOT `Hashable`: float hash keys are a footgun
@@ -124,13 +127,13 @@ type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implem
 // `Equatable` comes free from the built-in `equals`.
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64>
     implements Equatable<This> {
-    public fn bool equals(ref This other) { return this == other; }
+    public const fn bool equals(const ref This other) { return this == other; }
 }
 // `Comparable` (pure-kama, NO compiler blessing) — every int/float is totally ordered via a three-way
 // `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes (unsigned
 // `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Comparable<This> {
-    public fn Ordering compareTo(ref This other) {
+    public const fn Ordering compareTo(const ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
         return Ordering::Equal;
@@ -145,7 +148,7 @@ type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implem
 // (hash + equals) never see the same key type. Raw `a < b` on two floats is untouched — an all-primitive
 // comparison keeps the built-in C operator and never routes through `compareTo`.
 type intrinsic <float32, float64> implements Comparable<This> {
-    public fn Ordering compareTo(ref This other) {
+    public const fn Ordering compareTo(const ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
         if (this != this) { if (other != other) { return Ordering::Equal; } return Ordering::Greater; }
@@ -154,7 +157,7 @@ type intrinsic <float32, float64> implements Comparable<This> {
     }
 }
 type intrinsic <string> implements Comparable<This> {
-    public fn Ordering compareTo(ref This other) {
+    public const fn Ordering compareTo(const ref This other) {
         int32 n = cast<int32>(this.length());
         int32 m = cast<int32>(other.length());
         int32 lim = n; if (m < n) { lim = m; }

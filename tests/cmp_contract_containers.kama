@@ -9,9 +9,9 @@ import std::time::{Duration};
 type value Cents implements Equatable<This>, Comparable<This>, Hashable {
     public int32 v;
     public ctor of(int32 v) { this.v = v; }
-    public fn uint64 hash() { return cast<uint64>(this.v); }
-    public fn bool equals(ref Cents other) { return this.v == other.v; }
-    public fn Ordering compareTo(ref Cents other) {
+    public const fn uint64 hash() { return cast<uint64>(this.v); }
+    public const fn bool equals(const ref Cents other) { return this.v == other.v; }
+    public const fn Ordering compareTo(const ref Cents other) {
         if (this.v < other.v) { return Ordering::Less; }
         if (this.v > other.v) { return Ordering::Greater; }
         return Ordering::Equal;

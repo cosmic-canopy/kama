@@ -4,7 +4,7 @@
 @generate(of)
 type value V implements Equatable<This> {
     public int32 x;
-    public fn bool equals(ref V other) { return this.x == other.x; }
+    public const fn bool equals(const ref V other) { return this.x == other.x; }
 }
 fn int32 main() {
     V a = V.of(x: 7);

@@ -56,8 +56,8 @@ type value Fixed<B: FixedBacking<B>, const F: int32> implements Equatable<This>,
     // Comparison comes from the contracts, not from `operator==` & co. — `==`/`!=` call `equals`,
     // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Fixed a `Map` key (with `Hashable`)
     // and a `SortedSet`/`PriorityQueue` element, which the raw operators never did.
-    public fn bool equals(ref This other) { return this.raw.wide() == other.raw.wide(); }
-    public fn Ordering compareTo(ref This other) {
+    public const fn bool equals(const ref This other) { return this.raw.wide() == other.raw.wide(); }
+    public const fn Ordering compareTo(const ref This other) {
         if (this.raw.wide() < other.raw.wide()) { return Ordering::Less; }
         if (this.raw.wide() > other.raw.wide()) { return Ordering::Greater; }
         return Ordering::Equal;

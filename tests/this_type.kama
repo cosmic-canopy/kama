@@ -3,11 +3,11 @@
 // has to give it one concrete type. Used as a BOUND, `a.equals(b)` monomorphizes to a STATIC
 // `Point__equals(&a, b)`. Inside a type's OWN body `This` stays legal and means that type — nothing is
 // erased there — so `Point` still writes `equals(This other)` and returns `This` from `clone()`.
-type contract Equatable<T is This> for value { fn bool equals(T other); }
+type contract Equatable<T is This> for value { const fn bool equals(T other); }
 type value Point implements Equatable<This> {
     int32 x;
     public ctor make(int32 x) { this.x = x; }
-    public fn bool equals(This other) { return this.x == other.x; }   // This -> Point
+    public const fn bool equals(This other) { return this.x == other.x; }   // This -> Point
     public fn This clone() { This c = Point.make(x: this.x); return c; }   // self-returning (This local + return)
 }
 fn bool same<T: Equatable<T>>(T a, T b) { return a.equals(other: b); }  // static dispatch via the bound

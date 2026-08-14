@@ -6,7 +6,7 @@ type value V implements Equatable<This> {
     public int32 x;
     public V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
     public V operator-() { return V.of(x: -this.x); }
-    public fn bool equals(ref V other) { return this.x == other.x; }
+    public const fn bool equals(const ref V other) { return this.x == other.x; }
 }
 fn int32 main() {
     V a = V.of(x: 5); V b = V.of(x: 3); V c = V.of(x: 8);

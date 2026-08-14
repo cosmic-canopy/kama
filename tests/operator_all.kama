@@ -22,8 +22,8 @@ type value Num implements Equatable<This>, Comparable<This> {
     public Num operator>>(Num rhs) { return Num.of(v: this.v >> rhs.v); }
 
     // comparison — one contract method each; `!=` is `!equals`, and `<=`/`>=` negate the opposite Ordering
-    public fn bool equals(ref Num other) { return this.v == other.v; }
-    public fn Ordering compareTo(ref Num other) {
+    public const fn bool equals(const ref Num other) { return this.v == other.v; }
+    public const fn Ordering compareTo(const ref Num other) {
         if (this.v < other.v) { return Ordering::Less; }
         if (this.v > other.v) { return Ordering::Greater; }
         return Ordering::Equal;

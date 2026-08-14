@@ -34,8 +34,8 @@ type value Q<B: Widen<B>> implements Equatable<This>, Comparable<This> {
     public This operator-(This rhs) { return Q::<B>.of(raw: B.fromWide(v: this.raw.wide() - rhs.raw.wide())); }
 
     // Comparison is a CONTRACT, not an operator — `==` calls equals, `<` calls compareTo.
-    public fn bool equals(ref This other) { return this.raw.wide() == other.raw.wide(); }
-    public fn Ordering compareTo(ref This other) {
+    public const fn bool equals(const ref This other) { return this.raw.wide() == other.raw.wide(); }
+    public const fn Ordering compareTo(const ref This other) {
         if (this.raw.wide() < other.raw.wide()) { return Ordering::Less; }
         if (this.raw.wide() > other.raw.wide()) { return Ordering::Greater; }
         return Ordering::Equal;

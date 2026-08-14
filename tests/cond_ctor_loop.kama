@@ -3,7 +3,7 @@
 @generate(of)
 type value V implements Comparable<This> {
     public int32 x;
-    public fn Ordering compareTo(ref V other) {
+    public const fn Ordering compareTo(const ref V other) {
         if (this.x < other.x) { return Ordering::Less; }
         if (this.x > other.x) { return Ordering::Greater; }
         return Ordering::Equal;

@@ -32,8 +32,8 @@ type value Duration implements Equatable<This>, Comparable<This> {
     public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
     // `==`/`<`/`>`/`<=`/`>=` come from these two contracts; conforming also makes a Duration usable as a
     // `SortedMap`/`SortedSet` key and a `PriorityQueue` element — a timeout wheel is now expressible.
-    public fn bool equals(ref Duration other) { return this.nanos == other.nanos; }
-    public fn Ordering compareTo(ref Duration other) {
+    public const fn bool equals(const ref Duration other) { return this.nanos == other.nanos; }
+    public const fn Ordering compareTo(const ref Duration other) {
         if (this.nanos < other.nanos) { return Ordering::Less; }
         if (this.nanos > other.nanos) { return Ordering::Greater; }
         return Ordering::Equal;
@@ -56,8 +56,8 @@ type value Instant implements Equatable<This>, Comparable<This> {
     public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }
     // As for Duration: comparison is the contract, and it also makes an Instant orderable in a container
     // (a deadline queue). `<=`/`>=` now work too — the raw operators only ever covered `==`/`<`/`>`.
-    public fn bool equals(ref Instant other) { return this.rawNanos == other.rawNanos; }
-    public fn Ordering compareTo(ref Instant other) {
+    public const fn bool equals(const ref Instant other) { return this.rawNanos == other.rawNanos; }
+    public const fn Ordering compareTo(const ref Instant other) {
         if (this.rawNanos < other.rawNanos) { return Ordering::Less; }
         if (this.rawNanos > other.rawNanos) { return Ordering::Greater; }
         return Ordering::Equal;

@@ -5612,7 +5612,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.isSynthCmp = true; mi.isConst = true;   // a derived comparison reads `this` and nothing else
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
                     mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
-                    ParamSig o; o.name = "other"; o.byRef = true; o.className = ci.name; mi.params.push_back(o);
+                    ParamSig o; o.name = "other"; o.byRef = true; o.isConst = true;   // `Equatable` borrows
+                    o.className = ci.name; mi.params.push_back(o);                   // the operand read-only
                     ci.methods["equals"] = mi;   // `fn bool equals(ref This other)`
                 }
             }
@@ -14999,6 +15000,18 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                              + "', which declares it `const fn` — declare it `const fn` here too")
                                 .c_str(),
                             mi->node ? mi->node->line : ci.declLine());
+            // Same argument, one level down: a `const ref T` MEMBER promises the caller its argument comes
+            // back untouched. The caller can only read the member, so an implementation that borrows the
+            // same parameter mutably silently revokes that promise for everyone bound by the contract.
+            if (m.params)
+                for (size_t pi = 0; pi < m.params->size() && pi < mi->params.size(); ++pi) {
+                    auto& mp = (*m.params)[pi];
+                    if (mp && mp->isConst && !mi->params[pi].isConst)
+                        unsupported(("parameter `" + mi->params[pi].name + "` of '" + m.name
+                                     + "' implements contract '" + ii.name + "', which declares it "
+                                       "`const` — declare it `const` here too").c_str(),
+                                    mi->node ? mi->node->line : ci.declLine());
+                }
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
                  << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";

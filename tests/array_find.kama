@@ -6,7 +6,7 @@ import std::collections::{FixedArray};
 type value Tag implements Equatable<This> {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
-    public fn bool equals(ref Tag other) { return this.id == other.id; }
+    public const fn bool equals(const ref Tag other) { return this.id == other.id; }
 }
 
 fn int main() {

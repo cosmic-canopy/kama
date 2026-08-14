@@ -23,7 +23,7 @@ type value Vec2 implements Equatable<This> {
     public Vec2 operator/(float32 s){ return Vec2.of(x: this.x / s, y: this.y / s); }
     public Vec2 operator-()         { return Vec2.of(x: -this.x, y: -this.y); }
     // `==`/`!=` come from `Equatable` (float fields compare with exact IEEE `==`, as they always did).
-    public fn bool equals(ref Vec2 other) { return this.x == other.x && this.y == other.y; }
+    public const fn bool equals(const ref Vec2 other) { return this.x == other.x && this.y == other.y; }
 
     public fn float32 dot(Vec2 r)     { return this.x * r.x + this.y * r.y; }
     public fn float32 lengthSq()      { return this.dot(r: this); }
@@ -54,7 +54,7 @@ type value Vec3 implements Equatable<This> {
     public Vec3 operator*(float32 s){ return Vec3.of(x: this.x * s, y: this.y * s, z: this.z * s); }
     public Vec3 operator/(float32 s){ return Vec3.of(x: this.x / s, y: this.y / s, z: this.z / s); }
     public Vec3 operator-()         { return Vec3.of(x: -this.x, y: -this.y, z: -this.z); }
-    public fn bool equals(ref Vec3 other) { return this.x == other.x && this.y == other.y && this.z == other.z; }
+    public const fn bool equals(const ref Vec3 other) { return this.x == other.x && this.y == other.y && this.z == other.z; }
 
     public fn float32 dot(Vec3 r)     { return this.x*r.x + this.y*r.y + this.z*r.z; }
     public fn float32 lengthSq()      { return this.dot(r: this); }
@@ -84,7 +84,7 @@ type value Vec4 implements Equatable<This> {
     public Vec4 operator*(float32 s){ return Vec4.of(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
     public Vec4 operator/(float32 s){ return Vec4.of(x: this.x/s, y: this.y/s, z: this.z/s, w: this.w/s); }
     public Vec4 operator-()         { return Vec4.of(x: -this.x, y: -this.y, z: -this.z, w: -this.w); }
-    public fn bool equals(ref Vec4 other) { return this.x==other.x && this.y==other.y && this.z==other.z && this.w==other.w; }
+    public const fn bool equals(const ref Vec4 other) { return this.x==other.x && this.y==other.y && this.z==other.z && this.w==other.w; }
 
     public fn float32 dot(Vec4 r)  { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
     public fn float32 lengthSq()   { return this.dot(r: this); }
