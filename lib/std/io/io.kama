@@ -40,7 +40,7 @@ type enum IoError implements Error {
     BrokenPipe,
     Other(int32 code);
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case NotFound:          "not found";
             case PermissionDenied:  "permission denied";

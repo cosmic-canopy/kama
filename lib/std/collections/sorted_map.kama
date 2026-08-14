@@ -559,7 +559,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
 
     // Serialize as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
     // order is hash-arbitrary). Deserialize `put`s each pair back (the tree re-sorts).
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w);
         match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };

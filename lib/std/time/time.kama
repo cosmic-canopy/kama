@@ -20,12 +20,12 @@ type value Duration implements Equatable<This>, Comparable<This> {
     public ctor fromMillis(int64 ms) { return Duration.of(nanos: ms * 1000000i64); }
     public ctor fromSecs(int64 s)    { return Duration.of(nanos: s * 1000000000i64); }
 
-    public fn int64 asNanos()      { return this.nanos; }
-    public fn int64 asMicros()     { return this.nanos / 1000i64; }
-    public fn int64 asMillis()     { return this.nanos / 1000000i64; }
-    public fn int64 asSecs()       { return this.nanos / 1000000000i64; }
-    public fn float64 asSecsF()    { return cast<float64>(this.nanos) / 1000000000.0f64; }
-    public fn bool isNegative()    { return this.nanos < 0i64; }
+    public const fn int64 asNanos()      { return this.nanos; }
+    public const fn int64 asMicros()     { return this.nanos / 1000i64; }
+    public const fn int64 asMillis()     { return this.nanos / 1000000i64; }
+    public const fn int64 asSecs()       { return this.nanos / 1000000000i64; }
+    public const fn float64 asSecsF()    { return cast<float64>(this.nanos) / 1000000000.0f64; }
+    public const fn bool isNegative()    { return this.nanos < 0i64; }
 
     public Duration operator+(Duration r) { return Duration.of(nanos: this.nanos + r.nanos); }
     public Duration operator-(Duration r) { return Duration.of(nanos: this.nanos - r.nanos); }
@@ -46,11 +46,11 @@ type value Instant implements Equatable<This>, Comparable<This> {
     public uint64 rawNanos;
 
     // Time elapsed from an earlier Instant to this one (non-negative when `earlier` truly precedes this).
-    public fn Duration since(Instant earlier) {
+    public const fn Duration since(Instant earlier) {
         return Duration.of(nanos: cast<int64>(this.rawNanos) - cast<int64>(earlier.rawNanos));
     }
     // Time from this Instant until now.
-    public fn Duration elapsed() { return monotonicNow().since(earlier: this); }
+    public const fn Duration elapsed() { return monotonicNow().since(earlier: this); }
 
     public Duration operator-(Instant earlier) { return this.since(earlier: earlier); }
     public Instant operator+(Duration d)       { return Instant.of(rawNanos: this.rawNanos + cast<uint64>(d.nanos)); }

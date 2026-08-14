@@ -75,7 +75,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
         while (i < n) { this.byte(b: cast<uint8>(v & 255ui64)); v = v >> 8ui64; i = i + 1; }
     }
     // A tagged string: 0x0F + u32 LE length + raw bytes. Used for both string VALUES and field NAMES.
-    fn void putStr(ref string s) {
+    fn void putStr(const ref string s) {
         this.byte(b: 15ui8);
         int32 n = cast<int32>(s.length());
         this.putU(v: cast<uint64>(cast<uint32>(n)), n: 4);
@@ -102,7 +102,7 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public unsafe fn void writeF64(float64 v) { this.byte(b: 10ui8); this.putU(v: kama_f64_bits(v: v), n: 8); }
     public fn void writeBool(bool v) { this.byte(b: v ? 12ui8 : 11ui8); }
     public fn void writeChar(char v) { this.byte(b: 14ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
-    public fn void writeString(ref string v) { this.putStr(s: ref v); }
+    public fn void writeString(const ref string v) { this.putStr(s: ref v); }
     public fn void writeNull() { this.byte(b: 13ui8); }
     // --- graph/pointer framing ---
     public fn void writeRef(uint64 id) { this.byte(b: 22ui8); this.putU(v: id, n: 8); }

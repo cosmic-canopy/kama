@@ -26,7 +26,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
     public unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
-    public unsafe fn bool hasNext() {
+    public unsafe const fn bool hasNext() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); }
         return this.pos < this.len;
     }
@@ -98,7 +98,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         this.mods = this.mods + 1;                     // structural change — invalidates any live iterator
     }
 
-    public fn int32 length() { return this.len; }
+    public const fn int32 length() { return this.len; }
 
     // The safe DynamicArray->pointer bridge (see FixedArray.dataPtr): obtaining the buffer pointer is
     // safe; dereferencing it is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
@@ -230,8 +230,8 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
-    public fn bool contains(ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when [T: Equatable<T>] {
+    public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public const fn int32 indexOf(const ref T item) when [T: Equatable<T>] {
         int32 i = 0;
         // `item.equals(other: this[i])`, not `this[i].equals(…)` — the receiver must be the `ref T`
         // identifier so a PRIMITIVE element (int32, whose `equals` is a scalar intrinsic conformance) resolves; a
@@ -244,9 +244,9 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // The element method must be called through a NAMEABLE `ref T` (like `indexOf`'s `equals`), so a
     // primitive element's intrinsic `serialize`/`deserialize` resolves — a raw buffer element `this[i]`
     // isn't a nameable receiver. Hence the `serElem` helper.
-    fn Result<Unit, Owned<Error>> serElem(ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
     // A JSON array: each element serialized in order — a bad element write propagates its boxed error.
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
         while (i < this.len) {

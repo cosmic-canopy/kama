@@ -27,7 +27,7 @@ type view DequeIterMut<T> implements IteratorMut<T> {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
         this.modsp = modsp; this.modsAt = modsAt;
     }
-    public unsafe fn bool hasNext() {
+    public unsafe const fn bool hasNext() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); }
         return this.pos < this.len;
     }
@@ -125,7 +125,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         return Optional::Some(value: give x);
     }
 
-    public fn int32 length() { return this.len; }
+    public const fn int32 length() { return this.len; }
 
     // Logical index [0..len) front-to-back, bounds-checked — `dq[0]` is the front, `dq[len-1]` the back.
     public unsafe ref T operator[](int32 i) {
@@ -166,8 +166,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     // Membership + first logical index, by ELEMENT equality — present only when the element is `Equatable`.
     // Like DynamicArray, the element method is called through a nameable `ref T` so a PRIMITIVE element's
     // scalar intrinsic conformance resolves (a wrapped buffer element isn't a nameable receiver).
-    public fn bool contains(ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when [T: Equatable<T>] {
+    public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public const fn int32 indexOf(const ref T item) when [T: Equatable<T>] {
         int32 i = 0;
         while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
         return 0 - 1;
@@ -175,8 +175,8 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
 
     // --- Serialization (present only when the element is Serialize/Deserialize) --- a JSON array in
     // front-to-back order. The `serElem` helper gives the element a nameable `ref T` receiver.
-    fn Result<Unit, Owned<Error>> serElem(ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
         while (i < this.len) {

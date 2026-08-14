@@ -40,9 +40,9 @@ type value Fixed<B: FixedBacking<B>, const F: int32> implements Equatable<This>,
 
     // Divide rather than shift: a right shift floors, and `toInt` truncates toward zero, so the two
     // disagree on every negative fraction (-1.5 is -1, not -2).
-    public fn int32   toInt()     { return cast<int32>(this.raw.wide() / (1i64 << F)); }
-    public fn float64 toFloat()   { return cast<float64>(this.raw.wide()) / cast<float64>(1i64 << F); }
-    public fn float32 toFloat32() { return cast<float32>(this.raw.wide()) / cast<float32>(1i64 << F); }
+    public const fn int32   toInt()     { return cast<int32>(this.raw.wide() / (1i64 << F)); }
+    public const fn float64 toFloat()   { return cast<float64>(this.raw.wide()) / cast<float64>(1i64 << F); }
+    public const fn float32 toFloat32() { return cast<float32>(this.raw.wide()) / cast<float32>(1i64 << F); }
 
     // Every operator is the same three steps — widen into the accumulator, do the arithmetic at width,
     // narrow back. The narrowing cast inside `fromWide` is the overflow signal.
@@ -64,7 +64,7 @@ type value Fixed<B: FixedBacking<B>, const F: int32> implements Equatable<This>,
     }
 
     // Saturating variants — never trap: the accumulator is the same, only the narrowing differs.
-    public fn This satAdd(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() + r.raw.wide())); }
-    public fn This satSub(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() - r.raw.wide())); }
-    public fn This satMul(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
+    public const fn This satAdd(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() + r.raw.wide())); }
+    public const fn This satSub(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() - r.raw.wide())); }
+    public const fn This satMul(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
 }

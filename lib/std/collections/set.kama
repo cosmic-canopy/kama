@@ -38,22 +38,22 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
         Map<K, Unit, H, A> inner = Map.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         this.m = give inner;
     }
-    public fn bool contains(ref K key) { return this.m.contains(key: key); }
+    public const fn bool contains(const ref K key) { return this.m.contains(key: key); }
     // `Map.remove` now returns the removed VALUE moved out (`Optional<Unit>` here — the payload is nothing).
     // A Set has no value to reclaim, so it reports presence as a `bool`; the `Unit` binds and drops.
     public fn bool remove(ref K key) {
         Optional<Unit> hit = this.m.remove(key: key);   // bind first — a method call isn't a valid match subject
         return match (hit) { case Some(value: u): true; case None: false; };
     }
-    public fn int32 length() { return this.m.length(); }
+    public const fn int32 length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
     public fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 
     // Serialize as a JSON array of the members. Serialize needs a `Copyable` key (the key iterator yields
     // copies); deserialize just `add`s each key (no copy). A yielded `k` is a nameable local, so `k.serialize`
     // resolves for a primitive key directly.
-    fn Result<Unit, Owned<Error>> serElem(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
         w.beginArray(count: cast<usize>(this.m.length()));
         foreach (K k in this.m) {
             Result<Unit, Owned<Error>> __sr = this.serElem(k: k, w: w);

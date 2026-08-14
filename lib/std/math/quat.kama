@@ -34,16 +34,16 @@ type value Quat {
     }
     public Quat operator+(Quat r) { return Quat.of(x: this.x+r.x, y: this.y+r.y, z: this.z+r.z, w: this.w+r.w); }
 
-    public fn Quat scale(float32 s)  { return Quat.of(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
-    public fn Quat conjugate()       { return Quat.of(x: 0.0f32-this.x, y: 0.0f32-this.y, z: 0.0f32-this.z, w: this.w); }
-    public fn float32 dot(Quat r)    { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
-    public fn float32 lengthSq()     { return this.dot(r: this); }
-    public fn float32 length()       { float32 q = this.lengthSq(); return sqrt(x: q); }
-    public fn Quat normalized()      { return this.scale(s: 1.0f32 / this.length()); }
-    public fn Quat inverse()         { return this.conjugate().scale(s: 1.0f32 / this.lengthSq()); }
+    public const fn Quat scale(float32 s)  { return Quat.of(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
+    public const fn Quat conjugate()       { return Quat.of(x: 0.0f32-this.x, y: 0.0f32-this.y, z: 0.0f32-this.z, w: this.w); }
+    public const fn float32 dot(Quat r)    { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
+    public const fn float32 lengthSq()     { return this.dot(r: this); }
+    public const fn float32 length()       { float32 q = this.lengthSq(); return sqrt(x: q); }
+    public const fn Quat normalized()      { return this.scale(s: 1.0f32 / this.length()); }
+    public const fn Quat inverse()         { return this.conjugate().scale(s: 1.0f32 / this.lengthSq()); }
 
     // rotate a vector: v + 2w(u×v) + 2(u×(u×v)), u = (x,y,z)
-    public fn Vec3 rotate(Vec3 v) {
+    public const fn Vec3 rotate(Vec3 v) {
         Vec3 u = Vec3.of(x: this.x, y: this.y, z: this.z);
         Vec3 uv = u.cross(r: v);
         Vec3 uuv = u.cross(r: uv);
@@ -68,7 +68,7 @@ type value Quat {
         return a.scale(s: wa) + bb.scale(s: wb);
     }
 
-    public fn Mat3 toMat3() {
+    public const fn Mat3 toMat3() {
         float32 xx=this.x*this.x; float32 yy=this.y*this.y; float32 zz=this.z*this.z;
         float32 xy=this.x*this.y; float32 xz=this.x*this.z; float32 yz=this.y*this.z;
         float32 wx=this.w*this.x; float32 wy=this.w*this.y; float32 wz=this.w*this.z;
@@ -77,7 +77,7 @@ type value Quat {
         Vec3 c2 = Vec3.of(x: 2.0f32*(xz+wy),        y: 2.0f32*(yz-wx),        z: 1.0f32-2.0f32*(xx+yy));
         return Mat3.fromCols(c0: c0, c1: c1, c2: c2);
     }
-    public fn Mat4 toMat4() {
+    public const fn Mat4 toMat4() {
         float32 xx=this.x*this.x; float32 yy=this.y*this.y; float32 zz=this.z*this.z;
         float32 xy=this.x*this.y; float32 xz=this.x*this.z; float32 yz=this.y*this.z;
         float32 wx=this.w*this.x; float32 wy=this.w*this.y; float32 wz=this.w*this.z;

@@ -25,12 +25,12 @@ type value Vec2 implements Equatable<This> {
     // `==`/`!=` come from `Equatable` (float fields compare with exact IEEE `==`, as they always did).
     public const fn bool equals(const ref Vec2 other) { return this.x == other.x && this.y == other.y; }
 
-    public fn float32 dot(Vec2 r)     { return this.x * r.x + this.y * r.y; }
-    public fn float32 lengthSq()      { return this.dot(r: this); }
-    public fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
-    public fn Vec2 normalized()       { float32 k = 1.0f32 / this.length(); return Vec2.of(x: this.x * k, y: this.y * k); }
-    public fn Vec2 hadamard(Vec2 r)   { return Vec2.of(x: this.x * r.x, y: this.y * r.y); }
-    public fn float32 distance(Vec2 r){ float32 dx = this.x - r.x; float32 dy = this.y - r.y; return sqrt(x: dx*dx + dy*dy); }
+    public const fn float32 dot(Vec2 r)     { return this.x * r.x + this.y * r.y; }
+    public const fn float32 lengthSq()      { return this.dot(r: this); }
+    public const fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
+    public const fn Vec2 normalized()       { float32 k = 1.0f32 / this.length(); return Vec2.of(x: this.x * k, y: this.y * k); }
+    public const fn Vec2 hadamard(Vec2 r)   { return Vec2.of(x: this.x * r.x, y: this.y * r.y); }
+    public const fn float32 distance(Vec2 r){ float32 dx = this.x - r.x; float32 dy = this.y - r.y; return sqrt(x: dx*dx + dy*dy); }
 
     public ctor lerp(Vec2 a, Vec2 b, float32 t) {
         return Vec2.of(x: a.x + (b.x-a.x)*t, y: a.y + (b.y-a.y)*t);
@@ -56,13 +56,13 @@ type value Vec3 implements Equatable<This> {
     public Vec3 operator-()         { return Vec3.of(x: -this.x, y: -this.y, z: -this.z); }
     public const fn bool equals(const ref Vec3 other) { return this.x == other.x && this.y == other.y && this.z == other.z; }
 
-    public fn float32 dot(Vec3 r)     { return this.x*r.x + this.y*r.y + this.z*r.z; }
-    public fn float32 lengthSq()      { return this.dot(r: this); }
-    public fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
-    public fn Vec3 normalized()       { float32 k = 1.0f32 / this.length(); return Vec3.of(x: this.x*k, y: this.y*k, z: this.z*k); }
-    public fn Vec3 hadamard(Vec3 r)   { return Vec3.of(x: this.x*r.x, y: this.y*r.y, z: this.z*r.z); }
-    public fn Vec3 cross(Vec3 r)      { return Vec3.of(x: this.y*r.z - this.z*r.y, y: this.z*r.x - this.x*r.z, z: this.x*r.y - this.y*r.x); }
-    public fn float32 distance(Vec3 r){ float32 dx=this.x-r.x; float32 dy=this.y-r.y; float32 dz=this.z-r.z; return sqrt(x: dx*dx+dy*dy+dz*dz); }
+    public const fn float32 dot(Vec3 r)     { return this.x*r.x + this.y*r.y + this.z*r.z; }
+    public const fn float32 lengthSq()      { return this.dot(r: this); }
+    public const fn float32 length()        { float32 q = this.lengthSq(); return sqrt(x: q); }
+    public const fn Vec3 normalized()       { float32 k = 1.0f32 / this.length(); return Vec3.of(x: this.x*k, y: this.y*k, z: this.z*k); }
+    public const fn Vec3 hadamard(Vec3 r)   { return Vec3.of(x: this.x*r.x, y: this.y*r.y, z: this.z*r.z); }
+    public const fn Vec3 cross(Vec3 r)      { return Vec3.of(x: this.y*r.z - this.z*r.y, y: this.z*r.x - this.x*r.z, z: this.x*r.y - this.y*r.x); }
+    public const fn float32 distance(Vec3 r){ float32 dx=this.x-r.x; float32 dy=this.y-r.y; float32 dz=this.z-r.z; return sqrt(x: dx*dx+dy*dy+dz*dz); }
 
     public ctor lerp(Vec3 a, Vec3 b, float32 t) {
         return Vec3.of(x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t, z: a.z+(b.z-a.z)*t);
@@ -86,9 +86,9 @@ type value Vec4 implements Equatable<This> {
     public Vec4 operator-()         { return Vec4.of(x: -this.x, y: -this.y, z: -this.z, w: -this.w); }
     public const fn bool equals(const ref Vec4 other) { return this.x==other.x && this.y==other.y && this.z==other.z && this.w==other.w; }
 
-    public fn float32 dot(Vec4 r)  { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
-    public fn float32 lengthSq()   { return this.dot(r: this); }
-    public fn float32 length()     { float32 q = this.lengthSq(); return sqrt(x: q); }
-    public fn Vec4 normalized()    { float32 k = 1.0f32 / this.length(); return Vec4.of(x: this.x*k, y: this.y*k, z: this.z*k, w: this.w*k); }
-    public fn Vec3 xyz()           { return Vec3.of(x: this.x, y: this.y, z: this.z); }
+    public const fn float32 dot(Vec4 r)  { return this.x*r.x + this.y*r.y + this.z*r.z + this.w*r.w; }
+    public const fn float32 lengthSq()   { return this.dot(r: this); }
+    public const fn float32 length()     { float32 q = this.lengthSq(); return sqrt(x: q); }
+    public const fn Vec4 normalized()    { float32 k = 1.0f32 / this.length(); return Vec4.of(x: this.x*k, y: this.y*k, z: this.z*k, w: this.w*k); }
+    public const fn Vec3 xyz()           { return Vec3.of(x: this.x, y: this.y, z: this.z); }
 }

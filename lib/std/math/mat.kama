@@ -12,8 +12,8 @@ type value Mat2 {
     public ctor identity() {
         return Mat2.fromCols(c0: Vec2.of(x: 1.0f32, y: 0.0f32), c1: Vec2.of(x: 0.0f32, y: 1.0f32));
     }
-    public fn float32 get(int32 c, int32 r) { Vec2 col = this.cols[c]; return r == 0 ? col.x : col.y; }
-    public fn Vec2 transform(Vec2 v) {
+    public const fn float32 get(int32 c, int32 r) { Vec2 col = this.cols[c]; return r == 0 ? col.x : col.y; }
+    public const fn Vec2 transform(Vec2 v) {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
         return Vec2.of(x: c0.x*v.x + c1.x*v.y, y: c0.y*v.x + c1.y*v.y);
     }
@@ -21,12 +21,12 @@ type value Mat2 {
         Vec2 r0 = this.transform(v: r.cols[0]); Vec2 r1 = this.transform(v: r.cols[1]);
         return Mat2.fromCols(c0: r0, c1: r1);
     }
-    public fn Mat2 transpose() {
+    public const fn Mat2 transpose() {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
         return Mat2.fromCols(c0: Vec2.of(x: c0.x, y: c1.x), c1: Vec2.of(x: c0.y, y: c1.y));
     }
-    public fn float32 determinant() { Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1]; return c0.x*c1.y - c1.x*c0.y; }
-    public fn Mat2 inverse() {
+    public const fn float32 determinant() { Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1]; return c0.x*c1.y - c1.x*c0.y; }
+    public const fn Mat2 inverse() {
         Vec2 c0 = this.cols[0]; Vec2 c1 = this.cols[1];
         float32 k = 1.0f32 / (c0.x*c1.y - c1.x*c0.y);
         return Mat2.fromCols(c0: Vec2.of(x: c1.y*k, y: 0.0f32 - c0.y*k),
@@ -43,8 +43,8 @@ type value Mat3 {
                               c1: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32),
                               c2: Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32));
     }
-    public fn float32 get(int32 c, int32 r) { Vec3 col = this.cols[c]; return r == 0 ? col.x : (r == 1 ? col.y : col.z); }
-    public fn Vec3 transform(Vec3 v) {
+    public const fn float32 get(int32 c, int32 r) { Vec3 col = this.cols[c]; return r == 0 ? col.x : (r == 1 ? col.y : col.z); }
+    public const fn Vec3 transform(Vec3 v) {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
         return Vec3.of(x: c0.x*v.x + c1.x*v.y + c2.x*v.z,
                     y: c0.y*v.x + c1.y*v.y + c2.y*v.z,
@@ -54,17 +54,17 @@ type value Mat3 {
         Vec3 r0 = this.transform(v: r.cols[0]); Vec3 r1 = this.transform(v: r.cols[1]); Vec3 r2 = this.transform(v: r.cols[2]);
         return Mat3.fromCols(c0: r0, c1: r1, c2: r2);
     }
-    public fn Mat3 transpose() {
+    public const fn Mat3 transpose() {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
         return Mat3.fromCols(c0: Vec3.of(x: c0.x, y: c1.x, z: c2.x),
                               c1: Vec3.of(x: c0.y, y: c1.y, z: c2.y),
                               c2: Vec3.of(x: c0.z, y: c1.z, z: c2.z));
     }
-    public fn float32 determinant() {
+    public const fn float32 determinant() {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
         return c0.x*(c1.y*c2.z - c2.y*c1.z) - c1.x*(c0.y*c2.z - c2.y*c0.z) + c2.x*(c0.y*c1.z - c1.y*c0.z);
     }
-    public fn Mat3 inverse() {
+    public const fn Mat3 inverse() {
         Vec3 c0 = this.cols[0]; Vec3 c1 = this.cols[1]; Vec3 c2 = this.cols[2];
         float32 m00=c0.x; float32 m10=c0.y; float32 m20=c0.z;   // m<r><c>
         float32 m01=c1.x; float32 m11=c1.y; float32 m21=c1.z;
@@ -111,13 +111,13 @@ type value Mat4 {
     }
 
     // element at column c, row r (0-based)
-    public fn float32 get(int32 c, int32 r) {
+    public const fn float32 get(int32 c, int32 r) {
         Vec4 col = this.cols[c];
         return r == 0 ? col.x : (r == 1 ? col.y : (r == 2 ? col.z : col.w));
     }
 
     // result = M * v (column-vector): a linear combination of the columns.
-    public fn Vec4 transform(Vec4 v) {
+    public const fn Vec4 transform(Vec4 v) {
         Vec4 c0 = this.cols[0];
         Vec4 c1 = this.cols[1];
         Vec4 c2 = this.cols[2];
@@ -128,12 +128,12 @@ type value Mat4 {
             z: c0.z*v.x + c1.z*v.y + c2.z*v.z + c3.z*v.w,
             w: c0.w*v.x + c1.w*v.y + c2.w*v.z + c3.w*v.w);
     }
-    public fn Vec3 transformPoint(Vec3 p) {
+    public const fn Vec3 transformPoint(Vec3 p) {
         Vec4 pv = Vec4.of(x: p.x, y: p.y, z: p.z, w: 1.0f32);
         Vec4 r = this.transform(v: pv);
         return Vec3.of(x: r.x / r.w, y: r.y / r.w, z: r.z / r.w);
     }
-    public fn Vec3 transformDir(Vec3 d) {
+    public const fn Vec3 transformDir(Vec3 d) {
         Vec4 dv = Vec4.of(x: d.x, y: d.y, z: d.z, w: 0.0f32);
         Vec4 r = this.transform(v: dv);
         return Vec3.of(x: r.x, y: r.y, z: r.z);
@@ -147,7 +147,7 @@ type value Mat4 {
         Vec4 r3 = this.transform(v: rhs.cols[3]);
         return Mat4.fromCols(c0: r0, c1: r1, c2: r2, c3: r3);
     }
-    public fn Mat4 transpose() {
+    public const fn Mat4 transpose() {
         Vec4 c0 = this.cols[0];
         Vec4 c1 = this.cols[1];
         Vec4 c2 = this.cols[2];
@@ -217,7 +217,7 @@ type value Mat4 {
     }
 
     // ---- determinant + general inverse (MESA-style adjugate; column-major m[c][r]) ----
-    public fn float32 determinant() {
+    public const fn float32 determinant() {
         Vec4 a = this.cols[0]; Vec4 b = this.cols[1]; Vec4 c = this.cols[2]; Vec4 d = this.cols[3];
         // m<row><col>: cols[col].{x=row0,y=row1,z=row2,w=row3}
         float32 m0=a.x; float32 m4=a.y; float32 m8=a.z;  float32 m12=a.w;
@@ -230,7 +230,7 @@ type value Mat4 {
         float32 i12= -m4*m9*m14  + m4*m10*m13 + m8*m5*m14 - m8*m6*m13 - m12*m5*m10 + m12*m6*m9;
         return m0*i0 + m1*i4 + m2*i8 + m3*i12;
     }
-    public fn Mat4 inverse() {
+    public const fn Mat4 inverse() {
         Vec4 a = this.cols[0]; Vec4 b = this.cols[1]; Vec4 c = this.cols[2]; Vec4 d = this.cols[3];
         float32 m0=a.x; float32 m4=a.y; float32 m8=a.z;  float32 m12=a.w;
         float32 m1=b.x; float32 m5=b.y; float32 m9=b.z;  float32 m13=b.w;

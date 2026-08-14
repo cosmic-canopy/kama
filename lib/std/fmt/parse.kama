@@ -26,7 +26,7 @@ export { ParseError, FromStr, parse, FromStrRadix, parseRadix };
 type enum ParseError implements Error {
     Empty, InvalidDigit, OutOfRange;
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) {
             case Empty:        "cannot parse an empty string";
             case InvalidDigit: "invalid digit";

@@ -36,7 +36,7 @@ type contract FixedBacking<B is This> for value, intrinsic {
 // would just move the width back into a name.
 
 type intrinsic <int8> implements FixedBacking<This> {
-    public fn int64 wide() { return cast<int64>(this); }
+    public const fn int64 wide() { return cast<int64>(this); }
     public ctor int8 fromWide(int64 v) { return cast<int8>(v); }
     public ctor int8 clampWide(int64 v) {
         int64 lo = 0i64 - 128i64;          // int8Min
@@ -46,7 +46,7 @@ type intrinsic <int8> implements FixedBacking<This> {
 }
 
 type intrinsic <int16> implements FixedBacking<This> {
-    public fn int64 wide() { return cast<int64>(this); }
+    public const fn int64 wide() { return cast<int64>(this); }
     public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
     public ctor int16 clampWide(int64 v) {
         int64 lo = 0i64 - 32768i64;        // int16Min
@@ -56,7 +56,7 @@ type intrinsic <int16> implements FixedBacking<This> {
 }
 
 type intrinsic <int32> implements FixedBacking<This> {
-    public fn int64 wide() { return cast<int64>(this); }
+    public const fn int64 wide() { return cast<int64>(this); }
     public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
     public ctor int32 clampWide(int64 v) {
         int64 lo = 0i64 - 2147483648i64;   // int32Min

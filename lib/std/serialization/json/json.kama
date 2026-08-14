@@ -93,7 +93,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
     }
     // A JSON string literal: quotes + escaping for ", \, the common control shorts, and \u00XX otherwise.
     // Bytes >= 0x20 (incl. UTF-8 continuation bytes) pass through verbatim — valid since the source is UTF-8.
-    fn void quoted(ref string s) {
+    fn void quoted(const ref string s) {
         this.byte(b: 34ui8);                        // "
         int32 n = cast<int32>(s.length());
         int32 i = 0;
@@ -141,7 +141,7 @@ type resource JsonWriter<W: Writer> implements Serializer {
         this.sep(); this.ascii(s: f64Str(v: v)); this.needComma = true;
     }
     public fn void writeBool(bool v) { this.sep(); this.ascii(s: boolStr(b: v)); this.needComma = true; }
-    public fn void writeString(ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
+    public fn void writeString(const ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
     public fn void writeNull() { this.sep(); this.ascii(s: "null"); this.needComma = true; }
     // --- graph/pointer framing ---
     // A pointer field is written as a bare integer id (0 = null/expired). The {"root":id,"objects":{...}}

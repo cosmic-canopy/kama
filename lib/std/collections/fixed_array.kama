@@ -20,7 +20,7 @@ type view FixedArrayIter<T> implements Iterator<T> {
 type view FixedArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
     public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
-    public fn bool hasNext() { return this.pos < this.len; }
+    public const fn bool hasNext() { return this.pos < this.len; }
     public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
@@ -58,7 +58,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         this.allocBuffer(size: size);
     }
 
-    public fn int32 length() { return this.size; }
+    public const fn int32 length() { return this.size; }
 
     public unsafe ref T operator[](int32 i) {
         if (i < 0 || i >= this.size) { panic(msg: "FixedArray index out of bounds"); }
@@ -80,13 +80,13 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
-    public unsafe fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
+    public unsafe const fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
     public unsafe fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
-    public fn bool contains(ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
-    public fn int32 indexOf(ref T item) when [T: Equatable<T>] {
+    public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public const fn int32 indexOf(const ref T item) when [T: Equatable<T>] {
         int32 i = 0;
         // `item.equals(other: this[i])` (receiver is the `ref T` identifier) so a primitive element resolves
         // — see DynamicArray.indexOf. `equals` is symmetric.
@@ -105,8 +105,8 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Serialize as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserialize is a
     // follow-up: an `FixedArray` is fixed-size but a JSON array's length is unknown until read, and transferring a
     // temp `DynamicArray`'s buffer into an `FixedArray` without double-dropping resource elements needs a buffer-steal ctor.
-    fn Result<Unit, Owned<Error>> serElem(ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
-    public fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.size));
         int32 i = 0;
         while (i < this.size) {

@@ -66,6 +66,9 @@ type view MapValueIterMut<V> implements IteratorMut<V> {
     public unsafe ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
+    // NOT `const fn`, unlike every other container's: this one SCANS FORWARD past empty slots to find
+    // the next occupied one, so asking the question advances the cursor. (`IteratorMut.hasNext` is
+    // therefore not a const member either — `SlotMap`'s does the same.)
     public unsafe fn bool hasNext() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
@@ -164,7 +167,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         this.reserve(n: capacity);
     }
 
-    public fn int32 length() { return this.len; }
+    public const fn int32 length() { return this.len; }
 
     // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
     // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
@@ -181,12 +184,12 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // `H::finish` avalanches it before it is masked to a slot. `H` defaults to `DefaultHasher`
     // (splitmix64) so `Map<K,V>` is unchanged; `Map<K,V,FastHasher>` swaps in a cheaper mixer. The
     // static call resolves per monomorphization (like `K::deserialize`) — no stored hasher instance.
-    fn uint64 hashKey(ref K k) { return H::finish(raw: k.hash()); }
-    fn bool eqKeys(ref K a, ref K b) { return a.equals(other: b); }
+    const fn uint64 hashKey(const ref K k) { return H::finish(raw: k.hash()); }
+    const fn bool eqKeys(const ref K a, const ref K b) { return a.equals(other: b); }
 
     // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
-    unsafe fn int32 slotOf(ref K key) {
+    unsafe const fn int32 slotOf(const ref K key) {
         if (this.cap == 0) { return 0 - 1; }
         int32 i = cast<int32>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
         while (true) {
@@ -198,7 +201,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return 0 - 1;
     }
 
-    public fn bool contains(ref K key) { return this.slotOf(key: key) >= 0; }
+    public const fn bool contains(const ref K key) { return this.slotOf(key: key) >= 0; }
 
     // Deep-copy a stored value through a typed `ref V` borrow. `copy this.vals[i]` directly can't deep-copy
     // an owning element: `this.vals` is a raw `UnsafePtr<V>`, whose index has no known element class, so the `copy`
@@ -370,9 +373,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
     // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
     // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
-    fn Result<Unit, Owned<Error>> serKey(ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    fn Result<Unit, Owned<Error>> serVal(ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
-    public unsafe fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
         w.beginArray(count: cast<usize>(this.len));
         int32 i = 0;
         while (i < this.cap) {
