@@ -161,10 +161,18 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
 // with no path and the real ones only arrive per module, inside emitProgram's loop. So every diagnostic
 // raised by collectProgram (the whole front end) reported an empty file, in stderr AND in the structured
 // `Diagnostic.file` an editor places it by. `_collectingUnitPath` is the unit a collect pass is walking;
-// prefer it when it is set, and a late whole-program check scopes it from the ClassInfo's `declFile`.
+// a late whole-program check scopes it from the ClassInfo's `declFile`.
+//
+// `_collectingUnitPath` WINS when it is set, and that ordering is the whole point: it names the unit whose
+// declarations are being walked RIGHT NOW, which is strictly more specific than "the module being written".
+// It used to lose to a non-empty `_sourcePath`, so a single-file `kama check user.kama` — where
+// `_sourcePath` is set from the start — reported every imported module's declaration against `user.kama`.
+// The LINE was right and the FILE was wrong, which is the worst shape a diagnostic can take: it points a
+// reader (or an editor's go-to) confidently at an innocent line of the wrong file. `ScopedStr` restores the
+// previous value at the end of each collect pass, so body emission is unaffected.
 const std::string& CEmitter::diagFile() const
 {
-    return _sourcePath.empty() && !_collectingUnitPath.empty() ? _collectingUnitPath : _sourcePath;
+    return !_collectingUnitPath.empty() ? _collectingUnitPath : _sourcePath;
 }
 
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
