@@ -156,13 +156,24 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
     return out;
 }
 
+// Which file a diagnostic belongs to. `_sourcePath` is the module currently being WRITTEN, which is right
+// during body emission and empty everywhere else in a multi-file build — the driver constructs that emitter
+// with no path and the real ones only arrive per module, inside emitProgram's loop. So every diagnostic
+// raised by collectProgram (the whole front end) reported an empty file, in stderr AND in the structured
+// `Diagnostic.file` an editor places it by. `_collectingUnitPath` is the unit a collect pass is walking;
+// prefer it when it is set, and a late whole-program check scopes it from the ClassInfo's `declFile`.
+const std::string& CEmitter::diagFile() const
+{
+    return _sourcePath.empty() && !_collectingUnitPath.empty() ? _collectingUnitPath : _sourcePath;
+}
+
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
     ++_unsupported;
     const std::string display = demangleForDisplay(rawWhat);
     const char* what = display.c_str();
     std::fprintf(stderr, "kama: warning: unsupported %s at %s:%d (not yet lowered)\n",
-                 what, _sourcePath.c_str(), srcLine);
+                 what, diagFile().c_str(), srcLine);
     // Structured form for the query surface. `unsupported` is a hard error at the driver (unsupported > 0
     // fails the build), so it surfaces as an Error in an editor even though the stderr line says "warning".
     // We only know the line here (call sites pass `node->line`); precise column/end come with spans (T3).
@@ -171,7 +182,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
     d.severity = DiagSeverity::Error;
     d.code = "unsupported";
     d.message = what;
-    d.file = _sourcePath;
+    d.file = diagFile();
     _diagnostics.push_back(d);
     *_out << "/* TODO(kama): unsupported " << what << " */";
 }
@@ -183,13 +194,13 @@ void CEmitter::warning(const char* rawWhat, int srcLine)
 {
     const std::string display = demangleForDisplay(rawWhat);
     const char* what = display.c_str();
-    std::fprintf(stderr, "kama: warning: %s at %s:%d\n", what, _sourcePath.c_str(), srcLine);
+    std::fprintf(stderr, "kama: warning: %s at %s:%d\n", what, diagFile().c_str(), srcLine);
     Diagnostic d;
     d.line = srcLine;
     d.severity = DiagSeverity::Warning;
     d.code = "warning";
     d.message = what;
-    d.file = _sourcePath;
+    d.file = diagFile();
     _diagnostics.push_back(d);
 }
 
@@ -4767,6 +4778,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
             ClassInfo ci = buildVariantClassInfo(ed, name);
+            ci.declFile = unit && unit->name ? *unit->name : std::string();
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
                 // each `Optional<Arg>` becomes a specialized ClassInfo at discovery (registerGenericTypeInst).
@@ -4951,6 +4963,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.scope = _nsCtx.scope;
         ci.usings = _nsCtx.usings;
         ci.symbolAliases = _nsCtx.symbolAliases;
+        ci.declFile = unit && unit->name ? *unit->name : std::string();   // for a late whole-program check
         ci.isExternStruct = isExt;
         if (isExt) _externNames.insert(ci.name);
         ci.node = cd;
@@ -10315,6 +10328,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             if (ci == _classes.end()) {
                 if (!_enums.count(name)) continue;   // unknown/errored earlier — already diagnosed
                 _classes[name] = buildVariantClassInfo(ed, name);
+                _classes[name].declFile = u && u->name ? *u->name : std::string();
                 _enums.erase(name);   // now a tagged class: match/construction take the variant path
                 ci = _classes.find(name);
             }
@@ -18213,6 +18227,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
+        // Every diagnostic these four raise is ABOUT a declaration in `u`, and in a multi-file build
+        // `_sourcePath` is still "" here — so without this they report no file at all. See diagFile().
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         collectSignatures(u);
         collectEnums(u);
         collectInterfaces(u);
@@ -18303,6 +18320,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         ClassInfo& ci = kv.second;
         unsigned k = implementerKind(ci);
         if (!k) continue;
+        // A whole-program check has no unit context of its own, so borrow the one collection recorded —
+        // otherwise every rejection here reports an empty file in a multi-file build. See diagFile().
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);
         const std::string kw  = kamaImplKindListText(k);
         const std::string art = (k == IK_Enum || k == IK_Intrinsic) ? "an " : "a ";
         for (auto& base : ci.interfaces) {

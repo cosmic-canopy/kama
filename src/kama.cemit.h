@@ -373,6 +373,11 @@ struct ClassInfo {
     std::string                       scope;                 // mangle prefix ("" for collections)
     std::vector<std::string>          usings;
     std::map<std::string, std::string> symbolAliases;        // per-symbol import alias -> mangled global
+    // The declaring file, for a diagnostic raised about this type OUTSIDE per-module emission — where
+    // `_sourcePath` is whatever module is being written and, in a multi-file build, is still "" (the
+    // driver constructs that emitter with no path; the real ones arrive per module inside emitProgram).
+    // Collection knows the unit; a late whole-program check does not, so it is recorded here.
+    std::string                       declFile;
 
     // FFI: an `extern class` is an external C struct — kama uses its
     // fields for access but never emits it (a header/linked code provides it),
@@ -1949,6 +1954,7 @@ private:
 
     // Both render their message through demangleForDisplay first, so an internal mangled name
     // (`_F4__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
+    const std::string& diagFile() const;   // the file a diagnostic belongs to — see the definition
     void unsupported(const char* rawWhat, int srcLine);
     void warning(const char* rawWhat, int srcLine);   // soft: reported, does NOT fail the build
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
