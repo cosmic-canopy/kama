@@ -423,6 +423,11 @@ struct CollectionInfo {
 struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params;
                          bool isPlaceReturn = false;     // `fn ref T m()` — vtbl slot/cast spells `T*`
                          bool isCtor = false;            // a contract-required `ctor` (M8a) — compile-time guarantee, NOT a vtbl slot
+                         // `const fn` on the member. Unlike `unsafe` — which marks a BODY, and so is
+                         // rejected on a bodiless contract member — `const` constrains what a CALLER may
+                         // pass as receiver, so it is signature-level and the contract may demand it: an
+                         // implementation of a `const fn` member must itself be `const fn`.
+                         bool isConst = false;
                          // The declaration's NAME identifier, for the reference index (M6 B3c). Null for
                          // the operator arm, which has no name node — as MethodInfo::node already is.
                          SharedIdentifier nameId; };
@@ -1896,6 +1901,7 @@ private:
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
+    void        checkConstPlaceReturn(bool isConst, bool isRef, const std::string& m, int line);
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
     // name of a const generic param bound in this instantiation — see the definition for why.
     void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);

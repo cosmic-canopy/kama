@@ -1,0 +1,13 @@
+// Deep const, from the inside: within a `const fn` the receiver is immutable, so a write to a field
+// through `this` is rejected. The call GATE (a non-const method on a const receiver) has been guarded
+// since M24b by elem_method_const; the write half never had a fixture, which is why this one exists.
+type value Counter {
+    int32 n;
+    public ctor make(int32 start) { this.n = start; }
+    public const fn void bad() { this.n = this.n + 1; }   // writes through `const this` -> REJECT
+}
+fn int32 main() {
+    Counter c = Counter.make(start: 1);
+    c.bad();
+    return c.n;
+}

@@ -47,6 +47,14 @@ hand reliably (see the trap below).
 ./dev matrix         # test all + every tools/check-*.sh guard — the pre-commit gate
 ```
 
+**Run a test task ONCE, into a file, then read the file.** These take minutes, not seconds — `./dev
+matrix` builds the compiler and runs the whole corpus plus every guard. Re-running it to see a
+different slice of the same output is pure waste:
+
+```sh
+./dev matrix > /tmp/matrix.log 2>&1; tail -5 /tmp/matrix.log   # then grep the SAME file for details
+```
+
 Notes:
 - **Per-platform notes live in `docs/platforms/`** — one page per host that needs more than `./dev`.
   Only [windows.md](docs/platforms/windows.md) exists so far, because macOS and Linux are where this

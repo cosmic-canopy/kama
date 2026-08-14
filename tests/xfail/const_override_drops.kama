@@ -1,0 +1,16 @@
+// An `override` may not drop `const`. The caller only ever sees the BASE declaration, so a const
+// receiver that is legal there has to stay legal for whatever subclass sits behind the slot —
+// otherwise the override mutates through a binding its caller was promised was immutable.
+type virtual(maxDepth: 1) resource Base
+{
+    int32 n;
+    public ctor make() { this.n = 1; }
+    public fn int32 go() { return this.read(); }
+    protected virtual const fn int32 read() { return this.n; }
+}
+type final resource Leaf extends Base
+{
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int32 read() { return 7; }      // drops `const` -> REJECT
+}
+fn int main() { Leaf l = Leaf.make(); return l.go(); }

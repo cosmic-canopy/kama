@@ -1,0 +1,14 @@
+// `const fn ref T` launders const in one line, with no `unsafe` anywhere: the place it returns is a
+// writable alias into `this`, so `c.place() = 99` mutates a `const` binding. Rejected at the
+// declaration. The two halves get separate names instead — `get`/`getRef`, `iterator`/`iterMut`,
+// `peek`/`peekRef` — which is what the stdlib already spells.
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 5; }
+    public const fn ref int32 place() { return this.n; }   // a const method handing out a place -> REJECT
+}
+fn int32 main() {
+    const Cell c = Cell.make();
+    c.place() = 99;
+    return 0;
+}

@@ -4657,7 +4657,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         bool bad = namesThis(md->returnType);
                         if (md->params) for (auto& pp : *md->params) if (pp && namesThis(pp->type)) bad = true;
                         if (bad) rejectThis(*md->name->value, md->line);
-                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->name});
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst, md->name});
                     }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
@@ -4845,7 +4845,8 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ci.genSerialize = true;
                     ci.interfaces.push_back("Serialize"); ci.staticOnlyInterfaces.push_back("Serialize");
                     MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
+                    mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
+                    mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
                     scanTypeForCollections(mi.returnType);
                     ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
                     ci.methods["serialize"] = mi;
@@ -5187,6 +5188,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
+                        checkConstPlaceReturn(md->isConst, md->isRef, *md->name->value, md->line);
                         if (md->whenParams)   // `fn … when [P: B, …]` — conditional method (AND of all)
                             for (size_t c = 0; c < md->whenParams->size(); ++c) {
                                 auto& p = (*md->whenParams)[c];
@@ -5521,7 +5523,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!hasItf("Serialize")) ci.interfaces.push_back("Serialize");
                 if (!ci.methods.count("serialize")) {
                     MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
-                    mi.isSynthSer = true; mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
+                    mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
+                    mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
                     scanTypeForCollections(mi.returnType);   // monomorphize Result<Unit, Owned<Error>>
                     ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
                     ci.methods["serialize"] = mi;   // `fn Result<Unit, Owned<Error>> serialize(ref Serializer w)`
@@ -5550,7 +5553,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!hasItf("Format")) ci.interfaces.push_back("Format");
                 if (!ci.methods.count("format")) {
                     MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
-                    mi.isSynthFormat = true;
+                    mi.isSynthFormat = true; mi.isConst = true;   // the dump writes to `f`, never to `this`
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
                     mi.returnType = synthId("void", IDENTIFIER_VOID_VAL);
                     ParamSig f; f.name = "f"; f.byRef = true; f.className = "Formatter"; mi.params.push_back(f);
@@ -5606,7 +5609,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!hasItf(eqName)) ci.interfaces.push_back(eqName);
                 if (!ci.methods.count("equals")) {
                     MethodInfo mi; mi.cName = ci.name + "__equals"; mi.visibility = Visibility::Public;
-                    mi.isSynthCmp = true;
+                    mi.isSynthCmp = true; mi.isConst = true;   // a derived comparison reads `this` and nothing else
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
                     mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
                     ParamSig o; o.name = "other"; o.byRef = true; o.className = ci.name; mi.params.push_back(o);
@@ -5617,7 +5620,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!hasItf("Hashable")) ci.interfaces.push_back("Hashable");
                 if (!ci.methods.count("hash")) {
                     MethodInfo mi; mi.cName = ci.name + "__hash"; mi.visibility = Visibility::Public;
-                    mi.isSynthCmp = true;
+                    mi.isSynthCmp = true; mi.isConst = true;   // ditto — a hash is a pure read of the fields
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
                     mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
                     ci.methods["hash"] = mi;     // `fn uint64 hash()`
@@ -6352,6 +6355,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.params = std::move(params);
         mi.returnType = ret;
         mi.isIntrinsic = true;
+        mi.isConst = true;                    // `string` is immutable: every one of its intrinsics reads.
+                                              // The ones that "change" a string (`concat`/`trim`/`substring`
+                                              // /case) return a NEW owned string and leave the receiver alone.
         mi.visibility = Visibility::Public;   // an intrinsic (a string op) IS that type's public API —
                                               // string's `equals` is real, so its nominal Equatable (recorded
                                               // in `interfaces`) resolves to it for a `<K: Equatable>` bound
@@ -6466,14 +6472,16 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     ci.collKind = CollKind::Fixed;
     ci.collElemClass = elemClass;
     ci.destructible = false;                   // a value — owns no heap
-    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret) {
+    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret,
+                         bool isConst) {
         MethodInfo mi; mi.cName = cName + "__" + mname;
-        mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true;
+        mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
         ci.methods[mname] = mi;
     };
-    addMethod("get",    { ParamSig{"index", false, ""} }, elem);
-    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} }, SharedIdentifier());
-    addMethod("length", {}, SharedIdentifier());
+    addMethod("get",    { ParamSig{"index", false, ""} }, elem, true);
+    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} },
+              SharedIdentifier(), false);   // the one intrinsic here that writes
+    addMethod("length", {}, SharedIdentifier(), true);
     _classes[cName] = ci;
 }
 
@@ -6514,7 +6522,9 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
     ci.collElemClass = elemClass; ci.destructible = true;
     auto addM = [&](const std::string& m, std::vector<ParamSig> p) {
         MethodInfo mi; mi.cName = cName + "__" + m; mi.params = std::move(p);
-        mi.isIntrinsic = true; ci.methods[m] = mi;
+        // `valid`/`expired`/`tryUpgrade`/`downgrade` all read the handle and hand back a fresh one; none
+        // reseats the receiver, so all are callable on a const smart pointer.
+        mi.isIntrinsic = true; mi.isConst = true; ci.methods[m] = mi;
     };
     // Intrinsics (not auto-deref forwarded): Owned has none; Shared has valid();
     // Weak has tryUpgrade() (-> Optional<Shared<T>>) and expired().
@@ -6827,7 +6837,9 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
                     auto bare = [&](const std::string& n){ return synthId(n); };
                     // downgrade intrinsic on Rc_Shape (-> RcWeak_Shape); dispatched via _classes[cls].methods
-                    MethodInfo dm; dm.cName = mangled + "__" + downName; dm.isIntrinsic = true; dm.returnType = bare(weakMangled);
+                    MethodInfo dm; dm.cName = mangled + "__" + downName; dm.isIntrinsic = true;
+                    dm.isConst = true;   // hands back a fresh Weak; the Shared it reads is untouched
+                    dm.returnType = bare(weakMangled);
                     _classes[mangled].methods[downName] = dm;
                     // RcWeak_Shape.tryUpgrade returns Optional<Rc_Shape> (not the default Optional<Shared<elem>>)
                     auto opt = bare("Optional");
@@ -9064,6 +9076,14 @@ bool CEmitter::giveOfBorrowedBinding(SharedExpression e, int line)
 std::string CEmitter::moveOnlySource(SharedExpression e, int line)
 {
     if (giveOfBorrowedBinding(e, line)) return "";
+    // A move MUTATES its source — it leaves it holding a moved-from value — so a const binding may not be
+    // one. Every other write through a const root is caught by `checkConstWrite` on an assignment LHS; a
+    // hand-off writes through the RHS instead, which is why it needed its own guard. This is the single
+    // choke point: every real move reaches here (a `copy`/retain does not, and correctly so).
+    if (rootIsConst(rootBinding(e)))
+        unsupported(("cannot `give` out of `const " + rootBinding(e) + "` — a move leaves its source "
+                     "holding a moved-from value, which a const binding may not become; `copy` it, or "
+                     "drop the `const`").c_str(), line);
     if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
         std::string nm = id->value ? *id->value : "";
         if ((!id->qualifier || id->qualifier->empty()) && _moveState.count(nm)) return nm;
@@ -9736,13 +9756,21 @@ void CEmitter::buildVtables()
                 unsupported(("'override fn " + mname + "' overrides no virtual method in any base class "
                              "(the base method must be `virtual`/`abstract`)").c_str(),
                             mi.node ? mi.node->line : 0);
-            // a `final` slot may not be re-overridden by any subclass.
+            // a `final` slot may not be re-overridden by any subclass, and an override may not drop
+            // `const`: the caller sees the BASE declaration, so a const receiver that is legal there must
+            // stay legal for every subclass that could be behind the slot. (Adding `const` in an override
+            // is fine — it only narrows what the override itself may do.)
             if (mi.isOverride)
                 for (ClassInfo* b = ci->base; b; b = b->base) {
                     auto it = b->methods.find(mname);
                     if (it != b->methods.end() && it->second.isVirtual) {
                         if (it->second.isFinal)
                             unsupported(("cannot override '" + mname + "': it is `final` in '" + b->name + "'").c_str(),
+                                        mi.node ? mi.node->line : 0);
+                        if (it->second.isConst && !mi.isConst)
+                            unsupported(("'override fn " + mname + "' drops `const`: it is `const fn` in '"
+                                         + b->name + "', so a caller may invoke it on a const receiver — "
+                                         "declare the override `const fn` too").c_str(),
                                         mi.node ? mi.node->line : 0);
                         break;   // nearest declaring base wins
                     }
@@ -10372,6 +10400,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             mi.params       = paramSigsOf(md->params);
             mi.node         = md;
             mi.isConst      = md->isConst;
+            checkConstPlaceReturn(md->isConst, md->isRef, mname, md->line);
             mi.isUnsafe     = modHas(md->modifiers, "unsafe");
             mi.isPlaceReturn = md->isRef;
             // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
@@ -10701,10 +10730,23 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
     // Phrased over the (type, contract) pair rather than one spelling of the impl, so it reads correctly
     // whether the conformance was declared on the type or supplied by an impl block.
     if (const std::vector<InterfaceMethod>* need = contractMethods(contract))
-        for (auto& nm : *need)
-            if (!tci.methods.count(nm.name))
+        for (auto& nm : *need) {
+            auto have = tci.methods.find(nm.name);
+            if (have == tci.methods.end()) {
                 unsupported(("`" + tkey + "` implements `" + contract + "` but is missing method `"
                              + nm.name + "` required by the contract").c_str(), line);
+                continue;
+            }
+            // Constness is part of the promise, not a local detail. A contract that declares `const fn`
+            // says its callers may hold the implementer `const` — an implementation that drops the marker
+            // makes that false for everyone bound by the contract. The converse is fine: an impl may be
+            // MORE const than the contract asks, which only widens where it can be called.
+            if (nm.isConst && !have->second.isConst)
+                unsupported(("`" + tkey + "` implements `" + contract + "` but its `" + nm.name
+                             + "` is not `const fn` — the contract declares it `const fn`, so a caller "
+                               "holding a const receiver may call it; declare the implementation "
+                               "`const fn` too").c_str(), line);
+        }
 }
 
 // a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
@@ -11708,6 +11750,24 @@ void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, in
 // writing TO or THROUGH a `const` binding is a hard error (deep const, so
 // `c.field = …` / `c[i] = …` are caught too), and a `const` data member may only be
 // written in the constructor.
+// `const fn ref T m()` is const-laundering in one line, with no `unsafe` anywhere: a place returned out
+// of a const method is a writable alias into `this`, so `c.place() = 99;` mutates a `const` binding — deep
+// const defeated by the one construct that hands out an address instead of a value.
+//
+// The fix is the one kama's own library already spells: name the two halves apart. `get`/`getRef`,
+// `iterator`/`iterMut`, `peek`/`peekRef` — the reading half is const, the borrowing half is not, and a
+// caller holding a const receiver reaches only the first. (This is Rust's `get`/`get_mut`, not C++'s
+// const-overloading, which would need every accessor written twice.) A read-only place — C#'s
+// `ref readonly` — would be the strictly more expressive answer, but it needs a const-place type kama
+// does not have, and the corpus asks for it nowhere.
+void CEmitter::checkConstPlaceReturn(bool isConst, bool isRef, const std::string& m, int line)
+{
+    if (isConst && isRef)
+        unsupported(("`const fn ref " + m + "` returns a writable place out of a const method, which "
+                     "launders const away — a caller can assign through it. Drop `const`, or return by "
+                     "value (the `get`/`getRef` split the stdlib uses)").c_str(), line);
+}
+
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
@@ -14113,6 +14173,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         && call->args && call->args->size() == 1) {
         rejectRawOutsideUnsafe("`addr(of: …)`", call->line);
         SharedExpression a = (*call->args)[0]->expression;
+        // …and it may not launder const. The pointer that comes back is writable, so taking it from a
+        // const root would hand out exactly the mutable alias every other rule here denies — `addr` is
+        // just the spelling that skips the assignment LHS `checkConstWrite` watches. There is no
+        // expression-level `const UnsafePtr<T>` to hand back instead (the const pointer type exists only
+        // as a PARAMETER, for const-correct FFI), so the honest answer is to reject rather than to widen
+        // the type system for it. This is also what keeps a `mods`-counter iterator factory — which is
+        // `addr(of: this.mods)` — correctly outside the const surface.
+        if (rootIsConst(rootBinding(a)))
+            unsupported(("`addr(of: …)` on `const " + rootBinding(a) + "` hands back a writable pointer "
+                         "into a const binding — const is deep, and a raw address is not an exception")
+                            .c_str(), call->line);
         // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
         // UnsafePtr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that
         // storage by hand, so the hole becomes a live value and its destructor comes back. Restricted to
@@ -14918,6 +14989,15 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             if (mi->visibility != Visibility::Public)
                 unsupported(("method '" + m.name + "' implements contract '" + ii.name
                              + "' and must be declared `public`").c_str(),
+                            mi->node ? mi->node->line : ci.declLine());
+            // …and constness is part of that public contract. `const fn` on the member promises every
+            // caller that a const receiver is enough; dispatch goes through a slot, so the implementation
+            // is the only place that promise can be broken. (Only one direction: an impl may be MORE const
+            // than the member asks — that widens where it can be called and breaks nothing.)
+            if (m.isConst && !mi->isConst)
+                unsupported(("method '" + m.name + "' implements contract '" + ii.name
+                             + "', which declares it `const fn` — declare it `const fn` here too")
+                                .c_str(),
                             mi->node ? mi->node->line : ci.declLine());
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
@@ -17859,9 +17939,20 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
         ClassInfo* owner = nullptr;
         MethodInfo* mi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &owner) : nullptr;
-        if (mi && !mi->isConst && !mi->isIntrinsic)
+        if (mi && !mi->isConst)
             unsupported(("cannot call non-const method `" + method + "` on a const receiver "
                          "(declare it `const fn` if it does not mutate)").c_str(), call->line);
+        // A CONTRACT-typed receiver resolves in `_interfaces`, not `_classes`, so the lookup above comes
+        // back null and the call sails through. The contract member is the only thing visible here — the
+        // concrete implementation is behind a vtable slot — which is exactly why the member carries
+        // `isConst` (see InterfaceMethod) and why conformance now enforces it.
+        if (!mi && isInterface(mcls))
+            if (const std::vector<InterfaceMethod>* need = contractMethods(mcls))
+                for (auto& nm : *need)
+                    if (nm.name == method && !nm.isConst)
+                        unsupported(("cannot call non-const contract method `" + method + "` on a const "
+                                     "receiver (declare it `const fn` on `" + mcls
+                                     + "` if it does not mutate)").c_str(), call->line);
     }
     // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
     if (isSmartPtrClass(cls))

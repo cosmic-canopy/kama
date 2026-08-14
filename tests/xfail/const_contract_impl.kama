@@ -1,0 +1,11 @@
+// A contract declares `const fn`, so every caller bound by it may hold the implementer const. Dispatch
+// goes through a slot, so the implementation is the only place that promise can break — an impl that
+// drops the marker is rejected. (The converse is fine: an impl may be MORE const than the member asks.)
+// Contrast `unsafe`, which is rejected ON the member: that marks a BODY, and a member has none.
+type contract Readable for value { const fn int32 read(); }
+type value A implements Readable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 read() { return this.n; }             // not `const fn` -> REJECT
+}
+fn int32 main() { A a = A.make(n: 0); return a.read(); }

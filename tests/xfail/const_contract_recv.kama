@@ -1,0 +1,12 @@
+// A CONTRACT-typed receiver held const. The concrete implementation is behind a vtable slot, so the
+// member declaration is the only constness visible at the call — which is why the member carries the
+// marker and why the gate has to resolve contracts, not only classes.
+type contract Shape for value { fn int32 area(); const fn int32 sides(); }
+type value Sq implements Shape {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+    public const fn int32 sides() { return 4; }
+}
+fn int32 bad(const Shape sh) { return sh.area(); }        // `area` is not `const fn` -> REJECT
+fn int32 main() { Sq q = Sq.make(s: 3); return bad(sh: q); }

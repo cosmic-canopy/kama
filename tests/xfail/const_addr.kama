@@ -1,0 +1,10 @@
+// `addr(of: …)` is the spelling that skips the assignment LHS the const-write check watches: the
+// pointer it returns is writable, so taking it from a const root hands out the mutable alias every
+// other rule denies. There is no expression-level `const UnsafePtr<T>` to hand back instead (the const
+// pointer type exists only as a PARAMETER, for const-correct FFI), so this is rejected outright.
+type value Cell {
+    int32 n;
+    public ctor make() { this.n = 5; }
+    public unsafe const fn UnsafePtr<int32> leak() { return addr(of: this.n); }   // -> REJECT
+}
+fn int32 main() { Cell c = Cell.make(); return 0; }

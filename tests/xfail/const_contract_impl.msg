@@ -1,0 +1,1 @@
+declares it `const fn`

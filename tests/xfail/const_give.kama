@@ -1,0 +1,9 @@
+// A move MUTATES its source: it leaves it holding a moved-from value, which is precisely what a const
+// binding may not become. Every other write through a const root is caught on an assignment LHS; a
+// hand-off writes through the RHS instead, so it needed its own guard.
+import std::collections::{DynamicArray};
+fn int32 main() {
+    const DynamicArray<int32> a = DynamicArray.empty();
+    DynamicArray<int32> b = give a;                        // moves out of a const binding -> REJECT
+    return b.length();
+}
