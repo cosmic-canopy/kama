@@ -93,6 +93,27 @@ case "$task" in
       n=${n%.kama}; n=${n#tests/}
       src="tests/$n.kama"; exp="tests/$n.expect"
       [ -f "$src" ] || { echo "MISSING $n (no $src)"; rc=1; continue; }
+      mkdir -p "$tmp/$(dirname "$n")"   # `xfail/<name>` and any other nested fixture
+      # A NEGATIVE fixture inverts the contract: it must FAIL to build, cleanly (a signal is a compiler
+      # crash, not a rejection), and with the error tests/xfail/<name>.msg names. Same contract as
+      # run_tests.sh's xfail leg — without this arm the inner loop could not run a negative fixture at
+      # all, which is precisely the kind that guards a "kama REJECTS this" claim.
+      case "$n" in
+        xfail/*)
+          # `set -e` would kill the shell on the rejection itself, so the `if` reads the status instead
+          if "$KAMA" build "$src" -o "$tmp/$n" >"$tmp/$n.err" 2>&1; then got=0; else got=$?; fi
+          if [ "$got" -eq 0 ]; then echo "FAIL $n (compiled, but must be REJECTED)"; rc=1; continue; fi
+          if [ "$got" -ge 128 ]; then
+            echo "FAIL $n (compiler CRASHED, signal $((got-128)) — a rejection must be clean)"
+            sed 's/^/    /' "$tmp/$n.err" | head -3; rc=1; continue
+          fi
+          msg="tests/$n.msg"
+          if [ -f "$msg" ] && ! grep -qF "$(cat "$msg")" "$tmp/$n.err"; then
+            echo "FAIL $n (rejected, but error missing \"$(cat "$msg")\")"
+            sed 's/^/    /' "$tmp/$n.err" | head -3; rc=1; continue
+          fi
+          echo "PASS $n (rejected)"; continue ;;
+      esac
       if ! "$KAMA" build "$src" -o "$tmp/$n" >"$tmp/$n.err" 2>&1; then
         echo "FAIL $n (build)"; sed 's/^/    /' "$tmp/$n.err" | head -5; rc=1; continue
       fi

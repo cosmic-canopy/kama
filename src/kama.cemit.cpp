@@ -4500,6 +4500,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
+        sig.isUnsafe = fn->isUnsafe;     // `unsafe fn …` — the body may touch raw memory
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
 
         // kama has no overloading, so a name is declared once per namespace — but this was a bare
@@ -4613,6 +4614,16 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     if (md->body)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
+                    // …and having no body, it has nothing to be `unsafe`. A contract member is a CONDUIT:
+                    // both ends are already closed by the member's own types — an implementation whose
+                    // signature names `UnsafePtr` must be an `unsafe fn`, and a caller cannot invoke one
+                    // without holding an `UnsafePtr`. That is what keeps `A: Allocator` a safe bound while
+                    // `allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
+                    if (modHas(md->modifiers, "unsafe"))
+                        unsupported(("`unsafe` marks a function BODY, and the `contract` member `"
+                                     + (md->name && md->name->value ? *md->name->value : std::string())
+                                     + "` has none — the implementation carries the marker, not the "
+                                       "declaration").c_str(), md->line);
                     // A contract signature may not name `This`. It is the erasure hazard in one line: a
                     // vtbl slot has to give `This` ONE type, so it binds the contract, while the concrete
                     // function behind the slot bound the implementing type — two bindings for one function
@@ -5038,6 +5049,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
                 else if (mv == "expose")
                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", cd->line);
+                else if (mv == "unsafe")
+                    unsupported("`unsafe` marks a function BODY, and a type has none — mark the members that "
+                                "touch raw memory instead", cd->line);
             }
 #if !KAMA_INHERITANCE
         // A `virtual class` goes too, not just `extends` — it carries a vtable with or without a subclass,
@@ -5066,6 +5080,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (!mod->value) continue;
                             if (*mod->value == "expose")
                                 unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", fd->line);
+                            if (*mod->value == "unsafe")
+                                unsupported("`unsafe` marks a function BODY, and a field has none — declaring "
+                                            "an `UnsafePtr<T>` field is safe; it is reading and writing one "
+                                            "that requires an `unsafe fn`", fd->line);
                         }
                     // A `value` picks field visibility PER FIELD (default private, `public` allowed;
                     // `protected` belongs to an extensible `resource`). A `resource` field is always
@@ -5164,6 +5182,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + ci.name
                                          + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md->line);
                         mi.isFinal    = modHas(md->modifiers, "final");
+                        mi.isUnsafe   = modHas(md->modifiers, "unsafe");
+                        // `unsafe` describes a BODY. A contract member and an `abstract` method are
+                        // bodiless, so there is nothing in them to be unsafe — and a contract could not
+                        // usefully specify one anyway: everything it might force is already forced by the
+                        // member's own types (an implementation whose signature names `UnsafePtr` must be
+                        // an `unsafe fn`; a caller must hold an `UnsafePtr` to invoke it). This is what
+                        // keeps `A: Allocator` a perfectly safe bound.
+                        if (mi.isUnsafe && !md->body)
+                            unsupported(("`unsafe` marks a function BODY, and `" + *md->name->value
+                                         + "` has none — the implementation carries the marker, not the "
+                                           "declaration").c_str(), md->line);
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
@@ -5393,6 +5422,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.arity      = arity;
                     mi.isStatic   = (arity == 2);            // the free form takes no `this`
                     mi.isPlaceReturn = d->refReturn;         // `ref T operator[]` — the result is a place (T*)
+                    mi.isUnsafe   = modHas(od->modifiers, "unsafe");   // `unsafe ref T operator[]` — View indexes raw memory
                     mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
                     ci.methods[opName] = mi;
                 } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
@@ -10258,6 +10288,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             mi.params       = paramSigsOf(md->params);
             mi.node         = md;
             mi.isConst      = md->isConst;
+            mi.isUnsafe     = modHas(md->modifiers, "unsafe");
             mi.isPlaceReturn = md->isRef;
             // a static factory (no `self`) — e.g. `deserialize`; a `ctor` (construction-model M8e:
             // `deserialize` is a fallible ctor) is ALWAYS static, like the in-class ctor path.
@@ -10385,7 +10416,8 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
         _returnIsPlace = md->isRef;
         emitMethodOrCtorBody(eci.name + "__" + *md->name->value, ret.c_str(),
                              md->params, md->body, eci, md->isConst,
-                             modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
+                             modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
+                             modHas(md->modifiers, "unsafe"));
         _returnIsPlace = false;
     }
 }
@@ -14370,6 +14402,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _pendingParamDtors.clear();
     _currentClass = nullptr;
     _currentFunc  = name;   // a free function may be a `friend` accessor
+    _inUnsafe = fn->isUnsafe;   // `unsafe` is the FUNCTION now — the whole body is the relaxed region
     if (fn->parameters) {
         for (auto& p : *fn->parameters) {
             if (!p->identifier || !p->identifier->value) continue;
@@ -14864,6 +14897,9 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 {
     line(ci.dtorNode ? ci.dtorNode->line : (ci.node ? ci.node->line : 0));
     _currentClass = &ci;
+    // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
+    // exactly like any other body.
+    _inUnsafe = ci.dtorNode && modHas(ci.dtorNode->modifiers, "unsafe");
     _refParams.clear();
     _paramNames.clear();
     _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
@@ -14940,11 +14976,13 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 // Emit a method or constructor body with `self`/field/param context set up.
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
-                                    ClassInfo& owner, bool isConstMethod, bool isStatic)
+                                    ClassInfo& owner, bool isConstMethod, bool isStatic,
+                                    bool isUnsafe)
 {
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
+    _inUnsafe = isUnsafe;         // `unsafe` is the FUNCTION now — the whole body is the relaxed region
     // A named `ctor` is emitted as a static factory (no `self` PARAMETER), but it does have a `this`: the
     // value it is building. Storage for it is synthesized below, so `this` must resolve here even though
     // the C signature is static.
@@ -15100,7 +15138,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             // `return e` addresses the place (see the ReturnNode path, gated on `_returnIsPlace`).
             std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
             _returnIsPlace = mi.isPlaceReturn;
-            emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false, mi.arity == 2);
+            emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false,
+                                 mi.arity == 2, mi.isUnsafe);
             _returnIsPlace = false;
             continue;
         }
@@ -15121,7 +15160,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // `self->__vptr` store). But it DOES construct — its bare local of the return type is the object
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
         _inNamedCtorBody = mi.isCtor;
-        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic);
+        emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
+                             mi.isUnsafe);
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
@@ -18729,7 +18769,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 _returnIsPlace = md->isRef;
                 emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
-                                     modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
+                                     modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
+                                     modHas(md->modifiers, "unsafe"));
                 _returnIsPlace = false;
             }
         }
@@ -18907,7 +18948,8 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             _returnIsPlace = md->isRef;
             emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
-                                 modHas(md->modifiers, "static") || md->isCtor);   // a `ctor` is static (no `self`)
+                                 modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
+                                 modHas(md->modifiers, "unsafe"));
             _returnIsPlace = false;
         }
     }

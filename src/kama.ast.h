@@ -360,6 +360,7 @@ public:
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
     bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
+    bool isUnsafe = false;         // `unsafe fn …` — the BODY may touch raw memory (C#'s meaning). Calling one is free.
     SharedAttributeList attributes; // `@interrupt`/`@section(".x")` (null when none) — MCU codegen attributes
     FunctionDeclarationNode(CodeGenContext& context,  SharedModifier modifier, SharedIdentifier returnType, SharedIdentifier name,
                             SharedParameterList parameters, SharedBlock block, SharedStringList typeParams = SharedStringList() )

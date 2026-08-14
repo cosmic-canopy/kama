@@ -86,6 +86,7 @@ struct FuncSig {
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
+    bool                   isUnsafe = false;       // `unsafe fn …` — the body may touch raw memory
     FunctionDeclarationNode* node = nullptr;  // decl site (LSP def-site table; unused by emission)
 };
 
@@ -142,6 +143,9 @@ struct MethodInfo {
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in kama_runtime.h, not AST
     bool                         isConst = false;     // `const fn …` — non-mutating
+    bool                         isUnsafe = false;    // `unsafe fn …` — the BODY may touch raw memory (C#'s
+                                                      // meaning). Calling one is unrestricted; it is the
+                                                      // signature, not the marker, that bounds the danger.
     Visibility                   visibility = Visibility::Private;
     bool                         isFinal = false;     // `final fn` — seals a virtual slot
     bool                         isStatic = false;    // `static fn` — no implicit `self`; called `Type::m(...)`
@@ -1655,7 +1659,7 @@ private:
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
                               SharedParameterList params, SharedBlock body,
                               ClassInfo& owner, bool isConstMethod = false,
-                              bool isStatic = false);
+                              bool isStatic = false, bool isUnsafe = false);
     // Bring zero-inited storage of class `ty` (named `nm` in C) up to a valid empty state — field
     // initializers, each field's `default` ctor, and the vtable pointer. Shared by the bare class-local
     // declaration path and by a `ctor`'s implicit `this` storage, which must agree exactly.

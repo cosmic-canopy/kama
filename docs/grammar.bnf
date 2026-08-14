@@ -367,6 +367,14 @@ modifier
   | PUBLIC
   | FINAL
   | STATIC
+  | UNSAFE
+    /* `unsafe` on a MEMBER is a general modifier, not a dedicated slot like `const_opt` below — and the
+       difference is forced, not stylistic. `const`/`hardware` need a slot because they also begin other
+       declaration forms (a const field, a `hardware` static), so an `unsafe_opt` sitting in front of
+       `const_opt` would make the parser REDUCE the empty `unsafe_opt` on lookahead CONST while
+       `constant_declaration` wants to SHIFT it — a shift/reduce conflict. `unsafe` begins no other member
+       form, so the list has room for it. It is also what C# does (`public unsafe` and `unsafe public` both
+       parse there); the emitter, not the grammar, is what rejects it where no body exists to be unsafe. */
   | DEFAULT      /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL
     /* `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — how many levels may still be added BELOW this
@@ -406,11 +414,11 @@ function_declaration
 
   | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
-  | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
-  | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+  | attribute_list function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
-  | function_modifier_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
@@ -1176,6 +1184,15 @@ method_name
 const_opt
   : /* Nothing */
   | CONST
+  ;
+/* `unsafe fn …` — the raw-memory qualifier on a FREE function. C#'s meaning, not Rust's: it marks the
+   BODY as doing dangerous things, so CALLING an `unsafe fn` is unrestricted and its visibility is
+   ordinary (`public unsafe fn` is the common case in the stdlib). A free function has no modifier LIST
+   to join — `function_modifier_opt` holds `expose` alone — hence a slot here and a `modifier` there.
+   `unsafe` begins no other module-level form, so the empty reduction is unambiguous. */
+unsafe_opt
+  : /* Nothing */
+  | UNSAFE
   ;
 /* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
    modifier) so it appears only where it is meaningful: a module `static` and an `UnsafePtr<T>` parameter. */

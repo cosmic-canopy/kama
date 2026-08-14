@@ -1,0 +1,8 @@
+// Declaring an `UnsafePtr<T>` FIELD is safe — every container and every `type extern value` depends on
+// it, and so does the MCU `static` path. It is READING and WRITING one that requires an `unsafe fn`.
+// A field has no body, so the marker has nothing to describe there.
+type resource Buf {
+    public unsafe UnsafePtr<int32> data;
+}
+
+fn int32 main() { return 0; }

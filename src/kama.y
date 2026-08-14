@@ -383,7 +383,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt hardware_opt method_name kind_name
+%type <string> const_opt hardware_opt unsafe_opt method_name kind_name
 
 %start compilation_unit
 
@@ -788,6 +788,14 @@ modifier
   | PUBLIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | FINAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | STATIC   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | UNSAFE   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+    /* `unsafe` on a MEMBER is a general modifier, not a dedicated slot like `const_opt` below — and the
+       difference is forced, not stylistic. `const`/`hardware` need a slot because they also begin other
+       declaration forms (a const field, a `hardware` static), so an `unsafe_opt` sitting in front of
+       `const_opt` would make the parser REDUCE the empty `unsafe_opt` on lookahead CONST while
+       `constant_declaration` wants to SHIFT it — a shift/reduce conflict. `unsafe` begins no other member
+       form, so the list has room for it. It is also what C# does (`public unsafe` and `unsafe public` both
+       parse there); the emitter, not the grammar, is what rejects it where no body exists to be unsafe. */
   | DEFAULT   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* `default ctor` — the canonical zero-arg ctor */
   | VIRTUAL   { $$ = std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $1); }
     /* `virtual(maxDepth: 2)` / `abstract(maxDepth: 1)` — how many levels may still be added BELOW this
@@ -837,32 +845,11 @@ function_declaration
       fn->isComptime = true;
       $$ = fn;
   }
-  | function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $7, $9 );
-      STAMP_LOC(fn->name, @4);   /* precise name span (an unmodified fn's @$ starts at the previous token) */
+  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+      STAMP_LOC(fn->name, @5);   /* precise name span (an unmodified fn's @$ starts at the previous token) */
+      fn->isUnsafe = ($2 != nullptr);
       /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
-      rejectFnTypeParamDefault($5, &@5, scanner);
-      if ($5 && !$5->empty()) {
-          fn->typeParams = std::make_shared<StringList>();
-          fn->typeBounds = std::make_shared<BoundsList>();
-          fn->typePins  = std::make_shared<IdentifierList>();
-          fn->constParams = std::make_shared<StringList>();
-          fn->constTypes  = std::make_shared<IdentifierList>();
-          for (auto& p : *$5) if (p && p->value) {
-              fn->typeParams->push_back(p->value);
-              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
-              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
-              fn->constTypes->push_back(p->isConstParam ? p->constType : SharedIdentifier());
-              if (p->isConstParam) fn->constParams->push_back(p->value);
-          }
-      }
-      $$ = fn;
-  }
-  | attribute_list function_modifier_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
-      /* `@interrupt`/`@section(".x")` fn — MCU codegen attributes (mirrors the attributed-TYPE form). */
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
-      STAMP_LOC(fn->name, @5);
-      fn->attributes = $1;
       rejectFnTypeParamDefault($6, &@6, scanner);
       if ($6 && !$6->empty()) {
           fn->typeParams = std::make_shared<StringList>();
@@ -880,21 +867,45 @@ function_declaration
       }
       $$ = fn;
   }
-  | function_modifier_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+  | attribute_list function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+      /* `@interrupt`/`@section(".x")` fn — MCU codegen attributes (mirrors the attributed-TYPE form). */
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $11 );
+      STAMP_LOC(fn->name, @6);
+      fn->attributes = $1;
+      fn->isUnsafe = ($3 != nullptr);
+      rejectFnTypeParamDefault($7, &@7, scanner);
+      if ($7 && !$7->empty()) {
+          fn->typeParams = std::make_shared<StringList>();
+          fn->typeBounds = std::make_shared<BoundsList>();
+          fn->typePins  = std::make_shared<IdentifierList>();
+          fn->constParams = std::make_shared<StringList>();
+          fn->constTypes  = std::make_shared<IdentifierList>();
+          for (auto& p : *$7) if (p && p->value) {
+              fn->typeParams->push_back(p->value);
+              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
+              fn->constTypes->push_back(p->isConstParam ? p->constType : SharedIdentifier());
+              if (p->isConstParam) fn->constParams->push_back(p->value);
+          }
+      }
+      $$ = fn;
+  }
+  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       /* `fn ref T f(ref …)` — a place-returning FREE function (mirrors the `fn ref T` method form).
          The returned place must borrow a `ref`/`out` param (a free fn has no `this`); the escape
          check at the ReturnNode place path enforces it. */
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
-      STAMP_LOC(fn->name, @5);
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $11 );
+      STAMP_LOC(fn->name, @6);
       fn->isRef = true;
-      rejectFnTypeParamDefault($6, &@6, scanner);
-      if ($6 && !$6->empty()) {
+      fn->isUnsafe = ($2 != nullptr);
+      rejectFnTypeParamDefault($7, &@7, scanner);
+      if ($7 && !$7->empty()) {
           fn->typeParams = std::make_shared<StringList>();
           fn->typeBounds = std::make_shared<BoundsList>();
           fn->typePins  = std::make_shared<IdentifierList>();
           fn->constParams = std::make_shared<StringList>();
           fn->constTypes  = std::make_shared<IdentifierList>();
-          for (auto& p : *$6) if (p && p->value) {
+          for (auto& p : *$7) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
               fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
@@ -1744,6 +1755,15 @@ method_name
 const_opt
   : /* Nothing */   { $$ = SharedString(); }
   | CONST           { $$ = $1; }
+  ;
+/* `unsafe fn …` — the raw-memory qualifier on a FREE function. C#'s meaning, not Rust's: it marks the
+   BODY as doing dangerous things, so CALLING an `unsafe fn` is unrestricted and its visibility is
+   ordinary (`public unsafe fn` is the common case in the stdlib). A free function has no modifier LIST
+   to join — `function_modifier_opt` holds `expose` alone — hence a slot here and a `modifier` there.
+   `unsafe` begins no other module-level form, so the empty reduction is unambiguous. */
+unsafe_opt
+  : /* Nothing */   { $$ = SharedString(); }
+  | UNSAFE          { $$ = $1; }
   ;
 /* `hardware T` — the MCU/MMIO qualifier (emits C `volatile`). A dedicated slot (not a general
    modifier) so it appears only where it is meaningful: a module `static` and an `UnsafePtr<T>` parameter. */

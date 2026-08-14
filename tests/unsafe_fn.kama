@@ -1,0 +1,33 @@
+// `unsafe fn` — the raw-memory seam at FUNCTION granularity (C#'s meaning, not Rust's): the marker says
+// this BODY touches raw memory, so calling one is unrestricted and its visibility is ordinary. That is
+// what makes `public unsafe fn` the common stdlib shape rather than a contradiction.
+//
+// Covers every position the marker reaches: a method, a `ctor`, a destructor, an `operator[]`, and a free
+// function — plus the point of the model, which is that safe `main` calls all of them with no ceremony.
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+
+type resource Cell {
+    UnsafePtr<int32> p;
+
+    public unsafe ctor of(int32 v) {
+        this.p = cast<UnsafePtr<int32>>(malloc(n: cast<usize>(4)));
+        this.p[0] = v;
+        return this;
+    }
+    public unsafe fn int32 get() { return this.p[0]; }
+    public unsafe fn void set(int32 v) { this.p[0] = v; }
+    public unsafe ref int32 operator[](usize i) { return this.p[i]; }
+    public unsafe ~Cell() { free(p: cast<UnsafePtr>(this.p)); }
+}
+
+// A FREE `unsafe fn` — `std::math`/`std::net`/`std::fs` are free-function-shaped, so requiring a host
+// type purely to satisfy a visibility rule would be arbitrary.
+unsafe fn int32 peek(UnsafePtr<int32> q) { return q[0]; }
+
+fn int32 main() {
+    Cell c = Cell.of(v: 7);      // an unsafe ctor, called from safe code
+    c.set(v: 35);                // an unsafe method, called from safe code
+    c[0] = c[0] + 1;             // an unsafe place-returning operator[]
+    return c.get();              // 36
+}

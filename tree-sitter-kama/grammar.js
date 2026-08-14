@@ -77,6 +77,7 @@ const PRIMITIVE_TYPES = [
 const MODIFIERS = [
   'abstract', 'extern', 'override', 'private', 'protected',
   'public', 'final', 'static', 'default', 'virtual', 'immutable',
+  'unsafe',
 ];
 
 /** kama.y `overloadable_operator`. */
@@ -360,6 +361,7 @@ module.exports = grammar({
       seq(
         optional($.attribute_list),
         optional($.function_modifier),
+        optional('unsafe'),
         optional('comptime'),
         'fn',
         field('return_type', $._function_return_type),

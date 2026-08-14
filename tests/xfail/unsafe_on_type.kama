@@ -1,0 +1,6 @@
+// `unsafe` marks a function BODY (C#'s meaning). A TYPE has no body, so there is nothing in it to be
+// unsafe — and a blanket type-level marker would be the opposite of the greppable-at-the-declaration
+// guarantee the seam exists for. Mark the members that touch raw memory instead.
+type unsafe value V { public int32 x; }
+
+fn int32 main() { return 0; }

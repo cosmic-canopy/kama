@@ -1,0 +1,10 @@
+// A contract member is BODILESS, so it cannot be `unsafe` — and a contract could not usefully specify
+// one anyway. A member is a CONDUIT: both ends are already closed by its own types. An implementation
+// whose signature names `UnsafePtr` must be an `unsafe fn`, and a caller cannot invoke one without
+// holding an `UnsafePtr`. That is exactly what keeps `A: Allocator` a perfectly safe BOUND while
+// `allocate`/`deallocate` stay uninvocable outside an `unsafe fn`.
+type contract RawSink for value {
+    unsafe fn void put(UnsafePtr<int32> p);
+}
+
+fn int32 main() { return 0; }

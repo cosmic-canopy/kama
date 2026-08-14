@@ -1450,6 +1450,18 @@
           "members": [
             {
               "type": "STRING",
+              "value": "unsafe"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
               "value": "comptime"
             },
             {
@@ -2571,6 +2583,10 @@
         {
           "type": "STRING",
           "value": "immutable"
+        },
+        {
+          "type": "STRING",
+          "value": "unsafe"
         },
         {
           "type": "SEQ",
