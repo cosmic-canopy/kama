@@ -3,7 +3,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 
-fn int main()
+unsafe fn int main()
 {
     UnsafePtr p = malloc(n: 64);
     if (p == null) { return 1; }

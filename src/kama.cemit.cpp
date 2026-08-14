@@ -2083,6 +2083,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
+        // Containment: `cast<UnsafePtr<T>>(…)` MAKES a raw pointer out of an integer or another pointer —
+        // one of the two production sites (the other is `addr(of:)`). It stays possible, which is what
+        // keeps MMIO writable; it just cannot happen in a function carrying no marker.
+        if (namesUnsafePtr(v->type)) rejectRawOutsideUnsafe("`cast<UnsafePtr<…>>(…)`", v->line);
         // A cast lowers to a C cast, and C casts only between SCALARS and POINTERS. Anything that lowers to
         // an aggregate produces `((Pair)(x))`, which the C compiler rejects — and used to reject with no
         // kama diagnostic at all, naming a mangled type the user never wrote.
@@ -2947,6 +2951,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
+            // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal
+            // (every container depends on it), but naming one as a local is holding raw memory in a body,
+            // which is what the marker exists to make greppable.
+            if (namesUnsafePtr(declType))
+                rejectRawOutsideUnsafe(("local `" + (lvd && lvd->variables && !lvd->variables->empty()
+                                                     && (*lvd->variables)[0]->name
+                                                     && (*lvd->variables)[0]->name->value
+                                                        ? *(*lvd->variables)[0]->name->value
+                                                        : std::string("?")) + "`").c_str(), n->line);
             if (lvd && lvd->variables)
                 for (auto& d : *lvd->variables)
                     if (d) rejectNullInit(declType, d->initializer, "a local", n->line);
@@ -4518,6 +4531,14 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             }
         }
 
+        // The signature half of the containment rule, free-function side. `extern` is exempt for the same
+        // reason a contract member is: it is BODILESS, so there is nothing in it to be unsafe — CALLING one
+        // is the unsafe act, gated at the call. A bodiless `fn` is a function-pointer signature TYPE and
+        // never reaches here (it went to `_sigs` above).
+        if (!isExtern(fn))
+            checkSignatureRawPtr(fn->isUnsafe, fn->returnType, fn->parameters,
+                                 *fn->name->value, fn->name->line);
+
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -5179,6 +5200,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("`unsafe` marks a function BODY, and `" + *md->name->value
                                          + "` has none — the implementation carries the marker, not the "
                                            "declaration").c_str(), md->line);
+                        // The signature half of the containment rule. A member that NAMES a raw pointer —
+                        // in its return type or any parameter — must be `unsafe`, so the marker sits at
+                        // the declaration a reader greps for rather than inside a body they must open.
+                        // Only where a body exists: an `abstract` member is a guarantee, and a `contract`
+                        // member (collected in collectInterfaces) is a conduit — see the rejection above.
+                        if (md->body) checkSignatureRawPtr(mi.isUnsafe, md->returnType, md->params,
+                                                           *md->name->value, md->line);
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
@@ -10081,6 +10109,42 @@ void CEmitter::computeDeeplyImmutable()
 // Matches the SOURCE spelling on purpose: this runs with `_typeSubst` empty, so cType() on an
 // unsubstituted contract type parameter resolves nothing useful. `_viewTypeNames` holds bare source names
 // for exactly this kind of check.
+// The `UnsafePtr` containment rule. TRUE when `type` is `UnsafePtr` or carries one in a generic argument.
+// The recursion is the whole point: `Optional<UnsafePtr>` (what `Allocator.allocate` returns) never spells
+// the word at the binding site — `match (a.allocate(…)) { case Some(value: p): … }` — so a rule that
+// matched the spelled token would let the raw pointer out through a function carrying no marker at all.
+bool CEmitter::namesUnsafePtr(SharedIdentifier type)
+{
+    if (!type || !type->value) return false;
+    if (*type->value == "UnsafePtr") return true;
+    if (type->genericArgs) {
+        for (auto& a : *type->genericArgs) if (namesUnsafePtr(a)) return true;
+    } else if (namesUnsafePtr(type->genericArg)) return true;
+    return false;
+}
+
+// One diagnostic for every raw-pointer position, so the seam reads the same wherever it is hit.
+bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
+{
+    if (_inUnsafe) return false;
+    unsupported((std::string(what) + " is a raw pointer, so it requires an `unsafe fn` — mark the "
+                 "enclosing function `unsafe`").c_str(), line);
+    return true;
+}
+
+void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
+                                    const std::string& name, int line)
+{
+    if (isUnsafe) return;
+    const char* where = nullptr;
+    if (namesUnsafePtr(ret)) where = "returns";
+    else if (params) for (auto& p : *params) if (p && namesUnsafePtr(p->type)) { where = "takes"; break; }
+    if (!where) return;
+    unsupported(("`" + name + "` " + where + " a raw pointer, so it must be declared `unsafe` — the "
+                 "marker belongs at the declaration, where it is greppable, not inside the body")
+                    .c_str(), line);
+}
+
 bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const
 {
     if (!p || !p->type || !p->type->value) return false;
@@ -12677,7 +12741,23 @@ void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int 
 {
     if (!owner) return;
     for (auto& f : owner->fields)
-        if (f.name == field) { canAccess(owner, f.visibility, field, line); return; }
+        if (f.name == field) {
+            canAccess(owner, f.visibility, field, line);
+            // Containment, on the propagation vector rather than the dereference. DECLARING an
+            // `UnsafePtr` field stays legal — every container and every `type extern value` depends on
+            // it — but touching one is holding raw memory, and that is what finding 2 exploited: a field
+            // plus `addr(of:)` is a general dangling-pointer factory, and `other.p = this.p` moves a raw
+            // pointer between objects through a function carrying no marker at all. The deref (`p[0]`)
+            // was never the leak; acquisition and propagation were.
+            //
+            // Hooked HERE, not at the call sites, because every field-resolution path already funnels
+            // through this one function — the smart-pointer auto-deref arm, the `Deref<T>` contract arm,
+            // and the plain arm each call it, and a gate installed at one of them would silently miss
+            // the other two.
+            if (namesUnsafePtr(f.type))
+                rejectRawOutsideUnsafe(("field `" + field + "`").c_str(), line);
+            return;
+        }
 }
 
 // resolve each class's raw `friend` grants to match keys, once every unit's
@@ -13165,6 +13245,20 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                                       (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
                                           ? (*a->bindingIds)[i]->line : a->line);
                 const FieldInfo& pf = vc->payload[slotOf[i]];
+                // Containment, on the position that made a TOKEN-based rule leak. `match (a.allocate(…))
+                // { case Some(value: p): … }` binds an `UnsafePtr` and never spells the word — a rule
+                // reading the spelled type would let a raw pointer into a function carrying no marker
+                // (probed: a double free with zero `unsafe` tokens in the function). The payload's own
+                // declared type is right here, so key on that.
+                // SUBSTITUTED, unlike the signature rule. `Optional<UnsafePtr>` stores its payload in the
+                // template's `T`, so the source spelling here is `T` and reads as safe. That is fine to do
+                // at a USE site — the diagnostic lands on the `match` the author actually wrote — whereas
+                // substituting in the signature rule would make a declaration's error depend on which
+                // instantiation happened to exist.
+                if (namesUnsafePtr(deepSubstType(pf.type)))
+                    rejectRawOutsideUnsafe(("`match` binding `" + *(*a->bindings)[i] + "`").c_str(),
+                                           (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
+                                               ? (*a->bindingIds)[i]->line : a->line);
                 // The LABEL names the variant's field, so it is a reference to that field's declaration —
                 // hover, go-to-definition and rename all reach it, the same as any other named use.
                 if (a->labelIds && i < a->labelIds->size() && pf.nameId)
@@ -13839,6 +13933,21 @@ static inline std::string placeWrap(const std::string& c, bool isPlace)
 
 std::string CEmitter::emitInvocation(InvocationNode* call)
 {
+    // Containment, on ACQUISITION-BY-CALL. A call that RETURNS a raw pointer hands one to its caller, and
+    // that caller may be unmarked: `kfree(p: make())` never binds the value to a local or a field, so the
+    // declaration, local and field rules all miss it, and the pointer is used twice with no marker in
+    // sight. Calling an `unsafe fn` stays unrestricted — that is the model — but the RESULT still has to
+    // land somewhere allowed to hold it.
+    //
+    // `callReturnTypeRaw` is the same resolver `exprClass` uses, so a method, a free function and a
+    // `Type::factory()` all answer here rather than at three separate sites.
+    {
+        std::string rc = callReturnTypeRaw(call);
+        if (!rc.empty() && rc.size() > 1 && rc.back() == '*' && !isViewCType(rc)
+            && !isClass(rc) && !isInterface(rc))
+            rejectRawOutsideUnsafe("this call's result", call->line);
+    }
+
     // Calling a method ON a slot fills it (the receiver goes in by pointer and the method builds the
     // value — the stdlib's builder shape, e.g. `slot FixedArray<T,A> r; r.allocBuffer(size: size);`).
     // So the hole becomes a live value here and its destructor comes back. Mirrors the analysis rule in
@@ -13958,11 +14067,17 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return emitBindableInvoke(name, _localTypes[name], call->args, call->line);
     }
 
-    // FFI: `addr(x)` is a builtin — the address of a local/value (`&(x)`),
-    // for out-params and passing a descriptor by pointer. A controlled operation
-    // (it addresses a real value), so it needs no `unsafe`.
+    // FFI: `addr(x)` is a builtin — the address of a local/value (`&(x)`), for out-params and passing a
+    // descriptor by pointer.
+    //
+    // It used to need no `unsafe`, on the reasoning that it addresses a REAL value. The boundary spike
+    // killed that: `addr(of:)` plus an `UnsafePtr` FIELD is a general dangling-pointer factory — take the
+    // address of a local, store it, return — which reproduces `stack-use-after-scope` under ASan with no
+    // `View` involved and no marker anywhere in the program (finding 2). Addressing a live value is safe;
+    // it is the raw pointer that comes BACK, and outlives it, that is not.
     if (name == "addr" && (!call->identifier->qualifier || call->identifier->qualifier->empty())
         && call->args && call->args->size() == 1) {
+        rejectRawOutsideUnsafe("`addr(of: …)`", call->line);
         SharedExpression a = (*call->args)[0]->expression;
         // Taking a SLOT's address is the vouching act for the raw move-out dance (`slot T x;
         // UnsafePtr<T> d = addr(of: x); unsafe { d[0] = …; } return give x;`): the code now initializes that

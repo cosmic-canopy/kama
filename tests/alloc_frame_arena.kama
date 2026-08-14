@@ -14,7 +14,7 @@ import std::collections::{Arena, BumpAllocator};
     return acc;
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     Arena frame = Arena.make(capacity: 128);   // a tiny per-frame budget
     BumpAllocator a = frame.handle();
 

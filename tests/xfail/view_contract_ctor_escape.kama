@@ -17,8 +17,8 @@ type contract FromWide<B is This> for value, view {
 type view Span implements FromWide<This> {
     UnsafePtr<int64> p; int32 n;
 
-    public ctor make(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
-    public ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }
+    public unsafe ctor make(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public unsafe ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }
 }
 
 fn int32 main() { return 0; }

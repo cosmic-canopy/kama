@@ -40,7 +40,7 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     A alloc;
-    public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
+    public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
     // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
     // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph

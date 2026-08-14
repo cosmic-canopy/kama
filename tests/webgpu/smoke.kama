@@ -17,7 +17,7 @@ extern fn UnsafePtr  wgpuCreateInstance(UnsafePtr descriptor);   // WGPUInstance
 extern fn void wgpuInstanceRelease(UnsafePtr instance);
 extern fn int32 puts(UnsafePtr<int8> s);
 
-fn int main() {
+unsafe fn int main() {
     UnsafePtr instance = wgpuCreateInstance(descriptor: null);
     if (instance != null) {
         string ok = "kama webgpu smoke: WGPUInstance created";

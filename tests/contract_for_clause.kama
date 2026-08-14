@@ -21,7 +21,7 @@ type value Card implements Rankable, Sized {
 // keys on `isBorrow`, so `Sized` has to name `view` for this to be admitted at all.
 type view Window implements Sized {
     UnsafePtr<int32> data; int32 len;
-    public ctor make(UnsafePtr<int32> data, int32 len) { this.data = data; this.len = len; }
+    public unsafe ctor make(UnsafePtr<int32> data, int32 len) { this.data = data; this.len = len; }
     public fn int32 size() { return this.len; }
 }
 type enum Shade implements Sized {

@@ -1,0 +1,16 @@
+// The shape a TOKEN-based rule misses, and the reason the rule keys on the TYPE. `p` is an `UnsafePtr` and
+// the word never appears anywhere in `churn` — the payload type is the template's `T`, substituted at the
+// instance. Probed before the gate existed: this compiled, and it is a double free with zero `unsafe`
+// tokens in the function.
+type contract Alloc for value { fn Optional<UnsafePtr> get(usize n); }
+type value A implements Alloc {
+    public unsafe fn Optional<UnsafePtr> get(usize n) { return Optional::Some(value: kmalloc(n: n)); }
+}
+extern fn UnsafePtr kmalloc(usize n);
+extern fn void kfree(UnsafePtr p);
+
+fn void churn(ref A a) {
+    match (a.get(n: cast<usize>(64))) { case Some(value: p): { kfree(p: p); kfree(p: p); } case None: { } };
+}
+
+fn int32 main() { return 0; }

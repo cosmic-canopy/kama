@@ -16,7 +16,7 @@
 type view Span {
     UnsafePtr<int64> p; int32 n;
 
-    public ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
+    public unsafe ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
     public unsafe fn int64 first() { return this.p[0]; }
 }
 

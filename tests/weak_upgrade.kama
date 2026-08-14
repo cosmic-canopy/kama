@@ -8,7 +8,7 @@ type value Counter { public int32 n; public ctor make(int32 start) { this.n = st
 type resource RcWeak<T> {
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
-    public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
+    public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }   // shares an existing ctrl
     public unsafe fn Optional<Rc<T>> tryUpgrade() {
         if (this.c[0].strong > 0) {
             this.c[0].strong = this.c[0].strong + 1;
@@ -25,7 +25,7 @@ type resource RcWeak<T> {
 type resource Rc<T> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy) {
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
-    public ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
+    public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c) { this.p = p; this.c = c; }       // shares an existing ctrl
     public unsafe ctor adopt(UnsafePtr<T> raw) {
         UnsafePtr<Ctrl> ctrl = null;
         ctrl = cast<UnsafePtr<Ctrl>>(malloc(n: sizeof(Ctrl))); ctrl[0].strong = 1; ctrl[0].weak = 0;

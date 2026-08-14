@@ -5,7 +5,7 @@ type value Circle implements Shape { int32 r; public ctor make(int32 r){this.r=r
 type value Square { int32 s; public ctor make(int32 s){this.s=s;} }   // does NOT implement Shape
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p;
-    public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
+    public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public unsafe fn ref T deref() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }

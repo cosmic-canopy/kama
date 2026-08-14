@@ -77,7 +77,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
-    public fn Result<usize, IoError> sendTo(View<uint8> bytes, ref SocketAddr to) {
+    public unsafe fn Result<usize, IoError> sendTo(View<uint8> bytes, ref SocketAddr to) {
         string h = to.ipString();
         while (true) {
             isize n = kama_sendto_inet(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()),
@@ -89,7 +89,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Receive one datagram into `into` (truncated to into.length() if larger); returns count + sender.
     // Non-blocking + nothing queued => Err(WouldBlock). EINTR-retried.
-    public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
+    public unsafe fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
         uint32 ip = 0ui32;
         uint16 port = 0ui16;
         if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr.fromHostIp(ip: ip, port: port))); }
@@ -102,7 +102,7 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Send to the connected default peer (see connect). EINTR-retried.
-    public fn Result<usize, IoError> send(View<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> send(View<uint8> bytes) {
         while (true) {
             isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
@@ -111,7 +111,7 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Receive from the connected default peer. Non-blocking + empty => Err(WouldBlock). EINTR-retried.
-    public fn Result<usize, IoError> recv(View<uint8> into) {
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
@@ -128,7 +128,7 @@ type resource UdpSocket implements DatagramSocket {
     }
 
     // Resolve the actual local address (after bind port 0, this yields the OS-assigned ephemeral port).
-    public fn Result<SocketAddr, IoError> localAddr() {
+    public unsafe fn Result<SocketAddr, IoError> localAddr() {
         uint32 ip = 0ui32;
         uint16 port = 0ui16;
         if (kama_getsockname(fd: this.fd, outIp: addr(of: ip), outPort: addr(of: port)) != 0) { return Result::Err(error: lastError()); }

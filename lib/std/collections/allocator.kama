@@ -29,7 +29,7 @@ type resource Arena {
     // — the arena never reallocs) plus a live pointer to `offset` (via `addr(of: this.offset)`, the
     // same field-address idiom the iterators use for `mods`), so every by-value copy of the handle
     // mutates the same bump pointer.
-    public fn BumpAllocator handle() {
+    public unsafe fn BumpAllocator handle() {
         return BumpAllocator.make(buffer: this.buffer, offset: addr(of: this.offset), capacity: this.capacity);
     }
 
@@ -48,7 +48,7 @@ type resource Arena {
 type value BumpAllocator implements Allocator {
     UnsafePtr<uint8> buffer; UnsafePtr<int32> offset; int32 capacity;
 
-    public ctor make(UnsafePtr<uint8> buffer, UnsafePtr<int32> offset, int32 capacity) {
+    public unsafe ctor make(UnsafePtr<uint8> buffer, UnsafePtr<int32> offset, int32 capacity) {
         this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
@@ -60,5 +60,5 @@ type value BumpAllocator implements Allocator {
         return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));
     }
 
-    public fn void deallocate(UnsafePtr pointer, usize bytes) { }           // no-op: the Arena owns the region
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes) { }           // no-op: the Arena owns the region
 }

@@ -16,7 +16,7 @@ fnptr int32 TickFn(UnsafePtr state);
 extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
 extern fn void kama_app_exit(int32 code);
 
-fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
+unsafe fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
 
 // Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored
 // while the run loop keeps the runtime alive, so this forces a true shutdown; on native it is exit().

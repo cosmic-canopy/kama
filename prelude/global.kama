@@ -509,7 +509,7 @@ type value GlobalAllocator implements Allocator {
 // trivially and is callable from inside the generic collections (where inferring a generic `<A>` helper
 // from a type-param-typed `this.alloc` is not supported). The dead `:= cast<UnsafePtr>(0)` after `panic`
 // satisfies the value-arm checker (`panic` traps first, so it never runs).
-fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
+unsafe fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
     return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<UnsafePtr>(0); } };
 }
 

@@ -1,0 +1,5 @@
+// `cast<UnsafePtr<T>>(…)` is the other production site — it MAKES a raw pointer out of an integer. It stays
+// possible (that is what keeps MMIO writable); it just cannot happen in a function carrying no marker.
+fn int32 main() {
+    return cast<int32>(cast<usize>(cast<UnsafePtr<uint32>>(0x40021000)));
+}

@@ -45,7 +45,7 @@ type resource Sender<T> {
     UnsafePtr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
-    public ctor make(UnsafePtr handle) { this.handle = handle; }
+    public unsafe ctor make(UnsafePtr handle) { this.handle = handle; }
 
     // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
     // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
@@ -75,7 +75,7 @@ type resource Sender<T> {
     // is already gone and no further send can enqueue), so we DRAIN any items still buffered — relocating
     // each into a local so its `~dtor` runs exactly once — before freeing the queue. This is the M8
     // no-leak fix: a channel abandoned with buffered resource items no longer leaks them.
-    ~Sender() {
+    unsafe ~Sender() {
         if (this.handle != null) {
             if (kama_channel_close_sender(ch: this.handle) != 0) {
                 bool more = true;
@@ -94,7 +94,7 @@ type resource Sender<T> {
 type resource Receiver<T> {
     UnsafePtr handle;   // the shared queue; null once moved-from
 
-    public ctor make(UnsafePtr handle) { this.handle = handle; }
+    public unsafe ctor make(UnsafePtr handle) { this.handle = handle; }
 
     // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
     // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
@@ -119,7 +119,7 @@ type resource Receiver<T> {
 
     // Close the receiver side. Symmetric to ~Sender: if this is the last live endpoint, drain the
     // remaining buffered items (dropping each) before freeing the queue — the M8 no-leak fix.
-    ~Receiver() {
+    unsafe ~Receiver() {
         if (this.handle != null) {
             if (kama_channel_close_receiver(ch: this.handle) != 0) {
                 bool more = true;
@@ -141,12 +141,12 @@ type resource Receiver<T> {
 type resource Channel<T> {
     UnsafePtr handle;
 
-    public ctor bounded(usize capacity) {
+    public unsafe ctor bounded(usize capacity) {
         this.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
     }
 
-    public fn Sender<T>   sender()   { return Sender::<T>.make(handle: this.handle); }
-    public fn Receiver<T> receiver() { return Receiver::<T>.make(handle: this.handle); }
+    public unsafe fn Sender<T>   sender()   { return Sender::<T>.make(handle: this.handle); }
+    public unsafe fn Receiver<T> receiver() { return Receiver::<T>.make(handle: this.handle); }
 
     ~Channel() { }   // no-op: the endpoints own the queue's lifetime (last-dropper-frees)
 }

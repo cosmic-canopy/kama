@@ -1,0 +1,10 @@
+// ACQUISITION-BY-CALL: the result is never bound to a local or a field, so the declaration, local and field
+// rules all miss it — and the pointer is used twice with no marker in sight. Calling an `unsafe fn` stays
+// unrestricted, which is the model; the RESULT still has to land somewhere allowed to hold it.
+extern fn UnsafePtr kmalloc(usize n);
+extern fn void kfree(UnsafePtr p);
+unsafe fn UnsafePtr make() { return kmalloc(n: cast<usize>(8)); }
+
+fn void churn() { kfree(p: make()); kfree(p: make()); }
+
+fn int32 main() { return 0; }

@@ -18,7 +18,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
 type view MapKeyIter<K> implements Iterator<K> {
     UnsafePtr<K> keys; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<K> keys, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<K> keys, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
@@ -40,7 +40,7 @@ type view MapKeyIter<K> implements Iterator<K> {
 // VALUE (a copy), and rejects a structural change made mid-iteration via the `mods` snapshot.
 type view MapValueIter<V> implements Iterator<V> {
     UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
@@ -63,7 +63,7 @@ type view MapValueIter<V> implements Iterator<V> {
 // change is caught).
 type view MapValueIterMut<V> implements IteratorMut<V> {
     UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn bool hasNext() {
@@ -97,7 +97,7 @@ type resource Entry<K, V> {
 // a structural change made mid-iteration via the `mods` snapshot.
 type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
     UnsafePtr<K> keys; UnsafePtr<V> vals; UnsafePtr<uint8> state; int32 cap; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<K> keys, UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<K> keys, UnsafePtr<V> vals, UnsafePtr<uint8> state, int32 cap, UnsafePtr<int32> modsp, int32 modsAt) {
         this.keys = keys; this.vals = vals; this.state = state; this.cap = cap; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -168,7 +168,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // `foreach (K k in map)` — a by-value key iterator (present only for a `Copyable` key). It borrows the
     // key + state buffers and a live pointer to `mods` so a mid-iteration structural change is caught.
-    public fn MapKeyIter<K> iterator() when [K: Copyable<K>] {
+    public unsafe fn MapKeyIter<K> iterator() when [K: Copyable<K>] {
         return MapKeyIter::<K>.make(keys: this.keys, state: this.state, cap: this.cap,
                                modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -242,11 +242,11 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // `foreach (V v in map.values())` — a by-value value iterator (present only for a Copyable value), the
     // value analogue of `iterator()`. `valuesMut()` borrows instead, for any value type.
-    public fn MapValueIter<V> values() when [V: Copyable<V>] {
+    public unsafe fn MapValueIter<V> values() when [V: Copyable<V>] {
         return MapValueIter::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
     }
-    public fn MapValueIterMut<V> valuesMut() {
+    public unsafe fn MapValueIterMut<V> valuesMut() {
         return MapValueIterMut::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                          modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -255,7 +255,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // key and value are Copyable (it hands out an owned copy of each pair). The pair analogue of `iterator()`
     // (keys) and `values()`. Keys are never mutated in place, so there is no `entriesMut()`; mutate values via
     // `valuesMut()` / `getRef`.
-    public fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
+    public unsafe fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
         return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.state, cap: this.cap,
                                         modsp: addr(of: this.mods), modsAt: this.mods);
     }
@@ -306,7 +306,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // rejected (giving out of an element leaves a moved-from owner); instead relocate bitwise through raw
     // `UnsafePtr<V>` aliases into a zero-init'd local, then `give`. The caller tombstones the stale slot so it's
     // never dropped again — the same move-out idiom as `Deque.takeAt`.
-    fn V takeVal(int32 at) {
+    unsafe fn V takeVal(int32 at) {
         slot V x;                                          // the hole `relocate`'s `out` parameter fills
         relocate(from: this.vals, at: at, into: out x);
         return give x;

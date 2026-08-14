@@ -8,7 +8,7 @@ type resource Payload {
     UnsafePtr<int32> dst;
     int32 value;
 
-    public ctor make(UnsafePtr<int32> dst, int32 value) {
+    public unsafe ctor make(UnsafePtr<int32> dst, int32 value) {
         this.dst = dst;
         this.value = value;
     }
@@ -22,7 +22,7 @@ fn void worker(Payload p) {
     p.run();
 }
 
-fn int main() {
+unsafe fn int main() {
     int32 shared = 0;
     Payload p = Payload.make(dst: addr(of: shared), value: 7i32);
     {

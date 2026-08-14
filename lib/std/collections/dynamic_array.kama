@@ -8,7 +8,7 @@ export { DynamicArray };
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type view DynamicArrayIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<T> next() {
@@ -23,7 +23,7 @@ type view DynamicArrayIter<T> implements Iterator<T> {
 // The invalidation check lives in hasNext() (it runs before each next()).
 type view DynamicArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn bool hasNext() {
@@ -102,13 +102,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
 
     // The safe DynamicArray->pointer bridge (see FixedArray.dataPtr): obtaining the buffer pointer is
     // safe; dereferencing it is `unsafe`. Valid only until the next resizing op (add/insert/reserve).
-    public fn UnsafePtr<T> dataPtr() { return this.data; }
+    public unsafe fn UnsafePtr<T> dataPtr() { return this.data; }
 
     // Borrow the whole array as a `View<T>` (a non-owning slice / span) — zero copy, no ownership
     // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
     // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
     // resized. Mutating through the view writes back to this array's buffer.
-    public fn View<T> view() { return View::<T>.make(data: this.data, len: this.len); }
+    public unsafe fn View<T> view() { return View::<T>.make(data: this.data, len: this.len); }
 
     // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
     public unsafe fn View<T> slice(int32 from, int32 count) {
@@ -144,10 +144,10 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements — `DynamicArray<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
-    public fn DynamicArrayIter<T> iterator() when [T: Copyable<T>] {
+    public unsafe fn DynamicArrayIter<T> iterator() when [T: Copyable<T>] {
         return DynamicArrayIter::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
-    public fn DynamicArrayIterMut<T> iterMut() {
+    public unsafe fn DynamicArrayIterMut<T> iterMut() {
         return DynamicArrayIterMut::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
@@ -198,7 +198,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // Move the element at `idx` OUT of the buffer into a fresh owned local (the slot is left stale — the
     // caller either overwrites it by shifting or drops it by decrementing `len`). Bitwise-relocate through raw
     // `UnsafePtr<T>` aliases into a zero-init'd local, then `give` — the same move-out idiom as `Deque.takeAt`.
-    fn T takeAt(int32 idx) {
+    unsafe fn T takeAt(int32 idx) {
         slot T x;                                           // the hole `relocate`'s `out` parameter fills
         relocate(from: this.data, at: idx, into: out x);
         return give x;

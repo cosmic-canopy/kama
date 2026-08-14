@@ -30,36 +30,36 @@ type value Ready {
 // A readiness set. Move-only; frees its C cursor on drop (RAII).
 type resource Poller {
     UnsafePtr state;
-    private ctor make(UnsafePtr state) { this.state = state; }
+    private unsafe ctor make(UnsafePtr state) { this.state = state; }
 
-    public ctor Result<Poller, IoError> create() {
+    public unsafe ctor Result<Poller, IoError> create() {
         UnsafePtr s = kama_poller_create();
         if (s == null) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Poller.make(state: s));
     }
 
     // Watch `fd` (a socket's rawHandle()) for `interest`. Re-adding an fd updates its interest.
-    public fn void add(isize fd, Interest interest) {
+    public unsafe fn void add(isize fd, Interest interest) {
         int32 bits = match (interest) { case Read: 1; case Write: 2; case ReadWrite: 3; };
         kama_poller_add(p: this.state, fd: fd, interest: bits);
     }
 
     // Stop watching `fd`.
-    public fn void remove(isize fd) { kama_poller_remove(p: this.state, fd: fd); }
+    public unsafe fn void remove(isize fd) { kama_poller_remove(p: this.state, fd: fd); }
 
     // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready. Returns the count
     // ready (0 = timed out). EINTR surfaces as Err(Other) — the caller may retry.
-    public fn Result<int32, IoError> wait(int32 timeoutMs) {
+    public unsafe fn Result<int32, IoError> wait(int32 timeoutMs) {
         int32 n = kama_poller_wait(p: this.state, timeoutMs: timeoutMs);
         if (n < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: n);
     }
 
     // The readiness of `fd` as reported by the last wait().
-    public fn Ready readyFor(isize fd) {
+    public unsafe fn Ready readyFor(isize fd) {
         int32 bits = kama_poller_ready(p: this.state, fd: fd);
         return Ready.of(readable: (bits & 1) != 0, writable: (bits & 2) != 0);
     }
 
-    ~Poller() { kama_poller_free(p: this.state); }
+    unsafe ~Poller() { kama_poller_free(p: this.state); }
 }

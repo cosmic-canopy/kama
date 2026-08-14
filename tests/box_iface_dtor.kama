@@ -13,7 +13,7 @@ type resource Circle implements Shape {
 }
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p;
-    public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
+    public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public unsafe fn ref T deref() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }

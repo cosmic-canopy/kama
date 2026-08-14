@@ -3,7 +3,7 @@
 type contract Drawable for value { fn int32 draw(); }
 type view Span implements Drawable {
     UnsafePtr<int32> data; int32 len;
-    public ctor make(UnsafePtr<int32> data, int32 len) { this.data = data; this.len = len; }
+    public unsafe ctor make(UnsafePtr<int32> data, int32 len) { this.data = data; this.len = len; }
     public fn int32 draw() { return this.len; }
 }
 fn int32 main() { return 0; }

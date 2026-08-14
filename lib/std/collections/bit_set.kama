@@ -11,7 +11,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
 type view BitSetIter implements Iterator<int32> {
     UnsafePtr<uint64> words; int32 wordCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    public unsafe ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<int32> next() {
@@ -153,7 +153,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     // `BitSetIter` return type resolves in THIS module, not the caller's scope, so iterating needs no
     // separate import. (Only explicitly naming the type — `BitSetIter it = bs.setBits()` — requires
     // `import std::collections::{BitSetIter}`, like naming any type.)
-    public fn BitSetIter setBits() {
+    public unsafe fn BitSetIter setBits() {
         return BitSetIter.make(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

@@ -17,7 +17,7 @@ type value Thing {
     public ctor make() { this.x = 0; }
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     int32 a = null;              // a primitive local
     UnsafePtr<int32> ok = null;  // ... and the one spelling that IS allowed
     return 0;

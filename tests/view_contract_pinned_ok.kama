@@ -19,7 +19,7 @@ type contract Windowed<S is This> for value, view {
 type view Span implements Windowed<This> {
     UnsafePtr<int64> p; int32 n;
 
-    public ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
+    public unsafe ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public fn int32 length() { return this.n; }
     public unsafe fn int64 at(int32 i) { return this.p[i]; }
     // Returns a view over `this`'s buffer — roots at `this`, so the return escape check accepts it.

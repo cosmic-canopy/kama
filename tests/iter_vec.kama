@@ -5,7 +5,7 @@ extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 type value VecIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
-    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -14,10 +14,10 @@ type value VecIter<T> implements Iterator<T> {
 }
 type resource Vec<T> implements Iterable<T> {
     UnsafePtr<T> data; int32 len;
-    public ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
+    public unsafe ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
     public unsafe ref T operator[](int32 i) { return this.data[i]; }
-    public fn VecIter<T> iterator() { return VecIter.make(data: this.data, len: this.len); }
-    ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
+    public unsafe fn VecIter<T> iterator() { return VecIter.make(data: this.data, len: this.len); }
+    unsafe ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
 fn int32 main() {
     Vec<int32> v = Vec.make(n: 4);

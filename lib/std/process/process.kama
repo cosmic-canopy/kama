@@ -90,7 +90,7 @@ fn ExitStatus statusOf(int32 st) {
 }
 
 // Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
-fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
+unsafe fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
     int32 n = 1 + args.length();
     UnsafePtr v = kama_argv_new(n: n);
     kama_argv_set(v: v, i: 0, s: program.cstr());
@@ -104,7 +104,7 @@ fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
 
 // Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
 // merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
-fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
+unsafe fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
     int32 n = keys.length();
     UnsafePtr ov = kama_argv_new(n: n);
     int32 i = 0;
@@ -178,7 +178,7 @@ type resource Command {
 
     // Spawn the child and return a live Process handle. Creates a pipe (or opens /dev/null) per Piped/Null
     // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
-    public fn Result<Process, IoError> start() {
+    public unsafe fn Result<Process, IoError> start() {
         // stdin: parent WRITES inKeep; child READS inGive.
         File inKeep = File.make(fd: -1);
         File inGive = File.make(fd: -1);
@@ -257,7 +257,7 @@ type resource Command {
     // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
     // capture lives in the `kama_capture2` seam (POSIX poll / Windows threads) — reading one stream to EOF
     // then the other would deadlock once the child fills the second pipe. One platform-neutral path here.
-    public fn Result<Output, IoError> run() {
+    public unsafe fn Result<Output, IoError> run() {
         this.outCfg = Stdio::Piped;
         this.errCfg = Stdio::Piped;
         Result<Process, IoError> sp = this.start();
@@ -317,7 +317,7 @@ type resource Process {
     public fn void closeStdin() { this.inPipe.close(); }
 
     // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op).
-    public fn Result<ExitStatus, IoError> wait() {
+    public unsafe fn Result<ExitStatus, IoError> wait() {
         if (this.reaped) { return Result::Err(error: IoError::Other(code: 0)); }
         int32 st = 0;
         while (true) {
@@ -328,7 +328,7 @@ type resource Process {
     }
 
     // Non-blocking reap. Ok(Some) if the child exited (status collected), Ok(None) if still running.
-    public fn Result<Optional<ExitStatus>, IoError> tryWait() {
+    public unsafe fn Result<Optional<ExitStatus>, IoError> tryWait() {
         if (this.reaped) { return Result::Ok(value: Optional::None); }
         int32 st = 0;
         while (true) {

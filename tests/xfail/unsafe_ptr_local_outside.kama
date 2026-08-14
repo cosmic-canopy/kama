@@ -1,0 +1,9 @@
+// Containment: a LOCAL binding of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal — every
+// container and every `type extern value` depends on it — but naming one as a local is holding raw memory
+// in a body, which is what the marker exists to make greppable.
+extern fn UnsafePtr kmalloc(usize n);
+
+fn int32 main() {
+    UnsafePtr<int32> p = cast<UnsafePtr<int32>>(kmalloc(n: cast<usize>(4)));
+    return 0;
+}

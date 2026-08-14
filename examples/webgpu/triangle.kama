@@ -125,7 +125,7 @@ fn string triangleWgsl() {
 }
 
 // Build the render pipeline for the triangle (device is ready; format is the surface's).
-fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
+unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     string wgsl = triangleWgsl();
     WGPUShaderSourceWGSL src = WGPUShaderSourceWGSL();
     src.chain.sType = 2;                 // WGPUSType_ShaderSourceWGSL
@@ -162,7 +162,7 @@ fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
 // (Re)configure the surface for the device. Called once when the device is ready, and again
 // whenever wgpuSurfaceGetCurrentTexture reports the surface is out of date (native swapchains go
 // stale — e.g. after the first present, or on resize — and must be reconfigured to recover).
-fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
+unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
     WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
     cfg.device = device;
     cfg.format = 27;          // WGPUTextureFormat_BGRA8Unorm

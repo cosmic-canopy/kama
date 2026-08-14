@@ -3,7 +3,7 @@
 // `int32 a; a = null;` would otherwise slip this check exactly as it slips the `== null` one.
 type value Thing { public int32 x; public ctor make() { this.x = 0; } }
 
-fn int32 main() {
+unsafe fn int32 main() {
     Thing t = Thing.make();
     int32 a = 1;
     UnsafePtr<int32> p = null;

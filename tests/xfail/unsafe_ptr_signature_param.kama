@@ -1,0 +1,6 @@
+// The SIGNATURE half: a declaration that NAMES a raw pointer must carry the marker, so a reader greps the
+// declaration instead of opening the body. A `contract` member is exempt — it is bodiless, and both its
+// implementer and its caller are forced by their own types.
+fn int32 peek(UnsafePtr<int32> p) { return 0; }
+
+fn int32 main() { return 0; }

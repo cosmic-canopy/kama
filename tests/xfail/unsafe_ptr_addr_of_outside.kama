@@ -1,0 +1,9 @@
+// `addr(of:)` PRODUCES a raw pointer. It used to need no marker, on the reasoning that it addresses a real
+// value — the boundary spike killed that: `addr(of:)` plus an `UnsafePtr` field is a general
+// dangling-pointer factory (finding 2), reproducing stack-use-after-scope under ASan with no marker
+// anywhere in the program. Addressing a live value is safe; the pointer that comes BACK and outlives it is
+// not.
+fn int32 main() {
+    int32 x = 7;
+    return cast<int32>(cast<usize>(addr(of: x)));
+}

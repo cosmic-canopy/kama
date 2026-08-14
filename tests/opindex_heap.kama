@@ -15,7 +15,7 @@ type resource IntVec {
     }
     public unsafe ref int32 operator[](int32 i) { return this.data[i]; }
     public fn int32 length() { return this.len; }
-    ~IntVec() { free(p: this.data); }
+    unsafe ~IntVec() { free(p: this.data); }
 }
 fn int32 main() {
     IntVec v = IntVec.make(n: 4);

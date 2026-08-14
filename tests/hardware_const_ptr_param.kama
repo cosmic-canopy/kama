@@ -2,7 +2,7 @@
 // (volatile so each read re-fetches; const so the driver can't write through it).
 unsafe fn uint32 peek(const hardware UnsafePtr<uint32> reg) { return reg[0]; }
 
-fn int32 main() {
+unsafe fn int32 main() {
     uint32 cell = 42;
     return cast<int32>(peek(reg: addr(of: cell)));   // 42
 }

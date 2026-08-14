@@ -25,19 +25,19 @@ type resource Isolate {
 
     // Wrap a raw boxed handle from the isolate seam. The compiler lowers the `isolate …` expression form
     // to this ctor; it is not meant to be called directly (the handle must come from the spawn wrapper).
-    ctor fromRaw(UnsafePtr handle) {
+    unsafe ctor fromRaw(UnsafePtr handle) {
         this.handle = handle;
     }
 
     // Block until the isolate finishes. Safe to call more than once (and the destructor calls it).
-    public fn void join() {
+    public unsafe fn void join() {
         if (this.handle != null) {
             kama_isolate_join_boxed(h: this.handle);
             this.handle = cast<UnsafePtr>(null);
         }
     }
 
-    ~Isolate() {
+    unsafe ~Isolate() {
         if (this.handle != null) { kama_isolate_join_boxed(h: this.handle); }
     }
 }

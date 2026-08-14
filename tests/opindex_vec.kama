@@ -8,7 +8,7 @@ extern fn void free(UnsafePtr p);
 type resource Vec<T> {
     UnsafePtr<T> data;
     int32 len;
-    public ctor make(int32 n) { 
+    public unsafe ctor make(int32 n) { 
         this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T)));
         this.len = n;
  }
@@ -18,7 +18,7 @@ type resource Vec<T> {
         return this.data[i];
     }
     public fn int32 length() { return this.len; }
-    ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
+    unsafe ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
 fn int32 main() {
     Vec<int32> v = Vec.make(n: 3);

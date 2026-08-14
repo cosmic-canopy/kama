@@ -1,0 +1,8 @@
+// The signature rule covers the RETURN type too — handing a raw pointer out is exactly as visible a fact
+// as taking one in, and both belong at the declaration.
+extern fn UnsafePtr kmalloc(usize n);
+unsafe fn UnsafePtr grab() { return kmalloc(n: cast<usize>(8)); }
+
+fn UnsafePtr passthrough() { return grab(); }
+
+fn int32 main() { return 0; }

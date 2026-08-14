@@ -3,7 +3,7 @@ extern fn void free(UnsafePtr p);
 type value Counter { public int32 n; public Counter(int32 s) { this.n = s; } public fn int32 get() { return this.n; } }
 type resource Box<T> implements Deref<T>, HeapOwner<T> {
     UnsafePtr<T> p;
-    public ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
+    public unsafe ctor adopt(UnsafePtr<T> raw) { this.p = raw; return this; }
     public unsafe fn ref T deref() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }

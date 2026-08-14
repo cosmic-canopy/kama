@@ -41,7 +41,7 @@ type resource WtConnection implements DatagramSocket {
     }
 
     // Send one datagram to the connected peer.
-    public fn Result<usize, IoError> send(View<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> send(View<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         if (kama_wt_send(h: this.handle, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length())) != 0) {
             return Result::Err(error: IoError::Other(code: 0 - 1));
@@ -50,7 +50,7 @@ type resource WtConnection implements DatagramSocket {
     }
 
     // Receive one datagram. Err(WouldBlock) if none has arrived; Err(ConnectionReset) if the session closed.
-    public fn Result<usize, IoError> recv(View<uint8> into) {
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         int32 n = kama_wt_recv(h: this.handle, buf: addr(of: into[0]), n: cast<usize>(into.length()));
         if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }

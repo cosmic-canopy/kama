@@ -8,7 +8,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
-    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -19,7 +19,7 @@ type view FixedArrayIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
 type view FixedArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
-    public ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public fn bool hasNext() { return this.pos < this.len; }
     public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
@@ -66,12 +66,12 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     }
 
     // The safe FixedArray->pointer bridge: obtaining the buffer pointer is safe; dereferencing it is `unsafe`.
-    public fn UnsafePtr<T> dataPtr() { return this.data; }
+    public unsafe fn UnsafePtr<T> dataPtr() { return this.data; }
 
     // Borrow the whole array (or a sub-range) as a non-owning `View<T>` slice — zero copy. See
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
-    public fn View<T> view() { return View::<T>.make(data: this.data, len: this.size); }
+    public unsafe fn View<T> view() { return View::<T>.make(data: this.data, len: this.size); }
     public unsafe fn View<T> slice(int32 from, int32 count) {
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
         if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
@@ -80,8 +80,8 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements borrow instead: `foreach (ref T x in arr)`.)
-    public fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
-    public fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
+    public unsafe fn FixedArrayIter<T> iterator() when [T: Copyable<T>] { return FixedArrayIter::<T>.make(data: this.data, len: this.size); }
+    public unsafe fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).

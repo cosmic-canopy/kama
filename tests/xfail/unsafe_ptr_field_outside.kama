@@ -1,0 +1,11 @@
+// The PROPAGATION vector, which is what finding 2 actually exploited. The dereference `p[0]` was gated even
+// before this campaign; moving a raw pointer between objects was not — and needs no dereference at all.
+extern fn UnsafePtr kmalloc(usize n);
+
+type resource Box {
+    UnsafePtr<int32> p;
+    public unsafe ctor make() { this.p = cast<UnsafePtr<int32>>(kmalloc(n: cast<usize>(4))); return this; }
+    public fn void leak(ref Box other) { other.p = this.p; }   // no marker, no deref, raw pointer moved
+}
+
+fn int32 main() { return 0; }

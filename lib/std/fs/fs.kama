@@ -64,7 +64,7 @@ type resource File implements Reader, Writer {
     // Read up to `into.length()` bytes into `into`; returns the count (0 = end of file). EINTR-retried.
     // The `Reader` contract shape — fills a borrowed byte view (View's `operator[]` panics on an empty view,
     // so a zero-length request short-circuits to Ok(0)).
-    public fn Result<usize, IoError> read(View<uint8> into) {
+    public unsafe fn Result<usize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {
             isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
@@ -75,7 +75,7 @@ type resource File implements Reader, Writer {
 
     // The `Writer` partial-write PRIMITIVE: one `kama_write` (EINTR-retried), returning the count actually
     // written (may be `< length`). The free `writeAll(Writer, View)` loops over this to send every byte.
-    public fn Result<usize, IoError> write(View<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> write(View<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {
             isize n = kama_write(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
@@ -88,7 +88,7 @@ type resource File implements Reader, Writer {
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // Read the whole file to EOF into an owning byte buffer.
-    public fn Result<DynamicArray<uint8>, IoError> readAll() {
+    public unsafe fn Result<DynamicArray<uint8>, IoError> readAll() {
         DynamicArray<uint8> buf = DynamicArray.empty();
         FixedArray<uint8> scratch = FixedArray.make(size: 65536);
         bool eof = false;
@@ -110,7 +110,7 @@ type resource File implements Reader, Writer {
     }
 
     // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
-    public fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
+    public unsafe fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
         int32 total = cast<int32>(bytes.length());
         int32 off = 0;
         while (off < total) {
@@ -155,7 +155,7 @@ fn Result<usize, IoError> writeFile(ref string path, ref DynamicArray<uint8> byt
 }
 
 // Size + directory flag for a path.
-fn Result<Metadata, IoError> stat(ref string path) {
+unsafe fn Result<Metadata, IoError> stat(ref string path) {
     uint64 sz = 0ui64;
     int32 isdir = 0;
     int32 rc = kama_path_stat(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir));
@@ -170,7 +170,7 @@ fn Result<Unit, IoError> remove(ref string path) {
 }
 
 // DynamicArray a directory's entries (excluding "." and ".."), each as an owned string.
-fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
+unsafe fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
     UnsafePtr dirp = kama_diropen(path: path.cstr());
     if (dirp == null) { return Result::Err(error: lastError()); }
     DynamicArray<string> names = DynamicArray.empty();

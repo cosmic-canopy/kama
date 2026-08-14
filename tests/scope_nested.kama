@@ -8,7 +8,7 @@ type resource Slot {
     UnsafePtr<int32> cell;
     int32 value;
 
-    public ctor make(UnsafePtr<int32> cell, int32 value) {
+    public unsafe ctor make(UnsafePtr<int32> cell, int32 value) {
         this.cell = cell;
         this.value = value;
     }
@@ -18,7 +18,7 @@ type resource Slot {
 
 fn void writer(Slot s) { s.run(); }
 
-fn int main() {
+unsafe fn int main() {
     int32 a = 0;
     int32 b = 0;
     Slot sa = Slot.make(cell: addr(of: a), value: 30i32);

@@ -2,7 +2,7 @@
 // a memory-mapped register (the write must not be optimized away or reordered under -O2).
 unsafe fn void poke(hardware UnsafePtr<uint32> reg, uint32 v) { reg[0] = v; }
 
-fn int32 main() {
+unsafe fn int32 main() {
     uint32 cell = 0;
     poke(reg: addr(of: cell), v: 42);
     return cast<int32>(cell);   // 42

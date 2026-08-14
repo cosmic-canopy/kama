@@ -1453,6 +1453,26 @@ private:
     // `implements`, because no body can satisfy it.
     void checkViewContractCtors();
     bool paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const;
+    // The `UnsafePtr` containment rule (the unsafe seam). `namesUnsafePtr` is TRUE when a type node IS
+    // `UnsafePtr` or CONTAINS one in a generic argument — `Optional<UnsafePtr>` is the shape that made a
+    // token-based rule leak, since `match (a.allocate(…)) { case Some(value: p): … }` binds an `UnsafePtr`
+    // and never spells it.
+    //
+    // Keyed on the SOURCE spelling, deliberately, exactly as `paramCanCarryBorrow` and `_viewTypeNames`
+    // are: a rule that read the SUBSTITUTED type would make `DynamicArray<UnsafePtr<int32>>` force every
+    // method of `DynamicArray` unsafe at that one instantiation and not at others — a diagnostic that
+    // depends on monomorphization, reported at a declaration the author of the instantiation never wrote.
+    // Holding a raw pointer is legal (an `UnsafePtr` FIELD is legal by design); it is naming one in a
+    // signature, and producing or handling one in a body, that the marker exists to make greppable.
+    static bool namesUnsafePtr(SharedIdentifier type);
+    // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
+    // No-op inside one. Returns true if it rejected.
+    bool rejectRawOutsideUnsafe(const char* what, int line);
+    // The signature half: a declaration NAMING a raw pointer (return type or any parameter) must be
+    // `unsafe`. Applied only where a body exists — an `abstract` member and a `contract` member are
+    // bodiless conduits, forced instead by the types their implementer and caller must handle.
+    void checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
+                              const std::string& name, int line);
     // M6.2: greatest-fixpoint dual of computeReachesPointer — mark every deeply/transitively immutable type
     // (the `immutable` qualifier verified) and error on a qualified type with a mutable part. A `Shared`/`Weak`
     // over such a T is sendable across isolates and uses the atomic refcount flavor.
