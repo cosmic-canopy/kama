@@ -15,22 +15,22 @@ extern fn string kama_fmt_f64(float64 v);
 extern fn string kama_fmt_f32(float32 v);
 
 // Core conversions (widest of each class).
-fn string i64Str(int64 v)   { return kama_fmt_i64(v: v); }
-fn string u64Str(uint64 v)  { return kama_fmt_u64(v: v); }
-fn string f64Str(float64 v) { return kama_fmt_f64(v: v); }
-fn string f32Str(float32 v) { return kama_fmt_f32(v: v); }
+unsafe fn string i64Str(int64 v)   { return kama_fmt_i64(v: v); }
+unsafe fn string u64Str(uint64 v)  { return kama_fmt_u64(v: v); }
+unsafe fn string f64Str(float64 v) { return kama_fmt_f64(v: v); }
+unsafe fn string f32Str(float32 v) { return kama_fmt_f32(v: v); }
 
 // Narrower widths widen into the core conversions (JSON is width-agnostic; binary packs tight elsewhere).
-fn string i8Str(int8 v)    { return kama_fmt_i64(v: cast<int64>(v)); }
-fn string i16Str(int16 v)  { return kama_fmt_i64(v: cast<int64>(v)); }
-fn string i32Str(int32 v)  { return kama_fmt_i64(v: cast<int64>(v)); }
-fn string u8Str(uint8 v)   { return kama_fmt_u64(v: cast<uint64>(v)); }
-fn string u16Str(uint16 v) { return kama_fmt_u64(v: cast<uint64>(v)); }
-fn string u32Str(uint32 v) { return kama_fmt_u64(v: cast<uint64>(v)); }
+unsafe fn string i8Str(int8 v)    { return kama_fmt_i64(v: cast<int64>(v)); }
+unsafe fn string i16Str(int16 v)  { return kama_fmt_i64(v: cast<int64>(v)); }
+unsafe fn string i32Str(int32 v)  { return kama_fmt_i64(v: cast<int64>(v)); }
+unsafe fn string u8Str(uint8 v)   { return kama_fmt_u64(v: cast<uint64>(v)); }
+unsafe fn string u16Str(uint16 v) { return kama_fmt_u64(v: cast<uint64>(v)); }
+unsafe fn string u32Str(uint32 v) { return kama_fmt_u64(v: cast<uint64>(v)); }
 
 // Convenience aliases for the platform-width signed/unsigned integer.
-fn string intStr(int64 v)   { return kama_fmt_i64(v: v); }
-fn string uintStr(uint64 v) { return kama_fmt_u64(v: v); }
+unsafe fn string intStr(int64 v)   { return kama_fmt_i64(v: v); }
+unsafe fn string uintStr(uint64 v) { return kama_fmt_u64(v: v); }
 
 // The two boolean literals (JSON/YAML spelling).
 fn string boolStr(bool b) { if (b) { return "true"; } return "false"; }

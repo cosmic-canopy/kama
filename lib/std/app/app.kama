@@ -20,4 +20,4 @@ unsafe fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, sta
 
 // Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored
 // while the run loop keeps the runtime alive, so this forces a true shutdown; on native it is exit().
-fn void quit(int32 code) { kama_app_exit(code: code); }
+unsafe fn void quit(int32 code) { kama_app_exit(code: code); }

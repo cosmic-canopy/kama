@@ -13,7 +13,7 @@ extern fn int32 kama_wt_send(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn int32 kama_wt_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_wt_close(int32 h);
 
-fn void finish(int32 h, int32 code) { kama_wt_close(h: h); quit(code: code); }
+unsafe fn void finish(int32 h, int32 code) { kama_wt_close(h: h); quit(code: code); }
 
 // state block: int32 header [handle, phase, ticks] at bytes 0..11; byte scratch at offset 16.
 unsafe fn int32 tick(UnsafePtr state) {

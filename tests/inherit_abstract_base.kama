@@ -29,7 +29,7 @@ type abstract(maxDepth: 1) resource Codec
     protected virtual fn int32 salt() { return 1; }                  // MAY be overridden — defaulted here
     protected virtual fn int32 extra() { return 0; }
     public fn int32 describe() { return 100; }                       // reached via base.describe() below
-    ~Codec() { kama_trace(code: 1); }
+    unsafe ~Codec() { kama_trace(code: 1); }
 }
 
 type final resource Doubler extends Codec
@@ -42,10 +42,10 @@ type final resource Doubler extends Codec
     // `base.describe()` reaches a PUBLIC base method non-virtually. Legal from a protected override: the
     // restriction on `base.` is the MEMBER's visibility, not the calling method's.
     protected override fn int32 extra() { return base.describe(); }
-    ~Doubler() { kama_trace(code: 2); }
+    unsafe ~Doubler() { kama_trace(code: 2); }
 }
 
-fn int main()
+unsafe fn int main()
 {
     int32 sum = 0;
     {

@@ -9,7 +9,7 @@ fnptr int32 Get(int32 d);
 type resource Probe {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
-    ~Probe() { kama_trace(code: 9); }
+    unsafe ~Probe() { kama_trace(code: 9); }
     public fn int32 read(int32 d) { return this.id + d; }
 }
 fn int use() {
@@ -17,7 +17,7 @@ fn int use() {
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
 }
-fn int main() {
+unsafe fn int main() {
     int r = use();
     if (r != 43) { return 1; }
     return kama_trace_get();                        // single dtor -> 9

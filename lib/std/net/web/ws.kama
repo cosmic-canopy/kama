@@ -29,13 +29,13 @@ type resource WsConnection implements ReliableStream, Reader, Writer {
 
     // Open a ws:// or wss:// connection. Returns immediately; the handshake completes asynchronously —
     // poll state() until Open before sending.
-    public ctor Result<WsConnection, IoError> connect(ref string url) {
+    public unsafe ctor Result<WsConnection, IoError> connect(ref string url) {
         int32 h = kama_ws_connect(url: url.cstr());
         if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
         return Result::Ok(value: WsConnection.make(handle: h));
     }
 
-    public fn WsState state() {
+    public unsafe fn WsState state() {
         int32 s = kama_ws_state(h: this.handle);
         if (s == 0) { return WsState::Connecting; }
         if (s == 1) { return WsState::Open; }
@@ -67,5 +67,5 @@ type resource WsConnection implements ReliableStream, Reader, Writer {
     // No-op: web sockets are always non-blocking (kept for ReliableStream parity with native TcpStream).
     public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
 
-    ~WsConnection() { kama_ws_close(h: this.handle); }
+    unsafe ~WsConnection() { kama_ws_close(h: this.handle); }
 }

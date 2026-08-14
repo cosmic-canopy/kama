@@ -18,7 +18,7 @@ extern fn int32 kama_rtc_send(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn int32 kama_rtc_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_rtc_close(int32 h);
 
-fn void finish(int32 a, int32 b, int32 code) { kama_rtc_close(h: a); kama_rtc_close(h: b); quit(code: code); }
+unsafe fn void finish(int32 a, int32 b, int32 code) { kama_rtc_close(h: a); kama_rtc_close(h: b); quit(code: code); }
 
 // state block: int32 header [A, B, phase, ticks] at bytes 0..15; SDP scratch at offset 64 (4 KB); datagram
 // scratch at offset 4200.

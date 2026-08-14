@@ -148,7 +148,7 @@ type intrinsic <uint64> implements FromStr {
 extern "kama_fmt.h";
 extern fn int32 kama_parse_f64_ck(ref string s, out float64 v);
 
-fn Result<float64, ParseError> parseF64(ref string s) {
+unsafe fn Result<float64, ParseError> parseF64(ref string s) {
     slot float64 v;
     int32 st = kama_parse_f64_ck(s: s, v: out v);
     if (st == 1) { return Result::Err(error: ParseError::Empty); }

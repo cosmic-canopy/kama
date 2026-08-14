@@ -9,10 +9,10 @@ type resource Handle {
     int32 h;
     public ctor open(int32 v) { this.h = v; }
     public fn int32 val() { return this.h; }
-    ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
+    unsafe ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
 }
 
-fn int main() {
+unsafe fn int main() {
     Handle h = Handle.open(v: 7);
     Optional<Handle> opt = Optional::Some(value: give h);
 

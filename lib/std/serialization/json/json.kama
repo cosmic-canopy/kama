@@ -334,8 +334,8 @@ type resource JsonReader implements Deserializer {
     public fn uint16 readU16() { return cast<uint16>(this.readUint()); }
     public fn uint32 readU32() { return cast<uint32>(this.readUint()); }
     public fn uint64 readU64() { return this.readUint(); }
-    public fn float64 readF64() { string t = this.numToken(); return kama_parse_f64(s: ref t); }
-    public fn float32 readF32() { string t = this.numToken(); return cast<float32>(kama_parse_f64(s: ref t)); }
+    public unsafe fn float64 readF64() { string t = this.numToken(); return kama_parse_f64(s: ref t); }
+    public unsafe fn float32 readF32() { string t = this.numToken(); return cast<float32>(kama_parse_f64(s: ref t)); }
     public fn bool readBool() {
         this.skipWs();
         uint8 c = this.peek();

@@ -7,7 +7,7 @@ type resource Probe
 {
     int32 id;
     public ctor make(int32 id) { this.id = id; }
-    ~Probe() { kama_trace(code: 7); }
+    unsafe ~Probe() { kama_trace(code: 7); }
 }
 
 fn int build()
@@ -16,7 +16,7 @@ fn int build()
     return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
 }
 
-fn int main()
+unsafe fn int main()
 {
     int r = build();
     return kama_trace_get();   // fold(7) = 7

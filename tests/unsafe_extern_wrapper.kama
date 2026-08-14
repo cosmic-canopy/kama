@@ -1,0 +1,12 @@
+// The seam doing its job rather than costing something: an exported free function keeps a SAFE signature
+// over a free `unsafe fn` that makes the C call. This is the shape `std::fmt`'s `i32Str…`, `fs::stat` and
+// `time::monotonicNow` all take — 21 exported free functions in the stdlib — and it is why a free
+// `unsafe fn` has to exist at all: `std::math`/`std::net`/`std::fs` are deliberately free-function-shaped,
+// so requiring a host type purely to satisfy a visibility rule would be arbitrary.
+extern "<stdlib.h>";
+extern fn int32 abs(int32 x);
+
+unsafe fn int32 absRaw(int32 v) { return abs(x: v); }          // free, unsafe, makes the C call
+fn int32 abs32(int32 v) { return absRaw(v: v); }               // safe public API over it
+
+fn int32 main() { return abs32(v: 0 - 41) + 1; }

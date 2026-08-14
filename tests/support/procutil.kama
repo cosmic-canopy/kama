@@ -40,7 +40,7 @@ unsafe fn int32 parseIntArg(string s) {
     return v;
 }
 
-fn int main() {
+unsafe fn int main() {
     string cmd = argAt(i: 0);
 
     if (cmd == "echo") {

@@ -3922,7 +3922,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // one THROUGH the place — an `ElementAccessNode` LHS isn't a named lvalue, so the branches below miss
         // it, and the RHS `give`/`copy` marker would otherwise hit the "bare sub-expression" reject. A
         // primitive element keeps the plain store path; a raw `UnsafePtr<T>` slot is handled just below.
-        if (as->token == EQ && !_inUnsafe) {
+        //
+        // This used to read `if (as->token == EQ && !_inUnsafe)`, to keep a RAW slot store out of the
+        // collection-release path. `_inUnsafe` was always the wrong discriminator for that — the raw path
+        // below tests the actual question, `ptrElemType`/`ptrLocalElemType`, i.e. "is the LHS a raw pointer
+        // element" — and it became actively wrong once `unsafe` grew from a BLOCK to the whole FUNCTION:
+        // an `unsafe fn` doing an ordinary `xs[0] = give s` on a COLLECTION skipped the release entirely,
+        // and the `give` then fell through to the generic "bare sub-expression" reject. Probed. The two
+        // paths are disjoint by their own tests, so the guard was redundant as well as harmful.
+        if (as->token == EQ) {
             if (auto* ea = dynamic_cast<ElementAccessNode*>(as->unaryExpression.get())) {
                 std::string dcoll, drecv, didx, et;
                 if (collectionElemAccess(ea, dcoll, drecv, didx) && _collections.count(dcoll))
@@ -10145,6 +10153,24 @@ void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedP
                     .c_str(), line);
 }
 
+// Calling an `extern fn` requires an enclosing `unsafe fn`. The DECLARATION carries no marker — it is
+// bodiless, so there is nothing in it to be unsafe, exactly as with a contract member — which makes the
+// CALL the only place the boundary can be drawn.
+//
+// NO SCALAR EXEMPTION, deliberately. `extern fn int32 kama_close_socket(isize fd)` names no pointer and is
+// a double-free primitive by effect; so are `kama_app_exit` and `kama_ws_close`. 87 of the 188
+// `lib/`+`prelude/` extern declarations name no pointer at all, so a type-based carve-out would leave
+// finding 1 — a double free with zero `unsafe` tokens in the program — open in its handle-closing shape
+// while looking like it had been closed. Danger here is a property of the callee's EFFECT, which kama
+// cannot see, not of its signature, which it can.
+void CEmitter::gateExternCall(const FuncSig& sig, const std::string& name, int line)
+{
+    if (_inUnsafe || !sig.node || !isExtern(sig.node)) return;
+    unsupported(("calling the `extern fn` `" + name + "` requires an `unsafe fn` — C is outside kama's "
+                 "guarantees, so the call is the boundary (the declaration carries no marker: it has no "
+                 "body to be unsafe)").c_str(), line);
+}
+
 bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const
 {
     if (!p || !p->type || !p->type->value) return false;
@@ -14247,9 +14273,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             return "0";
         }
         auto fit = _funcs.find(resolveFunc(name, qual, call->identifier.get()));
-        if (fit != _funcs.end())
+        if (fit != _funcs.end()) {
+            gateExternCall(fit->second, name, call->line);
             return placeWrap(emitReorderedCall(fit->second.cName, "", fit->second.params, call->args, call->line),
                              fit->second.isPlaceReturn);
+        }
         // The head names a GENERIC template with no turbofish (`Box::tag()`). `typeName` is the bare
         // template, which is in no instance table, so this used to land on the catch-all below — a
         // message that names neither the cause nor the fix. A static has no receiver and its parameters
@@ -14287,6 +14315,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         return s + ")";
     }
+    gateExternCall(it->second, name, call->line);
     return placeWrap(emitReorderedCall(it->second.cName, "", it->second.params, call->args, call->line),
                      it->second.isPlaceReturn);
 }

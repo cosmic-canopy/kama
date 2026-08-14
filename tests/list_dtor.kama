@@ -13,7 +13,7 @@ type resource Probe
 {
     int id;
     public ctor make(int id) { this.id = id; }
-    ~Probe() { kama_trace(code: id); }
+    unsafe ~Probe() { kama_trace(code: id); }
 }
 
 fn int build()
@@ -29,7 +29,7 @@ fn int build()
     // scope exit: a,b,c were moved into xs (dtors suppressed); xs -> ~[1,2,4]
 }
 
-fn int main()
+unsafe fn int main()
 {
     int r = build();
     return kama_trace_get();

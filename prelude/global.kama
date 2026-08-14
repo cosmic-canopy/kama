@@ -380,15 +380,15 @@ type value Args implements Iterator<string> {
     int32 pos;
     public ctor make() { this.pos = 0; return this; }   // a free fn can't touch the private cursor
     // foreach protocol: yield each user arg once (a fresh owned string), then None.
-    public fn Optional<string> next() {
+    public unsafe fn Optional<string> next() {
         if (this.pos >= kama_args_count()) { return Optional::None; }
         string s = kama_args_at(i: this.pos);
         this.pos = this.pos + 1;
         return Optional::Some(value: give s);
     }
     // Random access (an owned collection isn't available in the floor).
-    public fn int32 count() { return kama_args_count(); }
-    public fn Optional<string> get(int32 at) {
+    public unsafe fn int32 count() { return kama_args_count(); }
+    public unsafe fn Optional<string> get(int32 at) {
         if (at < 0 || at >= kama_args_count()) { return Optional::None; }
         return Optional::Some(value: kama_args_at(i: at));
     }
@@ -460,7 +460,7 @@ unsafe fn string envOr(string name, string dflt) {
 // instead (this call is a no-op there).
 fnptr void PanicHandler();
 extern fn void kama_set_panic_handler(PanicHandler h);
-fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
+unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
 
 // ── Console output (diagnostics floor) ──────────────────────────────────────────────────────────────────
 // The floor print family: text to stdout (`print`/`println`, the program's data/results) or stderr
@@ -547,18 +547,18 @@ type resource Formatter {
     public ctor make() { this.buf = ""; }
     // Append a string's UTF-8 bytes verbatim (borrowed — reads the fat pointer, doesn't dup the bytes).
     public unsafe fn void writeStr(ref string s) { kama_str_push(buf: addr(of: this.buf), src: s); }
-    public fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }
-    public fn void writeU64(uint64 v)  { string t = kama_fmt_u64(v: v);  this.writeStr(s: ref t); }
-    public fn void writeF64(float64 v) { string t = kama_fmt_f64(v: v);  this.writeStr(s: ref t); }
-    public fn void writeF32(float32 v) { string t = kama_fmt_f32(v: v);  this.writeStr(s: ref t); }
+    public unsafe fn void writeI64(int64 v)   { string t = kama_fmt_i64(v: v);  this.writeStr(s: ref t); }
+    public unsafe fn void writeU64(uint64 v)  { string t = kama_fmt_u64(v: v);  this.writeStr(s: ref t); }
+    public unsafe fn void writeF64(float64 v) { string t = kama_fmt_f64(v: v);  this.writeStr(s: ref t); }
+    public unsafe fn void writeF32(float32 v) { string t = kama_fmt_f32(v: v);  this.writeStr(s: ref t); }
     public fn void writeBool(bool v)   { string t = "false"; if (v) { t = "true"; } this.writeStr(s: ref t); }
-    public fn void writeChar(char c)   { string t = kama_fmt_char(cp: c); this.writeStr(s: ref t); }
+    public unsafe fn void writeChar(char c)   { string t = kama_fmt_char(cp: c); this.writeStr(s: ref t); }
     // Format-specifier writers (interpolation fast-paths): fixed float precision + base-N integer. `upper`
     // and `prefix` are 0/1 flags; the integer is masked to `width` bits so a signed negative round-trips.
-    public fn void writeF64Prec(float64 v, int32 prec, int32 width, int32 flags) { string t = kama_fmt_f64_prec(v: v, prec: prec, width: width, flags: flags); this.writeStr(s: ref t); }
-    public fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix); this.writeStr(s: ref t); }
-    public fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
-    public fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
+    public unsafe fn void writeF64Prec(float64 v, int32 prec, int32 width, int32 flags) { string t = kama_fmt_f64_prec(v: v, prec: prec, width: width, flags: flags); this.writeStr(s: ref t); }
+    public unsafe fn void writeU64Radix(uint64 v, int32 radix, int32 width, int32 upper, int32 prefix) { string t = kama_fmt_u64_radix(v: v, radix: radix, width: width, upper: upper, prefix: prefix); this.writeStr(s: ref t); }
+    public unsafe fn void writeI64Width(int64 v, int32 width, int32 flags) { string t = kama_fmt_i64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
+    public unsafe fn void writeU64Width(uint64 v, int32 width, int32 flags) { string t = kama_fmt_u64_width(v: v, width: width, flags: flags); this.writeStr(s: ref t); }
     // Hand back the accumulated buffer as the owned result string (zero-copy move-out; the Formatter is spent).
     public unsafe fn string finish() { return kama_str_take(buf: addr(of: this.buf)); }
 }

@@ -1,0 +1,7 @@
+// NO SCALAR EXEMPTION. This extern names no pointer at all — it is `isize` in, `int32` out — and it is a
+// double-close primitive by EFFECT. 87 of the 188 lib+prelude extern declarations are pointer-free, so a
+// type-based carve-out would leave finding 1 open in its handle-closing shape while looking closed.
+extern fn int32 kama_close_socket(isize fd);
+
+fn int32 shut(isize fd) { return kama_close_socket(fd: fd) + kama_close_socket(fd: fd); }
+fn int32 main() { return 0; }

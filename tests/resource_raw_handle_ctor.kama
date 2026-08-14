@@ -10,7 +10,7 @@ type resource Handle {
     int32 h;
     public ctor open(int32 v) { this.h = v; }
     public fn int32 val() { return this.h; }
-    ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
+    unsafe ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
 }
 
 type resource Wrapper {
@@ -25,7 +25,7 @@ fn int build() {
     return w.val();                                  // w drops here -> Wrapper__dtor -> Handle__dtor -> trace(5) ONCE
 }
 
-fn int main() {
+unsafe fn int main() {
     int v = build();
     // exactly ONE Handle drop (the live one). fold of a single trace(5): 0*31 + 5 = 5.
     // A spurious drop of the zeroed `inner` at the field-first-write would fold in a second 5 -> 160.

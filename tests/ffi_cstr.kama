@@ -1,4 +1,4 @@
 // FFI: pass a kama string to a C const char* via .cstr() (header-based).
 extern "<string.h>";
 extern fn usize strlen(UnsafePtr<int8> s);
-fn int main() { string s = "**"; int32 n = cast<int32>(strlen(s: s.cstr())); return n * 21; }  // 2*21=42
+unsafe fn int main() { string s = "**"; int32 n = cast<int32>(strlen(s: s.cstr())); return n * 21; }  // 2*21=42

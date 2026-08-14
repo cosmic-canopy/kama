@@ -70,51 +70,51 @@ type contract Real<T is This> for value, intrinsic {
 }
 
 type intrinsic <float64> implements Real<This> {
-    public fn float64 sqrt()  { return kama_sqrt(x: this); }
-    public fn float64 cbrt()  { return kama_cbrt(x: this); }
-    public fn float64 sin()   { return kama_sin(x: this); }
-    public fn float64 cos()   { return kama_cos(x: this); }
-    public fn float64 tan()   { return kama_tan(x: this); }
-    public fn float64 asin()  { return kama_asin(x: this); }
-    public fn float64 acos()  { return kama_acos(x: this); }
-    public fn float64 atan()  { return kama_atan(x: this); }
-    public fn float64 exp()   { return kama_exp(x: this); }
-    public fn float64 log()   { return kama_log(x: this); }
-    public fn float64 log2()  { return kama_log2(x: this); }
-    public fn float64 log10() { return kama_log10(x: this); }
-    public fn float64 floor() { return kama_floor(x: this); }
-    public fn float64 ceil()  { return kama_ceil(x: this); }
-    public fn float64 round() { return kama_round(x: this); }
-    public fn float64 trunc() { return kama_trunc(x: this); }
-    public fn float64 abs()   { return kama_fabs(x: this); }
-    public fn float64 pow(float64 y)   { return kama_pow(x: this, y: y); }
-    public fn float64 fmod(float64 y)  { return kama_fmod(x: this, y: y); }
-    public fn float64 atan2(float64 x) { return kama_atan2(x: this, y: x); }
-    public fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
+    public unsafe fn float64 sqrt()  { return kama_sqrt(x: this); }
+    public unsafe fn float64 cbrt()  { return kama_cbrt(x: this); }
+    public unsafe fn float64 sin()   { return kama_sin(x: this); }
+    public unsafe fn float64 cos()   { return kama_cos(x: this); }
+    public unsafe fn float64 tan()   { return kama_tan(x: this); }
+    public unsafe fn float64 asin()  { return kama_asin(x: this); }
+    public unsafe fn float64 acos()  { return kama_acos(x: this); }
+    public unsafe fn float64 atan()  { return kama_atan(x: this); }
+    public unsafe fn float64 exp()   { return kama_exp(x: this); }
+    public unsafe fn float64 log()   { return kama_log(x: this); }
+    public unsafe fn float64 log2()  { return kama_log2(x: this); }
+    public unsafe fn float64 log10() { return kama_log10(x: this); }
+    public unsafe fn float64 floor() { return kama_floor(x: this); }
+    public unsafe fn float64 ceil()  { return kama_ceil(x: this); }
+    public unsafe fn float64 round() { return kama_round(x: this); }
+    public unsafe fn float64 trunc() { return kama_trunc(x: this); }
+    public unsafe fn float64 abs()   { return kama_fabs(x: this); }
+    public unsafe fn float64 pow(float64 y)   { return kama_pow(x: this, y: y); }
+    public unsafe fn float64 fmod(float64 y)  { return kama_fmod(x: this, y: y); }
+    public unsafe fn float64 atan2(float64 x) { return kama_atan2(x: this, y: x); }
+    public unsafe fn float64 hypot(float64 y) { return kama_hypot(x: this, y: y); }
 }
 
 type intrinsic <float32> implements Real<This> {
-    public fn float32 sqrt()  { return kama_sqrtf(x: this); }
-    public fn float32 cbrt()  { return kama_cbrtf(x: this); }
-    public fn float32 sin()   { return kama_sinf(x: this); }
-    public fn float32 cos()   { return kama_cosf(x: this); }
-    public fn float32 tan()   { return kama_tanf(x: this); }
-    public fn float32 asin()  { return kama_asinf(x: this); }
-    public fn float32 acos()  { return kama_acosf(x: this); }
-    public fn float32 atan()  { return kama_atanf(x: this); }
-    public fn float32 exp()   { return kama_expf(x: this); }
-    public fn float32 log()   { return kama_logf(x: this); }
-    public fn float32 log2()  { return kama_log2f(x: this); }
-    public fn float32 log10() { return kama_log10f(x: this); }
-    public fn float32 floor() { return kama_floorf(x: this); }
-    public fn float32 ceil()  { return kama_ceilf(x: this); }
-    public fn float32 round() { return kama_roundf(x: this); }
-    public fn float32 trunc() { return kama_truncf(x: this); }
-    public fn float32 abs()   { return kama_fabsf(x: this); }
-    public fn float32 pow(float32 y)   { return kama_powf(x: this, y: y); }
-    public fn float32 fmod(float32 y)  { return kama_fmodf(x: this, y: y); }
-    public fn float32 atan2(float32 x) { return kama_atan2f(x: this, y: x); }
-    public fn float32 hypot(float32 y) { return kama_hypotf(x: this, y: y); }
+    public unsafe fn float32 sqrt()  { return kama_sqrtf(x: this); }
+    public unsafe fn float32 cbrt()  { return kama_cbrtf(x: this); }
+    public unsafe fn float32 sin()   { return kama_sinf(x: this); }
+    public unsafe fn float32 cos()   { return kama_cosf(x: this); }
+    public unsafe fn float32 tan()   { return kama_tanf(x: this); }
+    public unsafe fn float32 asin()  { return kama_asinf(x: this); }
+    public unsafe fn float32 acos()  { return kama_acosf(x: this); }
+    public unsafe fn float32 atan()  { return kama_atanf(x: this); }
+    public unsafe fn float32 exp()   { return kama_expf(x: this); }
+    public unsafe fn float32 log()   { return kama_logf(x: this); }
+    public unsafe fn float32 log2()  { return kama_log2f(x: this); }
+    public unsafe fn float32 log10() { return kama_log10f(x: this); }
+    public unsafe fn float32 floor() { return kama_floorf(x: this); }
+    public unsafe fn float32 ceil()  { return kama_ceilf(x: this); }
+    public unsafe fn float32 round() { return kama_roundf(x: this); }
+    public unsafe fn float32 trunc() { return kama_truncf(x: this); }
+    public unsafe fn float32 abs()   { return kama_fabsf(x: this); }
+    public unsafe fn float32 pow(float32 y)   { return kama_powf(x: this, y: y); }
+    public unsafe fn float32 fmod(float32 y)  { return kama_fmodf(x: this, y: y); }
+    public unsafe fn float32 atan2(float32 x) { return kama_atan2f(x: this, y: x); }
+    public unsafe fn float32 hypot(float32 y) { return kama_hypotf(x: this, y: y); }
 }
 
 // --- the public surface: one name, either width, inferred from the argument ----------------------

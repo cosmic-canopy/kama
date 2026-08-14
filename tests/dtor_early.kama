@@ -5,7 +5,7 @@ type resource Res
 {
     int id;
     public ctor make(int id) { this.id = id; }
-    ~Res() { kama_trace(code: id); }
+    unsafe ~Res() { kama_trace(code: id); }
 }
 
 fn int f(bool c)
@@ -19,7 +19,7 @@ fn int f(bool c)
     return 9;
 }
 
-fn int main()
+unsafe fn int main()
 {
     int r = f(c: true);
     return kama_trace_get();

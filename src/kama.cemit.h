@@ -1986,6 +1986,9 @@ private:
     // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the
     // classes; exprEnumType keeps the enums. See the .cpp.
     std::string callReturnTypeRaw(InvocationNode* inv);
+    // The extern-call gate. CALLING a C function is the unsafe act — the declaration is bodiless, so it
+    // carries no marker of its own. No scalar exemption: see the definition.
+    void gateExternCall(const FuncSig& sig, const std::string& name, int line);
 
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
     // `fn` is null for a module static (which accepts `@section` only).

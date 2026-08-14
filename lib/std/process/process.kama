@@ -83,7 +83,7 @@ type resource Output {
 }
 
 // Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status).
-fn ExitStatus statusOf(int32 st) {
+unsafe fn ExitStatus statusOf(int32 st) {
     if (kama_proc_exited(st: st) != 0)   { return ExitStatus.of(code: kama_proc_exit_code(st: st), signal: 0); }
     if (kama_proc_signaled(st: st) != 0) { return ExitStatus.of(code: -1, signal: kama_proc_term_signal(st: st)); }
     return ExitStatus.of(code: -1, signal: 0);
@@ -341,19 +341,19 @@ type resource Process {
 
     // Send a signal to the child. No-op if already reaped/detached (handle == 0). On Windows any signal maps
     // to TerminateProcess — see kama_kill; `signal(sig)` fidelity is POSIX-only.
-    public fn Result<Unit, IoError> signal(int32 sig) {
+    public unsafe fn Result<Unit, IoError> signal(int32 sig) {
         if (this.handle == 0) { return Result::Ok(value: Unit::Unit); }
         if (kama_kill(handle: this.handle, sig: sig) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
-    public fn Result<Unit, IoError> kill()      { return this.signal(sig: kama_SIGKILL()); }
-    public fn Result<Unit, IoError> terminate() { return this.signal(sig: kama_SIGTERM()); }
+    public unsafe fn Result<Unit, IoError> kill()      { return this.signal(sig: kama_SIGKILL()); }
+    public unsafe fn Result<Unit, IoError> terminate() { return this.signal(sig: kama_SIGTERM()); }
 
     // Non-blocking reap/detach on drop: reap if already exited, else hand the pid to the runtime's reaper
     // park, which sweeps it on a later drop (POSIX cannot reparent a live child to init while WE are still
     // running, so an un-swept pid would stay a zombie and eventually exhaust the process table — see
     // kama_proc_detach). NEVER blocks. Then the pipe Files drop, closing any live fds.
-    ~Process() {
+    unsafe ~Process() {
         if (this.handle != 0 && !this.reaped) {
             kama_proc_detach(handle: this.handle);
         }

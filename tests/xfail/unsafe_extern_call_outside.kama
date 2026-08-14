@@ -1,0 +1,19 @@
+// Finding 1, the sharpest of the boundary spike: a DOUBLE FREE with zero `unsafe` tokens in the program.
+// Only the dereference `p[i]` was ever gated, and this never dereferences — it just hands the same handle
+// to C twice. The declaration carries no marker (it is bodiless, exactly like a contract member), so the
+// CALL is the only place the boundary can be drawn.
+extern "<stdlib.h>";
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+
+type resource Handle {
+    UnsafePtr buf;
+    public unsafe ctor make() { this.buf = malloc(n: 64); return this; }
+    public unsafe fn void release() { free(p: this.buf); }
+    unsafe ~Handle() { free(p: this.buf); }
+}
+
+// The one function with no marker — and the extern call inside it is what the gate catches.
+fn void sneak(ref Handle h) { free(p: cast<UnsafePtr>(0)); }
+
+fn int32 main() { return 0; }

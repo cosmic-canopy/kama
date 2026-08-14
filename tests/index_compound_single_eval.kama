@@ -5,9 +5,9 @@
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
 
-fn int32 idx() { kama_trace(code: 1); return 1; }   // side effect: one event; returns index 1
+unsafe fn int32 idx() { kama_trace(code: 1); return 1; }   // side effect: one event; returns index 1
 
-fn int32 main() {
+unsafe fn int32 main() {
     InlineArray<int32, 3> a = [10, 20, 30];
     a[idx()] += 5;                                  // a[1] -> 25; idx() must run exactly once
     // 42 iff the element updated once AND the index was evaluated exactly once (trace acc == 1).

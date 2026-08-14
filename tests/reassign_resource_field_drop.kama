@@ -10,7 +10,7 @@ extern fn int kama_trace_get();
 type resource Inner {
     int32 tag;
     public ctor make(int32 tag) { this.tag = tag; }
-    ~Inner() { kama_trace(code: this.tag); }
+    unsafe ~Inner() { kama_trace(code: this.tag); }
 }
 type resource Outer {
     Inner inner;
@@ -18,7 +18,7 @@ type resource Outer {
     public fn void swap(int32 t) { this.inner = Inner.make(tag: t); }   // reassign a live field via a fresh ctor
 }
 
-fn int main() {
+unsafe fn int main() {
     Outer o = Outer.make(i: Inner.make(tag: 5));   // first-write: NO drop of the {0} slot
     o.swap(t: 9);                                  // reassign: MUST drop old inner(5)
     return kama_trace_get();                        // 5 (o's own final drop of inner(9) happens after this read)

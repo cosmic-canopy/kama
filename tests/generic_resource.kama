@@ -11,7 +11,7 @@ type resource Box<T> {
     T value;
     public ctor make(T v) { this.value = v; }
     public fn T get() { return this.value; }
-    ~Box() { kama_trace(code: 7); }
+    unsafe ~Box() { kama_trace(code: 7); }
 }
 
 fn Box<int32> make(int32 v) {
@@ -19,7 +19,7 @@ fn Box<int32> make(int32 v) {
     return give b;                            // move the box out (inner dtor suppressed)
 }
 
-fn int32 main() {
+unsafe fn int32 main() {
     int32 g = 0;
     {
         Box<int32> a = make(v: 5);           // owns a Box_int32

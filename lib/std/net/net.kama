@@ -43,7 +43,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     public ctor make(isize fd) { this.fd = fd; }
 
     // Connect to a numeric host:port (e.g. "127.0.0.1"). The stream closes on drop.
-    public ctor Result<TcpStream, IoError> connect(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpStream, IoError> connect(ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();
@@ -67,14 +67,14 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     }
 
     // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock.
-    public fn Result<Unit, IoError> setNonBlocking(bool on) {
+    public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
         int32 v = on ? 1 : 0;
         if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 
     // Disable Nagle's algorithm (TCP_NODELAY) — send small packets immediately. Latency-critical for games.
-    public fn Result<Unit, IoError> setNoDelay(bool on) {
+    public unsafe fn Result<Unit, IoError> setNoDelay(bool on) {
         int32 v = on ? 1 : 0;
         if (kama_set_nodelay(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
@@ -96,7 +96,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 
     // Begin a non-blocking connect. The returned stream's connection may still be in flight: poll it for
     // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback.
-    public ctor Result<TcpStream, IoError> connectNonBlocking(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpStream, IoError> connectNonBlocking(ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();
@@ -120,7 +120,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 
     // Resolve a non-blocking connect once the socket reports writable: Ok if connected, else the cause
     // (ConnectionRefused / TimedOut / …). Reads SO_ERROR — meaningful only after writability.
-    public fn Result<Unit, IoError> checkConnected() {
+    public unsafe fn Result<Unit, IoError> checkConnected() {
         if (kama_socket_error(fd: this.fd) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
@@ -135,7 +135,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     // reaching here at all. The guard is therefore REDUNDANT, and it stays deliberately — one predictable
     // compare in front of a syscall, standing between a future drop-tracking bug and a silent `close(0)`
     // on stdin. Cheap insurance against a catastrophic, near-undebuggable failure. Same for the two below.
-    ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
+    unsafe ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
 // A listening TCP socket. Closes on drop (RAII). Move-only.
@@ -144,7 +144,7 @@ type resource TcpListener {
     private ctor make(isize fd) { this.fd = fd; }
 
     // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
-    public ctor Result<TcpListener, IoError> bind(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpListener, IoError> bind(ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();
@@ -164,7 +164,7 @@ type resource TcpListener {
     }
 
     // Accept the next incoming connection (blocking). EINTR-retried.
-    public fn Result<TcpStream, IoError> accept() {
+    public unsafe fn Result<TcpStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);
             if (cfd >= 0) { return Result::Ok(value: TcpStream.make(fd: cfd)); }
@@ -173,7 +173,7 @@ type resource TcpListener {
     }
 
     // Toggle non-blocking mode. In non-blocking mode, accept() returns Err(WouldBlock) when the queue is empty.
-    public fn Result<Unit, IoError> setNonBlocking(bool on) {
+    public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
         int32 v = on ? 1 : 0;
         if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
@@ -182,5 +182,5 @@ type resource TcpListener {
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public fn isize rawHandle() { return this.fd; }
 
-    ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
+    unsafe ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
 }

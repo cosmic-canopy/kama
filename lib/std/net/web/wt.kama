@@ -27,13 +27,13 @@ type resource WtConnection implements DatagramSocket {
     private ctor make(int32 handle) { this.handle = handle; }
 
     // Open a session to an https:// URL (HTTP/3). Returns immediately; poll state() until Connected.
-    public ctor Result<WtConnection, IoError> connect(ref string url) {
+    public unsafe ctor Result<WtConnection, IoError> connect(ref string url) {
         int32 h = kama_wt_connect(url: url.cstr());
         if (h < 0) { return Result::Err(error: IoError::Other(code: 0 - 1)); }
         return Result::Ok(value: WtConnection.make(handle: h));
     }
 
-    public fn WtState state() {
+    public unsafe fn WtState state() {
         int32 s = kama_wt_state(h: this.handle);
         if (s == 0) { return WtState::Connecting; }
         if (s == 1) { return WtState::Connected; }
@@ -74,5 +74,5 @@ type resource WtConnection implements DatagramSocket {
     // No-op: web transports are always non-blocking (kept for DatagramSocket parity with native UdpSocket).
     public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
 
-    ~WtConnection() { kama_wt_close(h: this.handle); }
+    unsafe ~WtConnection() { kama_wt_close(h: this.handle); }
 }

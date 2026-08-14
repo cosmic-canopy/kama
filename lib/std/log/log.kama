@@ -39,7 +39,7 @@ fn int32 levelBits(LogLevel lv) {
     };
 }
 
-fn void setLogSink(LogSink s) { kama_set_log_sink(s: s); }
+unsafe fn void setLogSink(LogSink s) { kama_set_log_sink(s: s); }
 
 // Manual hot-path guard: `if (logEnabled(level: LogLevel::Debug, tag: "audio")) { logDebug(...) }` skips
 // building an expensive message when the record is filtered out. Reads `tag` by borrow (like `print`), never

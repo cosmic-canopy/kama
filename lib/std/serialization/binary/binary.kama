@@ -98,8 +98,8 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void writeU32(uint32 v) { this.byte(b: 7ui8); this.putU(v: cast<uint64>(v), n: 4); }
     public fn void writeU64(uint64 v) { this.byte(b: 8ui8); this.putU(v: v, n: 8); }
     // Binary stores raw IEEE-754 bits, so NaN/Inf round-trip exactly (no NotRepresentable rejection like JSON).
-    public fn void writeF32(float32 v) { this.byte(b: 9ui8);  this.putU(v: cast<uint64>(kama_f32_bits(v: v)), n: 4); }
-    public fn void writeF64(float64 v) { this.byte(b: 10ui8); this.putU(v: kama_f64_bits(v: v), n: 8); }
+    public unsafe fn void writeF32(float32 v) { this.byte(b: 9ui8);  this.putU(v: cast<uint64>(kama_f32_bits(v: v)), n: 4); }
+    public unsafe fn void writeF64(float64 v) { this.byte(b: 10ui8); this.putU(v: kama_f64_bits(v: v), n: 8); }
     public fn void writeBool(bool v) { this.byte(b: v ? 12ui8 : 11ui8); }
     public fn void writeChar(char v) { this.byte(b: 14ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
     public fn void writeString(ref string v) { this.putStr(s: ref v); }
@@ -199,8 +199,8 @@ type resource BinaryReader implements Deserializer {
     public fn uint16 readU16() { this.expectTag(t: 6ui8); return cast<uint16>(this.getU(n: 2)); }
     public fn uint32 readU32() { this.expectTag(t: 7ui8); return cast<uint32>(this.getU(n: 4)); }
     public fn uint64 readU64() { this.expectTag(t: 8ui8); return this.getU(n: 8); }
-    public fn float32 readF32() { this.expectTag(t: 9ui8);  return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
-    public fn float64 readF64() { this.expectTag(t: 10ui8); return kama_f64_from_bits(b: this.getU(n: 8)); }
+    public unsafe fn float32 readF32() { this.expectTag(t: 9ui8);  return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
+    public unsafe fn float64 readF64() { this.expectTag(t: 10ui8); return kama_f64_from_bits(b: this.getU(n: 8)); }
     public fn bool readBool() {
         uint8 b = this.next();
         if (b == 12ui8) { return true; }

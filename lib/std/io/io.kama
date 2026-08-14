@@ -60,7 +60,7 @@ type enum IoError implements Error {
 }
 
 // Read the platform's last-error ONCE (call this immediately after a failed syscall) and classify it.
-fn IoError lastError() {
+unsafe fn IoError lastError() {
     int32 e = kama_last_error();
     if (e == kama_ENOENT())       { return IoError::NotFound; }
     if (e == kama_EACCES())       { return IoError::PermissionDenied; }

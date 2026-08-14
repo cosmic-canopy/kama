@@ -1,0 +1,20 @@
+// An `unsafe fn` that ALSO does an ordinary owned-element store into a COLLECTION — the mixed shape the
+// block-to-function widening put at risk.
+//
+// The owned-element path used to be guarded by `!_inUnsafe`, meant to keep a RAW slot store out of it.
+// That was always the wrong discriminator (the raw path tests `ptrElemType`, the actual question), and it
+// became harmful once `unsafe` covered the whole function: `xs[0] = give s` on a real collection skipped
+// the release, and the `give` then fell through to the generic "bare sub-expression" reject. This fixture
+// is the guard that it stays fixed — both halves in one function, which is exactly what makes it a test.
+import std::collections::{DynamicArray};
+
+unsafe fn int32 churn() {
+    DynamicArray<string> xs = DynamicArray.empty();
+    xs.add(item: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".concat(other: "bbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    int32 probe = 7;
+    UnsafePtr<int32> raw = addr(of: probe);     // the raw half — what makes the function legitimately unsafe
+    xs[0] = give "cccccccccccccccccccccccccccccccccccccccccccccccccccc".concat(other: "dddddd");
+    return xs.length() + raw[0] - 7;
+}
+
+fn int32 main() { return churn() - 1; }

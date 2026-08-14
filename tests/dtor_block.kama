@@ -8,13 +8,13 @@ type resource Res
     {
         this.id = id;
     }
-    ~Res()
+    unsafe ~Res()
     {
         kama_trace(code: id);
     }
 }
 
-fn int main()
+unsafe fn int main()
 {
     {
         Res a = Res.make(id: 1);

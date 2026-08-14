@@ -65,6 +65,6 @@ type value Instant implements Equatable<This>, Comparable<This> {
 }
 
 // The current monotonic instant. Never runs backward; only differences are meaningful (not a wall clock).
-fn Instant monotonicNow() {
+unsafe fn Instant monotonicNow() {
     return Instant.of(rawNanos: kama_now_mono_ns());
 }
