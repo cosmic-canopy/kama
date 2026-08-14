@@ -1778,6 +1778,101 @@ bag-only convenience — a memberwise seam breaks on complex types); a separate 
 mandatory "designated"/"final" ctor every path funnels through (completeness comes from definite assignment,
 not from a funnel). Constructor **overloading** is a standing non-goal — named parameters cover it.
 
+## Immutability — `const` ✅
+
+`const` is **runtime immutability**, and it is **deep**: neither the binding nor anything reached through
+it may be mutated. (The other two axes are orthogonal — `static` is runtime associated storage, `comptime`
+is compile-time evaluation; see *Compile-time constants*.) It appears in exactly six positions:
+
+| form | what it binds |
+|---|---|
+| `const T x = init;` | a **local** — no reassign, no write through it, no `++`/`--` |
+| `const T f;` in a type body | a **field** — write-once, assignable only in a constructor |
+| `const T x` / `const ref T x` parameter | a **read-only** argument; `const ref` is a read-only borrow |
+| `const UnsafePtr<T> p` parameter | lowers to C `const T*`, for const-correct FFI |
+| `const fn` on a method | the method does not mutate its receiver |
+| `const N: int32` type parameter | a **const generic** — a compile-time value, an unrelated feature |
+
+A free function has no receiver, so `const fn` does not apply to one; nor to a `ctor`, a destructor, or an
+`operator` member. The qualifier follows the modifiers: `public unsafe const fn` parses, `const public fn`
+does not.
+
+### `const fn` — a non-mutating method
+
+Inside a `const fn` the receiver is immutable, deeply. Writing `this.f`, writing a bare field name, writing
+through `this.a.b[i]`, `++`/`--` on any of those, and passing any of them to a non-const `ref`/`out`
+parameter are all rejected. So is **moving** out of it — `give` leaves its source holding a moved-from
+value, which is a mutation — and so is `addr(of: …)`, which would hand back a writable pointer into it.
+
+Symmetrically, a **const receiver** — a `const` local, a `const`/`const ref` parameter, or `this` inside a
+`const fn` — may call only `const fn` methods. That gate is the point of the marker: it is what lets a
+caller hold a value immutably and still use it.
+
+```kama
+type value Counter {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }              // read-only
+    public const fn int32 doubled() { return this.value() * 2; }  // const calling const: fine
+    public fn void bump() { this.n = this.n + 1; }                // mutating
+}
+const Counter c = Counter.make(n: 9);
+int32 v = c.value();      // fine
+c.bump();                 // error: cannot call non-const method `bump` on a const receiver
+```
+
+**`const fn` is ABI-neutral.** It is a front-end rule only — the emitted C signature is identical either
+way, so marking a method costs nothing and changes no generated code.
+
+**A `const fn` may not return `ref T`.** A place returned out of a const method is a writable alias into
+the receiver, so `c.place() = 99` would mutate a `const` binding with no `unsafe` anywhere. The two halves
+take separate names instead — `get`/`getRef`, `iterator`/`iterMut`, `peek`/`peekRef` — which is the split
+the standard library already spelled and now the one the compiler enforces. (This is Rust's
+`get`/`get_mut`, not C++'s const-overloading, which would need every accessor written twice. A read-only
+place — C#'s `ref readonly` — would be more expressive; it is not in the language.)
+
+Operators cannot be `const fn`, and need not be: a write through `operator[]` on a const receiver is
+already rejected at the assignment, since its root is const.
+
+### Constness in a contract
+
+A contract member may be declared `const fn`, and an implementation must honor it — the promise is to
+every caller bound by the contract, and dispatch goes through a slot, so the implementation is the only
+place it can break. The same holds one level down for a `const ref` **parameter**. Only that direction is
+checked: an implementation may be *more* const than its member asks, which merely widens where it can be
+called.
+
+This is the opposite call from `unsafe`, which is **rejected** on a contract member — and the reason is
+the difference between the two markers. `unsafe` describes a *body*, which a member does not have.
+`const` constrains what a *caller* may pass as receiver, so it is signature-level and belongs on the
+declaration.
+
+An `override` may not drop `const` either: the caller sees only the base declaration, so a const receiver
+that is legal there has to stay legal for whatever subclass sits behind the slot.
+
+### What the standard library marks
+
+The query surface: `length`/`isEmpty`/`capacity`/`count`, `contains`/`indexOf`/`test`/`isSubsetOf`,
+`get`/`peek`/`first`/`last`/`floor`/`ceil`, `iterator` (but not `iterMut`), all of `Vec`/`Mat`/`Quat`/
+`Duration`/`Instant`/`Fixed`, and the protocols — `Hashable.hash`, `Equatable.equals`,
+`Comparable.compareTo`, `Error.message`, `Format.format`, `Serialize.serialize`, `Real`'s twenty-one
+members. `Equatable` and `Comparable` borrow their operand `const ref`.
+
+What it deliberately does **not** mark is as informative:
+
+- **`view()`, `slice()`, `iterMut()`, `dataPtr()`, `getRef()`** hand out a mutable window into the
+  receiver. Const on any of them would launder exactly what the rule above closes.
+- **`Map`'s and `SlotMap`'s `hasNext()`** scan forward past empty slots, so asking the question moves the
+  cursor. They are not queries — which is why `IteratorMut.hasNext` is not a const member either, even
+  though the other implementations would satisfy it.
+- **`Copyable.copy`** keeps a mutable borrow of its source: a retaining copy (`Shared`, `Weak`, a library
+  `Rc`) bumps a refcount reached through it.
+- **`Atomic<T>`** marks nothing. C++ would call `load()` const; kama does not, because this is the
+  sanctioned shared-mutable cell and saying otherwise would be the one place const lies.
+- **`fs`/`net`/`process` I/O** — `read`, `write`, `flush`, `accept`, `setNonBlocking` — change OS state
+  even though no kama field moves. Only the true accessors (`rawFd`, `rawHandle`, `state`, `id`,
+  `status`, `success`) are const.
+
 ## Uninitialized storage — `slot` ✅
 
 A `slot` names the storage an **`out` parameter is about to fill** — declared externally so the reader can

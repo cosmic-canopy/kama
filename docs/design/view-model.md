@@ -11,7 +11,10 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > without which `Viewable` and the iterator contracts cannot be spelled — has **shipped** too
 > ([SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-)).
 >
-> The remaining prerequisite is **marking the stdlib `const fn`** ([ROADMAP.md](../ROADMAP.md) row 1).
+> Both prerequisites have now shipped. The stdlib `const fn` marking landed too
+> ([SPEC.md](../SPEC.md#immutability--const-)) — but see *Field mints* below: it is **not** what
+> unblocks the four field mints, and the rule this brief used to state would have rejected three of
+> them. Nothing gates this work any longer.
 
 ## The model, in one paragraph
 
@@ -247,14 +250,49 @@ guards it.
 `const`. The error message is the entire UX of this feature: *"`xf` is borrowed by `v` for this block"*
 beats *"unknown identifier `xf`"*.
 
-**Field mints need `const fn`, which makes it a hard prerequisite rather than an independent item.** Four
-of the eight non-test mints are on a field — `binary.kama:67`, `json.kama:55`, `streams.kama:180`,
-`streams.kama:212`. Banning the *place* `this.buf` does not stop `this.someMethod()` from reallocating it,
-so the rule is: **inside `borrow this.f as v`, only a `const fn` may be called on `this`.** That is the
-`const fn` item in [ROADMAP.md](../ROADMAP.md), and this work depends on it.
+### Field mints — the rule is per-FIELD, not per-receiver
 
-There are no `ref` locals in kama, so for a plain local the block is airtight with no further rule: there
-is no way to have pre-made an alias to the host.
+> ⚠️ **This section replaces an earlier rule that did not survive its own four sites.** It used to read:
+> *"inside `borrow this.f as v`, only a `const fn` may be called on `this`"*, and it named the stdlib
+> `const fn` marking as a hard prerequisite. The marking has since **shipped** (SPEC's *Immutability*
+> section) — but it is not what unblocks these four, and the whole-`this` rule would reject three of them.
+
+Four of the eight non-test mints are on a field. Reading what is actually inside each window:
+
+| site | inside the window | under a whole-`this` const rule |
+|---|---|---|
+| `binary.kama:67` | `this.sink.write(…)`, then **`this.failWith(…)`** on the `Err` arm | `failWith` sets `this.failed` — it can never be `const fn` → **rejected** |
+| `json.kama:55` | identical shape, same `this.failWith(…)` | **rejected** |
+| `streams.kama:212` | `this.inner.read(…)`, then **`this.fill = n; this.pos = 0;`** | deep const bans the field writes → **rejected** |
+| `streams.kama:180` | `this.inner.write(…)` only | passes |
+
+Every one of those mutations touches a **different field** than the borrowed one. Banning the *place*
+`this.buf` does not stop `this.someMethod()` reallocating it — that part of the original reasoning stands —
+but "touches no field at all" is a far blunter instrument than the job needs.
+
+**The rule is disjointness of places.** Inside `borrow this.f as v { … }`, only `this.f` is frozen;
+`this.sink`, `this.inner`, `this.failed` stay fully mutable. It is sound because two distinct fields of one
+object cannot overlap in storage, so writing one can never invalidate a view into another.
+
+`const fn` keeps exactly one job under that rule, and it is a real one: a call on **`this` itself**
+(`this.reset()`) is opaque — the compiler cannot see which fields it touches. The two honest answers are a
+real effects analysis ("which fields does this method write?") or the one-bit approximation "it is
+`const fn`, so it writes nothing". Take the second. It costs nothing at these four sites, which contain no
+such call — but it is what closes the case the moment one appears.
+
+**Two clauses this needs that the old rule did not state.**
+
+1. **`this` may not escape the block.** `helper(w: ref this)` hands a callee the ability to name `this.f`
+   with no further indirection. Passing `this` or `ref this` out of a `borrow this.f as v` block must be
+   rejected, or require the callee be `const`.
+2. There are no `ref` locals in kama, so for a plain **local** host the block is airtight with no further
+   rule — there is no way to have pre-made an alias to it.
+
+**What neither rule closes.** A second field holding a raw alias to the same buffer — a
+`UnsafePtr<uint8>` pointed at `this.buf.data` — defeats per-field disjointness *and* whole-`this` const
+equally. That is contained by the unsafe seam (every touch is inside an `unsafe fn`), not eliminated by
+this brief. Worth stating plainly: per-field is not a weakening. It offers the same guarantee as the
+stricter rule against the same adversary, and accepts three sites the stricter rule rejects.
 
 ## ECS, and what the corpus says
 
@@ -314,6 +352,7 @@ the contract `for` clause has shipped, so this can now be spelled. GOALS §3c st
 that kama picked (c) and the rules match it. SPEC gains a **Views** section with the window model and the
 mint/derive/pass/store table. Every negative claim has an `xfail`: mint outside a `borrow`/`foreach`;
 naming the host inside a `borrow`; mutating the container inside a `foreach` body (finding ⑧'s missing
-fixture); calling a non-`const fn` on `this` inside `borrow this.f as v`; `View.make` no longer existing;
+fixture); calling a non-`const fn` on `this` ITSELF inside `borrow this.f as v` (a call on a DIFFERENT
+field is legal — see *Field mints*); naming `this`/`ref this` inside such a block; `View.make` no longer existing;
 `View.over` outside a `Viewable.view()` body; a `Viewable` conformance whose `view()` is missing; and
 `borrow` over a temporary. Then this file is deleted.

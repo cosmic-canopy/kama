@@ -44,15 +44,19 @@ re-reading it (two tracked entries died on contact — see §2, and three more c
 was being closed: the `for` clause's kind set, `unsafe`'s containment rule, and `Viewable`'s `friend`
 grant). **The unsafe seam shipped** — `unsafe fn` replaced `unsafe { }`, `extern` is gated at the call, and
 `UnsafePtr` is contained; findings ①②⑨ are closed, and what the language now IS lives in
-[SPEC.md](SPEC.md#unsafe-fn--raw-pointer-memory-access) and [GOALS.md](GOALS.md). Item 1 is a small prerequisite that sits ahead of larger work it unblocks:
+[SPEC.md](SPEC.md#unsafe-fn--raw-pointer-memory-access) and [GOALS.md](GOALS.md). **`const fn` shipped
+too** — the marker is now enforced through contracts, overrides, intrinsics, `@generate`, `give` and
+`addr(of:)`, and the stdlib carries 246 of them plus 48 `const ref` parameters where it carried zero
+([SPEC.md](SPEC.md#immutability--const-)). It was scheduled here as a prerequisite of item 1; probing the
+four sites it was meant to unblock showed it is not one, which is recorded in that item and in the design
+doc. The list is now ordered by severity alone:
 
 | # | work | closes | where | why here |
 |---|---|---|---|---|
-| **1** | mark the stdlib `const fn` | prerequisite | §2 | pure annotation, no compiler change; **0 uses today** though enforced on both sides. Now a **hard prerequisite of 2**, not an independent item: 4 of the 8 non-test view mints are on a *field*, and banning the place `this.buf` does not stop `this.someMethod()` reallocating it |
-| 2 | **the view model** — `borrow` is the only mint; `foreach` IS a borrow scope | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag; measured cost is 8 mint sites outside `tests/`. **Depends on 1** (the stdlib `const fn` marking). It never depended on the unsafe seam — a view's mint is an intrinsic, not a ctor |
-| 3 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by 2 (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
-| 4 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
-| 5 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
+| **1** | **the view model** — `borrow` is the only mint; `foreach` IS a borrow scope | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag; measured cost is 8 mint sites outside `tests/`. **Nothing gates it any longer.** Its brief used to require that only a `const fn` be callable on `this` inside a `borrow`, which is why the `const fn` marking sat ahead of it — but reading the four field mints killed that rule: three of them mutate a DIFFERENT field of `this` inside the window (`this.failWith(…)`, `this.fill = n`), so the whole-`this` rule rejects the sites it exists to enable. The rule is per-field disjointness; `const fn` remains the fallback for a call on `this` ITSELF, of which those four have none |
+| 2 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by 1 (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
+| 3 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
+| 4 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
 **The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
 came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
@@ -308,7 +312,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   implementing the programmer-promises one**. The fix is lexical, and `borrow` is the **only** mint —
   `foreach`/`parallel_for` are borrow scopes too, which is what retires finding ⑧'s dead guard rather than
   reviving it. Cost, measured: of 59 `.view()`/`.slice()` sites, only **11** are outside `tests/` — 8 mints
-  (4 of them on a *field*, which is why `const fn` is now a prerequisite) and 3 derives that stay free.
+  (4 of them on a *field* — those need the per-field disjointness rule, not receiver constness; see the
+  design doc) and 3 derives that stay free.
   There are **zero** long-lived views in `lib/`/`prelude/`/`examples/`/`bench/`, and `examples/webgpu`
   holds no kama `View` at all. Of Rust's four borrow abilities, three cost kama nothing it uses; the
   fourth — storing a borrow in a struct — is *already* forbidden and worked around with borrowed
