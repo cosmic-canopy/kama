@@ -1,0 +1,1 @@
+`@viewable` marks a `type contract`, not a `type view`

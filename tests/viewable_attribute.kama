@@ -1,0 +1,40 @@
+// M1a — `@viewable` on a `type contract` is recognized and inert. It marks the contract as the MINT
+// GRANT: a view is a bidirectional relationship, so it may be born only inside the view itself or inside
+// the type it views, and implementing a member of a marked contract is how the viewed type declares that
+// capability. Enforcement (the private ctor plus the gate) lands with the stdlib's grants, in one commit;
+// until then this fixture pins only that the attribute PARSES, VALIDATES, and changes no behavior.
+//
+// Both shapes a marked contract can take are exercised: a member returning a `type view` directly, and one
+// returning a CONTRACT a view implements — the latter is what `Iterable<T>.iterator()` is, and is why the
+// grant cannot be inferred from signatures alone.
+import std::collections::{DynamicArray};
+
+@viewable type contract Spanned<S> for resource { fn S span(); }
+@viewable type contract Counted for resource { fn Iterator<int32> counter(); fn int32 size(); }
+
+type view Span implements Iterator<int32> {
+    UnsafePtr<int32> p; int32 n; int32 pos;
+    public unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; this.pos = 0; }
+    public unsafe fn Optional<int32> next() {
+        if (this.pos >= this.n) { return Optional::None; }
+        int32 i = this.pos; this.pos = this.pos + 1;
+        return Optional::Some(value: copy this.p[i]);
+    }
+}
+
+type resource Buf implements Spanned<Span>, Counted {
+    DynamicArray<int32> a;
+    public ctor empty() { this.a = DynamicArray.empty(); }
+    public fn void add(int32 v) { this.a.add(item: v); }
+    public fn int32 size() { return this.a.length(); }
+    public unsafe fn Span span()    { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+    public unsafe fn Span counter() { return this.span(); }
+}
+
+fn int32 main() {
+    Buf b = Buf.empty();
+    b.add(v: 10); b.add(v: 20); b.add(v: 12);
+    int32 sum = 0;
+    foreach (int32 v in b.span()) { sum = sum + v; }
+    return sum + b.size();   // 42 + 3 = 45
+}

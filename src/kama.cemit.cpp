@@ -4664,6 +4664,25 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         ii.name = qualify(*cd->name->value); ii.scope = _nsCtx.scope; ii.usings = _nsCtx.usings;
         ii.symbolAliases = _nsCtx.symbolAliases;   // so contract sigs can name imported/library-generic types
         ii.node = cd;                              // decl site for the LSP def-site table (unused by emission)
+        ii.declFile = unit && unit->name ? *unit->name : std::string();   // for a late whole-program check
+        // `@viewable` — the mint grant (see InterfaceInfo::isViewable). Read here rather than in
+        // collectClasses because that pass `continue`s on a contract, and read at all rather than being
+        // inferred from the member signatures because the grant is a DECLARATION: `Iterable<T>.iterator()`
+        // returns the `Iterator<T>` CONTRACT, not a view, so no signature in a marked contract has to name
+        // one. What returns a view is the IMPLEMENTATION, and that is where the grant is spent.
+        if (cd->attributes)
+            for (auto& at : *cd->attributes) {
+                if (!at || !at->name) continue;
+                if (*at->name == "viewable") {
+                    if (at->args && !at->args->empty())
+                        unsupported("`@viewable` takes no arguments — it marks the whole contract, and the "
+                                    "return type of each member self-selects which ones may mint", cd->line);
+                    ii.isViewable = true;
+                } else {
+                    unsupported(("unknown contract attribute `@" + *at->name
+                                 + "` (expected `@viewable`)").c_str(), cd->line);
+                }
+            }
         // Kind gate: `for <kinds>` is MANDATORY on a contract — the designer must state which kinds may
         // implement it. The clause is a COMMA LIST meaning "any of these" (`for value, view`); there is
         // no `|` alternative in the grammar (kama.y kind_name_list), whatever older messages implied.
@@ -5099,8 +5118,18 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         else unsupported("`@generate(...)` accepts only Serialize, Deserialize, Format, "
                                          "Equatable, Hashable, of, zero", cd->line);
                     }
+                } else if (*at->name == "viewable") {
+                    // `@viewable` is a grant a contract carries, never a property of one type. Marking the
+                    // type itself would say "I may be minted anywhere", which is the forge the private ctor
+                    // exists to close — and it could not be written generically, since a bound names
+                    // contracts (kama.y type_param) and has no way to name a marked type.
+                    unsupported(("`@viewable` marks a `type contract`, not a `type "
+                                 + (cd->typeKind ? *cd->typeKind : std::string("?")) + "` — minting is a "
+                                 "capability the VIEWED type declares by implementing a marked contract, "
+                                 "so put the mark on that contract").c_str(), cd->line);
                 } else {
-                    unsupported(("unknown type attribute `@" + *at->name + "` (expected `@generate`)").c_str(), cd->line);
+                    unsupported(("unknown type attribute `@" + *at->name
+                                 + "` (expected `@generate`)").c_str(), cd->line);
                 }
             }
 
@@ -10371,6 +10400,50 @@ void CEmitter::checkViewContractCtors()
             }
         }
     }
+}
+
+// A `@viewable` contract must be able to grant something. The mark is spent by an IMPLEMENTATION whose
+// return type is a `type view`, so a member can only ever mint if its declared return type is a view
+// (`fn Span span()`) or a contract a view may implement (`fn Iterator<T> iterator()` — the shape every
+// prelude iteration contract has, and the reason this cannot be checked at collectInterfaces, where
+// neither `_classes` nor `_viewTypeNames` is populated yet).
+//
+// ONE such member is enough, deliberately: `Windowed` pairs `fn S rest()` with `fn int32 length()`, and a
+// per-member rule would reject the second for the crime of being ordinary. What is worth rejecting is a
+// contract where NO member could ever mint — there the mark is inert, and inert is exactly how a grant
+// fails silently. (`ctor` slots are excluded: a contract ctor is not a grant, since a call to one from
+// outside is neither inside the view nor inside the type it views.)
+void CEmitter::checkViewableContracts()
+{
+    auto couldMint = [&](const InterfaceInfo& ii) {
+        // The contract's OWN type parameters. `Viewable<V> { fn V view(); }` names the view through a
+        // parameter bound at the conformance site (`implements Viewable<View<T>>`), so `V` is the most
+        // direct mintable shape there is — and the one that reads as a non-view here if it is missed.
+        const std::string& key = ii.templateKey.empty() ? ii.name : ii.templateKey;
+        auto pp = _genericContractParams.find(key);
+        for (auto& m : ii.methods) {
+            if (m.isCtor || !m.returnType || !m.returnType->value) continue;
+            const std::string& r = *m.returnType->value;
+            if (_viewTypeNames.count(r)) return true;              // a `type view` by source name
+            if (_interfaces.count(r) || _genericContracts.count(r)) return true;   // a contract a view may implement
+            if (_interfaces.count(qualify(r)) || _genericContracts.count(qualify(r))) return true;
+            if (pp != _genericContractParams.end()
+                && std::find(pp->second.begin(), pp->second.end(), r) != pp->second.end()) return true;
+        }
+        return false;
+    };
+    auto check = [&](const InterfaceInfo& ii) {
+        if (!ii.isViewable || couldMint(ii)) return;
+        const std::string& shown = ii.templateKey.empty() ? ii.name : ii.templateKey;
+        ScopedStr _cu(_collectingUnitPath, ii.declFile);   // name the file that DECLARED it, not the one being checked
+        unsupported(("`@viewable` grants nothing on contract `" + shown + "` — no member returns a `type "
+                     "view`, a contract one could implement, or one of this contract's own type "
+                     "parameters, so no implementation of it could ever mint. Mark the contract that "
+                     "hands the view out").c_str(),
+                    ii.node ? ii.node->line : 0);
+    };
+    for (auto& kv : _genericContracts) check(kv.second);            // the template — its instances copy it
+    for (auto& kv : _interfaces) if (kv.second.templateKey.empty()) check(kv.second);   // non-generic only
 }
 
 // Reject every `channel<T>` (`Channel`/`Sender`/`Receiver` instance) whose element T transitively reaches
@@ -18884,6 +18957,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // After the kind gate, so a view failing a `for resource` clause hears that first — it is the more
     // fundamental problem, and the two would otherwise both fire on one declaration.
     checkViewContractCtors();
+    checkViewableContracts();
 
     // Validate export manifests: a name in `export { … };` must be a real top-level declaration in
     // that same file (catches typos + enforces per-file surfaces for directory-modules).

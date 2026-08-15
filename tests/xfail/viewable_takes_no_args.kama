@@ -1,0 +1,5 @@
+// `@viewable` marks the WHOLE contract and takes no arguments — the return type of each member
+// self-selects which ones may mint, so there is nothing for an argument list to name. (`@generate(...)`
+// is the attribute that takes one, which is what makes the mistake plausible enough to guard.)
+@viewable(Span) type contract Spanned<S> for resource { fn S span(); }
+fn int32 main() { return 0; }

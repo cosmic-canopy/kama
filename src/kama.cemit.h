@@ -480,6 +480,14 @@ struct InterfaceInfo {
     int                          pinnedParam = -1;
     std::string                  templateKey;   // the generic contract this specializes (e.g. "Iterator")
     std::vector<SharedIdentifier> typeArgs;      // the concrete args (e.g. [int32])
+    // `@viewable type contract C { … }` — the MINT GRANT. A `type view`'s constructor is private, because
+    // a view is a bidirectional relationship: it does not exist without a type to view, so it may be born
+    // only inside the view itself or inside the type it views. This flag is how a type DECLARES that it
+    // views something — implementing a member of a marked contract lets that member's body mint the view
+    // it returns. Copied into every specialization by the _genericContracts template path, so marking
+    // `Iterable<T>` marks `Iterable_int32` too.
+    bool                         isViewable = false;
+    std::string                  declFile;   // the unit that declared it — a late whole-program check scopes diagFile() from it
     ClassDeclarationNode*        node = nullptr;  // decl site (`type contract` node; LSP def-site table, unused by emission)
 };
 
@@ -1455,6 +1463,7 @@ private:
     // parameters that carry no borrow — such a view could only borrow a constructor local. Rejected at the
     // `implements`, because no body can satisfy it.
     void checkViewContractCtors();
+    void checkViewableContracts();   // a `@viewable` contract must have a member that could mint
     bool paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const;
     // The `UnsafePtr` containment rule (the unsafe seam). `namesUnsafePtr` is TRUE when a type node IS
     // `UnsafePtr` or CONTAINS one in a generic argument — `Optional<UnsafePtr>` is the shape that made a

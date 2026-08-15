@@ -1,0 +1,1 @@
+`@viewable` grants nothing on contract `Sized`

@@ -1,0 +1,1 @@
+`@viewable` takes no arguments

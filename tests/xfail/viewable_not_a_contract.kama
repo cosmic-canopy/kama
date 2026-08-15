@@ -1,0 +1,10 @@
+// `@viewable` is a grant a CONTRACT carries, never a property of one type. Marking the type itself would
+// say "I may be minted anywhere", which is exactly the forge the private constructor exists to close — and
+// it could not be written generically either, since a type-parameter bound names contracts and has no way
+// to name a marked type.
+@viewable type view Span {
+    UnsafePtr<int32> p; int32 n;
+    public unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; }
+    public fn int32 length() { return this.n; }
+}
+fn int32 main() { return 0; }

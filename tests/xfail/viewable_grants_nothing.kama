@@ -1,0 +1,13 @@
+// A `@viewable` contract must be able to grant something. The mark is spent by an implementation whose
+// return type is a `type view`, so a member can only ever mint if it returns a view or a contract a view
+// may implement. Here no member does, so the mark is INERT — and an inert grant is how the whole model
+// fails silently: the author believes minting is permitted where it is not.
+@viewable type contract Sized for resource { fn int32 size(); fn bool isEmpty(); }
+
+type resource Bag implements Sized {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public fn int32 size() { return this.n; }
+    public fn bool isEmpty() { return this.n == 0; }
+}
+fn int32 main() { return 0; }
