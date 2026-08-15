@@ -49,19 +49,26 @@ too** — the marker is now enforced through contracts, overrides, intrinsics, `
 `addr(of:)`, and the stdlib carries 246 of them plus 48 `const ref` parameters where it carried zero
 ([SPEC.md](SPEC.md#immutability--const-)). It was scheduled here as a prerequisite of item 1; probing the
 four sites it was meant to unblock showed it is not one, which is recorded in that item and in the design
-doc. **The view model shipped** — a `type view`'s ctor is private, minting is a grant carried by a
-`@viewable` contract, `main` may no longer be `unsafe`, and a mint protocol emits no vtable; findings ③④⑤⑥
-close and ⑧ is retired. What the language now IS lives in [SPEC.md](SPEC.md#slices--spans--viewt-) and
-[GOALS.md](GOALS.md) §3c, which stops promising a view "can never dangle" and says what is true instead.
-Finding ③ is **restated, not closed**: a view is now unforgeable *by accident*, and still length-trusting —
-a type that owns memory can hand out a truthful pointer with a false length, which no type system without
-lifetimes can catch. The list is now ordered by severity alone:
+doc. **The view model's MINT shipped** — a `type view`'s ctor is private, minting is a grant carried by a
+`@viewable` contract, `main` may no longer be `unsafe`, and a mint protocol emits no vtable. What the
+language now IS lives in [SPEC.md](SPEC.md#slices--spans--viewt-) and [GOALS.md](GOALS.md) §3c, which
+stops promising a view "can never dangle" and says what is true instead. Finding ③ is **restated, not
+closed** (unforgeable by accident, still length-trusting) and ⑧ is retired with its dead guard.
+
+⚠️ **④⑤⑥ did NOT close, and the row that shipped claimed they would.** That claim was a PLAN copied
+forward as a result; probing it afterwards (ASan, 2026-08-15) shows all three still compile and still
+fault. The reason is one axis the campaign never covered: the mint answers **who** may make a view, and
+`borrow` gives a **safe place to put one** — but `borrow` is *opt-in*, so the unsafe spelling
+`View<int32> v = d.view();` as a plain local is still legal, and every one of ④⑤⑥ rides it. Closing them
+means making `borrow` the only way a view survives a statement, which is source-breaking and therefore
+pre-tag. It is row 1 below. The list is ordered by severity:
 
 | # | work | closes | where | why here |
 |---|---|---|---|---|
-| **1** | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by the view mint (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
-| 2 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
-| 3 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
+| **1** | **the view WINDOW — make `borrow` mandatory** — ④⑤⑥ are live heap-use-after-frees reachable from safe kama with zero `unsafe` tokens | ④⑤⑥ | §2 | **ASan-proven open, 2026-08-15**, after the mint campaign's row asserted they would close. `borrow` shipped as a safe spelling and nothing requires it: a `View<T>` held as a plain local outlives a `d.add()` that reallocs (⑤), can be reseated through a `ref View<T>` parameter to a dead inner scope (④), and can be passed beside a `ref` to its own container in one call (⑥). Source-breaking — it makes a bare view local an error — so before the tag, and the last such change |
+| 2 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by the view mint (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
+| 3 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
+| 4 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
 **The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
 came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
@@ -295,12 +302,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   |---|---|---|---|
   | ~~1~~ | ~~`extern fn` calls are ungated — double-free, zero `unsafe`~~ — **CLOSED**: calling an `extern fn` needs an `unsafe fn`, no scalar exemption | language | — |
   | ~~2~~ | ~~`addr(of:)` + an `UnsafePtr` field = general dangling-pointer factory~~ — **CLOSED**: `UnsafePtr` is contained; producing, holding and propagating one all need an `unsafe fn` | language | — |
-  | 3 | **`View::<T>.make` is a `public ctor`** taking a raw pointer + a *trusted* length; `operator[]` bounds-checks against the supplied `len` → `heap-buffer-overflow`. No fixture ever called it | both | M |
-  | 4 | **view reseat** — nested block, loop body, **and through a `ref View<T>` parameter** → UAF. The `ref`-param form crosses a function boundary, so an intra-function depth check is *not enough* | language | S–M |
-  | 5 | **resize invalidation** — `View` over a `DynamicArray` that grows → UAF | language | M |
-  | 6 | **aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)` → UAF. Nothing checks two arguments of one call for aliasing | language | M |
+  | 3 | ~~**`View::<T>.make` is a `public ctor`**~~ — **RESTATED, not closed**: the ctor is private and minting needs a `@viewable` grant, so safe kama cannot forge one. The length is still *trusted* — a type that owns the memory can hand out a truthful pointer with a false length | both | — |
+  | 4 | **view reseat** — nested block, loop body, **and through a `ref View<T>` parameter** → UAF. The `ref`-param form crosses a function boundary, so an intra-function depth check is *not enough*. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | S–M |
+  | 5 | **resize invalidation** — `View` over a `DynamicArray` that grows → UAF. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | M |
+  | 6 | **aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)` → UAF. The overlapping-`ref` rule that shipped does not see a `ref` and a *view of the same root* as overlapping. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | M |
   | 7 | **`reserve()` reallocs without bumping `mods`** in `DynamicArray`, `Deque`, `Map`, `SlotMap` → UAF under a live iterator | stdlib | S |
-  | 8 | **the compile-time foreach-invalidation guard is dead code** — `:17611` requires `isIntrinsicColl`, which admits only `string`/`BindableFunctionPtr`/`InlineArray`, none of which has an `add`. Zero fixtures expect its diagnostic | language | S–M |
+  | ~~8~~ | ~~**the compile-time foreach-invalidation guard is dead code**~~ — **RETIRED**: the guard is gone rather than revived; the borrow window is the mechanism that replaces it | language | — |
   | ~~9~~ | ~~one `unsafe { }` disables definite assignment for the whole function~~ — **CLOSED by construction**: `unsafe` IS the function now, so relaxing locals is correct, and `out` params stopped being relaxed at all | language | — |
   | 10 | **an uninstantiated generic body gets no analysis at all** — unsafe gate, escape check, moves, definite assignment all deferred to instantiation. A package author ships `check`-green code and consumers get the errors | language, not UB | M |
   | 11 | narrowing `cast<int8>(300)` → 44, silently. No check, no fixture | wart | S |
