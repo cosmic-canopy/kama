@@ -1,0 +1,13 @@
+// Mutable-borrow uniqueness: two `ref` arguments naming the SAME place hand the callee two mutable
+// aliases to one object. Rust never checks this because `&mut` is unique by construction; kama's
+// `ref` is not, so the check lives at the call site. (Reading both is fine — say `const ref`.)
+type value Pair { public int32 lo; public int32 hi;
+    public ctor make(int32 lo, int32 hi) { this.lo = lo; this.hi = hi; } }
+
+fn void merge(ref Pair dst, ref Pair src) { dst.lo = src.hi; }
+
+fn int32 main() {
+    Pair p = Pair.make(lo: 1, hi: 2);
+    merge(dst: p, src: p);
+    return 0;
+}

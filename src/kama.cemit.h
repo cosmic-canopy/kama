@@ -863,8 +863,6 @@ private:
         auto it = _classes.find(name);
         return it != _classes.end() && it->second.isBorrow;
     }
-    std::vector<std::string> _foreachColls;  // root bindings of collections being iterated (nested foreach) —
-                                             // growing one mid-iteration (`add`) invalidates its element refs
 
     std::map<std::string, ClassInfo>   _classes;     // class name -> info
     std::map<std::string, std::string> _localTypes;  // local/param -> class name ("" if primitive)
@@ -1886,6 +1884,12 @@ private:
     static double ctAsF(const CTValue& v);
     static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;        // the root identifier a write targets
+    // The PLACE a expression designates: the base binding plus its chain of field names. This is the
+    // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field
+    // name to `this.<name>` needs `findFieldOwner`.
+    std::vector<std::string> placePath(SharedExpression e);
+    static bool placesConflict(const std::vector<std::string>& a, const std::vector<std::string>& b);
+    static std::string placeText(const std::vector<std::string>& p);   // "this.inner.buf", for diagnostics
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.
@@ -1986,7 +1990,6 @@ private:
     // (`_F4__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
     const std::string& diagFile() const;   // the file a diagnostic belongs to — see the definition
     void unsupported(const char* rawWhat, int srcLine);
-    void warning(const char* rawWhat, int srcLine);   // soft: reported, does NOT fail the build
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
     std::string demangleForDisplay(const std::string& msg, int depth = 0) const;
     // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the

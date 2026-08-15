@@ -9,7 +9,10 @@
 //     at all only because the self-type is a pinned parameter and a primitive can be widened.
 
 // Reaching the contract method through a BOUND — the spelling every concrete comparison uses below.
-fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+// `const ref`, not `ref`: it only READS its operands, and saying so is what lets `cmp(a: x, b: x)`
+// compare a value with itself — two *mutable* borrows of one place is the aliasing the call-site
+// uniqueness check rejects.
+fn Ordering cmp<T: Comparable<T>>(const ref T a, const ref T b) { return a.compareTo(other: b); }
 
 // Generic max via the bound: proves `<T: Comparable<T>>` lowers `a.compareTo(other: b)` to a static direct call.
 // (`compareTo` borrows its operand, so `a`/`b` stay live; instantiated here for the value type `int32`.)

@@ -195,22 +195,12 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
     *_out << "/* TODO(kama): unsupported " << what << " */";
 }
 
-// A SOFT diagnostic: it reports and shows up in an editor, but does not fail the build. Distinct from
-// `unsupported`, which is a hard error. Used to land a breaking rule in two steps — warn while the corpus
-// is swept, then flip to `unsupported` — so every intermediate commit stays green.
-void CEmitter::warning(const char* rawWhat, int srcLine)
-{
-    const std::string display = demangleForDisplay(rawWhat);
-    const char* what = display.c_str();
-    std::fprintf(stderr, "kama: warning: %s at %s:%d\n", what, diagFile().c_str(), srcLine);
-    Diagnostic d;
-    d.line = srcLine;
-    d.severity = DiagSeverity::Warning;
-    d.code = "warning";
-    d.message = what;
-    d.file = diagFile();
-    _diagnostics.push_back(d);
-}
+// (A soft `warning()` stood here, whose header promised it could land a breaking rule in two steps —
+// warn while the corpus is swept, then flip to `unsupported`. It never had a caller, and the promise
+// was false: `run_tests.sh` fails any fixture whose stderr matches /warning/i, deliberately, because a
+// warning is the compiler saying it does not believe its own output. Breaking rules land the other way
+// round — migrate the corpus and the rule in one commit. `DiagSeverity::Warning` itself stays; its one
+// producer is the LSP-only `undeclared-import` in the driver, which never reaches stderr.)
 
 // ---------------------------------------------------------------------------
 // Namespaces: scope prefixes + name resolution
@@ -3821,12 +3811,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << elemTy << " " << nm << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
         }
 
-        // Mark this collection as "being iterated": growing it (`add`) mid-loop reallocs its buffer
-        // and invalidates the element references — a use-after-free (verified) for a `ref` binding, a
-        // runaway loop otherwise. `emitMethodCall` rejects `add` on a root in this stack.
-        std::string iterRoot = rootBinding(fe->expression);
-        if (!iterRoot.empty()) _foreachColls.push_back(iterRoot);
-
         SharedStatement last;
         if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
             if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
@@ -3835,7 +3819,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         }
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
-        if (!iterRoot.empty()) _foreachColls.pop_back();
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
         if (fe->isRef && !hadRef) _refParams.erase(nm);
         popScope();
@@ -8633,12 +8616,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (_classes.count(elemTy) && _classes[elemTy].destructible)
             recordDestructibleLocal(nm, elemTy);
     }
-    // Mutation guard: mutating the container mid-loop is the author's concern for a user iterator (its
-    // `UnsafePtr` cursor would dangle) — the built-in `add`-reject can't see into user methods. Still push the
-    // root so a mix of a user container + a built-in field-collection `add` inside is caught.
-    std::string iterRoot = rootBinding(fe->expression);
-    if (!iterRoot.empty()) _foreachColls.push_back(iterRoot);
-
     SharedStatement last;
     if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
         if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
@@ -8647,7 +8624,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     }
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
-    if (!iterRoot.empty()) _foreachColls.pop_back();
     if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
     if (fe->isRef && !hadRef) _refParams.erase(nm);
     popScope();
@@ -11220,6 +11196,24 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 unsupported(("unknown argument name '" + kv.first + "' in call").c_str(), srcLine);
     }
 
+    // Mutable-borrow uniqueness. Two `ref`/`out` arguments naming overlapping places hand the callee two
+    // mutable aliases to one object, so anything it does through one can invalidate what it holds through
+    // the other — the classic `merge(dst: xs, src: xs)`. Rust never has to check this because `&mut` is
+    // unique by construction; kama's `ref` is not, so the check has to live at the call site. It is the
+    // SAME prefix test the view model uses for `borrow`: `f(a: x, b: ref x.lo)` conflicts because `{x}` is
+    // a prefix of `{x, lo}`. `out` is `byRef && !isConst`, so a fill overlapping a borrow is caught too.
+    std::vector<std::vector<std::string>> mutableArgPlaces;
+    auto checkArgOverlap = [&](const std::vector<std::string>& path, const std::string& pname) {
+        if (path.empty()) return;                    // not a nameable place — nothing to compare
+        for (auto& seen : mutableArgPlaces)
+            if (placesConflict(seen, path))
+                unsupported(("`" + placeText(path) + "` is passed as two overlapping mutable arguments in "
+                             "one call (`" + pname + "` aliases an earlier `ref`/`out` argument) — the "
+                             "callee would hold two mutable borrows of the same object; pass distinct "
+                             "places, or read one into a local first").c_str(), srcLine);
+        mutableArgPlaces.push_back(path);
+    };
+
     std::string s = cName + "(";
     bool first = true;
     if (!leadArg.empty()) { s += leadArg; first = false; }
@@ -11256,6 +11250,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
+        // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is
+        // mandatory), so the marker would miss the commonest spelling.
+        if (p.byRef && !p.isConst) checkArgOverlap(placePath(argExpr), p.name);
         // inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
         // `Cls__ctor(&dest, …)`, which needs an lvalue destination, so materialize a HOISTED temp
         // (declared on its own line before this statement — pure ISO C, no `({ … })`) and pass it by
@@ -11639,6 +11637,68 @@ std::string CEmitter::rootBinding(SharedExpression e) const
         return (ea->identifier && ea->identifier->value) ? *ea->identifier->value : "";
     }
     return "";
+}
+
+// The PLACE an expression designates: the base binding plus its chain of field names.
+//   `x` -> {x};  `this` -> {this};  `this.inner.buf` -> {this, inner, buf}
+// A bare field name inside a method is normalized to `this.<name>`, because that is what it
+// resolves to (see the implicit-field branch of the IdentifierNode arm of `emitExpression`) —
+// without this, `borrow this.buf as v { buf.clear(); }` would name the same storage by a path that
+// compares unequal.
+//
+// EMPTY means "not a statically-nameable place", and that is load-bearing rather than a failure
+// case: an ELEMENT (`a[i]`) has a runtime index no static rule can pin, and a CALL
+// (`this.slot().buf`) or a temporary designates no place at all. Both are rejected as borrow hosts
+// on exactly this signal. (Rust is conservative about the index projection too — it is why
+// `split_at_mut` has to exist.)
+std::vector<std::string> CEmitter::placePath(SharedExpression e)
+{
+    ASTNode* n = e.get();
+    if (!n) return {};
+    if (dynamic_cast<ThisAccessNode*>(n)) return { "this" };
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return {};
+        const std::string& nm = *id->value;
+        // A bare name that is neither a local nor a param, but IS a field of the enclosing class,
+        // is an implicit `this.<nm>`. Mirror that resolution order exactly.
+        if (!_localTypes.count(nm) && !_paramNames.count(nm) && _currentClass
+            && findFieldOwner(_currentClass, nm))
+            return { "this", nm };
+        return { nm };
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!ma->expression || !ma->identifier || !ma->identifier->value) return {};
+        std::vector<std::string> base = placePath(ma->expression);
+        if (base.empty()) return {};                 // rooted at a call/element — not a place
+        base.push_back(*ma->identifier->value);
+        return base;
+    }
+    return {};   // element access, invocation, temporary, literal — not a place
+}
+
+// Two places may overlap in storage iff one is a PREFIX of the other (equality included). If
+// neither is, they are provably disjoint: two distinct fields of one object cannot overlap, so
+// writing one can never invalidate a view into the other. That is the exact statement of the
+// disjointness argument — not an approximation — and it is what lets `borrow this.buf as v` leave
+// `this.sink` and `this.failed` fully mutable while still catching `ref this`, whose place `{this}`
+// is a prefix of `{this, buf}`.
+//
+// An empty path never conflicts: "not a place" is handled by rejecting it at the mint, not by
+// pretending it aliases everything.
+bool CEmitter::placesConflict(const std::vector<std::string>& a, const std::vector<std::string>& b)
+{
+    if (a.empty() || b.empty()) return false;
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i)
+        if (a[i] != b[i]) return false;
+    return true;
+}
+
+std::string CEmitter::placeText(const std::vector<std::string>& p)
+{
+    std::string s;
+    for (size_t i = 0; i < p.size(); ++i) { if (i) s += "."; s += p[i]; }
+    return s;
 }
 
 // The root a view-CONSTRUCTOR's borrowed pointer argument comes from, tracing through the safe
@@ -17934,18 +17994,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
     // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.
     if (cls.empty() && exprIsString(receiver)) cls = "kama_string";
-    // Iterator invalidation: growing a collection (`add`) while a `foreach` iterates it reallocs the
-    // buffer and dangles the loop's element refs (a use-after-free for a `ref` binding). Reject it — a
-    // local rule (the loop already names the collection), no lifetimes; collect + append after the loop.
-    if (method == "add" && !_foreachColls.empty() && !cls.empty() && _classes.count(cls)
-        && _classes[cls].isIntrinsicColl) {
-        std::string r = rootBinding(receiver);
-        bool iterated = false;
-        if (!r.empty()) for (auto& c : _foreachColls) if (c == r) { iterated = true; break; }
-        if (iterated)
-            unsupported(("cannot grow `" + r + "` while iterating it in a `foreach` (it would invalidate "
-                         "the loop) — collect the additions and append them after the loop").c_str(), call->line);
-    }
+    // (An iterator-invalidation guard stood here, keyed on `method == "add" && isIntrinsicColl`. It
+    // could never fire: `isIntrinsicColl` is set only for String/Owned/Shared/Weak/Bindable/Fixed, and
+    // none of those has an `add` — every growable collection is an ordinary library type. It is
+    // replaced by the view model's place rule, which makes the container unnameable for the extent of
+    // the `foreach` and so needs no method-name list to stay honest.)
     // a non-const method may not be called on a const receiver (deep const).
     // The method lives on the pointee for a smart-pointer receiver (auto-deref).
     if (isConstReceiver(receiver)) {
@@ -17966,6 +18019,35 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                         unsupported(("cannot call non-const contract method `" + method + "` on a const "
                                      "receiver (declare it `const fn` on `" + mcls
                                      + "` if it does not mutate)").c_str(), call->line);
+    }
+    // Mutable-borrow uniqueness, RECEIVER side. `emitReorderedCall` compares the `ref`/`out` arguments
+    // against each other, but it only ever sees the receiver as an already-emitted C string, so
+    // `p.absorb(other: p)` and `p.take(n: p.hi)` slipped through it. A non-`const fn` method borrows its
+    // receiver mutably, so it participates in exactly the same prefix test — checked here, where the
+    // receiver EXPRESSION is still in hand, rather than by threading it through `emitDispatch`.
+    if (!cls.empty()) {
+        std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
+        ClassInfo* rowner = nullptr;
+        MethodInfo* rmi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &rowner) : nullptr;
+        std::vector<std::string> recvPlace = placePath(receiver);
+        if (rmi && !rmi->isConst && !recvPlace.empty() && call->args) {
+            for (auto& a : *call->args) {
+                if (!a || !a->name || !a->name->value) continue;
+                const ParamSig* ps = nullptr;
+                for (auto& p : rmi->params) if (p.name == *a->name->value) { ps = &p; break; }
+                if (!ps || !ps->byRef || ps->isConst) continue;
+                SharedExpression ax = a->expression;
+                if (auto* h = dynamic_cast<HandoffNode*>(ax.get())) ax = h->value;
+                std::vector<std::string> ap = placePath(ax);
+                if (!ap.empty() && placesConflict(recvPlace, ap))
+                    unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
+                                 + "` while `" + placeText(recvPlace) + "` is its receiver — a non-`const "
+                                 "fn` borrows its receiver mutably, so this hands the method two mutable "
+                                 "borrows of the same object; pass a distinct place, read it into a local "
+                                 "first, or declare `" + method + "` a `const fn` if it does not mutate")
+                                    .c_str(), call->line);
+            }
+        }
     }
     // Smart-pointer receiver: an intrinsic (lock/expired/valid) or auto-deref to T.
     if (isSmartPtrClass(cls))

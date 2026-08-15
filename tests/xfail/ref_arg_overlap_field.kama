@@ -1,0 +1,15 @@
+// The overlap test is a PREFIX test over places, not equality: `{p}` is a prefix of `{p, lo}`, so a
+// whole-object `ref` and a `ref` to one of its fields overlap. Disjoint SIBLINGS (`p.lo` + `p.hi`)
+// stay legal — that is the same disjointness the view model's `borrow` rule rests on.
+type value Pair { public int32 lo; public int32 hi;
+    public ctor make(int32 lo, int32 hi) { this.lo = lo; this.hi = hi; } }
+
+fn void mix(ref Pair whole, ref int32 part) { whole.hi = part; }
+fn void bump(ref int32 a, ref int32 b) { a = a + b; }
+
+fn int32 main() {
+    Pair p = Pair.make(lo: 1, hi: 2);
+    bump(a: p.lo, b: p.hi);      // legal — disjoint sibling fields
+    mix(whole: p, part: p.lo);   // rejected — `{p}` is a prefix of `{p, lo}`
+    return 0;
+}

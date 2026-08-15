@@ -1,0 +1,13 @@
+// The receiver participates in mutable-borrow uniqueness too: a non-`const fn` borrows `this` mutably,
+// so `p.absorb(other: p)` hands the method two mutable borrows of one object. `emitReorderedCall` cannot
+// see this — it receives the receiver as an already-emitted C string — so the check lives in
+// `emitMethodCall`, where the receiver EXPRESSION is still in hand.
+type value Pair { public int32 lo; public int32 hi;
+    public ctor make(int32 lo, int32 hi) { this.lo = lo; this.hi = hi; }
+    public fn void absorb(ref Pair other) { this.lo = other.hi; } }
+
+fn int32 main() {
+    Pair p = Pair.make(lo: 1, hi: 2);
+    p.absorb(other: p);
+    return 0;
+}
