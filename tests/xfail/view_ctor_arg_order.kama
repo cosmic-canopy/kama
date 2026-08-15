@@ -1,0 +1,15 @@
+// A view ctor's borrow is found by ARGUMENT NAME, not by the order the call wrote its arguments.
+//
+// Named arguments are kama's calling convention: `emitReorderedCall` binds them into DECLARED order
+// through a by-name map and errors on a missing one, so writing them in a different order is the same
+// call. The escape check used to root at the first WRITTEN argument, on the convention that a view ctor
+// takes its borrow first — so simply writing the length first walked past it, and this returned a view
+// over a dead local with no diagnostic at all. The `data:`-first spelling of the SAME call was rejected.
+import std::collections::{View};
+
+unsafe fn View<int32> bad(ref int32 keep) {
+    int32 local = 7;
+    return View::<int32>.make(len: keep, data: addr(of: local));   // `keep` is a safe root; `local` is not
+}
+
+fn int32 main() { int32 k = 1; return bad(keep: ref k).length(); }

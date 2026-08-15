@@ -1,0 +1,14 @@
+// A DERIVE roots wherever its receiver roots — recursively — and that must not become an escape hatch.
+// `viewReturnRoot` now recurses into a chained receiver so that `this.view().slice(…)` roots at `this`
+// (see tests/view_derive_chain, the shape the stdlib containers use). The recursion is a strict
+// generalization, never a relaxation: here the receiver is a LOCAL array, so the derived view still
+// borrows storage that dies at return, and it is still rejected.
+import std::collections::{View, DynamicArray};
+
+unsafe fn View<int32> bad() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1);
+    return a.view().slice(from: 0, count: 1);   // roots at `a`, a local -> dangles
+}
+
+fn int32 main() { return bad().length(); }

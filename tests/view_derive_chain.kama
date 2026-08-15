@@ -1,0 +1,32 @@
+// A sub-view DERIVED from a mint, returned from a method — `this.<field>.view().slice(…)`.
+//
+// This is the shape the stdlib containers' `slice` takes once minting is confined to `view()`: a `slice`
+// no longer builds a view out of a raw pointer, it narrows the one `view()` already handed out. It only
+// compiles because `viewReturnRoot` recurses into a chained receiver. Before that it rooted through
+// `rootBinding`, which has no arm for a call, so the receiver `this.buf.view()` rooted at "" and the
+// return was rejected as though it borrowed a local — the diagnostic blaming the `return` rather than
+// the missing recursion. The negative twin is tests/xfail/view_chain_over_local.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+type resource Bag {
+    DynamicArray<int32> buf;
+    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4); }
+    public fn void add(int32 v) { this.buf.add(item: v); }
+
+    // The derive. Bounds are checked HERE so the panic names what the author called, then the
+    // construction itself is delegated — one mint, narrowed.
+    public unsafe fn View<int32> slice(int32 from, int32 count) {
+        if (from < 0 || count < 0 || from + count > this.buf.length()) { panic(msg: "Bag.slice out of bounds"); }
+        return this.buf.view().slice(from: from, count: count);
+    }
+    // A derive off a derive — the recursion has to hold at depth, not just one level.
+    public unsafe fn View<int32> tail() { return this.slice(from: 1, count: 2).slice(from: 1, count: 1); }
+}
+
+fn int32 main() {
+    Bag b = Bag.make();
+    b.add(v: 10); b.add(v: 20); b.add(v: 11); b.add(v: 99);
+    return sum(xs: b.slice(from: 0, count: 3)) + sum(xs: b.tail());   // 41 + 11 = 52
+}

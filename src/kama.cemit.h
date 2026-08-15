@@ -1896,6 +1896,13 @@ private:
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.
     std::string viewReturnRoot(SharedExpression e) const;
     std::string borrowArgRoot(SharedExpression e) const;
+    // The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the ctor's declared
+    // parameters — every one of them that can carry a borrow, not just the first one written.
+    std::string viewCtorBorrowRoot(IdentifierNode* typeId, const std::string& method,
+                                   SharedArgumentList args) const;
+    // Does a borrowed root outlive the call? (`this`, a `ref` param, or a view param.) The single
+    // predicate behind the B4 return check and the ctor-argument check, so the two cannot drift.
+    bool        isSafeViewRoot(const std::string& root) const;
     bool        rootIsConst(const std::string& root) const;   // const local/param/this/field
     bool        isConstFieldWrite(SharedExpression target);   // writing a const data member
     // Access control.

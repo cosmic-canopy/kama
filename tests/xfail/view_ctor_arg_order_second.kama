@@ -1,0 +1,21 @@
+// EVERY parameter that can carry a borrow is checked, not just one of them. A view may window more than
+// one piece of caller memory — `BitSetIter.make(words: …, modsp: addr(of: this.mods))` in the stdlib
+// borrows twice — and such a view dangles if ANY single one of its borrows does. Here the first borrow
+// argument (`words`) is a perfectly safe `ref` parameter, and only the second (`modsp`) points at a
+// ctor-local, so a check that stopped at the first borrow it found would accept this.
+import std::collections::{View};
+
+type view Pair {
+    UnsafePtr<int32> words; UnsafePtr<int32> modsp; int32 n;
+    public unsafe ctor make(UnsafePtr<int32> words, UnsafePtr<int32> modsp, int32 n) {
+        this.words = words; this.modsp = modsp; this.n = n;
+    }
+    public const fn int32 size() { return this.n; }
+}
+
+unsafe fn Pair bad(ref int32 keep) {
+    int32 local = 0;
+    return Pair.make(words: addr(of: keep), modsp: addr(of: local), n: 1);   // 2nd borrow dangles
+}
+
+fn int32 main() { int32 k = 1; return bad(keep: ref k).size(); }

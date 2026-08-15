@@ -3646,7 +3646,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // so skip the fn-shaped check here for a ctor body.
         if (retExpr && !_inNamedCtorBody && isViewCType(_currentReturnCType)) {
             std::string root = viewReturnRoot(retExpr);
-            if (root != "this" && !_refParams.count(root) && !_viewParams.count(root))
+            if (!isSafeViewRoot(root))
                 unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
                             "or a `ref` parameter — returning a view over a local would dangle; return an "
                             "owning `DynamicArray` to hand back data", n->line);
@@ -11812,31 +11812,92 @@ std::string CEmitter::borrowArgRoot(SharedExpression e) const
     return rootBinding(e);                                               // this.data -> "this"; local -> its name
 }
 
+bool CEmitter::isSafeViewRoot(const std::string& root) const
+{
+    return root == "this" || _refParams.count(root) > 0 || _viewParams.count(root) > 0;
+}
+
+// The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the declared parameters.
+//
+// Named arguments ARE kama's calling convention — `emitReorderedCall` binds them into declared order
+// through a `byName` map and errors on a missing one, so the order a call WRITES them in carries no
+// meaning. This used to root at `args[0]` on the convention (its own word) that a view ctor takes its
+// borrow first, and writing the length first walked straight past the escape check:
+//
+//     return View::<int32>.make(len: keep, data: addr(of: local));   // compiled; view over a dead local
+//     return View::<int32>.make(data: addr(of: local), len: keep);   // the SAME call, rejected
+//
+// so ask the signature instead. And ask it about EVERY parameter that can carry a borrow, not just one:
+// a multi-borrow ctor (`BitSetIter.make(words:…, modsp: addr(of: this.mods))`) dangles if any single one
+// of them does. Returns the first UNSAFE root, so the caller's diagnostic names the real offender;
+// otherwise the first borrowed root. "" means "cannot tell", which the caller rejects — the same answer
+// every other unresolvable call form here gives.
+std::string CEmitter::viewCtorBorrowRoot(IdentifierNode* typeId, const std::string& method,
+                                         SharedArgumentList args) const
+{
+    if (!typeId || !typeId->value) return "";
+    auto* self = const_cast<CEmitter*>(this);   // resolveUserName/findMethod are non-const; this query is
+    const std::string key = self->resolveUserName(*typeId->value, typeId->qualifier);
+
+    // A concrete `type view` resolves in `_classes`; a GENERIC one (`View<T>`) lives only as a template,
+    // and the template is the right place to ask: `paramCanCarryBorrow` keys on the SOURCE spelling of the
+    // parameter's type, so it answers correctly even where the monomorph cannot be pinned down.
+    SharedParameterList params;
+    if (self->_classes.count(key)) {
+        ClassInfo* owner = nullptr;
+        if (MethodInfo* mi = self->findMethod(&self->_classes[key], method, &owner))
+            if (mi->node) params = mi->node->params;
+    }
+    if (!params) {
+        auto gt = _genericTypes.find(key);
+        if (gt != _genericTypes.end()) {
+            auto mit = gt->second.methods.find(method);
+            if (mit != gt->second.methods.end() && mit->second.node) params = mit->second.node->params;
+        }
+    }
+    if (!params) return "";
+
+    std::map<std::string, SharedExpression> byName;
+    if (args)
+        for (auto& a : *args)
+            if (a->name && a->name->value) byName[*a->name->value] = a->expression;
+
+    std::string firstBorrowed;
+    for (auto& p : *params) {
+        if (!paramCanCarryBorrow(p.get(), std::string())) continue;
+        if (!p->identifier || !p->identifier->value) return "";
+        auto it = byName.find(*p->identifier->value);
+        if (it == byName.end()) return "";                  // a borrow argument we cannot see -> reject
+        const std::string r = borrowArgRoot(it->second);
+        if (!isSafeViewRoot(r)) return r;                   // name the one that actually dangles
+        if (firstBorrowed.empty()) firstBorrowed = r;
+    }
+    return firstBorrowed;   // "" when no parameter carries a borrow — rejected, exactly as before
+}
+
 // The root a RETURNED view ultimately borrows, dispatched on the return form:
-//  - a view constructor `View(data: <p>, len: <n>)` -> the root of its FIRST argument (the borrowed
-//    pointer/ref; a `type view`'s ctor takes its borrow first, by convention);
-//  - a chained call `recv.slice(...)` returning a view -> the receiver's root;
+//  - a view constructor `View.make(data: <p>, len: <n>)` -> viewCtorBorrowRoot, by argument NAME;
+//  - a chained call `recv.slice(...)` returning a view -> wherever the RECEIVER roots, recursively, so a
+//    derive off a mint (`this.view().slice(...)`) roots at `this` instead of nowhere;
 //  - a bare place (a view local/param) -> rootBinding (a param roots at itself; a local likewise, and a
 //    local's borrow provenance is unknown, so it is correctly rejected).
 std::string CEmitter::viewReturnRoot(SharedExpression e) const
 {
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
-        std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
-        bool bareCall = !inv->expression;   // `View(...)` has no receiver; `recv.m(...)` does
-        if (bareCall && _viewTypeNames.count(callee)) {                  // legacy nameless view ctor `View(...)`
-            if (inv->args && !inv->args->empty()) return borrowArgRoot((*inv->args)[0]->expression);
-            return "";
-        }
+        // (No arm for a bare `View(...)`: nameless construction is rejected upstream — "nameless
+        //  construction 'Span(...)' is no longer allowed — use a named constructor".)
         if (inv->expression)                                            // `recv.slice(...)` or `View.make(...)`
             if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
-                // Dot-on-type view ctor `View.make(...)`: the receiver names a view TYPE (not an instance),
-                // so it borrows like the legacy nameless `View(...)` — root at its first (pointer) argument.
+                const std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+                // Dot-on-type view ctor `View.make(...)`: the receiver names a view TYPE, not an instance.
                 if (auto* id = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                    if (id->value && (!id->qualifier || id->qualifier->empty()) && _viewTypeNames.count(*id->value)) {
-                        if (inv->args && !inv->args->empty()) return borrowArgRoot((*inv->args)[0]->expression);
-                        return "";
-                    }
-                if (ma->expression) return rootBinding(ma->expression);  // chained: `recv.slice(...)` -> receiver's root
+                    if (id->value && _viewTypeNames.count(*id->value))
+                        return viewCtorBorrowRoot(id, method, inv->args);
+                // Chained: `recv.slice(...)`. RECURSE rather than `rootBinding` — the receiver may itself be
+                // a call (`this.view().slice(...)`), and `rootBinding` has no InvocationNode arm, so it
+                // answered "" and the derive was rejected as if it borrowed a local. A strict
+                // generalization: for any non-invocation receiver `viewReturnRoot` IS `rootBinding`.
+                if (ma->expression) return viewReturnRoot(ma->expression);
             }
         return "";                                                      // unknown call form -> reject
     }
