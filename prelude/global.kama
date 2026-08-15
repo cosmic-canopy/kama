@@ -325,6 +325,13 @@ type intrinsic <string>  implements Deserialize  { public ctor Result<string, st
 // clamped to the available bytes rather than reading past the end.
 type view Chars implements Iterator<char> {
     UnsafePtr<uint8> data; int32 len; int32 pos;
+    // The compiler calls this for `s.chars()`. It used to write a POSITIONAL C compound literal
+    // (`{ data, len, 0 }`) instead, which had to match the field order on the line above and nothing
+    // checked that it did — reordering a field here silently miscompiled every string iteration in the
+    // program. A real constructor makes the C compiler the checker. Private like every view ctor: `Chars`
+    // views a `string`, and `string` is a primitive whose `.chars()` is syntax, so the emitter stands in
+    // for the viewed type exactly as it does for `foreach`.
+    unsafe ctor over(UnsafePtr<uint8> at, int32 count) { this.data = at; this.len = count; this.pos = 0; }
     public unsafe fn Optional<char> next() {
         if (this.pos >= this.len) { return Optional::None; }
         uint32 c0 = cast<uint32>(this.data[this.pos]);
@@ -351,6 +358,12 @@ type view Chars implements Iterator<char> {
 extern fn string kama_string_from_raw(UnsafePtr<uint8> src, int32 start, int32 len);
 type view Split implements Iterator<string> {
     UnsafePtr<uint8> data; int32 len; UnsafePtr<uint8> sep; int32 seplen; int32 pos; bool done;
+    // As with `Chars.over` — the compiler calls this for `s.split(separator:)`, in place of a six-field
+    // positional compound literal that no check tied to the field order above.
+    unsafe ctor over(UnsafePtr<uint8> at, int32 count, UnsafePtr<uint8> sepAt, int32 sepCount) {
+        this.data = at; this.len = count; this.sep = sepAt; this.seplen = sepCount;
+        this.pos = 0; this.done = false;
+    }
     public unsafe fn Optional<string> next() {
         if (this.done) { return Optional::None; }
         if (this.seplen == 0) {

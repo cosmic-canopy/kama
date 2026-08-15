@@ -18492,8 +18492,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (method == "chars") {
             std::string sv = stableBorrow(receiver, "receiver");
             if (sv.empty()) return "0";
+            // A real constructor, not a positional compound literal. `{ data, len, 0 }` had to match the
+            // field order in `prelude/global.kama` and nothing checked that it did, so reordering a field
+            // there miscompiled every string iteration in silence. Now the C compiler checks it.
             std::string charsC = cType(synthId("Chars"));
-            return "((" + charsC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, 0 })";
+            return "(" + charsC + "__over((uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len))";
         }
         // split — borrows the receiver AND the separator; materialize each independently.
         SharedExpression sepExpr = (call->args && call->args->size() == 1) ? (*call->args)[0]->expression
@@ -18503,8 +18506,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string sep = sepExpr ? stableBorrow(sepExpr, "separator") : std::string("kama_string_lit(\"\", 0)");
         if (sep.empty()) return "0";
         std::string splitC = cType(synthId("Split"));
-        return "((" + splitC + "){ (uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
-             + sep + ").data, (int32_t)(" + sep + ").len, 0, false })";
+        return "(" + splitC + "__over((uint8_t*)(" + sv + ").data, (int32_t)(" + sv + ").len, (uint8_t*)("
+             + sep + ").data, (int32_t)(" + sep + ").len))";
     }
     std::string recvPtr;
     if (auto* ea = dynamic_cast<ElementAccessNode*>(receiver.get())) {
