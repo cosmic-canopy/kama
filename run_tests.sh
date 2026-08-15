@@ -172,20 +172,74 @@ build_one() {
         "$KAMA" build "$@" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$out"
     fi
 }
+# Run a fixture under a WATCHDOG, because a fixture that hangs used to wedge the whole suite forever.
+#
+# `tests/fs_raii.kama` has hung the wasm leg twice (2026-08-13, 2026-08-15), `node` blocked at 0% CPU
+# with an alive event loop. Neither time produced a single byte of evidence: there was no time bound, so
+# the runner simply waited, the log's mtime froze, and the only way to learn WHICH fixture was stuck was
+# `podman exec ps`. Both times a re-run passed, so it was written off as a flake — 0% CPU is *blocked*,
+# not slow, and a flake does not pick the same fixture twice.
+#
+# So: bound it, and make the timeout produce the evidence the hang never did. On expiry the child gets
+# SIGUSR2 first — for `node` that writes a diagnostic report naming every live libuv handle (`timer`,
+# `fs_event`, `tcp`, …), i.e. exactly what the loop is waiting on — and only then SIGKILL.
+#
+# Hand-rolled rather than `timeout(1)`: macOS ships neither `timeout` nor `gtimeout`, and the native leg
+# is the host leg. Two extra idle processes per fixture is the price; the suite already forks per fixture.
+# $1 is a marker path: the watchdog TOUCHES it when it fires, and that — not the exit code — is how the
+# caller knows. Inferring "was it killed?" from `128 + signo` does not survive the platform: SIGUSR2 is 12
+# on Linux and 31 on macOS, and the native leg is the host leg, so an exit-code test would silently stop
+# recognising a hang on exactly one platform. A file is unambiguous everywhere.
+KAMA_FIXTURE_TIMEOUT="${KAMA_FIXTURE_TIMEOUT:-120}"   # seconds; 0 disables. Slowest real fixture: ~1.2s.
+watchdog_run() {
+    local mark="$1"; shift
+    if [ "$KAMA_FIXTURE_TIMEOUT" = 0 ]; then "$@"; return $?; fi
+    "$@" &
+    local child=$!
+    ( sleep "$KAMA_FIXTURE_TIMEOUT"
+      kill -0 "$child" 2>/dev/null || exit 0          # finished in time — nothing to do
+      : >"$mark"
+      kill -s USR2 "$child" 2>/dev/null               # ask node to dump WHY it is still alive
+      sleep 3
+      kill -s KILL "$child" 2>/dev/null ) &
+    local dog=$!
+    wait "$child"; local rc=$?
+    kill "$dog" 2>/dev/null; wait "$dog" 2>/dev/null
+    return $rc
+}
+
 # Run one built fixture: $1 = output base path, $2 = stderr capture file. Sets global `actual`. A browser
 # transport (BROWSER=1, e.g. WebTransport) runs the wasm in headless Chromium via Playwright; other wasm
 # fixtures run under node; native runs the binary directly.
 run_one() {
+    # --report-on-signal costs nothing until the signal arrives, and both the report and the watchdog's
+    # marker land in the fixture's own build dir, which is already per-fixture and already swept.
+    local rdir; rdir="$(dirname -- "$1")"
     if [ "$WASM" = 1 ]; then
         if [ "${BROWSER:-0}" = 1 ]; then
-            KAMA_WT_CERT_HASH="$WT_CERT_HASH" node "$TESTS_DIR/support/browser_run.js" "$1.js" 2>"$2"
+            KAMA_WT_CERT_HASH="$WT_CERT_HASH" \
+            watchdog_run "$rdir/timed_out" node "$TESTS_DIR/support/browser_run.js" "$1.js" 2>"$2"
         else
-            node "$1.js" 2>"$2"
+            NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
+            watchdog_run "$rdir/timed_out" node "$1.js" 2>"$2"
         fi
     else
-        "$1" 2>"$2"
+        watchdog_run "$rdir/timed_out" "$1" 2>"$2"
     fi
     actual=$?
+}
+
+timed_out() { [ -f "$1/timed_out" ]; }
+hang_evidence() {   # $1 = the fixture's build dir
+    local r="$1/hang.json"
+    [ -f "$r" ] || { echo "  (no node report — a native fixture, or the report never got written)"; return; }
+    node -e '
+      const r = require(process.argv[1]);
+      const h = [...new Set((r.libuv || []).filter(x => x.is_active).map(x => x.type))];
+      console.log("  live libuv handles:", h.length ? h.join(", ") : "(none — loop was idle)");
+      const s = (r.javascriptStack && r.javascriptStack.stack) || [];
+      if (s.length) console.log("  js stack:", s.slice(0, 4).join(" | "));
+    ' "$r" 2>/dev/null || echo "  (report present but unreadable: $r)"
 }
 
 # The tools/check-*.sh guards. ONE runner (tools/run-checks.sh) drives them here AND in `./dev check`,
@@ -307,6 +361,10 @@ test_one() {
     fi
     run_one "$exe" "$TMP/$name.san"
     [ "$HAVE_MS" = 1 ] && echo $(( $(now_ms) - t0 )) >"$TMP/$name.ms"   # report-only build+run wall-clock
+    if timed_out "$wd"; then
+        { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
+        echo FAIL >"$res"; return
+    fi
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
@@ -405,6 +463,10 @@ multi_one() {
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"
+    if timed_out "$wd"; then
+        { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
+        echo FAIL >"$res"; return
+    fi
     if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
