@@ -1,401 +1,255 @@
-# The view model — finishing `type view` (in-flight design)
+# The view model — where a view may be born (in-flight design)
 
 *In-flight design doc. **Delete this file when the view work ships**, once GOALS §3c + SPEC carry the
 record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 
-> Written out of the safety/unsafe boundary spike (`0addb7c`). Every number below was measured, not
-> estimated; the eleven findings it refers to are in [ROADMAP.md](../ROADMAP.md) §2. Companion briefs:
-> the **unsafe seam**, which has since **shipped**
-> ([SPEC.md](../SPEC.md#what-requires-an-unsafe-fn--the-decision-table)) — `unsafe` marks the body, an
-> `extern` call is gated, and `UnsafePtr` is contained. Its other prerequisite — the contract `for` clause,
-> without which `Viewable` and the iterator contracts cannot be spelled — has **shipped** too
-> ([SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-)).
->
-> Both prerequisites have now shipped. The stdlib `const fn` marking landed too
-> ([SPEC.md](../SPEC.md#immutability--const-)) — but see *Field mints* below: it is **not** what
-> unblocks the four field mints, and the rule this brief used to state would have rejected three of
-> them. Nothing gates this work any longer.
+> **Read this before the git log.** Every claim below was **probed against a built compiler**, with the
+> command recorded. That is deliberate: the previous revision of this file specified a design that could
+> not be built (`View.over` as an intrinsic, `View` declaring no ctor, a `Viewable` that names `View<T>`
+> from the prelude), and each of those died on contact. A doc is not evidence — so this one shows its work.
 
-## The model, in one paragraph
+## Status
 
-**A view is a window into another type.** It owns nothing, destroys nothing, and it is only meaningful
-while the window is open. It does not exist independently — it is always *paired* with the thing it
-looks into. **A borrowing iterator is a view**: not by analogy but literally, since `b743f80` made all
-17 of them `type view`. An iterator is a window plus a cursor.
-
-(A *generating* iterator — `Args` is the only one in the tree; `IntRange` was cited in an earlier draft
-and does not exist — borrows nothing and is correctly a `type value`. The test is whether it holds a
-pointer into memory it does not own: `Chars` holds `UnsafePtr<uint8> data`, `Args` holds an `int32`
-cursor and copies each arg out. The
-distinction matters when spelling the contracts; see [SPEC.md](../SPEC.md#the-contract-for-clause--which-kinds-may-implement-it-).)
-
-## The two questions a view type must answer
-
-The trouble with `type view` today is that it answers one of these and pretends to answer the other.
-
-1. **Which** — this view is a window into *that* container.
-2. **How long** — the window is open *until when*.
-
-Rust answers both with one lifetime annotation, which is why they look like one question. They are
-separable, and separating them is what makes this tractable without lifetimes.
-
-For **how long**, there are exactly three answers available to any language:
-
-| | mechanism | sound? | cost |
-|---|---|---|---|
-| a | the programmer promises | C++ `span`, **kama today** | no | free |
-| b | the type system proves it | Rust `&[T]` + lifetimes | yes | annotations in every signature; the machinery [GOALS.md](../GOALS.md) §3e declines |
-| c | lexical scope bounds it | `foreach`, the `borrow` block | yes | expressiveness |
-
-**kama documents (b) and implements (a).** GOALS §3c promises a view "can never dangle"; the escape rules
-deliver something much weaker. That gap is the defect — in the docs as much as in the code — and it is why
-the type has been hard to reason about: the stated contract and the real one differ, so there is no stable
-mental model to hold.
-
-**The decision: kama picks (c).** `foreach` already *is* (c) — it scopes an iterator lexically.
-Generalising that to the whole kind is not a new concept, it is making the two members of one kind behave
-the same way.
-
-## Why (c) is nearly free *for kama specifically*
-
-Scored against Rust's four borrow abilities:
-
-| Rust ability | lost? |
+| | |
 |---|---|
-| return an interior reference | **No** — kama already allows the useful subset, rooted at `this` or a `ref` param. That is `d.view()`, `v.slice()`, `operator[] -> ref T`. |
-| relate two lifetimes in one signature | **No measurable loss** — needs a returned borrow derived from one of two params. Zero demand in the corpus. |
-| disjoint mutable borrows (`split_at_mut`) | **No** — served by built-ins: `parallel_for` splits into disjoint sub-views internally, plus `View.swap` / `sort`. |
-| **store a borrow in a struct** | **Yes — and it is already lost.** `view_field` forbids it. |
+| **Shipped — the *window*** | `borrow` opens a lexical extent; a **place** is a base plus a field chain and two places conflict iff one is a prefix of the other; overlapping `ref`/`out` arguments rejected; one `borrow` may not bind the same place twice. `a6545dc` `60ef122` `6abbb1a` |
+| **Shipped — escape-check soundness** | a view ctor's borrow is matched **by argument name**, not by position; a chained derive roots where its receiver roots. `8b6d4e6` |
+| **In flight — the *mint*** | this document: where a view may be born |
 
-kama has *already paid* Rust's expressiveness price via those shipped `xfail` fixtures; it simply has not
-been collecting Rust's guarantee in return. Going lexical does not take expressiveness away — it takes away
-the *workaround*.
+The window answers *how long*. The mint answers *from what*. Both are needed for
+[GOALS.md](../GOALS.md) §3c to mean anything.
 
-And the workaround is measurable: the **18 `type view` declarations** in `lib/`+`prelude/` carry **37**
-`UnsafePtr` fields, of which **11 are `modsp` mutation-counter pointers and 26 are borrowed data
-pointers**. That is "store a borrow in a struct", performed 26 times, with a raw pointer standing in for
-the borrow the language will not let them name. Those fields are the same shape as finding ②.
+## What the probes established
 
-> ⚠️ Earlier drafts of this file said "25 borrowed raw-pointer fields across 18 declarations", and
-> [ROADMAP.md](../ROADMAP.md) has said 17, 18 and 19 `type view` declarations in different places. Settled
-> by counting: **18 declarations = 17 borrowing iterators + `View<T>` itself**; the 19 was a grep counting
-> a comment line in `view.kama`. And separating `modsp` from the data pointers is the useful half of the
-> number, because a `modsp` points at a single `int32`, not a range, so it can never become a view.
+Run these before changing any of it; they are cheap and they are the whole basis of the design.
 
-## Measured impact of going lexical
-
-| measurement | value |
-|---|---|
-| `.view()` / `.slice()` call sites | **59** — 48 `tests/`, 9 `lib/`, 2 `examples/` |
-| non-test sites | **11** — **8 mints** (4 of them on a *field*) and **3 derives** from a `View<T>` parameter, which stay free |
-| `View` **locals** outside `tests/` | **2**, both `sort.kama:115,117`, and both *derived from a `View<T>` parameter* |
-| long-lived views in `lib/` / `prelude/` / `examples/` / `bench/` | **zero** |
-| `foreach` sites | **141** (37 `lib/`, 2 `prelude/`, 100 `tests/`, 1 `examples/`, 1 `bench/`) + **9** `parallel_for` |
-| `examples/webgpu` | holds **no kama `View`** — `WGPUStringView` is a C extern struct |
-
-## The rules
-
-- **Minting** a view *from a container* — requires a lexical window: `borrow`, `foreach`, or
-  `parallel_for`. **There is no statement-scoped temporary.**
-- **Deriving** a view *from a view* (`v.slice(...)`) — free. Same window; `parallel_for` depends on it.
-- **Passing** a view to a callee — free. A callee's frame is strictly shorter than its caller's, so **the
-  free-standing `View<T>` parameter survives unchanged** — which is most of the real usage
-  (`read(into: View<uint8>)` across `std::net`/`io`/`fs`, all of `sort`).
-- **Storing** — still forbidden. No relaxation.
-
-Gating the *mint* rather than checking the *use* is what closes the cross-function case. Finding ⑥ was
-`bad(d: ref d, v: d.view())`; inside a borrow block `d` is unnameable, so `ref d` is rejected where you
-would write it, and no depth of indirection reconstructs the pair. This is also why lexical beats a
-call-site root check: shadowing cannot rot into dead code the way finding ⑧'s guard did.
-
-**No statement-scoped temporary, and the reason is not just uniformity.** An earlier draft recommended
-allowing `integrate(xs: xf.view(), …)` on the grounds that "its window is provably the statement". The
-window is — but the *container* is not protected for that statement, and finding ⑥'s
-`bad(d: ref d, v: d.view())` **is a single statement**. Allowing the temporary would therefore have
-required a second rule (no other mention of the mint's root anywhere in the same statement). Requiring the
-block needs no such companion.
-
-## Syntax
-
-`borrow` is purely lexical — **zero codegen, zero runtime cost.**
+**1. Safe kama already cannot forge a view.** Every route to an `UnsafePtr` is gated — including the
+indirect one, which is the interesting case:
 
 ```kama
-// mint + name the window. `xf` is unnameable until the closing brace.
-borrow xf as v {
-    integrate(xs: v, dt: 2.0f32);
-    sort(items: v.slice(from: 0, count: n));    // derive — free
-    // xf.add(item: …);                          // ERROR: `xf` is borrowed by `v` for this block
+fn int32 main() {                                     // NOT unsafe
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    View<int32> v = View::<int32>.make(data: a.dataPtr(), len: 999999);
 }
-
-// multi-binding: one level, not one per component array
-borrow transforms as t, velocities as vel { movement(t: t, v: vel); }
-
-// `foreach` IS a window — it names the ELEMENTS instead of the view
-foreach (ref Transform t in xf) { … }
-foreach (K k in map) { /* map.remove(key: k) — ERROR: `map` is borrowed by the loop */ }
+// error: this call's result is a raw pointer, so it requires an `unsafe fn`
 ```
 
-Two consequences of a block being a *statement*, both benign:
+So the forge is unreachable from safe code. The type-keyed containment rule
+([SPEC](../SPEC.md#what-requires-an-unsafe-fn--the-decision-table)) holds.
+
+**2. But an `unsafe fn` can hand a bogus view *to* safe code, and its signature looks safe.**
 
 ```kama
-// a value that must escape is an ordinary pre-initialized local.
-// NOT a `slot` — SPEC rule 1: "Only an `out` argument fills a slot. Not an assignment."
-int32 ticks = 0;
-borrow ts as t { ticks = tickAll::<Timer>(items: t); }
-
-// a `slot` DOES compose, when the fill is an `out` argument: SPEC rule 3 accepts a fill in
-// "a nested block that always runs", and a `borrow` block is unconditional.
-slot File f;
-borrow d as v { openInto(src: v, dst: out f); }
-```
-
-And the block hoists out of a loop, so the common stdlib shape gets shorter rather than longer —
-`pump()`, `streams.kama:52`:
-
-```kama
-borrow scratch as s {
-    while (true) {
-        Result<usize, IoError> rr = from.read(into: s);
-        …
-        Result<Unit, IoError> wr = writeAll(w: to, bytes: s.slice(from: 0, count: k));   // derive
-        …                                                                                 // `return`
-    }                                                                                     // from inside
-}                                                                                         // is fine
-```
-
-## How a type opts in — `Viewable`
-
-```kama
-type contract Viewable<T> for value, resource, view, intrinsic { fn View<T> view(); }
-
-type resource DynamicArray<T> implements Viewable<T> {
-    UnsafePtr<T> data;  int32 len;
-    public unsafe fn View<T> view() { return View.over(base: this.data, count: this.len); }
+unsafe fn View<int32> window(ref DynamicArray<int32> a) {
+    return View::<int32>.make(data: a.dataPtr(), len: 999999);   // only the LENGTH is a lie
+}
+fn int32 main() {                                   // safe — no `unsafe` token below this line
+    View<int32> v = window(a: ref a);
+    foreach (int32 x in v) { … }                    // walks 999999 elements of a 1-element buffer
 }
 ```
 
-The `view()` member resolves **structurally**, not through contract dispatch, or it boxes — `emitForeachIterator`
-(`kama.cemit.cpp:8366`) already does exactly that for `iterator()`/`iterMut()`, which is the precedent.
-
-**Two compiler-checked facts carry the design. Neither is convention:**
-
-1. **`View.over(base:count:)` is an intrinsic, not a ctor**, legal in exactly two positions: the body of a
-   `Viewable<T>.view()` conformance, and `View`'s own `slice`. **`View` declares no ctor at all** —
-   `View.make(UnsafePtr, int32)` ceases to exist — so a forged view is *unrepresentable* rather than
-   discouraged. That is what actually kills finding ③, and it is needed precisely because under the
-   shipped unsafe seam's model — where calling an `unsafe fn` is unrestricted — a public ctor would
-   otherwise be callable from safe code.
-2. **`.view()` may appear only as the subject of a `borrow`/`foreach`.** The member is public so `borrow` can
-   resolve it; a direct `View<T> v = xf.view();` is the mint-outside-a-window error. The minting rule is
-   enforced at the call site, not at the declaration.
-
-### ⚠️ The `friend`-grant sketch is rejected — it cannot be implemented
-
-An earlier draft proposed that "`Viewable` tags the host and grants the view access to nominated private
-fields", reusing `friend Type[members];`. `friend` is real enforcement (four `xfail`s pin it), but **a
-grant is useless unless the grantee can name the member, and `View<T>` cannot**:
+**This cannot be closed by any rule.** Compare the two signatures:
 
 ```kama
-public ctor over<H: Viewable<T>>(ref H host) { this.data = host.data; }
-//                                                       ^^^^^^^^^ does not resolve
+public unsafe fn View<T> view()                          // DynamicArray — legitimate
+unsafe fn View<int32> window(ref DynamicArray<int32> a)  // the forge
 ```
 
-`H`'s only visible members are those its bound `Viewable<T>` declares, and `Viewable` is a **contract** —
-public-only — so it may not declare an `UnsafePtr` member without violating containment. The decision *not
-to parameterise the view by its host* is what makes friendship unimplementable here; there is no
-`host.data` to grant. `friend` fits one named type reaching one named member, not a generic view over an
-open set of hosts.
+Structurally identical — raw memory in, safe wrapper out, pointer rooted in something that outlives the
+call. The only difference is whether the length is truthful, which no type system without lifetimes can
+check. Rust has the same property: `Vec::as_slice` is a *safe* function with `unsafe` internals, and a
+buggy one returns a bad slice with no marker anywhere.
 
-### Kind, and why it is not the constraint
+**3. A private ctor plus `friend` already rejects an ungranted minter** — shipped machinery, zero
+compiler work, verified with generics at both ends:
 
-`Viewable` is **`for value, resource, view, intrinsic`** — anything with storage may opt in. Not
-`for resource`: that would exclude `View<T>` itself (a `type view`, and `Viewable` — which is how
-`ViewIter` windows a `View`) and `string` (a `type intrinsic`). A `type value` with inline storage is a
-legitimate host too — a `Vec4` viewed as `View<float32>` is a real engine idiom, and nothing unsound
-follows, because the host is unnameable for the window's extent and so cannot be copied or moved while it
-is open. `enum` is excluded: a tagged union's payload is not a contiguous run.
+```kama
+type view Cur<T> implements Iterator<T> {
+    friend Bag[make];
+    unsafe ctor make(UnsafePtr<T> d, int32 n) { … }        // private
+}
+unsafe fn Cur<int32> forge(UnsafePtr<int32> p) { return Cur::<int32>.make(d: p, n: 999999); }
+// error: 'make' is private in 'Cur<int32>'
+```
 
-**The real constraint is that a `borrow` host must be a *place* that outlives the block** — a local,
-field, parameter, or element, never a temporary (`borrow makeVec() as v { }`); precedent
-`tests/xfail/addr_of_temporary.kama`. That holds at every kind, which is why the kind gate is not the
-mechanism.
+⚠️ This does **not** contradict the *"`friend`-grant sketch is rejected"* finding in the previous
+revision. That rejection was about a different direction — a generic `View.over<H: Viewable<T>>(ref H host)`
+reaching into the **host's** private `data` field, which is unimplementable because `H`'s only visible
+members are those its bound declares. Here the grant runs the other way: the **view** grants access to
+**its own** ctor. Both findings stand.
 
-**Do NOT parameterise the view by its host** (`View<T, Host>`). Binding the host into the type would give
-"which" for free, but it infects every signature — `read(into: View<uint8>)` across `std::net`/`io`/`fs`
-and all of `sort` would have to name a host — and pushed to soundness it converges on lifetimes with extra
-steps, which GOALS §3e declines. Keep `View<T>`: `Viewable` + the `View.over` intrinsic supply *no
-forging*, lexical scope supplies *how long*. That division is the whole design.
+## The goal, stated honestly
 
-## `foreach` is a borrow scope
+Forging cannot be eliminated — probe 2 settles that, and it is a property of the unsafe surface, which is
+dangerous by design, deliberately small, and greppable at declarations. So the goal is:
 
-**One model, two spellings.** `borrow` opens a window and gives it a **name**; `foreach`/`parallel_for`
-open a window and give you its **elements**. They are not alternatives — you cannot substitute one for the
-other — so requiring both would be saying it twice, and they compose: inside `borrow xf as v { … }`, a
-`foreach (… in v)` is a derive.
+> **Make every mint an explicitly granted, greppable privilege, and keep the trusted set to the types
+> that own the memory.**
 
-The container becomes unnameable inside a `foreach` body. **That closes finding ⑧ by the same rule that
-closes ④⑤⑥**, and *retires* the dead compile-time invalidation guard at `kama.cemit.cpp:17611` (which
-requires `isIntrinsicColl`, admitting only `string`/`BindableFunctionPtr`/`InlineArray`, none of which has
-an `add`) rather than reviving it.
+That is an *auditability and generality* win, not a soundness win. [GOALS.md](../GOALS.md) §3c's promise
+that a view "can never dangle" overclaims and must be restated as **"safe kama cannot originate a
+dangling view; the trusted boundary is the `unsafe fn` set, greppable at declarations"** — still a
+stronger claim than C or C++ can make.
 
-Requiring `foreach` to *nest inside* a `borrow` was considered and rejected: every `foreach` over a
-container mints (`map.iterator()`, `s.chars()`, `arr.iterMut()`), so it would cost **141 `foreach` sites +
-9 `parallel_for`** and buy no safety, since `foreach` already has exactly the extent a `borrow` would give
-it.
+## The model — one idea
 
-**`foreach` is NOT desugared into `borrow`.** It stays a parallel construct sharing the model, so
-`emitForeachIterator`'s monomorphized zero-dispatch path is untouched — `tools/check-ecs-zero-dispatch.sh`
-guards it.
+> A `type view`'s constructor is **implicitly private**. Minting is a **grant**, carried by a contract
+> marked `@viewable`: implementing a member of such a contract lets that member's body mint the view it
+> returns.
 
-## Making the host unnameable
+Implicitly private is what makes this *hard to use incorrectly*. A view author writes no `friend` list
+and cannot forget to close the door; omitting the contract fails **closed** — the ctor is simply
+unreachable — rather than silently leaving a forge open.
 
-`borrow d as v { … }` marks the binding **borrowed**, with a dedicated diagnostic — not shadowing, not
-`const`. The error message is the entire UX of this feature: *"`xf` is borrowed by `v` for this block"*
-beats *"unknown identifier `xf`"*.
+```kama
+@viewable type contract Viewable<V> for value, resource, view, intrinsic { fn V view(); }
 
-### Field mints — the rule is per-FIELD, not per-receiver
+type resource DynamicArray<T, A> implements …, Viewable<View<T>> {
+    public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
+}
+```
 
-> ⚠️ **This section replaces an earlier rule that did not survive its own four sites.** It used to read:
-> *"inside `borrow this.f as v`, only a `const fn` may be called on `this`"*, and it named the stdlib
-> `const fn` marking as a hard prerequisite. The marking has since **shipped** (SPEC's *Immutability*
-> section) — but it is not what unblocks these four, and the whole-`this` rule would reject three of them.
+- **The grant:** inside a method implementing a member of a `@viewable` contract, the view type that
+  method returns may be minted.
+- **The bidirectional half:** a view type mintable this way may mint **itself** anywhere in its own
+  methods. That is what makes `View.slice` — and a future `split`/`chunks`/`first` — work with no
+  extra rule.
+- **`V` must be a `type view`.** kama has no kind bounds (a `type_param`'s `bounds` is a list of
+  *contract* names, `kama.y:769`), so this is a check on the marked contract using `implementerKind`
+  (`cemit.cpp:18524`), which already maps `ClassInfo::isBorrow` → `IK_View`.
+- **Contract-level marking is sufficient** — the return type self-selects, so a member returning `int32`
+  mints nothing and a whole-contract mark cannot over-grant. Member-level (`@viewable fn V view();`)
+  stays available if a future contract needs the precision.
 
-Four of the eight non-test mints are on a field. Reading what is actually inside each window:
+### Why the grant rides on a contract
 
-| site | inside the window | under a whole-`this` const rule |
+Two rejected alternatives, recorded so they are not re-proposed:
+
+- **Bless `View` by name in the emitter** (the previous revision's design). It does not generalize: a
+  user's own `type view DmaSpan` has the identical forge and no blessing helps, so the compiler accretes
+  one special case per view type — 16 of them in the stdlib alone.
+- **A per-method `@viewable` marker.** Tempting because it covers every mint with no new contracts, but
+  it makes the capability invisible to the type system: you cannot write a generic over "things that
+  hand out a values iterator". Contracts are how kama declares capability, and the mint is a capability.
+
+## Coverage — 16 of 16, and the gaps are real
+
+Surveying every mint site in `lib/std` + `prelude` found 23 calls across 16 view types. **Eleven sat in
+methods implementing no contract member** — which is not a flaw in the rule but a set of capabilities the
+stdlib never declared:
+
+| mint | today | contract |
 |---|---|---|
-| `binary.kama:67` | `this.sink.write(…)`, then **`this.failWith(…)`** on the `Err` arm | `failWith` sets `this.failed` — it can never be `const fn` → **rejected** |
-| `json.kama:55` | identical shape, same `this.failWith(…)` | **rejected** |
-| `streams.kama:212` | `this.inner.read(…)`, then **`this.fill = n; this.pos = 0;`** | deep const bans the field writes → **rejected** |
-| `streams.kama:180` | `this.inner.write(…)` only | passes |
+| 9 iterators via `iterator()`/`iterMut()` | `Iterable<T>` / `IterableMut<T>` | mark the two `@viewable` |
+| `Map.values()`, `Map.valuesMut()`, `SlotMap.values()`, `SlotMap.valuesMut()` | plain methods | new `ValuesIterable` / `ValuesIterableMut` — **two implementers each on day one** |
+| `Map.entries()` | plain method | new `EntriesIterable`; `SortedMap` is the natural second |
+| `BitSet.setBits()` | plain method | **`Iterable<int32>`, renamed `iterator()`** — no new contract |
+| `View<T>` | public `View.make` | new `Viewable<V>` — the open set |
 
-Every one of those mutations touches a **different field** than the borrowed one. Banning the *place*
-`this.buf` does not stop `this.someMethod()` reallocating it — that part of the original reasoning stands —
-but "touches no field at all" is a far blunter instrument than the job needs.
+These are exported, fixture-covered public API (`tests/map_values.kama`, `tests/map_entries.kama`,
+`tests/slot_map.kama`, `tests/bit_set.kama`), not implementation details. `BitSet`'s own comment says it
+*"is not `Iterable`"* — an omission rather than a decision, since yielding set-bit indices is the obvious
+iteration and the `int32` element type already rules out the C#/C++ "one `bool` per position" reading.
 
-**The rule is disjointness of places.** Inside `borrow this.f as v { … }`, only `this.f` is frozen;
-`this.sink`, `this.inner`, `this.failed` stay fully mutable. It is sound because two distinct fields of one
-object cannot overlap in storage, so writing one can never invalidate a view into another.
+⚠️ `Set.iterator` (`set.kama:50`) **returns** a `MapKeyIter` by delegating to `this.m.iterator()`. It does
+not mint, so it needs no grant — the rule must key on **calling the ctor**, never on returning a view.
 
-`const fn` keeps exactly one job under that rule, and it is a real one: a call on **`this` itself**
-(`this.reset()`) is opaque — the compiler cannot see which fields it touches. The two honest answers are a
-real effects analysis ("which fields does this method write?") or the one-bit approximation "it is
-`const fn`, so it writes nothing". Take the second. It costs nothing at these four sites, which contain no
-such call — but it is what closes the case the moment one appears.
+## What this does NOT change
 
-**Two clauses this needs that the old rule did not state.**
+**The four `foreach` nominal gates stay** (`Iterable`/`IterableMut`/`Iterator`/`IteratorMut`,
+`cemit.cpp:8602-8644`). They answer a different question — *"is this type declared iterable?"*, the
+protocol opt-in that keeps `foreach` nominal instead of duck-typed — where `@viewable` answers *"may this
+method construct this view?"*. Marking `Iterable` `@viewable` grants the mint to `iterator()`; it says
+nothing about who may be `foreach`ed.
 
-1. **`this` may not escape the block.** `helper(w: ref this)` hands a callee the ability to name `this.f`
-   with no further indirection. Passing `this` or `ref this` out of a `borrow this.f as v` block must be
-   rejected, or require the callee be `const`.
-2. There are no `ref` locals in kama, so for a plain **local** host the block is airtight with no further
-   rule — there is no way to have pre-made an alias to it.
+Keeping those four hardcoded is principled, and the distinction is exactly what condemns the old design:
+`Iterable`/`Iterator` are the **language's own** protocol contracts — `foreach` is syntax, so what it
+lowers onto is language-level, like `Deref` for `.` forwarding, `HeapOwner` for `new`, `Format` for
+interpolation. `View` is a **library type**; hardcoding *that* was the mistake.
 
-**What neither rule closes.** A second field holding a raw alias to the same buffer — a
-`UnsafePtr<uint8>` pointed at `this.buf.data` — defeats per-field disjointness *and* whole-`this` const
-equally. That is contained by the unsafe seam (every touch is inside an `unsafe fn`), not eliminated by
-this brief. Worth stating plainly: per-field is not a weakening. It offers the same guarantee as the
-stricter rule against the same adversary, and accepts three sites the stricter rule rejects.
+**Generator iterators stay grant-free.** The mint gate applies to `type view` only. An iterator that owns
+its state — `type value`/`type resource` implementing `Iterator<T>` — borrows nothing, can dangle
+nothing, and stays constructible anywhere. Already proven in tree: `Args` (`prelude/global.kama:382`,
+`foreach`'d at `tests/args_env_empty.kama:17`), `IntRange` (`tests/gencontract_value.kama`), `VecIter`
+(`tests/iter_vec.kama`).
 
-### ⚠️ Two things this rule leaves undecided — settle them BEFORE writing code
+## Milestones
 
-The per-field rule replaced the whole-`this` one late, and it is stated only for the shape the four sites
-actually use: a **direct field of `this`**, borrowed by name. Two questions its surface raises have no
-answer yet, and both are cheaper to decide now than to discover mid-implementation.
+### M1 — the attribute and the gate
 
-**1. How deep is a "place"?** `borrow this.buf as v` freezes `this.buf`. What about:
+`@viewable` recognized on a `type contract` (attributes on `type` declarations already parse,
+`kama.y:685` — no grammar change); a marked contract's view-returning members validated to return a
+`type view`; a `type view`'s ctor becomes implicitly private; the gate itself at `emitDotOnTypeCtorCall`
+(`cemit.cpp:17764`), the single choke point both `X.make(…)` and `X::<T>.make(…)` route through.
 
-- **a nested path** — `borrow this.inner.buf as v`. Is the frozen place `this.inner.buf`, or all of
-  `this.inner`? Freezing the leaf is more permissive and matches the disjointness argument (two fields of
-  `inner` cannot overlap either); freezing the whole subobject is simpler to implement and to explain.
-  Note the rule must at least reject writing `this.inner` *itself* while a view into `this.inner.buf` is
-  open, since replacing the subobject destroys the buffer.
-- **a field reached through a call** — `borrow this.slot().buf as v` is not a place at all, so presumably
-  it is simply rejected (mint only from a *named* path). Say so explicitly; it is the same "no
-  statement-scoped temporary" instinct applied to the host rather than the view.
-- **an element** — `borrow this.items[i] as v`. The index is a runtime value, so no static rule can say
-  which element is frozen. Likely answer: reject, and require the caller bind the element first. That
-  wants a fixture either way.
+Fixtures: `xfail/view_ctor_forge`, `xfail/viewable_not_marked`, `xfail/viewable_arg_not_a_view`; positive
+`viewable_user_type` — a user container minting its **own** `type view` through its **own** `@viewable`
+contract, which is the fixture that proves the generality claim.
 
-The corpus does not force the answer — all four field mints are one level deep (`this.scratch`,
-`this.buf`) — so this is a design choice, not a measurement.
+### M2 — declare the missing capabilities
 
-**2. `this` must not escape the block, and "escape" is not yet defined.** `helper(w: ref this)` inside a
-`borrow this.buf as v` hands the callee the ability to name `this.buf` with no further indirection, which
-is finding ⑥ one level up. Passing `this` or `ref this` out has to be rejected — but the same reasoning
-extends to handing out anything the callee can reach `this.buf` through, and the boundary is unclear:
+Mark `Iterable`/`IterableMut` `@viewable`. Add `ValuesIterable`/`ValuesIterableMut`/`EntriesIterable` in
+**`lib/std/collections/`, not the prelude** — `Iterable` is floor because `foreach` over a container is
+language-level, but these are not (you `foreach` the returned iterator, never the container), and keeping
+them in std is what stops the floor from growing. `BitSet implements Iterable<int32>`, `setBits()` →
+`iterator()`: **source-breaking at 3 sites** (`tests/bit_set.kama:31`,
+`tests/import_transitive_iter.kama:10`, and the doc comment at `bit_set.kama:151`).
 
-- `ref this` / `this` as an argument — clearly rejected.
-- `ref this.buf` — already dead, since the host is unnameable.
-- **`ref this.otherField`** — is that fine? Under disjointness it should be, but only if the callee cannot
-  get from `otherField` back to the container. In safe kama it cannot; through a stored `UnsafePtr` it can,
-  which is the unsafe-seam residual above rather than a new hole.
-- a **closure or `fnptr` capturing `this`** — kama has `Bindable`/`fnptr` carrying an object, so this is a
-  real path, not hypothetical.
+Fold in a cheap consistency fix: iterator **exports are inconsistent** — `map`, `slot_map` and `bit_set`
+export their iterator types; `dynamic_array`, `fixed_array`, `deque` and `view` do not.
 
-Deciding this is what makes the `borrow` diagnostic writable — *"`this` is borrowed by `v` for this
-block"* is the same UX argument the host-unnameable section makes, and it needs the same precision.
+### M3 — `View<T>` and the open set
 
-## ECS, and what the corpus says
+`Viewable<V>` in `prelude/global.kama` beside the iteration contracts. `View.make` → private
+`ctor over(at:count:)`. `DynamicArray`/`FixedArray` declare `implements Viewable<View<T>>`. Their `slice`
+becomes a **derive** — `this.view().slice(from:count:)` — which `8b6d4e6` unblocked; keep each
+container's own bounds check so the panic still names what the author called. `borrow`/`parallel_for`
+become nominal on `Viewable`, mirroring the `IterableMut` gate at `cemit.cpp:8602`, placed **after** the
+existing `view()`-resolution checks so `xfail/parfor_noncontiguous` still matches. Resolution stays
+**structural** — the contract is a gate, never a dispatch, which is what keeps the ECS path zero-dispatch.
 
-[tests/ecs_pattern.kama](../../tests/ecs_pattern.kama) is the data-oriented shape the language is meant to
-carry. A system is a free function over a `View<T>` parameter with `foreach`/`parallel_for` inside — that
-part is unchanged, and it is the majority of the code. What changes is the three call sites, which gain a
-block:
+`Viewable` is **non-boxable** (a mint protocol, not a value) and emits **no vtable**.
 
-```kama
-borrow xf as v {
-    integrate(xs: v, dt: 2.0f32);         // was :74
-    integratePar(xs: v, dt: 0.0f32);      // was :75  — parallel_for inside
-}
-```
+### M4 — `Chars`/`Split` stop being compound literals
 
-The owning `DynamicArray`s live in the world, not the systems — the standard architecture (Bevy hands a
-system its queries per run), so the model matches rather than fights it. Archetype/chunk iteration is
-`slice()`, which is a derive and therefore free.
+⛔ **They cannot leave the prelude.** `string` is floor and `foreach (char c in s.chars())` works with
+**no import** — a stated invariant in [SPEC.md](../SPEC.md) and all four fixtures. Moving them breaks
+`--no-std` outright (the prelude is embedded in `bin/kama`; `lib/` is absent) and breaks
+`registerCollection`, which calls `synthId("Chars")` unconditionally for every program using a string.
 
-**WebGPU** holds no kama `View` at all: `wgpuQueueWriteBuffer(data: cast<UnsafePtr>(addr(of: angle)),
-size: 4)` hands C a raw address plus a length, and under the unsafe seam that line's enclosing function
-becomes `unsafe fn` — the correct marking for a genuine, short-lived FFI hand-off. The place a view *would*
-appear is a mapped buffer range, which map/unmap makes **inherently** a lexical window.
+⛔ **Writing `string.chars()` in kama is also blocked** — `string` cannot declare non-contract methods in
+kama source, a contract-scoped method is not callable bare (`cemit.cpp:18343`), and there is no safe
+byte-pointer accessor to write the body with. That is a language change, not a refactor.
 
-The residual risk is an **async** mapped range — a window opened by a callback and closed later, which no
-lexical block can span. kama has no async/await today, so it does not arise; re-ask if one lands.
+✅ **Achievable and worth doing:** give them real private ctors and have the emitter call `Chars__make(…)`
+instead of writing a **positional** C compound literal (`cemit.cpp:18283`). `{ data, len, 0 }` must match
+the prelude's field order and nothing checks it — reordering a field in `global.kama:315` silently
+miscompiles. `stableBorrow` and the wrapper-scope temp relocation (`cemit.cpp:8677`) **stay**: they solve
+a different problem — a view over a string *rvalue* — and there is no general rule to fold them into.
 
-## What this closes, and what it does not
+### M5 — the shipping record
 
-Closes, from the eleven: **③** (no forgeable `View.over` — views only come from a `Viewable`), **④**
-(nothing outlives the block to reseat onto), **⑤**, **⑥**, and **⑧** (retired, not revived).
+SPEC gains the mint model and the stated limit; GOALS §3c is restated per *The goal, stated honestly*;
+[FLOOR.md](../FLOOR.md) gains `Viewable`; ROADMAP finding ③ is **restated, not deleted** —
+unforgeable-by-accident, still length-trusting. Then delete this file.
 
-⚠️ **Does not close, and must not be assumed to:** **①/②/⑨** are **already closed** by the shipped unsafe
-seam, not by this brief — do not re-derive them here. **⑦** (`reserve()` reallocs without bumping
-`mods`) is *de-fanged* here — the container is unnameable during iteration, so the exploit path closes
-lexically — but the counter is still simply wrong, and it remains a real stdlib fix covering what the
-lexical rule cannot see. **⑩** (uninstantiated generic bodies unchecked) and **⑪** (silent narrowing cast)
-are unrelated.
+## Traps — each one cost a probe
 
-## The raw-pointer fields that stay
+| trap | consequence if rediscovered late |
+|---|---|
+| **`base` is a reserved keyword** (`kama.l:386`) — `over(base:count:)` does not parse, at the parameter *and* the call site | a parse error inside `lib/std/`, so nearly every fixture fails |
+| **`Viewable` must not name `View<T>`** if it is prelude-resident — `global.kama:371` records that "DynamicArray/View aren't collected this early" | the contract would not resolve at all |
+| **`staticOnlyInterfaces` (`cemit.cpp:10496`) never fires for a generic instance** — it is the impl-block path, and generics skip `linkBases` | the zero-vtable work must go at the three consumers (`:15109`, `:18976`, `:18965`) |
+| the **`"Viewable"` template key is the bare string** only because `global.kama` has no `namespace` | a namespaced contract silently matches nothing, failing every `borrow` in the corpus |
+| `implements Viewable<View<T>>` — a contract over a nested generic instance — **is probed working**; one precedent exists (`map.kama:101`) | would otherwise look risky and get designed around |
+| **`Set.iterator` delegates, it does not mint** | a rule keyed on "returns a view" grants the wrong set |
+| `tests/fs_raii.kama` intermittently **deadlocks the wasm leg** at 0% CPU (reproduced twice, same fixture) — pre-existing and unrelated | do not diagnose it as fallout from this work |
 
-The 26 borrowed data pointers are the honest measure of what the model is missing, and the answer is
-explicit: **they stay unsafe internals.** The field *declaration* is legal per the unsafe seam's table;
-every *touch* moves inside an `unsafe fn`. `Map`/`SlotMap` hold parallel arrays sharing one `cap` and
-`Deque` is a ring buffer, so neither is expressible as a contiguous view — that is a property of the data
-structures, not a gap in the language.
+## Verification
 
-Converting the ~9 iterators that *could* hold a `View<T>` instead is **explicitly out of scope**: each
-drops one pointer rather than all of them, and `next()` currently skips bounds checking because the loop
-already proved `pos < len`, where `View.operator[]` would re-check. `-O3` will likely fold that; debug will
-not. **Measure on the `foreach` path before converting anything**, since
-`tools/check-ecs-zero-dispatch.sh` guards that loop.
-
-## Definition of done
-
-the contract `for` clause has shipped, so this can now be spelled. GOALS §3c states
-that kama picked (c) and the rules match it. SPEC gains a **Views** section with the window model and the
-mint/derive/pass/store table. Every negative claim has an `xfail`: mint outside a `borrow`/`foreach`;
-naming the host inside a `borrow`; mutating the container inside a `foreach` body (finding ⑧'s missing
-fixture); calling a non-`const fn` on `this` ITSELF inside `borrow this.f as v` (a call on a DIFFERENT
-field is legal — see *Field mints*); passing `this`/`ref this` out of such a block (scope per *Two things
-this rule leaves undecided*); `View.make` no longer existing;
-`View.over` outside a `Viewable.view()` body; a `Viewable` conformance whose `view()` is missing; and
-`borrow` over a temporary. Then this file is deleted.
+`./dev matrix` at every commit. Run once into a file, then read the file — and note that
+`./dev matrix > /tmp/m.log` sends **all** output there, so the harness's own task file stays empty and
+looks dead when it isn't. Every `xfail` must be rejected by `kama check` as well as `build`
+(`run_tests.sh:583`). The zero-vtable claim is evidenced by transpiling `tests/ecs_pattern.kama` before
+and after and diffing **empty** — a comment is not evidence.
