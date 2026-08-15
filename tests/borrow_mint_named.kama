@@ -1,0 +1,58 @@
+// `borrow` reads the GRANT, it does not guess a name. The old rule hardcoded `.view()`, which meant the
+// only windows that existed were over `DynamicArray`/`FixedArray` — a `Map` has no `view()`, so none of
+// its four iterators could ever be bounded, and a user's own mint named `.span()` was equally shut out.
+// Every `@viewable` contract member is a mint, so every one of them opens a window.
+//
+// Three grants, three windows, one file: the prelude's `Viewable<V>.view()`, `std::collections`'
+// `ValuesIterable<I>.values()`, and a USER contract's `span()`.
+import std::collections::{DynamicArray, Map, View};
+
+@viewable type contract Spanned<S> for resource { fn S span(); }
+
+type view Span implements Iterator<int32> {
+    UnsafePtr<int32> p; int32 n; int32 pos;
+    unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; this.pos = 0; }
+    public unsafe fn Optional<int32> next() {
+        if (this.pos >= this.n) { return Optional::None; }
+        int32 i = this.pos; this.pos = this.pos + 1;
+        return Optional::Some(value: copy this.p[i]);
+    }
+}
+
+type resource Buf implements Spanned<Span> {
+    DynamicArray<int32> a;
+    public ctor empty() { this.a = DynamicArray.empty(); }
+    public fn void add(int32 v) { this.a.add(item: v); }
+    public unsafe fn Span span() { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+}
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    int32 total = 0;
+
+    // 1. `Viewable<View<T>>.view()` — the prelude's grant.
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 4);
+    d.add(item: 10); d.add(item: 20);
+    borrow d.view() as v {
+        View<int32> half = v.slice(from: 0, count: 1);   // a derive off the alias — free, no new window
+        total = total + sum(xs: v) + sum(xs: half);      // 30 + 10
+    }
+
+    // 2. `ValuesIterable<MapValueIter<V>>.values()` — a mint that is NOT named `view`, over a container
+    //    that has no `view()` at all. This window had no spelling before the grant was read.
+    Map<int32, int32> m = Map.empty();
+    m.put(key: 1, value: 1); m.put(key: 2, value: 2);
+    borrow m.values() as vals {
+        foreach (int32 n in vals) { total = total + n; }  // + 3
+    }
+
+    // 3. A USER contract's grant. Nothing about `span` is known to the compiler.
+    Buf b = Buf.empty();
+    b.add(v: 4); b.add(v: 5);
+    borrow b.span() as s {
+        foreach (int32 n in s) { total = total + n; }     // + 9
+    }
+
+    return total;   // 30 + 10 + 3 + 9 = 52
+}

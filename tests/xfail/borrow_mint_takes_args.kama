@@ -1,0 +1,14 @@
+// A mint is nullary — it hands out a view of the WHOLE thing, and the window is over that. Narrowing is
+// a derive, not a mint: borrow the container and `.slice(…)` the alias inside the window, which costs
+// nothing and keeps one window per storage rather than one per sub-range.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
+    a.add(item: 1); a.add(item: 2);
+    int32 r = 0;
+    borrow a.slice(from: 0, count: 1) as v { r = sum(xs: v); }
+    return r;
+}

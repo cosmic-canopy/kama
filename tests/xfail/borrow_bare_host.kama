@@ -1,0 +1,14 @@
+// A container alone does not say WHICH view to open. `DynamicArray` grants three mints — `view`,
+// `iterator` and `iterMut` — so the old bare-host form was only unambiguous by accident, because the
+// rule hardcoded the name `view`. Name the mint: `borrow a.view() as v`.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1);
+    int32 r = 0;
+    borrow a as v { r = sum(xs: v); }
+    return r;
+}

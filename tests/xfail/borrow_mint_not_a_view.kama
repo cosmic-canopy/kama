@@ -1,0 +1,32 @@
+// A window bounds the life of a BORROW. A `@viewable` contract may carry members that are not mints —
+// `Counted` here grants `counter()` (a view) alongside `size()` (an `int32`) — so being granted is not
+// on its own enough. An `int32` owns itself and outlives nothing, so there is no borrow to bound.
+import std::collections::{DynamicArray};
+
+@viewable type contract Counted for resource { fn Iterator<int32> counter(); fn int32 size(); }
+
+type view Span implements Iterator<int32> {
+    UnsafePtr<int32> p; int32 n; int32 pos;
+    unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; this.pos = 0; }
+    public unsafe fn Optional<int32> next() {
+        if (this.pos >= this.n) { return Optional::None; }
+        int32 i = this.pos; this.pos = this.pos + 1;
+        return Optional::Some(value: copy this.p[i]);
+    }
+}
+
+type resource Buf implements Counted {
+    DynamicArray<int32> a;
+    public ctor empty() { this.a = DynamicArray.empty(); }
+    public fn void add(int32 v) { this.a.add(item: v); }
+    public fn int32 size() { return this.a.length(); }
+    public unsafe fn Span counter() { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+}
+
+fn int32 main() {
+    Buf b = Buf.empty();
+    b.add(v: 1);
+    int32 r = 0;
+    borrow b.size() as n { r = 1; }
+    return r;
+}

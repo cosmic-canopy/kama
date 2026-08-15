@@ -1,7 +1,12 @@
-// `borrow h as v { ... }` — the lexical window a view is minted into (the view model). kama answers
-// "how long is this view valid?" with lexical scope, not a lifetime and not a programmer promise, so a
-// mint has to name its extent, and the block IS that extent. Purely lexical: one C block plus one
-// initializer per binding, no runtime cost.
+// `borrow h.mint() as v { ... }` — the lexical window a view is minted into (the view model). kama
+// answers "how long is this view valid?" with lexical scope, not a lifetime and not a programmer
+// promise, so a mint has to name its extent, and the block IS that extent. Purely lexical: one C block
+// plus one initializer per binding, no runtime cost.
+//
+// The host is the MINT CALL, not the container: a type may grant several mints (`DynamicArray` grants
+// `view`, `iterator` and `iterMut`), so naming the container alone would not say which view to open.
+// The grant is a `@viewable` contract member — see tests/borrow_mint_named for a `values()` window over
+// a `Map`, which has no `view()` at all.
 //
 // This fixture is deliberately walker-heavy. A new statement node is invisible to several AST walkers
 // that have NO fallback arm, and each omission fails in a different and non-obvious way:
@@ -30,14 +35,14 @@ type resource Box {
     // storage. Borrowing the SAME place twice (`borrow a as x, a as y`) is the rejected case —
     // tests/xfail/borrow_two_bindings_overlap.
     public fn int32 pair() {
-        borrow this.buf as b, this.spare as sp { return sum(xs: b) + sum(xs: sp); }
+        borrow this.buf.view() as b, this.spare.view() as sp { return sum(xs: b) + sum(xs: sp); }
     }
 
     // A FIELD mint. Only `this.buf` freezes: `this.hits` is a different field of the same object, and
     // two distinct fields cannot overlap in storage, so writing it inside the window is sound. This is
     // the shape three of the four stdlib field mints need, and the one a whole-`this` rule would reject.
     public fn int32 total() {
-        borrow this.buf as b {
+        borrow this.buf.view() as b {
             this.hits = this.hits + 1;          // disjoint sibling — legal
             return sum(xs: b);                  // `return` from inside the window (alwaysExits)
         }
@@ -55,7 +60,7 @@ fn int32 main() {
 
     int32 viaLocal = 0;
     slot int32 filled;
-    borrow a as v {
+    borrow a.view() as v {
         DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 1);   // scanStmtForCollections
         inner.add(item: 1);
         viaLocal = sum(xs: v) + firstOr::<int32>(xs: v, dflt: 0) + inner.length();   // scanStmtForGenerics
@@ -67,7 +72,7 @@ fn int32 main() {
     DynamicArray<int32> c = DynamicArray.withCapacity(capacity: 2);
     c.add(item: 2);
     int32 multi = 0;
-    borrow a as x, c as y {
+    borrow a.view() as x, c.view() as y {
         multi = sum(xs: x) + sum(xs: y);        // 7 + 2 = 9
         multi = multi + sum(xs: x.slice(from: 0, count: 1));   // a DERIVE is free — no new window
     }                                           // + 3 = 12

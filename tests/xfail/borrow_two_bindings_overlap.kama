@@ -10,6 +10,6 @@ fn int32 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: 1);
     int32 r = 0;
-    borrow a as x, a as y { r = sum(xs: x) + sum(xs: y); }
+    borrow a.view() as x, a.view() as y { r = sum(xs: x) + sum(xs: y); }
     return r;
 }

@@ -1,0 +1,1 @@
+a mint takes no arguments

@@ -15,7 +15,7 @@ type resource Wrapper {
 
 fn int32 main() {
     Wrapper w = Wrapper.make();
-    borrow w as v {
+    borrow w.view() as v {
         return v.length();
     }
 }

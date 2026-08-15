@@ -1484,7 +1484,8 @@ private:
     static bool namesUnsafePtr(SharedIdentifier type);
     // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
     // No-op inside one. Returns true if it rejected.
-    bool declaresViewable(const ClassInfo& ci) const;   // the host of a `borrow`/`parallel_for` declared it hands out a view
+    bool grantedMint(const ClassInfo& ci, const std::string& member) const;  // `member` is a nullary member of a `@viewable` contract `ci` implements
+    bool declaresViewable(const ClassInfo& ci) const;   // the host of a `parallel_for` declared it hands out a view — `grantedMint(ci, "view")`
     bool rejectRawOutsideUnsafe(const char* what, int line);
     // The signature half: a declaration NAMING a raw pointer (return type or any parameter) must be
     // `unsafe`. Applied only where a body exists — an `abstract` member and a `contract` member are

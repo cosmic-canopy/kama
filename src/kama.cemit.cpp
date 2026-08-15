@@ -2358,7 +2358,30 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
         for (auto& b : *bn->bindings) {
             if (!b || !b->host || !b->alias || !b->alias->value) continue;
             const std::string alias = *b->alias->value;
-            std::vector<std::string> hp = placePath(b->host);
+            // The host is a MINT CALL — `<place>.<mint>()` — and the window is over the mint's RECEIVER.
+            // Naming the container alone would not say WHICH view to open: a type may carry several grants
+            // (`DynamicArray` has `view`, `iterator` and `iterMut`), and a `Map` has no `view()` at all, so
+            // the old hardcoded name left every iterator with no spelling. The grant already names its
+            // member; this reads it instead of guessing.
+            auto* inv = dynamic_cast<InvocationNode*>(b->host.get());
+            MemberAccessNode* ma = (inv && inv->expression)
+                                 ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr;
+            if (!ma || !ma->expression || !ma->identifier || !ma->identifier->value) {
+                unsupported(("`borrow` binds a mint call, so `" + alias + "` must name one — write "
+                             "`borrow <container>.<mint>() as " + alias + "` (e.g. `borrow d.view() as "
+                             + alias + "`, `borrow m.values() as " + alias + "`). A container alone does "
+                             "not say which view to open, and a type may grant several").c_str(), bn->line);
+                continue;
+            }
+            const std::string mint = *ma->identifier->value;
+            SharedExpression recvExpr = ma->expression;
+            if (inv->args && !inv->args->empty()) {
+                unsupported(("a mint takes no arguments, so `" + mint + "(…)` cannot open a window — "
+                             "borrow the whole thing and narrow inside it with `.slice(…)` on `" + alias
+                             + "`, which is free").c_str(), bn->line);
+                continue;
+            }
+            std::vector<std::string> hp = placePath(recvExpr);
             if (!hp.empty()) {
                 bool clash = false;
                 for (auto& pr : bound)
@@ -2374,31 +2397,40 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 if (clash) continue;
                 bound.push_back({ hp, alias });
             }
-            const std::string hostCls = exprClass(b->host);
+            const std::string hostCls = exprClass(recvExpr);
             if (hostCls.empty() || !_classes.count(hostCls)) {
-                unsupported(("`borrow` needs a container that can produce a view; `" + alias
+                unsupported(("`borrow` needs a container that can mint a view; `" + alias
                              + "`'s host is not one").c_str(), bn->line);
                 continue;
             }
-            // A view of the host is what the alias names. Resolve `view()` structurally.
-            MethodInfo* vmi = findMethod(&_classes[hostCls], "view", nullptr);
+            // Resolve the mint structurally — this is a gate, never a dispatch, which is what keeps the
+            // emitted call direct.
+            MethodInfo* vmi = findMethod(&_classes[hostCls], mint, nullptr);
             if (!vmi || !vmi->params.empty()) {
-                unsupported(("`" + hostCls + "` has no nullary `.view()`, so it cannot be borrowed — a "
-                             "`borrow` host must be a container that can hand out a `View<T>`").c_str(),
-                            bn->line);
+                unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
+                             "window — a `borrow` host must be a container that can hand out a view")
+                                .c_str(), bn->line);
                 continue;
             }
-            if (!declaresViewable(_classes[hostCls])) {
-                unsupported(("`" + hostCls + "` has a `.view()` but never declared that its storage is what "
-                             "that view views — `borrow` opens the window a view lives in, so the host must "
-                             "say so. Implement a `@viewable` contract with a nullary `view()` (the prelude's "
-                             "`Viewable<V>` is that contract)").c_str(), bn->line);
+            if (!grantedMint(_classes[hostCls], mint)) {
+                unsupported(("`" + hostCls + "` has a `." + mint + "()` but never granted it as a mint — "
+                             "`borrow` opens the window a view lives in, so the host must declare that its "
+                             "storage is what that view views. Implement a `@viewable` contract carrying `"
+                             + mint + "()` (the prelude's `Viewable<V>`, `Iterable<T>` and "
+                             "`ValuesIterable<I>` are such contracts)").c_str(), bn->line);
                 continue;
             }
             const std::string viewCType = cTypeInInstance(hostCls, vmi->returnType);
+            if (!isViewCType(viewCType)) {
+                unsupported(("`" + hostCls + "." + mint + "()` does not return a `type view` — a window "
+                             "bounds the life of a BORROW, and this hands back a value that owns itself, "
+                             "so there is nothing here for a window to bound; call it normally").c_str(),
+                            bn->line);
+                continue;
+            }
             indent(depth + 1);
             *_out << viewCType << " " << alias << " = " << vmi->cName
-                  << "(&(" << emitExpression(b->host) << "));\n";
+                  << "(&(" << emitExpression(recvExpr) << "));\n";
             _localTypes[alias] = viewCType;
             _scopes.back().declaredNames.push_back(alias);
         }
@@ -10311,15 +10343,24 @@ bool CEmitter::namesUnsafePtr(SharedIdentifier type)
 //
 // Resolution stays STRUCTURAL: this is a gate, never a dispatch, which is what keeps the emitted call
 // direct and the ECS path free of vtables.
-bool CEmitter::declaresViewable(const ClassInfo& ci) const
+// Is `member` a mint GRANTED to `ci` — a nullary, non-ctor member of a `@viewable` contract it
+// implements? The grant has always named its own member (`Viewable<V>.view`, `Iterable<T>.iterator`,
+// `ValuesIterable<I>.values`, a user's `Spanned<S>.span`); `borrow` used to ignore that and hardcode the
+// name `view`, which left every iterator — and every `Map`, which has no `view()` — with no window it
+// could open. Reading the grant is what makes the rule cover all `type view` kinds, not just `View<T>`.
+bool CEmitter::grantedMint(const ClassInfo& ci, const std::string& member) const
 {
     for (auto& ifn : ci.interfaces) {
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end() || !it->second.isViewable) continue;
-        for (auto& m : it->second.methods) if (!m.isCtor && m.name == "view") return true;
+        for (auto& m : it->second.methods)
+            if (!m.isCtor && m.name == member && (!m.params || m.params->empty())) return true;
     }
     return false;
 }
+
+// `parallel_for` needs CONTIGUOUS storage, so unlike `borrow` it wants one specific grant: `view()`.
+bool CEmitter::declaresViewable(const ClassInfo& ci) const { return grantedMint(ci, "view"); }
 
 bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
 {
