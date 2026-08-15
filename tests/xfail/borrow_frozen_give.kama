@@ -1,0 +1,17 @@
+// `give` takes the storage with it. The window would be left watching a buffer that now belongs to the
+// callee — the same dangle as growing the container, spelled as a move rather than a mutation.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn void eat(DynamicArray<int32> d) { }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as v {
+        eat(d: give a);              // the buffer leaves with the value
+        r = sum(xs: v);
+    }
+    return r;
+}

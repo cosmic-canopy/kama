@@ -1,0 +1,19 @@
+// The window defeated from the INSIDE. An alias names one window over one place for the extent of one
+// block. Reseating it keeps the name and drops the bound, so every later statement reads a view of
+// storage this window never froze — `b` here is mutable throughout.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    DynamicArray<int32> b = DynamicArray.withCapacity(capacity: 2);
+    b.add(item: 9);
+    int32 r = 0;
+    borrow a.view() as v {
+        v = b.view();                // `v` no longer names the window it was born in
+        r = sum(xs: v);
+    }
+    return r;
+}

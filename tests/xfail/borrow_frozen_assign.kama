@@ -1,0 +1,18 @@
+// Assigning the container itself drops the old buffer, so the view outlives its storage without any
+// method call at all. Reseating the HOST is as fatal as growing it.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    DynamicArray<int32> b = DynamicArray.withCapacity(capacity: 2);
+    b.add(item: 9);
+    int32 r = 0;
+    borrow a.view() as v {
+        a = give b;                  // the buffer `v` views is dropped here
+        r = sum(xs: v);
+    }
+    return r;
+}

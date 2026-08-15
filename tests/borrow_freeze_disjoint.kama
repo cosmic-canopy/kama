@@ -1,0 +1,63 @@
+// The freeze is a PLACE rule, not an object rule, and this fixture is the proof — everything here sits
+// inside a window and everything here is legal. The prefix test is the whole argument: two distinct
+// fields of one object cannot overlap in storage, so writing one can never invalidate a view into the
+// other. Without that precision the rule would have to freeze `this` whole, which would make the field
+// mint useless — and three of the four stdlib field mints need exactly this shape.
+//
+// Each line below is a shape that a coarser rule gets wrong, so each is a regression guard:
+//   * a disjoint SIBLING FIELD written inside a window over another field
+//   * an `out` argument filling a disjoint local
+//   * a non-`const fn` call on a disjoint local
+//   * a `const fn` READ of the frozen host itself — freezing forbids mutation, not use
+//   * `foreach` over the frozen host — also a read
+//   * an ELEMENT write through the frozen host: `a[0] = 7` cannot realloc, so it cannot dangle a view,
+//     and `View<T>` is a mutate-through window in the first place
+//   * a DERIVE off the alias, which opens no new window
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn void five(out int32 v) { v = 5; }
+
+type resource Box {
+    DynamicArray<int32> buf;
+    DynamicArray<int32> spare;
+    int32 hits;
+    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4);
+                         this.spare = DynamicArray.withCapacity(capacity: 2); this.hits = 0; }
+    public fn void add(int32 v) { this.buf.add(item: v); }
+
+    // A window over ONE field leaves every sibling fully mutable — including `this.spare`, a container
+    // that can realloc, which a whole-`this` rule would have to reject.
+    public fn int32 total() {
+        borrow this.buf.view() as b {
+            this.hits = this.hits + 1;        // disjoint scalar field
+            this.spare.add(item: 1);          // disjoint CONTAINER field — a realloc that cannot matter
+            return sum(xs: b) + this.hits + this.spare.length();
+        }
+    }
+}
+
+fn int32 main() {
+    Box bx = Box.make();
+    bx.add(v: 10); bx.add(v: 20);
+    int32 boxed = bx.total();                 // 30 + 1 + 1 = 32
+
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
+    a.add(item: 3); a.add(item: 4);
+    DynamicArray<int32> other = DynamicArray.withCapacity(capacity: 2);
+
+    int32 acc = 0;
+    slot int32 filled;
+    borrow a.view() as v {
+        other.add(item: 1);                   // a non-`const fn` on a DISJOINT local
+        five(v: out filled);                  // an `out` fill of a disjoint local
+        acc = acc + a.length();               // a `const fn` READ of the frozen host — 2
+        foreach (int32 x in a) { acc = acc + x; }   // reading the frozen host — 7
+        a[0] = 5;                             // an element write cannot realloc, so it cannot dangle `v`
+        acc = acc + sum(xs: v);               // 9, through the window
+        acc = acc + sum(xs: v.slice(from: 0, count: 1));   // a derive — no new window — 5
+    }
+    a.add(item: 100);                         // mutable again the moment the window closes
+
+    return boxed + acc + filled + other.length() - 55;   // 32 + 23 + 5 + 1 - 55 = 6
+}

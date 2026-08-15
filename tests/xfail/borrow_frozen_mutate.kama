@@ -1,0 +1,17 @@
+// The window exists to bound a view's life, so the storage it views may not move under it. `a.add()`
+// can realloc, and `v` would be left pointing at the freed buffer — this is finding ⑤ spelled inside
+// the very construct meant to prevent it. Mutate `a` after the window closes, or narrow the window.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as v {
+        a.add(item: 3);              // reallocs out from under `v`
+        r = sum(xs: v);
+    }
+    return r;
+}

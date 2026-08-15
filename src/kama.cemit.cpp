@@ -1965,6 +1965,15 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
         checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
+        // The window defeated from the INSIDE. An alias names one window over one place for the extent of
+        // one block; reseating it to some other container's view keeps the name and drops the bound, so
+        // the rest of the block reads a view nothing froze.
+        if (v->unaryExpression)
+            if (const std::vector<std::string>* r = frozenAliasRoot(rootBinding(v->unaryExpression)))
+                unsupported(("`" + rootBinding(v->unaryExpression) + "` is a `borrow` alias — it names the "
+                             "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
+                             "the block would hold a view of storage this window never froze. Open another "
+                             "`borrow`, or derive with `.slice(…)`").c_str(), v->line);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -2354,6 +2363,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     // in one statement instead of two. `borrow w.bodies as b, w.springs as s` stays legal: distinct fields
     // cannot overlap. A non-place host has an empty path and is skipped here — it is rejected on its own.
     std::vector<std::pair<std::vector<std::string>, std::string>> bound;   // place -> the alias holding it
+    std::vector<Scope::FrozenPlace> frozenNow;   // staged; registered after the loop (see below)
     if (bn->bindings) {
         for (auto& b : *bn->bindings) {
             if (!b || !b->host || !b->alias || !b->alias->value) continue;
@@ -2383,6 +2393,16 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             }
             std::vector<std::string> hp = placePath(recvExpr);
             if (!hp.empty()) {
+                // An ENCLOSING window already froze this storage. Two windows over one buffer are the
+                // same two mutable views the sibling rule below rejects, merely spelled across statements.
+                if (const Scope::FrozenPlace* outer = frozenConflict(hp)) {
+                    unsupported(("`" + placeText(hp) + "` is already borrowed by an enclosing `borrow` "
+                                 "(opened at line " + std::to_string(outer->line) + " as `" + outer->alias
+                                 + "`) — that would be two mutable views of one buffer; derive from `"
+                                 + outer->alias + "` with `.slice(…)` instead, which is free").c_str(),
+                                bn->line);
+                    continue;
+                }
                 bool clash = false;
                 for (auto& pr : bound)
                     if (placesConflict(pr.first, hp)) {
@@ -2433,7 +2453,13 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                   << "(&(" << emitExpression(recvExpr) << "));\n";
             _localTypes[alias] = viewCType;
             _scopes.back().declaredNames.push_back(alias);
+            frozenNow.push_back({ hp, alias, bn->line });
         }
+        // Registered only AFTER every binding is resolved. Eagerly, the second binding of
+        // `borrow a.view() as x, a.view() as y` would trip the freeze rule instead of the sibling rule
+        // above, which says the same thing far better — and `xfail/borrow_two_bindings_overlap` would go
+        // red against a message that is not wrong, merely worse.
+        for (auto& f : frozenNow) if (!f.place.empty()) _scopes.back().frozen.push_back(f);
     }
 
     SharedStatement last;
@@ -9189,6 +9215,14 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
 
 void CEmitter::markMoved(const std::string& cVar)
 {
+    // `give`ing the host out of the window is as fatal as growing it — the storage leaves with the value
+    // and the alias is left watching nothing. The single choke point for every move, so one check covers
+    // `a = give b`, `f(d: give a)` and the ctor/return forms alike.
+    if (const Scope::FrozenPlace* f = frozenConflict({ cVar }))
+        unsupported(("cannot `give` `" + cVar + "` — it is frozen by the enclosing `borrow` (opened at "
+                     "line " + std::to_string(f->line) + " as `" + f->alias + "`), and moving it would "
+                     "take the storage `" + f->alias + "` views with it; move it after the window closes")
+                        .c_str(), _curLine);
     //  (Increment 3): moving a local declared OUTSIDE the nearest enclosing loop would move
     // it again on the next iteration (double-move). Reject — conservative, no loop fixpoint. A value
     // declared INSIDE the loop body is fresh each iteration, so moving it is fine.
@@ -11992,6 +12026,42 @@ std::string CEmitter::placeText(const std::vector<std::string>& p)
     return s;
 }
 
+// --- The window's freeze -------------------------------------------------------------------------------
+// `borrow` bounds how long a view is valid by bounding the SCOPE it lives in. That is only half the
+// promise: the other half is that the storage does not move under it, which is what these three answer.
+// Without them a window was a comment — `borrow a.view() as v { a.add(item: 3); … v[0] }` compiled and
+// faulted under ASan, inside the very construct meant to prevent it.
+const CEmitter::Scope::FrozenPlace* CEmitter::frozenConflict(const std::vector<std::string>& p) const
+{
+    if (p.empty()) return nullptr;   // not a nameable place — an element write cannot realloc anyway
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& f : _scopes[i].frozen)
+            if (placesConflict(f.place, p)) return &f;
+    return nullptr;
+}
+
+const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& name) const
+{
+    if (name.empty()) return nullptr;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& f : _scopes[i].frozen)
+            if (f.alias == name) return &f.place;
+    return nullptr;
+}
+
+bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
+{
+    std::vector<std::string> p = placePath(target);
+    const Scope::FrozenPlace* f = frozenConflict(p);
+    if (!f) return false;
+    unsupported(("`" + placeText(p) + "` is frozen by the enclosing `borrow` (opened at line "
+                 + std::to_string(f->line) + " as `" + f->alias + "`) — a view is live over that storage, "
+                 "so growing or reseating it would leave `" + f->alias + "` dangling. Mutate it after the "
+                 "window closes, or narrow the window. A DISJOINT sibling field stays mutable inside it")
+                    .c_str(), line);
+    return true;
+}
+
 // The root a view-CONSTRUCTOR's borrowed pointer argument comes from, tracing through the safe
 // forms a view is built with: `addr(of: this.data[i])` (pointer offset) and `this.dataPtr()` (a
 // place-returning accessor call). Anything else falls back to rootBinding (`this.data` -> "this";
@@ -12184,6 +12254,9 @@ void CEmitter::checkConstPlaceReturn(bool isConst, bool isRef, const std::string
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
+    // The window's freeze rides this helper for the same reason the const rules do: it is on every write
+    // path there is. Independent of the const arms below, so a write that is both gets both sentences.
+    rejectFrozenWrite(target, srcLine);
     std::string root = rootBinding(target);
     // A const generic parameter is a compile-time value, not storage — `F = 3` used to emit
     // `((int32_t)16) = 3` and die in clang against generated code. Reported here rather than through
@@ -18444,6 +18517,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         ClassInfo* rowner = nullptr;
         MethodInfo* rmi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &rowner) : nullptr;
         std::vector<std::string> recvPlace = placePath(receiver);
+        // A non-`const fn` borrows its receiver MUTABLY, so calling one on frozen storage is the shape
+        // finding ⑤ rides — `a.add(item: 3)` can realloc, and the window's alias would be left pointing
+        // at the freed buffer. `const fn` is what makes this precise rather than "any method call": the
+        // stdlib marks 247 of them, so a read inside a window stays free.
+        if (rmi && !rmi->isConst && !recvPlace.empty()) rejectFrozenWrite(receiver, call->line);
         if (rmi && !rmi->isConst && !recvPlace.empty() && call->args) {
             for (auto& a : *call->args) {
                 if (!a || !a->name || !a->name->value) continue;

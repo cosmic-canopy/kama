@@ -1080,6 +1080,15 @@ private:
                    // same root is rejected (the same-root disjointness rule: no two tasks share a cell).
                    bool isTaskScope = false; std::vector<std::string> taskChildren;
                    std::set<std::string> borrowedRoots;
+                   // `borrow h.mint() as v { … }` — the host PLACE, frozen for the extent of the block.
+                   // A view is live over that storage, so growing or reseating it would leave the alias
+                   // dangling. Conflict is the same prefix test the rest of the model uses, which is what
+                   // leaves a DISJOINT sibling field fully mutable inside the window. Scope-shaped rather
+                   // than emitter-shaped so nesting, loops and a `return` out of the block all unwind for
+                   // free, and so a frozen place can never leak past the function (`_scopes` is cleared
+                   // per function).
+                   struct FrozenPlace { std::vector<std::string> place; std::string alias; int line = 0; };
+                   std::vector<FrozenPlace> frozen;
                    // LSP (M3.4), analysis mode only: the bindings this scope declares, with the index key
                    // each was given. Deliberately PARALLEL to `declaredNames` rather than folded into it —
                    // that vector drives the shadowing rules, and it also (by design) excludes `foreach` and
@@ -1911,6 +1920,11 @@ private:
     std::vector<std::string> placePath(SharedExpression e);
     static bool placesConflict(const std::vector<std::string>& a, const std::vector<std::string>& b);
     static std::string placeText(const std::vector<std::string>& p);   // "this.inner.buf", for diagnostics
+    // The innermost enclosing `borrow` whose frozen host overlaps `p`, or null. Walks `_scopes` back to
+    // front, exactly as `markMoved` does for its own scope-shaped question.
+    const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
+    const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
+    bool rejectFrozenWrite(SharedExpression target, int line);   // one sentence for every write shape
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.

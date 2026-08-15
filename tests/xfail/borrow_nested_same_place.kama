@@ -1,0 +1,16 @@
+// Two windows over one buffer are two mutable views of it — exactly what a single `borrow` with two
+// bindings of the same place is rejected for (xfail/borrow_two_bindings_overlap), merely spelled across
+// statements instead of within one. Derive from the outer alias; a derive is free and opens no window.
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as v {
+        borrow a.view() as w { r = sum(xs: v) + sum(xs: w); }
+    }
+    return r;
+}
