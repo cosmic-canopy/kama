@@ -606,6 +606,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ## 3. Open design questions (settle before the work they gate)
 
+- **Should `spawn`'s disjointness check move from ROOT granularity to PLACE granularity?** The view
+  model introduced `placePath()` / `placesConflict()` — a place is a base plus its chain of field
+  names, and two places conflict iff one is a prefix of the other. `spawn`'s existing rule
+  (`Scope::borrowedRoots`, pinned by `tests/xfail/scope_borrow_same_root.kama`) compares **roots**, so
+  two children borrowing `w.bodies` and `w.springs` are rejected as "the same root `w`" even though the
+  fields cannot overlap. Adopting the place test would unify the two predicates — one rule, which is
+  what [GOALS.md](GOALS.md) §4 asks for — and admit the disjoint-field case the ECS/engine shape wants.
+  **It is a relaxation of a concurrency rule, which is why it is a question and not a chore:** the
+  argument that two disjoint fields are safe to hand two threads is the same disjointness argument the
+  view model rests on, but it has to hold across a thread boundary rather than within one frame, and
+  nothing has been probed. Cheap to do, not cheap to get wrong. Do not fold it into a view commit.
+
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
   types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that
