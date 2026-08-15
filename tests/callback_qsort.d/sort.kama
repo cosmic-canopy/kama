@@ -13,7 +13,7 @@ extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);
 
 unsafe fn int32 cmp(UnsafePtr<int32> a, UnsafePtr<int32> b) { int32 r = 0; r = a[0] - b[0]; return r; }
 
-unsafe fn int main()
+unsafe fn int run()
 {
     FixedArray<int32> a = FixedArray.make(size: 4);
     a[0] = 30; a[1] = 10; a[2] = 2; a[3] = 99;
@@ -23,3 +23,7 @@ unsafe fn int main()
     UnsafePtr<int32> p = a.dataPtr(); r = p[3] - p[0] - 55;           // sorted -> 99-2-55
     return r;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int main() { return run(); }

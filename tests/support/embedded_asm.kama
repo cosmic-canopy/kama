@@ -2,8 +2,12 @@
 // assemble it — so this is checked by shape (the emitted C), not run, mirroring @interrupt/@section.
 // The multi-instruction string also proves the emitter C-escapes the `\n` (a full memory barrier around
 // a masked critical section: mask interrupts, then a data sync barrier).
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     asm("wfi");
     asm("cpsid i\n\tdsb");
     return 0;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -3,7 +3,7 @@
 // builds AND runs on the CI host (native/ASan legs); ARM-only mnemonics (`wfi`) are checked by the
 // transpile-grep guard in tools/check-embedded.sh instead. asm is native/embedded only — the runner
 // SKIPs it on the wasm leg.
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     int32 n = 0;
     while (n < 21) {
         asm("nop");   // a harmless no-op; proves the lowering assembles + runs
@@ -11,3 +11,7 @@ unsafe fn int32 main() {
     }
     return n + 1;   // 22
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -3,8 +3,12 @@ extern "<stdlib.h>";
 type extern value div_t { int32 quot; int32 rem; }
 extern fn div_t div(int32 numer, int32 denom);
 
-unsafe fn int main()
+unsafe fn int run()
 {
     div_t r = div(numer: 17, denom: 5);   // quot 3, rem 2
     return r.quot + r.rem;                 // 5
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int main() { return run(); }

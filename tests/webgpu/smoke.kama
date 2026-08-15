@@ -17,7 +17,7 @@ extern fn UnsafePtr  wgpuCreateInstance(UnsafePtr descriptor);   // WGPUInstance
 extern fn void wgpuInstanceRelease(UnsafePtr instance);
 extern fn int32 puts(UnsafePtr<int8> s);
 
-unsafe fn int main() {
+unsafe fn int run() {
     UnsafePtr instance = wgpuCreateInstance(descriptor: null);
     if (instance != null) {
         string ok = "kama webgpu smoke: WGPUInstance created";
@@ -29,3 +29,7 @@ unsafe fn int main() {
     }
     return 0;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int main() { return run(); }

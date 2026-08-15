@@ -2,9 +2,13 @@
 // so reads/writes through it are real MMIO accesses.
 static hardware UnsafePtr<uint32> reg;
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     uint32 cell = 7;
     reg = addr(of: cell);
     reg[0] = 42;
     return cast<int32>(reg[0]);   // 42
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

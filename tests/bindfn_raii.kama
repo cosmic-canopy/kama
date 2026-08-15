@@ -4,6 +4,7 @@ import std::memory::{Owned};
 // drop -> 9, a double drop -> 288).
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 fnptr int32 Get(int32 d);
 type resource Probe {
     int32 id;
@@ -16,7 +17,7 @@ fn int use() {
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
 }
-unsafe fn int main() {
+fn int main() {
     int r = use();
-    return kama_trace_get();                        // single dtor -> 9
+    return traceGet();                        // single dtor -> 9
 }

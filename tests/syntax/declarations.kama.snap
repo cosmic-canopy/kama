@@ -202,15 +202,31 @@
 #                                   ^ source.kama keyword.operator.arithmetic.kama
 #                                    ^^^^^^ source.kama
 >
->unsafe fn int32 main() {
+>// `asm(...)` needs an `unsafe fn`, and `main` may not be one — it encloses the whole program.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>unsafe fn void nop() { asm("nop"); }
 #^^^^^^ source.kama keyword.other.modifier.kama
 #      ^ source.kama
 #       ^^ source.kama keyword.other.kama
 #         ^ source.kama
-#          ^^^^^ source.kama storage.type.primitive.kama
-#               ^ source.kama
-#                ^^^^ source.kama entity.name.function.kama
-#                    ^^^^^ source.kama
+#          ^^^^ source.kama storage.type.primitive.kama
+#              ^ source.kama
+#               ^^^ source.kama entity.name.function.kama
+#                  ^^^^^ source.kama
+#                       ^^^ source.kama string.quoted.double.asm.kama keyword.other.kama
+#                          ^ source.kama string.quoted.double.asm.kama punctuation.section.parens.begin.kama
+#                           ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.begin.kama
+#                            ^^^ source.kama string.quoted.double.asm.kama meta.embedded.assembly
+#                               ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.end.kama
+#                                ^^^^^ source.kama
+>
+>fn int32 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
 >    Point p = Point.make(x: 20);
 #^^^^ source.kama
 #    ^^^^^ source.kama entity.name.type.kama
@@ -287,14 +303,10 @@
 #                       ^^^ source.kama
 #                          ^ source.kama constant.numeric.integer.kama
 #                           ^^ source.kama
->    asm("nop");
+>    nop();
 #^^^^ source.kama
-#    ^^^ source.kama string.quoted.double.asm.kama keyword.other.kama
-#       ^ source.kama string.quoted.double.asm.kama punctuation.section.parens.begin.kama
-#        ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.begin.kama
-#         ^^^ source.kama string.quoted.double.asm.kama meta.embedded.assembly
-#            ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.end.kama
-#             ^^^ source.kama
+#    ^^^ source.kama entity.name.function.kama
+#       ^^^^ source.kama
 >    return a + b;
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.control.kama

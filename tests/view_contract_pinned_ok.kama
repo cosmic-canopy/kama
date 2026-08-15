@@ -8,6 +8,11 @@
 //   * an UNPINNED generic contract, whose slots return some other type     -> `Iterable<T>` on `View<T>`
 //
 // The rejected counterpart is `xfail/view_contract_ctor_escape.kama`.
+//
+// A view exists only relative to the type it views, so the buffer's OWNER is what hands one out: `Buf`
+// holds the storage and `Buf.span()` is the single place the raw `addr(of:)` lives. `main` never sees a
+// raw pointer, which is why it needs no `unsafe` — and `main` may not be `unsafe` in any case, since it
+// encloses the whole program.
 import std::collections::{DynamicArray, View};
 
 type contract Windowed<S is This> for value, view {
@@ -26,13 +31,22 @@ type view Span implements Windowed<This> {
     public unsafe fn Span rest() { return Span.over(p: addr(of: this.p[1]), n: this.n - 1); }
 }
 
-unsafe fn int32 main() {
+// The owner of the memory. Its `span()` is the only route to a `Span`, and the only `addr(of:)` here.
+type resource Buf {
+    DynamicArray<int64> a;
+
+    public ctor empty() { this.a = DynamicArray.empty(); }
+    public fn void add(int64 v) { this.a.add(item: v); }
+    public unsafe fn Span span() { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+}
+
+fn int32 main() {
     int32 r = 0;
 
-    DynamicArray<int64> a = DynamicArray.empty();
-    a.add(item: 7i64); a.add(item: 8i64); a.add(item: 9i64);
+    Buf buf = Buf.empty();
+    buf.add(v: 7i64); buf.add(v: 8i64); buf.add(v: 9i64);
 
-    Span s = Span.over(p: addr(of: a[0]), n: 3);
+    Span s = buf.span();
     if (s.length() == 3 && s.at(i: 0) == 7i64) { r = r + 1; }        // 1
     Span t = s.rest();
     if (t.length() == 2 && t.at(i: 0) == 8i64) { r = r + 1; }        // 2

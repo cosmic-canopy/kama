@@ -14,7 +14,7 @@ type value DynamicArrayIter implements Iterator<int32> {                       /
         int32 v = this.cur[0].val; this.cur = this.cur[0].nextp; return Optional::Some(value: v);
     }
 }
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     UnsafePtr<Node> a = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
     UnsafePtr<Node> b = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
     UnsafePtr<Node> c = cast<UnsafePtr<Node>>(malloc(n: sizeof(Node)));
@@ -27,3 +27,7 @@ unsafe fn int32 main() {
     free(p: cast<UnsafePtr>(a)); free(p: cast<UnsafePtr>(b)); free(p: cast<UnsafePtr>(c));
     return sum;   // 6
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -3,7 +3,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 
-unsafe fn int main()
+unsafe fn int run()
 {
     UnsafePtr<int32> p = malloc(n: 16);   // void* -> int32_t* (implicit in C)
     if (p == null) { return 1; }
@@ -14,3 +14,7 @@ unsafe fn int main()
     free(p: p);
     return s;   // 42
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int main() { return run(); }

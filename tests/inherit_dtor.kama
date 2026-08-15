@@ -1,5 +1,6 @@
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 // Destructor chaining through inheritance (Derived's dtor runs, then Base's).
 // M25b: extension is opt-in, so Base is a `virtual class`; the dtor chain is unchanged.
@@ -15,10 +16,10 @@ type final resource Derived extends Base
     unsafe ~Derived() { kama_trace(code: 2); }
     protected override fn int kind() { return 1; }
 }
-unsafe fn int main()
+fn int main()
 {
     {
         Derived d = Derived.make();
     }
-    return kama_trace_get();
+    return traceGet();
 }

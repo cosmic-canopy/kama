@@ -14808,6 +14808,22 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     bool isEntry = false;
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
 
+    // `unsafe` marks a CONTAINED region, and `main` is the one function that contains everything: an
+    // `unsafe fn main` puts the whole program inside the trusted set from the root, so every containment
+    // rule the seam installs (`UnsafePtr` acquisition, `addr(of:)`, the `extern fn` call gate) is off for
+    // the entire call-free body of the program at once. That is the same shape as finding 1 — a marker
+    // whose scope is so wide it stops marking anything — and it is why the entry point is the one place
+    // the qualifier cannot mean what it says. Rejected here rather than at the declaration sweep because
+    // `isEntry` is decided by the same mangling that names the function.
+    //
+    // The fix costs nothing: a kama `unsafe fn` is callable FROM safe code (only an `extern fn` is gated
+    // at the call, see gateExternCall), so the raw work moves one frame down into a helper and `main`
+    // calls it. The marker then names the region that actually needs it.
+    if (isEntry && fn->isUnsafe)
+        unsupported("`main` may not be `unsafe` — it encloses the whole program, so the marker would put "
+                    "every line in the trusted region. Move the raw work into a helper `unsafe fn` and "
+                    "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn->line);
+
     // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,
     // a collection, or an `Owned`/`Shared`/`Weak` smart pointer) carries RAII/refcount state that
     // cannot cross that boundary safely. Gate it here (post-collectClasses, so `_classes` is filled).

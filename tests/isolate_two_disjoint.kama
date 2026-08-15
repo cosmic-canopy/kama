@@ -8,8 +8,8 @@ type resource Payload {
     UnsafePtr<int32> dst;
     int32 value;
 
-    public unsafe ctor make(UnsafePtr<int32> dst, int32 value) {
-        this.dst = dst;
+    public unsafe ctor make(ref int32 dst, int32 value) {
+        this.dst = addr(of: dst);
         this.value = value;
     }
 
@@ -22,11 +22,11 @@ fn void worker(Payload p) {
     p.run();
 }
 
-unsafe fn int main() {
+fn int main() {
     int32 a = 0;
     int32 b = 0;
-    Payload pa = Payload.make(dst: addr(of: a), value: 10i32);
-    Payload pb = Payload.make(dst: addr(of: b), value: 20i32);
+    Payload pa = Payload.make(dst: ref a, value: 10i32);
+    Payload pb = Payload.make(dst: ref b, value: 20i32);
     scope {
         spawn worker(p: give pa);   // disjoint slot `a`
         spawn worker(p: give pb);   // disjoint slot `b`

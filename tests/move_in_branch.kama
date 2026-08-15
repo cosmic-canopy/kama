@@ -4,6 +4,7 @@ import std::collections::{DynamicArray};
 // (inside sink). One drop of code 7 -> 7. (A broken merge that kept `a` live would fold to 224.)
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;
@@ -21,7 +22,7 @@ fn int32 pick(int32 c) {
     return 0;                          // a's dtor skipped (already moved)
 }
 
-unsafe fn int32 main() {
+fn int32 main() {
     int32 r = pick(c: 1);
-    return kama_trace_get();          // exactly one drop -> 7
+    return traceGet();          // exactly one drop -> 7
 }

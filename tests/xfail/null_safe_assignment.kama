@@ -3,7 +3,7 @@
 // `int32 a; a = null;` would otherwise slip this check exactly as it slips the `== null` one.
 type value Thing { public int32 x; public ctor make() { this.x = 0; } }
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     Thing t = Thing.make();
     int32 a = 1;
     UnsafePtr<int32> p = null;
@@ -12,3 +12,7 @@ unsafe fn int32 main() {
     p = null;      // allowed — an `UnsafePtr` is the one slot `null` belongs in
     return 0;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -5,6 +5,7 @@
 import std::collections::{FixedArray};
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -18,8 +19,8 @@ fn int build()
     return 0;   // `a` drops here -> Array_Probe__dtor -> 3x Probe__dtor
 }
 
-unsafe fn int main()
+fn int main()
 {
     int r = build();
-    return kama_trace_get();
+    return traceGet();
 }

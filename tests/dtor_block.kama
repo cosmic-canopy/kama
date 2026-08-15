@@ -1,5 +1,6 @@
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res
 {
@@ -14,11 +15,11 @@ type resource Res
     }
 }
 
-unsafe fn int main()
+fn int main()
 {
     {
         Res a = Res.make(id: 1);
         Res b = Res.make(id: 2);
     }
-    return kama_trace_get();
+    return traceGet();
 }

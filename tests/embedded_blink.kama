@@ -5,7 +5,7 @@
 // hosted behavior is unchanged, so this asserts a deterministic exit code like any other fixture.
 static hardware UnsafePtr<uint32> gpio_odr;   // -> volatile uint32* : real MMIO writes, never elided
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     uint32 led = 0;                     // stands in for the peripheral register on the host
     gpio_odr = addr(of: led);
 
@@ -16,3 +16,7 @@ unsafe fn int32 main() {
     }
     return cast<int32>(gpio_odr[0]) + blinks;   // 21 toggles -> bit=1; 1 + 21 = 22
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -5,7 +5,7 @@ import std::collections::{FixedArray};
 extern "csum.h";   // int32_t csum(const int32_t* a, int32_t n);
 extern fn int32 csum(const UnsafePtr<int32> data, int32 n);
 
-unsafe fn int main()
+unsafe fn int run()
 {
     FixedArray<int32> a = FixedArray.make(size: 4);
     a[0] = 9; a[1] = 13; a[2] = 7; a[3] = 13;
@@ -13,3 +13,7 @@ unsafe fn int main()
     s = csum(data: a.dataPtr(), n: 4);   // 9+13+7+13 = 42, no cast at the const-ptr edge
     return s;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int main() { return run(); }

@@ -4,6 +4,7 @@ import std::collections::{DynamicArray};
 // "factory landmine"). One drop of code 3 -> trace 3.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;
@@ -22,7 +23,7 @@ fn int32 build() {
     return x.head();          // 9;  x drops at build's end -> exactly one trace(3)
 }
 
-unsafe fn int32 main() {
+fn int32 main() {
     int32 h = build();
-    return h + kama_trace_get();   // 9 + 3 = 12   (a double-drop would fold to 9 + 96)
+    return h + traceGet();   // 9 + 3 = 12   (a double-drop would fold to 9 + 96)
 }

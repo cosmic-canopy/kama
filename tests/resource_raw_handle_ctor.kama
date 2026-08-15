@@ -5,6 +5,7 @@
 // compiler never dropping the non-live slot, not from an author band-aid.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Handle {
     int32 h;
@@ -25,10 +26,10 @@ fn int build() {
     return w.val();                                  // w drops here -> Wrapper__dtor -> Handle__dtor -> trace(5) ONCE
 }
 
-unsafe fn int main() {
+fn int main() {
     int v = build();
     // exactly ONE Handle drop (the live one). fold of a single trace(5): 0*31 + 5 = 5.
     // A spurious drop of the zeroed `inner` at the field-first-write would fold in a second 5 -> 160.
     if (v != 7) { return 90; }
-    return kama_trace_get();                         // expect 5
+    return traceGet();                         // expect 5
 }

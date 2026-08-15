@@ -4,6 +4,7 @@ import std::collections::{DynamicArray};
 // ((1*31+1)*31+1)=993 -> exit 993 & 0xFF = 225.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;
@@ -14,10 +15,10 @@ type resource Res {
 
 fn int32 sink(Res r) { return r.head(); }
 
-unsafe fn int32 main() {
+fn int32 main() {
     for (int32 i = 0; i < 3; i = i + 1) {
         Res a = Res.make(v: i);      // fresh each iteration
         sink(r: give a);        // moved into sink; a's own dtor skipped
     }
-    return kama_trace_get();   // 3 drops -> 225
+    return traceGet();   // 3 drops -> 225
 }

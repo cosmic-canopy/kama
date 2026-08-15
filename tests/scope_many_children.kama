@@ -8,8 +8,8 @@ type resource Slot {
     UnsafePtr<int32> cell;
     int32 value;
 
-    public unsafe ctor make(UnsafePtr<int32> cell, int32 value) {
-        this.cell = cell;
+    public unsafe ctor make(ref int32 cell, int32 value) {
+        this.cell = addr(of: cell);
         this.value = value;
     }
 
@@ -18,15 +18,15 @@ type resource Slot {
 
 fn void writer(Slot s) { s.run(); }
 
-unsafe fn int main() {
+fn int main() {
     int32 c0 = 0;
     int32 c1 = 0;
     int32 c2 = 0;
     int32 c3 = 0;
-    Slot s0 = Slot.make(cell: addr(of: c0), value: 1i32);
-    Slot s1 = Slot.make(cell: addr(of: c1), value: 2i32);
-    Slot s2 = Slot.make(cell: addr(of: c2), value: 4i32);
-    Slot s3 = Slot.make(cell: addr(of: c3), value: 8i32);
+    Slot s0 = Slot.make(cell: ref c0, value: 1i32);
+    Slot s1 = Slot.make(cell: ref c1, value: 2i32);
+    Slot s2 = Slot.make(cell: ref c2, value: 4i32);
+    Slot s3 = Slot.make(cell: ref c3, value: 8i32);
     scope {
         spawn writer(s: give s0);
         spawn writer(s: give s1);

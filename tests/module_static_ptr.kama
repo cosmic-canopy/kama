@@ -1,8 +1,12 @@
 // MCU step 1: an `UnsafePtr` static (a peripheral handle) — zero-inits to null, then holds an assigned address.
 static UnsafePtr<int32> target;
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     int32 x = 42;
     target = addr(of: x);
     return target[0];   // 42
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

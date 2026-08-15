@@ -8,8 +8,8 @@ type resource Payload {
     UnsafePtr<int32> dst;
     int32 value;
 
-    public unsafe ctor make(UnsafePtr<int32> dst, int32 value) {
-        this.dst = dst;
+    public unsafe ctor make(ref int32 dst, int32 value) {
+        this.dst = addr(of: dst);
         this.value = value;
     }
 
@@ -23,9 +23,9 @@ fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it
     p.run();
 }
 
-unsafe fn int main() {
+fn int main() {
     int32 result = 0;
-    Payload p = Payload.make(dst: addr(of: result), value: 42i32);
+    Payload p = Payload.make(dst: ref result, value: 42i32);
     scope {
         spawn worker(p: give p);   // deferred-join child on a fresh OS thread with the moved bundle
     }                              // BARRIER: the child is joined here, before `result` is read

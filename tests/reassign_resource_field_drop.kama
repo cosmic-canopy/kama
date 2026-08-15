@@ -2,10 +2,11 @@
 // old resource leaks — the bug that let a reassigned fd stay open). Inner's dtor traces its tag; swap()
 // reassigns this.inner via a fresh Inner.make(). The ctor's first-write of r.inner must NOT drop (the {0}
 // slot is not live — the drop-only-if-live / close(0) invariant), so the only pre-return drop is the swap's.
-//   fix present -> swap drops old inner(5) -> kama_trace_get() == 5
+//   fix present -> swap drops old inner(5) -> traceGet() == 5
 //   pre-fix bug -> old inner leaked, no drop -> 0
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Inner {
     int32 tag;
@@ -18,8 +19,8 @@ type resource Outer {
     public fn void swap(int32 t) { this.inner = Inner.make(tag: t); }   // reassign a live field via a fresh ctor
 }
 
-unsafe fn int main() {
+fn int main() {
     Outer o = Outer.make(i: Inner.make(tag: 5));   // first-write: NO drop of the {0} slot
     o.swap(t: 9);                                  // reassign: MUST drop old inner(5)
-    return kama_trace_get();                        // 5 (o's own final drop of inner(9) happens after this read)
+    return traceGet();                        // 5 (o's own final drop of inner(9) happens after this read)
 }

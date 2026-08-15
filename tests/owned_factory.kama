@@ -4,6 +4,7 @@ import std::memory::{Owned};
 // once at the caller's scope exit (no callee-free, no leak, no double-free).
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Node
 {
@@ -18,10 +19,10 @@ fn Owned<Node> make(int32 v)
     return n;                                  // MOVE OUT (make's unwind no-ops)
 }
 
-unsafe fn int main()
+fn int main()
 {
     {
         Owned<Node> p = make(v: 7);   // p owns the Node
     }                                  // p drops here -> ~Node -> 6
-    return kama_trace_get();          // fold(5,6) = 161
+    return traceGet();          // fold(5,6) = 161
 }

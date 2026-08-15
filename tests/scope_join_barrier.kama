@@ -8,8 +8,8 @@ type resource Slot {
     UnsafePtr<int32> cell;
     int32 value;
 
-    public unsafe ctor make(UnsafePtr<int32> cell, int32 value) {
-        this.cell = cell;
+    public unsafe ctor make(ref int32 cell, int32 value) {
+        this.cell = addr(of: cell);
         this.value = value;
     }
 
@@ -18,11 +18,11 @@ type resource Slot {
 
 fn void writer(Slot s) { s.run(); }   // owns the moved bundle; writes through its own slot
 
-unsafe fn int main() {
+fn int main() {
     int32 a = 0;
     int32 b = 0;
-    Slot sa = Slot.make(cell: addr(of: a), value: 20i32);
-    Slot sb = Slot.make(cell: addr(of: b), value: 22i32);
+    Slot sa = Slot.make(cell: ref a, value: 20i32);
+    Slot sb = Slot.make(cell: ref b, value: 22i32);
     scope {
         spawn writer(s: give sa);   // deferred-join child — runs concurrently
         spawn writer(s: give sb);   // another child — disjoint cell

@@ -4,6 +4,7 @@ import std::collections::{DynamicArray};
 // use-after-move / conditional-drop). One drop of code 2 -> 2.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;
@@ -21,7 +22,7 @@ fn int32 run(int32 c) {
     return 0;
 }
 
-unsafe fn int32 main() {
+fn int32 main() {
     int32 x = run(c: 0);
-    return kama_trace_get();                // exactly one drop -> 2
+    return traceGet();                // exactly one drop -> 2
 }

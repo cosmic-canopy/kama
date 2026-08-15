@@ -2,6 +2,7 @@ import std::memory::{Owned};
 
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 // An `abstract` base: the shape where the base declares a seam a subclass MUST fill, which is the one
 // case with a clean contract equivalent — and therefore the case most worth pinning, since `virtual`
@@ -45,12 +46,12 @@ type final resource Doubler extends Codec
     unsafe ~Doubler() { kama_trace(code: 2); }
 }
 
-unsafe fn int main()
+fn int main()
 {
     int32 sum = 0;
     {
         Owned<Codec> c = new Doubler.make(seed: 5);   // upcast: leaf built, held as the abstract base
         sum = c.encode();                             // body 10 + salt (1+10) + extra 100 = 121
     }                                                 // drops through the BASE handle -> Doubler then Codec
-    return sum + kama_trace_get();                    // 121 + 63 = 184
+    return sum + traceGet();                    // 121 + 63 = 184
 }

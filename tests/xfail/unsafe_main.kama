@@ -1,0 +1,11 @@
+// `unsafe` marks a CONTAINED region, and `main` contains the whole program — so an `unsafe fn main`
+// switches off every containment rule the seam installs (raw-pointer acquisition, `addr(of:)`, the
+// `extern fn` call gate) for the entire program at once, which is the marker meaning nothing at all.
+//
+// The positive counterpart is every other fixture in this suite: a kama `unsafe fn` is callable FROM
+// safe code (only an `extern fn` is gated at the call), so the raw work moves one frame down and
+// `main` stays safe. `tests/unsafe_ptr.kama` is the canonical shape.
+unsafe fn int32 main() {
+    int32 x = 42;
+    return x;
+}

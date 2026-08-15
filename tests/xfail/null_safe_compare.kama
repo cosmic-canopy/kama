@@ -11,10 +11,14 @@
 // including inside an `unsafe fn`, which changes what you may DEREFERENCE, not what may be null.
 type value Thing { public int32 x; public ctor make() { this.x = 0; } }
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     int32 a = 1;
     UnsafePtr<int32> p = null;
     if (a == null) { return 1; }    // still an error INSIDE unsafe
     if (p != null) { return 2; }    // allowed — an `UnsafePtr` is the one thing that can be null
     return 0;
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

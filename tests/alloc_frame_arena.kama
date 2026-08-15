@@ -14,7 +14,7 @@ import std::collections::{Arena, BumpAllocator};
     return acc;
 }
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     Arena frame = Arena.make(capacity: 128);   // a tiny per-frame budget
     BumpAllocator a = frame.handle();
 
@@ -30,3 +30,7 @@ unsafe fn int32 main() {
     frame.reset();                        // bulk-free — reuse the region next frame
     return spawned + tick(liveEntities: spawned);   // 4 spawned + (0+2+4+6) = 4 + 12 = 16
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

@@ -3,6 +3,7 @@ import std::memory::{Shared};
 // handle drops — not per-handle (no double-free), and not never (no leak).
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -19,8 +20,8 @@ fn int build()
     // scope exit: ~b (strong 2->1, no dtor), ~a (strong 1->0, ~Probe -> 2)
 }
 
-unsafe fn int main()
+fn int main()
 {
     int r = build();
-    return kama_trace_get();   // fold(1,2) = 33
+    return traceGet();   // fold(1,2) = 33
 }

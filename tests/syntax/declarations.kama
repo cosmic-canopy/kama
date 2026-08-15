@@ -46,13 +46,16 @@ type enum Level implements Error {
 @compileFor(HOSTED)
 fn int32 twice(int32 n) { return n + n; }
 
-unsafe fn int32 main() {
+// `asm(...)` needs an `unsafe fn`, and `main` may not be one — it encloses the whole program.
+unsafe fn void nop() { asm("nop"); }
+
+fn int32 main() {
     Point p = Point.make(x: 20);
     int32 a = p.get();
     a += 1;
     a = a * 2 - 1;
     if (a == 40 && a != 0) { a = twice(n: a) - 41; }
     int32 b = a > 0 ? 1 : 0;
-    asm("nop");
+    nop();
     return a + b;
 }

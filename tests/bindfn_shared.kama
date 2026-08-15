@@ -5,6 +5,7 @@ import std::memory::{Shared};
 // work; trace fold then yields 9 iff the dtor ran exactly once.)
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 fnptr int32 Get(int32 d);
 type resource Probe {
     int32 id;
@@ -17,8 +18,8 @@ fn int use() {
     BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
     return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
 }
-unsafe fn int main() {
+fn int main() {
     int r = use();
     if (r != 43) { return 1; }
-    return kama_trace_get();                        // single dtor -> 9
+    return traceGet();                        // single dtor -> 9
 }

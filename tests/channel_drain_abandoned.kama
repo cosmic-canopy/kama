@@ -17,7 +17,7 @@ type resource Tracked {
     unsafe ~Tracked() { this.tally[0] = this.tally[0] + 1; }
 }
 
-unsafe fn int32 main() {
+unsafe fn int32 run() {
     UnsafePtr<int32> tally = null;
     tally = cast<UnsafePtr<int32>>(malloc(n: sizeof(int32))); tally[0] = 0;
     {
@@ -35,3 +35,7 @@ unsafe fn int32 main() {
     n = tally[0]; free(p: cast<UnsafePtr>(tally));
     return n;   // 3 iff every abandoned item was drained-and-dropped
 }
+
+// The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
+// (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
+fn int32 main() { return run(); }

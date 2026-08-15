@@ -6,6 +6,7 @@
 // box drops): fold([7]) = 7.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Box<T> {
     T value;
@@ -19,11 +20,11 @@ fn Box<int32> make(int32 v) {
     return give b;                            // move the box out (inner dtor suppressed)
 }
 
-unsafe fn int32 main() {
+fn int32 main() {
     int32 g = 0;
     {
         Box<int32> a = make(v: 5);           // owns a Box_int32
         g = a.get();                         // 5
     }                                        // a drops here -> ~Box fires once (trace = 7)
-    return g + kama_trace_get();            // 5 + 7 = 12
+    return g + traceGet();            // 5 + 7 = 12
 }

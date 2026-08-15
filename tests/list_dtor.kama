@@ -8,6 +8,7 @@ import std::collections::{DynamicArray};
 // fold ((1*31+2)*31+4)=1027 -> exit 1027 & 0xFF = 3.
 extern fn void kama_trace(int code);
 extern fn int kama_trace_get();
+unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -29,8 +30,8 @@ fn int build()
     // scope exit: a,b,c were moved into xs (dtors suppressed); xs -> ~[1,2,4]
 }
 
-unsafe fn int main()
+fn int main()
 {
     int r = build();
-    return kama_trace_get();
+    return traceGet();
 }
