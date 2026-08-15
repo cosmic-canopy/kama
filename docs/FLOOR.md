@@ -108,7 +108,8 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 
 - **Sum types:** `Optional<T>` (`Some`/`None`), `Result<T, E>` (`Ok`/`Err`).
 - **Core contracts:** `Deref<T>`, `HeapOwner<T>`, `Movable`, `Copyable`, `Hashable`, `Equatable`,
-  `Comparable` (+ `Ordering`), `Error`, `Iterator<T>`/`IteratorMut<T>`/`Iterable<T>`, `Allocator`
+  `Comparable` (+ `Ordering`), `Error`, `Iterator<T>`/`IteratorMut<T>`/`Iterable<T>`, `Viewable<V>`,
+  `Allocator`
   (+ `GlobalAllocator`), `Serialize`/`Deserialize`/`Serializer`/`Deserializer`.
 - **Text rendering (`std::fmt` core):** the `Format` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.

@@ -49,14 +49,19 @@ too** — the marker is now enforced through contracts, overrides, intrinsics, `
 `addr(of:)`, and the stdlib carries 246 of them plus 48 `const ref` parameters where it carried zero
 ([SPEC.md](SPEC.md#immutability--const-)). It was scheduled here as a prerequisite of item 1; probing the
 four sites it was meant to unblock showed it is not one, which is recorded in that item and in the design
-doc. The list is now ordered by severity alone:
+doc. **The view model shipped** — a `type view`'s ctor is private, minting is a grant carried by a
+`@viewable` contract, `main` may no longer be `unsafe`, and a mint protocol emits no vtable; findings ③④⑤⑥
+close and ⑧ is retired. What the language now IS lives in [SPEC.md](SPEC.md#slices--spans--viewt-) and
+[GOALS.md](GOALS.md) §3c, which stops promising a view "can never dangle" and says what is true instead.
+Finding ③ is **restated, not closed**: a view is now unforgeable *by accident*, and still length-trusting —
+a type that owns memory can hand out a truthful pointer with a false length, which no type system without
+lifetimes can catch. The list is now ordered by severity alone:
 
 | # | work | closes | where | why here |
 |---|---|---|---|---|
-| **1** | **the view model** — the *window* has shipped; what is left is the **mint**: a `type view`'s ctor becomes implicitly private and minting is a grant carried by a contract marked `@viewable` | ③④⑤⑥, retires ⑧ | [design/view-model.md](design/view-model.md) | source-breaking, so before the tag. **Nothing gates it.** The *window* half shipped (`a6545dc` `60ef122` `6abbb1a`: `borrow`, the place rule — a base plus a field chain, conflicting iff one is a prefix of the other — and overlapping `ref` arguments), as did a live escape-check soundness fix (`8b6d4e6`: a view ctor's borrow is matched by argument NAME, not position; writing the length argument first used to walk straight past the check). What remains is **where a view may be born**, and the survey found **23 mint sites across 16 view types**, eleven of them in methods implementing no contract member — capabilities the stdlib never declared (`Map.values()`, `Map.entries()`, `SlotMap.values()`, `BitSet.setBits()`). ⚠️ Probed and settled: forging **cannot** be eliminated — an `unsafe fn` returning a safe-looking wrapper over a bogus length is indistinguishable from `DynamicArray.view()`, so this buys auditability and generality, not soundness, and GOALS §3c must be restated to match |
-| 2 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by 1 (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
-| 3 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
-| 4 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
+| **1** | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by the view mint (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
+| 2 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
+| 3 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
 **The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
 came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
@@ -306,20 +311,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   in a loop; the `export` rule under nesting; `parallel_for`'s write-capture rule, which sees a write made
   through a captured raw pointer; and `unsafe` does **not** leak into a generic body.
 
-  **`type view` is the unfinished design under 3–6, and it has its own brief:
-  [design/view-model.md](design/view-model.md).** The short version: a view answers *which* container it
-  windows and *how long* the window stays open, and kama **documents the type-system answer while
-  implementing the programmer-promises one**. The fix is lexical, and `borrow` is the **only** mint —
-  `foreach`/`parallel_for` are borrow scopes too, which is what retires finding ⑧'s dead guard rather than
-  reviving it. Cost, measured: of 59 `.view()`/`.slice()` sites, only **11** are outside `tests/` — 8 mints
-  (4 of them on a *field* — those need the per-field disjointness rule, not receiver constness; see the
-  design doc) and 3 derives that stay free.
-  There are **zero** long-lived views in `lib/`/`prelude/`/`examples/`/`bench/`, and `examples/webgpu`
-  holds no kama `View` at all. Of Rust's four borrow abilities, three cost kama nothing it uses; the
-  fourth — storing a borrow in a struct — is *already* forbidden and worked around with borrowed
-  raw-pointer fields: **37** `UnsafePtr` fields across the **18** `type view` declarations (17 borrowing
-  iterators plus `View<T>` itself), of which 11 are `modsp` mutation counters and **26** are borrowed data
-  pointers. That is finding ②'s shape.
+  **`type view` was the unfinished design under 3–6, and it SHIPPED** — a view answers *which* container
+  it windows (the mint: a private ctor plus a `@viewable` grant) and *how long* the window stays open (the
+  `borrow` scope). See [SPEC.md](SPEC.md#slices--spans--viewt-). Finding ③ is restated rather than closed,
+  in the Working order above; ⑧'s dead guard is retired.
+
+  What the survey behind it found, kept because it is the cost basis and not a recap: of 59
+  `.view()`/`.slice()` sites only **11** are outside `tests/`, there are **zero** long-lived views in
+  `lib/`/`prelude/`/`examples/`/`bench/`, and `examples/webgpu` holds no kama `View` at all. Of Rust's four
+  borrow abilities, three cost kama nothing it uses; the fourth — storing a borrow in a struct — is
+  *already* forbidden and worked around with borrowed raw-pointer fields: **37** `UnsafePtr` fields across
+  the **18** `type view` declarations, of which 11 are `modsp` mutation counters and **26** are borrowed
+  data pointers. That is finding ②'s shape, and it is why containment had to key on the type.
 
   **The remedy shipped: `unsafe fn`.** `unsafe` now marks the BODY (C#'s meaning, not Rust's), calling one
   is unrestricted, `extern` is gated at the CALL, and any expression, declaration or binding whose TYPE is

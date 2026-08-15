@@ -74,7 +74,13 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    RAII-dropped). A **`type view`** *borrows* a range of memory it does not own — a non-owning,
    **stack-only** slice/span (the flagship is `View<T>`; C# `ref struct`). It copies like a value but is
    a *second-class borrow*: the escape check forbids it from being a field, a collection element, or an
-   escaping return, so — with no borrow checker — it can never dangle. A **`type contract`** is a
+   escaping return, and its **constructor is private** — a view is a bidirectional relationship, so it may be
+   minted only by the view itself or by the type it views, which declares that by implementing a contract
+   marked `@viewable`. The honest claim is therefore not "it can never dangle": **safe kama cannot
+   *originate* a dangling view, and the trusted boundary is the `unsafe fn` set, greppable at declarations.**
+   A type that owns memory can still hand out a truthful pointer with a false length — no type system
+   without lifetimes can catch that, and Rust has the same property (`Vec::as_slice` is a safe function with
+   unsafe internals). What the model buys is that the trusted set is small, named, and declared. A **`type contract`** is a
    public-only guarantee a type satisfies — kama's word for an interface (also a borrow, of one object).
    Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
    so kama unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give

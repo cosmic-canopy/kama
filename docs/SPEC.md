@@ -281,6 +281,37 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
+- **A view is minted by the type it views, and by nothing else.** A view is a bidirectional
+  relationship — it does not exist without a type to view — so a `type view`'s **constructor is private**,
+  and writing `public` on it is a compile error rather than a silent downgrade (the same rule a `view`
+  *field* already obeys). Two places may call it: the **view itself**, which is what makes `View.slice`
+  work; and the **type being viewed**, which declares that relationship by implementing a member of a
+  contract marked **`@viewable`**. Implementing such a member lets that member's body mint the view it
+  returns — the return type self-selects, so a marked contract cannot over-grant, and a member returning
+  `int32` mints nothing.
+
+  ```kama
+  @viewable type contract Viewable<V> for resource, value, view { fn V view(); }
+
+  type resource DynamicArray<T, A> implements …, Viewable<View<T>> {
+      public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
+  }
+  ```
+
+  The marked contracts in tree are `Viewable<V>`, `Iterable<T>`/`IterableMut<T>` (prelude) and
+  `ValuesIterable`/`ValuesIterableMut`/`EntriesIterable` (`std::collections`). A **`@viewable` contract is a
+  mint protocol, not a value**: it declares *who* may hand out a view, so boxing one would erase the very
+  identity the grant is about. It emits no C type at all — no vtable, no fat pointer — and naming one as a
+  local, parameter, field or return type is an error. Use it in an `implements` clause or as a generic
+  bound. `borrow` and `parallel_for` are **nominal** on it too: a host with a `.view()` that never declared
+  `Viewable` is rejected, though resolution stays structural, so the emitted call is still direct.
+
+  **What this buys is auditability and generality, not soundness.** A view is minted only by a type that
+  claims to own the memory — but that type's own `view()` can still return a truthful pointer with a false
+  length, and no type system without lifetimes can tell. Safe kama cannot *originate* a dangling view; the
+  trusted set is the `unsafe fn` bodies of the types that own the memory, and it is greppable at
+  declarations.
+
 - **A borrowing iterator is itself a view.** Every collection iterator — `ViewIter`/`ViewIterMut`,
   `DynamicArrayIter`, `MapValueIter`, `BitSetIter`, the `string` iterators `Chars`/`Split`, all of them — is
   declared `type view`, so it obeys the same escape rules as the `View<T>` above: a local or a by-value
@@ -1181,6 +1212,7 @@ type IS or CONTAINS `UnsafePtr<T>` may only occur inside an `unsafe fn`.** Plus 
 | **call** an `extern fn`, **scalar-only included** | `kama_close_socket(fd: fd)` | `unsafe fn` only |
 | inline `asm(…)` | | `unsafe fn` only |
 | **call** an `unsafe fn` | | unrestricted |
+| `unsafe` on **`main`** | `unsafe fn int32 main()` | **rejected** — see below |
 
 Two of these are worth their own sentence, because the obvious weaker version of each is wrong.
 
@@ -1193,6 +1225,12 @@ in the function.
 a double-close primitive by effect; 87 of the 188 stdlib extern declarations are pointer-free. Danger at
 this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it
 can — so a type-based carve-out would look like a rule and behave like a hole.
+
+**`main` may not be `unsafe`.** It encloses the whole program, so the marker would put every line in
+the trusted region and stop marking anything — the same shape as an `extern fn` call that needed no
+marker at all. Since calling an `unsafe fn` from safe code is unrestricted (above), the fix is always
+available and always better: move the raw work into a helper `unsafe fn` and call it from `main`, so
+the marker names the region that actually needs it.
 
 **Definite assignment inside an `unsafe fn`: locals relax, `out` parameters do not.** The split is
 load-bearing. Relaxation exists because a raw store is invisible to the definite-assignment walker, so an
