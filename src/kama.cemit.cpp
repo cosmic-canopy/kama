@@ -2347,10 +2347,32 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     _scopes.push_back(Scope());
 
     *_out << "{\n";
+    // The bindings of ONE `borrow` are checked against each other by the same prefix test the rest of the
+    // model uses. `borrow a as x, a as y` would hand out two mutable views of one buffer — `View<T>` is a
+    // mutate-through window, so this is precisely the aliasing the window exists to prevent, just spelled
+    // in one statement instead of two. `borrow w.bodies as b, w.springs as s` stays legal: distinct fields
+    // cannot overlap. A non-place host has an empty path and is skipped here — it is rejected on its own.
+    std::vector<std::pair<std::vector<std::string>, std::string>> bound;   // place -> the alias holding it
     if (bn->bindings) {
         for (auto& b : *bn->bindings) {
             if (!b || !b->host || !b->alias || !b->alias->value) continue;
             const std::string alias = *b->alias->value;
+            std::vector<std::string> hp = placePath(b->host);
+            if (!hp.empty()) {
+                bool clash = false;
+                for (auto& pr : bound)
+                    if (placesConflict(pr.first, hp)) {
+                        unsupported(("`" + placeText(hp) + "` is borrowed twice by one `borrow` (as `"
+                                     + pr.second + "` and as `" + alias + "`) — that is two mutable views "
+                                     "of the same storage, which is what the window exists to prevent; "
+                                     "borrow it once and derive with `.slice(…)`, which is free")
+                                        .c_str(), bn->line);
+                        clash = true;
+                        break;
+                    }
+                if (clash) continue;
+                bound.push_back({ hp, alias });
+            }
             const std::string hostCls = exprClass(b->host);
             if (hostCls.empty() || !_classes.count(hostCls)) {
                 unsupported(("`borrow` needs a container that can produce a view; `" + alias

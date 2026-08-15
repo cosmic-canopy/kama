@@ -18,9 +18,20 @@ fn void five(out int32 v) { v = 5; }
 
 type resource Box {
     DynamicArray<int32> buf;
+    DynamicArray<int32> spare;
     int32 hits;
-    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4); this.hits = 0; }
+    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4);
+                         this.spare = DynamicArray.withCapacity(capacity: 2); this.hits = 0; }
     public fn void add(int32 v) { this.buf.add(item: v); }
+    public fn void addSpare(int32 v) { this.spare.add(item: v); }
+
+    // TWO fields of one object in ONE window. Legal, and load-bearing: the bindings of a `borrow` are
+    // checked against each other by the same prefix test, and two distinct fields cannot overlap in
+    // storage. Borrowing the SAME place twice (`borrow a as x, a as y`) is the rejected case —
+    // tests/xfail/borrow_two_bindings_overlap.
+    public fn int32 pair() {
+        borrow this.buf as b, this.spare as sp { return sum(xs: b) + sum(xs: sp); }
+    }
 
     // A FIELD mint. Only `this.buf` freezes: `this.hits` is a different field of the same object, and
     // two distinct fields cannot overlap in storage, so writing it inside the window is sound. This is
@@ -36,7 +47,8 @@ type resource Box {
 fn int32 main() {
     Box bx = Box.make();
     bx.add(v: 10); bx.add(v: 20);
-    int32 boxed = bx.total();                   // 30
+    bx.addSpare(v: 6);
+    int32 boxed = bx.total() + bx.pair() - 36;   // 30 + 36 - 36 = 30
 
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
     a.add(item: 3); a.add(item: 4);

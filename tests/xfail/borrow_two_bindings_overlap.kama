@@ -1,0 +1,15 @@
+// Two bindings of ONE `borrow` are two places, checked against each other by the same prefix test the
+// rest of the view model uses. `borrow a as x, a as y` hands out two mutable views of one buffer —
+// `View<T>` is a mutate-through window, so this is exactly the aliasing the window exists to prevent,
+// merely spelled in one statement instead of two. Disjoint fields stay legal (see tests/borrow_basic).
+import std::collections::{View, DynamicArray};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1);
+    int32 r = 0;
+    borrow a as x, a as y { r = sum(xs: x) + sum(xs: y); }
+    return r;
+}
