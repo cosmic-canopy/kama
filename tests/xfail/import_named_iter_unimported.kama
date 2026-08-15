@@ -3,6 +3,6 @@
 import std::collections::{BitSet};
 fn int32 main() {
     BitSet bs = BitSet.empty();
-    BitSetIter it = bs.setBits();   // named but not imported -> clean error
+    BitSetIter it = bs.iterator();   // named but not imported -> clean error
     return 0;
 }

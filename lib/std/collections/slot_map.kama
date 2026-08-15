@@ -18,7 +18,7 @@ type value Handle {
 // `mods` snapshot — same contract as `MapValueIter`.
 type view SlotMapValueIter<V> implements Iterator<V> {
     UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -39,7 +39,7 @@ type view SlotMapValueIter<V> implements Iterator<V> {
 // to the next OCCUPIED slot (idempotent) and runs the invalidation check; `next()` hands out the `ref V`.
 type view SlotMapValueIterMut<V> implements IteratorMut<V> {
     UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -67,7 +67,9 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 // vacate). A handle stores the odd stamp from its insert, so `valid` is just `gens[index] == handle.generation`
 // — a removed slot (now even) or a reused slot (now a higher odd) both mismatch. `slotCount` is the high-water
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
-type resource SlotMap<V, A: Allocator = GlobalAllocator> {
+type resource SlotMap<V, A: Allocator = GlobalAllocator>
+        implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
+                   ValuesIterableMut<SlotMapValueIterMut<V>> {
     UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<int32> freeList = null;
     int32 slotCount = 0; int32 freeLen = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
 

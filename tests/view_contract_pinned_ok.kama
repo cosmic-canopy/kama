@@ -24,15 +24,18 @@ type contract Windowed<S is This> for value, view {
 type view Span implements Windowed<This> {
     UnsafePtr<int64> p; int32 n;
 
-    public unsafe ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
+    unsafe ctor over(UnsafePtr<int64> p, int32 n) { this.p = p; this.n = n; }
     public fn int32 length() { return this.n; }
     public unsafe fn int64 at(int32 i) { return this.p[i]; }
     // Returns a view over `this`'s buffer — roots at `this`, so the return escape check accepts it.
     public unsafe fn Span rest() { return Span.over(p: addr(of: this.p[1]), n: this.n - 1); }
 }
 
-// The owner of the memory. Its `span()` is the only route to a `Span`, and the only `addr(of:)` here.
-type resource Buf {
+// The owner of the memory. `Spanned` is how it DECLARES that its storage is what a `Span` views — which
+// is what entitles `span()` to mint one, since a view's constructor is private.
+@viewable type contract Spanned<S> for resource { fn S span(); }
+
+type resource Buf implements Spanned<Span> {
     DynamicArray<int64> a;
 
     public ctor empty() { this.a = DynamicArray.empty(); }

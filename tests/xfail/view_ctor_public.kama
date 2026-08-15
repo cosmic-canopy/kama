@@ -1,0 +1,12 @@
+// A `view` constructor's visibility is not the author's to choose. `public` on it would be a standing
+// offer to build a borrow over any memory the caller can name — the forge the mint rule closes — so it is
+// REJECTED rather than silently downgraded to private.
+//
+// Rejecting is what keeps the source honest: the default is already private, so a silent downgrade would
+// leave a declaration reading `public` while meaning the opposite. The same reasoning already governs a
+// `view` FIELD, which may not carry a written visibility either.
+type view Span {
+    UnsafePtr<int32> at; int32 count;
+    public unsafe ctor over(UnsafePtr<int32> at, int32 count) { this.at = at; this.count = count; }
+}
+fn int32 main() { return 0; }

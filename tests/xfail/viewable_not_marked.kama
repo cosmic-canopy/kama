@@ -1,0 +1,22 @@
+// The grant has to be DECLARED. `Holder` owns the buffer and its `window()` returns a `Span` over it —
+// every structural sign that this is the type being viewed is present — but `Windowed` carries no
+// `@viewable`, so nothing here says so, and the mint is rejected.
+//
+// That is the rule failing CLOSED, which is the whole reason the ctor is private by default rather than
+// by an opt-in the author can forget: an unmarked contract grants nothing, and the fix is to write the
+// mark rather than to discover, much later, that a view type was open to the world.
+type view Span {
+    UnsafePtr<int32> at; int32 count;
+    unsafe ctor over(UnsafePtr<int32> at, int32 count) { this.at = at; this.count = count; }
+    public const fn int32 length() { return this.count; }
+}
+
+type contract Windowed<S> for resource { fn S window(); }   // NOT `@viewable`
+
+type resource Holder implements Windowed<Span> {
+    int32 cell;
+    public ctor make() { this.cell = 7; }
+    public unsafe fn Span window() { return Span.over(at: addr(of: this.cell), count: 1); }
+}
+
+fn int32 main() { Holder h = Holder.make(); return h.window().length() - 1; }

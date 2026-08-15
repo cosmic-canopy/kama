@@ -1,14 +1,14 @@
 namespace std::collections;
 import std::ptr::{relocate};
 import std::collections::{View};
-export { DynamicArray };
+export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type view DynamicArrayIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
-    public unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
+    unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<T> next() {
@@ -23,7 +23,7 @@ type view DynamicArrayIter<T> implements Iterator<T> {
 // The invalidation check lives in hasNext() (it runs before each next()).
 type view DynamicArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len; UnsafePtr<int32> modsp; int32 modsAt;
-    public unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
+    unsafe ctor make(UnsafePtr<T> data, int32 len, UnsafePtr<int32> modsp, int32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe const fn bool hasNext() {
@@ -37,7 +37,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
+type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
                                   Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
     // (force-explicit-field-init: a primitive or raw `UnsafePtr` no longer rides silently on `= {0}`).
@@ -108,13 +108,14 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // transfer. The view may be passed DOWN the call stack (a `const View<T>` param = read-only) but
     // never stored (the `view` kind's escape check enforces that). Valid only while the array isn't
     // resized. Mutating through the view writes back to this array's buffer.
-    public unsafe fn View<T> view() { return View::<T>.make(data: this.data, len: this.len); }
+    public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.len); }
 
     // Borrow the sub-range `[from, from+count)` as a `View<T>`, bounds-checked (panics on overrun).
     public unsafe fn View<T> slice(int32 from, int32 count) {
+        // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
+        // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }
-        if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
-        return View::<T>.make(data: addr(of: this.data[from]), len: count);
+        return this.view().slice(from: from, count: count);
     }
 
     // Insert `item` at `index` (0..len), shifting the elements at `index..len` up one slot; `index == len`

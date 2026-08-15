@@ -10,13 +10,13 @@
 //     int64 junk = noise(a: 7i64, b: 9i64);   // stomps the dead frame
 //     s.first()                               // read garbage; the binary exited 1
 //
-// The legal shape is `View<T>`'s own `ctor make(UnsafePtr<T> data, int32 len)` — an `UnsafePtr<T>` parameter points at
-// memory the caller owns, so the view may borrow it.
+// The legal shape is `View<T>`'s own `ctor over(UnsafePtr<T> at, int32 count)` — an `UnsafePtr<T>`
+// parameter points at memory the caller owns, so the view may borrow it.
 
 type view Span {
     UnsafePtr<int64> p; int32 n;
 
-    public unsafe ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
+    unsafe ctor over(int64 v) { this.p = addr(of: v); this.n = 1; }
     public unsafe fn int64 first() { return this.p[0]; }
 }
 

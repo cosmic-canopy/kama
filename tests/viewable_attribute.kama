@@ -1,8 +1,9 @@
-// M1a — `@viewable` on a `type contract` is recognized and inert. It marks the contract as the MINT
-// GRANT: a view is a bidirectional relationship, so it may be born only inside the view itself or inside
-// the type it views, and implementing a member of a marked contract is how the viewed type declares that
-// capability. Enforcement (the private ctor plus the gate) lands with the stdlib's grants, in one commit;
-// until then this fixture pins only that the attribute PARSES, VALIDATES, and changes no behavior.
+// A USER container minting its OWN `type view` through its OWN `@viewable` contract — the fixture that
+// proves the mint rule is general, and not a blessing the compiler hands to `std::collections`.
+//
+// A view is a bidirectional relationship: it does not exist without a type to view. So `Span`'s ctor is
+// private, and `Buf` may build one only because it declares — by implementing a marked contract — that its
+// storage is what a `Span` views. `xfail/viewable_not_marked` is the same code with the mark removed.
 //
 // Both shapes a marked contract can take are exercised: a member returning a `type view` directly, and one
 // returning a CONTRACT a view implements — the latter is what `Iterable<T>.iterator()` is, and is why the
@@ -14,7 +15,7 @@ import std::collections::{DynamicArray};
 
 type view Span implements Iterator<int32> {
     UnsafePtr<int32> p; int32 n; int32 pos;
-    public unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; this.pos = 0; }
+    unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; this.pos = 0; }
     public unsafe fn Optional<int32> next() {
         if (this.pos >= this.n) { return Optional::None; }
         int32 i = this.pos; this.pos = this.pos + 1;

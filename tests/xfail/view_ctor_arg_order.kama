@@ -4,12 +4,26 @@
 // through a by-name map and errors on a missing one, so writing them in a different order is the same
 // call. The escape check used to root at the first WRITTEN argument, on the convention that a view ctor
 // takes its borrow first — so simply writing the length first walked past it, and this returned a view
-// over a dead local with no diagnostic at all. The `data:`-first spelling of the SAME call was rejected.
-import std::collections::{View};
+// over a dead local with no diagnostic at all. The `at:`-first spelling of the SAME call was rejected.
+//
+// The mint is properly GRANTED here (`Holder` declares `Windowed<Span>`, so `window()` may build a
+// `Span`), which is what leaves the escape check as the only thing this fixture can fail on.
 
-unsafe fn View<int32> bad(ref int32 keep) {
-    int32 local = 7;
-    return View::<int32>.make(len: keep, data: addr(of: local));   // `keep` is a safe root; `local` is not
+type view Span {
+    UnsafePtr<int32> at; int32 count;
+    unsafe ctor over(UnsafePtr<int32> at, int32 count) { this.at = at; this.count = count; }
+    public const fn int32 length() { return this.count; }
 }
 
-fn int32 main() { int32 k = 1; return bad(keep: ref k).length(); }
+@viewable type contract Windowed<S> for resource { fn S window(ref int32 keep); }
+
+type resource Holder implements Windowed<Span> {
+    int32 unused;
+    public ctor make() { this.unused = 0; }
+    public unsafe fn Span window(ref int32 keep) {
+        int32 local = 7;
+        return Span.over(count: keep, at: addr(of: local));   // `keep` is a safe root; `local` is not
+    }
+}
+
+fn int32 main() { Holder h = Holder.make(); int32 k = 1; return h.window(keep: ref k).length(); }

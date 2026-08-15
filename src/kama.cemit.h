@@ -934,6 +934,10 @@ private:
     // have never heard of each other can each conform `int32` to a contract one of them owns.
     std::map<std::pair<std::string, std::string>, std::string> _conformanceOrigin;
     std::string _collectingUnitPath;    // the unit whose declarations are being collected right now
+    // The view type the CURRENT method body is allowed to mint (its C name), or empty. Set on entry to
+    // every method body when the owner implements a `@viewable` contract declaring a member of that name
+    // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
+    std::string _mintGrant;
     std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
     // Pre-scanned conformances: target `primKey` -> the contracts a `type intrinsic` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
@@ -1688,10 +1692,14 @@ private:
     void emitClassDefinitions(ClassInfo& ci);
     // Emits a method / operator / named-`ctor` body. There is no `isCtor` flag: a named `ctor` is a static
     // factory with no `self`, so it needs none of the instance-ctor prologue the flag used to select.
+    // `memberName` is the KAMA name of the member being emitted (not the mangled `cName`) — the mint grant
+    // asks whether a `@viewable` contract declares a member by that name, and the mangled form cannot be
+    // split back apart reliably once a generic instance is in it.
     void emitMethodOrCtorBody(const std::string& cName, const char* retType,
                               SharedParameterList params, SharedBlock body,
                               ClassInfo& owner, bool isConstMethod = false,
-                              bool isStatic = false, bool isUnsafe = false);
+                              bool isStatic = false, bool isUnsafe = false,
+                              const char* memberName = nullptr);
     // Bring zero-inited storage of class `ty` (named `nm` in C) up to a valid empty state — field
     // initializers, each field's `default` ctor, and the vtable pointer. Shared by the bare class-local
     // declaration path and by a `ctor`'s implicit `this` storage, which must agree exactly.

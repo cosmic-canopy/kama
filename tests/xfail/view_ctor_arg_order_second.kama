@@ -1,21 +1,29 @@
 // EVERY parameter that can carry a borrow is checked, not just one of them. A view may window more than
-// one piece of caller memory — `BitSetIter.make(words: …, modsp: addr(of: this.mods))` in the stdlib
-// borrows twice — and such a view dangles if ANY single one of its borrows does. Here the first borrow
-// argument (`words`) is a perfectly safe `ref` parameter, and only the second (`modsp`) points at a
-// ctor-local, so a check that stopped at the first borrow it found would accept this.
-import std::collections::{View};
+// one piece of caller memory — `BitSetIter` in the stdlib borrows the word buffer AND the mutation
+// counter — and such a view dangles if ANY single one of its borrows does. Here the first borrow argument
+// (`words`) is a perfectly safe `ref` parameter, and only the second (`modsp`) points at a local, so a
+// check that stopped at the first borrow it found would accept this.
+//
+// The mint is properly GRANTED (`Holder` declares `Paired<Pair>`), so the escape check is the only thing
+// left for this fixture to fail on.
 
 type view Pair {
     UnsafePtr<int32> words; UnsafePtr<int32> modsp; int32 n;
-    public unsafe ctor make(UnsafePtr<int32> words, UnsafePtr<int32> modsp, int32 n) {
+    unsafe ctor make(UnsafePtr<int32> words, UnsafePtr<int32> modsp, int32 n) {
         this.words = words; this.modsp = modsp; this.n = n;
     }
     public const fn int32 size() { return this.n; }
 }
 
-unsafe fn Pair bad(ref int32 keep) {
-    int32 local = 0;
-    return Pair.make(words: addr(of: keep), modsp: addr(of: local), n: 1);   // 2nd borrow dangles
+@viewable type contract Paired<S> for resource { fn S pair(ref int32 keep); }
+
+type resource Holder implements Paired<Pair> {
+    int32 unused;
+    public ctor make() { this.unused = 0; }
+    public unsafe fn Pair pair(ref int32 keep) {
+        int32 local = 0;
+        return Pair.make(words: addr(of: keep), modsp: addr(of: local), n: 1);   // 2nd borrow dangles
+    }
 }
 
-fn int32 main() { int32 k = 1; return bad(keep: ref k).size(); }
+fn int32 main() { Holder h = Holder.make(); int32 k = 1; return h.pair(keep: ref k).size(); }

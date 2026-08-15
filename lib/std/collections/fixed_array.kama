@@ -1,6 +1,6 @@
 namespace std::collections;
 import std::collections::{View};
-export { FixedArray };
+export { FixedArray, FixedArrayIter, FixedArrayIterMut };
 
 extern "<string.h>";
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
@@ -8,7 +8,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T> implements Iterator<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
-    public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
@@ -19,7 +19,7 @@ type view FixedArrayIter<T> implements Iterator<T> {
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
 type view FixedArrayIterMut<T> implements IteratorMut<T> {
     UnsafePtr<T> data; int32 pos; int32 len;
-    public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public const fn bool hasNext() { return this.pos < this.len; }
     public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
@@ -27,7 +27,7 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
+type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
                                   Serialize when [T: Serialize] {
     UnsafePtr<T> data = null; int32 size = 0; A alloc;
 
@@ -71,11 +71,12 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Borrow the whole array (or a sub-range) as a non-owning `View<T>` slice — zero copy. See
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
-    public unsafe fn View<T> view() { return View::<T>.make(data: this.data, len: this.size); }
+    public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.size); }
     public unsafe fn View<T> slice(int32 from, int32 count) {
+        // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
+        // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
-        if (count == 0) { return View::<T>.make(data: this.data, len: 0); }
-        return View::<T>.make(data: addr(of: this.data[from]), len: count);
+        return this.view().slice(from: from, count: count);
     }
 
     // The by-value `foreach (T x in arr)` yields COPIES, so it exists only for a Copyable element.

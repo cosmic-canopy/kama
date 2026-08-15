@@ -1,0 +1,1 @@
+a `view` constructor is always private

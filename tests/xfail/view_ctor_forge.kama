@@ -1,0 +1,18 @@
+// THE FORGE, closed. `View<T>` borrows a `DynamicArray`'s buffer, and before the mint rule its
+// constructor was `public` — so any code that could name a raw pointer could hand safe code a `View` over
+// arbitrary memory with an arbitrary length, and `DynamicArray` had no say in it at all.
+//
+// A view is a bidirectional relationship: it does not exist without a type to view. So its constructor is
+// private and only two places may call it — the view itself (`View.slice`, narrowing its own borrow) and
+// the type being viewed, which declares that relationship by implementing `Viewable<View<T>>`. This free
+// function is neither.
+//
+// What this does NOT close is `DynamicArray.view()` returning a truthful pointer with a false length; see
+// GOALS §3c. The trusted set is now the types that own the memory, which is the honest claim.
+import std::collections::{DynamicArray, View};
+
+unsafe fn View<int32> forge(ref DynamicArray<int32> a) {
+    return View::<int32>.over(at: a.dataPtr(), count: 999999);
+}
+
+fn int32 main() { return 0; }

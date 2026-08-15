@@ -4,14 +4,14 @@ export { BitSet, BitSetIter };
 extern "<string.h>";
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
-// A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs.setBits())`), ascending.
+// A by-value iterator over the SET bit indices of a `BitSet` (`foreach (int32 i in bs)`), ascending.
 // It borrows the word buffer + snapshots the mutation counter and rejects a structural change (a grow, which
 // reallocates + re-homes the buffer) made mid-iteration — the same contract as the other collections' iterators.
 // Setting/clearing a bit IN PLACE keeps the buffer stable, so it does not invalidate a walk in flight. The scan
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
 type view BitSetIter implements Iterator<int32> {
     UnsafePtr<uint64> words; int32 wordCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    public unsafe ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    unsafe ctor make(UnsafePtr<uint64> words, int32 wordCount, UnsafePtr<int32> modsp, int32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<int32> next() {
@@ -35,7 +35,7 @@ type view BitSetIter implements Iterator<int32> {
 // clear. `set`/`toggle` past the current capacity auto-grow (doubling the word count); `test`/`clear` on an
 // out-of-range bit are a no-op / `false` (never grow). `capacity()` reports the addressable bit range (word
 // count × 64, ≥ the highest set bit). A move-only value that owns its buffer, but Copyable via a deep word copy.
-type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) {
+type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give), Iterable<int32> {
     UnsafePtr<uint64> words = null; int32 wordCount = 0; int32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
@@ -109,7 +109,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     }
 
     // Clear every bit (keeps the buffer). A structural change to the live contents, so it invalidates any
-    // in-flight `setBits()` iterator.
+    // in-flight `iterator()` iterator.
     public unsafe fn void clearAll() {
         int32 i = 0;
         while (i < this.wordCount) { this.words[i] = 0ui64; i = i + 1; }
@@ -148,12 +148,16 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
         return true;
     }
 
-    // `foreach (int32 i in bs.setBits())` — the set bit indices, ascending. (BitSet itself is not `Iterable`;
-    // iterate the returned iterator, like `SlotMap.values()`.) Importing `BitSet` alone suffices — the
-    // `BitSetIter` return type resolves in THIS module, not the caller's scope, so iterating needs no
-    // separate import. (Only explicitly naming the type — `BitSetIter it = bs.setBits()` — requires
-    // `import std::collections::{BitSetIter}`, like naming any type.)
-    public unsafe fn BitSetIter setBits() {
+    // `foreach (int32 i in bs)` — the set bit indices, ascending. This used to be `setBits()`, a plain
+    // method, and the comment here used to say "BitSet itself is not `Iterable`" as though that were a
+    // decision. It was an omission: yielding set-bit indices IS the obvious iteration of a bit set, and
+    // the `int32` element already rules out the C#/C++ "one `bool` per position" reading. Declaring
+    // `Iterable<int32>` is also what entitles this method to mint `BitSetIter` at all — the iterator
+    // borrows this set's word buffer, so the set is the type being viewed.
+    //
+    // Importing `BitSet` alone suffices: the `BitSetIter` return type resolves in THIS module, not the
+    // caller's scope. (Only explicitly naming the type needs `import std::collections::{BitSetIter}`.)
+    public unsafe fn BitSetIter iterator() {
         return BitSetIter.make(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

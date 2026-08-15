@@ -185,8 +185,20 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`
 // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
 // iterator (implements `Iterator<T>` and is iterated directly) needs no `Iterable`.
-type contract Iterable<T> for resource, view { fn Iterator<T> iterator(); }
-type contract IterableMut<T> for resource, view { fn IteratorMut<T> iterMut(); }
+// Both are `@viewable`: every collection iterator is a `type view` over the container's buffer, and a
+// view's ctor is private, so `iterator()`/`iterMut()` could not build one without this mark. `Iterable`
+// is the container SAYING it is the thing being viewed — which is exactly the relationship the mint rule
+// wants declared. (`Iterator`/`IteratorMut` are NOT marked: an iterator hands out elements, not views.)
+@viewable type contract Iterable<T> for resource, view { fn Iterator<T> iterator(); }
+@viewable type contract IterableMut<T> for resource, view { fn IteratorMut<T> iterMut(); }
+// The container-side mint grant for a plain window: a type that `implements Viewable<View<T>>` declares
+// that its storage is what a `View<T>` views, and `view()` is the one place that view is born.
+//
+// `V` is a type PARAMETER rather than a named `View<T>` on purpose, and not only because the prelude
+// cannot name a `std::collections` type this early (see the Args note below): a user's own `type view
+// DmaSpan` has the identical relationship to its owner, and a contract naming `View` would serve exactly
+// one type and leave every other view type unmintable.
+@viewable type contract Viewable<V> for resource, value, view { fn V view(); }
 // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
 // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
 // (std::json, …) implements; `Serialize` is what a `@generate(Serialize)` type gets (compiler-synthesized)

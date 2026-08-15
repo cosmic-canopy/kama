@@ -2,17 +2,17 @@
 // further than an `import` would, and that has to hold in every position that NAMES a type — a field, a
 // parameter, a return type and, here, a local variable declaration:
 //
-//     std::collections::ViewIter<int32> it = v.iterator();   // ACCEPTED, before this rule
+//     std::collections::BTreeNode<int32, int32> n = …;   // ACCEPTED, before this rule
 //
-// `lib/std/collections/view.kama` says `export { View };` — the iterators are deliberately internal. A
-// local is scope-bound, so this position never escaped anything on its own; the reason to close it is that
-// a half-enforced rule is worse to inherit than an unenforced one. What is still NOT checked is an
-// expression that never names the type (`v.iterator().next()`), which is not a declaration at all and
+// `lib/std/collections/sorted_map.kama` says `export { SortedMap };` — the B-tree node is the map's
+// internal structure. A local is scope-bound, so this position never escaped anything on its own; the
+// reason to close it is that a half-enforced rule is worse to inherit than an unenforced one. What is
+// still NOT checked is an expression that never names the type, which is not a declaration at all and
 // belongs to expression type checking.
-import std::collections::{View};
+import std::collections::{SortedMap};
 
-fn int32 sum(View<int32> v) {
-    std::collections::ViewIter<int32> it = v.iterator();
+fn int32 depth() {
+    slot std::collections::BTreeNode<int32, int32> n;
     return 0;
 }
 

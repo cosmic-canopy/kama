@@ -5297,6 +5297,22 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
+                        // A `view`'s CONSTRUCTOR is always private — the mint rule. A view is a
+                        // bidirectional relationship: it does not exist without a type to view, so it may
+                        // be born only inside the view itself or inside the type it views, the latter
+                        // declared by implementing a member of a `@viewable` contract. `public` here would
+                        // be a standing offer to build a borrow over any memory the caller can name, which
+                        // is the forge this closes. Rejected rather than silently downgraded, exactly as
+                        // fieldVisibility rejects a written visibility on a `view` field: the default is
+                        // already `Private`, so a downgrade would leave 16 stdlib declarations reading
+                        // `public` while meaning the opposite.
+                        if (ci.isBorrow && md->isCtor
+                            && (modHas(md->modifiers, "public") || modHas(md->modifiers, "protected")))
+                            unsupported(("a `view` constructor is always private — `" + ci.name + "` borrows "
+                                         "memory it does not own, so it may only be minted by the type that "
+                                         "owns that memory. Drop the visibility and let the viewed type "
+                                         "declare the capability, by implementing a `@viewable` contract "
+                                         "whose member returns this view").c_str(), md->line);
                         // `protected` belongs to a `resource` in an extensibility hierarchy
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
                         // override still uses `protected` by NVI). It's meaningless on a `value`, a
@@ -10673,7 +10689,7 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
         emitMethodOrCtorBody(eci.name + "__" + *md->name->value, ret.c_str(),
                              md->params, md->body, eci, md->isConst,
                              modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                             modHas(md->modifiers, "unsafe"));
+                             modHas(md->modifiers, "unsafe"), md->name->value->c_str());
         _returnIsPlace = false;
     }
 }
@@ -15517,12 +15533,28 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
                                     ClassInfo& owner, bool isConstMethod, bool isStatic,
-                                    bool isUnsafe)
+                                    bool isUnsafe, const char* memberName)
 {
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _inUnsafe = isUnsafe;         // `unsafe` is the FUNCTION now — the whole body is the relaxed region
+    // THE MINT GRANT. A `type view`'s ctor is private (see collectClasses), so the one way an outside type
+    // may build one is by declaring that it IS the type being viewed — which it does by implementing a
+    // member of a `@viewable` contract. This body may then mint the view it returns, and only that one:
+    // the return type self-selects, which is why marking a whole contract cannot over-grant.
+    //
+    // Computed once here rather than at each mint site, because the question is a property of the ENCLOSING
+    // METHOD, and a per-site lookup would have to re-derive the member name from the mangled C name.
+    _mintGrant.clear();
+    if (retType && memberName && *memberName && isViewCType(retType))
+        for (auto& base : owner.interfaces) {
+            auto it = _interfaces.find(base);
+            if (it == _interfaces.end() || !it->second.isViewable) continue;
+            for (auto& m : it->second.methods)
+                if (!m.isCtor && m.name == memberName) { _mintGrant = retType; break; }
+            if (!_mintGrant.empty()) break;
+        }
     // A named `ctor` is emitted as a static factory (no `self` PARAMETER), but it does have a `this`: the
     // value it is building. Storage for it is synthesized below, so `this` must resolve here even though
     // the C signature is static.
@@ -15701,7 +15733,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
         _inNamedCtorBody = mi.isCtor;
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
-                             mi.isUnsafe);
+                             mi.isUnsafe, kv.first.c_str());
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
@@ -18036,7 +18068,24 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                      + "(...)`, not `" + disp + "." + method + "::<...>(...)`").c_str(), call->line);
         return "0";
     }
-    canAccess(owner, mi->visibility, method, call->line);
+    // THE MINT. A `type view`'s constructor is private, so this is where the two places a view may be born
+    // are decided. One of them canAccess already knows — `_currentClass == owner` is the view minting
+    // ITSELF, which is what makes `View.slice()` and a future `split`/`chunks`/`first` work with no extra
+    // rule. The other is the grant: the type being VIEWED, declared by implementing a member of a
+    // `@viewable` contract that returns this view (`_mintGrant`, computed on entry to the body).
+    //
+    // The diagnostic replaces canAccess's generic "'make' is private in 'View'", which would be true and
+    // useless — it names an access-control fact and leaves the reader to rediscover the whole model.
+    if (stci->isBorrow && mi->visibility != Visibility::Public && _currentClass != owner
+        && _mintGrant != tn) {
+        unsupported(("`" + disp + "` is a `view`, so only the type it views may mint one — and `"
+                     + (_currentClass ? _currentClass->name : std::string("this function"))
+                     + "` has not declared that it does. Implement a `@viewable` contract whose member "
+                       "returns `" + disp + "`, and mint it from that member's body").c_str(), call->line);
+        return "0";
+    }
+    if (!stci->isBorrow || _mintGrant != tn)
+        canAccess(owner, mi->visibility, method, call->line);
     recordNodeRef(recv->identifier.get(), mi->node);   // M6 B3a: `Type.name(...)` references the ctor
     return emitReorderedCall(mi->cName, "", mi->params, call->args, call->line);
 }
@@ -19344,7 +19393,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                                     modHas(md->modifiers, "unsafe"));
+                                     modHas(md->modifiers, "unsafe"), md->name->value->c_str());
                 _returnIsPlace = false;
             }
         }
@@ -19523,7 +19572,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                                 modHas(md->modifiers, "unsafe"));
+                                 modHas(md->modifiers, "unsafe"), md->name->value->c_str());
             _returnIsPlace = false;
         }
     }

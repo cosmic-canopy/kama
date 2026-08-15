@@ -1,0 +1,22 @@
+namespace std::collections;
+export { ValuesIterable, ValuesIterableMut, EntriesIterable };
+
+// The container-side mint grants for the iterations that are NOT `foreach (x in container)`.
+//
+// `Iterable<T>`/`IterableMut<T>` live in the prelude because `foreach` over a container is language-level
+// — the syntax lowers onto them. These are not: you `foreach` the iterator these hand back, never the
+// container, so they are ordinary library contracts and keeping them here is what stops the prelude floor
+// from growing a member for every secondary iteration order.
+//
+// Each is `@viewable` for the same reason `Iterable` is: the iterator is a `type view` over the
+// container's buffers, a view's constructor is private, and the only type entitled to mint one is the
+// type being viewed. Before these existed, `Map.values()` and `SlotMap.values()` were plain methods
+// minting views over memory they owned WITHOUT ever declaring that relationship — the capability was
+// real, exercised, and exported, and simply never written down.
+//
+// The parameter is the ITERATOR type, not the element: it is what the member returns, and the return type
+// is what selects which members of a marked contract may mint. Two implementers each on day one — `Map`
+// and `SlotMap` — which is the test of whether a capability is worth a contract at all.
+@viewable type contract ValuesIterable<I> for resource { fn I values(); }
+@viewable type contract ValuesIterableMut<I> for resource { fn I valuesMut(); }
+@viewable type contract EntriesIterable<I> for resource { fn I entries(); }
