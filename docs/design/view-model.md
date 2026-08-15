@@ -176,6 +176,20 @@ nothing, and stays constructible anywhere. Already proven in tree: `Args` (`prel
 
 ## Milestones
 
+⚠️ **M1 and M2 are mutually dependent — do not land them in the order they are numbered.** M1's
+enforcement (implicitly-private ctors) breaks every legitimate mint until M2's grants exist, and M2's
+contracts are unwritable until M1 recognizes the attribute. The repo's **sweep-then-land** policy — the
+migration and the rule that would reject it land in the *same* commit — resolves it:
+
+1. **M1a** — recognize and validate `@viewable` on a contract. **No enforcement.** Inert, green on its own.
+2. **M1b + M2 as ONE commit** — declare the contracts and conformances *and* switch on implicitly-private
+   ctors plus the gate, together. This is the commit that must be green in one step; splitting it red-lines
+   the tree.
+3. **M3**, then **M4**, then **M5**.
+
+All 15 collection iterators are `type view`, so **the iterator forge closes as a consequence of M1b+M2**
+— it is not separate work. That is what the *16 of 16* coverage claim means.
+
 ### M1 — the attribute and the gate
 
 `@viewable` recognized on a `type contract` (attributes on `type` declarations already parse,
