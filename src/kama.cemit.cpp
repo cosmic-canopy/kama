@@ -707,6 +707,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (tp.count(*t->value)) return;
         checkQualifiedExport(t, what);
         checkTypeResolves(t, cType(t), what, t->line);
+        rejectMintProtocolValue(t, what, t->line);
     };
     // Every LOCAL declared type in a body, checked for module privacy ONLY. `collectBindings` is the
     // statement walker (kama.query.cpp) the position index already uses; `stmtOnly` drops its `match`-arm
@@ -2387,6 +2388,13 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                             bn->line);
                 continue;
             }
+            if (!declaresViewable(_classes[hostCls])) {
+                unsupported(("`" + hostCls + "` has a `.view()` but never declared that its storage is what "
+                             "that view views — `borrow` opens the window a view lives in, so the host must "
+                             "say so. Implement a `@viewable` contract with a nullary `view()` (the prelude's "
+                             "`Viewable<V>` is that contract)").c_str(), bn->line);
+                continue;
+            }
             const std::string viewCType = cTypeInInstance(hostCls, vmi->returnType);
             indent(depth + 1);
             *_out << viewCType << " " << alias << " = " << vmi->cName
@@ -2466,6 +2474,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                          "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
                          "collection cannot be split into disjoint slices").c_str(), pf->line);
             return;   // `viewMi` may be the null this guard rejected — never fall through and deref it
+        }
+        if (!declaresViewable(_classes[itCls])) {
+            unsupported(("parallel_for splits a container into disjoint slices, so the container must "
+                         "declare that its storage is what those slices view; `" + itCls + "` has a "
+                         "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
+                            .c_str(), pf->line);
+            return;
         }
         viewCType = cTypeInInstance(itCls, viewMi->returnType);
         viewExpr  = viewMi->cName + "(&(" + emitExpression(pf->expression) + "))";
@@ -3036,6 +3051,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                              + *declType->value + "<int32>`").c_str(), n->line);
             std::string ty = cType(declType);
             checkTypeResolves(declType, ty, "a local declaration", n->line);
+            rejectMintProtocolValue(declType, "a local", n->line);
             // Containment: a local BINDING of raw-pointer type. Declaring an `UnsafePtr` FIELD stays legal
             // (every container depends on it), but naming one as a local is holding raw memory in a body,
             // which is what the marker exists to make greppable.
@@ -8889,6 +8905,7 @@ bool CEmitter::isNamedValue(ASTNode* e)
 void CEmitter::rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line, bool alsoView)
 {
     if (!ty) return;
+    rejectMintProtocolValue(ty, whereClause, line);
     std::string ct = cType(ty);
     bool iface = isInterface(ct);
     // A `type view` is also a non-escaping borrow — reject it as a FIELD (alsoView), but NOT as a
@@ -10283,6 +10300,27 @@ bool CEmitter::namesUnsafePtr(SharedIdentifier type)
 }
 
 // One diagnostic for every raw-pointer position, so the seam reads the same wherever it is hit.
+// Does `ci` DECLARE that it hands out a view — a `@viewable` contract carrying a nullary `view()`?
+//
+// `borrow` and `parallel_for` are the two constructs that reach into a container for one, and both were
+// duck-typed on the NAME `view`. Nominal is what `foreach` already is, and what the mint rule makes almost
+// free: a type whose `view()` MINTS one must implement such a contract already, or the mint itself would
+// be rejected. What this adds is the delegating case — a `view()` that forwards someone else's view — and
+// the reason to close it is that `borrow` opens the window a view lives in, so the host had better be the
+// thing being viewed.
+//
+// Resolution stays STRUCTURAL: this is a gate, never a dispatch, which is what keeps the emitted call
+// direct and the ECS path free of vtables.
+bool CEmitter::declaresViewable(const ClassInfo& ci) const
+{
+    for (auto& ifn : ci.interfaces) {
+        auto it = _interfaces.find(ifn);
+        if (it == _interfaces.end() || !it->second.isViewable) continue;
+        for (auto& m : it->second.methods) if (!m.isCtor && m.name == "view") return true;
+    }
+    return false;
+}
+
 bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
 {
     if (_inUnsafe) return false;
@@ -10291,9 +10329,39 @@ bool CEmitter::rejectRawOutsideUnsafe(const char* what, int line)
     return true;
 }
 
+// A `@viewable` contract is a MINT PROTOCOL, not a value. It exists so the type being VIEWED can declare
+// that it is — and boxing one into a fat pointer would erase exactly the identity the grant is about,
+// leaving a `Viewable<View<T>>` that says "somebody hands out a view" and can no longer say who. It is also
+// what a boxed `Iterable<T>` would mean, and kama has never boxed an iterator: `foreach` resolves
+// structurally and emits direct monomorphized calls, which is the whole reason a view-kind iterator costs
+// nothing.
+//
+// So these contracts emit no C type at all (see emitInterfaceTypes), and this is the diagnostic that keeps
+// that an intentional rule rather than a clang error about a missing struct. A `@viewable` contract stays
+// perfectly usable where a contract belongs: an `implements` clause, and a generic BOUND.
+void CEmitter::rejectMintProtocolValue(SharedIdentifier ty, const char* what, int line)
+{
+    if (!ty || !ty->value) return;
+    auto viewable = [&](const std::string& k) {
+        auto i = _interfaces.find(k);
+        if (i != _interfaces.end()) return i->second.isViewable;
+        auto g = _genericContracts.find(k);
+        return g != _genericContracts.end() && g->second.isViewable;
+    };
+    if (!viewable(cType(ty)) && !viewable(*ty->value) && !viewable(qualify(*ty->value))) return;
+    unsupported(("`" + *ty->value + "` is a mint protocol — it declares WHO may hand out a view, so there "
+                 "is no value of it to be " + what + ". Use it in an `implements` clause, or as a generic "
+                 "bound (`<T: " + *ty->value + ">`)").c_str(), line);
+}
+
 void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
                                     const std::string& name, int line)
 {
+    // Rides along here because this is the one hook both the free-function and the method arm already call
+    // with a whole signature in hand — and unlike the raw-pointer half it has no `unsafe` escape, so it is
+    // checked before the early return below.
+    rejectMintProtocolValue(ret, "returned", line);
+    if (params) for (auto& p : *params) if (p) rejectMintProtocolValue(p->type, "a parameter", line);
     if (isUnsafe) return;
     const char* where = nullptr;
     if (namesUnsafePtr(ret)) where = "returns";
@@ -15241,6 +15309,12 @@ CEmitter::ContractSubst::~ContractSubst()
 
 void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 {
+    // A `@viewable` contract is a MINT PROTOCOL, not a value: it exists so the type being viewed can
+    // declare that it is, and a `Viewable<View<T>>` fat pointer is a thing no program can want — boxing
+    // one would erase the very type whose identity the grant is about. Emitting nothing is also what keeps
+    // the ECS path zero-dispatch: `DynamicArray` gained a conformance, and a conformance that costs a
+    // vtable per instantiation would make declaring the relationship expensive enough to avoid.
+    if (ii.isViewable) return;
     // No `This` binding here, deliberately: a contract signature can no longer name `This` (it declares a
     // pinned parameter instead), so there is nothing to bind. The binding that used to sit here gave the
     // slot ONE self-type — the contract — while the concrete function behind it had bound the implementing
@@ -15276,6 +15350,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         auto it = _interfaces.find(ifn);
         if (it == _interfaces.end()) { unsupported("unknown contract in implements", ci.declLine()); continue; }
         InterfaceInfo& ii = it->second;
+        if (ii.isViewable) continue;   // a mint protocol emits no type, so there is nothing to bind to
         // the slot casts must MATCH the vtbl struct's slot types EXACTLY, so render the contract's method
         // sigs under the CONTRACT's own name-resolution scope (its imports) — not the implementing unit's.
         // A non-generic contract carries that scope in `ii`; a generic-contract instance gets it (with T
@@ -19095,6 +19170,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
 #endif
     }
     for (auto& kv : _interfaces) {
+        if (kv.second.isViewable) continue;   // a mint protocol has no C type at all — see emitInterfaceTypes
         *_out << "typedef struct " << kv.first << "_vtbl " << kv.first << "_vtbl;\n";
         *_out << "typedef struct " << kv.first << " " << kv.first << ";\n";
     }
@@ -19177,6 +19253,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (staticOnly && !isPolyDispatchContract(ifn)) continue;   // Model C: enum→poly-dispatch vtbl HAS a def
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end()) continue;
+            if (it->second.isViewable) continue;   // a mint protocol has no vtbl TYPE, so this decl would not compile
             *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
         }
     }

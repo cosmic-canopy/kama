@@ -1403,6 +1403,7 @@ private:
     // Reject a non-escaping borrow in a storage position. Contracts are always rejected; a `type view`
     // is rejected only when `alsoView` (the FIELD site) — a view MAY be returned (checked per-ReturnNode).
     void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line, bool alsoView = false);
+    void rejectMintProtocolValue(SharedIdentifier ty, const char* what, int line);   // a `@viewable` contract is not a value
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
     // Cross-element smart-ptr UPCAST: widen a CONCRETE-element owning handle into a
     // CONTRACT-element (intrinsic fat) handle — the Liskov "is a" (`Shared<Shape> s = a;`
@@ -1483,6 +1484,7 @@ private:
     static bool namesUnsafePtr(SharedIdentifier type);
     // Diagnose an expression position whose type is a raw pointer outside an `unsafe fn`.
     // No-op inside one. Returns true if it rejected.
+    bool declaresViewable(const ClassInfo& ci) const;   // the host of a `borrow`/`parallel_for` declared it hands out a view
     bool rejectRawOutsideUnsafe(const char* what, int line);
     // The signature half: a declaration NAMING a raw pointer (return type or any parameter) must be
     // `unsafe`. Applied only where a body exists — an `abstract` member and a `contract` member are

@@ -1,0 +1,21 @@
+// `borrow` opens the window a view lives in, so its host must have DECLARED that its storage is what that
+// view views. `Wrapper.view()` here does not mint — it forwards the inner array's view — so the mint rule
+// never fires, and before `borrow` became nominal this was accepted purely because a method happened to be
+// spelled `view`. That is duck typing in the one construct whose entire job is to bound a borrow.
+//
+// The fix is one clause: `implements Viewable<View<int32>>`. Resolution stays structural either way — the
+// contract is a gate, never a dispatch — so nothing about the emitted call changes.
+import std::collections::{DynamicArray, View};
+
+type resource Wrapper {
+    DynamicArray<int32> inner;
+    public ctor make() { this.inner = DynamicArray.empty(); this.inner.add(item: 7); }
+    public unsafe fn View<int32> view() { return this.inner.view(); }
+}
+
+fn int32 main() {
+    Wrapper w = Wrapper.make();
+    borrow w as v {
+        return v.length();
+    }
+}

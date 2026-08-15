@@ -1,0 +1,18 @@
+// A `@viewable` contract is a MINT PROTOCOL, not a value. It exists so the type being VIEWED can declare
+// that it is one — and boxing it into a fat pointer erases exactly the identity the grant is about,
+// leaving something that says "somebody hands out a view" and can no longer say who.
+//
+// It is also what a boxed `Iterable<T>` would mean, and kama has never boxed an iterator: `foreach`
+// resolves `iterator()` structurally and emits a direct monomorphized call, which is the whole reason a
+// view-kind iterator costs nothing. So these contracts emit no C type at all, and this fixture is what
+// keeps that an intentional rule rather than a clang error about a missing struct.
+//
+// `Iterable` stays perfectly usable where a contract belongs — an `implements` clause, or a generic bound.
+import std::collections::{DynamicArray};
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 7);
+    Iterable<int32> boxed = a;
+    return 0;
+}
