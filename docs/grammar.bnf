@@ -569,6 +569,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | borrow_statement
   | asm_statement
   | comptime_assert_statement      /* a ClassMemberDeclarationNode IS a StatementNode */
   ;
@@ -607,6 +608,26 @@ spawn_statement
      `unsafe`. */
 scope_statement
   : SCOPE block
+  ;
+  /* `borrow xf as v, ys as w ` — the lexical window a view is minted into (view model). The host
+     is `primary_expression`, not a narrower place nonterminal, so that `borrow this.items[i] as v` and
+     `borrow makeVec() as v` reach the emitter and are rejected with a sentence; a tighter nonterminal
+     would make them bison syntax errors instead. The body is a `block` because those braces ARE the
+     window (like `scope ` / `parallel_for`). */
+borrow_statement
+  : BORROW borrow_bindings block
+  ;
+borrow_bindings
+  : borrow_binding
+  | borrow_bindings COMMA borrow_binding
+  ;
+  /* Two alternatives, for the same reason `as_downcast_expression` below needs two: a BARE name is a
+     `qualified_identifier_no_generic`, which `primary_expression` does not cover — that covers
+     `member_access` (`this.buf`), `element_access`, calls and the rest. Both spellings are real hosts:
+     the corpus mints from a local (`borrow scratch as s`) and from a field (`borrow this.buf as b`). */
+borrow_binding
+  : primary_expression AS IDENTIFIER
+  | qualified_identifier_no_generic AS IDENTIFIER
   ;
   /* `parallel_for (ref T e in coll) ` — disjoint-slice data-parallel loop (M6.3): splits `coll`
      into K non-overlapping sub-Views, one per worker, mutates each in place, and joins them ALL at its

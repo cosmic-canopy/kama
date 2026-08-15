@@ -6,12 +6,12 @@ type value C { int32 n; public ctor make(int32 n){ this.n = n; } public fn int32
 type resource H {
     Shared<C> c;
     public ctor make(Shared<C> handle) { this.c = handle; }     // retain into the field
-    public fn Shared<C> borrow() { return this.c; }      // bare field return = retain (copy)
+    public fn Shared<C> share() { return this.c; }      // bare field return = retain (copy)
 }
 fn int32 main() {
     Shared<C> s = new C.make(n: 7);
     H h = H.make(handle: s);            // field retains
-    Shared<C> a = h.borrow();      // retain again — a, h.c, s all share one C
-    Shared<C> b = h.borrow();      // and again
+    Shared<C> a = h.share();      // retain again — a, h.c, s all share one C
+    Shared<C> b = h.share();      // and again
     return a.get() + b.get();      // 7 + 7 = 14  (every handle drops; C freed exactly once)
 }

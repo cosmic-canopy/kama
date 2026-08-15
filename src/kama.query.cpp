@@ -1472,6 +1472,14 @@ void CEmitter::collectBindings(SharedStatement s, std::vector<QueryBinding>& out
         add(pf->name, pf->type);
         if (!stmtOnly) collectBindingsExpr(pf->expression, out);
         collectBindings(pf->body, out, stmtOnly);
+    } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+        // A `borrow` alias carries NO declared type — it is inferred from the host's `.view()` return —
+        // so it registers with a null type node rather than a synthesized one.
+        if (bn->bindings) for (auto& b : *bn->bindings) if (b) {
+            add(b->alias, nullptr);
+            if (!stmtOnly) collectBindingsExpr(b->host, out);
+        }
+        collectBindings(bn->body, out, stmtOnly);
     } else if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
         if (lv->variables) for (auto& d : *lv->variables) if (d) {
             add(d->name, lv->type);

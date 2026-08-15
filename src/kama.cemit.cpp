@@ -523,6 +523,7 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
         return false;
     }
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) return alwaysExits(sc->body);  // `scope { … }` always runs
+    if (auto* bn = dynamic_cast<BorrowNode*>(n)) return alwaysExits(bn->body); // `borrow … { … }` always runs
     // An `if` only guarantees an exit when BOTH arms do — a bare `if` may fall through by design.
     if (auto* f = dynamic_cast<IfNode*>(n))
         return f->elseStatement && alwaysExits(f->ifStatement) && alwaysExits(f->elseStatement);
@@ -576,6 +577,7 @@ bool CEmitter::hasLoopBreak(const SharedStatement& s) const
         return false;
     }
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) return hasLoopBreak(sc->body);
+    if (auto* bn = dynamic_cast<BorrowNode*>(n)) return hasLoopBreak(bn->body);
     if (auto* f = dynamic_cast<IfNode*>(n)) return hasLoopBreak(f->ifStatement) || hasLoopBreak(f->elseStatement);
     if (auto* m = dynamic_cast<MatchNode*>(n)) {
         if (m->arms) for (auto& a : *m->arms) if (a && a->block && hasLoopBreak(a->block)) return true;
@@ -2329,6 +2331,63 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     popScope();
 }
 
+// `borrow xf as v, ys as w { ... }` — the lexical window a view is minted into (the view model).
+//
+// The window is the whole mechanism. kama answers "how long is this view valid?" with lexical scope
+// rather than a lifetime (GOALS §3e declines the machinery) or a programmer promise (what `View<T>` had
+// before), so a mint has to name the extent it is valid for, and that extent is this block.
+//
+// Purely lexical: one C block plus one initializer per binding, no runtime cost. `.view()` resolves
+// STRUCTURALLY, the way emitForeachIterator already resolves `iterator()`/`iterMut()` — going through
+// contract dispatch would box the view and cost the zero-dispatch property the ECS path depends on.
+void CEmitter::emitBorrow(BorrowNode* bn, int depth)
+{
+    line(bn->line);
+    indent(depth);
+    _scopes.push_back(Scope());
+
+    *_out << "{\n";
+    if (bn->bindings) {
+        for (auto& b : *bn->bindings) {
+            if (!b || !b->host || !b->alias || !b->alias->value) continue;
+            const std::string alias = *b->alias->value;
+            const std::string hostCls = exprClass(b->host);
+            if (hostCls.empty() || !_classes.count(hostCls)) {
+                unsupported(("`borrow` needs a container that can produce a view; `" + alias
+                             + "`'s host is not one").c_str(), bn->line);
+                continue;
+            }
+            // A view of the host is what the alias names. Resolve `view()` structurally.
+            MethodInfo* vmi = findMethod(&_classes[hostCls], "view", nullptr);
+            if (!vmi || !vmi->params.empty()) {
+                unsupported(("`" + hostCls + "` has no nullary `.view()`, so it cannot be borrowed — a "
+                             "`borrow` host must be a container that can hand out a `View<T>`").c_str(),
+                            bn->line);
+                continue;
+            }
+            const std::string viewCType = cTypeInInstance(hostCls, vmi->returnType);
+            indent(depth + 1);
+            *_out << viewCType << " " << alias << " = " << vmi->cName
+                  << "(&(" << emitExpression(b->host) << "));\n";
+            _localTypes[alias] = viewCType;
+            _scopes.back().declaredNames.push_back(alias);
+        }
+    }
+
+    SharedStatement last;
+    auto* block = dynamic_cast<BlockNode*>(bn->body.get());
+    if (block && block->statements)
+        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
+    // Same double-destruction guard as `scope`: a jump exit already ran the full cleanup on its way out.
+    if (!(last && stmtIsJump(last)))
+        emitScopeCleanup(_scopes.back(), depth + 1);
+    indent(depth); *_out << "}\n";
+    if (bn->bindings)
+        for (auto& b : *bn->bindings)
+            if (b && b->alias && b->alias->value) _localTypes.erase(*b->alias->value);
+    popScope();
+}
+
 // Synthesize the `View<elem>` type node the loop iterates, so the scan passes register that instance
 // (a parallel_for always iterates a View — directly, or one we auto-`.view()` from a container). (M6.3)
 SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
@@ -2897,6 +2956,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // inside it at the closing brace, before any local dtor (join-before-drop).
     if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
         emitScope(sc, depth);
+        return;
+    }
+
+    // `borrow h as v { ... }` — the lexical window a view is minted into (the view model).
+    if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+        emitBorrow(bn, depth);
         return;
     }
 
@@ -7337,6 +7402,9 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(parforViewType(pf->type));   // M6.3: the synthesized View<T> the loop iterates
         scanExprForCollections(pf->expression);
         scanStmtForCollections(pf->body);
+    } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+        if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForCollections(b->host);
+        scanStmtForCollections(bn->body);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     }
@@ -7974,6 +8042,9 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
     } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
         scanExprForGenerics(pf->expression, localTys);
         scanStmtForGenerics(pf->body, localTys);
+    } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+        if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForGenerics(b->host, localTys);
+        scanStmtForGenerics(bn->body, localTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }
@@ -12764,6 +12835,12 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             scan(fe->expression); walkSkippable(fe->body);
         } else if (auto* pf = dynamic_cast<ParallelForNode*>(n)) {
             scan(pf->expression); walkSkippable(pf->body);
+        } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
+            // `walk`, not `walkSkippable`: a `borrow` block is UNCONDITIONAL, so an `out` fill inside it
+            // is a definite assignment (SPEC's slot rule 3 — "a nested block that always runs"). Pass
+            // `topLevel` through, exactly as the plain BlockNode arm does.
+            if (bn->bindings) for (auto& b : *bn->bindings) if (b) scan(b->host);
+            walk(bn->body, topLevel);
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             // `ctor make() { slot Foo r; … return give r; }` — handing a slot OUT of a constructor is
             // governed by checkNamedCtorComplete, which proves every field is assigned (counting field

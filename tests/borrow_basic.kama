@@ -1,0 +1,64 @@
+// `borrow h as v { ... }` — the lexical window a view is minted into (the view model). kama answers
+// "how long is this view valid?" with lexical scope, not a lifetime and not a programmer promise, so a
+// mint has to name its extent, and the block IS that extent. Purely lexical: one C block plus one
+// initializer per binding, no runtime cost.
+//
+// This fixture is deliberately walker-heavy. A new statement node is invisible to several AST walkers
+// that have NO fallback arm, and each omission fails in a different and non-obvious way:
+//   * scanStmtForCollections  — a Coll<T> first named inside the body never registers -> undefined C type
+//   * scanStmtForGenerics     — a generic called ONLY inside the body is never monomorphized -> LINK error
+//   * checkDefiniteAssignment — a `borrow` block always runs, so an `out` fill inside it is DEFINITE
+//   * alwaysExits             — a body whose every path returns must satisfy the return check
+// so each one is exercised below rather than assumed.
+import std::collections::{View, DynamicArray};
+
+fn T firstOr<T>(View<T> xs, T dflt) { foreach (T x in xs) { return x; } return dflt; }
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn void five(out int32 v) { v = 5; }
+
+type resource Box {
+    DynamicArray<int32> buf;
+    int32 hits;
+    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4); this.hits = 0; }
+    public fn void add(int32 v) { this.buf.add(item: v); }
+
+    // A FIELD mint. Only `this.buf` freezes: `this.hits` is a different field of the same object, and
+    // two distinct fields cannot overlap in storage, so writing it inside the window is sound. This is
+    // the shape three of the four stdlib field mints need, and the one a whole-`this` rule would reject.
+    public fn int32 total() {
+        borrow this.buf as b {
+            this.hits = this.hits + 1;          // disjoint sibling — legal
+            return sum(xs: b);                  // `return` from inside the window (alwaysExits)
+        }
+    }
+}
+
+fn int32 main() {
+    Box bx = Box.make();
+    bx.add(v: 10); bx.add(v: 20);
+    int32 boxed = bx.total();                   // 30
+
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
+    a.add(item: 3); a.add(item: 4);
+
+    int32 viaLocal = 0;
+    slot int32 filled;
+    borrow a as v {
+        DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 1);   // scanStmtForCollections
+        inner.add(item: 1);
+        viaLocal = sum(xs: v) + firstOr::<int32>(xs: v, dflt: 0) + inner.length();   // scanStmtForGenerics
+        five(v: out filled);                    // unconditional block -> a DEFINITE fill (slot rule 3)
+    }                                           // 7 + 3 + 1 = 11
+
+    // Multi-binding: one window, several names. A `borrow` block hoists, so this is one level, not one
+    // block per container.
+    DynamicArray<int32> c = DynamicArray.withCapacity(capacity: 2);
+    c.add(item: 2);
+    int32 multi = 0;
+    borrow a as x, c as y {
+        multi = sum(xs: x) + sum(xs: y);        // 7 + 2 = 9
+        multi = multi + sum(xs: x.slice(from: 0, count: 1));   // a DERIVE is free — no new window
+    }                                           // + 3 = 12
+
+    return boxed + viaLocal + multi + filled - 16;   // 30 + 11 + 12 + 5 - 16 = 42
+}

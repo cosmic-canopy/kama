@@ -35,7 +35,7 @@
   "if" "else" "match" "case"
   "while" "do" "foreach" "parallel_for"
   "break" "continue" "return"
-  "spawn" "scope"
+  "spawn" "scope" "borrow"
   "new" "try" "cast" "bitcast" "sizeof" "alignof"
 ] @keyword
 

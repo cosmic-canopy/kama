@@ -187,6 +187,7 @@ struct kamayystype {
   SharedNamespaceDeclaration namespacedeclaration;
   SharedModifier modifier;
   SharedUsingDeclaration usingdeclaration;
+  SharedBorrowBinding borrowbinding;
   SharedParameter parameter;
   SharedBlock block;
   SharedVariableDeclarator variabledeclarator;
@@ -205,6 +206,7 @@ struct kamayystype {
 
   SharedStringList strings;
   SharedUsingDeclarationList usingdeclarationlist;
+  SharedBorrowBindingList borrowbindinglist;
   SharedImportDeclaration importdeclaration;
   SharedImportDeclarationList importdeclarationlist;
   SharedStatementList statementlist;
@@ -260,7 +262,7 @@ struct kamayystype {
 %token <string> DEC_LITERAL HEX_LITERAL OCT_LITERAL BASED_LITERAL
 
 /* KEYWORDS */ 
-%token <string> ABSTRACT BASE BOOL BREAK
+%token <string> ABSTRACT BASE BOOL BORROW BREAK
 %token <string> CASE CAST BITCAST COMPTIME CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
@@ -335,6 +337,9 @@ struct kamayystype {
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
 %type <statement> marked_type_declaration spawn_statement scope_statement parallel_for_statement arm_value_statement asm_statement
+%type <statement> borrow_statement
+%type <borrowbindinglist> borrow_bindings
+%type <borrowbinding> borrow_binding
 %type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
@@ -1071,6 +1076,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | borrow_statement
   | asm_statement
   | comptime_assert_statement   { $$ = $1; }   /* a ClassMemberDeclarationNode IS a StatementNode */
   ;
@@ -1109,6 +1115,26 @@ spawn_statement
      `unsafe`. */
 scope_statement
   : SCOPE block   { $$ = std::make_shared<ScopeNode>(SCANNER_CODEGENCONTEXT, $2); }
+  ;
+  /* `borrow xf as v, ys as w { ... }` — the lexical window a view is minted into (view model). The host
+     is `primary_expression`, not a narrower place nonterminal, so that `borrow this.items[i] as v` and
+     `borrow makeVec() as v` reach the emitter and are rejected with a sentence; a tighter nonterminal
+     would make them bison syntax errors instead. The body is a `block` because those braces ARE the
+     window (like `scope { }` / `parallel_for`). */
+borrow_statement
+  : BORROW borrow_bindings block   { $$ = std::make_shared<BorrowNode>(SCANNER_CODEGENCONTEXT, $2, $3); }
+  ;
+borrow_bindings
+  : borrow_binding   { $$ = std::make_shared<BorrowBindingList>(); $$->push_back($1); }
+  | borrow_bindings COMMA borrow_binding   { $1->push_back($3); $$ = $1; }
+  ;
+  /* Two alternatives, for the same reason `as_downcast_expression` below needs two: a BARE name is a
+     `qualified_identifier_no_generic`, which `primary_expression` does not cover — that covers
+     `member_access` (`this.buf`), `element_access`, calls and the rest. Both spellings are real hosts:
+     the corpus mints from a local (`borrow scratch as s`) and from a field (`borrow this.buf as b`). */
+borrow_binding
+  : primary_expression AS IDENTIFIER   { auto a = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(a, @3); $$ = std::make_shared<BorrowBindingNode>(SCANNER_CODEGENCONTEXT, $1, a); }
+  | qualified_identifier_no_generic AS IDENTIFIER   { auto a = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(a, @3); $$ = std::make_shared<BorrowBindingNode>(SCANNER_CODEGENCONTEXT, std::static_pointer_cast<ExpressionNode>($1), a); }
   ;
   /* `parallel_for (ref T e in coll) { ... }` — disjoint-slice data-parallel loop (M6.3): splits `coll`
      into K non-overlapping sub-Views, one per worker, mutates each in place, and joins them ALL at its

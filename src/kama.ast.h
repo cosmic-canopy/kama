@@ -418,6 +418,29 @@ public:
         : ASTNode(context),  StatementNode(context), body(body) { }
 };
 
+// One `<host> as <alias>` pair of a `borrow`. The host is an EXPRESSION, not an identifier, because
+// the common stdlib shape mints from a field (`borrow this.buf as b`) — an identifier-only node (which
+// is what UsingDeclarationNode is) cannot spell that. It is still restricted to a *place* at emit time;
+// the grammar accepts `primary_expression` so that a non-place host is rejected with a sentence rather
+// than a bison syntax error.
+class BorrowBindingNode : public ASTNode {
+public:
+    SharedExpression host;
+    SharedIdentifier alias;
+    BorrowBindingNode(CodeGenContext& context, SharedExpression host, SharedIdentifier alias)
+        : ASTNode(context), host(host), alias(alias) { }
+};
+
+// `borrow a as x, b as y { … }` — the lexical window a view is minted into. Purely lexical: zero
+// codegen beyond the block and the alias initializers, zero runtime cost.
+class BorrowNode : public StatementNode {
+public:
+    SharedBorrowBindingList bindings;
+    SharedStatement body;   // a BlockNode — the braces are the window, so they are mandatory
+    BorrowNode(CodeGenContext& context, SharedBorrowBindingList bindings, SharedStatement body)
+        : ASTNode(context),  StatementNode(context), bindings(bindings), body(body) { }
+};
+
 // `isolate worker(p: give x)` — spawn a top-level fn on a fresh OS thread with a MOVED-in argument bundle.
 // Both a STATEMENT (`isolate worker(...);` — fused spawn+join) and an EXPRESSION (`Isolate h = isolate
 // worker(...);` — spawn now, returning an RAII handle whose drop=join): hence ExpressionStatementNode.

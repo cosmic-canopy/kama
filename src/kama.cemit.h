@@ -1758,6 +1758,7 @@ private:
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
+    void emitBorrow(BorrowNode* bn, int depth);      // `borrow h as v { }` — the lexical window a view is minted into
     void emitParallelFor(ParallelForNode* pf, int depth);   // `parallel_for (ref T e in coll) { }` — disjoint-slice data-parallel (M6.3)
     SharedIdentifier parforViewType(SharedIdentifier elem);  // synthesize the `View<elem>` type node the loop iterates (M6.3)
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null

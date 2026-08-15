@@ -614,6 +614,7 @@ module.exports = grammar({
         $.unsafe_statement,
         $.spawn_statement,
         $.scope_statement,
+        $.borrow_statement,
         $.parallel_for_statement,
         $.asm_statement,
         $.comptime_assert_statement,
@@ -769,6 +770,19 @@ module.exports = grammar({
 
     unsafe_statement: ($) => seq('unsafe', field('body', $.block)),
     scope_statement: ($) => seq('scope', field('body', $.block)),
+
+    // `borrow h as v, k as w { ... }` — the lexical window a view is minted into (view model). The host
+    // is a general expression here for the same reason kama.y uses `primary_expression`: a non-place host
+    // (`this.items[i]`, `makeVec()`) must reach the compiler and be rejected with a sentence, so the
+    // grammar must PARSE it. Mirrors kama.y's borrow_statement / borrow_bindings / borrow_binding.
+    borrow_statement: ($) =>
+      seq(
+        'borrow',
+        commaSep1($.borrow_binding),
+        field('body', $.block),
+      ),
+    borrow_binding: ($) =>
+      seq(field('host', $._expression), 'as', field('alias', $.identifier)),
     spawn_statement: ($) => seq('spawn', $.call_expression, ';'),
 
     // Exactly ONE string-literal operand, and it is embedded assembly — never interpolated.

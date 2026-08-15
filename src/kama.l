@@ -386,6 +386,7 @@ static struct name_value keywords [] = {
     {"base",        BASE},
     {"bitcast",     BITCAST},
     {"bool",        BOOL},
+    {"borrow",      BORROW},
     {"break",       BREAK},
     {"case",        CASE},
     {"cast",        CAST},
