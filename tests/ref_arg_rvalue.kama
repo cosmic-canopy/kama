@@ -1,6 +1,6 @@
 // A class RVALUE (a factory / call result) passed to a `const ref` parameter is materialized
 // into a scope-dtor'd temp instead of emitting `&(rvalue)` (illegal C). The borrow is read-only
-// and freed at scope end. A non-const `ref` rvalue is rejected instead (see xfail). ROADMAP §2.
+// and freed at scope end. A non-const `ref` rvalue is rejected instead (see xfail). ROADMAP_DETAIL §2.
 type value Vec2 {
     int32 x; int32 y;
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }

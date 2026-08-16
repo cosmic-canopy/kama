@@ -127,7 +127,7 @@ printf 'import engine::{ answer };\nfn int32 main() { return answer(); }\n' > "$
 # ⚠️ Built from INSIDE the member, not by path from here. projectManifestDir looks only in the input
 # file's own directory and then the CWD — it does not walk up the way owningPackageDir does — so
 # `kama build ws/server/src/server.kama` from out here cannot find ws/server/.kama/deps and fails with
-# `cannot resolve module 'engine'`. Pre-existing, and unrelated to seeding; noted in ROADMAP §10.
+# `cannot resolve module 'engine'`. Pre-existing, and unrelated to seeding; noted in ROADMAP_DETAIL §10.
 ( cd "$w/server" && "$KAMA" build src/server.kama -o "$tmp/srv" ) >"$tmp/ws.out" 2>&1 || {
     bad "the composed monorepo did not build:"; sed 's/^/    /' "$tmp/ws.out" >&2; }
 if [ -x "$tmp/srv" ]; then

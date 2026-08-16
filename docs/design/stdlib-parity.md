@@ -14,7 +14,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 >   one implementation covers `DynamicArray`/`FixedArray`/sub-ranges. `View<T>` gained `swap`+`reverse`;
 >   that was the right call, not a hack around, because a view is second-class in *escape*, not in
 >   mutability. Ordering comes from `Comparable` or an `Order<T>` **contract** — an `fnptr` could not
->   express it (no generic fn-pointer types, now ROADMAP §2) and would have been the worse tool regardless:
+>   express it (no generic fn-pointer types, now ROADMAP_DETAIL §2) and would have been the worse tool regardless:
 >   an indirect uninlinable call, and stateless in a language with no closures.
 > - **B — stability.** Both, and the stable one sorts an **index permutation** rather than a scratch buffer
 >   of `T` — that keeps it O(n log n) *and* free of a `Copyable` bound. `sort`/`sortWith` are
@@ -200,7 +200,7 @@ IPv6 · UDP multicast · TLS/HTTPS · HTTP · Unix sockets · regex · crypto/ch
 unbounded channels/`select` · the job system + event-loop scheduler · `std::io` compression adapters ·
 YAML/XML serde backends · a Unicode module (casing/whitespace stay ASCII) · a `std::gpu` kama wrapper.
 
-All are tracked in [ROADMAP.md](../ROADMAP.md) §1–§2. Rust ships none of them in `std` either, so they are
+All are tracked in [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md) §1–§2. Rust ships none of them in `std` either, so they are
 a post-1.0 *package ecosystem* story.
 
 ### On Unicode — and the one thing that IS worth scheduling

@@ -63,7 +63,7 @@ EOF
 }
 
 # `-j`: the compiler is ~10 translation units and a from-scratch build is 23.5s serial / 12.7s at -j10
-# (it was 8s / 3s until the compiler itself started building at -O2 — see ROADMAP section 9 lever 7; the
+# (it was 8s / 3s until the compiler itself started building at -O2 — see ROADMAP_DETAIL section 9 lever 7; the
 # 3x is bought back many times over at every use of the binary). Verified safe by building both ways and
 # comparing objects — every .o is byte-identical, so the dependency graph is complete (including the
 # generated bison/flex sources). The BINARY hash still varies run to run, but that is the macOS linker,

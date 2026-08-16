@@ -7247,7 +7247,7 @@ int main(int argc, char** argv)
         // goes in that target's `cflags` (`"cflags": ["-mcpu=cortex-m4"]`) — not through `--cc`, which is
         // what this said before the build-configuration campaign. kama itself passes NO -march/-mcpu/
         // -mtune anywhere, so every build targets the architecture's generic baseline unless a target
-        // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP §10).
+        // spec says otherwise. A first-class CPU-tuning knob is a recorded follow-on (ROADMAP_DETAIL §10).
         if (embedded)      cmd << "-ffreestanding -nostdlib -DKAMA_TARGET_EMBEDDED ";   // no OS: os=none
         if (stopsAtObject) cmd << "-c ";                                                // no link step
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";

@@ -106,10 +106,15 @@ Notes:
 
 ## Where things are written down
 
-`docs/ROADMAP.md` is a **plan, not a changelog** — delete a shipped item once its record lands in
-the right place (`docs/SPEC.md` for language surface, `docs/packages.md` / `docs/editors.md` /
-`docs/targets.md` for workflow, the git log for *why*). Its *Working order* table is the authority
-on what to do next.
+`docs/ROADMAP.md` is a **plan, not a changelog**, and it is **the ordered list only** — one row per
+item, a one-line summary, and a link. **It is the authority on what to do next; read it first and you
+should not need anything else to pick up work.** The reasoning behind each row lives in
+`docs/ROADMAP_DETAIL.md`, one section per topic. Keep prose out of ROADMAP.md — that is what took the
+single-file version to 1,279 lines and made "what is next" unanswerable without reading all of it;
+`tools/check-roadmap.sh` now holds the split down (line ceiling, every row resolves, no orphaned
+section). Delete a shipped item from **both** files once its record lands in the right place
+(`docs/SPEC.md` for language surface, `docs/packages.md` / `docs/editors.md` / `docs/targets.md` for
+workflow, the git log for *why*).
 
 `agents/AGENTS.md` is **not** this file: it is the snippet kama *ships* to user projects, and it
 must stay free of this repo's own working preferences. `docs/agents.md` documents that surface.

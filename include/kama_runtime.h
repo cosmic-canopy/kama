@@ -1093,7 +1093,7 @@ static inline int         kama_env_lookup(const char* name, kama_string* out) { 
 // graph machinery can't lean on kama library types (that circularity is why serialization became a compiler
 // intrinsic). This is the id-table / worklist / registry substrate; the reserve/intern/drain sequencing and
 // the two-pass read are emitted C driven onto it by the lowering. Inert until then. See docs/SPEC.md
-// "Serialization" and ROADMAP §4. (Replaces the generated-kama `std::serialization::graph` SerContext.)
+// "Serialization" and ROADMAP_DETAIL §4. (Replaces the generated-kama `std::serialization::graph` SerContext.)
 
 // An open-addressing uint64->uint64 map (linear probing, power-of-two capacity). Used two ways by the graph
 // lowering: write-side pointee-address -> id (dedup), and read-side id -> object pointer. Key 0 is the empty

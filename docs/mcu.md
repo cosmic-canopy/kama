@@ -86,7 +86,7 @@ Board-by-board:
 - **Arduino.** For **SAMD / Cortex-M** Arduino boards (e.g. Nano 33 BLE) the Cortex-M path applies (transpile +
   the core's toolchain, call `kama_main()` from `setup()`). For **classic AVR** Arduinos (Uno/Nano/Mega) note
   that kama's AVR support (Harvard `PROGMEM`, `ISR(VECTOR)` macros, `avr-gcc`) is **not yet shipped** — see
-  [ROADMAP.md](ROADMAP.md) §5; the portable compute transpiles, but AVR-specific peripheral/flash idioms don't
+  [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §5; the portable compute transpiles, but AVR-specific peripheral/flash idioms don't
   emit yet.
 
 If you flash a real board, the exact `--cc` flags, linker script, and flash command are the vendor SDK's — the

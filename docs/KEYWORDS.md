@@ -71,7 +71,7 @@ C `__attribute__((...))` **only** on the exact declaration they annotate; `@nohe
 ## Conditional-compilation attribute (`@compileFor`)
 
 Also on the `@name(args)` mechanism, but **not MCU-specific and not codegen** — a build-time keep/drop
-gate. See [SPEC.md](SPEC.md) *Conditional compilation* and [ROADMAP.md](ROADMAP.md) §5.
+gate. See [SPEC.md](SPEC.md) *Conditional compilation* and [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §5.
 
 | Attribute | On | Effect | Rules |
 |---|---|---|---|

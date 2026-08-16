@@ -286,7 +286,7 @@ not decide linkage for your dependencies. See [Runtime linkage](#runtime-linkage
 kama passes no `-march`/`-mcpu`/`-mtune`, so builds target the architecture's generic baseline — which
 is what makes them portable. To override, put it in the target's `cflags`:
 `"RPI": { "triple": "aarch64-linux-gnu", "cflags": ["-mcpu=cortex-a72"] }`. There is deliberately no
-`--march=native` shorthand yet; it is a recorded follow-on (ROADMAP §10).
+`--march=native` shorthand yet; it is a recorded follow-on (ROADMAP_DETAIL §10).
 
 **A `@compileFor` gate isn't firing.**
 Gate on the **derived** facts, not on how you spelled the build. `--target EMBEDDED` and

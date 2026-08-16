@@ -8,10 +8,10 @@ The key distinction throughout: **language gaps** (the compiler/runtime must cha
 kama work, unblocked today). A web framework is *mostly* library work — the HTTP parser, router, and middleware
 chain are ordinary kama. The old **language**-level question — the **async/concurrency model** — is now
 **answered and shipped** (the concurrency campaign: isolates + channels + `scope` + `Atomic<T>` +
-`parallel_for`, ROADMAP §6), so the event-loop scheduler is now a *library* over `Poller`. The one remaining
+`parallel_for`, ROADMAP_DETAIL §6), so the event-loop scheduler is now a *library* over `Poller`. The one remaining
 language ergonomic is **capturing closures** (a Tier-1 nice-to-have); everything else is library or FFI reach.
 
-Related: [ROADMAP.md](ROADMAP.md) §1 (net/std foundation), §6 (concurrency — the isolate model, **shipped**),
+Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (net/std foundation), §6 (concurrency — the isolate model, **shipped**),
 and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundation).
 
 ## What kama already has (the foundation)
@@ -46,7 +46,7 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 
 | Feature | Kind | Status | Why a server needs it | Effort |
 |---|---|---|---|---|
-| **Async task model / event loop** | ~~language~~ → now **library** | 🟡 the **language primitives are shipped** (concurrency campaign complete, 2026-07-23) — isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` + `Atomic<T>` + disjoint-slice `parallel_for`, native + wasm, TSan/ASan-proven (ROADMAP §6). What remains is **not a language gap**: a single-thread **scheduler / event-loop library** over the existing `Poller` — block a task on a channel, run other ready work (Go/Erlang style, deliberately **not** `async/await` function-coloring). The concurrency design explicitly makes the scheduler a *library* on the primitives, not language surface. Still the biggest **build**, but no longer blocked by the compiler. | **L (library)** |
+| **Async task model / event loop** | ~~language~~ → now **library** | 🟡 the **language primitives are shipped** (concurrency campaign complete, 2026-07-23) — isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` + `Atomic<T>` + disjoint-slice `parallel_for`, native + wasm, TSan/ASan-proven (ROADMAP_DETAIL §6). What remains is **not a language gap**: a single-thread **scheduler / event-loop library** over the existing `Poller` — block a task on a channel, run other ready work (Go/Erlang style, deliberately **not** `async/await` function-coloring). The concurrency design explicitly makes the scheduler a *library* on the primitives, not language surface. Still the biggest **build**, but no longer blocked by the compiler. | **L (library)** |
 | **Timers / monotonic clock (`std::time`)** | library (+thin FFI) | ✅ **`std::time` shipped** (concurrency M1 — monotonic `Instant`/`Duration`, native `clock_gettime` / wasm `emscripten_get_now` / Win QPC). The **timer wheel** (`setTimeout`/keep-alive expiry off the poll timeout) is the remaining piece — pure kama library on the shipped clock. | **S (lib)** |
 | **HTTP/1.1 (+ WebSocket upgrade) parser & server** | library | ❌ missing — only a ~200-line static-file `examples/httpd` proof | Request/response types, header parsing, chunked/`Content-Length` bodies, keep-alive, status constants. **Pure kama library work — not blocked by the language**; it just doesn't exist yet. | **M–L** |
 | **TLS / HTTPS** | library (FFI) | ❌ missing | Public-facing servers need TLS. Realistically an FFI binding to a C TLS stack (OpenSSL/BoringSSL/mbedTLS) behind a `ReliableStream`-shaped wrapper, so handlers are transport-agnostic. | **L** |
@@ -55,9 +55,9 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 
 | Feature | Kind | Status | Why | Effort |
 |---|---|---|---|---|
-| **Capturing closures** | **language** | 🟡 partial — free `fnptr` + `BindableFunctionPtr` only; no inline lambda that captures locals | Route handlers and middleware want to capture request context / config inline. Today you thread context through a handler *object* (a `type resource` whose fields hold the captures) and register `BindableFunctionPtr` methods — workable but verbose. Closures under the RAII/move model are a designed Tier-3 ergonomic (ROADMAP §3), not a blocker. | **M–L** |
+| **Capturing closures** | **language** | 🟡 partial — free `fnptr` + `BindableFunctionPtr` only; no inline lambda that captures locals | Route handlers and middleware want to capture request context / config inline. Today you thread context through a handler *object* (a `type resource` whose fields hold the captures) and register `BindableFunctionPtr` methods — workable but verbose. Closures under the RAII/move model are a designed Tier-3 ergonomic (ROADMAP_DETAIL §3), not a blocker. | **M–L** |
 | **DNS resolution** | library (FFI) | ❌ missing — numeric hosts only (`"127.0.0.1:8080"`) | An HTTP *client* (proxies, upstreams, webhooks) needs name resolution; a bare listener does not. Thin `getaddrinfo` FFI. | **S–M** |
-| **Concurrency / threads** | **language + runtime** | ✅ **shipped** — isolates + `channel<T>` + `scope` + `Atomic<T>` + `parallel_for`, native (OS threads) **and** wasm (Web Workers over SharedArrayBuffer), TSan/ASan-proven (ROADMAP §6, campaign complete). A single event-loop thread saturates one core; kama's shared-nothing isolates (1:1 to OS threads / WASM workers) are the worker/cluster equivalent, `give` moving data across a channel zero-copy. The multi-core scale-out substrate now exists — a scheduler that fans handlers across isolates is a library on top. | done (lang/runtime) |
+| **Concurrency / threads** | **language + runtime** | ✅ **shipped** — isolates + `channel<T>` + `scope` + `Atomic<T>` + `parallel_for`, native (OS threads) **and** wasm (Web Workers over SharedArrayBuffer), TSan/ASan-proven (ROADMAP_DETAIL §6, campaign complete). A single event-loop thread saturates one core; kama's shared-nothing isolates (1:1 to OS threads / WASM workers) are the worker/cluster equivalent, `give` moving data across a channel zero-copy. The multi-core scale-out substrate now exists — a scheduler that fans handlers across isolates is a library on top. | done (lang/runtime) |
 | **`std::io` / `std::process`** | library | 🟡 partial — `std::fs` shipped; stdout/stderr, argv, env, exit are ad-hoc C FFI in examples | Structured logging, config from env/argv, graceful exit codes. Thin kama wrappers over the C calls already used. | **S** |
 
 ## Tier 2 — Framework polish (library / FFI; not language gaps)
@@ -84,7 +84,7 @@ sides.
 1. ✅ **`std::time` shipped** (monotonic clock — concurrency M1). The **timer wheel** on top of it (a small
    kama library) is the remaining piece for every timeout in the loop.
 2. **The async task model — now a *library*, not a language gap.** The primitives (isolates / `channel` /
-   `scope` / `parallel_for`) are shipped (ROADMAP §6); build the single-thread **scheduler over `Poller`**
+   `scope` / `parallel_for`) are shipped (ROADMAP_DETAIL §6); build the single-thread **scheduler over `Poller`**
    (block a task on a channel, run other ready work) as a kama library. The defining feature; everything
    ergonomic hangs off it. Single-threaded loop first, then fan across the (already-shipped) isolates.
 3. **HTTP/1.1 library** (parser + request/response + keep-alive) on top of the loop — pure kama, unblocked.

@@ -423,7 +423,7 @@ not re-checked), and git dependencies carry no signature at all.
 
 So today, signing is a mechanism in place ahead of its policy. **The integrity guarantees above are the ones
 that carry weight.** A trust model — an allowed-signers set, then CI/OIDC provenance recorded in a
-transparency log — is tracked in [ROADMAP.md](ROADMAP.md) §10, and verification becomes mandatory with it.
+transparency log — is tracked in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §10, and verification becomes mandatory with it.
 
 Verification needs `ssh-keygen` on `PATH`; where it's absent, signing and verification skip gracefully.
 

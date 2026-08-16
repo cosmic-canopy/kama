@@ -34,7 +34,7 @@ fn int main()
 
     // (4) statement position, with a wildcard arm. `e` is initialized rather than a bare `slot`: the
     // definite-assignment pass does not yet count an exhaustive `match`'s arms as assigning it
-    // (tracked in ROADMAP §2) — unrelated to the subject rule this fixture is about.
+    // (tracked in ROADMAP_DETAIL §2) — unrelated to the subject rule this fixture is about.
     int32 e = 7;
     match (classify(x: 5)) {
         case Ok: { e = 0; }

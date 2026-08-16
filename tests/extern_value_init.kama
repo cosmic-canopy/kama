@@ -1,6 +1,6 @@
 // A `type extern value` (C-POD) struct can be aggregate-initialized with named field args
 // (`div_t(quot: 3, rem: 2)`); previously the args were silently dropped and the struct
-// zero-inited. Unset fields stay zero (from the `= {0}` declaration). See ROADMAP §2.
+// zero-inited. Unset fields stay zero (from the `= {0}` declaration). See ROADMAP_DETAIL §2.
 extern "<stdlib.h>";
 type extern value div_t { int32 quot; int32 rem; }
 

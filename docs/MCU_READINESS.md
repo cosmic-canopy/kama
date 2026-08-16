@@ -6,11 +6,11 @@ target a **bare-metal MCU** (ARM Cortex-M / AVR / RISC-V, no OS, often no heap),
 Status: ✅ have · 🟡 partial · ❌ missing. The emphasis is **language surface** — most peripheral drivers are
 ordinary library/FFI work once the core gaps below are closed.
 
-Related: [ROADMAP.md](ROADMAP.md) §5 (embedded milestone) is the design of record; the allocator seam is shared
+Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §5 (embedded milestone) is the design of record; the allocator seam is shared
 with [ENGINE_READINESS.md](ENGINE_READINESS.md) (frame arenas) and the collections campaign (M10/M11).
 
 > **Post-concurrency triage (2026-07-23): this track is the front-runner.** With the concurrency campaign
-> complete, the readiness re-triage (ROADMAP §6 "Forward sequencing") leans MCU: it is the **only** track with
+> complete, the readiness re-triage (ROADMAP_DETAIL §6 "Forward sequencing") leans MCU: it is the **only** track with
 > real **language-surface** work queued (Engine and Web are now library/platform work with no language gap),
 > and its #1 blocker builds directly onto the just-shipped concurrency model (see the statics row below). The
 > recommended sequence at the bottom is the actionable starting point.
@@ -50,8 +50,8 @@ mile of the no-heap story.**
 
 | Feature | Status | Why an MCU needs it | Effort |
 |---|---|---|---|
-| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ✅ **SHIPPED (step 1)** — `static T name = const;`, per-isolate by construction (`KAMA_ISOLATE_LOCAL`); value/`UnsafePtr`/`InlineArray` + const-init only in v1; TSan-clean | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [SPEC.md](SPEC.md#the-three-sharing-seams-) § "The three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
-| **`hardware` qualifier for MMIO** | ✅ **SHIPPED (step 2).** `hardware UnsafePtr<T>` → C `volatile T*`, `hardware` on a module `static` → `volatile T`/`volatile T*` (ISR↔loop flag/handle), `const hardware UnsafePtr<T>` → `const volatile T*` (read-only register); mirrors the shipped `const UnsafePtr<T>` lowering. `volatile` is no longer a keyword. Explicitly **not** a concurrency primitive. ROADMAP §5. Fixtures: `tests/hardware_*`. | done |
+| **Module-level mutable statics** (`static` globals with deterministic zero/const init) | ✅ **SHIPPED (step 1)** — `static T name = const;`, per-isolate by construction (`KAMA_ISOLATE_LOCAL`); value/`UnsafePtr`/`InlineArray` + const-init only in v1; TSan-clean | Firmware *lives* on module state: peripheral handles, ISR-shared flags, ring buffers, flash lookup tables. An ISR and `main` must share a flag; today there is no place to put it. **New language surface** (declaration + guaranteed zero/const init at reset). ROADMAP_DETAIL §5. **Build it *per-isolate by construction*** (plain C `static` on a single-core MCU → zero cost; `_Thread_local` on multicore native; automatic on wasm) so the same declaration is race-free under the threading model — cross-isolate sharing stays on the `Atomic<T>` seam. The concurrency model that pins this rule is now **shipped** (campaign complete 2026-07-23: isolates + channels + `scope` + `Atomic<T>` + `parallel_for`, [SPEC.md](SPEC.md#the-three-sharing-seams-) § "The three sharing seams"), so this is **settled, proven ground** — statics are a targeted addition onto working code, not a co-design with an unbuilt system. **This makes MCU the lowest-risk next track.** | **M** |
+| **`hardware` qualifier for MMIO** | ✅ **SHIPPED (step 2).** `hardware UnsafePtr<T>` → C `volatile T*`, `hardware` on a module `static` → `volatile T`/`volatile T*` (ISR↔loop flag/handle), `const hardware UnsafePtr<T>` → `const volatile T*` (read-only register); mirrors the shipped `const UnsafePtr<T>` lowering. `volatile` is no longer a keyword. Explicitly **not** a concurrency primitive. ROADMAP_DETAIL §5. Fixtures: `tests/hardware_*`. | done |
 | **Interrupt handlers / ISR entry** | ✅ **SHIPPED (step 4).** `@interrupt expose fn void h()` → `__attribute__((interrupt, used))` (the Cortex-M / RISC-V / classic-ARM ISR calling convention). Enforced `void f(void)` signature; `expose` required so the vector table can name the bare symbol; `used` survives `--gc-sections`. AVR's `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a deliberately separate later step. Fixture `tests/support/embedded_isr.kama` (transpile-grep in `tools/check-embedded.sh`). | done |
 | **Freestanding build target** (`--target embedded`: `-ffreestanding -nostdlib`, no `argc/argv` shim, `main` never returns) | ✅ **DONE (step 3)** — `--target embedded` compiles to a `-ffreestanding -nostdlib` object; the emitter emits a guarded `int main(void){ kama_main(); for(;;){} }` (no argv, never returns) selected by `KAMA_TARGET_EMBEDDED`. Triple-agnostic (via `--cc`); the startup object + linker script own the vector table at the user's link step. | **M** |
 
@@ -98,7 +98,7 @@ mile of the no-heap story.**
    `@interrupt("VECTOR")` → `ISR()` deferred. Fixtures: `tests/support/embedded_{isr,section}.kama`,
    xfail `tests/xfail/{isr_*,section_nonstring,interrupt_on_static}.kama`.
 5. **Fallible `allocate -> Optional<UnsafePtr>`** + `try new` + the checkable `@noheap`/`--no-heap` subset ✅
-   **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP §5). Also serves
+   **SHIPPED** — completes the no-heap story (shared with the embedded milestone in ROADMAP_DETAIL §5). Also serves
    game-engine frame allocators / real-time audio, not only MCU.
 6. **Inline asm / intrinsics** — ✅ **SHIPPED (step 6a, `4811d23`).** `asm("...")` inside an `unsafe fn`
    lowers to `__asm__ __volatile__("..." : : : "memory")` (always volatile + a full compiler memory
@@ -116,4 +116,4 @@ mile of the no-heap story.**
 **Bottom line:** the *systems core* (types, FFI, RAII, no-null, no-heap value subset, pluggable allocator) is
 already here. Bare-metal readiness is a focused set of **language-surface** additions — statics, `hardware`,
 ISRs, a freestanding target, fallible alloc — plus toolchain packaging. None require rethinking the model; they
-extend it into the freestanding world the design already anticipates (ROADMAP §5).
+extend it into the freestanding world the design already anticipates (ROADMAP_DETAIL §5).

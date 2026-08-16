@@ -109,7 +109,7 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   on top of it — at most `maxBytes` bytes, never splitting — for a wire field, a column limit or a log cap.
   Both guarantee **valid UTF-8, not visually intact text**: a cut at a codepoint boundary can still split a
   grapheme cluster (an `e` + combining accent, an emoji ZWJ sequence, a flag). Segmentation is defined by
-  UAX #29, needs Unicode tables, and stays a package concern — see [ROADMAP.md](ROADMAP.md) §2.
+  UAX #29, needs Unicode tables, and stays a package concern — see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.
 - **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
   null-safe, no `-1` sentinel); `contains(substring:)`, `startsWith(prefix:)`, `endsWith(suffix:)` return
   `bool`; `isEmpty()`.
@@ -185,7 +185,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   for zero-padded columns (`${h:02}:${m:02}`). A leading **`+`** forces a sign on non-negatives (`${n:+}` →
   `+42`) and **`-`** left-aligns within the width (`${n:-6}`); both compose with the width/precision. The full
   spec grammar is `[+|-]* [0? width] [.precision] | base`. Combining a base marker with width/flags, a custom
-  fill character, and center-align are not yet supported (see [ROADMAP.md](ROADMAP.md) §2).
+  fill character, and center-align are not yet supported (see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
 - **`@generate(Format)`** synthesizes a default field-dump `Format` impl so a type renders without a
   hand-written `format` — `Type { field1: v1, field2: v2 }`, each field dispatching to its own `Format` into
   the same sink (so nesting composes, one allocation):
@@ -198,7 +198,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   Strings render **raw/unquoted** (uniform single-contract dispatch — no special-case). A hand-written
   `format` wins over the derive; `@skip` omits a field. Every non-skipped field must itself be a
   primitive/string or a type that `implements Format` (an `Optional`/collection/enum-typed field, or a
-  generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP.md](ROADMAP.md) §2).
+  generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
   It is named after the **contract** (`Format`), not `display`/`debug` — Kama has one to-string contract, no
   Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
 - **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
@@ -220,7 +220,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   / `holeCount()` / `part(at:)` / `hole(at:)`; `stripIndent`, `html`, `sql` (+`SqlQuery`) live in `std::fmt`.
   Format specifiers compose inside a tag (`sql"…${amt:.2}"`). An unknown tag (no matching `fn` in scope) is a
   compile error. *(Type-preserved params — each hole keeping its static type into the params list rather than
-  a rendered `string` — is a compatible future extension; see [ROADMAP.md](ROADMAP.md) §2.)*
+  a rendered `string` — is a compatible future extension; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.)*
 
 ## Collections & strings ✅
 
@@ -909,7 +909,7 @@ A comparator is an *object*, so it may carry state (a key index, a direction, a 
 is what stands in for a capturing closure, since kama has none. It is also the faster choice: a
 `C: Order<T>` bound monomorphizes to a direct, inlinable call, where an `fnptr` is an indirect call the C
 compiler cannot inline (the reason `qsort` trails `std::sort`). `fnptr` could not express it in any case —
-a function-pointer type takes no type parameters (ROADMAP §2).
+a function-pointer type takes no type parameters (ROADMAP_DETAIL §2).
 
 Because a `ref` parameter may not name a smart pointer, `Order<Owned<T>>` is not instantiable: sort a
 container of the resources themselves. Searching splits what Rust folds into `Result<usize, usize>` —
@@ -2792,7 +2792,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
 - **Specialization is a non-goal.** There is no way to give one generic function a second body for a
   particular concrete type argument, and there will not be — the mechanism for a per-type body is a
   `contract` (plus `type intrinsic` for a primitive), which is what `std::math`'s `Real` is. Reasoning in
-  [ROADMAP.md](ROADMAP.md) § *Deferred language bits*.
+  [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) § *Deferred language bits*.
 
 ## Access control ✅
 
@@ -3176,7 +3176,7 @@ never-blocking data-parallel layer. The "multiplex thousands of connections over
 ergonomic is a **library** concern above the language — a native scheduler can back the very same
 blocking-shaped surface with fibers, with no language change and no effect on wasm.
 
-## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP.md](ROADMAP.md) §4)
+## Serialization — `@`-attributes + `@generate` ✅ (intrinsic implementation complete — by-value + full object graph + polymorphic `Shared<Contract>`; see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §4)
 
 Opt-in, compile-time serialization. The **user-facing surface is just contracts + attributes**; the *wire
 format* is library; **everything structural (the field walk + the object-graph machinery) is a compiler
@@ -3331,9 +3331,9 @@ One keyword has **reserved surface not yet implemented** — using it is a **har
   (member access) and `export` (the module public-surface manifest — `export { … };`, which ships today).
 
 `volatile` is **not** a keyword: C's `volatile` is spelled `hardware` (emits C `volatile` for MMIO registers
-and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP §5).
+and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP_DETAIL §5).
 
-## Known limitations (tracked → [ROADMAP.md](ROADMAP.md) §1)
+## Known limitations (tracked → [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1)
 
 Everything below **hard-errors** (never miscompiles) and has a clean workaround. Two kinds:
 

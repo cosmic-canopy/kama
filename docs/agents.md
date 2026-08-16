@@ -175,7 +175,7 @@ This is the sharpest edge in the toolchain for an agent, so it is stated plainly
 to the C compiler, which `kama build` invokes; the error is reported against the `.kama` file and
 line, because the emitted C carries `#line`. **So verify with `kama build`.**
 
-This is a known gap, tracked in [ROADMAP.md](ROADMAP.md) §2, and `tools/check-query.sh` asserts the
+This is a known gap, tracked in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2, and `tools/check-query.sh` asserts the
 caveat still holds — so the day the front end gains real type checking, the guard fails and forces
 this page to be corrected rather than letting it rot.
 
@@ -189,7 +189,7 @@ is a fixed floor per process — roughly 0.05 s for a file with no imports, 0.33
 cost of a query is essentially the cost of *starting* one. Ask everything about a file in a single
 invocation rather than shelling out per identifier: three questions in one process is ~0.23 s, the
 same three as separate processes is ~0.68 s, and the gap widens linearly with every question you add.
-(The floor itself is tracked in [ROADMAP.md](ROADMAP.md) §9 — the fix is a cached front end.)
+(The floor itself is tracked in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §9 — the fix is a cached front end.)
 
 ## Why not the LSP?
 

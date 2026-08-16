@@ -1,4 +1,4 @@
-// Regression (was a ROADMAP §2 known bug, fixed in M10b): a generic `DynamicArray<V>` field's
+// Regression (was a ROADMAP_DETAIL §2 known bug, fixed in M10b): a generic `DynamicArray<V>` field's
 // `operator[]` nested inside a call argument in a `return Optional::Some(...)` must resolve the USER
 // operator[] — not fall back to a raw-pointer subscript ("raw pointer access requires unsafe"). Root
 // cause was `exprClass` resolving `this.d`'s field type under the ambient `_typeSubst` (the enum

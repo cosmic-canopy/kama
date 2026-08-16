@@ -164,7 +164,7 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    backend is opt-in *tooling*, not a monolith — you build in the renderers you want. This is what makes
    goal #6 (scripting) and goal #1 (self-hosting) the **same** project: port the runtime into kama once,
    every backend inherits it. *The plan — and the IR-refactor that is the real work — live in
-   `docs/ROADMAP.md` §7.*
+   `docs/ROADMAP_DETAIL.md` §7.*
 
 ## Production-grade build & debugging
 

@@ -33,7 +33,7 @@ case "$line" in
     *)
         echo "check-opt: FAIL — the compiler is being built without optimization." >&2
         echo "  compile line: $line" >&2
-        echo "  Set OPT in the Makefile (default -O2). See ROADMAP section 9." >&2
+        echo "  Set OPT in the Makefile (default -O2). See ROADMAP_DETAIL section 9." >&2
         exit 1 ;;
 esac
 
