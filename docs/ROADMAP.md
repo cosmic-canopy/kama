@@ -47,28 +47,38 @@ grant). **The unsafe seam shipped** — `unsafe fn` replaced `unsafe { }`, `exte
 [SPEC.md](SPEC.md#unsafe-fn--raw-pointer-memory-access) and [GOALS.md](GOALS.md). **`const fn` shipped
 too** — the marker is now enforced through contracts, overrides, intrinsics, `@generate`, `give` and
 `addr(of:)`, and the stdlib carries 246 of them plus 48 `const ref` parameters where it carried zero
-([SPEC.md](SPEC.md#immutability--const-)). It was scheduled here as a prerequisite of item 1; probing the
-four sites it was meant to unblock showed it is not one, which is recorded in that item and in the design
-doc. **The view model's MINT shipped** — a `type view`'s ctor is private, minting is a grant carried by a
+([SPEC.md](SPEC.md#immutability--const-)). It was scheduled as a prerequisite of the view window, and
+probing the four sites it was meant to unblock showed it was not one — but the window's **freeze** turned
+out to be a fifth site where it is genuinely load-bearing: "a non-`const fn` mutates its receiver" is what
+makes the rule precise instead of "any method call mutates", and the stdlib's 247 markers are what keep a
+read inside a window free. **The view model's MINT shipped** — a `type view`'s ctor is private, minting is a grant carried by a
 `@viewable` contract, `main` may no longer be `unsafe`, and a mint protocol emits no vtable. What the
 language now IS lives in [SPEC.md](SPEC.md#slices--spans--viewt-) and [GOALS.md](GOALS.md) §3c, which
 stops promising a view "can never dangle" and says what is true instead. Finding ③ is **restated, not
 closed** (unforgeable by accident, still length-trusting) and ⑧ is retired with its dead guard.
 
-⚠️ **④⑤⑥ did NOT close, and the row that shipped claimed they would.** That claim was a PLAN copied
-forward as a result; probing it afterwards (ASan, 2026-08-15) shows all three still compile and still
-fault. The reason is one axis the campaign never covered: the mint answers **who** may make a view, and
-`borrow` gives a **safe place to put one** — but `borrow` is *opt-in*, so the unsafe spelling
-`View<int32> v = d.view();` as a plain local is still legal, and every one of ④⑤⑥ rides it. Closing them
-means making `borrow` the only way a view survives a statement, which is source-breaking and therefore
-pre-tag. It is row 1 below. The list is ordered by severity:
+**The view WINDOW shipped, and ④⑤⑥ are closed.** The mint answered *who* may make a view; the window
+answers *how long it lives*. `borrow` is no longer opt-in decoration: it binds a **mint call** (any nullary
+member of a `@viewable` contract, so `m.values()` and `buf.span()` open windows as well as `view()`), it
+**freezes its host place** for the extent of the block, and a view **local** must root in one — or in a
+by-value view parameter. A view may not be a `ref`/`out` parameter, and a view argument may not root in
+another argument's mutable place or in a non-`const fn` receiver. What the language now IS lives in
+[SPEC.md](SPEC.md#slices--spans--viewt-) and [GOALS.md](GOALS.md) §3c, which stops hedging and says safe
+kama can neither originate a dangling view nor hold a correctly-minted one across a mutation of the thing
+it views. Eleven ASan-proven use-after-frees stopped compiling, three of which no brief had named.
+
+> **The lesson this campaign paid for, again: a comment is not a guard.** `borrow` shipped documenting a
+> freeze it never implemented — `tests/borrow_basic.kama` asserted "only `this.buf` freezes" in prose, and
+> `placesConflict` described the rule in its own header — while `borrow a as v { a.add(…); v[0] }` compiled
+> and faulted. No fixture had ever mutated a borrowed host. The previous row's "closes ④⑤⑥" was a plan
+> copied forward as a result; this one was checked by re-running every repro, and the acceptance test was
+> the probe ledger rather than the suite, because an `xfail` never links and so never reaches ASan.
 
 | # | work | closes | where | why here |
 |---|---|---|---|---|
-| **1** | **the view WINDOW — make `borrow` mandatory** — ④⑤⑥ are live heap-use-after-frees reachable from safe kama with zero `unsafe` tokens | ④⑤⑥ | [design/view-window.md](design/view-window.md) | **ASan-proven open, 2026-08-15**, after the mint campaign's row asserted they would close. `borrow` shipped as a safe spelling and nothing requires it: a `View<T>` held as a plain local outlives a `d.add()` that reallocs (⑤), can be reseated through a `ref View<T>` parameter to a dead inner scope (④), and can be passed beside a `ref` to its own container in one call (⑥). Source-breaking — it makes a bare view local an error — so before the tag, and the last such change. **Probed and split into three pieces** — two of them (`ref`/`out` view parameters, view-root aliasing in an argument list) are NOT source-breaking and land first; only the window rule itself is. ⚠️ `borrow` cannot bind a derive, so the rule is *"a view local's root must already be lifetime-bounded"*, not *"everything must be `borrow`-bound"* — the latter has no legal spelling for `sort.kama` |
-| 2 | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is *de-fanged* by the view mint (the container is unnameable during iteration) but the counter is still wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
-| 3 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
-| 4 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
+| **1** | **the residual findings** — `reserve` bumps `mods` (⑦) · `kama check` does not type-check expressions (⑩) · narrowing `cast<int8>(300)` → 44 (⑪) · the test-infra gaps | ⑦⑩⑪ | §2 | the four items neither seam campaign covers, grouped so none is lost. ⑦ is the campaign's **named residual**: `foreach (x in d) { d.add(…) }` creates no source-level local for the window rule to see, so it is still defended at RUNTIME by the mods counter (fail-fast, not unnameable) — and that counter is wrong; ⑩ is the largest, one root cause — an uninstantiated generic body gets **no** analysis — and it lands on the LSP and on an AI agent told to verify its work; the test-infra gap (`tests/trap/` skipped on the san/wasm/Windows legs, **no leg runs MSan**) is exactly why ⑨ was invisible |
+| 2 | **C symbol naming** — a stable private scope, and mangle-on-collision for C keywords | — | §10 | **half of it is a live correctness bug, not a polish item**: 25 of C11's 44 keywords are legal kama identifiers, so `int32 switch = 3;` emits `int32_t switch = 3;` and clang rejects generated C the author never wrote (probed 2026-08-14). The other half — a file-private symbol's C name is POSITIONAL (`_F4__Holder` vs `_F5__Holder` depending on argument order) — makes `--keep-c` output non-reproducible, which is what the README's "drops into an existing C codebase" promise rests on |
+| 3 | stdlib parity M2b / M2c | — | §3 | ↓ surface area, once correctness is done |
 
 **The boundary spike is done and every finding above is scheduled.** The `Optional<UnsafePtr<T>>` campaign
 came *out* of the list — §2 records why: nothing null-shaped reaches a binary, and containing `UnsafePtr`
@@ -303,9 +313,9 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   | ~~1~~ | ~~`extern fn` calls are ungated — double-free, zero `unsafe`~~ — **CLOSED**: calling an `extern fn` needs an `unsafe fn`, no scalar exemption | language | — |
   | ~~2~~ | ~~`addr(of:)` + an `UnsafePtr` field = general dangling-pointer factory~~ — **CLOSED**: `UnsafePtr` is contained; producing, holding and propagating one all need an `unsafe fn` | language | — |
   | 3 | ~~**`View::<T>.make` is a `public ctor`**~~ — **RESTATED, not closed**: the ctor is private and minting needs a `@viewable` grant, so safe kama cannot forge one. The length is still *trusted* — a type that owns the memory can hand out a truthful pointer with a false length | both | — |
-  | 4 | **view reseat** — nested block, loop body, **and through a `ref View<T>` parameter** → UAF. The `ref`-param form crosses a function boundary, so an intra-function depth check is *not enough*. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | S–M |
-  | 5 | **resize invalidation** — `View` over a `DynamicArray` that grows → UAF. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | M |
-  | 6 | **aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)` → UAF. The overlapping-`ref` rule that shipped does not see a `ref` and a *view of the same root* as overlapping. **Re-probed OPEN 2026-08-15** (ASan heap-use-after-free) | language | M |
+  | ~~4~~ | ~~**view reseat** — nested block, loop body, and through a `ref View<T>` parameter~~ — **CLOSED**: a view may not be a `ref`/`out` parameter at all (fn, method and contract member), and a view local must root in a window, so there is no intra-function form left either | language | — |
+  | ~~5~~ | ~~**resize invalidation** — `View` over a `DynamicArray` that grows~~ — **CLOSED**: the window rule forces the mint into a `borrow`, and the window freezes its host, so the `add()` that reallocs is rejected | language | — |
+  | ~~6~~ | ~~**aliasing** — `bad(d: ref d, v: d.view())`, then `d.reserve(...)`~~ — **CLOSED**: a view argument roots through its receiver and is compared against every mutable argument *and* the receiver, which is where the sibling form `b.eat(v: b.view())` was hiding | language | — |
   | 7 | **`reserve()` reallocs without bumping `mods`** in `DynamicArray`, `Deque`, `Map`, `SlotMap` → UAF under a live iterator | stdlib | S |
   | ~~8~~ | ~~**the compile-time foreach-invalidation guard is dead code**~~ — **RETIRED**: the guard is gone rather than revived; the borrow window is the mechanism that replaces it | language | — |
   | ~~9~~ | ~~one `unsafe { }` disables definite assignment for the whole function~~ — **CLOSED by construction**: `unsafe` IS the function now, so relaxing locals is correct, and `out` params stopped being relaxed at all | language | — |

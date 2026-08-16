@@ -76,11 +76,14 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    a *second-class borrow*: the escape check forbids it from being a field, a collection element, or an
    escaping return, and its **constructor is private** — a view is a bidirectional relationship, so it may be
    minted only by the view itself or by the type it views, which declares that by implementing a contract
-   marked `@viewable`. The honest claim is therefore not "it can never dangle": **safe kama cannot
-   *originate* a dangling view, and the trusted boundary is the `unsafe fn` set, greppable at declarations.**
-   A type that owns memory can still hand out a truthful pointer with a false length — no type system
-   without lifetimes can catch that, and Rust has the same property (`Vec::as_slice` is a safe function with
-   unsafe internals). What the model buys is that the trusted set is small, named, and declared. A **`type contract`** is a
+   marked `@viewable`. Where it *lives* is the other half: a view local must root in a **`borrow` window**,
+   whose host is frozen for the block, so safe kama can neither originate a dangling view nor hold a
+   correctly-minted one across a mutation of the thing it views — with no borrow checker and no lifetimes,
+   only a prefix test over places. The honest residual is narrow and worth stating: a type that owns memory
+   can still hand out a truthful pointer with a **false length**, and no type system without lifetimes can
+   catch that — Rust has the same property (`Vec::as_slice` is a safe function with unsafe internals).
+   **The trusted boundary is the `unsafe fn` set, greppable at declarations**, and what the model buys is
+   that it is small, named, and declared. A **`type contract`** is a
    public-only guarantee a type satisfies — kama's word for an interface (also a borrow, of one object).
    Polymorphism's goal is **substitutability, not reuse**: inheritance bundles the two,
    so kama unbundles them — **generics** give reuse (zero-cost monomorphization), **contracts** give

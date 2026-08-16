@@ -263,16 +263,54 @@ Rust's `Vec::remove`/`pop`), never a silent drop.
 
 A **`View<T>`** is a non-owning window over a contiguous run of `T` — a slice / span (zero copy, no
 ownership transfer). It is a **`type view`** (the stack-only-borrow kind; see *Type declarations*): the
-escape check keeps it from being stored or outliving its buffer, so it can't dangle without a borrow checker.
+escape check keeps it from being stored, and **the window rule below keeps it from outliving its buffer**,
+so it cannot dangle — without a borrow checker, and without lifetimes.
 
 ```kama
 DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
-View<float32> all = verts.view();                       // borrow the whole buffer
-View<float32> mid = verts.slice(from: 2, count: 4);     // a sub-range [2, 6)
-uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy
-foreach (ref float32 x in mid) { x = x * 2.0; }         // mutate-through: writes back to `verts`
-int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index (a place)
+borrow verts.view() as all {                            // a WINDOW — `verts` is frozen inside it
+    View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
+    foreach (ref float32 x in mid) { x = x * 2.0; }     // mutate-through: writes back to `verts`
+    int32 n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
+}
+uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy, no window needed
+verts.add(item: 1.0);                                   // mutable again: the window has closed
 ```
+
+#### The window — `borrow h.mint() as v { … }` ✅
+
+A view borrows storage it does not own, so kama answers *how long is this view valid?* with **lexical
+scope** — not a lifetime annotation, and not a programmer's promise. A **`borrow` block is that extent**,
+and it is purely lexical: one C block plus one initializer per binding, no runtime cost.
+
+```kama
+borrow d.view() as v { … }        // `Viewable<View<T>>` grants `view()`
+borrow m.values() as vals { … }   // `ValuesIterable<I>` grants `values()` — `Map` has no `view()`
+borrow buf.span() as s { … }      // a user contract's own grant
+```
+
+Three rules, and together they are what lets the paragraph above say "cannot dangle":
+
+1. **The host is a MINT CALL**, and the window is over the call's *receiver*. The mint is any **nullary
+   member of a `@viewable` contract** the receiver's type implements — the grant names its own member, so
+   nothing is hardcoded. A container alone would not say which view to open (`DynamicArray` grants three),
+   and a mint takes no arguments: narrow by deriving off the alias with `.slice(…)` inside the window,
+   which is free.
+2. **The host place is FROZEN for the extent of the block** — no assignment, no non-`const` `ref`/`out`
+   argument, no `give` out of it, no non-`const fn` receiver overlapping it, and the alias itself may not
+   be reseated. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
+   mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
+   fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over
+   the frozen host, and an element write (`a[0] = 7` cannot realloc, and a view is a mutate-through window
+   in the first place).
+3. **A view LOCAL's root must already be lifetime-bounded** — a `borrow` alias, a by-value view parameter,
+   a derive off either, or a free function's result when every view handed to it was bounded. A view
+   minted from a container you can still name is *not* bounded, because the next line may grow it, and is
+   an error with the window as its remedy.
+
+The rule covers **every `type view`**, not just `View<T>`: an iterator that borrows is a view. That is only
+expressible because the mint is read from the grant — `Map` has no `view()`, so before that,
+`MapValueIter<int32> mi = m.values();` had no window it could open at all.
 
 - Obtain one from a container: `DynamicArray`/`FixedArray` expose **`view()`** (whole) and
   **`slice(from:, count:)`** (bounds-checked sub-range); `View<T>` itself has `slice`, `length()`,
@@ -281,6 +319,17 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
+- **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra
+  indirection adds is the power to reseat the caller's view at storage the caller never named. Pass it by
+  value (it is two words) or return one. The ban covers contract members too, where a bodiless signature
+  would otherwise propagate the spelling to every implementer.
+- **A view argument may not root in another argument's mutable place**, nor in the receiver of a
+  non-`const fn`: `bad(d: ref d, v: d.view())` and `b.eat(v: b.view())` hand the callee a window over
+  storage it may grow. A view roots through its *receiver*, so a chained derive roots where its receiver
+  roots.
+- **`foreach` needs a place to iterate from.** `foreach (x in d.view())` has nowhere to put the view and
+  nothing holding the buffer still — open a window and iterate the alias. An operand that *is* its own
+  iterator (`"ab".chars()`, `m.valuesMut()`) is copied by value and stays legal.
 - **A view is minted by the type it views, and by nothing else.** A view is a bidirectional
   relationship — it does not exist without a type to view — so a `type view`'s **constructor is private**,
   and writing `public` on it is a compile error rather than a silent downgrade (the same rule a `view`
@@ -303,20 +352,23 @@ int32 n = mid.length();   float32 first = mid[0];       // bounds-checked index 
   mint protocol, not a value**: it declares *who* may hand out a view, so boxing one would erase the very
   identity the grant is about. It emits no C type at all — no vtable, no fat pointer — and naming one as a
   local, parameter, field or return type is an error. Use it in an `implements` clause or as a generic
-  bound. `borrow` and `parallel_for` are **nominal** on it too: a host with a `.view()` that never declared
-  `Viewable` is rejected, though resolution stays structural, so the emitted call is still direct.
+  bound. `borrow` and `parallel_for` are **nominal** on it too: a host whose method was never granted is
+  rejected, though resolution stays structural, so the emitted call is still direct. `parallel_for` wants
+  one specific grant — `view()` — because it needs contiguous storage; `borrow` accepts any.
 
-  **What this buys is auditability and generality, not soundness.** A view is minted only by a type that
-  claims to own the memory — but that type's own `view()` can still return a truthful pointer with a false
-  length, and no type system without lifetimes can tell. Safe kama cannot *originate* a dangling view; the
-  trusted set is the `unsafe fn` bodies of the types that own the memory, and it is greppable at
-  declarations.
+  **What the mint buys is auditability and generality; the window is what buys soundness.** A view is
+  minted only by a type that claims to own the memory — but that type's own `view()` can still return a
+  truthful pointer with a false length, and no type system without lifetimes can tell. That residual is
+  named and small: the trusted set is the `unsafe fn` bodies of the types that own the memory, and it is
+  greppable at declarations. What safe kama can no longer do is hold a correctly-minted view across a
+  mutation of the thing it views.
 
 - **A borrowing iterator is itself a view.** Every collection iterator — `ViewIter`/`ViewIterMut`,
   `DynamicArrayIter`, `MapValueIter`, `BitSetIter`, the `string` iterators `Chars`/`Split`, all of them — is
   declared `type view`, so it obeys the same escape rules as the `View<T>` above: a local or a by-value
   parameter, returnable from the container's own `iterator()`/`values()` (it borrows `this`), and **never** a
-  field, a collection element or an `enum` payload. That closes the *laundering* path, where a `View<T>`
+  field, a collection element or an `enum` payload — **and it obeys the window rule**, so an iterator
+  local is bounded exactly as a `View<T>` local is. That closes the *laundering* path, where a `View<T>`
   could not be stored in a field but its iterator, holding the same pointer, could. It costs nothing at the
   use site: `foreach` resolves `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, so
   a view-kind iterator is never widened to a contract value. The mods-counter fail-fast the growable
@@ -1584,7 +1636,9 @@ every function, so declarations are greppable and self-describing:
   **copies** like a value (inline, no dtor) but owns nothing and is a **second-class borrow**: the escape
   check forbids it as a field, a collection element, or an `enum` payload, and allows it as a **return only
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
-  lifetime tracking), so it can't dangle. A view may **not** declare a `~dtor` or own a resource field, and
+  lifetime tracking). A **local** of the kind must root in a `borrow` window or a by-value view parameter,
+  and its host is frozen for that window's extent, so it cannot outlive the storage it views — see *Slices /
+  spans* for the window rule. A view is also never a `ref`/`out` parameter: it is already a borrow. A view may **not** declare a `~dtor` or own a resource field, and
   its fields are **private only** (its raw `UnsafePtr<T>` must not leak). A view's **conformance is checked at the
   `implements` site**: it may not implement a contract whose `ctor` **member** constructs the implementer from
   parameters that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — such a constructor could only borrow one
