@@ -9499,6 +9499,11 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         auto ms = _moveState.find(root);
         if (ms != _moveState.end() && ms->second != MoveState::NotMoved)
             unsupported(("cannot borrow `" + root + "` — it was moved (given) away").c_str(), iso->line);
+        // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
+        // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
+        // call through `spawn` must not launder it. This path never reaches `checkConstWrite`, which is
+        // where every other `ref` argument is caught.
+        rejectFrozenWrite(argNode->expression, iso->line);
         // Same-root disjointness: no two children of one scope may borrow the SAME root (they would race
         // on it). Distinct roots are statically disjoint; overlapping index-ranges of one buffer are M6.
         // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so

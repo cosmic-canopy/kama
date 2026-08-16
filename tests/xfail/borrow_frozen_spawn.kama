@@ -1,0 +1,22 @@
+// A `ref` handed to a task is a mutable borrow like any other. The direct call `grow(d: ref a)` is
+// rejected inside a window, so routing the identical call through `spawn` must not launder it — the task
+// reallocs `a` and the window's alias is left pointing at the freed buffer, which ASan confirms.
+//
+// This path never reaches `checkConstWrite`, where every other `ref` argument is caught: `spawn` validates
+// its borrow itself (scope-escape, move-state, same-root disjointness) and had no freeze arm.
+import std::concurrent;
+import std::collections::{DynamicArray, View};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+fn void grow(ref DynamicArray<int32> d) { int32 i = 0; while (i < 4096) { d.add(item: 7); i = i + 1; } }
+
+fn int main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1); a.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as v {
+        scope { spawn grow(d: ref a); }
+        r = sum(xs: v);                  // the original 2-element buffer, long since freed
+    }
+    return r;
+}
