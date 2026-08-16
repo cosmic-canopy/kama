@@ -11592,6 +11592,26 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                              "places, or read one into a local first").c_str(), srcLine);
         mutableArgPlaces.push_back(path);
     };
+    // A VIEW argument is a borrow too, and one whose root the test above cannot see: `bad(d: ref d, v:
+    // d.view())` passes a by-value parameter, so it never reached `checkArgOverlap`, and `placePath` of an
+    // invocation is empty anyway. Rooted through its receiver it becomes an ordinary place and the same
+    // prefix test applies — the callee must not be handed a window over a container it may also grow.
+    // Compared in BOTH directions so argument order cannot hide it.
+    std::vector<std::pair<std::vector<std::string>, std::string>> viewArgRoots;   // root -> param name
+    auto viewArgConflict = [&](const std::vector<std::string>& a, const std::string& viewName,
+                               const std::string& mutName) {
+        unsupported(("`" + placeText(a) + "` is borrowed by the view argument `" + viewName + "` and also "
+                     "passed as a mutable `ref`/`out` argument (`" + mutName + "`) in the same call — the "
+                     "callee holds a window over storage it may grow, and growing it leaves that window "
+                     "dangling. Pass the view alone and let the callee mint what it needs, or copy into an "
+                     "owning collection").c_str(), srcLine);
+    };
+    auto checkViewArgOverlap = [&](const std::vector<std::string>& root, const std::string& pname) {
+        if (root.empty()) return;
+        for (auto& seen : mutableArgPlaces)
+            if (placesConflict(seen, root)) viewArgConflict(root, pname, "an earlier argument");
+        viewArgRoots.push_back({ root, pname });
+    };
 
     std::string s = cName + "(";
     bool first = true;
@@ -11632,7 +11652,15 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
         // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is
         // mandatory), so the marker would miss the commonest spelling.
-        if (p.byRef && !p.isConst) checkArgOverlap(placePath(argExpr), p.name);
+        if (p.byRef && !p.isConst) {
+            std::vector<std::string> mp = placePath(argExpr);
+            checkArgOverlap(mp, p.name);
+            if (!mp.empty())
+                for (auto& vr : viewArgRoots)     // the other direction: the view argument came first
+                    if (placesConflict(vr.first, mp)) viewArgConflict(vr.first, vr.second, p.name);
+        } else if (!p.byRef && isViewCType(p.className)) {
+            checkViewArgOverlap(viewRootPlace(argExpr), p.name);
+        }
         // inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
         // `Cls__ctor(&dest, …)`, which needs an lvalue destination, so materialize a HOISTED temp
         // (declared on its own line before this statement — pure ISO C, no `({ … })`) and pass it by
@@ -12078,6 +12106,53 @@ std::string CEmitter::placeText(const std::vector<std::string>& p)
     std::string s;
     for (size_t i = 0; i < p.size(); ++i) { if (i) s += "."; s += p[i]; }
     return s;
+}
+
+// The place a VIEW expression ultimately borrows. `placePath` answers "what storage does this designate",
+// which is empty for an invocation — correct for a value, and useless for a view, because `d.view()`
+// designates no place while borrowing all of `d`. So the two forms that produce a view without being a
+// place are unwrapped here:
+//
+//   `d.view()`, `d.view().slice(…)`   -> {d}   — recurse through the RECEIVER (a chained derive roots
+//                                               where its receiver roots)
+//   a `borrow` alias `v`              -> the place that window froze
+//   a by-value view PARAMETER         -> {}    — the caller's frame already bounds it, and the caller is
+//                                               where its aliasing was checked
+//   `View.make(…)` (dot-on-type ctor) -> {}    — the mint rule governs it, not aliasing
+//
+// EMPTY means "nothing here can conflict", the same load-bearing signal `placePath` uses. Forgetting the
+// receiver unwrap would make every check downstream silently vacuous — an empty path conflicts with
+// nothing — so `xfail/view_arg_aliases_ref` is the guard that this function did anything at all.
+std::vector<std::string> CEmitter::viewRootPlace(SharedExpression e)
+{
+    ASTNode* n = e.get();
+    if (!n) return {};
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewRootPlace(h->value);
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (id->value && (!id->qualifier || id->qualifier->empty())) {
+            if (const std::vector<std::string>* r = frozenAliasRoot(*id->value)) return *r;
+            if (_viewParams.count(*id->value)) return {};
+        }
+        return placePath(e);
+    }
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        if (inv->expression)
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+                if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                    if (rid->value && _viewTypeNames.count(*rid->value)) return {};   // `View.make(…)`
+                if (ma->expression) return viewRootPlace(ma->expression);
+            }
+        return {};
+    }
+    // A ternary yields one of two views. Either arm may alias, so BOTH are offered to the caller; a
+    // single place cannot say "one of these", so the first that roots anywhere is returned and the other
+    // is caught on its own if it is the one that conflicts.
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) {
+        std::vector<std::string> a = t->LHS ? viewRootPlace(t->LHS) : std::vector<std::string>();
+        if (!a.empty()) return a;
+        return t->RHS ? viewRootPlace(t->RHS) : std::vector<std::string>();
+    }
+    return placePath(e);
 }
 
 // --- The window's freeze -------------------------------------------------------------------------------
@@ -18581,6 +18656,21 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 if (!a || !a->name || !a->name->value) continue;
                 const ParamSig* ps = nullptr;
                 for (auto& p : rmi->params) if (p.name == *a->name->value) { ps = &p; break; }
+                // A by-value VIEW argument over the receiver's own storage: `b.eat(v: b.view())`. The
+                // receiver is borrowed mutably by a non-`const fn`, so this is the argument-list aliasing
+                // rule with the receiver as the mutable side — and the receiver never reaches that rule,
+                // which only ever compares arguments with each other.
+                if (ps && !ps->byRef && isViewCType(ps->className)) {
+                    std::vector<std::string> vr = viewRootPlace(a->expression);
+                    if (!vr.empty() && placesConflict(recvPlace, vr))
+                        unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
+                                     + "` while `" + placeText(recvPlace) + "` is the receiver of non-`const "
+                                     "fn` `" + method + "` — the method may grow the very storage that "
+                                     "window views, leaving it dangling. Mint the view inside `" + method
+                                     + "`, or declare it a `const fn` if it does not mutate").c_str(),
+                                    call->line);
+                    continue;
+                }
                 if (!ps || !ps->byRef || ps->isConst) continue;
                 SharedExpression ax = a->expression;
                 if (auto* h = dynamic_cast<HandoffNode*>(ax.get())) ax = h->value;

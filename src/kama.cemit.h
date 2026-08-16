@@ -1931,6 +1931,7 @@ private:
     // front, exactly as `markMoved` does for its own scope-shaped question.
     const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
+    std::vector<std::string> viewRootPlace(SharedExpression e);   // the place a VIEW expression borrows
     bool rejectFrozenWrite(SharedExpression target, int line);   // one sentence for every write shape
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a

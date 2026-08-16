@@ -1,0 +1,16 @@
+// One call, two names for one buffer. `d` goes in as a mutable borrow and `d.view()` goes in as a view
+// OF that same borrow — so the callee holds a window it cannot see is tied to the container it is free
+// to grow. `reserve` reallocs, and `v[0]` reads the old block.
+//
+// The place machinery was already right; it simply never saw the view argument as a borrow of `d`. A
+// by-value parameter skips the `ref`/`out` overlap test, and `placePath(d.view())` is empty because an
+// invocation designates no place — so the view has to be rooted through its RECEIVER to be compared.
+import std::collections::{View, DynamicArray};
+
+fn int32 bad(ref DynamicArray<int32> d, View<int32> v) { d.reserve(n: 64); return v[0]; }
+
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
+    d.add(item: 1); d.add(item: 2);
+    return bad(d: ref d, v: d.view());
+}
