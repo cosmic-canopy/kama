@@ -3,10 +3,11 @@
 *In-flight design doc. **Delete this file when the work ships**, once SPEC + ROADMAP carry the record — see
 the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 
-**→ START HERE for the next session.** [ROADMAP.md](../ROADMAP.md) rows 1–7 are this campaign, in order.
-The design is settled: read *Decisions taken* and *Milestones* below, then start at **milestone 0**
-(clear `_localCTypes`, its own commit) and **milestone 1** (the first diagnostic). The traps table is
-not background — every row in it is a thing that will bite the implementation directly.
+**→ START HERE for the next session.** Milestones **0–4 have SHIPPED** — see the table below for what each
+one turned out to be. The next task is **milestone 5, `typeOfExpr`** ([ROADMAP.md](../ROADMAP.md) row 1),
+and then the source-breaking arc 5a → 5b → 6, which must run in that order. The design is settled: read
+*Decisions taken* and the *Milestones* table. The traps table is not background — every row in it is a
+thing that bit the implementation directly, and the four marked ✅ are the ones that already did.
 
 > **Read this before the ROADMAP row it replaces.** Every claim below was **probed against the built
 > compiler on 2026-08-15**, with the command recorded. The row this brief supersedes described ⑩ as
@@ -20,9 +21,15 @@ not background — every row in it is a thing that will bite the implementation 
 | | |
 |---|---|
 | **Closed by the view window** | ④⑤⑥ (the window rule, the freeze, `ref`/`out` view params, view-root aliasing) and ⑦ (`foreach` is a window; `mods` bumped in `growTo`). `1655e8a`…`19fc999` |
-| **OPEN — this document** | ⑩ (no expression type-checking), ⑪ (silent narrowing), the test-infra holes |
+| **Closed by the spine (M0–M4)** | ⑩ *by kind* at all five hand-off positions, and ⑪ *for constants*. `10b8f30`…`9794284` |
+| **OPEN — this document** | ⑩ beyond kinds (milestone 5, `typeOfExpr`), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
 
 ## What the probes established
+
+> ⚠️ **These probes ran on 2026-08-15, BEFORE the spine.** §1 and §3's constant half are now CLOSED —
+> both programs below are rejected by `kama check`, in kama's own words, and their repros live in
+> `tests/xfail/init_kind_*` and `tests/xfail/cast_const_oob*`. §2 and §3's runtime half are still open
+> and still reproduce exactly as written. Kept because the *reasoning* is what milestones 5–9 build on.
 
 ### 1. ⑩ is not about generics. **kama never type-checks an initializer at all.**
 
@@ -121,11 +128,11 @@ instrument; do not scope M6 before it has run.**
 
 | # | milestone | key sites | size |
 |---|---|---|---|
-| **0** | **Clear `_localCTypes` with its siblings.** Own commit, before anything reads it — see the trap table. | `cemit.cpp:15426`, `:15959`, `:16066`, `:16184` | ~10 LOC |
-| **1** | **The first diagnostic.** A `TKind` classifier + `declTypeKind` + `rejectInitKindMismatch`, modelled on `rejectNullInit` (`:438`), whose own comment already names this gap. Call it from `rejectNullInit`'s two existing sites plus the primitive-local path. **Kind boundaries only** — reject `Str`↔numeric/`Bool`/`Char`/`Class`, `Bool`↔numeric, `Class`/`Contract`/`Enum`/`Sig`↔primitive; allow every integral↔integral, float↔integral, char↔integral. | `:438`, `:800`, `:3134`, `:3283` | ~250 LOC, 9 fixtures, **0** corpus migration |
-| **2** | **⑪-const** — reject a provably out-of-range constant narrowing cast. Also fixes `constValue`'s `CastNode` arm, which treats a cast as value-preserving, so `InlineArray<T, cast<int8>(300)>` sizes at **300** while the runtime cast gives **44**. | `:2093`, `constValue:5933`/`:5949` | ~80 LOC |
-| **3** | Extend the kind rule to **return**, **argument**, **variant payload**, **match arm**. `emitReorderedCall` is the single named-argument matcher for all 29 call forms, and its primitive by-value path falls straight through unchecked at `:12100`. | `:3761`, `:11677`, `:14692`, `:14215`; `emitOwnedValueInto:13897` covers return+arm together | ~200 LOC |
-| **4** | **Duplicate-diagnostic dedupe** by `(ASTNode*, message)` in `unsupported()` — required before any check inside a generic type's member body, which is emitted once per instantiation. | `:178` | ~30 LOC |
+| **0** ✅ | **SHIPPED `10b8f30`.** Clear `_localCTypes` with its siblings. ⚠️ The brief called this latent; it was NOT — a `string` local in one body shadowed an `int32` FIELD in a later one, and the compiler **refused to build** valid code with an ownership diagnostic about a rule the program does not touch. Fixture: `tests/local_ctype_scope.kama`. | `cemit.cpp:15426`, `:15959`, `:16066`, `:16184` | 4 lines + 1 fixture |
+| **1** ✅ | **SHIPPED `9df1fa5`.** `TKind` + `kindOfCType` + `declTypeKind` + `exprKind` + `rejectInitKindMismatch`, modelled on `rejectNullInit` and wired at its two sites (`:800` field, `:3134` local — `:3283` needed no separate call, the local loop already covers every declarator). **FOUR families, not the brief's list:** `Unknown`/`Num`/`Bool`/`Str`/`Aggregate`, with the rule "equal, or either is Unknown". `Char` collapsed into `Num` (a `char` IS integral, so char↔integral needs no third family) and `Enum` collapsed too (a payload-less enum is emitted as an integer; a payload enum is a ClassInfo, so `isClass` covers it). | `:438`, `:800`, `:3134` | ~230 LOC, 10 fixtures, **0** corpus migration |
+| **2** ✅ | **SHIPPED `84df441`.** ⑪-const. ⚠️ `InlineArray<T, cast<int8>(300)>` — the named consequence — **does not parse**; a `cast` is not grammatical in a const-generic argument, so that path was never reachable. The reachable one is `comptime`, and it went the OTHER way: `comptime int32 N = cast<int8>(300);` was *accepted* while the identical runtime spelling truncated. The rejection therefore lives in the folder as well as the emit path. Migration: `tests/num_cast.kama` asserted the truncation. | `:2230` (emit), `constValue`'s `CastNode` arm | ~90 LOC, 3 fixtures |
+| **3** ✅ | **SHIPPED `9794284`.** The kind rule at the other four hand-off positions. `emitOwnedValueInto` covers return + all four `match`-arm sites with ONE call; argument and variant payload need their own. ⚠️ **ARGUMENT position is PARTIAL** — `ParamSig` records `className` and leaves it EMPTY for a primitive, so it reaches `string`/class params and is silent on numeric ones. Completing it means giving `ParamSig` a C type for primitives: a signature change reaching every construction site, including the synthesized intrinsic ones. | `emitOwnedValueInto`, `emitReorderedCall`, `emitVariantConstruction` | ~120 LOC, 4 fixtures |
+| **4** ✅ | **SHIPPED `81b7612`.** Duplicate-diagnostic dedupe. ⚠️ Keyed on **(file, line, message)**, not the brief's `(ASTNode*, message)` — `unsupported()` is handed a LINE, not a node. Guarded in `check-diag-file.sh` (a count assertion has no shape in the xfail harness). It also made it safe to diagnose from `constValue`, which milestone 2 needed. | `:178` | ~15 LOC |
 | **5** | **`typeOfExpr` proper** — the total function with a distinguished `Unknown`, composed from the twelve existing partial resolvers. The resolution logic (name lookup, generic-instance binding, `This`, auto-deref, contract receivers) is already written inside `callReturnTypeRaw` and `exprClass`. | new | ~500 LOC |
 | **5a** | **MEASURE** — a warn-only `--strict-numeric` mode over the corpus, with a taxonomy (literal-typed · `usize`-width · genuine widening · genuine narrowing). **Run it before AND after 5b**; the delta is how much of the migration contextual literal typing absorbs. | rides M5 | ~60 LOC |
 | **5b** | **Contextual literal typing** (D2a). Generalize `pendingWideLits` (`kama.y:2020`) from one parked magnitude to any — it was built to defer exactly 2^31 for the unary-minus rule, which is the same mechanism. Move the "does not fit `int32`" diagnostic out of `makeUnsuffixedInt` (`kama.y:2007`) into the checker, since the parser cannot know the destination; `compilation_unit` already reports unclaimed parked literals. **Fixtures:** `int64 a = 4294967295;` must now *compile* (today a hard parse error demanding `4294967295i64`); `int8 s = 300;` must be rejected at the literal; `tests/int_literal_min.kama` must still hold. | `kama.y:1998`–`2031` + M5's target-type channel | ~180 LOC |
@@ -134,8 +141,14 @@ instrument; do not scope M6 before it has run.**
 | **8** | **⑩b-cheap** — a concrete-only template-body walk as a new pass after `checkDeclaredTypes` (`:19591`), reusing `collectBindings` (`kama.query.cpp:1441`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors in uninstantiated templates. | new pass | ~150 LOC |
 | **9** | **⑩b-full** — opaque type parameters answering `findMethod` from declared bounds (`MethodInfo::whenParams`/`whenBounds`). Bounded quantification; **wants its own design doc.** | | ~600–900 LOC |
 
-**0–4 are the spine and are independently shippable. 6 and 7 must precede the 1.0 tag (both are
-source-visible). 8–9 are a parallel track and gate nothing.**
+**0–4 are the spine and have shipped. 6 and 7 must precede the 1.0 tag (both are source-visible). 8–9
+are a parallel track and gate nothing.**
+
+**What the spine did NOT close, so milestone 5 starts from the truth:** the checker answers *families*,
+never *which* one — any class may initialize any class, any width any width, and both halves of an
+argument's numeric side are unchecked. `kama check` catches `int32 x = "oops"` and still passes
+`int8 a = big`. Both guards (`check-agents.sh`, `check-query.sh`) now pin **both** ends of that
+boundary, so milestone 6 will fail them by design, exactly as milestone 1 did.
 
 **Where the checker lives: in the emitter, not a standalone pre-pass.** The destination type at every
 site is a *derived* value — `_localCTypes` / `_localTypeNodes` / `_currentReturnCType` / `_typeSubst` /
@@ -161,7 +174,9 @@ own row rather than folded into this campaign.
 | **`cType` is not injective** — `char` → `uint32_t`, `usize` → `size_t` | key the checker on `primKey` (`:1009`), which exists for exactly this, and add its missing `usize`/`isize` arms |
 | **Deliberate unknowns that must not fire** | array literals, bare variant ctors and value-producing `match` take their type from context (`_matchTargetCType`/`_variantTargetType`); `borrow` aliases have no written type; a primitive `match` payload binding has no type record at all; `foreach` bindings never reach `_localCTypes`; intrinsics register string args with `className == ""` on purpose; `extern fn` types are opaque |
 | **`This` needs `_thisType` on the stack** or `cType` errors; **`Base` resolves only after `linkBases()`**; **`sig` forward declarations** are why `checkDeclaredTypes` runs last | a resolver that skips the `ScopedStr _ts(_thisType, …)` dance `callReturnTypeRaw:17372` does will false-positive on every `This`-returning method |
-| ⚠️ **`tools/check-agents.sh:152`–`162` ASSERTS this gap still exists** — it fails if `kama check` starts catching expression type errors | **milestone 1 will fail it by design.** Delete the assertion and the caveat from `usage()` (`kama.driver.cpp:5183`–`5184`), `docs/agents.md` and `agents/AGENTS.md` in that same commit |
+| ✅ **TWO guards asserted this gap, not one.** The brief named only `tools/check-agents.sh`; `tools/check-query.sh:354`–`366` carried a byte-identical assertion. Five sites in all, with `usage()`, `docs/agents.md` and `agents/AGENTS.md` | Both were flipped in milestone 1 and now pin BOTH ends of the boundary — `check` MUST catch a kind mismatch and MUST still pass a width one. `docs/agents.md` also credited the wrong guard |
+| ✅ **`kama_string` is itself a registered class**, so an `isClass` test placed before the primitive names classifies every `string` as an aggregate | It rejected `string val = "";` on line 432 of the PRELUDE. Primitives are a closed set — test them first |
+| ✅ **A CONTRACT is not an aggregate for a kind rule.** `Hashable h = n;` over an `int32` is a shipped feature, and so is its boxed form `Owned<Hashable> b = 20;` | Three fixtures rejected (`comparable`, `intrinsic_widen`, `intrinsic_widen_box`). A destination that admits every kind cannot discriminate on kind — contracts, `sig`s and smart-pointer boxes over a contract are all `Unknown` |
 | **An `xfail/init_type_mismatch` would pass the xfail leg TODAY** — `kama build` already rejects it, via clang | what proves kama caught it is the `.msg` carrying kama's own wording, plus the agreement leg (`run_tests.sh:640`–`:651`), which fails today |
 | the prelude is compiled INTO the binary | `./dev build` after any `prelude/global.kama` edit |
 | a breaking rule and its corpus migration must land in ONE commit | `run_tests.sh` fails any fixture whose stderr matches `/warning/i`, and `unsupported()` prints `warning:` |
