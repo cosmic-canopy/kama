@@ -1,0 +1,50 @@
+// A `foreach` is a window, so its operand is frozen for the body — but frozen means "cannot be grown or
+// reseated", not "cannot be touched". Everything here sits inside a loop over the very thing it uses, and
+// everything here is legal. Each line is a shape a coarser rule gets wrong:
+//
+//   * a `const fn` READ of the container being iterated (`m.get`, `d.length`)
+//   * an ELEMENT write through the `ref` binding — the entire point of `foreach (ref …)`
+//   * a mutation of a DISJOINT container
+//   * a disjoint SIBLING FIELD written while iterating another field of the same object
+import std::collections::{DynamicArray, Map};
+
+type resource Box {
+    DynamicArray<int32> buf;
+    int32 hits;
+    public ctor make() { this.buf = DynamicArray.withCapacity(capacity: 4); this.hits = 0; }
+    public fn void add(int32 v) { this.buf.add(item: v); }
+    // Iterating one field while writing another: two distinct fields cannot overlap in storage.
+    public fn int32 tally() {
+        int32 t = 0;
+        foreach (int32 x in this.buf) {
+            this.hits = this.hits + 1;        // disjoint sibling field
+            t = t + x;
+        }
+        return t + this.hits;
+    }
+}
+
+fn int32 main() {
+    Box bx = Box.make();
+    bx.add(v: 10); bx.add(v: 20);
+    int32 r = bx.tally();                     // 30 + 2 = 32
+
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 4);
+    d.add(item: 1); d.add(item: 2); d.add(item: 3);
+    DynamicArray<int32> other = DynamicArray.withCapacity(capacity: 2);
+
+    foreach (ref int32 e in d) { e = e * 2; }         // element write through the binding — 2 4 6
+    foreach (int32 x in d) {
+        other.add(item: x);                           // a DISJOINT container may grow freely
+        r = r + d.length();                           // a `const fn` read of the frozen operand
+    }                                                 // + 9
+
+    Map<int32, int32> m = Map.withCapacity(capacity: 8);
+    m.put(key: 1, value: 5); m.put(key: 2, value: 6);
+    foreach (int32 k in m) {
+        int32 got = match (m.get(key: k)) { case Some(value: v): v; case None: 0; };   // const read while iterating
+        r = r + got;
+    }                                                 // + 11
+
+    return r + other.length() - 52;   // 32 + 9 + 11 + 3 - 52 = 3
+}

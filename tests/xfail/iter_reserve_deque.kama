@@ -1,0 +1,18 @@
+// `foreach` IS a window: it holds a borrowing iterator over its operand for the whole body, so the
+// operand is FROZEN there — growing it mid-loop is a compile error, not a runtime panic.
+//
+// This fixture was a `tests/trap/` case until the freeze reached `foreach`. It is finding 7's exact
+// repro: `reserve()` reallocs without going through `add`/`put`, so the mods counter stayed untouched and
+// the loop read the freed buffer (ASan-proven, zero `unsafe` tokens). The counter is now bumped in
+// `growTo` where the relocation happens, but that is depth — this rule is what makes the mistake
+// unnameable rather than merely trapped.
+// The `Deque` arm of the same defect — `reserve` -> `growTo` relocates the ring buffer.
+import std::collections::{Deque};
+
+fn int main() {
+    Deque<int32> q = Deque.withCapacity(capacity: 2);
+    q.pushBack(item: 1); q.pushBack(item: 2);
+    int32 t = 0;
+    foreach (int32 x in q) { q.reserve(n: 4096); t = t + x; }
+    return t;
+}

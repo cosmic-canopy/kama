@@ -312,6 +312,14 @@ The rule covers **every `type view`**, not just `View<T>`: an iterator that borr
 expressible because the mint is read from the grant — `Map` has no `view()`, so before that,
 `MapValueIter<int32> mi = m.values();` had no window it could open at all.
 
+**`foreach` and `parallel_for` are the same window under a different spelling.** Each holds a borrowing
+iterator over its operand for the extent of the body, so the operand is frozen there by rule 2 —
+`foreach (int32 x in d) { d.add(item: 9); }` is a **compile error**, not the runtime panic the growable
+containers' mods counter used to raise. The operand roots through its receiver, so `foreach (v in
+m.values())` freezes `m`. Reads stay free: a `const fn` call on the operand, an element write through a
+`ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
+mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
+
 - Obtain one from a container: `DynamicArray`/`FixedArray` expose **`view()`** (whole) and
   **`slice(from:, count:)`** (bounds-checked sub-range); `View<T>` itself has `slice`, `length()`,
   `isEmpty()`, `operator[]` (a mutate-through place), and `iterator()`/`iterMut()` for `foreach`.

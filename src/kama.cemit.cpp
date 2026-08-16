@@ -8909,6 +8909,18 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 
     Scope sc; sc.isLoopBoundary = true;
+    // A `foreach` IS a window: it holds a borrowing iterator over its operand for the extent of the body,
+    // which is exactly what `borrow` does — it just names the ELEMENTS instead of the view. So the operand
+    // is frozen for the body, and `foreach (x in d) { d.add(…) }` becomes a compile error rather than the
+    // runtime panic the mods counter raises. The counter stays as depth, but the mistake is now unnameable
+    // rather than merely trapped, which is the whole point of the window.
+    //
+    // The operand's PLACE, so a disjoint sibling stays mutable — `foreach (x in this.buf) { this.hits = … }`
+    // is legal for the same reason it is legal inside a `borrow`.
+    {
+        std::vector<std::string> op = viewRootPlace(fe->expression);   // roots `m.values()` at `m`, not at nothing
+        if (!op.empty()) sc.frozen.push_back({ op, nm, fe->line, /*fromBorrow=*/false });
+    }
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
     bool hadType = _localTypes.count(nm);
@@ -12338,7 +12350,7 @@ const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& nam
     if (name.empty()) return nullptr;
     for (int i = (int)_scopes.size() - 1; i >= 0; --i)
         for (auto& f : _scopes[i].frozen)
-            if (f.alias == name) return &f.place;
+            if (f.fromBorrow && f.alias == name) return &f.place;
     return nullptr;
 }
 
@@ -12347,11 +12359,15 @@ bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
     std::vector<std::string> p = placePath(target);
     const Scope::FrozenPlace* f = frozenConflict(p);
     if (!f) return false;
-    unsupported(("`" + placeText(p) + "` is frozen by the enclosing `borrow` (opened at line "
-                 + std::to_string(f->line) + " as `" + f->alias + "`) — a view is live over that storage, "
-                 "so growing or reseating it would leave `" + f->alias + "` dangling. Mutate it after the "
-                 "window closes, or narrow the window. A DISJOINT sibling field stays mutable inside it")
-                    .c_str(), line);
+    unsupported((f->fromBorrow
+        ? ("`" + placeText(p) + "` is frozen by the enclosing `borrow` (opened at line "
+           + std::to_string(f->line) + " as `" + f->alias + "`) — a view is live over that storage, so "
+           "growing or reseating it would leave `" + f->alias + "` dangling. Mutate it after the window "
+           "closes, or narrow the window. A DISJOINT sibling field stays mutable inside it")
+        : ("`" + placeText(p) + "` is frozen by the `foreach` at line " + std::to_string(f->line)
+           + " that is iterating it — the loop holds a borrowing iterator into that storage, so growing or "
+           "reseating it mid-loop would leave the iterator dangling. Collect what you need and apply it "
+           "after the loop. Reading it, and writing a DISJOINT sibling field, stay legal")).c_str(), line);
     return true;
 }
 

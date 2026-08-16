@@ -79,7 +79,9 @@ on every platform; the browser via WebAssembly) with no .NET/runtime baggage.
    marked `@viewable`. Where it *lives* is the other half: a view local must root in a **`borrow` window**,
    whose host is frozen for the block, so safe kama can neither originate a dangling view nor hold a
    correctly-minted one across a mutation of the thing it views — with no borrow checker and no lifetimes,
-   only a prefix test over places. The honest residual is narrow and worth stating: a type that owns memory
+   only a prefix test over places. `foreach` and `parallel_for` are that same window under another
+   spelling, so **iterator invalidation is a compile error too** — the growable containers still carry a
+   mods counter, but as depth behind a static rule rather than as the defense. The honest residual is narrow and worth stating: a type that owns memory
    can still hand out a truthful pointer with a **false length**, and no type system without lifetimes can
    catch that — Rust has the same property (`Vec::as_slice` is a safe function with unsafe internals).
    **The trusted boundary is the `unsafe fn` set, greppable at declarations**, and what the model buys is

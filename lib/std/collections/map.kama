@@ -44,7 +44,7 @@ type view MapValueIter<V> implements Iterator<V> {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     // Deep-copy a value through a typed `ref V` borrow — see `Map.cloneVal` for why a raw-buffer `copy` aliases.
-    fn V cloneVal(ref V v) { return copy v; }
+    const fn V cloneVal(const ref V v) { return copy v; }
     public unsafe fn Optional<V> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
@@ -107,7 +107,7 @@ type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
     // Deep-copy key/value through typed `ref` borrows — a raw-buffer `copy this.keys[p]` drops the `copy`
     // marker and aliases (unknown element class), so route through `ref K`/`ref V` (see `Map.cloneVal`).
     fn K cloneKey(ref K k) { return copy k; }
-    fn V cloneVal(ref V v) { return copy v; }
+    const fn V cloneVal(const ref V v) { return copy v; }
     public unsafe fn Optional<Entry<K,V>> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
@@ -209,8 +209,8 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // an owning element: `this.vals` is a raw `UnsafePtr<V>`, whose index has no known element class, so the `copy`
     // marker is dropped and it aliases (a use-after-free once both are dropped). Routing through a `ref V`
     // param gives the emitter the concrete `V`, so `copy v` emits the real element `__copy`.
-    fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
-    fn K cloneKey(ref K k) when [K: Copyable<K>] { return copy k; }   // same trick for an owning key
+    const fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
+    const fn K cloneKey(const ref K k) when [K: Copyable<K>] { return copy k; }   // same trick for an owning key
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
@@ -227,7 +227,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return this;
     }
 
-    public unsafe fn Optional<V> get(ref K key) when [V: Copyable<V>] {
+    public unsafe const fn Optional<V> get(ref K key) when [V: Copyable<V>] {
         int32 i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // hand back a copy; map keeps its own

@@ -1087,7 +1087,11 @@ private:
                    // than emitter-shaped so nesting, loops and a `return` out of the block all unwind for
                    // free, and so a frozen place can never leak past the function (`_scopes` is cleared
                    // per function).
-                   struct FrozenPlace { std::vector<std::string> place; std::string alias; int line = 0; };
+                   // `fromBorrow` separates a `borrow` window from a `foreach` one. Only a `borrow`
+                   // introduces an ALIAS that names the view, so only it can be reseated; a `foreach`
+                   // binding names an ELEMENT, and writing through it is the point of `ref` iteration.
+                   struct FrozenPlace { std::vector<std::string> place; std::string alias; int line = 0;
+                                        bool fromBorrow = true; };
                    std::vector<FrozenPlace> frozen;
                    // View locals whose root is already lifetime-bounded, so a DERIVE off one is bounded
                    // too (`View<T> mid = whole.slice(…)` where `whole` came from a window).
