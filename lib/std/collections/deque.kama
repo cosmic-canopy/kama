@@ -76,6 +76,10 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }
         this.data = nd; this.head = 0; this.cap = nc;
+        // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
+        // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
+        // how a realloc used to happen with the counter untouched (finding 7).
+        this.mods = this.mods + 1;
     }
     fn void ensureOne() { if (this.len == this.cap) { this.growTo(nc: this.cap == 0 ? 4 : this.cap * 2); } }
 

@@ -86,6 +86,10 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.cap) * sizeof(T));
         }
         this.data = nd; this.cap = nc;
+        // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
+        // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
+        // how a realloc used to happen with the counter untouched (finding 7).
+        this.mods = this.mods + 1;
     }
 
     public unsafe fn void add(T item) {

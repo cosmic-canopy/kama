@@ -1,0 +1,1 @@
+SlotMap modified during iteration

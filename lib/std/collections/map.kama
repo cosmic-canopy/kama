@@ -369,6 +369,10 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.state), bytes: cast<usize>(this.cap) * sizeof(uint8));
         }
         this.keys = nk; this.vals = nv; this.state = ns; this.cap = nc; this.tombs = 0;
+        // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
+        // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
+        // how a realloc used to happen with the counter untouched (finding 7).
+        this.mods = this.mods + 1;
     }
 
     // --- Serialization (present only when BOTH key and value are Serialize/Deserialize) ---

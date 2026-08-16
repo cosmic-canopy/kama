@@ -208,6 +208,10 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
         }
         this.values = nv; this.gens = ng; this.freeList = nf; this.cap = nc;
+        // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
+        // when `len` did not move. `reserve()` reaches here without going through `add`/`put`, which is
+        // how a realloc used to happen with the counter untouched (finding 7).
+        this.mods = this.mods + 1;
     }
 
     unsafe ~SlotMap() {   // drop each live (occupied) value, then release the three buffers via the allocator

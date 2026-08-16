@@ -1,0 +1,1 @@
+Deque modified during iteration
