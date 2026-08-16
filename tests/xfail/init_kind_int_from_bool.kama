@@ -1,0 +1,5 @@
+// ...and a `bool` does not decay to 0/1 either.
+fn int32 main() {
+    int32 x = true;
+    return 0;
+}

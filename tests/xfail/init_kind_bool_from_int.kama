@@ -1,0 +1,6 @@
+// C would take this. kama has no implicit truthiness — `bool` is its own kind, and the only thing
+// that initializes one is a `bool`.
+fn int32 main() {
+    bool b = 1;
+    return 0;
+}

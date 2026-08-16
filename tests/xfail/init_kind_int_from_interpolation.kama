@@ -1,0 +1,7 @@
+// An interpolation lowers to a `string`, so it is a `string` here too — even though every hole in it
+// is a number. (A TAGGED interpolation is left alone: its tag function decides the type.)
+fn int32 main() {
+    int32 n = 1;
+    int32 x = "v=${n}";
+    return 0;
+}

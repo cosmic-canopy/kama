@@ -1,0 +1,1 @@
+a field is declared `int32`, so it cannot be initialized with a `string`

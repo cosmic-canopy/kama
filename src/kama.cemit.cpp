@@ -447,6 +447,130 @@ void CEmitter::rejectNullInit(SharedIdentifier declType, SharedExpression init, 
                  "zero value, or `Optional<T>` to model absence").c_str(), line);
 }
 
+// ---------------------------------------------------------------------------------------------------
+// KINDS — the first expression type checking kama has ever done.
+//
+// `int32 x = "not an int";` passed `kama check` clean and failed at CLANG, against generated C the
+// author never wrote, naming C types (`kama_string`) the author never spelled. `kama check` saying OK
+// is the worse half: the editor shows a broken file as clean.
+//
+// This is deliberately NOT a type checker. It answers one question — which of four FAMILIES does a
+// value belong to — and rejects only a crossing between two of them. Width is not consulted: every
+// integral/float/char combination is allowed, because narrowing is milestone 6's decision (D2) and
+// carries a corpus migration this rule must not smuggle in.
+//
+// `Unknown` is the entire design. `exprClass` returns "" for a primitive AND for "unknown", and ~40
+// callers depend on that conflation, so a checker built on it either says nothing about primitives (the
+// exact bug) or fires on every unresolved name (unlandable). Here the two are distinct, and `Unknown`
+// NEVER diagnoses. Everything the classifier is not certain about — array literals, bare variant
+// constructors, value-producing `match`, `borrow` aliases, `foreach` bindings, primitive `match` payload
+// bindings, `extern fn` results, an unresolved name — becomes `Unknown` and is left alone.
+const char* CEmitter::kindName(TKind k)
+{
+    switch (k) {
+        case TKind::Num:       return "a number";
+        case TKind::Bool:      return "a `bool`";
+        case TKind::Str:       return "a `string`";
+        case TKind::Aggregate: return "a type value";
+        default:               return "unknown";
+    }
+}
+
+// Keyed on the LOWERED C type, so one function serves both sides of the comparison. `cType` is not
+// injective (`char` and `uint32` share `uint32_t`), which costs nothing here: both are `Num`, and
+// char/integral crossings are allowed anyway.
+CEmitter::TKind CEmitter::kindOfCType(const std::string& ct)
+{
+    if (ct.empty()) return TKind::Unknown;
+    // PRIMITIVES FIRST, and this order is load-bearing: `kama_string` is itself a registered class (it
+    // carries methods), so asking `isClass` first classified every `string` in the prelude as an aggregate
+    // and rejected `string val = "";` on line 432 of it. The primitive C names are a closed set that no
+    // user type can collide with — a user type is namespace-mangled — so testing them first is safe.
+    if (ct == "kama_string")                            return TKind::Str;
+    if (ct == "bool")                                   return TKind::Bool;
+    if (ct == "int8_t"  || ct == "int16_t"  || ct == "int32_t"  || ct == "int64_t"
+     || ct == "uint8_t" || ct == "uint16_t" || ct == "uint32_t" || ct == "uint64_t"
+     || ct == "float"   || ct == "double"
+     || ct == "size_t"  || ct == "ptrdiff_t")           return TKind::Num;
+    // A CONTRACT or a `sig` is deliberately Unknown, not an aggregate. A contract value accepts a class,
+    // another contract, AND a widened primitive — `Hashable h = n;` over an `int32` is a shipped feature
+    // (tests/intrinsic_widen.kama), and calling that an aggregate rejected three fixtures that are right.
+    // A destination that admits every kind cannot discriminate on kind.
+    if (isInterface(ct) || isSigType(ct))               return TKind::Unknown;
+    // A payload/generic `enum` is backed by a ClassInfo (`isVariant`), so `isClass` already covers it;
+    // `_enums` holds ONLY the payload-less kind, which this compiler calls "a bare integer, not a struct"
+    // in its own `@generate` diagnostic — and emits as one (`typedef uint8_t Tag;` for `: IntType`, a C
+    // enum otherwise). So a plain enum is `Num`, and `Tag t = 0` keeps compiling.
+    if (isClass(ct)) {
+        // …and the same exemption follows the contract into a smart-pointer handle. `Owned<Hashable> b = 20;`
+        // is the OWNING form of that widening (tests/intrinsic_widen_box.kama) — the one that can outlive its
+        // scope — so a box over a contract absorbs a primitive exactly as the bare contract does.
+        if (isSmartPtrClass(ct)) {
+            const std::string& el = _classes[ct].collElemClass;
+            if (el.empty() || isInterface(el)) return TKind::Unknown;
+        }
+        return TKind::Aggregate;
+    }
+    if (isEnum(ct))                                     return TKind::Num;
+    // Everything else — `void`, `void*`/`T*` (UnsafePtr), an FFI typedef, an unresolved name, a bare
+    // type parameter in a signature this pass sees before any binding. All of it is deliberately silent.
+    return TKind::Unknown;
+}
+
+CEmitter::TKind CEmitter::declTypeKind(SharedIdentifier type)
+{
+    if (!type || !type->value) return TKind::Unknown;
+    // `This`/`Base` resolve against an enclosing type that is NOT on the stack during `checkDeclaredTypes`
+    // — the same reason that pass's own `check` skips them. Asking `cType` here would make it diagnose,
+    // and this classifier must never be the thing that reports.
+    if (*type->value == "This" || *type->value == "Base") return TKind::Unknown;
+    return kindOfCType(cType(type));
+}
+
+// Certain-only. A literal knows its own family; a place expression answers through `lvalueCType`, which
+// resolves a local/param via `_localCTypes` and a field via its declared type — the same map milestone 0
+// made trustworthy by clearing it between bodies. Anything else is `Unknown` on purpose.
+CEmitter::TKind CEmitter::exprKind(SharedExpression e)
+{
+    if (!e) return TKind::Unknown;
+    ASTNode* n = e.get();
+
+    if (dynamic_cast<StringNode*>(n))  return TKind::Str;
+    if (dynamic_cast<BooleanNode*>(n)) return TKind::Bool;
+    // A char literal IS an integral value (`char` = a Unicode scalar, lowered to uint32_t), which is why
+    // char/integral crossings are allowed: there is no third family to keep them apart from.
+    if (dynamic_cast<CharNode*>(n))    return TKind::Num;
+    if (dynamic_cast<Int8Node*>(n)  || dynamic_cast<Int16Node*>(n)
+     || dynamic_cast<Int32Node*>(n) || dynamic_cast<Int64Node*>(n)
+     || dynamic_cast<UInt8Node*>(n) || dynamic_cast<UInt16Node*>(n)
+     || dynamic_cast<UInt32Node*>(n)|| dynamic_cast<UInt64Node*>(n)
+     || dynamic_cast<Float32Node*>(n)|| dynamic_cast<Float64Node*>(n)) return TKind::Num;
+    // An interpolation lowers to a `string` — UNLESS it carries a tag, whose function decides the type.
+    if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) return is->tag ? TKind::Unknown : TKind::Str;
+    // `null` belongs to `rejectNullInit`, which gives a better message than this rule could.
+    if (dynamic_cast<NullNode*>(n)) return TKind::Unknown;
+
+    if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n))
+        return kindOfCType(lvalueCType(e));
+
+    return TKind::Unknown;
+}
+
+void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init,
+                                      const char* what, int line)
+{
+    // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
+    // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where
+    // a type is deliberately half-resolved.
+    const TKind ik = exprKind(init);
+    if (ik == TKind::Unknown) return;
+    const TKind dk = declTypeKind(declType);
+    if (dk == TKind::Unknown || dk == ik) return;
+
+    unsupported((std::string(what) + " is declared `" + *declType->value + "`, so it cannot be initialized "
+                 "with " + kindName(ik) + " — " + kindName(dk) + " was expected").c_str(), line);
+}
+
 // A type name in a DECLARATION that resolved to nothing. `cType` hands an unresolved name straight back
 // (see resolveUserName's "caller handles" tail), and until now no caller did — so a misspelled or
 // unimported type sailed through analysis and only failed later in the C compiler, as a confusing
@@ -797,7 +921,8 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                         // the const arm in `emitExpression` disagree about what `F` means.
                         if (fld->declarators) for (auto& d : *fld->declarators)
                             if (d) { constParamShadow("field", d->name);
-                                     rejectNullInit(fld->type, d->initializer, "a field", fld->line); }
+                                     rejectNullInit(fld->type, d->initializer, "a field", fld->line);
+                                     rejectInitKindMismatch(fld->type, d->initializer, "a field", fld->line); }
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
@@ -3131,7 +3256,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                                         : std::string("?")) + "`").c_str(), n->line);
             if (lvd && lvd->variables)
                 for (auto& d : *lvd->variables)
-                    if (d) rejectNullInit(declType, d->initializer, "a local", n->line);
+                    if (d) { rejectNullInit(declType, d->initializer, "a local", n->line);
+                             rejectInitKindMismatch(declType, d->initializer, "a local", n->line); }
             bool cls = isClass(ty);
             bool iface = isInterface(ty);
             auto emitDeclarator = [&](auto& d) {

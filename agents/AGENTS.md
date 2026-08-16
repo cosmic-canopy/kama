@@ -47,10 +47,11 @@ kama run               # build the manifest entry and run it
 kama check <file>      # FAST SUBSET — see below
 ```
 
-`kama check` runs name resolution, named-argument matching, and ownership/move analysis. It is
-**not** a full type check: an expression type mismatch such as `int32 x = "oops";` is caught by the
-C compiler during `kama build`, so `check` reports OK. Treat a green `check` as "names resolve",
-never as "this compiles".
+`kama check` runs name resolution, named-argument matching, ownership/move analysis, and type checking
+**by kind** — a value is a number, a `bool`, a `string`, or a type value, and crossing between two of
+them (`int32 x = "oops";`) is rejected. It does **not** check **width**: `int8 a = big;` narrows an
+`int32` in silence, and so does `cast<int8>(300)`. Treat a green `check` as "names resolve and no kind
+is crossed", never as "the arithmetic is right".
 
 ## Rules an LLM trained on C#, Rust, TypeScript or Go will get wrong
 

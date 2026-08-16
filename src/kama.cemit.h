@@ -1688,6 +1688,16 @@ private:
     // `null` into a slot whose declared type is a safe kama type — rejected. The sibling of the `== null`
     // rule, for the STORE direction. `whereClause` completes "so ___ cannot be `null`".
     void rejectNullInit(SharedIdentifier declType, SharedExpression init, const char* what, int line);
+    // The first expression type check kama has ever had. KINDS only — the four families a value can
+    // belong to, not its width. `Unknown` is the whole design: it is what everything the classifier
+    // cannot answer becomes, and it never diagnoses. Widening/narrowing WITHIN a kind is milestone 6.
+    enum class TKind { Unknown, Num, Bool, Str, Aggregate };
+    TKind kindOfCType(const std::string& ct);            // kind of an already-lowered C type name
+    TKind declTypeKind(SharedIdentifier type);           // kind of a DECLARED kama type node
+    TKind exprKind(SharedExpression e);                  // kind of an expression; Unknown unless certain
+    static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
+    // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".
+    void rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init, const char* what, int line);
     // The type `e` is declared as, when that type can never BE null; "" when `null` is legitimate there.
     // Resolves a bare local through its DECLARED type node before falling back to `exprClass`, which is
     // empty for a primitive and so cannot tell an `int32` from an `UnsafePtr`.

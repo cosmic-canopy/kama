@@ -162,22 +162,31 @@ $ kama query src/app.kama --def 24:9 --symbols --json
 existing scripts keep working. A malformed `L:C` anywhere in the list is rejected before *any* answer
 is printed (exit 2, empty stdout): a partial batch that exits nonzero is worse than no batch.
 
-## `kama check` is not a full type check
+## `kama check` type-checks by KIND, not by WIDTH
 
 This is the sharpest edge in the toolchain for an agent, so it is stated plainly:
 
 | | catches |
 |---|---|
-| `kama check` | name resolution, unknown functions/methods/types, named-argument mismatches, ownership/move analysis, serde marks |
-| `kama build` | all of the above, **plus type errors** |
+| `kama check` | name resolution, unknown functions/methods/types, named-argument mismatches, ownership/move analysis, serde marks, **and a type mismatch by kind** |
+| `kama build` | all of the above, plus whatever the C compiler still catches |
 
-`int32 x = "oops";` makes `kama check` print `OK` and exit 0. Expression type checking is delegated
-to the C compiler, which `kama build` invokes; the error is reported against the `.kama` file and
-line, because the emitted C carries `#line`. **So verify with `kama build`.**
+A **kind** is one of four families: a number, a `bool`, a `string`, or a type value. Crossing between
+two of them is rejected by `kama check`, in kama's own words, against your `.kama` line:
 
-This is a known gap, tracked in [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2, and `tools/check-query.sh` asserts the
-caveat still holds — so the day the front end gains real type checking, the guard fails and forces
-this page to be corrected rather than letting it rot.
+```
+error: a local is declared `int32`, so it cannot be initialized with a `string` — a number was expected
+```
+
+**Width is not checked.** `int8 a = big;` narrows an `int32` in silence, through `check` and `build`
+both, and `cast<int8>(300)` yields 44. Strict numeric conversion is tracked in
+[ROADMAP.md](ROADMAP.md); until it lands, a green `check` means "names resolve and no kind is crossed",
+never "the arithmetic is right".
+
+Both halves are pinned by `tools/check-query.sh` **and** `tools/check-agents.sh` — the kind half so it
+cannot regress, the width half so the day it starts being caught, the guards fail and force this page
+to be corrected rather than letting it rot. That is not hypothetical: the kind half of this section
+exists because those guards asserted the opposite and failed.
 
 ## Cost
 

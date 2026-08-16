@@ -1,0 +1,11 @@
+// A FIELD initializer, checked in `checkDeclaredTypes` rather than on the emit walk — the other of
+// the two sites this rule is wired into.
+type value P {
+    int32 a = "no";
+    public ctor make() { this.a = 0; }
+}
+
+fn int32 main() {
+    P p = P.make();
+    return 0;
+}

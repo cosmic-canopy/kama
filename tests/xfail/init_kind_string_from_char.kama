@@ -1,0 +1,5 @@
+// A `char` is a Unicode scalar — an integral value, not a one-character string.
+fn int32 main() {
+    string s = 'A';
+    return 0;
+}

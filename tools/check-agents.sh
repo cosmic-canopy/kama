@@ -149,17 +149,32 @@ printf 'mine\n' > "$coll/CLAUDE.md"
 "$KAMA" agents list >/dev/null 2>&1 && ok "\`agents list\` runs" || bad "\`agents list\` failed"
 
 # ---------------------------------------------------------------------------------------------------
-echo "check-agents: the documented \`check\` caveat"
+echo "check-agents: the documented \`check\` boundary"
 
-# usage(), docs/agents.md and agents/AGENTS.md all tell an agent that `kama check` is NOT a full type
-# check. Assert the claim is still TRUE, so it cannot quietly become a lie.
+# usage(), docs/agents.md and agents/AGENTS.md all tell an agent exactly how far `kama check`'s type
+# checking reaches. Pin BOTH ends of that boundary, so neither half can quietly become a lie.
+#
+# This assertion used to read the other way — it asserted `check` did NOT type-check at all, and it
+# failed the day the kind rule landed, which is what forced these docs to be corrected instead of
+# rotting. Keep that property: the width half below fails at the strict-conversion milestone and will
+# force the next correction.
 bad_kama="$tmp/typebad.kama"
 printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$bad_kama"
 if "$KAMA" check "$bad_kama" >/dev/null 2>&1; then
-    ok "\`check\` still passes an expression type error (the caveat holds)"
+    bad "\`check\` no longer catches a KIND mismatch — the docs promise it does"
 else
-    bad "\`check\` now CATCHES expression type errors — delete the caveat from usage(),
-        docs/agents.md and agents/AGENTS.md, then remove this assertion"
+    ok "\`check\` catches a kind mismatch (\`int32 x = \"oops\"\`)"
+fi
+# ...and the far end: WIDTH is still not checked. `int8 a = big` narrows an int32 silently, through
+# `check` and `build` both. When strict numeric conversion lands this flips, and the fix is to correct
+# the three docs again — not to weaken this assertion.
+width_kama="$tmp/typewidth.kama"
+printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$width_kama"
+if "$KAMA" check "$width_kama" >/dev/null 2>&1; then
+    ok "\`check\` still passes a WIDTH mismatch (the documented remaining gap)"
+else
+    bad "\`check\` now catches narrowing conversions — update the \`kama check\` boundary in usage(),
+        docs/agents.md and agents/AGENTS.md, then update this assertion"
 fi
 # ...and `build` must still catch it, or the advice to use `build` is wrong too.
 if "$KAMA" build "$bad_kama" -o "$tmp/typebad.out" >/dev/null 2>&1; then

@@ -1,0 +1,6 @@
+// THE headline case of the analysis gap: this passed `kama check` clean and failed only at clang,
+// against generated C the author never wrote, naming a C type (`kama_string`) they never spelled.
+fn int32 main() {
+    int32 x = "not an int";
+    return 0;
+}

@@ -351,17 +351,25 @@ else
     echo "  FAIL: --diagnostics must not fail the process on a diagnostic" >&2
     fail=1
 fi
-# THE CAVEAT GUARD. `kama check` runs name/argument/ownership analysis, NOT a full type check: an
-# expression type mismatch is caught by the C compiler during `kama build`, so `check` says OK. That is
-# documented in usage(), in docs/agents.md and in AGENTS.md. If this ever starts failing, the fix is to
-# DELETE the caveat from all three, not to weaken this assertion.
+# THE BOUNDARY GUARD. `kama check` type-checks by KIND — a `string` cannot initialize an `int32` — and
+# not by WIDTH: narrowing an int32 into an int8 still passes both `check` and `build`. Both halves are
+# documented in usage(), in docs/agents.md and in AGENTS.md, and both are pinned here so neither can
+# quietly become a lie. (check-agents.sh asserts the same pair; docs/agents.md names both guards.)
 tbad="$tmp/typebad.kama"
 printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$tbad"
 if "$KAMA" check "$tbad" >/dev/null 2>&1; then
-    echo "  ok: \`check\` still passes an expression type error (the documented caveat holds)"
+    echo "  FAIL: \`check\` no longer catches a kind mismatch — the docs promise it does" >&2
+    fail=1
 else
-    echo "  NOTE: \`check\` now catches expression type errors — remove the caveat from usage()," >&2
-    echo "        docs/agents.md and agents/AGENTS.md, then delete this assertion." >&2
+    echo "  ok: \`check\` catches a kind mismatch (\`int32 x = \"oops\"\`)"
+fi
+twide="$tmp/typewidth.kama"
+printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$twide"
+if "$KAMA" check "$twide" >/dev/null 2>&1; then
+    echo "  ok: \`check\` still passes a width mismatch (the documented remaining gap)"
+else
+    echo "  NOTE: \`check\` now catches narrowing conversions — update the boundary in usage()," >&2
+    echo "        docs/agents.md and agents/AGENTS.md, then update this assertion." >&2
     fail=1
 fi
 

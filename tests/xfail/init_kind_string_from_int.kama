@@ -1,0 +1,5 @@
+// The same crossing in the other direction.
+fn int32 main() {
+    string s = 3;
+    return 0;
+}

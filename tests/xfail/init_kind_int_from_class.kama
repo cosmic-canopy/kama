@@ -1,0 +1,12 @@
+// ...and the reverse. The initializer is a bare local, so this is the classifier resolving an
+// IDENTIFIER through its declared type — not a literal.
+type value P {
+    int32 a;
+    public ctor make() { this.a = 0; }
+}
+
+fn int32 main() {
+    P p = P.make();
+    int32 x = p;
+    return 0;
+}

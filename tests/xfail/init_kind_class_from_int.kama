@@ -1,0 +1,11 @@
+// A type value is not a scalar. Rejected by kama now, rather than by clang against a struct
+// initialization the author never wrote.
+type value P {
+    int32 a;
+    public ctor make() { this.a = 0; }
+}
+
+fn int32 main() {
+    P p = 3;
+    return 0;
+}

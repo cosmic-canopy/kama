@@ -1,0 +1,1 @@
+is declared `P`, so it cannot be initialized with a number

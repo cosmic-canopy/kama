@@ -1,0 +1,1 @@
+is declared `bool`, so it cannot be initialized with a number
