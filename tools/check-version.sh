@@ -44,7 +44,25 @@ case "$ver" in
          exit 1 ;;
 esac
 
-# ---- 2. bumped, when this branch changed source ------------------------------------------------
+# ---- 2. the BINARY agrees with the file --------------------------------------------------------
+# The one that actually bit. `-DKAMA_VERSION` bakes the string into kama.driver.o, and nothing in the
+# Makefile's dependency graph mentioned VERSION — so a bump (or just a commit, which moves the +g<sha>
+# suffix) left the .o up to date and `kama --version` reported whatever it had been built with last.
+# A version that lies is worse than none, so assert the two agree rather than trusting the build rule.
+if [ -n "${KAMA:-}" ] && [ -x "${KAMA:-}" ]; then
+    got=$("$KAMA" --version 2>/dev/null | head -1)
+    case "$got" in
+        *"$ver"*) ;;
+        *) echo "check-version: FAIL — the binary does not report VERSION." >&2
+           echo "    VERSION file : $ver" >&2
+           echo "    $KAMA --version: $got" >&2
+           echo "  The version is baked into kama.driver.o; it rebuilds via \$(BUILD)/kama.version.stamp." >&2
+           echo "  If that stamp rule was removed or the binary is stale, rebuild: ./dev build" >&2
+           exit 1 ;;
+    esac
+fi
+
+# ---- 3. bumped, when this branch changed source ------------------------------------------------
 # Everything below degrades to SKIP. See the header.
 if ! command -v git >/dev/null 2>&1; then
     echo "check-version: OK ($ver; no git, bump check skipped)"; exit 0

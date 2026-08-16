@@ -148,6 +148,20 @@ $(BUILD)/kama.lexer.o $(BUILD)/kama.driver.o: $(BUILD)/kama.lexer.hpp
 # silence that one warning on this TU only — keeps the -Werror CI gate clean.
 $(BUILD)/kama.parser.o: CXXFLAGS += -Wno-unused-but-set-variable
 
+# The version string is baked into kama.driver.o by -DKAMA_VERSION, and NOTHING in the dependency graph
+# mentions it — so bumping VERSION, or simply committing (which moves the +g<sha> suffix), left the .o
+# up to date and `kama --version` kept reporting the string from whenever that TU last happened to
+# rebuild. A version that lies is worse than no version at all, which is the whole point of the file.
+#
+# The fix is a stamp whose CONTENT is the version string, rewritten only when it differs. The rule runs
+# every build (FORCE), but the file's mtime moves only on a real change, so exactly one TU rebuilds when
+# the version changes and nothing rebuilds when it has not.
+.PHONY: FORCE
+FORCE:
+$(BUILD)/kama.version.stamp: FORCE | $(BUILD)
+	@printf '%s' '$(VERSION)' | cmp -s - $@ 2>/dev/null || printf '%s' '$(VERSION)' > $@
+$(BUILD)/kama.driver.o: $(BUILD)/kama.version.stamp
+
 # Compile: hand-written compiler sources live in src/, generated ones in out/<platform>/.
 # -iquote $(BUILD) so #include "kama.parser.hpp" finds the generated header; -iquote src so both
 # hand-written and generated TUs find the hand-written headers by bare name (every #include among
