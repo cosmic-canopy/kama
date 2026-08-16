@@ -229,7 +229,9 @@ diverged:
   float32 so all intermediates are **exactly representable** (`|v| < 2^24`) — the checksum is therefore
   bit-identical across the float32 (kama/C/C++/Rust/Go) and float64 (JS/Lua/Python) backends. This is a
   **codegen/SIMD-vectorization** number: kama's math types carry a SIMD-ready layout, so this row tracks
-  whether the field-by-field ops lower to packed SIMD as the backend evolves (ROADMAP §2 SIMD campaign).
+  whether the field-by-field ops lower to packed SIMD as the backend evolves. (There is no SIMD *campaign*
+  and no explicit vector surface — vectorization is the C backend's, earned by the layout plus release
+  inlining; see [SPEC.md](../SPEC.md) *Math*.)
 
 ## NATIVE — execution time (median, ms)
 
