@@ -7,9 +7,13 @@ export { LogLevel, LogSink, setLogSink, logEnabled,
 // LEVEL threshold and a per-TAG override, both reconfigurable at runtime on a shipped binary via `--log`
 // (primary) or the `KAMA_LOG` env var (secondary), grammar `warn,audio=debug,net=trace`. Default level Info.
 //
-// This is v1 — a pure library over a small runtime seam (kama_log.h): a runtime FILTER decides, a swappable
-// SINK outputs. The message is built eagerly at the call site; use `logEnabled` as a manual guard to skip the
-// cost on a hot path (v2 will lower that guard automatically). The default sink writes `[LEVEL] tag: msg` to
+// A library over a small runtime seam (kama_log.h): a runtime FILTER decides, a swappable SINK outputs.
+// The compiler RECOGNIZES the five facade calls below and lowers each one to a guard with the message built
+// INSIDE it (the v2 lowering — `emitLogFacade`, src/kama.cemit.cpp), so a filtered-out record never assembles
+// its message and no manual guard is needed per call. Under `--release` a call below the compile-time floor
+// is physically absent, arguments unevaluated, like `debugAssert`. The five functions here are still compiled
+// as ordinary kama — they are what the lowering is defined against, not a path call sites take.
+// The default sink writes `[LEVEL] tag: msg` to
 // stderr (colored on a tty). Install your own with `setLogSink` (set once at startup, before spawning
 // isolates). Fatal invariants are a different concern — use `assert`/`panic` (the floor), never a log call.
 // Strings cross the FFI seam as borrowed byte spans (UnsafePtr<int8> + usize), never by value — the floor `print`
@@ -41,17 +45,19 @@ fn int32 levelBits(LogLevel lv) {
 
 unsafe fn void setLogSink(LogSink s) { kama_set_log_sink(s: s); }
 
-// Manual hot-path guard: `if (logEnabled(level: LogLevel::Debug, tag: "audio")) { logDebug(...) }` skips
-// building an expensive message when the record is filtered out. Reads `tag` by borrow (like `print`), never
-// forwards it by value.
+// Guards a whole BLOCK: `if (logEnabled(level: LogLevel::Debug, tag: "audio")) { prepareDump(); logDebug(…) }`
+// skips setup work that exists only to build the record. A single call needs no guard — the lowering inserts
+// one. Reads `tag` by borrow (like `print`), never forwards it by value.
 unsafe fn bool logEnabled(LogLevel level, string tag) {
     return kama_log_enabled(level: levelBits(lv: level), tag: tag.cstr(), tagLen: cast<usize>(tag.length()));
 }
 
-// The facade. `tag` may be "" (untagged). The message is already built by the caller (eager interpolation);
-// the guard only saves the dispatch + output when filtered. The enabled-check is inlined against the extern
-// (rather than calling `logEnabled`) so the owned `tag`/`msg` params are only ever read by borrow — a
-// kama->kama by-value forward would transfer ownership. v2 lowering will move the message build inside.
+// The facade body. Reached only if something calls a level function through a value rather than as a plain
+// statement — the lowering intercepts every ordinary call site before it gets here, so this is the definition
+// the recognizer is written against, and the fallback. `tag` may be "" (untagged); a caller arriving HERE has
+// already built the message, which is exactly the cost the lowering exists to avoid. The enabled-check is
+// inlined against the extern (rather than calling `logEnabled`) so the owned `tag`/`msg` params are only ever
+// read by borrow — a kama->kama by-value forward would transfer ownership.
 unsafe fn void logAt(int32 level, ref string tag, ref string msg) {
     if (kama_log_enabled(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()))) {
         kama_log_dispatch(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()),
