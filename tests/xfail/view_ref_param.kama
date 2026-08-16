@@ -1,0 +1,19 @@
+// A view IS a borrow. `ref View<T>` is a borrow OF a borrow, and the only thing it adds is the power to
+// RESEAT the caller's view — to point it at storage the caller never named. That is finding ④: the
+// callee aims the view at a container that dies at the end of its own block, and the caller reads it.
+// Pass a view by value; it is two words and copying it borrows nothing new.
+import std::collections::{View, DynamicArray};
+
+fn void reseat(ref View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
+
+fn int32 main() {
+    DynamicArray<int32> outer = DynamicArray.withCapacity(capacity: 2);
+    outer.add(item: 1);
+    View<int32> v = outer.view();
+    {
+        DynamicArray<int32> inner = DynamicArray.withCapacity(capacity: 2);
+        inner.add(item: 9);
+        reseat(v: ref v, src: ref inner);
+    }
+    return v[0];
+}

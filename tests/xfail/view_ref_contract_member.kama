@@ -1,0 +1,8 @@
+// The same rule at a CONTRACT member. A bodiless signature never reaches the emitter's parameter list,
+// so without a declaration-site check this spelling stayed legal in the one place it is most contagious:
+// every implementer of the contract has to repeat it.
+import std::collections::{View};
+
+type contract Sink for resource { fn void take(ref View<int32> v); }
+
+fn int32 main() { return 0; }

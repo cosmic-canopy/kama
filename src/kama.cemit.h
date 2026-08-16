@@ -1499,6 +1499,13 @@ private:
     // The signature half: a declaration NAMING a raw pointer (return type or any parameter) must be
     // `unsafe`. Applied only where a body exists — an `abstract` member and a `contract` member are
     // bodiless conduits, forced instead by the types their implementer and caller must handle.
+    bool namesViewType(SharedIdentifier t) const;   // the SOURCE spelling names a `type view`
+    void rejectViewByRef(FunctionParameterNode* p, const std::string& owner, int line);
+    void checkViewRefParams();                      // the `ref`/`out` view ban — a late whole-program pass
+    // By-`ref` parameters awaiting the view test, staged during `collectSignatures` (which runs before
+    // `collectClasses`, so no view name is known yet) with the file that declared them.
+    struct PendingViewByRef { FunctionParameterNode* param; std::string owner; int line; std::string file; };
+    std::vector<PendingViewByRef> _pendingViewByRef;
     void checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
                               const std::string& name, int line);
     // M6.2: greatest-fixpoint dual of computeReachesPointer — mark every deeply/transitively immutable type

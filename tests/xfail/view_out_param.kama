@@ -1,0 +1,15 @@
+// The `out` half of the same rule. `out View<T>` asks the callee to MINT a view into the caller's slot,
+// which puts the mint on the wrong side of the window: the callee names the storage, the caller names
+// the lifetime, and neither can see the other. Return a view instead — the return rule already checks
+// that it borrows `this` or a parameter.
+import std::collections::{View, DynamicArray};
+
+fn void fill(out View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 7);
+    slot View<int32> v;
+    fill(v: out v, src: ref a);
+    return v[0];
+}

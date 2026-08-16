@@ -10429,6 +10429,29 @@ void CEmitter::rejectMintProtocolValue(SharedIdentifier ty, const char* what, in
                  "bound (`<T: " + *ty->value + ">`)").c_str(), line);
 }
 
+// Does this type name a `type view`? Answered from the SOURCE spelling, like `namesUnsafePtr` — the rule
+// is about what the author wrote, and it has to work on a bodiless contract member where there is no C
+// type to ask about.
+bool CEmitter::namesViewType(SharedIdentifier t) const
+{
+    if (!t || !t->value) return false;
+    return _viewTypeNames.count(*t->value) > 0 || _viewTypeNames.count(qualify(*t->value)) > 0;
+}
+
+// A view IS a borrow, so `ref`/`out View<T>` is a borrow of a borrow — and the only thing the extra
+// indirection buys is the power to RESEAT the caller's view, at storage the caller never named. That is
+// finding ④. Zero of these existed in the corpus, so the ban costs nothing and removes the whole
+// cross-function half of the problem: a view can then only be aimed at something within one frame.
+void CEmitter::rejectViewByRef(FunctionParameterNode* p, const std::string& owner, int line)
+{
+    if (!p || !paramByRef(p) || !namesViewType(p->type)) return;
+    const std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "a parameter";
+    unsupported(("`" + owner + "` takes `" + nm + "` by `" + (paramIsOut(p) ? "out" : "ref")
+                 + "` — a view is already a borrow, so it cannot be passed by `ref`/`out`; that would let "
+                 "the callee reseat it at storage the caller never named. Pass it by value (a view is two "
+                 "words), or return one, which the view-return rule already checks").c_str(), line);
+}
+
 void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
                                     const std::string& name, int line)
 {
@@ -10437,6 +10460,13 @@ void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedP
     // checked before the early return below.
     rejectMintProtocolValue(ret, "returned", line);
     if (params) for (auto& p : *params) if (p) rejectMintProtocolValue(p->type, "a parameter", line);
+    // STAGED, not decided: `_viewTypeNames` is filled by `collectClasses`, which runs after this pass,
+    // so whether a parameter names a view is not knowable yet. Capture the unit path with it — a late
+    // check has no unit context of its own, and misattributing the FILE of a non-local declaration is
+    // a mistake this repo has already made once (tools/check-diag-file.sh).
+    if (params) for (auto& p : *params)
+        if (p && paramByRef(p.get()) && p->type && p->type->value)
+            _pendingViewByRef.push_back({ p.get(), name, line, _collectingUnitPath });
     if (isUnsafe) return;
     const char* where = nullptr;
     if (namesUnsafePtr(ret)) where = "returns";
@@ -10572,6 +10602,30 @@ void CEmitter::checkViewContractCtors()
 // contract where NO member could ever mint — there the mark is inert, and inert is exactly how a grant
 // fails silently. (`ctor` slots are excluded: a contract ctor is not a grant, since a call to one from
 // outside is neither inside the view nor inside the type it views.)
+// The contract-member arm of the `ref`/`out` view ban. A bodiless signature never reaches `paramListC`
+// or `checkSignatureRawPtr`, so without this the spelling stayed legal exactly where it is most
+// contagious — every implementer of the contract has to repeat it. Late, because `_viewTypeNames` is
+// filled by `collectClasses`, which runs AFTER contracts are collected.
+void CEmitter::checkViewRefParams()
+{
+    auto check = [&](const InterfaceInfo& ii) {
+        const std::string& shown = ii.templateKey.empty() ? ii.name : ii.templateKey;
+        for (auto& m : ii.methods) {
+            if (!m.params) continue;
+            ScopedStr _cu(_collectingUnitPath, ii.declFile);   // the file that DECLARED it
+            for (auto& p : *m.params)
+                if (p) rejectViewByRef(p.get(), shown + "." + m.name, ii.node ? ii.node->line : 0);
+        }
+    };
+    for (auto& kv : _genericContracts) check(kv.second);
+    for (auto& kv : _interfaces) if (kv.second.templateKey.empty()) check(kv.second);
+    // Free functions and methods, staged by `checkSignatureRawPtr` while their file was still current.
+    for (auto& pv : _pendingViewByRef) {
+        ScopedStr _cu(_collectingUnitPath, pv.file);
+        rejectViewByRef(pv.param, pv.owner, pv.line);
+    }
+}
+
 void CEmitter::checkViewableContracts()
 {
     auto couldMint = [&](const InterfaceInfo& ii) {
@@ -19204,6 +19258,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // fundamental problem, and the two would otherwise both fire on one declaration.
     checkViewContractCtors();
     checkViewableContracts();
+    checkViewRefParams();
 
     // Validate export manifests: a name in `export { … };` must be a real top-level declaration in
     // that same file (catches typos + enforces per-file surfaces for directory-modules).
