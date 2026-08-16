@@ -1,0 +1,1 @@
+a `foreach` over a view needs a named window

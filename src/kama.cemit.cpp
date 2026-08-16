@@ -8787,6 +8787,27 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 
     // Resolve the iterator + method C-names (structural). `iterCall`/`nextCall`/`hasNextCall` are the
     // full direct calls; `iterCType`/`optC` the concrete types.
+    // Calling `iterator()`/`iterMut()` on the operand takes its ADDRESS, so the operand has to BE
+    // somewhere. An rvalue is not: `foreach (x in d.view())` emitted `&(std__collections__View_int32){…}`
+    // and clang rejected generated C the author never wrote — a build error where `kama check` said the
+    // file was clean, which is the one disagreement run_tests.sh guards against most sharply.
+    //
+    // Only this branch is affected. An operand that IS its own iterator (`"ab".chars()`, `m.valuesMut()`)
+    // is copied into `__it` by value and stays legal, which is why the check cannot live at the top.
+    auto requirePlaceOperand = [&]() -> bool {
+        if (!placePath(fe->expression).empty()) return true;
+        const bool isView = isViewCType(container);
+        unsupported((isView
+            ? "a `foreach` over a view needs a named window — a view minted straight into the loop header "
+              "has nowhere to live and nothing holding its buffer still. Write `borrow "
+              "<container>.<mint>() as v { foreach (… in v) { … } }`"
+            : ("`foreach` needs somewhere to iterate FROM, and `" + container + "` here is a temporary "
+               "with no home — bind it to a local first (`" + container + " xs = …;`), then iterate that")
+                  .c_str()), fe->line);
+        *_out << "\n";
+        return false;
+    };
+
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
     // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
     // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
@@ -8803,6 +8824,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                 unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
                              "`foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
             }
+            if (!requirePlaceOperand()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
             iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
@@ -8827,7 +8849,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
         ClassInfo* ic = nullptr;
-        if (iterMi) { iterCType = cTypeInInstance(container, iterMi->returnType);
+        if (iterMi) { if (!requirePlaceOperand()) return;
+                      iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
                       iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it

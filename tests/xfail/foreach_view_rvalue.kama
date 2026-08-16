@@ -1,0 +1,13 @@
+// A view minted straight into a loop header has nowhere to live: nothing names it, so nothing holds its
+// buffer still, and `d` is free to realloc inside the body. It also produced a CLANG error rather than a
+// kama one — `&(rvalue)` is not valid C — which meant `kama check` called the file clean while
+// `kama build` rejected it, the one disagreement the analysis-agreement leg exists to catch.
+import std::collections::{DynamicArray, View};
+
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
+    d.add(item: 1); d.add(item: 2);
+    int32 t = 0;
+    foreach (int32 x in d.view()) { d.add(item: 9); t = t + x; }
+    return t;
+}
