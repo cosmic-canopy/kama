@@ -1225,6 +1225,13 @@ private:
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
     bool scalarByteSize(SharedIdentifier type, int64_t& out);  // `sizeof(T)` for a fixed-width scalar T
+    // The inclusive value range of a FIXED-WIDTH integral type. False for anything whose range this
+    // compiler has no business asserting — a float, a class, and deliberately `usize`/`isize`, whose
+    // width is the target's, not ours. Drives both the constant-cast check and `constValue`'s fold.
+    bool primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi);
+    // The one message for a constant that provably does not fit its cast target. Two paths reach it:
+    // the emit walk, and the const folder — a `comptime` constant is resolved only in the folder.
+    void rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line);
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
     void emitComptimeAssertsIn(ClassDeclarationNode* cd);      // the type-member form, under the live binding

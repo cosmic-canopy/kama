@@ -2,11 +2,17 @@
 // (impl-defined, not UB), widening sign/zero-extends, float->int truncates toward zero, a signed left
 // shift into the sign bit is defined, and unsigned overflow wraps. (Overflow/div-by-zero/out-of-range
 // float-cast TRAP instead of wrapping — not exercised here since a trap aborts.)
+//
+// The two narrowing cases below take their operand through a LOCAL on purpose. Written as constants —
+// `cast<int8>(300i32)` — they no longer compile: a constant that provably does not fit is rejected
+// (tests/xfail/cast_const_oob.kama), because truncating a number the author wrote out in full is not a
+// conversion but a different number. What this fixture is about is the RUNTIME rule, which is unchanged.
 import std::num::{int32Min};
 fn int main() {
     int32 r = 0;
-    if (cast<int8>(300i32) == 44i8)                  { r = r + 4; }   // 300 - 256
-    if (cast<uint8>(511i32) == 255ui8)               { r = r + 4; }   // 511 & 0xFF
+    int32 n300 = 300; int32 n511 = 511;
+    if (cast<int8>(n300) == 44i8)                    { r = r + 4; }   // 300 - 256
+    if (cast<uint8>(n511) == 255ui8)                 { r = r + 4; }   // 511 & 0xFF
     if (cast<int64>(0i32 - 5i32) == 0i64 - 5i64)     { r = r + 4; }   // sign-extend
     if (cast<int32>(cast<uint8>(200i32)) == 200)     { r = r + 4; }   // zero-extend (unsigned widen)
     if (cast<int32>(3.9f64) == 3)                    { r = r + 4; }   // truncate toward zero

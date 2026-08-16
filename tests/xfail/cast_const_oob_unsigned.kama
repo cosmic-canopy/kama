@@ -1,0 +1,5 @@
+// The unsigned edge: -1 is not "all ones" here, it is out of range.
+fn int32 main() {
+    uint8 a = cast<uint8>(0 - 1);
+    return 0;
+}

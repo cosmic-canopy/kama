@@ -2256,6 +2256,19 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                            "value to a concrete type use `expr.as<T>()`").c_str(), v->line);
             return "0";
         }
+        // A CONSTANT that provably does not fit the target. `cast<int8>(300)` silently produced 44, and
+        // nothing in the language said so — the value is knowable here, the compiler already has the
+        // folder, and truncating a number the author wrote in full is not a conversion, it is a
+        // different number. Precedent: xfail/constgen_oob rejects a constant out-of-range array index
+        // while a dynamic one traps at runtime.
+        //
+        // Only the CONSTANT half. A runtime narrowing cast still truncates in silence; that is a
+        // separate, source-visible decision (trap, plus `try cast<T>`) and its own milestone.
+        int64_t lo, hi, cv;
+        if (primIntRange(v->type, lo, hi) && constValue(v->unaryExpression, cv) && (cv < lo || cv > hi)) {
+            rejectConstCastOverflow(v->type, cv, lo, hi, v->line);
+            return "0";
+        }
         return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";
     }
 
@@ -6068,6 +6081,46 @@ bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
 // The compile-time integer value of a const generic argument expression: an integer literal (any
 // width), or a const-param identifier bound to a value in the current instantiation (`N` -> 4). This
 // is the value half of the monomorphization — the parallel of resolving a bound type-param.
+// The inclusive range of a fixed-width integral type, in the int64 the const folder works in.
+//
+// `usize`/`isize` are deliberately absent, for the same reason `scalarByteSize` refuses them: their
+// width belongs to the target, not to this compiler, and kama accepts arbitrary triples. Asserting a
+// range for `cast<usize>(4096)` would be asserting a target we were not told about. `uint64`'s upper
+// half is absent for a different reason — `constValue` folds in int64, so there is no value above
+// INT64_MAX for it to hand us, and claiming the range is [0, INT64_MAX] would be a lie about the type
+// rather than about the fold. Both cases answer "not checkable", which is the safe answer.
+// One message for both paths that can see an out-of-range constant cast — the emit walk, and the const
+// folder (which is where a `comptime` constant is resolved, and it never reaches the emit walk).
+void CEmitter::rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line)
+{
+    const std::string nm = (target && target->value) ? *target->value : std::string("?");
+    unsupported(("`cast<" + nm + ">(" + std::to_string(v) + ")` — " + std::to_string(v)
+                 + " does not fit `" + nm + "` (" + std::to_string(lo) + " to " + std::to_string(hi)
+                 + "), so this is not a conversion but a different number. Write a value in range, "
+                   "or mask first if the truncation is what you mean (`cast<" + nm + ">(x & 0xFF)`)")
+                .c_str(), line);
+}
+
+bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
+{
+    if (!type) return false;
+    SharedIdentifier t = deepSubstType(type);
+    if (!t || t->genericArg) return false;
+    switch (t->builtInVal) {
+        case IDENTIFIER_INT8_VAL:   lo = -128;        hi = 127;         return true;
+        case IDENTIFIER_INT16_VAL:  lo = -32768;      hi = 32767;       return true;
+        case IDENTIFIER_INT32_VAL:  lo = -2147483648LL; hi = 2147483647LL; return true;
+        case IDENTIFIER_UINT8_VAL:  lo = 0;           hi = 255;         return true;
+        case IDENTIFIER_UINT16_VAL: lo = 0;           hi = 65535;       return true;
+        case IDENTIFIER_UINT32_VAL: lo = 0;           hi = 4294967295LL; return true;
+        // `char` is a Unicode scalar lowered to uint32_t. Ranged by its WIDTH here, not by 0x10FFFF:
+        // "that is not a codepoint" is a different rule from "that does not fit", and this campaign is
+        // only about the second one.
+        case IDENTIFIER_CHAR_VAL:   lo = 0;           hi = 4294967295LL; return true;
+        default: return false;    // int64 (always fits), uint64, floats, usize/isize, everything else
+    }
+}
+
 bool CEmitter::constValue(SharedExpression e, int64_t& out)
 {
     if (!e) return false;
@@ -6084,8 +6137,26 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
 
     // MCU 6b-1: fold const arithmetic when every operand resolves, so a const-generic param can drive a
     // computed size (`Fixed<T, N+1>`, `2*N`). Recurses through the same shape `isConstInitExpr` permits.
-    if (auto* c = dynamic_cast<CastNode*>(n))
-        return constValue(c->unaryExpression, out);   // integer casts are value-preserving for the int64 fold
+    // A cast is NOT value-preserving, which this arm used to assume. `InlineArray<T, cast<int8>(300)>`
+    // therefore sized at 300 while the runtime cast gave 44 — the fold and the machine disagreed about
+    // the same expression. Narrow the folded value the way the emitted C cast will, so they agree.
+    // (The emit path rejects a provably out-of-range constant cast outright; this keeps the fold honest
+    // on every path that never reaches it.)
+    if (auto* c = dynamic_cast<CastNode*>(n)) {
+        if (!constValue(c->unaryExpression, out)) return false;
+        int64_t lo, hi;
+        if (primIntRange(c->type, lo, hi) && (out < lo || out > hi)) {
+            // The SAME rejection the emit path gives, because a `comptime` constant never reaches that
+            // path — it is folded here and nowhere else, so `comptime int32 N = cast<int8>(300);` was
+            // accepted while the identical `int8 v = cast<int8>(300);` was rejected. Two answers for one
+            // expression is the thing this campaign exists to remove. Safe to report from a query
+            // function only because duplicate diagnostics are now deduped on (file, line, message).
+            rejectConstCastOverflow(c->type, out, lo, hi, c->line);
+            const uint64_t span = (uint64_t)(hi - lo) + 1;             // 2^width, exactly
+            out = lo + (int64_t)(((uint64_t)(out - lo)) % span);       // wrap, as C does
+        }
+        return true;
+    }
     // M6: `sizeof(T)` for a fixed-width scalar. One arm serves every consumer, because they all route
     // here — module/type/local `comptime`, a const-generic argument (via constArgN), an InlineArray size,
     // a `[v; N]` fill count — and the binary recursion below gives `sizeof(int32) * 8` for free.

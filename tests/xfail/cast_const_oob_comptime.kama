@@ -1,0 +1,8 @@
+// The `comptime` spelling of the same expression. It is folded by `constValue` and never reaches the
+// emit walk, so it used to be ACCEPTED — folding to 300 while the identical runtime spelling gave 44.
+// One expression, two answers, and neither the language nor the machine agreed with the other.
+comptime int32 N = cast<int8>(300);
+
+fn int32 main() {
+    return N;
+}

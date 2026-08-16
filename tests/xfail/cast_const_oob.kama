@@ -1,0 +1,7 @@
+// `cast<int8>(300)` silently produced 44 — not a conversion, a different number. The value is
+// knowable at compile time and the folder already had it. Precedent: xfail/constgen_oob rejects a
+// constant out-of-range array index while a dynamic one traps at runtime.
+fn int32 main() {
+    int8 a = cast<int8>(300);
+    return cast<int32>(a);
+}
