@@ -825,6 +825,10 @@ private:
     // appends its `/* TODO */` marker to `*_out`; in analysis mode that marker goes here and is dropped).
     std::ostringstream _analysisSink;
     std::vector<Diagnostic> _diagnostics;   // structured semantic diagnostics (populated by unsupported())
+    // (file, line, message) already reported. A generic type's member body is emitted ONCE PER
+    // INSTANTIATION, so one mistake in it was counted and printed once per instantiation. Per-emitter,
+    // and every program gets its own CEmitter, so this never reaches across programs.
+    std::set<std::string> _reportedDiags;
     std::set<std::string> _externedHeaders;   // every `extern "<h>";` seen (populated by emitIncludes)
     // `isolate` lowering: per-module file-scope helper definitions (thread trampolines) to emit BEFORE a
     // module's bodies (a body takes the address of a trampoline, which C requires defined earlier in the

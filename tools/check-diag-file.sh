@@ -78,4 +78,35 @@ if ! printf '%s' "$out2" | grep -q 'solo\.kama:2'; then
     exit 1
 fi
 
-echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local)"
+# ---- 3. one mistake, one diagnostic --------------------------------------------------------------------
+# A generic type's member body is emitted ONCE PER INSTANTIATION, and `unsupported()` reported on every
+# pass — so a single bad line inside `Box<T>` became "FAILED (2 errors)" as soon as a program used both
+# `Box<int32>` and `Box<bool>`, with both errors pointing at the same line of the same file. An error
+# count that tracks instantiations rather than mistakes teaches a reader to distrust the count.
+#
+# Here rather than as an xfail for the same reason as the two above: the assertion is about HOW MANY
+# diagnostics appear, and the xfail harness only greps stderr for one substring.
+cat > "$tmp/generic_dup.kama" <<'EOF'
+type value Box<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; }
+    public fn int32 bad() { int32 x = "not an int"; return 0; }
+}
+fn int32 main() {
+    Box<int32> a = Box.make(item: 1);
+    Box<bool>  b = Box.make(item: true);
+    return a.bad() + b.bad();
+}
+EOF
+
+out3=$("$KAMA" check "$tmp/generic_dup.kama" 2>&1 || true)
+n=$(printf '%s\n' "$out3" | grep -c 'error: a local is declared' || true)
+if [ "$n" != 1 ]; then
+    echo "check-diag-file: FAIL — one bad initializer in a generic body reported $n times (expected 1)."
+    echo "  a diagnostic must count mistakes, not instantiations:"
+    printf '%s\n' "$out3" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
+echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local;"
+echo "                       and one mistake in a generic body is reported once, not once per instantiation)"

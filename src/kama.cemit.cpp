@@ -177,9 +177,21 @@ const std::string& CEmitter::diagFile() const
 
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
-    ++_unsupported;
     const std::string display = demangleForDisplay(rawWhat);
     const char* what = display.c_str();
+    // ONE mistake, ONE diagnostic. A generic type's member body is emitted once per instantiation, so a
+    // rule that fires inside one fired once per instantiation: `Box<int32>` and `Box<bool>` turned a
+    // single bad initializer into "FAILED (2 errors)", both on the same line of the same file. Keyed on
+    // (file, line, message) because `unsupported` is given a LINE, not a node — two different mistakes
+    // that agree on all three are indistinguishable to the reader anyway.
+    //
+    // The `/* TODO(kama): unsupported … */` marker below is deliberately NOT deduped: it is a property of
+    // the emission site, one per body actually emitted, and it keeps `--keep-c` honest.
+    if (!_reportedDiags.insert(diagFile() + ":" + std::to_string(srcLine) + ":" + display).second) {
+        *_out << "/* TODO(kama): unsupported " << what << " */";
+        return;
+    }
+    ++_unsupported;
     std::fprintf(stderr, "kama: warning: unsupported %s at %s:%d (not yet lowered)\n",
                  what, diagFile().c_str(), srcLine);
     // Structured form for the query surface. `unsupported` is a hard error at the driver (unsupported > 0
