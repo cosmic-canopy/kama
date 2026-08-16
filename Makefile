@@ -3,9 +3,22 @@ all: kama
 # Version: from the VERSION file (CI overrides with the git tag: make VERSION=1.2.3).
 VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0-dev)
 
+# ...plus the short commit, as SemVer build metadata, for every build that is NOT a CI release.
+# `VERSION` is bumped by hand (tools/check-version.sh holds that down), and a bump that is forgotten
+# would leave two different compilers both claiming the same number — which is the failure mode that
+# makes `kama --version` useless in a bug report. The sha makes a build identifiable regardless, the
+# way rustc, go and zig all do it. `$(origin VERSION)` is `command line` exactly when CI passed
+# `make VERSION=1.2.3`, and there the bare release number is what should be printed.
+ifneq ($(origin VERSION),command line)
+GITSHA := $(shell git rev-parse --short HEAD 2>/dev/null)
+ifneq ($(GITSHA),)
+VERSION := $(VERSION)+g$(GITSHA)
+endif
+endif
+
 CXX      = clang++
 # The compiler's OWN optimization level. There was no -O flag here at all until 2026-08-10, so kama
-# shipped unoptimized and every build-time number in ROADMAP §9 had been measured against an -O0
+# shipped unoptimized and every build-time number in ROADMAP_DETAIL §9 had been measured against an -O0
 # binary. It is worth 8.2x on the front end (httpd `check`: 338 ms -> 41 ms) and 5.4x over the fixture
 # corpus, for no change whatsoever in emitted C. -O1/-O2/-O3 measured within noise of each other
 # (41.4 / 41.1 / 42.2 ms); -O2 is the conventional level and the marginal winner, and -O3 both built

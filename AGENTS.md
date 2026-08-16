@@ -55,6 +55,15 @@ different slice of the same output is pure waste:
 ./dev matrix > /tmp/matrix.log 2>&1; tail -5 /tmp/matrix.log   # then grep the SAME file for details
 ```
 
+**Bump `VERSION` in any commit that changes `src/`, `include/`, `prelude/` or `lib/`** — a patch bump
+is the default; those are the four trees that end up inside the binary. `kama --version` is the first
+thing a bug report carries, and it is useless when two different compilers claim the same number:
+VERSION sat at `0.9.5` across dozens of emitter-changing commits before `tools/check-version.sh`
+started holding it down. Docs-only and test-only commits need no bump — they produce an identical
+compiler. The Makefile appends `+g<short-sha>` to whatever the file says, so a forgotten bump still
+leaves a binary you can identify; that is the backstop, not permission to skip it. Tagging the repo is
+a separate, later act — this is only the number the binary reports.
+
 Notes:
 - **Per-platform notes live in `docs/platforms/`** — one page per host that needs more than `./dev`.
   Only [windows.md](docs/platforms/windows.md) exists so far, because macOS and Linux are where this
