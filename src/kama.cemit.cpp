@@ -15423,7 +15423,14 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _refParams.clear();
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
+    // `_localCTypes` belongs on this line and was missing from it — here and at the other three
+    // per-body resets (emitDtorDefinition, and emitMethodOrCtorBody's entry and exit). Only the
+    // `parallel_for` worker synthesis ever cleared it, so a local's C type outlived its function and
+    // leaked into the next one. `lvalueCType` and `receiverScalarCType` consult this map BEFORE the
+    // field lookup, so a stale entry shadows a same-named field of a different type in a later body.
+    // Latent while nothing read it for a decision; a landmine the moment a type checker does.
+    _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+    _constLocals.clear(); _constLocalVals.clear();
     _moveState.clear();   // per-function move analysis
     _pendingParamDtors.clear();
     _currentClass = nullptr;
@@ -15956,7 +15963,8 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _inUnsafe = ci.dtorNode && modHas(ci.dtorNode->modifiers, "unsafe");
     _refParams.clear();
     _paramNames.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
+    _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+    _constLocals.clear(); _constLocalVals.clear();
     // Per-BODY analysis state, reset here for the same reason the two paths above reset it: a destructor
     // body is a function body like any other, and inheriting the previously-emitted function's move
     // analysis makes a local's state depend on emission order. It went unnoticed while no destructor
@@ -16063,7 +16071,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _viewParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
+    _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+    _constLocals.clear(); _constLocalVals.clear();
     _moveState.clear();   // per-method move analysis
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
@@ -16181,7 +16190,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _scopes.clear();
     _currentClass = nullptr;
     _refParams.clear();
-    _localTypes.clear(); _localTypeNodes.clear(); _constLocals.clear(); _constLocalVals.clear();
+    _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
+    _constLocals.clear(); _constLocalVals.clear();
     _inStaticMethod = false;
 }
 

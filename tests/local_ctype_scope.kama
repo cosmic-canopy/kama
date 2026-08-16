@@ -1,0 +1,32 @@
+// A local's C type must not outlive its function body.
+//
+// `_localCTypes` (local/param -> full C type) was cleared in exactly ONE place — the `parallel_for`
+// worker synthesis — while the four per-body resets cleared its siblings (`_localTypes`,
+// `_localTypeNodes`, `_constLocals`, `_constLocalVals`) and skipped it. So a local's C type leaked
+// from one body into the next, and `lvalueCType` consults that map BEFORE the field lookup: a stale
+// entry shadows a same-named field of a different type in a later body.
+//
+// Here `A.seed` leaves a `string v`; `B.set` then assigns to B's OWN field `v`, an `int32`. The
+// assignment handler read the stale `kama_string` and rejected this program with
+// "a collection/`string` hand-off must say `give` (move) or `copy` (deep)" — an ownership diagnostic
+// on an `int32 = int32` assignment, pointing at code that is correct. Valid code, refused.
+type value A {
+    int32 pad;
+    public ctor make() { this.pad = 0; }
+    public fn void seed() { string v = "hello"; }
+}
+
+type value B {
+    int32 v;
+    public ctor make() { this.v = 0; }
+    public fn void set(int32 n) { v = n; }
+    public fn int32 get() { return this.v; }
+}
+
+fn int32 main() {
+    A a = A.make();
+    a.seed();
+    B b = B.make();
+    b.set(n: 42);
+    return b.get();
+}
