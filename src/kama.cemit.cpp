@@ -2452,6 +2452,12 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             *_out << viewCType << " " << alias << " = " << vmi->cName
                   << "(&(" << emitExpression(recvExpr) << "));\n";
             _localTypes[alias] = viewCType;
+            // An alias is an ordinary local in every way a later statement can ask about, and generic
+            // INFERENCE asks through `_localCTypes` — without this, `sort(items: v)` on an alias could not
+            // infer `T` and demanded a turbofish. No fixture caught it because the only `borrow` fixture
+            // passed its alias to a non-generic `sum` and to an explicitly-turbofished call.
+            _localCTypes[alias] = viewCType;
+            _localTypeNodes[alias] = vmi->returnType;
             _scopes.back().declaredNames.push_back(alias);
             frozenNow.push_back({ hp, alias, bn->line });
         }
@@ -2472,7 +2478,11 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     indent(depth); *_out << "}\n";
     if (bn->bindings)
         for (auto& b : *bn->bindings)
-            if (b && b->alias && b->alias->value) _localTypes.erase(*b->alias->value);
+            if (b && b->alias && b->alias->value) {
+                _localTypes.erase(*b->alias->value);
+                _localCTypes.erase(*b->alias->value);
+                _localTypeNodes.erase(*b->alias->value);
+            }
     popScope();
 }
 
@@ -3185,6 +3195,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
                     if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
                     registerBinding(d->name.get(), SymKind::Local);   // LSP index (analysis mode only)
+                }
+                // The WINDOW RULE. A view local outlives the statement that made it, so its root has to
+                // outlive it too — and a container still in scope does not, since the next line may grow
+                // it. `borrow` is the spelling that bounds one, and after the mint generalization every
+                // `@viewable` grant can open a window, so a rejection here always has one.
+                if (isViewCType(ty) && d->initializer) {
+                    if (viewLocalBounded(d->initializer)) _scopes.back().boundedViews.insert(nm);
+                    else
+                        unsupported(("`" + nm + "` is a view of storage that nothing bounds — a view "
+                                     "borrows a buffer it does not own, so it may only live where that "
+                                     "buffer is held still. Open a window: `borrow <container>.<mint>() as "
+                                     + nm + " { … }`, and derive inside it with `.slice(…)`. A view already "
+                                     "rooted in a window, or in a by-value view parameter, needs no "
+                                     "window of its own").c_str(), n->line);
                 }
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
                 _localCTypes[nm] = ty;                        // full C type (incl. primitives) for assignment-RHS lowering
@@ -7725,6 +7749,56 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     return nullptr;
 }
 
+// The type a `borrow` alias names: the mint's declared return type, with the HOST's generic arguments
+// substituted in (`DynamicArray<int32>.view()` -> `View<int32>`).
+//
+// An alias is the one local in the language with no written type, so it is the one local `localTys` cannot
+// learn from the declaration — and `localTys` is the table generic inference reads. Without this,
+// `sort(items: v)` on an alias could not infer `T` and demanded a turbofish, while the identical call on a
+// plain view local did not. Exactly the `foreach`-binding gap recorded one arm below in
+// `scanStmtForGenerics`, and invisible for the same reason: the only `borrow` fixture passed its alias to a
+// non-generic function and to an explicitly-turbofished one.
+SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
+                                              std::map<std::string, SharedIdentifier>& localTys)
+{
+    auto* inv = dynamic_cast<InvocationNode*>(host.get());
+    if (!inv || !inv->expression) return nullptr;
+    auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+    if (!ma || !ma->identifier || !ma->identifier->value || !ma->expression) return nullptr;
+    SharedIdentifier recvTy = exprTypeNode(ma->expression, localTys);
+    if (!recvTy || !recvTy->value) return nullptr;
+    const std::string& mint = *ma->identifier->value;
+
+    // The template shape carries the mint's declared return type; the concrete class does too, when the
+    // host is not generic (a user's `Buf.span()`).
+    // `resolveUserName`, not `qualify` — the host is usually an IMPORTED type, and `qualify` answers with
+    // this file's private mangle (`_F4__DynamicArray`), which matches nothing.
+    const std::string base = resolveUserName(*recvTy->value, recvTy->qualifier, nullptr);
+    ClassInfo* shape = nullptr;
+    const std::vector<std::string>* tps = nullptr;
+    auto g = _genericTypes.find(base);
+    if (g != _genericTypes.end()) {
+        shape = &g->second;
+        auto tp = _genericTypeParams.find(base);
+        if (tp != _genericTypeParams.end()) tps = &tp->second;
+    } else {
+        auto c = _classes.find(base);
+        if (c != _classes.end()) shape = &c->second;
+    }
+    if (!shape) return nullptr;
+    MethodInfo* mi = findMethod(shape, mint, nullptr);
+    if (!mi || !mi->returnType) return nullptr;
+    if (!tps || !recvTy->genericArgs) return mi->returnType;   // non-generic host — nothing to substitute
+
+    std::map<std::string, SharedIdentifier> saved = _typeSubst;
+    _typeSubst.clear();
+    for (size_t i = 0; i < tps->size() && i < recvTy->genericArgs->size(); ++i)
+        _typeSubst[(*tps)[i]] = (*recvTy->genericArgs)[i];
+    SharedIdentifier out = deepSubstType(mi->returnType);
+    _typeSubst = saved;
+    return out;
+}
+
 // A1: infer the concrete generic-variant instance of a value-producing variant constructor used as a `match`
 // SUBJECT — `match (Optional::Some(x))` -> the `Optional<int32>` instance node. The subject parses as an
 // InvocationNode whose callee is a `Type::Variant` qualified identifier (no receiver). Each BARE-type-param
@@ -8184,7 +8258,14 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanExprForGenerics(pf->expression, localTys);
         scanStmtForGenerics(pf->body, localTys);
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
-        if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForGenerics(b->host, localTys);
+        if (bn->bindings) for (auto& b : *bn->bindings) if (b) {
+            scanExprForGenerics(b->host, localTys);
+            // A `borrow` ALIAS is a locally-typed value like the declaration and `foreach` arms above —
+            // and the only one whose type is never written, so it has to be resolved from the mint.
+            if (b->alias && b->alias->value)
+                if (SharedIdentifier at = mintReturnTypeNode(b->host, localTys))
+                    localTys[*b->alias->value] = at;
+        }
         scanStmtForGenerics(bn->body, localTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
@@ -12153,6 +12234,61 @@ std::vector<std::string> CEmitter::viewRootPlace(SharedExpression e)
         return t->RHS ? viewRootPlace(t->RHS) : std::vector<std::string>();
     }
     return placePath(e);
+}
+
+// The window rule. A view borrows storage it does not own, so a view LOCAL is only as good as its root:
+// it is legal exactly when that root is already lifetime-bounded, and a container you can still name and
+// grow is not. This is the question `viewRootPlace` cannot answer, because "roots nowhere" and "roots at
+// something bounded" are the same empty vector there and opposite answers here.
+//
+// Bounded means one of:
+//   * a `borrow` alias — the window IS the bound, and the freeze keeps the storage still
+//   * a by-value view PARAMETER — the caller's frame outlives this one, and the caller is where the
+//     aliasing was checked (probing showed a rule on the callee would be the wrong place: the caller had
+//     borrowed and it still dangled, because the SAME call passed `ref` to the container)
+//   * a derive off either — `View<T> mid = whole.slice(…)` roots where `whole` roots
+//   * a free function's result, when every view it was handed is bounded — the view-return rule already
+//     guarantees the result roots at one of those arguments
+//
+// NOT bounded: a mint from a nameable container (`d.view()`), which is the shape every one of findings
+// ④⑤⑥ rides, and which now has `borrow d.view() as v` as its spelling.
+bool CEmitter::viewLocalBounded(SharedExpression init)
+{
+    ASTNode* n = init.get();
+    if (!n) return false;
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewLocalBounded(h->value);
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return false;
+        const std::string& nm = *id->value;
+        if (frozenAliasRoot(nm) || _viewParams.count(nm)) return true;
+        for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+            if (_scopes[i].boundedViews.count(nm)) return true;
+        return false;
+    }
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))
+        return t->LHS && t->RHS && viewLocalBounded(t->LHS) && viewLocalBounded(t->RHS);
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        if (inv->expression)
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+                // `View.make(…)` — the dot-on-type view ctor. The mint rule governs it (its ctor is
+                // private and `checkViewCtorEscape` checks what it borrows), so it is not this rule's.
+                if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                    if (rid->value && _viewTypeNames.count(*rid->value)) return true;
+                return ma->expression && viewLocalBounded(ma->expression);   // a derive roots where its receiver does
+            }
+        // A free function. Its return already had to root at one of ITS parameters, so the result is
+        // bounded exactly when every view handed to it was.
+        bool sawView = false;
+        if (inv->args)
+            for (auto& a : *inv->args) {
+                if (!a || !a->expression) continue;
+                if (!isViewCType(exprClass(a->expression))) continue;
+                sawView = true;
+                if (!viewLocalBounded(a->expression)) return false;
+            }
+        return sawView;
+    }
+    return false;
 }
 
 // --- The window's freeze -------------------------------------------------------------------------------

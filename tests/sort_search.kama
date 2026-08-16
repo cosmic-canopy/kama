@@ -6,23 +6,25 @@ import std::collections::{DynamicArray, View, sort, binarySearch, lowerBound};
 fn int main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 20); xs.add(item: 30); xs.add(item: 40);
-    View<int32> v = xs.view();
-    sort(items: v);
+    int32 a = 0; int32 b = 0; int32 c = 0; int32 d = 0; int32 e = 0; int32 g = 0;
+    borrow xs.view() as v {
+        sort(items: v);
 
-    int32 t20 = 20;
-    int32 t35 = 35;
-    int32 t5  = 5;
-    int32 t99 = 99;
+        int32 t20 = 20;
+        int32 t35 = 35;
+        int32 t5  = 5;
+        int32 t99 = 99;
 
-    Optional<int32> f20 = binarySearch(items: v, target: t20);
-    Optional<int32> f35 = binarySearch(items: v, target: t35);
-    int32 a = match (f20) { case Some(value: i): i; case None: 99; };   // 1 — the FIRST of the duplicates
-    int32 b = match (f35) { case Some(value: i): i; case None: 7; };    // 7 — absent
+        Optional<int32> f20 = binarySearch(items: v, target: t20);
+        Optional<int32> f35 = binarySearch(items: v, target: t35);
+        a = match (f20) { case Some(value: i): i; case None: 99; };   // 1 — the FIRST of the duplicates
+        b = match (f35) { case Some(value: i): i; case None: 7; };    // 7 — absent
 
-    int32 c = lowerBound(items: v, target: t35);   // 4 — first index whose element is >= 35
-    int32 d = lowerBound(items: v, target: t5);    // 0 — before everything
-    int32 e = lowerBound(items: v, target: t99);   // 5 — past the end
-    int32 g = lowerBound(items: v, target: t20);   // 1 — first position a 20 could go
+        c = lowerBound(items: v, target: t35);   // 4 — first index whose element is >= 35
+        d = lowerBound(items: v, target: t5);    // 0 — before everything
+        e = lowerBound(items: v, target: t99);   // 5 — past the end
+        g = lowerBound(items: v, target: t20);   // 1 — first position a 20 could go
+    }
 
     return a + b + c + d + e + g;   // 1 + 7 + 4 + 0 + 5 + 1 = 18
 }

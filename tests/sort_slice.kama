@@ -6,14 +6,18 @@ import std::collections::{DynamicArray, View, sort, isSorted};
 fn int main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 9); xs.add(item: 7); xs.add(item: 5); xs.add(item: 3); xs.add(item: 1); xs.add(item: 8);
-    View<int32> whole = xs.view();
-    View<int32> mid = whole.slice(from: 1, count: 4);   // 7 5 3 1
-    sort(items: mid);                                    // -> 1 3 5 7
+    int32 ends = 0; int32 inner = 0; int32 part = 0; int32 all = 0;
+    // One window over `xs`; `mid` is a DERIVE off the alias, so it needs no window of its own — it roots
+    // where `whole` roots, and that is already bounded.
+    borrow xs.view() as whole {
+        View<int32> mid = whole.slice(from: 1, count: 4);   // 7 5 3 1
+        sort(items: mid);                                   // -> 1 3 5 7
 
-    int32 ends = (whole[0] == 9 ? 1 : 0) + (whole[5] == 8 ? 1 : 0);      // untouched: 2
-    int32 inner = whole[1] * 1000 + whole[2] * 100 + whole[3] * 10 + whole[4];   // 1357
-    int32 part = isSorted(items: mid) ? 1 : 0;                            // the window is sorted
-    int32 all  = isSorted(items: whole) ? 1 : 0;                          // the whole array is NOT
+        ends = (whole[0] == 9 ? 1 : 0) + (whole[5] == 8 ? 1 : 0);      // untouched: 2
+        inner = whole[1] * 1000 + whole[2] * 100 + whole[3] * 10 + whole[4];   // 1357
+        part = isSorted(items: mid) ? 1 : 0;                           // the window is sorted
+        all  = isSorted(items: whole) ? 1 : 0;                         // the whole array is NOT
+    }
 
     return ends + (inner - 1357) + part * 40 + all;   // 2 + 0 + 40 + 0 = 42
 }

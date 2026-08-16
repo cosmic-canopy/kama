@@ -20,8 +20,13 @@ fn int32 main() {
     Map<int32, int32> m = Map.withCapacity(capacity: 8);
     m.put(key: 1, value: 10);
     m.put(key: 2, value: 20);
-    MapValueIter<int32> mi = m.values();      // a LOCAL of iterator type — always fine
-    int32 a = total(it: mi);                  // ... and passed down by value
+    // An iterator that borrows IS a view, so it obeys the window rule like any other. `Map` has no
+    // `view()`, and before the mint generalization that meant this had no window it could open at all —
+    // reading the `@viewable` grant is what gives `values()` one.
+    int32 a = 0;
+    borrow m.values() as mi {
+        a = total(it: mi);                    // passed down by value
+    }
 
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 4);
     d.add(item: 3);
@@ -29,10 +34,11 @@ fn int32 main() {
     int32 b = 0;
     foreach (int32 v in d) { b = b + v; }     // the ordinary foreach surface, unchanged
 
-    View<int32> v = d.view();
     int32 c = 0;
-    foreach (int32 x in v) { c = c + x; }     // a view's own iterator — the laundering pair
-    sort(items: v);                           // `sort` takes a View directly and still does
+    borrow d.view() as v {
+        foreach (int32 x in v) { c = c + x; } // a view's own iterator — the laundering pair
+        sort(items: v);                       // `sort` takes a View directly and still does
+    }
 
     return a + b + c;                         // 30 + 7 + 7 (an exit code, so keep it under 256)
 }

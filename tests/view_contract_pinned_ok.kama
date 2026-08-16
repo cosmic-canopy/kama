@@ -49,16 +49,19 @@ fn int32 main() {
     Buf buf = Buf.empty();
     buf.add(v: 7i64); buf.add(v: 8i64); buf.add(v: 9i64);
 
-    Span s = buf.span();
-    if (s.length() == 3 && s.at(i: 0) == 7i64) { r = r + 1; }        // 1
-    Span t = s.rest();
-    if (t.length() == 2 && t.at(i: 0) == 8i64) { r = r + 1; }        // 2
+    // A user's own mint opens a window through its own grant — nothing here is named `view`.
+    borrow buf.span() as s {
+        if (s.length() == 3 && s.at(i: 0) == 7i64) { r = r + 1; }    // 1
+        Span t = s.rest();                                           // a DERIVE off the alias — no window
+        if (t.length() == 2 && t.at(i: 0) == 8i64) { r = r + 1; }    // 2
+    }
 
     // The unpinned-contract path is untouched: `View<T>` implements `Iterable<T>`/`IterableMut<T>`.
     DynamicArray<int32> b = DynamicArray.empty();
     b.add(item: 1); b.add(item: 2);
-    View<int32> v = b.view();
-    if (v.length() == 2) { r = r + 1; }                                  // 3
+    borrow b.view() as v {
+        if (v.length() == 2) { r = r + 1; }                              // 3
+    }
 
     return r;   // 3
 }

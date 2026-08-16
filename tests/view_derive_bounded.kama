@@ -1,0 +1,42 @@
+// The window rule rejects a view whose root nothing bounds. This fixture is the other half: the four
+// roots that ARE bounded, each of which a coarser rule ("every view local must be `borrow`-bound") would
+// reject with no legal spelling available.
+//
+//   1. a by-value view PARAMETER — the caller's frame outlives this one, and `borrow` cannot bind a
+//      derive, so a rule demanding a window here would have no answer. This is the shape
+//      lib/std/collections/sort.kama:115,117 needs.
+//   2. a DERIVE off a bounded local — roots where its receiver roots.
+//   3. a derive off a `borrow` ALIAS — the same, one step from the window itself.
+//   4. a free function's result, when every view handed to it was bounded — the view-return rule already
+//      guarantees the result roots at one of those arguments.
+import std::collections::{DynamicArray, View};
+
+fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
+
+// 1 + 2: a by-value view parameter is a bounded root, and a derive off one is bounded too.
+fn int32 halves(View<int32> items) {
+    View<int32> left  = items.slice(from: 0, count: 2);
+    View<int32> right = items.slice(from: 2, count: 2);
+    View<int32> inner = left.slice(from: 1, count: 1);   // a derive off a derive
+    return sum(xs: left) * 100 + sum(xs: right) * 10 + sum(xs: inner);
+}
+
+// 4: the result roots at the argument, so it is bounded exactly when the argument was.
+fn View<int32> firstHalf(View<int32> xs) { return xs.slice(from: 0, count: 2); }
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
+    a.add(item: 1); a.add(item: 2); a.add(item: 3); a.add(item: 4);
+
+    int32 r = 0;
+    borrow a.view() as w {
+        r = r + halves(items: w);                 // 3*100 + 7*10 + 2 = 372
+
+        View<int32> mid = w.slice(from: 1, count: 2);   // 3: a derive off the alias
+        r = r + sum(xs: mid);                     // + 5 = 377
+
+        View<int32> fh = firstHalf(xs: w);        // 4: a free fn's result over a bounded argument
+        r = r + sum(xs: fh);                      // + 3 = 380
+    }
+    return r - 338;   // 42
+}

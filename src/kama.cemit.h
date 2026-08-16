@@ -1089,6 +1089,9 @@ private:
                    // per function).
                    struct FrozenPlace { std::vector<std::string> place; std::string alias; int line = 0; };
                    std::vector<FrozenPlace> frozen;
+                   // View locals whose root is already lifetime-bounded, so a DERIVE off one is bounded
+                   // too (`View<T> mid = whole.slice(…)` where `whole` came from a window).
+                   std::set<std::string> boundedViews;
                    // LSP (M3.4), analysis mode only: the bindings this scope declares, with the index key
                    // each was given. Deliberately PARALLEL to `declaredNames` rather than folded into it —
                    // that vector drives the shadowing rules, and it also (by design) excludes `foreach` and
@@ -1932,6 +1935,8 @@ private:
     const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
     std::vector<std::string> viewRootPlace(SharedExpression e);   // the place a VIEW expression borrows
+    bool viewLocalBounded(SharedExpression init);   // the window rule: is this view's root lifetime-bounded?
+    SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
     bool rejectFrozenWrite(SharedExpression target, int line);   // one sentence for every write shape
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a

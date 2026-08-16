@@ -32,28 +32,32 @@ fn int main() {
     rs.add(item: Rec.make(dept: 2, id: 3));
     rs.add(item: Rec.make(dept: 1, id: 4));
     rs.add(item: Rec.make(dept: 2, id: 5));
-    View<Rec> v = rs.view();
-
     ByField byId   = ByField.make(field: 1);
     ByField byDept = ByField.make(field: 0);
-    sortWith(items: v, by: byId);      // by id:   1 2 3 4 5
-    sortWith(items: v, by: byDept);    // by dept: dept 1 (ids 2,4), dept 2 (ids 1,3,5) — ids ASCENDING iff stable
 
     int32 ok = 1;
-    if (v[0].id != 2) { ok = 0; }
-    if (v[1].id != 4) { ok = 0; }
-    if (v[2].id != 1) { ok = 0; }
-    if (v[3].id != 3) { ok = 0; }
-    if (v[4].id != 5) { ok = 0; }
+    borrow rs.view() as v {
+        sortWith(items: v, by: byId);      // by id:   1 2 3 4 5
+        sortWith(items: v, by: byDept);    // by dept: dept 1 (ids 2,4), dept 2 (ids 1,3,5) — ids ASCENDING iff stable
+
+        if (v[0].id != 2) { ok = 0; }
+        if (v[1].id != 4) { ok = 0; }
+        if (v[2].id != 1) { ok = 0; }
+        if (v[3].id != 3) { ok = 0; }
+        if (v[4].id != 5) { ok = 0; }
+    }
 
     // a run of equal keys must survive intact, not merely be present
     DynamicArray<int32> dup = DynamicArray::<int32>.empty();
     int32 i = 0;
     while (i < 40) { dup.add(item: 7 - (i % 3)); i = i + 1; }
-    View<int32> dv = dup.view();
-    sort(items: dv);
-    int32 lo = dv[0] == 5 ? 1 : 0;
-    int32 hi = dv[39] == 7 ? 1 : 0;
+    int32 lo = 0;
+    int32 hi = 0;
+    borrow dup.view() as dv {
+        sort(items: dv);
+        lo = dv[0] == 5 ? 1 : 0;
+        hi = dv[39] == 7 ? 1 : 0;
+    }
 
     return ok * 40 + lo + hi;   // 42
 }

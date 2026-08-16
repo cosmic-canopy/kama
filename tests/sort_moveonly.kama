@@ -33,11 +33,12 @@ fn int main() {
     ts.add(item: Tag.make(n: 1));
     ts.add(item: Tag.make(n: 3));
     ts.add(item: Tag.make(n: 2));
-    View<Tag> v = ts.view();
-
     ByValue by = ByValue.make();
-    sortUnstableWith(items: v, by: by);
-    int32 ok = isSortedWith(items: v, by: by) ? 1 : 0;
-
-    return v[0].value() * 1000 + v[1].value() * 100 + v[2].value() * 10 + v[3].value() + ok - 1195;   // 1234 + 1 - 1195 = 40
+    int32 r = 0;
+    borrow ts.view() as v {
+        sortUnstableWith(items: v, by: by);
+        int32 ok = isSortedWith(items: v, by: by) ? 1 : 0;
+        r = v[0].value() * 1000 + v[1].value() * 100 + v[2].value() * 10 + v[3].value() + ok - 1195;
+    }
+    return r;   // 1234 + 1 - 1195 = 40
 }

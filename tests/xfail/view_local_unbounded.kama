@@ -1,0 +1,12 @@
+// Finding ⑤, and the shape every one of ④⑤⑥ rode. `d` is a container you can still name, so the very
+// next statement may grow it — and the view is left pointing at the freed buffer. Nothing about the
+// declaration says how long it is meant to be valid, which is precisely what a window says.
+import std::collections::{View, DynamicArray};
+
+fn int32 main() {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
+    d.add(item: 1); d.add(item: 2);
+    View<int32> v = d.view();
+    d.add(item: 3); d.add(item: 4); d.add(item: 5);   // reallocs out from under `v`
+    return v[0];
+}

@@ -58,9 +58,12 @@ import std::collections::{FixedArray, View, sortUnstable};
 fn int main() {
     FixedArray<int32> fa = FixedArray::<int32>.make(size: 3);
     fa[0] = 3; fa[1] = 1; fa[2] = 2;
-    View<int32> v = fa.view();
-    sortUnstable(items: v);
-    return v[0] * 100 + v[1] * 10 + v[2];
+    int32 r = 0;
+    borrow fa.view() as v {
+        sortUnstable(items: v);
+        r = v[0] * 100 + v[1] * 10 + v[2];
+    }
+    return r;
 }
 EOF
 if ! "$KAMA" build --no-heap "$sortsrc" -o "$tmp/d.out" >/dev/null 2>"$tmp/su.err"; then

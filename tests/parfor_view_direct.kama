@@ -9,9 +9,10 @@ fn int main() {
     int32 i = 0;
     while (i < 8) { a.add(item: 1i32); i = i + 1; }   // eight 1s
 
-    View<int32> v = a.view();
-    parallel_for (ref int32 e in v) {                 // direct View — no auto-view
-        e = e + 4;                                    // each 1 -> 5
+    borrow a.view() as v {
+        parallel_for (ref int32 e in v) {             // direct View — no auto-view
+            e = e + 4;                                // each 1 -> 5
+        }
     }
 
     int32 s = 0;
