@@ -1862,7 +1862,12 @@ private:
     // give/copy matrix for an OWNED value (smart-ptr / resource / collection / bindable — move consumes the
     // source, copy duplicates). Shared by `return` and value-producing `match` arms (`:= give x` / `:= List()`).
     void emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
-                            SharedExpression value, int line, int depth);
+                            SharedExpression value, int line, int depth,
+                            const char* what = "this value");
+    // The kind rule against an ALREADY-LOWERED destination C type, for the hand-off sites that have one
+    // (a return value, a `match` arm, a call argument) rather than a declared type node.
+    void rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
+                                 const char* what, int line);
     // The variant type named by a `::` qualifier — a non-generic union directly, or a generic
     // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
     ClassInfo* resolveVariantType(const std::string& qualResolved);

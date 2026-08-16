@@ -1,0 +1,9 @@
+// A value-producing `match` arm takes its type from the destination (`_matchTargetCType`), which is
+// the same channel the return hand-off uses.
+type enum Shape { Circle(float64 r), Empty }
+
+fn int32 main() {
+    Shape s = Shape::Circle(r: 3.0);
+    int32 v = match (s) { case Circle(r: r): 1; case Empty: "no"; };
+    return v;
+}

@@ -1,0 +1,8 @@
+// A variant payload does its own named-argument matching rather than going through
+// `emitReorderedCall`, so it is a fourth hand-off site with its own check.
+type enum Msg { Text(string t), None }
+
+fn int32 main() {
+    Msg m = Msg::Text(t: 5);
+    return 0;
+}

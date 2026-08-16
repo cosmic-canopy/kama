@@ -568,6 +568,20 @@ CEmitter::TKind CEmitter::exprKind(SharedExpression e)
     return TKind::Unknown;
 }
 
+// The same rule where the destination is already a LOWERED C type rather than a declared type node — a
+// return value, a `match` arm, a call argument. Those sites never hold the kama type; they hold the C
+// type they are about to assign through, which is exactly what `kindOfCType` wants.
+void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
+                                       const char* what, int line)
+{
+    const TKind vk = exprKind(value);
+    if (vk == TKind::Unknown) return;
+    const TKind dk = kindOfCType(dstCType);
+    if (dk == TKind::Unknown || dk == vk) return;
+    unsupported((std::string(what) + " expects " + kindName(dk) + ", so it cannot be given "
+                 + kindName(vk)).c_str(), line);
+}
+
 void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init,
                                       const char* what, int line)
 {
@@ -3909,7 +3923,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // bare generic ctor) uniformly with a value-producing `match` arm, then unwind, then return.
             std::string tmp = "__ret_" + std::to_string(_tempCounter++);
             indent(depth); *_out << _currentReturnCType << " " << tmp << ";\n";
-            emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth);
+            emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth, "a return value");
             emitUnwindAll(depth);
             indent(depth); *_out << "return " << tmp << ";\n";
         } else {
@@ -11979,6 +11993,18 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        // The kind rule in ARGUMENT position, as far as the signature can carry it. `ParamSig` records a
+        // param's `className` and leaves it EMPTY for a primitive, so this reaches the `string` and
+        // class/aggregate parameters and stays silent on the numeric ones — a partial rule, and partial in
+        // the safe direction: an empty className reads as Unknown and says nothing. Giving `ParamSig` a C
+        // type for its primitives is what would complete it, and that is a signature change reaching every
+        // construction site including the synthesized intrinsic ones.
+        //
+        // A CONTRACT param is exempt for the same reason a contract destination is: `hashVia(h: 22)` widens
+        // a primitive into a fat pointer, so it accepts every kind by design.
+        if (!p.className.empty() && !isInterface(p.className))
+            rejectValueKindMismatch(p.className, argExpr,
+                                    ("argument `" + p.name + "`").c_str(), srcLine);
         // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
         // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is
         // mandatory), so the marker would miss the commonest spelling.
@@ -14104,11 +14130,16 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
 // apply the give/copy matrix (smart-ptr / resource / collection / bindable — move consumes the source, copy
 // duplicates). Mirrors the `return`-value hand-off, shared with value-producing `match` arms.
 void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
-                                  SharedExpression value, int line, int depth)
+                                  SharedExpression value, int line, int depth, const char* what)
 {
     int handoff = 0;   // 0 none, 1 give, 2 copy
     SharedExpression v = value;
     if (v) if (auto* h = dynamic_cast<HandoffNode*>(v.get())) { handoff = h->isGive ? 1 : 2; v = h->value; }
+    // The kind rule, one site for both hand-offs this function serves: a `return` value and a
+    // value-producing `match` arm. Checked on the UNWRAPPED value, so `return give x;` is judged on `x`.
+    // `dstCType` is empty for a void return and for a statement-position `match`, which reads as Unknown
+    // and says nothing — the same silence every other unresolved destination gets.
+    rejectValueKindMismatch(dstCType, v, what, line);
     bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
     std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
@@ -14421,7 +14452,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
-                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, "a `match` arm");
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
@@ -14430,7 +14461,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
-            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, "a `match` arm");   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;
@@ -14624,7 +14655,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
-                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2);
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, "a `match` arm");
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
@@ -14633,7 +14664,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
-            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2);   // `case X: give x;`
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, "a `match` arm");   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;
@@ -14902,6 +14933,13 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+            // The kind rule for a payload. This construction does its own named-argument matching instead
+            // of going through `emitReorderedCall`, so it is the fourth hand-off site and needs its own
+            // call — the same reason the payload LABEL needed its own `recordNodeRef` two lines up.
+            // (An `Owned<Error>`/`Shared<Error>` field reads as Unknown, so the enum-boxing path below is
+            // untouched.)
+            rejectValueKindMismatch(fcls, argExpr,
+                                    ("payload field `" + f.name + "`").c_str(), srcLine);
             // an inline construction as the payload (inline `new`, an inline generic-instance ctor,
             // or a nested `Some(Some(…))` / value-producing `match`) materializes against the field type;
             // propagate the target so the nested variant/match resolves.

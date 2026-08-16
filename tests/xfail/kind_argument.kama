@@ -1,0 +1,6 @@
+// ARGUMENT position, through `emitReorderedCall` — the one named-argument matcher for all 29 call
+// forms. Reaches a `string`/class parameter; a numeric parameter is not yet covered, because
+// `ParamSig` records no C type for a primitive.
+fn int32 f(string s) { return 0; }
+
+fn int32 main() { return f(s: 3); }

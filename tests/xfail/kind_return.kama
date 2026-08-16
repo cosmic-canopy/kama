@@ -1,0 +1,7 @@
+// The kind rule in RETURN position. `emitOwnedValueInto` is the shared hand-off for a return value and
+// a value-producing `match` arm, so one check there covers both.
+fn int32 f() {
+    return "no";
+}
+
+fn int32 main() { return f(); }
