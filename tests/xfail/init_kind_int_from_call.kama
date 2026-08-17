@@ -1,0 +1,9 @@
+// A CALL RESULT crossing a kind boundary. Before `typeOfExpr` the classifier switched on the node and
+// knew only literals and simple places, so every call handed its result over unexamined — the shape a
+// real program hits far more often than the bare `int32 x = "…"` the spine was built on.
+fn string maker() { return "s"; }
+
+fn int32 main() {
+    int32 x = maker();
+    return 0;
+}

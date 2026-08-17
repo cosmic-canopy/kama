@@ -1706,6 +1706,12 @@ private:
     TKind kindOfCType(const std::string& ct);            // kind of an already-lowered C type name
     TKind declTypeKind(SharedIdentifier type);           // kind of a DECLARED kama type node
     TKind exprKind(SharedExpression e);                  // kind of an expression; Unknown unless certain
+    // The LOWERED C type of any expression, "" when not certain. Total, and "" NEVER diagnoses — it is
+    // `TKind::Unknown` one level down. This is the resolver every finer rule composes from: the kind
+    // rule above reads it through `kindOfCType`, and width/conversion checking will read it directly.
+    std::string typeOfExpr(SharedExpression e);
+    std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
+    std::string indexElemTypeRaw(SharedExpression e);    // `a[i]`'s element type, class OR primitive
     static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
     // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".
     void rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init, const char* what, int line);

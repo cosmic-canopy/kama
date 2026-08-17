@@ -1,0 +1,6 @@
+// A `cast<T>` states its own result type outright, so this is the one arm that can never be uncertain.
+fn int32 main() {
+    int32 n = 5;
+    string s = cast<int64>(n);
+    return 0;
+}

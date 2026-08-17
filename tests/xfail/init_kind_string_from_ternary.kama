@@ -1,0 +1,7 @@
+// A value-producing TERNARY takes its type from its branches. Both arms agree, so the first that
+// resolves is representative — the walk `exprClass` already made for classes, now for every type.
+fn int32 main() {
+    bool c = true;
+    string s = c ? 1 : 2;
+    return 0;
+}

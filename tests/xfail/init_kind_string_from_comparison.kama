@@ -1,0 +1,8 @@
+// A comparison yields `bool` WHATEVER its operands are, which is why the operator arm can answer with
+// certainty where arithmetic (whose width C's usual conversions decide) deliberately cannot.
+fn int32 main() {
+    int32 a = 1;
+    int32 b = 2;
+    string t = a < b;
+    return 0;
+}

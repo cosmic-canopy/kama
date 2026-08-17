@@ -1,0 +1,13 @@
+// The same through a METHOD on a receiver, which resolves down a different path (findMethod + the
+// owning instance's type-arg binding) than a free function does.
+type value Box {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 get() { return this.n; }
+}
+
+fn int32 main() {
+    Box b = Box.make(n: 3);
+    string s = b.get();
+    return 0;
+}

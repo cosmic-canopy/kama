@@ -539,33 +539,166 @@ CEmitter::TKind CEmitter::declTypeKind(SharedIdentifier type)
     return kindOfCType(cType(type));
 }
 
-// Certain-only. A literal knows its own family; a place expression answers through `lvalueCType`, which
-// resolves a local/param via `_localCTypes` and a field via its declared type — the same map milestone 0
-// made trustworthy by clearing it between bodies. Anything else is `Unknown` on purpose.
-CEmitter::TKind CEmitter::exprKind(SharedExpression e)
+// `cType` for a type node that a CLASSIFIER is asking about: "" wherever cType would DIAGNOSE. `This`
+// and `Base` are the only two names it errors on, and both are legitimate in a signature this pass may
+// see before the context that resolves them exists — `checkDeclaredTypes` skips them for the same
+// reason. A classifier that reports is a classifier that fires on correct code.
+std::string CEmitter::classifierCType(SharedIdentifier type)
 {
-    if (!e) return TKind::Unknown;
+    if (!type || !type->value) return "";
+    if (*type->value == "This" && !type->genericArg && _thisType.empty()) return "";
+    if (*type->value == "Base" && !type->genericArg
+        && (!_basesLinked || !_currentClass || _currentClass->baseName.empty())) return "";
+    return cType(type);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// `typeOfExpr` — the total expression classifier.
+//
+// The twelve partial resolvers that grew up inside this emitter each answer for one node shape, and each
+// returns "" for BOTH "this is a primitive" and "I have no idea". That conflation is why none of them
+// could ever be the basis of a type rule: built on `exprClass`, a checker is either silent on every
+// primitive or firing on every unresolved name. Here the two are separated — a primitive answers with
+// its C spelling, and "" means only "not certain", exactly as `TKind::Unknown` does one level up.
+//
+// It COMPOSES those resolvers rather than re-deriving them. Each already carries the hard parts —
+// generic-instance binding, `This` under `_thisType`, auto-deref through a smart pointer or a user
+// `Deref<T>`, contract receivers, `_typeSubst` save/restore — and a second implementation of any of
+// that is free to drift from the one the emitter actually lowers through.
+//
+// The answer is a LOWERED C type name, not a new type representation, because every destination in the
+// compiler already holds one (`_localCTypes`, `_currentReturnCType`, `_matchTargetCType`,
+// `ParamSig::className`, `FuncSig::retCType`) and `primKeyOfCType` recovers the kama width from it.
+std::string CEmitter::typeOfExpr(SharedExpression e)
+{
+    if (!e) return "";
     ASTNode* n = e.get();
 
-    if (dynamic_cast<StringNode*>(n))  return TKind::Str;
-    if (dynamic_cast<BooleanNode*>(n)) return TKind::Bool;
-    // A char literal IS an integral value (`char` = a Unicode scalar, lowered to uint32_t), which is why
-    // char/integral crossings are allowed: there is no third family to keep them apart from.
-    if (dynamic_cast<CharNode*>(n))    return TKind::Num;
-    if (dynamic_cast<Int8Node*>(n)  || dynamic_cast<Int16Node*>(n)
-     || dynamic_cast<Int32Node*>(n) || dynamic_cast<Int64Node*>(n)
-     || dynamic_cast<UInt8Node*>(n) || dynamic_cast<UInt16Node*>(n)
-     || dynamic_cast<UInt32Node*>(n)|| dynamic_cast<UInt64Node*>(n)
-     || dynamic_cast<Float32Node*>(n)|| dynamic_cast<Float64Node*>(n)) return TKind::Num;
+    // --- literals: the one place a type is known outright -------------------------------------------
+    if (dynamic_cast<StringNode*>(n))   return "kama_string";
+    if (dynamic_cast<BooleanNode*>(n))  return "bool";
+    if (dynamic_cast<CharNode*>(n))     return "uint32_t";   // `char` IS a Unicode scalar, lowered to uint32
+    if (dynamic_cast<Int8Node*>(n))     return "int8_t";
+    if (dynamic_cast<Int16Node*>(n))    return "int16_t";
+    if (dynamic_cast<Int32Node*>(n))    return "int32_t";
+    if (dynamic_cast<Int64Node*>(n))    return "int64_t";
+    if (dynamic_cast<UInt8Node*>(n))    return "uint8_t";
+    if (dynamic_cast<UInt16Node*>(n))   return "uint16_t";
+    if (dynamic_cast<UInt32Node*>(n))   return "uint32_t";
+    if (dynamic_cast<UInt64Node*>(n))   return "uint64_t";
+    if (dynamic_cast<Float32Node*>(n))  return "float";
+    if (dynamic_cast<Float64Node*>(n))  return "double";
     // An interpolation lowers to a `string` — UNLESS it carries a tag, whose function decides the type.
-    if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) return is->tag ? TKind::Unknown : TKind::Str;
-    // `null` belongs to `rejectNullInit`, which gives a better message than this rule could.
-    if (dynamic_cast<NullNode*>(n)) return TKind::Unknown;
+    if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) {
+        if (!is->tag) return "kama_string";
+        std::string key = resolveFunc(*is->tag, nullptr);
+        auto f = _funcs.find(key);
+        return f != _funcs.end() ? f->second.retCType : "";
+    }
+    // `null` is deliberately typeless here: `rejectNullInit` owns it and says something better.
+    if (dynamic_cast<NullNode*>(n)) return "";
 
-    if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n))
-        return kindOfCType(lvalueCType(e));
+    // --- places -------------------------------------------------------------------------------------
+    if (dynamic_cast<ThisAccessNode*>(n)) return _currentClass ? _currentClass->name : "";
+    if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<MemberAccessNode*>(n)) {
+        // `lvalueCType` answers a local/param and a field of the current class; `receiverScalarCType`
+        // reaches a PRIMITIVE field through an arbitrary receiver, which lvalueCType's own path already
+        // covers but a const-generic binding does not; `exprClass` reaches a module `static` and resolves
+        // a field under its OWNER INSTANCE's type args. First non-empty wins — they do not disagree,
+        // they cover different shapes.
+        std::string ct = lvalueCType(e);
+        if (ct.empty()) ct = receiverScalarCType(e);
+        if (ct.empty()) ct = exprClass(e);
+        return ct;
+    }
 
-    return TKind::Unknown;
+    // --- calls --------------------------------------------------------------------------------------
+    // `callReturnTypeRaw` is UNFILTERED by design — it was extracted out of `exprClass` precisely so a
+    // non-class return (a plain enum, a primitive) survives, which is what makes it usable here.
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) return callReturnTypeRaw(inv);
+
+    // --- indexing -----------------------------------------------------------------------------------
+    if (dynamic_cast<ElementAccessNode*>(n)) {
+        std::string ct = indexElemTypeRaw(e);
+        // `receiverScalarCType` resolves the container through `_localCTypes` where `exprClass` (which
+        // `indexElemTypeRaw` asks first) resolves it through `_localTypes` — different maps, so it
+        // answers for a container shape the other misses rather than duplicating it.
+        return !ct.empty() ? ct : receiverScalarCType(e);
+    }
+
+    // --- conversions --------------------------------------------------------------------------------
+    if (auto* c  = dynamic_cast<CastNode*>(n))    return classifierCType(c->type);
+    if (auto* bc = dynamic_cast<BitcastNode*>(n)) return classifierCType(bc->type);
+    if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return classifierCType(optionalTypeNode(ad->type));
+    if (dynamic_cast<SizeofNode*>(n)) return "size_t";   // `sizeof`/`alignof` are a `usize`
+
+    // --- operators ----------------------------------------------------------------------------------
+    // A comparison or a logical connective yields `bool` WHATEVER its operands are, so this arm is
+    // certain where the arithmetic one is not.
+    if (dynamic_cast<LogicalAndOrNode*>(n)) return "bool";
+    if (auto* be = dynamic_cast<BinaryExpressionNode*>(n)) {
+        switch (be->token) {
+            case EQEQ: case NOTEQ: case LT: case GT: case LEQ: case GEQ: return "bool";
+            default: break;
+        }
+        std::string oc = operatorResultClass(be->token, /*binary*/1, be->LHS, be->RHS);
+        if (!oc.empty()) return oc;
+        // `string + string` is the one built-in binary operator over a non-numeric type.
+        if (be->token == PLUS && (exprIsString(be->LHS) || exprIsString(be->RHS))) return "kama_string";
+        // ARITHMETIC over numbers is deliberately "": C's usual arithmetic conversions decide the width
+        // of `a + b`, and modelling them is the strict-conversion milestone's job. Answering with a guess
+        // here would give that milestone a wrong number to argue with. The KIND is not at risk — both
+        // operands are already `Num` or the operator rule above rejected them.
+        return "";
+    }
+    if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
+        // `!x` is a `bool` regardless; `-x`/`+x`/`~x` carry the operand's type through, and a user
+        // operator carries its own return type.
+        if (su->token == EXCLAMATION) return "bool";
+        std::string oc = operatorResultClass(su->token, /*unary*/0, su->expression, nullptr);
+        return !oc.empty() ? oc : typeOfExpr(su->expression);
+    }
+    if (auto* pr = dynamic_cast<PreIncrDecrNode*>(n)) {
+        std::string oc = operatorResultClass(pr->token, 0, pr->expression, nullptr);
+        return !oc.empty() ? oc : typeOfExpr(pr->expression);
+    }
+    if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) {
+        std::string oc = operatorResultClass(po->token, 0, po->expression, nullptr);
+        return !oc.empty() ? oc : typeOfExpr(po->expression);
+    }
+
+    // --- value-producing branches -------------------------------------------------------------------
+    // Every arm shares a type, so the first that resolves is representative — the same walk `exprClass`
+    // makes, including a block arm's terminal `:= expr;`.
+    if (auto* tx = dynamic_cast<TernaryExpressionNode*>(n)) {
+        std::string lc = typeOfExpr(tx->LHS);
+        return !lc.empty() ? lc : typeOfExpr(tx->RHS);
+    }
+    if (auto* mx = dynamic_cast<MatchNode*>(n)) {
+        if (mx->arms)
+            for (auto& a : *mx->arms) {
+                SharedExpression v = a->body;
+                if (!v && a->block && a->block->statements)
+                    for (auto& st : *a->block->statements)
+                        if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
+                if (!v) continue;                                // a diverging arm has no value
+                std::string ac = typeOfExpr(v);
+                if (!ac.empty()) return ac;
+            }
+        return "";
+    }
+
+    // Everything else is deliberately silent: an array literal and a bare variant constructor take their
+    // type from context, a `borrow` alias has no written type, an `extern fn` result is opaque.
+    return "";
+}
+
+// The kind of an expression is the kind of its type. Before `typeOfExpr` this switched on the node
+// itself and reached literals and simple places only, so a call result, an element, a cast, a comparison
+// and a value-producing `match` all crossed a hand-off unexamined.
+CEmitter::TKind CEmitter::exprKind(SharedExpression e)
+{
+    return kindOfCType(typeOfExpr(e));
 }
 
 // The same rule where the destination is already a LOWERED C type rather than a declared type node — a
@@ -17733,6 +17866,51 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     return "";
 }
 
+// The element type of `a[i]`, UNFILTERED — it may name a class or a primitive. Extracted from exprClass
+// for the same reason `callReturnTypeRaw` was: exprClass keeps only what `isClass` accepts, so a
+// container of primitives answered "" and a type rule could not tell `DynamicArray<int32>`'s element
+// from an unresolved receiver. Pure resolution (no emission) — mirrors the front of collectionElemAccess.
+std::string CEmitter::indexElemTypeRaw(SharedExpression e)
+{
+    auto* ea = dynamic_cast<ElementAccessNode*>(e.get());
+    if (!ea) return "";
+    SharedExpression recv = ea->expression ? ea->expression
+                                           : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+    std::string cls = exprClass(recv);
+    if (!cls.empty() && _classes.count(cls) && _classes[cls].isIntrinsicColl) {
+        // An intrinsic collection records its element CLASS, and leaves it empty for a primitive
+        // element — the same conflation, one level down. `_collections` carries the C type for both.
+        const std::string& ec = _classes[cls].collElemClass;
+        if (!ec.empty()) return ec;
+        auto ci = _collections.find(cls);
+        return ci != _collections.end() ? ci->second.elemCType : "";
+    }
+    if (cls == "kama_string") return "uint8_t";          // `s[i]` is a byte
+    // a user place-`operator[]` element resolves to the operator's element type (its `ref T`), so
+    // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
+    if (MethodInfo* op = userIndexOp(cls)) {
+        ScopedStr _ts(_thisType, cls);
+        // Bind the owning generic instance's type args so `operator[]`'s `ref T` resolves concretely
+        // (`v[i]` on a `List<Probe>` -> Probe), the same as a method return.
+        NsCtx savedCtx = _nsCtx;
+        std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        auto gi = _genericTypeInsts.find(cls);
+        if (gi != _genericTypeInsts.end()) {
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
+            for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
+                _typeSubst[ps[i]] = gi->second.typeArgs[i];
+            _nsCtx = _genericTypeInstCtx.count(cls) ? _genericTypeInstCtx[cls] : _genericTypeCtx[gi->second.templateKey];
+        }
+        std::string rt = cType(op->returnType);
+        _typeSubst = savedSubst; _nsCtx = savedCtx;
+        return rt;
+    }
+    // A raw `UnsafePtr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
+    // element type, so a `drop`/`copy`/variant hand-off of the element knows what it is.
+    return ptrElemType(e);
+}
+
 std::string CEmitter::exprClass(SharedExpression e)
 {
     if (!e) return "";
@@ -17805,38 +17983,9 @@ std::string CEmitter::exprClass(SharedExpression e)
     }
 
     // `list[i]` / `a[i]` resolves to the ELEMENT type, so `list[i].m()` finds the method.
-    // Pure resolution (no emission) — mirrors the front of collectionElemAccess.
-    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
-        SharedExpression recv = ea->expression ? ea->expression
-                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-        std::string cls = exprClass(recv);
-        if (!cls.empty() && _classes.count(cls) && _classes[cls].isIntrinsicColl)
-            return _classes[cls].collElemClass;
-        // a user place-`operator[]` element resolves to the operator's element type (its `ref T`), so
-        // `m[i][j]` / `m[i].field` chain. Bind `This`/the instance's type args for the return type.
-        if (MethodInfo* op = userIndexOp(cls)) {
-            ScopedStr _ts(_thisType, cls);
-            // Bind the owning generic instance's type args so `operator[]`'s `ref T` resolves concretely
-            // (`v[i]` on a `List<Probe>` -> Probe), the same as a method return.
-            NsCtx savedCtx = _nsCtx;
-            std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-            auto gi = _genericTypeInsts.find(cls);
-            if (gi != _genericTypeInsts.end()) {
-                _typeSubst.clear();
-                const std::vector<std::string>& ps = _genericTypeParams[gi->second.templateKey];
-                for (size_t i = 0; i < ps.size() && i < gi->second.typeArgs.size(); ++i)
-                    _typeSubst[ps[i]] = gi->second.typeArgs[i];
-                _nsCtx = _genericTypeInstCtx.count(cls) ? _genericTypeInstCtx[cls] : _genericTypeCtx[gi->second.templateKey];
-            }
-            std::string rt = cType(op->returnType);
-            _typeSubst = savedSubst; _nsCtx = savedCtx;
-            return isClass(rt) ? rt : "";
-        }
-        // A raw `UnsafePtr<T>` field index (`this.data[i]` in unsafe container code): resolve to the pointer's
-        // element type, so a `drop`/`copy`/variant hand-off of the element knows what it is.
-        std::string pet = ptrElemType(e);
-        if (!pet.empty()) return isClass(pet) ? pet : "";
-        return "";
+    if (dynamic_cast<ElementAccessNode*>(n)) {
+        std::string et = indexElemTypeRaw(e);
+        return isClass(et) ? et : "";
     }
 
     // a CALL RESULT's static class (pure resolution — no emission), so a call can be a

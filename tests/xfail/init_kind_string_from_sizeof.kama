@@ -1,0 +1,5 @@
+// `sizeof`/`alignof` fold to a `usize`, which is a number like any other.
+fn int32 main() {
+    string s = sizeof(int32);
+    return 0;
+}
