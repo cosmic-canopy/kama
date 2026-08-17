@@ -1,0 +1,71 @@
+// Arithmetic on two values of one type yields THAT type (D-arith) — kama's own rule, as in
+// Rust/Swift/Go, not C's integer promotion. Every check below is one that C answers differently:
+// `uint8 + uint8` is an `int` in C, so the promoted value survives until something narrows it, and
+// until this fixture existed nothing in the corpus ever looked at it before that happened.
+//
+// The fixture is POSITIVE on purpose. An `xfail` never links, so it never reaches ASan or the wasm
+// leg; a rule about what a value IS has to be run, not merely rejected.
+fn int32 main()
+{
+    int32 r = 0;
+
+    uint8 a = 200ui8;
+    uint8 b = 100ui8;
+
+    // The plain hand-off. This already worked, because the ASSIGNMENT truncated — which is exactly why
+    // the disagreement stayed invisible: C computed 300 and the store made it 44.
+    uint8 c = a + b;
+    if (c == 44ui8)                          { r = r + 4; }
+
+    // ...and here is the same expression NOT reaching a uint8 destination. C hands `cast` the promoted
+    // 300; kama's rule says the operand type is the result type, so it is 44 before the cast sees it.
+    if (cast<int32>(a + b) == 44)            { r = r + 4; }
+
+    // A comparison against the wrapped value. C compares 300 and answers true; 44 > 250 is false.
+    if ((a + b) > 250ui8)                    { r = r + 0; } else { r = r + 4; }
+
+    // Division and modulo read the value, so they disagree wherever the wrap does: 300/2 is 150,
+    // 44/2 is 22. `/` and `%` are also the two that a truncating cast CANNOT be moved past.
+    if ((a + b) / 2ui8 == 22ui8)             { r = r + 4; }
+    if ((a + b) % 7ui8 == 2ui8)              { r = r + 4; }
+
+    // Signed, at a different width: int8 100+100 wraps to -56, where C would carry 200.
+    int8 s = 100i8;
+    int8 t = 100i8;
+    if (cast<int32>(s + t) == 0 - 56)        { r = r + 4; }
+
+    // int16, so the rule is not a special case of the byte width.
+    int16 m = 30000i16;
+    int16 n = 30000i16;
+    if (cast<int32>(m + n) == 0 - 5536)      { r = r + 4; }
+
+    // Bitwise complement is the unary half of the same rule: `~a` on a uint8 is a uint8, so the high
+    // bits are not part of the value. C's `~` promotes first and leaves them set.
+    uint8 u = 15ui8;
+    if (cast<int32>(~u) == 240)              { r = r + 4; }
+
+    // Multiplication, where the promoted value is far outside the operand type.
+    uint8 p = 20ui8;
+    uint8 q = 30ui8;
+    if (cast<int32>(p * q) == 88)            { r = r + 4; }
+
+    // A left shift out of the operand's width. `<<` takes its result type from the LHS — the shift
+    // count is a count, not a co-operand, which is why the two sides need not agree.
+    uint8 sh = 3ui8;
+    if (cast<int32>(sh << 7ui8) == 128)      { r = r + 4; }
+
+    // Wider types are unaffected: they are already their own type in C, so nothing changes for them,
+    // and these two arms are what prove the truncating cast was not applied where it does not belong.
+    // A value well past any sub-`int` width must survive intact — a stray `(uint8_t)` would make it 224.
+    int32 w1 = 100000;
+    int32 w2 = 3;
+    if (w1 * w2 == 300000)                   { r = r + 4; }
+
+    // Note the SIGNED arm deliberately does not overflow: `int32 + int32` past INT32_MAX traps (SPEC's
+    // "signed overflow traps in debug"), so an overflow probe here would exit 133 and prove nothing
+    // about this rule. Unsigned wrap is defined, so the wide-unsigned arm can go all the way.
+    uint32 v1 = 4000000000ui32;
+    if (v1 + v1 == 3705032704ui32)           { r = r + 4; }
+
+    return r;   // 48
+}

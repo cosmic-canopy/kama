@@ -570,6 +570,45 @@ std::string CEmitter::classifierCType(SharedIdentifier type)
     return cType(type);
 }
 
+// The numeric-classification primitives the width rules are built on. Placed AHEAD of `typeOfExpr`
+// because that classifier now uses them: under D-arith it must ask "is this a numeric C type" to
+// decide whether `T op T` yields `T`, and a shift must ask the same of its LEFT operand alone.
+namespace {
+// Width in bits of a numeric C type, 0 if it is not one. `size_t`/`ptrdiff_t` are TARGET-width by
+// definition — reported as their own bucket rather than assigned a number this compiler cannot know.
+int cNumBits(const std::string& ct)
+{
+    if (ct == "int8_t"  || ct == "uint8_t")  return 8;
+    if (ct == "int16_t" || ct == "uint16_t") return 16;
+    if (ct == "int32_t" || ct == "uint32_t" || ct == "float") return 32;
+    if (ct == "int64_t" || ct == "uint64_t" || ct == "double") return 64;
+    return 0;
+}
+bool cNumSigned(const std::string& ct)
+{
+    return ct == "int8_t" || ct == "int16_t" || ct == "int32_t" || ct == "int64_t"
+        || ct == "float"  || ct == "double"  || ct == "ptrdiff_t";
+}
+bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
+bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t"; }
+
+// Is this expression a NUMERIC LITERAL the author wrote — including one behind a sign? That bucket is
+// the whole point of the measurement: contextual literal typing (row 2) absorbs it for free, so the
+// row-3 migration is what is LEFT once it is subtracted.
+bool isNumericLiteral(const ASTNode* n)
+{
+    if (!n) return false;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n))
+        return isNumericLiteral(u->expression.get());
+    return dynamic_cast<const Int8Node*>(n)   || dynamic_cast<const Int16Node*>(n)
+        || dynamic_cast<const Int32Node*>(n)  || dynamic_cast<const Int64Node*>(n)
+        || dynamic_cast<const UInt8Node*>(n)  || dynamic_cast<const UInt16Node*>(n)
+        || dynamic_cast<const UInt32Node*>(n) || dynamic_cast<const UInt64Node*>(n)
+        || dynamic_cast<const Float32Node*>(n)|| dynamic_cast<const Float64Node*>(n)
+        || dynamic_cast<const CharNode*>(n);
+}
+}  // namespace
+
 // ---------------------------------------------------------------------------------------------------
 // `typeOfExpr` — the total expression classifier.
 //
@@ -664,23 +703,27 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
         if (!oc.empty()) return oc;
         // `string + string` is the one built-in binary operator over a non-numeric type.
         if (be->token == PLUS && (exprIsString(be->LHS) || exprIsString(be->RHS))) return "kama_string";
-        // ARITHMETIC over two operands of the SAME numeric type. This is C's rule stated exactly, not a
-        // guess: integer promotion takes anything narrower than `int` to `int`, and two operands already
-        // agreeing need no further conversion. `i = i + 1` — by far the commonest shape in the corpus —
-        // resolves here, and `int8 x = a + b;` correctly answers `int32_t`, which is a real narrowing on
-        // the way back out.
+        // A SHIFT takes its type from the LEFT operand alone. The right one is a COUNT, not a co-operand
+        // — Rust implements `Shl<Rhs>` for every integer pair and C promotes each side independently — so
+        // requiring the two to agree would be a rule about nothing. `lib/std/num/fixed.kama` shifts an
+        // `int64` by a `const F: int32` eight times over, and `json.kama` writes `(c >> 4ui8)`.
+        if (be->token == LTLT || be->token == GTGT) {
+            const std::string lt = typeOfExpr(be->LHS);
+            return (cNumBits(lt) || cNumTargetWidth(lt)) ? lt : "";
+        }
+        // ARITHMETIC over two operands of the SAME numeric type yields THAT type — kama's own rule
+        // (D-arith), not C's. C would promote anything narrower than `int` to `int` here, and that answer
+        // used to be reported: `uint8 + uint8` was an `int32_t`, so `fn uint8 hexDigit(uint8 v) { return
+        // 48ui8 + v; }` read as a narrowing return in code that has nothing wrong with it. Inheriting C's
+        // promotion table also makes it part of kama's surface — a reader would have to know it to predict
+        // which lines need a cast — which is the opposite of what this campaign is for. Rust, Swift and Go
+        // all answer `T`, and `emitBinaryOperator` now emits the cast that makes C agree.
         //
-        // MIXED operand types stay "". That is where the usual arithmetic conversions get interesting,
-        // and the strict-conversion rule has to DECIDE what kama does there (C's answer may not be it)
-        // rather than inherit an answer from this classifier.
+        // MIXED operand types stay "". Under full D2 they are an ERROR (milestone 6's operand rule), so
+        // there is no conversion for this classifier to describe and no answer it should invent.
         {
             const std::string lt = typeOfExpr(be->LHS), rt = typeOfExpr(be->RHS);
-            if (!lt.empty() && lt == rt) {
-                if (lt == "float" || lt == "double" || lt == "int32_t" || lt == "uint32_t"
-                 || lt == "int64_t" || lt == "uint64_t" || lt == "size_t" || lt == "ptrdiff_t") return lt;
-                if (lt == "int8_t" || lt == "int16_t" || lt == "uint8_t" || lt == "uint16_t")
-                    return "int32_t";     // C integer promotion: both fit in `int`
-            }
+            if (!lt.empty() && lt == rt && (cNumBits(lt) || cNumTargetWidth(lt))) return lt;
         }
         return "";
     }
@@ -753,41 +796,6 @@ CEmitter::TKind CEmitter::exprKind(SharedExpression e)
 // The taxonomy is the brief's four buckets plus two the brief folded together and should not have:
 // a signedness flip at equal width changes the value without changing the width, and an int/float
 // crossing is a conversion in a category of its own. Both would otherwise be counted as "widening".
-namespace {
-// Width in bits of a numeric C type, 0 if it is not one. `size_t`/`ptrdiff_t` are TARGET-width by
-// definition — reported as their own bucket rather than assigned a number this compiler cannot know.
-int cNumBits(const std::string& ct)
-{
-    if (ct == "int8_t"  || ct == "uint8_t")  return 8;
-    if (ct == "int16_t" || ct == "uint16_t") return 16;
-    if (ct == "int32_t" || ct == "uint32_t" || ct == "float") return 32;
-    if (ct == "int64_t" || ct == "uint64_t" || ct == "double") return 64;
-    return 0;
-}
-bool cNumSigned(const std::string& ct)
-{
-    return ct == "int8_t" || ct == "int16_t" || ct == "int32_t" || ct == "int64_t"
-        || ct == "float"  || ct == "double"  || ct == "ptrdiff_t";
-}
-bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
-bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t"; }
-
-// Is this expression a NUMERIC LITERAL the author wrote — including one behind a sign? That bucket is
-// the whole point of the measurement: contextual literal typing (row 2) absorbs it for free, so the
-// row-3 migration is what is LEFT once it is subtracted.
-bool isNumericLiteral(const ASTNode* n)
-{
-    if (!n) return false;
-    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n))
-        return isNumericLiteral(u->expression.get());
-    return dynamic_cast<const Int8Node*>(n)   || dynamic_cast<const Int16Node*>(n)
-        || dynamic_cast<const Int32Node*>(n)  || dynamic_cast<const Int64Node*>(n)
-        || dynamic_cast<const UInt8Node*>(n)  || dynamic_cast<const UInt16Node*>(n)
-        || dynamic_cast<const UInt32Node*>(n) || dynamic_cast<const UInt64Node*>(n)
-        || dynamic_cast<const Float32Node*>(n)|| dynamic_cast<const Float64Node*>(n)
-        || dynamic_cast<const CharNode*>(n);
-}
-}  // namespace
 
 void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression value,
                                   const char* what, int line)
@@ -2085,6 +2093,27 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // above. The guard is the control flow, not a classifier test, which is what keeps it out of the
         // three traps `exprClass`'s `isClass` filter has already sprung on this campaign.
         noteNumericOperands(token, lhs, rhs, binaryOperator(token).c_str(), line);
+
+        // D-arith, the emission half: `T op T` IS a `T`, so where C would hand back a promoted `int` the
+        // result is narrowed to `T` right here. Only the four sub-`int` types can differ — everything
+        // from `int32` up is already its own type in C — and only a value-producing operator; a
+        // comparison yields `bool`, so promotion cannot reach its result. A shift takes its type from the
+        // LEFT operand alone, matching `typeOfExpr`.
+        //
+        // Without this the classifier and the emitter disagree wherever the promoted value is READ before
+        // something narrows it: `cast<int32>(a + b)` said 300 where kama's rule says 44, and so did
+        // `(a + b) > c`, `(a + b) / c` and `arr[a + b]`. The corpus never noticed because a hand-off into
+        // a `T` destination truncates on the way in, which is the one path where both answers agree.
+        // Measured at 39 sites before the change (`--strict-numeric`'s `arith-subint` bucket); the 11,662
+        // sub-`int` COMPARISONS are untouched, which is why the bucket had to be split to size this.
+        std::string resT;
+        if (!isComparisonToken(token)) {
+            const std::string lt = typeOfExpr(lhs);
+            if (token == LTLT || token == GTGT) resT = lt;
+            else if (!lt.empty() && lt == typeOfExpr(rhs)) resT = lt;
+            if (!(cNumBits(resT) && cNumBits(resT) < 32 && !cNumFloat(resT))) resT.clear();
+        }
+        const std::string open  = resT.empty() ? "(" : "(" + resT + ")(";
         // A signed LEFT shift into the sign bit is UB in C; route it through `kama_lshift` (shifts in the
         // matching unsigned type — defined) so there's no UB even in debug (release's `-fwrapv` also
         // defines it, but debug has none). Right shift of a signed value is impl-defined, not UB.
@@ -2099,10 +2128,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             bool knownUnsigned = lt == IDENTIFIER_UINT8_VAL  || lt == IDENTIFIER_UINT16_VAL
                               || lt == IDENTIFIER_UINT32_VAL || lt == IDENTIFIER_UINT64_VAL;
             if (!knownUnsigned)   // unknown type stays on the safe path
-                return "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
+                return open + "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + "))";
         }
-        return "(" + emitExpression(lhs) + " " + binaryOperator(token) + " "
-                   + emitExpression(rhs) + ")";   // primitives — unchanged
+        return open + emitExpression(lhs) + " " + binaryOperator(token) + " "
+                    + emitExpression(rhs) + ")";   // primitives — `open` narrows a sub-`int` result
     }
 
     // Comparison is CONTRACT-driven, not operator-driven. `Equatable` and `Comparable` are the single
@@ -2750,6 +2779,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             case PLUS:        op = "+"; break;
             case MINUS:       op = "-"; break;
             default:          op = "/*?unary*/"; break;
+        }
+        // The unary half of D-arith. `~` and `-` and `+` carry the operand's type through — `typeOfExpr`
+        // has always said so — but C promotes a sub-`int` operand first, so `~u` on a `uint8` came back
+        // with the high bits set and `cast<int32>(~15ui8)` answered -16 instead of 240. `!` is excluded:
+        // it yields `bool` and its operand is not a number. Same four types, same reasoning, as the
+        // binary half above.
+        if (v->token != EXCLAMATION) {
+            const std::string t = typeOfExpr(v->expression);
+            if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t))
+                return "(" + t + ")(" + op + emitExpression(v->expression) + ")";
         }
         return "(" + op + emitExpression(v->expression) + ")";
     }

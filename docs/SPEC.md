@@ -972,6 +972,29 @@ is a compile error, from one [`comptime assert`](#compile-time-assertions--compt
 own body reading `sizeof(B)` — not a rule the compiler knows about this type. See
 [MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.
 
+**Arithmetic on two values of one type yields that type.** `uint8 + uint8` is a `uint8`, at every width —
+kama's own rule, the one Rust, Swift and Go have, and *not* C's integer promotion, which would make the
+result an `int` and every sub-`int` expression a narrowing on the way back out:
+
+```kama
+fn uint8 hexDigit(uint8 v) {
+    if (v < 10ui8) { return 48ui8 + v; }   // `uint8 + uint8` : uint8 — no cast, nothing to convert
+    return 97ui8 + (v - 10ui8);
+}
+```
+
+Two consequences worth stating, because C answers both differently:
+
+- The result **wraps** into its own type rather than surviving at `int` width. `uint8 a = 200ui8, b =
+  100ui8;` makes `a + b` equal to `44`, and it is 44 everywhere — `cast<int32>(a + b)`, `(a + b) > 250ui8`
+  and `(a + b) / 2ui8` all read the wrapped value. C would carry 300 until something narrowed it, so the
+  two agree only where the value is immediately stored into a `uint8`.
+- A **shift** takes its type from its LEFT operand alone. The right one is a count, not a co-operand, so
+  the two need not agree: `int64 x; x << someInt32` is fine, as is `(c >> 4ui8)` on a `uint8`.
+
+C's promotion is not part of kama's surface, which is the point: a reader should not have to know it to
+predict which lines need a cast. The emitted C carries an explicit narrowing so the two agree.
+
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
 - **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during
@@ -983,6 +1006,12 @@ UB:
 - **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
   (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
 - **Out-of-range `float → int`** **traps**; in-range truncates toward zero. Integer narrowing wraps mod 2ⁿ.
+- ⚠️ **The signed-overflow trap is a property of `int32`/`int64`, not of every signed type.** `int8 s =
+  100i8; s + s` is `-56`, silently: the operands promote to `int` in the emitted C, where 200 does not
+  overflow, and the rule above then narrows the result — and a narrowing *conversion* is what the trap
+  does not watch. So a sub-`int` signed type wraps where a wider one aborts. This predates the rule above
+  (the same value arrived by the same route when it was the assignment that narrowed); the rule is what
+  makes it worth writing down. `int32` and `int64` trap as stated.
 
 Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dependency) + `-fwrapv` +
 the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.
