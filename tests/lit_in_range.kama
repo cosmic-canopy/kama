@@ -5,6 +5,12 @@
 //
 // Every position the rejection reaches is pinned here too, plus the three destinations whose width this
 // compiler refuses to assert (`usize`, `isize`, `uint64`) and which are therefore answered by SIGN alone.
+// A module-level `comptime` above INT64_MAX. `_moduleConsts` records a const's VALUE and no type, so the
+// classifier answers "" for `HUGE` while `constValue` folds it to -1 — a REINTERPRETATION, not a value.
+// The rule stays silent when it cannot tell those apart, which is the constraint the whole campaign rests
+// on; the first cut read "the classifier did not say uint64" as "signed" and rejected this line.
+comptime uint64 HUGE = 18446744073709551615ui64;
+
 type value Box {
     public int8 v = 100;
     public ctor make() { this.v = 100; }
@@ -47,5 +53,7 @@ fn int32 main() {
     if (n == 4096)                      { count = count + 1; }
     if (d == -4096)                     { count = count + 1; }
     if (u == 18446744073709551615ui64)  { count = count + 1; }
-    return count;   // 13
+    uint64 fromConst = HUGE;                        // the module const, untyped by the classifier
+    if (fromConst == 18446744073709551615ui64) { count = count + 1; }
+    return count;   // 14
 }

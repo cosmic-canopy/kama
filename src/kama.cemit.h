@@ -1253,9 +1253,10 @@ private:
     // the emit walk, and the const folder — a `comptime` constant is resolved only in the folder.
     void rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line);
     // 5b-A. Is a folded constant PROVABLY outside its destination? The only answer that diagnoses; every
-    // uncertainty is "no". `srcUnsignedWide` says `constValue`'s int64 fold reinterpreted a magnitude
-    // above INT64_MAX as negative, which the range comparison must not read at face value.
-    bool constOutOfRange(const std::string& dstCType, int64_t v, bool srcUnsignedWide);
+    // uncertainty is "no". `srcCType` is the SOURCE's lowered type and may be "" — it is what tells a
+    // genuinely negative value apart from `constValue`'s int64 reinterpretation of a magnitude above
+    // INT64_MAX, and "" means neither can be ruled out, so nothing is reported.
+    bool constOutOfRange(const std::string& dstCType, int64_t v, const std::string& srcCType);
     void rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
                                const char* what, bool isInit, int line);
     // 5b-B. A hand-off position has a destination, so every `wideUnsuffixed` literal reachable from the

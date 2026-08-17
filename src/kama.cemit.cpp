@@ -801,7 +801,7 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     if (isNumericLiteral(value.get())) {
         int64_t v;
         if (!constValue(value, v)) return;
-        if (!constOutOfRange(dstCType, v, v < 0 && src == "uint64_t")) return;
+        if (!constOutOfRange(dstCType, v, src)) return;
     }
 
     const char* cat;
@@ -841,15 +841,29 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
 // range-checkable destination and none is out of range, and none of the 105 rows into `size_t`/`uint64_t`
 // passes a negative. Both boundary guards (check-agents.sh, check-query.sh) keep passing too, because the
 // width mismatch they pin is `int8 a = big` — a VARIABLE, which `constValue` does not fold.
-bool CEmitter::constOutOfRange(const std::string& dstCType, int64_t v, bool srcUnsignedWide)
+bool CEmitter::constOutOfRange(const std::string& dstCType, int64_t v, const std::string& srcCType)
 {
+    // `constValue` folds into an int64, so a NEGATIVE fold means one of three things and only two are
+    // answerable: the value really is negative (a signed source), or it is a magnitude above INT64_MAX
+    // reinterpreted (a 64-bit unsigned source), or WE CANNOT TELL. "Cannot tell" must be silent — the
+    // constraint this whole campaign is built on — and the first cut of this rule broke it by reading
+    // "the classifier did not say uint64_t" as "signed". `_moduleConsts` and `_constLocalVals` record a
+    // const's VALUE with no type, so `typeOfExpr` answers "" for a module-level `comptime`, and
+    // `uint64 x = M;` for `comptime uint64 M = 18446744073709551615ui64;` was rejected as "-1".
+    const bool srcSigned = srcCType == "int8_t"  || srcCType == "int16_t" || srcCType == "int32_t"
+                        || srcCType == "int64_t" || srcCType == "ptrdiff_t";
+    const bool srcU64    = srcCType == "uint64_t" || srcCType == "size_t";
+    if (v < 0 && !srcSigned) {
+        if (!srcU64) return false;                  // unknown source — a value and a reinterpretation look alike
+        // Above INT64_MAX, so it fits a 64-bit unsigned destination and nothing else.
+        return !(dstCType == "uint64_t" || dstCType == "size_t");
+    }
     int64_t lo, hi;
-    if (primIntRangeC(dstCType, lo, hi)) return srcUnsignedWide || v < lo || v > hi;
-    // The two target-width types and the 64-bit pair, answered by SIGN alone rather than by a width this
-    // compiler was not told. `usize n = -1;` is a bug on every target without knowing which one, and a
-    // magnitude above INT64_MAX fits nothing narrower than a 64-bit unsigned.
-    if (dstCType == "uint64_t" || dstCType == "size_t")    return !srcUnsignedWide && v < 0;
-    if (dstCType == "int64_t"  || dstCType == "ptrdiff_t") return srcUnsignedWide;
+    if (primIntRangeC(dstCType, lo, hi)) return v < lo || v > hi;
+    // The two target-width types, answered by SIGN alone rather than by a width this compiler was not
+    // told: `usize n = -1;` is a bug on every target without knowing which one. `int64_t`/`ptrdiff_t`
+    // hold every fold that reaches here.
+    if (dstCType == "uint64_t" || dstCType == "size_t") return v < 0;
     return false;                       // not an integer destination — a float, a class, an enum
 }
 
@@ -884,11 +898,11 @@ void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpressi
 {
     int64_t v;
     if (dstCType.empty() || !value || !constValue(value, v)) return;
-    // `constValue` folds into an int64, so a `uint64` source above INT64_MAX comes back NEGATIVE. That is
-    // a reinterpretation, not the value, and reading it at face value would reject
-    // `uint64 w = 18446744073709551615ui64;` — which tests/int_literal_wide.kama pins as CORRECT.
-    const bool srcUnsignedWide = (v < 0 && typeOfExpr(value) == "uint64_t");
-    if (!constOutOfRange(dstCType, v, srcUnsignedWide)) return;
+    const std::string srcCType = typeOfExpr(value);
+    if (!constOutOfRange(dstCType, v, srcCType)) return;
+    // A negative fold from a 64-bit unsigned source is a magnitude above INT64_MAX, so the diagnostic
+    // must print the magnitude rather than the reinterpretation.
+    const bool srcUnsignedWide = v < 0 && (srcCType == "uint64_t" || srcCType == "size_t");
 
     const std::string name = kamaNameOf(dstCType, primKeyOfCType(dstCType));
     const std::string shown = srcUnsignedWide ? std::to_string((unsigned long long)v) : std::to_string(v);
