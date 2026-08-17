@@ -3,15 +3,25 @@
 *In-flight design doc. **Delete this file when the work ships**, once SPEC + ROADMAP carry the record — see
 the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 
-**→ START HERE for the next session.** Milestones **0 through 5b have SHIPPED** — see the table below for
-what each one turned out to be. The next task is **milestone 6, strict numeric conversion**
-([ROADMAP.md](../ROADMAP.md) row 1), then 7. **Row 6's size is settled at 103**: 5b-A drove 5a's `literal`
-bucket from 219 to zero, so what the sweep still reports is what the strict rule will actually have to
-migrate. **Read *The 5a measurement* below before scoping it** — it says something the brief did not
-predict, and note that milestone 6 **will fail both boundary guards by design**. The
-design is settled otherwise: read *Decisions taken* and the *Milestones* table. The traps table is not
-background — every row in it is a thing that bit the implementation directly, and the ones marked ✅ are
-the ones that already did.
+**→ START HERE for the next session.** Milestones **0 through 5b have SHIPPED**, at `0.9.23` — see the
+table below for what each one turned out to be. The next task is **milestone 6, strict numeric
+conversion** ([ROADMAP.md](../ROADMAP.md) **row 1**), then **milestone 7** (runtime cast trap + `try cast`,
+ROADMAP row 2).
+
+**Milestone 6 is already measured: 103 sites, all one shape, one subsystem.** 5b-A drove the `literal`
+bucket from 219 to zero, so what the sweep reports now IS the migration — read *The 5a measurement* below
+before scoping, because the shape is not the one this brief predicted. Three things to know before
+starting:
+
+- the rule is **source-breaking**, so the rule and its corpus migration land in **ONE commit**;
+- it **will fail both boundary guards by design** (`check-agents.sh`, `check-query.sh` pin "`check` still
+  passes a WIDTH mismatch"). Correct `usage()`, `docs/agents.md` and `agents/AGENTS.md` and then the
+  assertions — never weaken them;
+- the kind rule already owns the four-family half, so milestone 6 is purely about WIDTH.
+
+The design is settled otherwise: read *Decisions taken* (D1, D2, D2a) and the *Milestones* table. The
+traps table is not background — every row in it is a thing that bit the implementation directly, and the
+ones marked ✅ are the ones that already did.
 
 > **Read this before the ROADMAP row it replaces.** Every claim below was **probed against the built
 > compiler on 2026-08-15**, with the command recorded. The row this brief supersedes described ⑩ as
@@ -27,7 +37,7 @@ the ones that already did.
 | **Closed by the view window** | ④⑤⑥ (the window rule, the freeze, `ref`/`out` view params, view-root aliasing) and ⑦ (`foreach` is a window; `mods` bumped in `growTo`). `1655e8a`…`19fc999` |
 | **Closed by the spine (M0–M4)** | ⑩ *by kind* at all five hand-off positions, and ⑪ *for constants*. `10b8f30`…`9794284` |
 | **Closed by M5/5a** | ⑩ *by type* at **six** positions (assignment was the sixth, and unwired), and the row-3 migration is now measured rather than guessed. `db9e3e1`…`c0be0ad` |
-| **Closed by 5b** | CONTEXTUAL LITERAL TYPING, all three halves: a constant that does not fit its destination at all six positions (A), a wide unsuffixed literal a wider destination can claim (B), and a suffixed literal against its own suffix (C). `59edf78`… |
+| **Closed by 5b** | CONTEXTUAL LITERAL TYPING, all three halves: a constant that does not fit its destination at all six positions (A), a wide unsuffixed literal a wider destination can claim (B), and a suffixed literal against its own suffix (C). Plus two fixes found by re-probing after the fact. `59edf78` · `89430c0` · `811f238` · `4232be0` · `612c35f` |
 | **OPEN — this document** | ⑩ by WIDTH (milestone 6), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
 
 ## What the probes established
@@ -144,8 +154,8 @@ instrument; do not scope M6 before it has run.**
 | **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. **Measured before starting: 5b has ZERO corpus migration** — of 5a's 219 `literal` rows only 21 have a range-checkable destination and none is out of range, none of the 105 unsigned-wide rows passes a negative, and all 885 suffixed literals fit their suffix. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
 | **5b-C** ✅ | **SHIPPED.** The suffixed range check, at every width. ⚠️ **Not the latent hole this brief filed it as** — the negative boundary was a live bug emitting invalid C; see the section below. | `createIntegerLiteralNode`, `WideLit`, `emitExpression`'s `Int64Node` arm | ~45 LOC, 4 fixtures, **0** corpus migration |
 | **5b-B** ✅ | **SHIPPED.** A wide unsuffixed literal is built at its natural width and marked; a hand-off claims it, `emitExpression` reports one nothing claimed. ⚠️ **The parser→emitter channel this brief scoped was not needed** — the record belongs on the NODE. `pendingWideLits` stays, for 5b-C. | `makeUnsuffixedInt`, `negateWideLit`, `governWideLiterals`, `ASTNode::wideUnsuffixed` | ~80 LOC, 5 fixtures, **0** corpus migration |
-| **5b-A** ✅ | **SHIPPED.** The fits-check at all six hand-off positions, reach = whatever `constValue` folds. **5a's `literal` bucket went 219 → 0**, so row 2 is now measured at 103. ⚠️ Two things the plan did not foresee: a `uint64` fold reads as NEGATIVE, and `usize`/`uint64` deserve a sign rule even with no asserted range. | `primIntRangeC`, `constOutOfRange`, `rejectConstOutOfRange`, `noteNumericHandoff` | ~90 LOC, 10 fixtures, **0** corpus migration |
-| **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b must land first, or the migration carries thousands of literal suffixes 5b would have made unnecessary. Note the kind rule already owns the four-family half, so 6 is purely about WIDTH. | `kindOfCType`'s callers | ~200 LOC + migration sized by 5a |
+| **5b-A** ✅ | **SHIPPED.** The fits-check at all six hand-off positions, reach = whatever `constValue` folds. **5a's `literal` bucket went 219 → 0**, so milestone 6 is now measured at 103. ⚠️ Two things the plan did not foresee: a `uint64` fold reads as NEGATIVE, and `usize`/`uint64` deserve a sign rule even with no asserted range. | `primIntRangeC`, `constOutOfRange`, `rejectConstOutOfRange`, `noteNumericHandoff` | ~90 LOC, 10 fixtures, **0** corpus migration |
+| **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b landed first, so the migration carries no literal suffixes it would have made unnecessary. The kind rule already owns the four-family half, so 6 is purely about WIDTH. **Where the rule goes is already built**: `noteNumericHandoff` sits at all six hand-off positions and already computes source and destination C types and classifies the crossing — turning the TSV row into a diagnostic is the rule. ⚠️ It **must** exempt what 5b made legal: a literal that fits its destination is not a conversion (`constOutOfRange` is the predicate), and an unknown source type must stay silent. ⚠️ **Fails `check-agents.sh` + `check-query.sh` by design** — fix `usage()`, `docs/agents.md`, `agents/AGENTS.md`, then the assertions. | `noteNumericHandoff`'s classification, `kindOfCType`'s callers | ~200 LOC + 103 sites, one shape |
 | **7** | **⑪-runtime** (D1) — trap, plus `try cast<T>`. `try` is contextual and today parses only before `new`; extend to `cast`. Reuses `try new`'s `Optional<T>` static-result path. The constant half already rejects there, so the site and the range helper (`primIntRange`) exist. Fixtures: `tests/cast_try_ok.kama`, `tests/trap/cast_narrow_runtime`, `tests/xfail/cast_try_bad_type` (mirror `xfail/try_new_bad_type`). | `emitExpression`'s `CastNode` arm, `src/kama.y` | ~120 LOC |
 | **8** | **⑩b-cheap** — a concrete-only template-body walk as a new pass after the `checkDeclaredTypes(units)` call in `analyze`, reusing `collectBindings` (`kama.query.cpp`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors in uninstantiated templates. | new pass | ~150 LOC |
 | **9** | **⑩b-full** — opaque type parameters answering `findMethod` from declared bounds (`MethodInfo::whenParams`/`whenBounds`). Bounded quantification; **wants its own design doc.** | | ~600–900 LOC |
@@ -158,21 +168,23 @@ family, at **six** hand-off positions. It still does not check WIDTH — `kama c
 `int32 x = "oops"` and still passes `int8 a = big`, and both guards (`check-agents.sh`,
 `check-query.sh`) pin **both** ends of that boundary, so milestone 6 will fail them by design.
 
-## The 5a measurement — what row 3's migration actually is
+## The 5a measurement — what milestone 6's migration actually is
 
-769 files (`tests lib prelude examples bench`, xfail excluded), deduped:
+769 files (`tests lib prelude examples bench`, xfail excluded), deduped. **The right-hand column is the
+number to scope against** — 5b closed the `literal` bucket, so nothing else is going to shrink it:
 
-| bucket | rows | what it is |
-|---|---|---|
-| `literal` | **219** | a literal into a differently-typed destination. **Row 2 (contextual literal typing) absorbs every one.** Spread across all six positions: 75 argument, 63 local, 41 assignment, 40 field |
-| `narrowing` | **103** | ⚠️ **all `int32_t -> uint8_t`, and all one shape.** `fn uint8 hexDigit(uint8 v) { return 48ui8 + v; }` — C promotes two `uint8` operands to `int`, so the return narrows. Concentrated in `lib/std/serialization/json/json.kama` and the `ser_*` fixtures; 68 return, 34 argument, 1 assignment |
-| `widening` · `signedness` · `int-float` · `usize-width` | **0** | none, anywhere |
-| `unknown-src` | 1,752 | the instrument's blind spot: generic bodies (type-parameter operands) and MIXED-type arithmetic |
+| bucket | before 5b | AFTER 5b | what it is |
+|---|---|---|---|
+| `literal` | 219 | **0** | a literal into a differently-typed destination. Contextual literal typing absorbed every one: a literal that FITS is already of its destination's type, so no conversion happens |
+| `narrowing` | 103 | **103** | ⚠️ **all `int32_t -> uint8_t`, and all one shape.** `fn uint8 hexDigit(uint8 v) { return 48ui8 + v; }` — C promotes two `uint8` operands to `int`, so the return narrows. Concentrated in `lib/std/serialization/json/json.kama` and the `ser_*` fixtures; 68 return, 34 argument, 1 assignment |
+| `widening` · `signedness` · `int-float` · `usize-width` | 0 | **0** | none, anywhere |
+| `unknown-src` | 1,752 | 1,745 | the instrument's blind spot: generic bodies (type-parameter operands) and MIXED-type arithmetic. `moduleStaticCTypeRaw` resolved 9 of them and none was a new narrowing |
 
 **The finding the brief did not predict.** The corpus is not loose about conversions — it already
-spells them (161 `cast<usize>` alone, 335 `cast<int32>`), which is why `widening` is empty. What row 3
-will actually hit is **C's integer promotion of sub-`int` arithmetic surfacing at a return**, and that
-is 103 well-bounded sites in one subsystem, not a corpus-wide sweep.
+spells them (161 `cast<usize>` alone, 335 `cast<int32>`), which is why `widening` is empty. What
+milestone 6 will actually hit is **C's integer promotion of sub-`int` arithmetic surfacing at a return**,
+and that is 103 well-bounded sites in one subsystem, not a corpus-wide sweep. Re-run the sweep first
+(command in *Ordering* below) rather than trusting this table.
 
 ## Milestone 5b, scoped — START HERE
 
@@ -198,8 +210,8 @@ whatever `constValue` folds, matching milestone 2's `cast` rule, so `int8 x = ca
 `int8 x = 300` no longer give two answers. `primIntRangeC` is the same table `primIntRange` holds, reached
 from a lowered C type; `primIntRange` now routes through it so the numbers live in one place.
 
-**The `literal` bucket is now 0** — 219 → 0, leaving `103 narrowing` + `1752 unknown-src`. That is row 2's
-real size. Contextual typing is implemented as a **query, not an AST mutation**: `noteNumericHandoff` drops
+**The `literal` bucket is now 0** — 219 → 0, leaving `103 narrowing` + `1745 unknown-src`. That is
+milestone 6's real size. Contextual typing is implemented as a **query, not an AST mutation**: `noteNumericHandoff` drops
 a literal that fits, because such a literal already *is* of the destination's type. Retyping the node would
 be wrong under a second instantiation and would change `primKeyOfLiteral`'s method dispatch.
 
@@ -277,9 +289,9 @@ word it differently. One thing the plan did not foresee: **INT64_MIN has no C li
 
 **The record below is what it was.**
 
-Filed today under ROADMAP row 30 ("remaining language limitations") and reasoned about in
-[§2](../ROADMAP_DETAIL.md#s2), but it is the SAME rule as 5b-A and should ride with it rather than wait
-for a campaign of its own. Verified still live on `0.9.18`:
+Was filed under ROADMAP's "remaining language limitations" row and reasoned about in
+[§2](../ROADMAP_DETAIL.md#s2) — both entries are now deleted — but it is the SAME rule as 5b-A and rode
+with it rather than waiting for a campaign of its own. Verified live on `0.9.18` before the fix:
 
 ```kama
 int8 a = 300i8;            // -> 44, silently. `kama check` says OK; the program exits 44
@@ -290,7 +302,7 @@ int32 b = 2147483648i32;   // -> INT32_MIN, silently
 unsuffixed path checks; the suffixed one — where the author has *stated* the width — does not, which is
 the wrong way round. Fix = the same range test against the suffix's width, with the negation fold
 extended to cover `-128i8` / `-2147483648i32`. **Corpus-clean** (no suffixed literal anywhere exceeds
-its suffix), so it is a latent hole and carries no migration. Delete the row-30 entry when it lands.
+its suffix), so it is a latent hole and carries no migration.
 
 ### Ordering
 
@@ -298,7 +310,7 @@ its suffix), so it is a latent hole and carries no migration. Delete the row-30 
 channel. 5b-B is the one that does. **All three before milestone 6**, or its migration carries literal
 suffixes 5b would have made unnecessary.
 
-**Re-run 5a after 5b** — the `literal` bucket should go to zero, and what remains is row 6's real size.
+**Re-run 5a before starting milestone 6** — the `literal` bucket is zero, and what remains is its real size.
 The command:
 
 ```sh
@@ -340,7 +352,11 @@ own row rather than folded into this campaign.
 | ✅ **…but the type cannot go in `className`, and this cost a matrix cycle.** That field also drives `ownsByValue`, and the read-only `kama_string__*` intrinsics deliberately BORROW their string argument — the trap table's own "Deliberate unknowns" row said so, and the call site says so in a comment | Naming it there made **51 fixtures** demand a `give`/`copy` marker for `s.contains(...)`. The checker got its own field, `ParamSig::kindCType`, consulted only where `className` is empty |
 | ✅ **`ParamSig::byRef` had no default initializer.** A `ParamSig` built field-by-field left it indeterminate | `InlineArray_uint8_256__get` was handed `&i` where it wanted a `size_t`. **Clean on the host leg, failed on the container** — a bug whose existence depended on stack contents. Now defaulted |
 | ✅ **There were SIX hand-off positions, not five.** Plain assignment (`x = expr;`) is not an initializer and the spine never wired it | The campaign's headline defect survived one statement past the fixture pinning it: `int32 x = 0; x = "oops";` passed `kama check` and failed at clang. `tests/xfail/assign_kind_int_from_string` |
-| ✅ **A measurement that hides its blind spot is worse than no measurement.** 5a's first draft dropped every hand-off whose source it could not type | It reported 219 rows, all `literal`, reading as "row 3 has no migration". Adding an `unknown-src` bucket showed **29,282** dropped — 0.7% coverage. Modelling same-type arithmetic (C's rule stated exactly, not a guess) took it to 1,752 and surfaced the 103 real narrowings |
+| ✅ **A measurement that hides its blind spot is worse than no measurement.** 5a's first draft dropped every hand-off whose source it could not type | It reported 219 rows, all `literal`, reading as "the strict rule has no migration". Adding an `unknown-src` bucket showed **29,282** dropped — 0.7% coverage. Modelling same-type arithmetic (C's rule stated exactly, not a guess) took it to 1,752 and surfaced the 103 real narrowings |
+| ✅ **An UNKNOWN source type must never be read as a signed one — and 5b-A shipped a regression doing exactly that.** `constValue` folds into an int64, so a `uint64` magnitude above INT64_MAX comes back NEGATIVE. 5b-A told that apart from a real negative by asking `typeOfExpr`, and read any answer other than `uint64_t` as "signed" | `_moduleConsts`/`_constLocalVals` record a const's VALUE with no type, so a module-level `comptime uint64 M = …ui64;` classified as `""` and `uint64 x = M;` was rejected as "-1". The local spelling passed only because `_localCTypes` happens to record the declarator, which is why the corpus and every probe missed it. **A negative fold has THREE states** — value, reinterpretation, unanswerable — and the third must be silent (`4232be0`) |
+| ✅ **`exprClass`'s `isClass` filter hid a primitive for the THIRD time.** `callReturnTypeRaw` and `indexElemTypeRaw` were both extracted out of `exprClass` for it; `moduleStaticCTypeRaw` is the third | The silence above then let `comptime int32 NEG = -1; uint8 u = NEG;` through, emitting 255. The type was in `_moduleStatics` all along — `exprClass` looked it up and then filtered it away. **If a classifier is silent on something, suspect this filter before suspecting the rule** (`612c35f`) |
+| ✅ **A green matrix does not prove a REJECTION rule right — and did not.** Both fixes above passed all three legs and 36 guards | No fixture had the shape. The acceptance test for a rule with uncertainty branches is a probe ledger that walks EACH branch — value / reinterpretation / unknown, at every position — not a green suite |
+| **`./dev matrix` fails `check-grammar` after any edit inside a `kama.y` RULE** — comments count | Run `tools/gen-grammar` and commit `docs/grammar.bnf`. Editing only the C helper functions at the foot of the file does not trip it |
 | the prelude is compiled INTO the binary | `./dev build` after any `prelude/global.kama` edit |
 | a breaking rule and its corpus migration must land in ONE commit | `run_tests.sh` fails any fixture whose stderr matches `/warning/i`, and `unsupported()` prints `warning:` |
 
@@ -350,6 +366,17 @@ own row rather than folded into this campaign.
 - Every fixture must be rejected by **`kama check`** as well as `kama build`.
 - The probes in §1–§3 are the acceptance test: each must stop compiling (or start being diagnosed by kama
   rather than by clang), and the resulting diagnostics belong in the commit message.
+- **Baseline to beat, at `0.9.23`: native 1138 / san 1124 / wasm 1096, 36 guards.**
+- **Probe every branch of the rule, including the ones that must stay SILENT.** Two bugs shipped in 5b
+  survived a green matrix because no fixture had their shape; both were found by asking "is the thing I
+  wrote down as a trap actually fixed?". For a width rule that means: in range, out of range high, out of
+  range low, negative into unsigned, a magnitude above INT64_MAX, and each of those as a literal, a local
+  `comptime`, a module `comptime` and const arithmetic — at all six positions.
+- **Re-run the corpus scan for silent breakage**, which the suite does not cover:
+  ```sh
+  find tests lib prelude examples bench -name '*.kama' -not -path '*/xfail/*' \
+    | while read -r f; do ./kama check "$f" >/dev/null 2>&1 || echo "REJECTED $f"; done
+  ```
 - ⚠️ **Do not trust a line number in this file.** `src/kama.cemit.cpp` is ~20k lines and moves under every
   commit; the spine alone shifted it by 257. Everything above names a SYMBOL for that reason — grep for it.
   Line numbers survive only where they point into a file this campaign does not edit.
