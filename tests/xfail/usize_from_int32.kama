@@ -1,0 +1,1 @@
+fn int32 main() { int32 b = 5; usize a = b; return 0; }

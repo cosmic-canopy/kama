@@ -607,6 +607,23 @@ bool isNumericLiteral(const ASTNode* n)
         || dynamic_cast<const Float32Node*>(n)|| dynamic_cast<const Float64Node*>(n)
         || dynamic_cast<const CharNode*>(n);
 }
+// A LITERAL EXPRESSION: a numeric literal, or arithmetic built only out of them. D2a types a literal by
+// its destination, and const arithmetic over literals is still the literal — `int8 a = 2 + 3;` is the
+// author writing 5 where an `int8` goes, and `tests/int_literal_wide.kama:57` already pins governance
+// reaching through such a fold.
+//
+// ⚠️ A NAMED constant is deliberately NOT one, and the distinction is the whole reason this cannot just
+// ask `constValue`: the folder happily evaluates `comptime int32 N = 5;` to 5, but `N` STATES a type, so
+// `int8 x = N;` is a conversion — as it is in Rust, where `const N: i32` cannot initialize an `i8`.
+// Folding is about the value; this is about whether the author wrote a type.
+bool isLiteralExpr(const ASTNode* n)
+{
+    if (!n) return false;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isLiteralExpr(u->expression.get());
+    if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n))
+        return isLiteralExpr(b->LHS.get()) && isLiteralExpr(b->RHS.get());
+    return isNumericLiteral(n);
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------
@@ -1047,6 +1064,55 @@ void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpressi
                  + shown + tail).c_str(), line);
 }
 
+// Milestone 6, the hand-off half: a value must ALREADY have its destination's type. No implicit numeric
+// conversion — not narrowing, not widening, not a signedness flip, not int/float. The Rust/Swift/Go rule
+// (D2), and the reason it is a 1.0 gate: it is source-breaking, so it lands before the API-stability tag
+// or waits for 2.0.
+//
+// This is `noteNumericHandoff`'s classification turned into a judgement, at the same two funnels, because
+// those are the only places that hold a destination type. What it must NOT do is fire on anything the
+// rest of the campaign made legal:
+//
+//   - an UNKNOWN source is silent. `typeOfExpr` returns "" for a type parameter, a const-generic
+//     parameter, a `foreach` binding, a `borrow` alias, an intrinsic with no recorded return type, an
+//     `extern fn` result and a mixed-arithmetic subexpression. Every one of those must compile, and this
+//     is the single most important constraint in the campaign — a rule built on a classifier that
+//     conflates "primitive" with "no idea" is either silent on every primitive or unlandable.
+//   - a LITERAL is contextually typed (D2a), so it is already of its destination's type and there is no
+//     conversion to reject. `constOutOfRange` is the predicate for the one that does not fit, and
+//     `rejectConstOutOfRange` — which ran just above — owns that case, so this rule stays out of it
+//     entirely rather than risking a second diagnostic for one mistake.
+//   - a non-numeric destination or source belongs to the KIND rule below, which says it better.
+void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpression value,
+                                       const char* what, bool isInit, int line)
+{
+    if (!value || dstCType.empty()) return;
+    const bool dstNum = cNumBits(dstCType) || cNumTargetWidth(dstCType);
+    if (!dstNum) return;
+    const std::string src = typeOfExpr(value);
+    if (src.empty() || src == dstCType) return;
+    if (!cNumBits(src) && !cNumTargetWidth(src)) return;   // a kind crossing — the rule below names it
+
+    // The D2a exemption: a literal takes its type from its destination, so there is no conversion to
+    // reject. `rejectConstOutOfRange` ran just above and owns the one that does not FIT, so this rule
+    // stays out of the literal case entirely rather than risk a second diagnostic for one mistake.
+    //
+    // One crossing survives it, and the line is REPRESENTABILITY, not family. `float32 f = 3;` is the
+    // literal written at the destination's type and 5b decided it deliberately —
+    // `tests/lit_in_range.kama:32` pins it, "an int literal into a float destination is contextual too" —
+    // which is a step past Rust, where `let f: f64 = 3;` is an error. But `int32 x = 1.5;` cannot be the
+    // same thing in reverse: no reading of `1.5` is an `int32`, so context is not typing the literal, it
+    // is silently truncating it. That one is a real conversion and is rejected.
+    if (isLiteralExpr(value.get()) && !(cNumFloat(src) && !cNumFloat(dstCType))) return;
+
+    const std::string dstName = kamaNameOf(dstCType, primKeyOfCType(dstCType));
+    const std::string srcName = kamaNameOf(src, primKeyOfCType(src));
+    unsupported((std::string(what) + (isInit ? " is declared `" : " expects `") + dstName
+                 + "`, so it cannot be " + (isInit ? "initialized with " : "given ") + "a `" + srcName
+                 + "` — kama has no implicit numeric conversion. Convert it explicitly: `cast<" + dstName
+                 + ">(…)`").c_str(), line);
+}
+
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                        const char* what, int line)
 {
@@ -1055,6 +1121,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
     if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
     rejectConstOutOfRange(dstCType, value, what, false, line);
+    rejectNumericConversion(dstCType, value, what, /*isInit*/false, line);   // milestone 6
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -1075,6 +1142,18 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     int64_t folded;
     if (init && constValue(init, folded))
         rejectConstOutOfRange(classifierCType(declType), init, what, true, line);
+    // Milestone 6. Unlike the range check above this is NOT gated on the initializer folding — a
+    // conversion needs no constant, and `int8 a = big;` is the shape the whole rule is named for.
+    //
+    // The source test is spelled out HERE rather than left to the rule, because an argument is evaluated
+    // before the call it is passed to: writing `rejectNumericConversion(classifierCType(declType), …)`
+    // would lower the declared type on every initializer in the program, which is exactly what the
+    // comment above says this site must not do inside `checkDeclaredTypes`.
+    if (init) {
+        const std::string srcT = typeOfExpr(init);
+        if (!srcT.empty() && (cNumBits(srcT) || cNumTargetWidth(srcT)))
+            rejectNumericConversion(classifierCType(declType), init, what, /*isInit*/true, line);
+    }
     // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
     // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where
     // a type is deliberately half-resolved.

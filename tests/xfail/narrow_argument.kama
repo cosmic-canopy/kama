@@ -1,0 +1,1 @@
+fn void f(int8 x) { } fn int32 main() { int32 b = 5; f(x: b); return 0; }

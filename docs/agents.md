@@ -162,7 +162,7 @@ $ kama query src/app.kama --def 24:9 --symbols --json
 existing scripts keep working. A malformed `L:C` anywhere in the list is rejected before *any* answer
 is printed (exit 2, empty stdout): a partial batch that exits nonzero is worse than no batch.
 
-## `kama check` type-checks by KIND, not by WIDTH
+## `kama check` type-checks by KIND and by WIDTH
 
 This is the sharpest edge in the toolchain for an agent, so it is stated plainly:
 
@@ -184,16 +184,41 @@ expression: a call result, an element, a cast, a comparison, a ternary. Where ka
 type it says nothing rather than guessing, so a green `check` is not a proof the program has no type
 error; it is a proof that none of the ones kama can see are there.
 
-**Width is not checked.** `int8 a = big;` narrows an `int32` in silence, through `check` and `build`
-both. (A *constant* that does not fit is rejected — `cast<int8>(300)` is an error, not 44 — because the
-value is knowable; a runtime one still truncates.) Strict numeric conversion is tracked in
-[ROADMAP.md](ROADMAP.md); until it lands, a green `check` means "names resolve and no kind is crossed",
-never "the arithmetic is right".
+**Width is checked at those same places**, because **kama has no implicit numeric conversion** — the
+Rust/Swift/Go rule. `int8 a = big;` is an error and wants `cast<int8>(big)`:
 
-Both halves are pinned by `tools/check-query.sh` **and** `tools/check-agents.sh` — the kind half so it
-cannot regress, the width half so the day it starts being caught, the guards fail and force this page
-to be corrected rather than letting it rot. That is not hypothetical: the kind half of this section
-exists because those guards asserted the opposite and failed.
+```
+error: a local is declared `int8`, so it cannot be initialized with a `int32` — kama has no implicit
+numeric conversion. Convert it explicitly: `cast<int8>(…)`
+```
+
+It is not only narrowing. **Every** crossing is a conversion and every one wants a `cast`: widening
+(`int64 a = someInt32`), a signedness flip (`uint8 a = someInt8`), int/float in both directions, and
+anything involving `usize`/`isize`. If two types differ, the conversion is written down.
+
+What is **not** a conversion, and needs no cast:
+
+| | |
+|---|---|
+| a literal, typed by its destination | `int8 a = 100;` · `float32 f = 3;` · `uint8 b = 255;` |
+| arithmetic over literals — still the literal | `int8 a = 2 + 3;` |
+| arithmetic on one type, which yields that type | `uint8 c = a + b;` on two `uint8`s |
+| a shift, which takes its type from the left operand | `int64 x = y << someInt32;` |
+
+A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
+cast. And a constant that does not fit its destination is rejected for that instead — `int8 a = 300;`
+and `cast<int8>(300)` are errors, not 44.
+
+Where kama is not certain of a type it still says nothing, so the same caveat applies as for kinds: a
+green `check` proves none of the errors kama can see are there, not that there are none. The places it
+is deliberately silent are a type parameter, a const-generic parameter, a `foreach` binding, a `borrow`
+alias, an `extern fn` result, and arithmetic mixing two types.
+
+Both halves are pinned by `tools/check-query.sh` **and** `tools/check-agents.sh`, so neither can rot.
+That mechanism has now fired twice as designed: those guards once asserted that a KIND mismatch was
+missed, and failed the day it started being caught; they then asserted a WIDTH mismatch was missed, and
+failed the day *that* started being caught — which is what forced this section to be rewritten rather
+than left stale.
 
 ## Cost
 

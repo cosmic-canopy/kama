@@ -1,0 +1,1 @@
+fn int8 g() { int32 b = 5; return b; } fn int32 main() { return g() + 0i8 == 0i8 ? 0 : 1; }

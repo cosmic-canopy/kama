@@ -154,10 +154,12 @@ echo "check-agents: the documented \`check\` boundary"
 # usage(), docs/agents.md and agents/AGENTS.md all tell an agent exactly how far `kama check`'s type
 # checking reaches. Pin BOTH ends of that boundary, so neither half can quietly become a lie.
 #
-# This assertion used to read the other way — it asserted `check` did NOT type-check at all, and it
-# failed the day the kind rule landed, which is what forced these docs to be corrected instead of
-# rotting. Keep that property: the width half below fails at the strict-conversion milestone and will
-# force the next correction.
+# Both of these assertions used to read the other way, and BOTH have now fired as designed. The first
+# asserted `check` did not type-check at all, and failed the day the kind rule landed. The second
+# asserted a WIDTH mismatch was still missed, and failed the day strict numeric conversion landed. Each
+# failure forced these docs to be corrected instead of rotting, which is the entire point of the pair —
+# so when the next rule extends this boundary, correct the docs and then the assertion, in that order,
+# and never by weakening it.
 bad_kama="$tmp/typebad.kama"
 printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$bad_kama"
 if "$KAMA" check "$bad_kama" >/dev/null 2>&1; then
@@ -165,16 +167,26 @@ if "$KAMA" check "$bad_kama" >/dev/null 2>&1; then
 else
     ok "\`check\` catches a kind mismatch (\`int32 x = \"oops\"\`)"
 fi
-# ...and the far end: WIDTH is still not checked. `int8 a = big` narrows an int32 silently, through
-# `check` and `build` both. When strict numeric conversion lands this flips, and the fix is to correct
-# the three docs again — not to weaken this assertion.
+# ...and the far end: WIDTH is checked too — kama has no implicit numeric conversion, so `int8 a = big`
+# is an error and wants `cast<int8>(big)`.
 width_kama="$tmp/typewidth.kama"
 printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$width_kama"
 if "$KAMA" check "$width_kama" >/dev/null 2>&1; then
-    ok "\`check\` still passes a WIDTH mismatch (the documented remaining gap)"
+    bad "\`check\` no longer catches a WIDTH mismatch — the docs promise no implicit numeric conversion"
 else
-    bad "\`check\` now catches narrowing conversions — update the \`kama check\` boundary in usage(),
-        docs/agents.md and agents/AGENTS.md, then update this assertion"
+    ok "\`check\` catches a width mismatch (\`int8 a = big\`)"
+fi
+# The OTHER end of the width boundary, and the one a blunt fix would break: a LITERAL is typed by its
+# destination, so it is not a conversion and must still compile. Without this, "reject a width mismatch"
+# is satisfiable by rejecting `int8 a = 100;` too, which would make the language unusable and this guard
+# green. Both halves, same reasoning as the kind pair above.
+lit_kama="$tmp/typelit.kama"
+printf 'fn int32 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$lit_kama"
+if "$KAMA" check "$lit_kama" >/dev/null 2>&1; then
+    ok "\`check\` still accepts a literal typed by its destination (\`int8 a = 100\`)"
+else
+    bad "\`check\` now rejects a literal at its destination's type — the width rule must exempt
+        contextually-typed literals; see docs/agents.md's table of what is NOT a conversion"
 fi
 # ...and `build` must still catch it, or the advice to use `build` is wrong too.
 if "$KAMA" build "$bad_kama" -o "$tmp/typebad.out" >/dev/null 2>&1; then

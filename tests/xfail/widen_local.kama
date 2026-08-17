@@ -1,0 +1,1 @@
+fn int32 main() { int32 b = 5; int64 a = b; return 0; }

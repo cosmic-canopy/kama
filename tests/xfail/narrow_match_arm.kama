@@ -1,0 +1,3 @@
+type enum C { R, G }
+fn int8 g(C c) { int32 b = 5; return match (c) { case R: b; case G: 0i8; }; }
+fn int32 main() { return 0; }

@@ -1,0 +1,1 @@
+comptime int32 N = 5; fn int32 main() { int8 x = N; return 0; }

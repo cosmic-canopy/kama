@@ -1,0 +1,1 @@
+fn int32 main() { float64 f = 1.5; int32 a = f; return 0; }

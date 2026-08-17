@@ -352,9 +352,11 @@ else
     fail=1
 fi
 # THE BOUNDARY GUARD. `kama check` type-checks by KIND — a `string` cannot initialize an `int32` — and
-# not by WIDTH: narrowing an int32 into an int8 still passes both `check` and `build`. Both halves are
-# documented in usage(), in docs/agents.md and in AGENTS.md, and both are pinned here so neither can
-# quietly become a lie. (check-agents.sh asserts the same pair; docs/agents.md names both guards.)
+# by WIDTH: kama has no implicit numeric conversion, so `int8 a = big` is an error wanting
+# `cast<int8>(big)`. A LITERAL is typed by its destination and is therefore NOT a conversion, which is
+# the other end of the width boundary and the one a blunt fix would break. All three are documented in
+# usage(), in docs/agents.md and in AGENTS.md, and all three are pinned here so none can quietly become
+# a lie. (check-agents.sh asserts the same set; docs/agents.md names both guards.)
 tbad="$tmp/typebad.kama"
 printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$tbad"
 if "$KAMA" check "$tbad" >/dev/null 2>&1; then
@@ -366,10 +368,18 @@ fi
 twide="$tmp/typewidth.kama"
 printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$twide"
 if "$KAMA" check "$twide" >/dev/null 2>&1; then
-    echo "  ok: \`check\` still passes a width mismatch (the documented remaining gap)"
+    echo "  FAIL: \`check\` no longer catches a width mismatch — the docs promise no implicit conversion" >&2
+    fail=1
 else
-    echo "  NOTE: \`check\` now catches narrowing conversions — update the boundary in usage()," >&2
-    echo "        docs/agents.md and agents/AGENTS.md, then update this assertion." >&2
+    echo "  ok: \`check\` catches a width mismatch (\`int8 a = big\`)"
+fi
+tlit="$tmp/typelit.kama"
+printf 'fn int32 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$tlit"
+if "$KAMA" check "$tlit" >/dev/null 2>&1; then
+    echo "  ok: \`check\` still accepts a literal typed by its destination (\`int8 a = 100\`)"
+else
+    echo "  FAIL: \`check\` now rejects a literal at its destination's type — the width rule must" >&2
+    echo "        exempt contextually-typed literals (docs/agents.md: what is NOT a conversion)." >&2
     fail=1
 fi
 

@@ -50,10 +50,15 @@ kama check <file>      # FAST SUBSET — see below
 `kama check` runs name resolution, named-argument matching, ownership/move analysis, and type checking
 **by kind** — a value is a number, a `bool`, a `string`, or a type value, and crossing between two of
 them (`int32 x = "oops";`) is rejected — wherever a value crosses into a destination of a stated type
-(an initializer, an assignment, a `return`, a `match` arm, an argument, an enum payload). It does
-**not** check **width**: `int8 a = big;` narrows an `int32` in silence. (A *constant* that does not fit
-is rejected, so `cast<int8>(300)` is an error rather than 44.) Treat a green `check` as "names resolve
-and no kind is crossed", never as "the arithmetic is right".
+(an initializer, an assignment, a `return`, a `match` arm, an argument, an enum payload). It also checks
+**width**, at those same places: **kama has no implicit numeric conversion**, so `int8 a = big;` is an
+error and wants `cast<int8>(big)`. That covers every crossing, not just narrowing — widening
+(`int64 a = someInt32`), a signedness flip and int/float are all conversions and all want a `cast`.
+
+A **literal** is typed by its destination, so it is not a conversion and needs no cast: `int8 a = 100;`,
+`float32 f = 3;` and `int8 a = 2 + 3;` are all fine, while a constant that does not fit its destination
+(`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. A **named** constant is not a literal —
+`comptime int32 N = 5;` states a type, so `int8 x = N;` wants a cast like any other value.
 
 ## Rules an LLM trained on C#, Rust, TypeScript or Go will get wrong
 

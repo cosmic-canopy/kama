@@ -1,0 +1,1 @@
+fn int32 main() { usize n = 4096; int32 a = n; return 0; }

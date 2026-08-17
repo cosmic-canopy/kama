@@ -1,0 +1,1 @@
+type enum E { S(int8 v) } fn int32 main() { int32 b = 5; E e = E::S(v: b); return 0; }

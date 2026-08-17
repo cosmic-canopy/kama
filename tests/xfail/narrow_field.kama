@@ -1,0 +1,1 @@
+type value B { public int8 v; public ctor make(int32 s) { this.v = s; } } fn int32 main() { B b = B.make(s: 5); return 0; }
