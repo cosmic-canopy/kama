@@ -1756,6 +1756,8 @@ private:
     std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
     void noteNumericHandoff(const std::string& dstCType, SharedExpression value,
                             const char* what, int line);   // M5a measurement; silent unless the flag is on
+    void noteNumericOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                             const char* posWhat, int line);   // the seventh position; same flag, same rows
     std::string indexElemTypeRaw(SharedExpression e);    // `a[i]`'s element type, class OR primitive
     static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
     // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".

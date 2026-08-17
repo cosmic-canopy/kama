@@ -846,6 +846,87 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     std::fprintf(stdout, "%s\n", row.c_str());
 }
 
+// The SEVENTH position, and the one the hand-off instrument above cannot see: an operator's two OPERANDS.
+// D2 read literally — "no implicit numeric conversion" — makes `int32 + uint8` a conversion as surely as
+// `int8 a = big` is, and that is the rule Rust/Swift/Go have (`i32 + u8` does not compile; `Add<u8>` is not
+// implemented for `i32`). Nothing anywhere measures it today, so this sizes it before the rule exists.
+//
+// Same row shape as `noteNumericHandoff`, deliberately: column 4 carries the LEFT operand where a hand-off
+// row carries the source, column 5 the RIGHT where it carries the destination, so one `cut -f6 | sort |
+// uniq -c` still answers the whole histogram. Every bucket is prefixed `op-` so the six hand-off buckets
+// stay separable in it. Column 7 is the OPERATOR rather than a position name, because which operators drive
+// the migration is exactly what decides the exemption list.
+//
+// ⚠️ `op-unknown` is REPORTED, not dropped. 5a's first draft dropped every hand-off whose source it could
+// not type and reported 219 rows, reading as "the strict rule has no migration" while hiding 29,282. A
+// measurement that hides its blind spot is worse than no measurement, and this instrument's blind spot is
+// larger than that one's: a type-parameter operand, a const-generic parameter, an intrinsic with no
+// recorded return type, and (until milestone 6's own D-arith change) every mixed-width arithmetic
+// subexpression all answer "".
+void CEmitter::noteNumericOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                                   const char* posWhat, int line)
+{
+    if (!_strictNumericScan || !lhs || !rhs) return;
+    const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
+    const bool lNum = !lt.empty() && (cNumBits(lt) || cNumTargetWidth(lt));
+    const bool rNum = !rt.empty() && (cNumBits(rt) || cNumTargetWidth(rt));
+
+    // Not a numeric operator pair at all: `string + string`, `bool && bool`, a user type, an enum (which
+    // lowers to its own typedef, never to a C numeric name). Silent — those are other rules' subjects.
+    if ((!lt.empty() && !lNum) || (!rt.empty() && !rNum)) return;
+    if (lt.empty() && rt.empty()) return;         // both unknown says nothing about anything
+
+    const char* cat;
+    if (!lNum || !rNum)                                        cat = "op-unknown";
+    else if (opToken == LTLT || opToken == GTGT)               cat = lt == rt ? nullptr : "op-shift";
+    else if (lt == rt) {
+        // Same type on both sides is no conversion — but the four sub-`int` types are where C's integer
+        // promotion makes the RESULT wider than either operand, which is what D-arith (`T op T -> T`)
+        // changes and what the emitter then has to truncate. Counting them here says whether that
+        // emission change is twenty sites or two thousand, before a line of it is written.
+        //
+        // ⚠️ A COMPARISON is counted separately and is NOT part of that change: it yields `bool`, so
+        // promotion cannot leak into its result and it needs no cast. Lumping the two together answered
+        // 11,701 when the number D-arith actually has to touch was 39 — a measurement off by 300x, in the
+        // direction that would have killed the design.
+        if (!cNumBits(lt) || cNumBits(lt) >= 32 || cNumFloat(lt)) cat = nullptr;
+        else cat = isComparisonToken(opToken) ? "cmp-subint" : "arith-subint";
+    }
+    else if (isNumericLiteral(lhs.get()) && isNumericLiteral(rhs.get())) {
+        // BOTH sides literals (`4294967295 + 1`). Neither one is a destination for the other, so there is
+        // nothing to convert: the whole expression is contextually typed by the hand-off it feeds, which
+        // is where 5b-A range-checks it and 5b-B governs its width — `tests/int_literal_wide.kama:57`
+        // pins exactly that ("governance reaches THROUGH const arithmetic"). Counted rather than dropped
+        // so the exemption stays visible; reading it as a migration site is how this instrument first
+        // reported the operand rule as costing one site when it costs none.
+        cat = "op-both-literal";
+    }
+    else if (isNumericLiteral(lhs.get()) != isNumericLiteral(rhs.get())) {
+        // Exactly one side is a literal, so D2a applies at operand position too: the literal takes the
+        // OTHER operand's type, and no conversion happens — unless it does not fit there, which is the
+        // one case that becomes an error rather than an exemption.
+        const bool lLit = isNumericLiteral(lhs.get());
+        const std::string& litT  = lLit ? lt : rt;
+        const std::string& destT = lLit ? rt : lt;
+        int64_t v;
+        if (!constValue(lLit ? lhs : rhs, v)) cat = "op-literal";        // a float literal: no fold, no check
+        else cat = constOutOfRange(destT, v, litT) ? "op-literal-oob" : "op-literal";
+    }
+    else if (cNumTargetWidth(lt) || cNumTargetWidth(rt))       cat = "op-usize-width";
+    else if (cNumFloat(lt) != cNumFloat(rt))                   cat = "op-int-float";
+    else if (cNumBits(lt) != cNumBits(rt))
+        cat = cNumSigned(lt) != cNumSigned(rt) ? "op-mixed-both" : "op-mixed-width";
+    else                                                       cat = "op-mixed-sign";
+
+    if (!cat) return;                              // same type, nothing to migrate and nothing to note
+
+    std::string row = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+                    + (lt.empty() ? "?" : lt) + "\t" + (rt.empty() ? "?" : rt) + "\t" + cat + "\t"
+                    + (posWhat ? posWhat : "");
+    if (!_strictNumericSeen.insert(row).second) return;
+    std::fprintf(stdout, "%s\n", row.c_str());
+}
+
 // ---------------------------------------------------------------------------------------------------
 // 5b-A — CONTEXTUAL LITERAL TYPING (D2a). A literal takes its type from its DESTINATION, and the
 // fits-check runs against that type.
@@ -1998,6 +2079,12 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         return "0";
     }
     if (!lUser && !rUser) {
+        // The operand measurement (C2) goes HERE and nowhere else: this branch is entered only when
+        // neither side is a user type, so a user `operator+`, an `Equatable`/`Comparable` lowering, a
+        // contract value, a `sig` and `string + string` are all structurally out of reach — they return
+        // above. The guard is the control flow, not a classifier test, which is what keeps it out of the
+        // three traps `exprClass`'s `isClass` filter has already sprung on this campaign.
+        noteNumericOperands(token, lhs, rhs, binaryOperator(token).c_str(), line);
         // A signed LEFT shift into the sign bit is UB in C; route it through `kama_lshift` (shifts in the
         // matching unsigned type — defined) so there's no UB even in debug (release's `-fwrapv` also
         // defines it, but debug has none). Right shift of a signed value is impl-defined, not UB.
@@ -2593,6 +2680,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (binTok && userOperandType(exprClass(v->unaryExpression), _classes))
             return "(" + emitExpression(v->unaryExpression) + " = "
                        + emitBinaryOperator(binTok, v->unaryExpression, v->expression, v->line) + ")";
+        // A COMPOUND assignment on primitives is an operand pair — `x += y` is `x = x <op> y` — and it is
+        // the one shape the assignment hand-off at `emitStatement` deliberately excludes (it is not a
+        // hand-off: the destination's type is already the result's). So the operand rule is what covers
+        // it, and this is where it is measured. Plain `=` is excluded here because it IS that hand-off.
+        if (binTok) noteNumericOperands(binTok, v->unaryExpression, v->expression,
+                                        assignmentOperator(v->token).c_str(), v->line);
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
     }
@@ -6642,6 +6735,13 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
     if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
         int64_t l, r;
         if (!constValue(b->LHS, l) || !constValue(b->RHS, r)) return false;
+        // The folder is an ESCAPE HATCH from the emit walk, and this measures how wide it is. A module
+        // `comptime`/`static` initializer is baked from this fold and never reaches `emitBinaryOperator`,
+        // so an operand rule that lives only there would be silent on `comptime int32 A = 1i8 + 2i32;`.
+        // Milestone 2 found the same asymmetry with `cast` and closed it by diagnosing from the folder;
+        // whether this one is worth a second home is what the `const-fold` count decides.
+        noteNumericOperands(b->token, b->LHS, b->RHS, ("const-fold " + binaryOperator(b->token)).c_str(),
+                            b->line);
         switch (b->token) {
             case PLUS:    out = l + r; return true;
             case MINUS:   out = l - r; return true;
