@@ -1,0 +1,7 @@
+// The unsigned half of tests/xfail/int_literal_suffix_overflow. An unsigned suffix has no negative
+// boundary to rescue — no unary minus makes 300 a `uint8` — so this is rejected outright rather than
+// parked. `0x1FFui8` and every other base reach the same check: a mask is a value like any other.
+fn int32 main() {
+    uint8 a = 300ui8;
+    return cast<int32>(a);
+}

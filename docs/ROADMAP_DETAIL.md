@@ -465,15 +465,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   unrelated reason — the emitter wrote `--2147483648`, which the C compiler reads as a pre-decrement.
   Guarded by `tests/int_literal_min.kama`.
 
-  **Still open, same family: a SUFFIXED literal is not range-checked against its own suffix.**
-  ⚠️ **Scheduled — it rides milestone 5b as "5b-C"** ([design/analysis-gap.md](design/analysis-gap.md)),
-  because it is the same range test as the contextual-literal rule at a second site. Do not start it as
-  its own campaign, and delete this paragraph and row 30's mention of it when 5b lands. `300i8`
-  truncates to 44 and `2147483648i32` to INT32_MIN, both in silence — `createIntegerLiteralNode` narrows
-  with a C cast and never compares. The unsuffixed path checks; the suffixed one, where the author has
-  *stated* the width, does not. Corpus-clean today (no suffixed literal anywhere exceeds its suffix), so
-  this is a latent hole rather than a live bug. Fix = the same range test, against the suffix's width,
-  with the negation fold extended to cover `-128i8` / `-2147483648i32`.
+  ~~**Same family: a SUFFIXED literal is not range-checked against its own suffix.**~~ **Fixed** as
+  milestone 5b-C, the same rule at every width: a magnitude one past the maximum parks and the `MINUS`
+  claims it, anything larger is rejected at the literal. The brief filed this as a latent hole because the
+  corpus is clean — 885 suffixed literals, none out of range — and that was half right. `300i8` really was
+  only latent. But the NEGATIVE boundary was a live bug: `-128i8` narrowed to -128 at parse time, the
+  minus then negated an already-negative node, and the emitter wrote `(--128)`, which C reads as a
+  pre-decrement. INT8_MIN/INT16_MIN/INT32_MIN/INT64_MIN had no suffixed spelling at all, and `kama check`
+  passed the file — only clang objected. Guarded by `tests/int_literal_suffix_min.kama` and three
+  `tests/xfail/int_literal_suffix_*` fixtures.
 
 - **Unresolved type names — one residual: GENERIC ARGUMENTS.** Declared type names are now checked
   (`checkDeclaredTypes`, a single-visit walk at the tail of `collectProgram`), so a misspelled or unimported

@@ -34,7 +34,8 @@ extern int yylex(YYSTYPE * yylval_param, YYLTYPE * yylloc_param, yyscan_t scanne
 int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner);
-SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str);
+SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
+                                          const std::string& spelling, YYLTYPE* loc, yyscan_t scanner);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
     SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
     SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
@@ -523,10 +524,10 @@ literal
     int base = (int)strtoll($1->substr(underscoreIndex + 1).c_str(), NULL, 10);
     $$ = makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, $1->substr(2, underscoreIndex - 3), base, &@1, scanner);
   }
-  | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1 ); }
-  | HEX_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  16, $1->substr(2) ); }
-  | OCT_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  8, $1->substr(2) ); }
-  | BASED_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  0, $1->substr(2) ); }
+  | DEC_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  10, *$1, *$1, &@1, scanner ); }
+  | HEX_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  16, $1->substr(2), *$1, &@1, scanner ); }
+  | OCT_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  8, $1->substr(2), *$1, &@1, scanner ); }
+  | BASED_LITERAL   { $$ = createIntegerLiteralNode(SCANNER_CODEGENCONTEXT,  0, $1->substr(2), *$1, &@1, scanner ); }
 
   /* strtof/strtod (not std::stof/stod): a float literal at/above the type max (e.g. FLT_MAX) makes the
      std:: versions THROW std::out_of_range, which was uncaught and terminated the compiler. strtof/strtod
@@ -2024,14 +2025,19 @@ static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string
            entry, and compilation_unit reports it if nothing did. The wrapped int32 IS the answer for the
            negated form, which is why the node needs no fixing up when it is claimed. */
         auto n = std::make_shared<Int32Node>(ctx, (int32_t)v);
-        ctx.pendingWideLits[n.get()] = CodeGenContext::WideLit{ digits, loc ? loc->first_line : ctx.line,
-                                                                        loc ? loc->first_column : ctx.col };
+        ctx.pendingWideLits[n.get()] = CodeGenContext::WideLit{
+            "integer literal `" + digits + "` does not fit `int32`, the width of an unsuffixed literal"
+            " -- write the width you mean (`" + digits + "i64`, `" + digits + "ui32`)",
+            loc ? loc->first_line : ctx.line, loc ? loc->first_column : ctx.col };
         return n;
     }
     return std::make_shared<Int32Node>(ctx, (int32_t)v);
 }
 
-SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str)
+/* `str` is the token with any base prefix already stripped (the grammar hands `0x1FFi8` in as `1FFi8`);
+   `spelling` is what the author actually typed, and is used only for the diagnostic. */
+SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
+                                          const std::string& spelling, YYLTYPE* loc, yyscan_t scanner)
 {
   bool signedVal = true;
   int bits = 32;
@@ -2088,10 +2094,15 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
     digits = str.substr(0, str.length() - suffixSize);
   }
 
-  long long val = 0;
-  unsigned long long uval = 0;
-  if(signedVal) val  = strtoll( digits.c_str(), NULL, realBase);
-  else          uval = strtoull(digits.c_str(), NULL, realBase);
+  /* The token carries no sign — a leading `-` is a separate unary node — so the digits are always a
+     MAGNITUDE, and strtoull is the honest parse for both signednesses. Signed used to go through strtoll,
+     which SATURATES at LLONG_MAX, so `9223372036854775808i64` silently became INT64_MAX instead of being
+     caught below. The narrowing casts in the switch then take the low bits, which is exactly right for
+     the one magnitude that IS in range under a minus. */
+  errno = 0;
+  unsigned long long uval = strtoull(digits.c_str(), NULL, realBase);
+  const bool pastU64 = (errno == ERANGE);
+  const long long val = (long long)uval;
   SharedExpression rtn;
 
   if(signedVal)
@@ -2131,6 +2142,35 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
         rtn = std::make_shared<UInt32Node>(context, (uint32_t)uval);
       break;
     }
+  }
+
+  /* 5b-C: the suffix STATES the width, so the magnitude is checked against that width. This is the half
+     the unsuffixed path always had and the suffixed one never did — the wrong way round, since here the
+     author said what they wanted: `300i8` narrowed with the C cast above and became 44, and
+     `2147483648i32` became INT32_MIN, both in silence, through `kama check` and `kama build` both.
+
+     One magnitude is exempt, and it is the reason this cannot simply reject: EXACTLY one past the maximum
+     is the type's MINIMUM under a unary minus. `-128i8` is INT8_MIN written down. It parks in
+     pendingWideLits the way an unsuffixed 2^31 does, `MINUS` claims it, and the node already holds the
+     wrapped value — which is why the switch above narrows before this check rather than after. Unclaimed
+     at end of parse, it reports. Before this, `-128i8` did not merely mis-evaluate: the emitter wrote
+     `(--128)`, which C reads as a pre-decrement, so INT8_MIN/INT16_MIN/INT32_MIN had NO suffixed spelling
+     at all and the failure surfaced as a clang error against generated code. */
+  const unsigned long long umax =
+      signedVal ? ((bits == 64) ? 9223372036854775807ULL : ((1ULL << (bits - 1)) - 1ULL))
+                : ((bits == 64) ? 18446744073709551615ULL : ((1ULL << bits) - 1ULL));
+  if(pastU64 || uval > umax)
+  {
+    const std::string typeName = (signedVal ? "int" : "uint") + std::to_string(bits);
+    const std::string range = signedVal ? ("-" + std::to_string(umax + 1ULL) + " to " + std::to_string(umax))
+                                        : ("0 to " + std::to_string(umax));
+    const std::string msg = "integer literal `" + spelling + "` does not fit `" + typeName + "` (" + range
+                          + ") -- the suffix states the width, so write a value in range or a wider suffix";
+    if(signedVal && !pastU64 && uval == umax + 1ULL)
+      context.pendingWideLits[rtn.get()] = CodeGenContext::WideLit{ msg,
+          loc ? loc->first_line : context.line, loc ? loc->first_column : context.col };
+    else
+      yyerror(loc, scanner, msg.c_str());
   }
 
   return rtn;

@@ -51,13 +51,19 @@ public:
     // it), so the pointer removes any dependence on reduction order.
     std::map<const StringList*, std::vector<SrcRange>> listSegPos;
 
-    // An unsuffixed integer literal that does not fit `int32` is an error — except that `-2147483648`
-    // IS that literal, under a unary minus, and the negation fits exactly. So the check cannot fire at
-    // the literal: 2147483648 parks itself here, `MINUS` takes the entry when it consumes one (the
-    // Int32Node already holds the wrapped value, which is the right answer), and compilation_unit
-    // reports whatever is left over. Keyed by the NODE, like listSegPos and for the same reason —
-    // literals nest inside other reductions, so a single pending slot would clobber.
-    struct WideLit { std::string digits; int line; int col; };
+    // An integer literal whose magnitude is EXACTLY one past its type's maximum — the only out-of-range
+    // magnitude a unary minus can rescue, because the negation fits exactly. `2147483648` unsuffixed IS
+    // INT32_MIN written down; so is `128i8` for `int8`. The check therefore cannot fire at the literal:
+    // it parks itself here, `MINUS` takes the entry when it consumes one (the node already holds the
+    // wrapped value, which is the right answer at every width), and compilation_unit reports whatever is
+    // left over. Keyed by the NODE, like listSegPos and for the same reason — literals nest inside other
+    // reductions, so a single pending slot would clobber.
+    //
+    // The entry carries its own MESSAGE rather than just the digits: the two producers phrase it
+    // differently (an unsuffixed literal is told to write the width it means; a suffixed one already
+    // stated a width and is told the range that width has), and a reporter that branched on which
+    // producer parked the entry would be the same fact written twice.
+    struct WideLit { std::string msg; int line; int col; };
     std::map<const void*, WideLit> pendingWideLits;
 
     // TAKE, not read — see listSegPos. True iff `node` was a parked wide literal, which is exactly the
@@ -74,10 +80,7 @@ public:
     void reportPendingWideLits()
     {
         for (auto& kv : pendingWideLits)
-            handleError(kv.second.line, kv.second.col, "Parse",
-                        ("integer literal `" + kv.second.digits + "` does not fit `int32`, the width of an "
-                         "unsuffixed literal -- write the width you mean (`" + kv.second.digits + "i64`, `"
-                         + kv.second.digits + "ui32`)").c_str());
+            handleError(kv.second.line, kv.second.col, "Parse", kv.second.msg.c_str());
         pendingWideLits.clear();
     }
 

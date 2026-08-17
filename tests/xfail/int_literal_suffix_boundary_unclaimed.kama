@@ -1,0 +1,8 @@
+// The far end of tests/int_literal_suffix_min. A magnitude exactly one past the maximum is legal ONLY
+// under a unary minus, where it is the type's minimum; on its own it does not fit and must still be
+// reported. It parks at the literal and this is the end-of-parse report of what nothing claimed —
+// the same mechanism the unsuffixed 2^31 has used since tests/int_literal_min.
+fn int32 main() {
+    int8 a = 128i8;   // `-128i8` is INT8_MIN and compiles; `128i8` alone does not fit
+    return cast<int32>(a);
+}

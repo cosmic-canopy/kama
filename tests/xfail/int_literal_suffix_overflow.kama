@@ -1,0 +1,10 @@
+// A SUFFIXED literal is range-checked against its own suffix. It was not: `createIntegerLiteralNode`
+// narrowed with a C cast and never compared, so `300i8` became 44 — silently, through `kama check` and
+// `kama build` both, with the program exiting 44 and nothing anywhere saying why.
+//
+// This is the wrong way round from the unsuffixed literal, which always checked: here the author has
+// STATED the width, which is more information, not less.
+fn int32 main() {
+    int8 a = 300i8;   // 300 is not an int8; it was becoming 44
+    return cast<int32>(a);
+}

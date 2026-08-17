@@ -2138,7 +2138,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int32Node*>(n))  return std::to_string(v->value);
-    if (auto* v = dynamic_cast<Int64Node*>(n))  return std::to_string((long long)v->value) + "LL";
+    // INT64_MIN has no C literal: `-9223372036854775808LL` is the unary minus applied to a magnitude one
+    // past LLONG_MAX, which no signed type holds, so C gives it an unsigned type (and clang warns). The
+    // idiomatic spelling — what <stdint.h> itself uses for INT64_MIN — is one less, minus one. Reachable
+    // since 5b-C gave INT64_MIN a suffixed spelling (`-9223372036854775808i64`).
+    if (auto* v = dynamic_cast<Int64Node*>(n)) {
+        if ((int64_t)v->value == INT64_MIN) return "(-9223372036854775807LL - 1)";
+        return std::to_string((long long)v->value) + "LL";
+    }
     if (auto* v = dynamic_cast<UInt8Node*>(n))  return std::to_string((unsigned)v->value) + "U";
     if (auto* v = dynamic_cast<UInt16Node*>(n)) return std::to_string((unsigned)v->value) + "U";
     if (auto* v = dynamic_cast<UInt32Node*>(n)) return std::to_string(v->value) + "U";

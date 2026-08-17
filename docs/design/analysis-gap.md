@@ -138,7 +138,8 @@ instrument; do not scope M6 before it has run.**
 | **4** ✅ | **SHIPPED `81b7612`.** Duplicate-diagnostic dedupe. ⚠️ Keyed on **(file, line, message)**, not the brief's `(ASTNode*, message)` — `unsupported()` is handed a LINE, not a node. Guarded in `check-diag-file.sh` (a count assertion has no shape in the xfail harness). It also made it safe to diagnose from `constValue`, which milestone 2 needed. | `unsupported()` | ~15 LOC |
 | **5** ✅ | **SHIPPED `db9e3e1`, `a5b118d`, `c0be0ad`.** `typeOfExpr` — the lowered C type of any expression, `""` when not certain, `""` never diagnoses; `exprKind` is one line over it. ⚠️ **The brief's `ParamSig` claim was FALSE** (see below), and a **SIXTH hand-off position existed**: plain assignment, unwired by the spine, so `x = "oops";` still failed at clang. Two extractions the plan did not foresee: `indexElemTypeRaw` (`exprClass` filtered the user `operator[]`'s `ref T` through `isClass`, so a container of primitives answered "unknown") and `classifierCType` (`cType` DIAGNOSES on `This`/`Base`). | `exprClass`, `callReturnTypeRaw`, `receiverScalarCType`, `lvalueCType`, `operatorResultClass` | ~330 LOC, 10 fixtures, **0** corpus migration |
 | **5a** ✅ | **SHIPPED `c0be0ad`.** `--strict-numeric`, hidden (no `usage()`, no docs) — a **TSV on stdout**, not warnings: the soft `warning()` channel was deliberately deleted and `run_tests.sh` fails any fixture whose stderr matches `/warning/i`. ⚠️ It reports **its own blind spot as a bucket** (`unknown-src`), which is what forced the arithmetic arm — that count was **29,282** without it and **1,752** with it, so the first draft measured 0.7% of the corpus and would have read as "no migration". Taxonomy below. | rides M5 | ~120 LOC |
-| **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
+| **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. **Measured before starting: 5b has ZERO corpus migration** — of 5a's 219 `literal` rows only 21 have a range-checkable destination and none is out of range, none of the 105 unsigned-wide rows passes a negative, and all 885 suffixed literals fit their suffix. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
+| **5b-C** ✅ | **SHIPPED.** The suffixed range check, at every width. ⚠️ **Not the latent hole this brief filed it as** — the negative boundary was a live bug emitting invalid C; see the section below. | `createIntegerLiteralNode`, `WideLit`, `emitExpression`'s `Int64Node` arm | ~45 LOC, 4 fixtures, **0** corpus migration |
 | **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b must land first, or the migration carries thousands of literal suffixes 5b would have made unnecessary. Note the kind rule already owns the four-family half, so 6 is purely about WIDTH. | `kindOfCType`'s callers | ~200 LOC + migration sized by 5a |
 | **7** | **⑪-runtime** (D1) — trap, plus `try cast<T>`. `try` is contextual and today parses only before `new`; extend to `cast`. Reuses `try new`'s `Optional<T>` static-result path. The constant half already rejects there, so the site and the range helper (`primIntRange`) exist. Fixtures: `tests/cast_try_ok.kama`, `tests/trap/cast_narrow_runtime`, `tests/xfail/cast_try_bad_type` (mirror `xfail/try_new_bad_type`). | `emitExpression`'s `CastNode` arm, `src/kama.y` | ~120 LOC |
 | **8** | **⑩b-cheap** — a concrete-only template-body walk as a new pass after the `checkDeclaredTypes(units)` call in `analyze`, reusing `collectBindings` (`kama.query.cpp`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors in uninstantiated templates. | new pass | ~150 LOC |
@@ -212,7 +213,19 @@ is known. This is the half `pendingWideLits` is for — but note what is actuall
   makes for its own synthesized nodes — not the parse's `CodeGenContext`. Building that channel is the
   real work here, and no earlier draft of this brief accounted for it.
 
-### 5b-C — the rider: a SUFFIXED literal is not range-checked against its own suffix
+### 5b-C ✅ SHIPPED — a SUFFIXED literal is now range-checked against its own suffix
+
+⚠️ **"Corpus-clean, so a latent hole and no live bug" was half wrong.** `300i8` was latent, as recorded.
+The NEGATIVE boundary was not: `-128i8` emitted `(--128)`, which C reads as a pre-decrement, so
+INT8_MIN/INT16_MIN/INT32_MIN/INT64_MIN had **no suffixed spelling at all** — a clang error against
+generated code, with `kama check` green. The parked-magnitude mechanism `pendingWideLits` already held for
+the unsuffixed 2^31 generalizes to every width unchanged (the node holds the wrapped value, `MINUS` claims
+it, end-of-parse reports leftovers); only its message had to move into the entry, since the two producers
+word it differently. One thing the plan did not foresee: **INT64_MIN has no C literal either**
+(`-9223372036854775808LL` is a magnitude past LLONG_MAX), so `emitExpression`'s `Int64Node` arm now writes
+`(-9223372036854775807LL - 1)`, which is what `<stdint.h>` writes.
+
+**The record below is what it was.**
 
 Filed today under ROADMAP row 30 ("remaining language limitations") and reasoned about in
 [§2](../ROADMAP_DETAIL.md#s2), but it is the SAME rule as 5b-A and should ride with it rather than wait
