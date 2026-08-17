@@ -1,0 +1,1 @@
+fn int32 main() { uint8 u = 5ui8; int32 i = 1; u += i; return 0; }

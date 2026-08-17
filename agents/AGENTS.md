@@ -55,6 +55,11 @@ them (`int32 x = "oops";`) is rejected — wherever a value crosses into a desti
 error and wants `cast<int8>(big)`. That covers every crossing, not just narrowing — widening
 (`int64 a = someInt32`), a signedness flip and int/float are all conversions and all want a `cast`.
 
+The same rule applies **between an operator's two operands**, comparisons included: `int32 + uint8` does
+not compile, and neither does `i < n` with an `int32` counter against a `usize` length — the commonest
+shape to get wrong. Write `cast<usize>(i) < n`. A **shift** is the exception: its right operand is a
+count, so `x << someInt32` on an `int64` is fine.
+
 A **literal** is typed by its destination, so it is not a conversion and needs no cast: `int8 a = 100;`,
 `float32 f = 3;` and `int8 a = 2 + 3;` are all fine, while a constant that does not fit its destination
 (`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. A **named** constant is not a literal —

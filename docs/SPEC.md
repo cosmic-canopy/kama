@@ -995,6 +995,32 @@ Two consequences worth stating, because C answers both differently:
 C's promotion is not part of kama's surface, which is the point: a reader should not have to know it to
 predict which lines need a cast. The emitted C carries an explicit narrowing so the two agree.
 
+**There is no implicit numeric conversion.** If two numeric types differ, the conversion is written down
+— the Rust/Swift/Go rule. It applies in two places:
+
+- **Wherever a value crosses into a destination of a stated type** — a local, a field, an assignment, a
+  `return`, a `match` arm, an argument, an enum payload. `int8 a = big;` is an error wanting
+  `cast<int8>(big)`.
+- **Between an operator's two operands.** `int32 + uint8` does not compile, and neither does
+  `int32 < usize`. That second one is the point: C answers `-1 < 1u32` with *false*, and a rule that
+  covered assignments but not comparisons would leave the sharpest edge in place.
+
+It is every crossing, not just narrowing — widening, a signedness flip and int/float in either direction
+are all conversions. What is **not** a conversion, and needs no cast:
+
+| | |
+|---|---|
+| a literal, typed by its destination — or by the other operand | `int8 a = 100;` · `float32 f = 3;` · `v < 10` on a `uint8` |
+| arithmetic over literals, which is still the literal | `int8 a = 2 + 3;` |
+| arithmetic on one type, which yields that type | `a + b` on two `uint8`s |
+| a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
+
+A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
+cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`).
+
+Where kama cannot be certain of a type it says nothing rather than guessing — a type parameter, a
+const-generic parameter, a `foreach` binding, a `borrow` alias, an `extern fn` result.
+
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
 - **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during

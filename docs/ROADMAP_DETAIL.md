@@ -360,14 +360,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   guard that extracts the claims and requires each to name a fixture, which needs a machine-readable
   link between the two (a `<!-- xfail: name -->` marker beside the claim is the cheap shape).
 
-- **A lib/prelude diagnostic is attributed to the file being checked.** `kama check app.kama` reports an
-  error raised inside `lib/std/…` or the prelude as `app.kama:<the LIB file's line>` — the line number is
-  right for the wrong file, so it points into the middle of the user's source or past its end. Harmless for
-  a single error a human reads in context, and actively misleading in an editor or any sweep over the
-  corpus (enumerating rule violations across `tests/` had to filter by "is the reported line past this
-  file's end?" to tell the two apart). Wants the unit to travel with the diagnostic, as `RefUnitScope`
-  already does for the reference index.
-
 - **A top-level `fn`'s diagnostics point at the PREVIOUS declaration — LOW-prio, and pairs with the item
   above.** `ASTNode::line` is "the lexer position at reduction time — approximate for multi-token nodes
   (bison lookahead skew)" ([kama.ast.h](../src/kama.ast.h)), refined by `STAMP_LOC` only where hover and
@@ -1073,13 +1065,17 @@ rather than here, so there is one number to keep current. Forward work:
     agree on — a ready-made test set for the two properties that matter, **idempotence**
     (`fmt(fmt(x)) == fmt(x)`) and **semantic preservation** (reparse, or compare emitted C).
 
-- **A diagnostic raised inside an inlined prelude/lib body reports the USER's filename with the PRELUDE's
-  line.** A prelude generic whose bound fails correctly reports it at the call site, then emits a cascade
-  against `<user file>:<prelude line>` — a line the user's file may not even have. Two defects in
-  one: the instantiation proceeds after its bound has already failed, and the diagnostic inherits the wrong
-  unit. The second is the same class of bug as the `kama_panic_at` line-baking the codegen gate has to
-  normalize around, so a fix likely serves both. Narrow — it needs a prelude GENERIC whose bound fails —
-  but the wrong file:line is the kind of thing that sends a reader to the wrong place entirely.
+- **A failed generic bound still instantiates.** A generic whose bound fails reports that correctly at the
+  call site — and then emits the whole body's follow-on errors as well, because the instantiation proceeds
+  anyway. `Map<NotHashable, int32>` gives two accurate bound diagnostics followed by two cascade ones
+  (`NotHashable has no method equals` / `hash`), which are consequences, not findings. Wants the
+  instantiation abandoned once a bound has failed, the way `unsupported`'s dedupe made the error count
+  track mistakes rather than instantiations.
+
+  *(This entry used to carry a second defect — the cascade landed on `<user file>:<prelude line>`, a line
+  the user's file may not even have. That half is CLOSED: the unit now travels with the diagnostic, and
+  the cascade above lands on `lib/std/collections/map.kama:190`, which is where it belongs. Guarded by
+  `tools/check-diag-file.sh` cases 4 and 5.)*
 
 - **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** *(SCHEDULED — working-order row 4.)* README promises
   *"the output IS readable C, so kama drops into an existing C codebase one file at a time"*, and `--keep-c`

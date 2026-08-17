@@ -1760,6 +1760,8 @@ private:
                              const char* posWhat, int line);   // the seventh position; same flag, same rows
     void rejectNumericConversion(const std::string& dstCType, SharedExpression value,
                                  const char* what, bool isInit, int line);   // M6: no implicit conversion
+    void rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                             const std::string& opName, int line);   // M6: the seventh position
     std::string indexElemTypeRaw(SharedExpression e);    // `a[i]`'s element type, class OR primitive
     static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
     // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".

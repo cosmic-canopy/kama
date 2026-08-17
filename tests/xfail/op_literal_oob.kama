@@ -1,0 +1,1 @@
+fn int32 main() { int8 a = 5i8; if (a + 300 == 0i8) { return 1; } return 0; }

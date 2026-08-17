@@ -196,6 +196,12 @@ It is not only narrowing. **Every** crossing is a conversion and every one wants
 (`int64 a = someInt32`), a signedness flip (`uint8 a = someInt8`), int/float in both directions, and
 anything involving `usize`/`isize`. If two types differ, the conversion is written down.
 
+It also applies **between an operator's two operands**, which is where an LLM writing kama is most
+likely to trip: `int32 + uint8` does not compile, and neither does `i < n` with an `int32` counter
+against a `usize` length — the single commonest shape to get wrong. Write `cast<usize>(i) < n`.
+Comparisons are included on purpose: C answers `-1 < 1u32` with *false*, and a rule that covered
+assignments but not comparisons would leave the sharpest edge in place.
+
 What is **not** a conversion, and needs no cast:
 
 | | |

@@ -1,0 +1,76 @@
+// The operand rule's EXEMPTIONS, in one runnable file. Kama has no implicit numeric conversion, so
+// `int32 + uint8` is an error — and everything below is a shape that must keep compiling anyway.
+//
+// Positive on purpose. The rejections live in `tests/xfail/op_*`, and an xfail never links, so it never
+// reaches ASan or the wasm leg. What a rejection rule most needs guarded is the code it must NOT touch,
+// and that has to be run.
+import std::num::{int32Min};
+import std::collections::{DynamicArray};
+
+type enum Colour { Red, Green }
+
+fn int32 main()
+{
+    int32 r = 0;
+
+    // A SHIFT's right operand is a count, not a co-operand — the two types need not agree. This is the
+    // shape `lib/std/num/fixed.kama` uses eight times (an int64 shifted by a `const F: int32`).
+    int64 wide  = 1i64;
+    int32 count = 3;
+    if ((wide << count) == 8i64)                 { r = r + 4; }
+
+    // ...and `json.kama`'s nibble split, where the shift's result feeds a same-type mask.
+    uint8 byte = 200ui8;
+    if (((byte >> 4ui8) & 15ui8) == 12ui8)       { r = r + 4; }
+
+    // A LITERAL takes the OTHER OPERAND's type, so no suffix is needed. Without this the corpus would
+    // have to spell `10ui8` everywhere it compares a byte against a small number.
+    uint8 v = 5ui8;
+    if (v < 10)                                  { r = r + 4; }
+    if (v + 1ui8 == 6ui8)                        { r = r + 4; }
+
+    // A literal too wide for the default `int32` is claimed by the other operand as well. This one used
+    // to be a hard PARSE error whose message said "give it a destination whose type it can take" — the
+    // other operand now is one.
+    int64 big = 5i64;
+    if (big < 4294967295)                        { r = r + 4; }
+
+    // Two literals: neither is the other's destination, so the whole expression is typed by where it
+    // goes, exactly as a lone literal is.
+    if (2 + 3 == 5)                              { r = r + 4; }
+
+    // A SUFFIXED literal shifted into the sign bit keeps its stated type — the result is an `int32`,
+    // not a constant for the destination to retype. SPEC guarantees the value; `num_cast.kama` asserts
+    // it; and reading it as a literal expression instead is what made this rule reject that fixture.
+    if ((1i32 << 31) == int32Min())              { r = r + 4; }
+
+    // Same type on both sides, at a sub-`int` width — the arithmetic rule's own case, and the one that
+    // proves the operand rule does not fire on the thing D-arith made legal.
+    uint8 a = 200ui8;
+    uint8 b = 100ui8;
+    if (a + b == 44ui8)                          { r = r + 4; }
+
+    // `string + string` is a built-in over a non-numeric type and never reaches the numeric rule.
+    string s = "ka";
+    string t = "ma";
+    if ((s + t) == "kama")                       { r = r + 4; }
+
+    // An enum lowers to its own typedef, not to a C numeric name, so comparing two of them says nothing
+    // about width.
+    Colour c = Colour::Red;
+    if (c == Colour::Red)                        { r = r + 4; }
+
+    // A `foreach` binding has no recorded type — one of the places the classifier is deliberately
+    // silent, and therefore one the rule must never speak about.
+    DynamicArray<uint8> d = DynamicArray.empty();
+    d.add(item: 7ui8);
+    uint8 sum = 0ui8;
+    foreach (uint8 e in d) { sum = sum + e; }
+    if (sum == 7ui8)                             { r = r + 4; }
+
+    // An explicit conversion is how a genuine mix is written, and it must of course still work.
+    int32 i = 5;
+    if (i + cast<int32>(v) == 10)                { r = r + 4; }
+
+    return r;   // 48
+}

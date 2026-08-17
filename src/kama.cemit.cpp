@@ -616,12 +616,19 @@ bool isNumericLiteral(const ASTNode* n)
 // ask `constValue`: the folder happily evaluates `comptime int32 N = 5;` to 5, but `N` STATES a type, so
 // `int8 x = N;` is a conversion — as it is in Rust, where `const N: i32` cannot initialize an `i8`.
 // Folding is about the value; this is about whether the author wrote a type.
+// ⚠️ A SHIFT is not one either, however literal both its sides are. Its result type comes from the LEFT
+// operand — that is D-arith, the same rule the classifier and the emitter follow — so context does not
+// get to choose it. `1i32 << 31` is an `int32` whose value is INT32_MIN, which SPEC guarantees and
+// `tests/num_cast.kama:21` asserts; reading it as a literal instead made the fold's 2147483648 look like
+// a constant that does not fit an `int32`, and rejected the fixture.
 bool isLiteralExpr(const ASTNode* n)
 {
     if (!n) return false;
     if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isLiteralExpr(u->expression.get());
-    if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n))
+    if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n)) {
+        if (b->token == LTLT || b->token == GTGT) return false;
         return isLiteralExpr(b->LHS.get()) && isLiteralExpr(b->RHS.get());
+    }
     return isNumericLiteral(n);
 }
 }  // namespace
@@ -1111,6 +1118,59 @@ void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpres
                  + "`, so it cannot be " + (isInit ? "initialized with " : "given ") + "a `" + srcName
                  + "` — kama has no implicit numeric conversion. Convert it explicitly: `cast<" + dstName
                  + ">(…)`").c_str(), line);
+}
+
+// Milestone 6, the OPERAND half — the seventh position. D2 read literally: mixing two numeric types in
+// one expression is an implicit conversion just as surely as `int8 a = big` is, so it is an error.
+// `i32 + u8` does not compile in Rust (`Add<u8>` is not implemented for `i32`), nor in Swift, nor in Go.
+//
+// The exemptions are the rule's whole content, and each is a decision:
+//
+//   SHIFT — exempt. The right operand is a COUNT, not a co-operand; Rust implements `Shl<Rhs>` for every
+//     integer pair and C promotes each side independently. Requiring agreement would be a rule about
+//     nothing, and it would break `lib/std/num/fixed.kama` (an `int64` shifted by a `const F: int32`,
+//     eight times over) and `json.kama`'s `(c >> 4ui8)`. The result type still comes from the left.
+//   COMPARISON — INCLUDED. Rust rejects `1i32 == 1u8`, and this is the rule's highest safety payoff:
+//     C's `-1 < 1u32` is FALSE, which is the whole reason `-Wsign-compare` exists.
+//   LITERAL — exempt, and typed by the OTHER OPERAND. That is D2a extended from a hand-off to an
+//     operand, and without it the corpus would drown in suffixes: `v < 10` on a `uint8` would need
+//     `10ui8`. A wide unsuffixed literal is claimed here too, which is the third caller
+//     `governWideLiterals` needed — `int64 x; x > 4294967295` was a parse error whose own message said
+//     "give it a destination whose type it can take", and under this rule the other operand is one.
+//   BOTH literals — exempt. Neither is the other's destination; the hand-off types the whole expression.
+//   UNKNOWN — silent, as everywhere else in this campaign.
+void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                                   const std::string& opName, int line)
+{
+    if (!lhs || !rhs) return;
+    if (opToken == LTLT || opToken == GTGT) return;          // a shift count is not a co-operand
+
+    const bool lLit = isLiteralExpr(lhs.get()), rLit = isLiteralExpr(rhs.get());
+    if (lLit && rLit) return;                                // the hand-off types the whole expression
+
+    std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
+
+    // A literal takes the other operand's type. Claim any wide unsuffixed literal against it first —
+    // otherwise `governWideLiterals`' end-of-emit report fires on a literal this rule just legitimized —
+    // then range-check it there, which is the same predicate the hand-off uses.
+    if (lLit != rLit) {
+        SharedExpression lit = lLit ? lhs : rhs;
+        const std::string& otherT = lLit ? rt : lt;
+        if (otherT.empty() || !(cNumBits(otherT) || cNumTargetWidth(otherT))) return;
+        governWideLiterals(lit);
+        rejectConstOutOfRange(otherT, lit, ("an operand of `" + opName + "`").c_str(), false, line);
+        return;
+    }
+
+    if (lt.empty() || rt.empty() || lt == rt) return;
+    if (!(cNumBits(lt) || cNumTargetWidth(lt))) return;      // `string + string`, a bool, an enum
+    if (!(cNumBits(rt) || cNumTargetWidth(rt))) return;
+
+    unsupported(("`" + opName + "` needs both operands to have the same type, and the left is `"
+                 + kamaNameOf(lt, primKeyOfCType(lt)) + "` while the right is `"
+                 + kamaNameOf(rt, primKeyOfCType(rt)) + "` — kama has no implicit numeric conversion. "
+                 "Convert one side (`cast<" + kamaNameOf(lt, primKeyOfCType(lt)) + ">(…)` or `cast<"
+                 + kamaNameOf(rt, primKeyOfCType(rt)) + ">(…)`)").c_str(), line);
 }
 
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
@@ -2172,6 +2232,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // above. The guard is the control flow, not a classifier test, which is what keeps it out of the
         // three traps `exprClass`'s `isClass` filter has already sprung on this campaign.
         noteNumericOperands(token, lhs, rhs, binaryOperator(token).c_str(), line);
+        rejectMixedOperands(token, lhs, rhs, binaryOperator(token), line);   // milestone 6, the operands
 
         // D-arith, the emission half: `T op T` IS a `T`, so where C would hand back a promoted `int` the
         // result is narrowed to `T` right here. Only the four sub-`int` types can differ — everything
@@ -2792,8 +2853,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // the one shape the assignment hand-off at `emitStatement` deliberately excludes (it is not a
         // hand-off: the destination's type is already the result's). So the operand rule is what covers
         // it, and this is where it is measured. Plain `=` is excluded here because it IS that hand-off.
-        if (binTok) noteNumericOperands(binTok, v->unaryExpression, v->expression,
-                                        assignmentOperator(v->token).c_str(), v->line);
+        if (binTok) {
+            noteNumericOperands(binTok, v->unaryExpression, v->expression,
+                                assignmentOperator(v->token).c_str(), v->line);
+            rejectMixedOperands(binTok, v->unaryExpression, v->expression,
+                                assignmentOperator(v->token), v->line);
+        }
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
     }
