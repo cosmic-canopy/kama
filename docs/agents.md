@@ -178,8 +178,15 @@ two of them is rejected by `kama check`, in kama's own words, against your `.kam
 error: a local is declared `int32`, so it cannot be initialized with a `string` — a number was expected
 ```
 
+It reaches **every place a value crosses into a destination of a stated type** — an initializer, an
+assignment, a `return`, a `match` arm, a call argument, an enum payload — and the value can be any
+expression: a call result, an element, a cast, a comparison, a ternary. Where kama is not certain of a
+type it says nothing rather than guessing, so a green `check` is not a proof the program has no type
+error; it is a proof that none of the ones kama can see are there.
+
 **Width is not checked.** `int8 a = big;` narrows an `int32` in silence, through `check` and `build`
-both, and `cast<int8>(300)` yields 44. Strict numeric conversion is tracked in
+both. (A *constant* that does not fit is rejected — `cast<int8>(300)` is an error, not 44 — because the
+value is knowable; a runtime one still truncates.) Strict numeric conversion is tracked in
 [ROADMAP.md](ROADMAP.md); until it lands, a green `check` means "names resolve and no kind is crossed",
 never "the arithmetic is right".
 

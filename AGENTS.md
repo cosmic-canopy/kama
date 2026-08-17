@@ -55,8 +55,10 @@ different slice of the same output is pure waste:
 ./dev matrix > /tmp/matrix.log 2>&1; tail -5 /tmp/matrix.log   # then grep the SAME file for details
 ```
 
-**Bump `VERSION` in any commit that changes `src/`, `include/`, `prelude/` or `lib/`** — a patch bump
-is the default; those are the four trees that end up inside the binary. `kama --version` is the first
+**Bump `VERSION` in any commit that changes `src/`, `include/`, `prelude/`, `lib/`, `agents/` or
+`seed/`** — a patch bump is the default; those are the six trees that end up inside the binary. The
+last two read as documentation and are not: they are *embedded*, so editing them changes what
+`kama agents` and `kama seed` write. `kama --version` is the first
 thing a bug report carries, and it is useless when two different compilers claim the same number:
 VERSION sat at `0.9.5` across dozens of emitter-changing commits before `tools/check-version.sh`
 started holding it down. Docs-only and test-only commits need no bump — they produce an identical

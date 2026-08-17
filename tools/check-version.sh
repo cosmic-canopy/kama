@@ -78,7 +78,12 @@ fi
 
 # Did anything that ends up IN the binary change? Docs-only and test-only branches need no bump —
 # the point is to distinguish compilers, and those two produce an identical one.
-changed=$(git -C "$ROOT" diff --name-only "$base"...HEAD -- src include prelude lib Makefile 2>/dev/null)
+#
+# `agents/` and `seed/` are on this list because they are EMBEDDED (Makefile: kama.agents.gen.cpp,
+# kama.seed.gen.cpp), so `kama agents` and `kama seed` write different bytes after a change to them.
+# They read as documentation and are not, which is precisely the case this guard exists to catch —
+# two different compilers claiming the same version.
+changed=$(git -C "$ROOT" diff --name-only "$base"...HEAD -- src include prelude lib agents seed Makefile 2>/dev/null)
 if [ -z "$changed" ]; then
     echo "check-version: OK ($ver; no source change vs $base)"; exit 0
 fi
@@ -90,7 +95,7 @@ fi
 
 if [ "$ver" = "$basever" ]; then
     echo "check-version: FAIL — source changed vs $base but VERSION is still $ver." >&2
-    echo "  Changed under src/ include/ prelude/ lib/ Makefile:" >&2
+    echo "  Changed under src/ include/ prelude/ lib/ agents/ seed/ Makefile:" >&2
     printf '    %s\n' $changed >&2
     echo "  Bump the patch in ./VERSION (see AGENTS.md)." >&2
     exit 1
