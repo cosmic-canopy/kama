@@ -1,0 +1,6 @@
+// The variant-payload position. See tests/xfail/lit_oob_local for the rule.
+type enum Tag { Small(int8 v), None }
+fn int32 main() {
+    Tag t = Tag::Small(v: 300);
+    return 0;
+}

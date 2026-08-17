@@ -1,0 +1,51 @@
+// The far end of the tests/xfail/lit_oob_* family: contextual literal typing ACCEPTS. A literal that fits
+// its destination IS of that type — no conversion happens, so there is nothing to diagnose and nothing
+// for the strict-numeric rule (row 2) to migrate later. This is what took the measurement's `literal`
+// bucket from 219 rows to zero.
+//
+// Every position the rejection reaches is pinned here too, plus the three destinations whose width this
+// compiler refuses to assert (`usize`, `isize`, `uint64`) and which are therefore answered by SIGN alone.
+type value Box {
+    public int8 v = 100;
+    public ctor make() { this.v = 100; }
+}
+type enum Tag { Small(int8 v), None }
+
+fn void take(int8 x) { }
+fn int8 giveMax() { return 127; }
+
+fn int32 main() {
+    int8   local     = 100;          // the boundaries of every width the table knows
+    int8   lo        = -128;
+    uint8  ulo       = 0;
+    uint8  uhi       = 255;
+    int16  wide      = 32767;
+    uint32 big       = 4294967295ui32;   // the suffix is still required — see milestone 5b-B
+    char   codepoint = 65;
+    float32 fromInt  = 3;            // an int literal into a float destination is contextual too
+
+    local = 127;                     // assignment
+    take(x: -128);                   // argument
+    Box b = Box.make();              // a field initializer, above
+    Tag t = Tag::Small(v: 100);      // a variant payload
+
+    usize  n  = 4096;                // no range asserted — non-negative is the whole test
+    isize  d  = -4096;               // ...and isize takes negatives
+    uint64 u  = 18446744073709551615ui64;   // a fold that reads as -1 in int64 and is NOT negative
+
+    int32 count = 0;
+    if (cast<int32>(local) == 127)      { count = count + 1; }
+    if (cast<int32>(lo) == -128)        { count = count + 1; }
+    if (cast<int32>(ulo) == 0)          { count = count + 1; }
+    if (cast<int32>(uhi) == 255)        { count = count + 1; }
+    if (cast<int32>(wide) == 32767)     { count = count + 1; }
+    if (big == 4294967295ui32)          { count = count + 1; }
+    if (cast<int32>(codepoint) == 65)   { count = count + 1; }
+    if (fromInt == 3.0f32)              { count = count + 1; }
+    if (cast<int32>(giveMax()) == 127)  { count = count + 1; }
+    if (cast<int32>(b.v) == 100)        { count = count + 1; }
+    if (n == 4096)                      { count = count + 1; }
+    if (d == -4096)                     { count = count + 1; }
+    if (u == 18446744073709551615ui64)  { count = count + 1; }
+    return count;   // 13
+}

@@ -1,0 +1,6 @@
+// The field-initializer position. See tests/xfail/lit_oob_local for the rule.
+type value Box {
+    public int8 v = 300;
+    public ctor make() { this.v = 0i8; }
+}
+fn int32 main() { return 0; }

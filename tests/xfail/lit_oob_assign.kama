@@ -1,0 +1,7 @@
+// The assignment position — the sixth hand-off, and the one the spine originally missed. See
+// tests/xfail/lit_oob_local for the rule.
+fn int32 main() {
+    int8 s = 0;
+    s = 300;
+    return cast<int32>(s);
+}

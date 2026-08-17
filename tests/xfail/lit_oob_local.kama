@@ -1,0 +1,11 @@
+// CONTEXTUAL LITERAL TYPING, the common half. A literal takes its type from its DESTINATION, and the
+// fits-check runs against that type — so this is not "an int32 narrowed to an int8", it is an `int8`
+// literal that is not an int8. `kama check` passed it and the program ran with 44 in `s`.
+//
+// The other five hand-off positions are pinned beside this one: lit_oob_assign, lit_oob_argument,
+// lit_oob_return, lit_oob_field, lit_oob_variant. All six funnel through the same two functions, which
+// is why one rule reached all of them.
+fn int32 main() {
+    int8 s = 300;   // 300 is not an int8; it was becoming 44
+    return cast<int32>(s);
+}

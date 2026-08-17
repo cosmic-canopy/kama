@@ -793,6 +793,17 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     if (src == dstCType) return;
     if (!cNumBits(src) && !cNumTargetWidth(src)) return;   // a kind crossing, which is already an ERROR
 
+    // CONTEXTUAL LITERAL TYPING (D2a), which is what 5b MEANS: a literal takes its type from its
+    // destination, so a literal that FITS there is already of that type and no conversion happens. Only
+    // one that does not fit is a hand-off at all — and that one is now an ERROR (rejectConstOutOfRange),
+    // not a row to migrate. This is what empties the `literal` bucket and leaves row 2's real size.
+    // A literal that does not fold (a float) is contextually typed too, and drops for the same reason.
+    if (isNumericLiteral(value.get())) {
+        int64_t v;
+        if (!constValue(value, v)) return;
+        if (!constOutOfRange(dstCType, v, v < 0 && src == "uint64_t")) return;
+    }
+
     const char* cat;
     if (isNumericLiteral(value.get()))                            cat = "literal";
     else if (cNumTargetWidth(src) || cNumTargetWidth(dstCType))   cat = "usize-width";
@@ -816,10 +827,81 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     std::fprintf(stdout, "%s\n", row.c_str());
 }
 
+// ---------------------------------------------------------------------------------------------------
+// 5b-A — CONTEXTUAL LITERAL TYPING (D2a). A literal takes its type from its DESTINATION, and the
+// fits-check runs against that type.
+//
+// The rule is milestone 2's constant-cast check at a different site, and it reaches every site for free
+// because all six hand-off positions funnel through the two functions below — nowhere else holds a
+// destination type. Its reach is whatever `constValue` folds, not written literals only, which is the
+// same reach the `cast` rule already has: two answers for `int8 x = cast<int8>(300)` and `int8 x = 300`
+// would be exactly the split this campaign exists to remove.
+//
+// Measured before it was built: ZERO corpus sites change. Of 5a's 219 `literal` rows only 21 have a
+// range-checkable destination and none is out of range, and none of the 105 rows into `size_t`/`uint64_t`
+// passes a negative. Both boundary guards (check-agents.sh, check-query.sh) keep passing too, because the
+// width mismatch they pin is `int8 a = big` — a VARIABLE, which `constValue` does not fold.
+bool CEmitter::constOutOfRange(const std::string& dstCType, int64_t v, bool srcUnsignedWide)
+{
+    int64_t lo, hi;
+    if (primIntRangeC(dstCType, lo, hi)) return srcUnsignedWide || v < lo || v > hi;
+    // The two target-width types and the 64-bit pair, answered by SIGN alone rather than by a width this
+    // compiler was not told. `usize n = -1;` is a bug on every target without knowing which one, and a
+    // magnitude above INT64_MAX fits nothing narrower than a 64-bit unsigned.
+    if (dstCType == "uint64_t" || dstCType == "size_t")    return !srcUnsignedWide && v < 0;
+    if (dstCType == "int64_t"  || dstCType == "ptrdiff_t") return srcUnsignedWide;
+    return false;                       // not an integer destination — a float, a class, an enum
+}
+
+namespace {
+// `primKeyOfCType` hands `size_t`/`ptrdiff_t` straight back — neither has a `builtInVal`, so neither can
+// be one of its arms. A diagnostic must still name them the way the author spelled them.
+std::string kamaNameOf(const std::string& ct, const std::string& primKey)
+{
+    if (ct == "size_t")    return "usize";
+    if (ct == "ptrdiff_t") return "isize";
+    return primKey;
+}
+}  // namespace
+
+void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
+                                     const char* what, bool isInit, int line)
+{
+    int64_t v;
+    if (dstCType.empty() || !value || !constValue(value, v)) return;
+    // `constValue` folds into an int64, so a `uint64` source above INT64_MAX comes back NEGATIVE. That is
+    // a reinterpretation, not the value, and reading it at face value would reject
+    // `uint64 w = 18446744073709551615ui64;` — which tests/int_literal_wide.kama pins as CORRECT.
+    const bool srcUnsignedWide = (v < 0 && typeOfExpr(value) == "uint64_t");
+    if (!constOutOfRange(dstCType, v, srcUnsignedWide)) return;
+
+    const std::string name = kamaNameOf(dstCType, primKeyOfCType(dstCType));
+    const std::string shown = srcUnsignedWide ? std::to_string((unsigned long long)v) : std::to_string(v);
+    int64_t lo, hi;
+    std::string head, tail;
+    if (primIntRangeC(dstCType, lo, hi)) {
+        head = "` (" + std::to_string(lo) + " to " + std::to_string(hi) + ")";
+        tail = " — that is not a conversion but a different number. Write a value in range, or mask first "
+               "if the truncation is what you mean (`cast<" + name + ">(x & 0xFF)`)";
+    } else {
+        head = "`";
+        tail = " — `" + name + "` holds no negative value, and its width belongs to the target rather than "
+               "to this compiler, so there is no conversion this could mean";
+    }
+    // Phrased like the kind-mismatch neighbour at the same position: an initializer is "declared T, so it
+    // cannot be initialized with", a value hand-off is "expects T, so it cannot be given".
+    unsupported((std::string(what) + (isInit ? " is declared `" : " expects `") + name + head
+                 + (isInit ? ", so it cannot be initialized with " : ", so it cannot be given ")
+                 + shown + tail).c_str(), line);
+}
+
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                        const char* what, int line)
 {
     noteNumericHandoff(dstCType, value, what, line);   // M5a: measure first, then judge
+    // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
+    // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
+    rejectConstOutOfRange(dstCType, value, what, false, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -832,6 +914,13 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
                                       const char* what, int line)
 {
     if (_strictNumericScan) noteNumericHandoff(classifierCType(declType), init, what, line);
+    // 5b-A, ahead of the kind rule for the reason given at `rejectValueKindMismatch`, and gated on the
+    // initializer folding FIRST: this site runs inside `checkDeclaredTypes`, where a type is deliberately
+    // half-resolved and the rule below is careful not to lower one unless it must. `constValue` fails in
+    // a few dynamic_casts for anything that is not a constant, which is almost every initializer.
+    int64_t folded;
+    if (init && constValue(init, folded))
+        rejectConstOutOfRange(classifierCType(declType), init, what, true, line);
     // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
     // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where
     // a type is deliberately half-resolved.
@@ -6383,22 +6472,35 @@ void CEmitter::rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64
                 .c_str(), line);
 }
 
+bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
+{
+    if (ct == "int8_t")   { lo = -128;            hi = 127;            return true; }
+    if (ct == "int16_t")  { lo = -32768;          hi = 32767;          return true; }
+    if (ct == "int32_t")  { lo = -2147483648LL;   hi = 2147483647LL;   return true; }
+    if (ct == "uint8_t")  { lo = 0;               hi = 255;            return true; }
+    if (ct == "uint16_t") { lo = 0;               hi = 65535;          return true; }
+    // `char` also lowers to uint32_t, and is ranged by its WIDTH rather than by 0x10FFFF: "that is not a
+    // codepoint" is a different rule from "that does not fit", and this campaign is only about the second.
+    if (ct == "uint32_t") { lo = 0;               hi = 4294967295LL;   return true; }
+    return false;             // int64_t (holds every fold), uint64_t, floats, size_t/ptrdiff_t, classes
+}
+
 bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
 {
     if (!type) return false;
     SharedIdentifier t = deepSubstType(type);
     if (!t || t->genericArg) return false;
+    // Which types are admitted is decided HERE, on the builtin tag, so this stays exact for a declared
+    // type node (and never calls `cType`, which diagnoses on `This`/`Base`). Only the NUMBERS are
+    // delegated, so the value positions — which hold no type node — cannot drift from these.
     switch (t->builtInVal) {
-        case IDENTIFIER_INT8_VAL:   lo = -128;        hi = 127;         return true;
-        case IDENTIFIER_INT16_VAL:  lo = -32768;      hi = 32767;       return true;
-        case IDENTIFIER_INT32_VAL:  lo = -2147483648LL; hi = 2147483647LL; return true;
-        case IDENTIFIER_UINT8_VAL:  lo = 0;           hi = 255;         return true;
-        case IDENTIFIER_UINT16_VAL: lo = 0;           hi = 65535;       return true;
-        case IDENTIFIER_UINT32_VAL: lo = 0;           hi = 4294967295LL; return true;
-        // `char` is a Unicode scalar lowered to uint32_t. Ranged by its WIDTH here, not by 0x10FFFF:
-        // "that is not a codepoint" is a different rule from "that does not fit", and this campaign is
-        // only about the second one.
-        case IDENTIFIER_CHAR_VAL:   lo = 0;           hi = 4294967295LL; return true;
+        case IDENTIFIER_INT8_VAL:   return primIntRangeC("int8_t",   lo, hi);
+        case IDENTIFIER_INT16_VAL:  return primIntRangeC("int16_t",  lo, hi);
+        case IDENTIFIER_INT32_VAL:  return primIntRangeC("int32_t",  lo, hi);
+        case IDENTIFIER_UINT8_VAL:  return primIntRangeC("uint8_t",  lo, hi);
+        case IDENTIFIER_UINT16_VAL: return primIntRangeC("uint16_t", lo, hi);
+        case IDENTIFIER_UINT32_VAL: return primIntRangeC("uint32_t", lo, hi);
+        case IDENTIFIER_CHAR_VAL:   return primIntRangeC("uint32_t", lo, hi);
         default: return false;    // int64 (always fits), uint64, floats, usize/isize, everything else
     }
 }

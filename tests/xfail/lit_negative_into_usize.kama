@@ -1,0 +1,9 @@
+// The half of the rule that has no range to compare against. `usize`'s width belongs to the TARGET, not
+// to this compiler — kama accepts arbitrary triples — so `primIntRange` refuses to assert a range for it,
+// and always has. But a NEGATIVE constant is out of range on every possible target, and that answer needs
+// no width at all. Same for `uint64`. This is the whole of what the sign test buys, and it is the one
+// rejection here that a real program is likely to have written by accident.
+fn int32 main() {
+    usize n = -1;
+    return cast<int32>(n);
+}

@@ -1,0 +1,8 @@
+// The rule's reach is whatever `constValue` FOLDS, not written literals only — which is the reach the
+// constant-cast rule (milestone 2) already had. `cast<int8>(N)` was rejected here while the identical
+// `int8 s = N` was accepted, and two answers for one fact is exactly the split this campaign removes.
+fn int32 main() {
+    comptime int32 N = 300;
+    int8 s = N;
+    return cast<int32>(s);
+}

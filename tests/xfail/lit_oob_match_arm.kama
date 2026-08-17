@@ -1,0 +1,11 @@
+// A value-producing `match` arm. It reaches the rule through `emitOwnedValueInto`, the same function the
+// return position uses — one call covers both. See tests/xfail/lit_oob_local for the rule.
+type enum Step { More(int32 left), Done }
+fn int32 main() {
+    Step s = Step::Done;
+    int8 r = match (s) {
+        case More(left: left): 1;
+        case Done: 300;
+    };
+    return cast<int32>(r);
+}

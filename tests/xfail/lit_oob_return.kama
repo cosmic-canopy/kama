@@ -1,0 +1,3 @@
+// The return position. See tests/xfail/lit_oob_local for the rule.
+fn int8 give300() { return 300; }
+fn int32 main() { return cast<int32>(give300()); }

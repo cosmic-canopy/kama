@@ -1,0 +1,6 @@
+// The argument position. See tests/xfail/lit_oob_local for the rule.
+fn void take(int8 x) { }
+fn int32 main() {
+    take(x: 300);
+    return 0;
+}

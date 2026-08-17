@@ -3,10 +3,12 @@
 *In-flight design doc. **Delete this file when the work ships**, once SPEC + ROADMAP carry the record — see
 the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 
-**→ START HERE for the next session.** Milestones **0–5a have SHIPPED** — see the table below for what
-each one turned out to be. The next task is **milestone 5b, contextual literal typing**
-([ROADMAP.md](../ROADMAP.md) row 1), then 6 and 7. **Read *The 5a measurement* below before scoping 6**:
-it is the number that milestone existed to produce, and it says something the brief did not predict. The
+**→ START HERE for the next session.** Milestones **0–5a, 5b-A and 5b-C have SHIPPED** — see the table
+below for what each one turned out to be. The next task is **milestone 5b-B** (a wide unsuffixed literal
+whose destination is wider — [ROADMAP.md](../ROADMAP.md) row 1), then 6 and 7. **Row 6's size is now
+settled at 103**: 5b-A drove 5a's `literal` bucket from 219 to zero, so what the sweep still reports is
+what the strict rule will actually have to migrate. **Read *The 5a measurement* below before scoping 6** —
+it says something the brief did not predict. The
 design is settled otherwise: read *Decisions taken* and the *Milestones* table. The traps table is not
 background — every row in it is a thing that bit the implementation directly, and the ones marked ✅ are
 the ones that already did.
@@ -25,7 +27,8 @@ the ones that already did.
 | **Closed by the view window** | ④⑤⑥ (the window rule, the freeze, `ref`/`out` view params, view-root aliasing) and ⑦ (`foreach` is a window; `mods` bumped in `growTo`). `1655e8a`…`19fc999` |
 | **Closed by the spine (M0–M4)** | ⑩ *by kind* at all five hand-off positions, and ⑪ *for constants*. `10b8f30`…`9794284` |
 | **Closed by M5/5a** | ⑩ *by type* at **six** positions (assignment was the sixth, and unwired), and the row-3 migration is now measured rather than guessed. `db9e3e1`…`c0be0ad` |
-| **OPEN — this document** | ⑩ by WIDTH (milestones 5b, 6), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
+| **Closed by 5b-A/5b-C** | a constant that does not FIT its destination, at all six positions, and a suffixed literal that does not fit its own suffix. `59edf78`… |
+| **OPEN — this document** | 5b-B (a wide unsuffixed literal), ⑩ by WIDTH (milestone 6), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
 
 ## What the probes established
 
@@ -140,6 +143,7 @@ instrument; do not scope M6 before it has run.**
 | **5a** ✅ | **SHIPPED `c0be0ad`.** `--strict-numeric`, hidden (no `usage()`, no docs) — a **TSV on stdout**, not warnings: the soft `warning()` channel was deliberately deleted and `run_tests.sh` fails any fixture whose stderr matches `/warning/i`. ⚠️ It reports **its own blind spot as a bucket** (`unknown-src`), which is what forced the arithmetic arm — that count was **29,282** without it and **1,752** with it, so the first draft measured 0.7% of the corpus and would have read as "no migration". Taxonomy below. | rides M5 | ~120 LOC |
 | **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. **Measured before starting: 5b has ZERO corpus migration** — of 5a's 219 `literal` rows only 21 have a range-checkable destination and none is out of range, none of the 105 unsigned-wide rows passes a negative, and all 885 suffixed literals fit their suffix. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
 | **5b-C** ✅ | **SHIPPED.** The suffixed range check, at every width. ⚠️ **Not the latent hole this brief filed it as** — the negative boundary was a live bug emitting invalid C; see the section below. | `createIntegerLiteralNode`, `WideLit`, `emitExpression`'s `Int64Node` arm | ~45 LOC, 4 fixtures, **0** corpus migration |
+| **5b-A** ✅ | **SHIPPED.** The fits-check at all six hand-off positions, reach = whatever `constValue` folds. **5a's `literal` bucket went 219 → 0**, so row 2 is now measured at 103. ⚠️ Two things the plan did not foresee: a `uint64` fold reads as NEGATIVE, and `usize`/`uint64` deserve a sign rule even with no asserted range. | `primIntRangeC`, `constOutOfRange`, `rejectConstOutOfRange`, `noteNumericHandoff` | ~90 LOC, 10 fixtures, **0** corpus migration |
 | **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b must land first, or the migration carries thousands of literal suffixes 5b would have made unnecessary. Note the kind rule already owns the four-family half, so 6 is purely about WIDTH. | `kindOfCType`'s callers | ~200 LOC + migration sized by 5a |
 | **7** | **⑪-runtime** (D1) — trap, plus `try cast<T>`. `try` is contextual and today parses only before `new`; extend to `cast`. Reuses `try new`'s `Optional<T>` static-result path. The constant half already rejects there, so the site and the range helper (`primIntRange`) exist. Fixtures: `tests/cast_try_ok.kama`, `tests/trap/cast_narrow_runtime`, `tests/xfail/cast_try_bad_type` (mirror `xfail/try_new_bad_type`). | `emitExpression`'s `CastNode` arm, `src/kama.y` | ~120 LOC |
 | **8** | **⑩b-cheap** — a concrete-only template-body walk as a new pass after the `checkDeclaredTypes(units)` call in `analyze`, reusing `collectBindings` (`kama.query.cpp`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors in uninstantiated templates. | new pass | ~150 LOC |
@@ -185,7 +189,28 @@ commands are one-liners, re-run them rather than trusting this table.
 These are **three problems** (A, B and the C rider below), and conflating them is what made the
 old estimate meaningless.
 
-### 5b-A — a literal that does not FIT its destination (the common half)
+### 5b-A ✅ SHIPPED — a folded constant that does not FIT its destination
+
+The rule reaches all six positions from the **two functions** the kind rule already funnels through
+(`rejectInitKindMismatch`, `rejectValueKindMismatch`) — nowhere else holds a destination type. Reach is
+whatever `constValue` folds, matching milestone 2's `cast` rule, so `int8 x = cast<int8>(300)` and
+`int8 x = 300` no longer give two answers. `primIntRangeC` is the same table `primIntRange` holds, reached
+from a lowered C type; `primIntRange` now routes through it so the numbers live in one place.
+
+**The `literal` bucket is now 0** — 219 → 0, leaving `103 narrowing` + `1752 unknown-src`. That is row 2's
+real size. Contextual typing is implemented as a **query, not an AST mutation**: `noteNumericHandoff` drops
+a literal that fits, because such a literal already *is* of the destination's type. Retyping the node would
+be wrong under a second instantiation and would change `primKeyOfLiteral`'s method dispatch.
+
+⚠️ **`constValue` folds into an int64, so a `uint64` source above INT64_MAX comes back NEGATIVE.** Read at
+face value that rejects `uint64 w = 18446744073709551615ui64;`, which `tests/int_literal_wide.kama` pins as
+correct. The `srcUnsignedWide` flag is that carve-out, and it also lets the rule catch the case the `cast`
+rule still misses (that magnitude into an `int64` destination).
+
+⚠️ **`usize`/`uint64` have no asserted range and still get a rule**: negative is out of range on every
+possible target, and that answer needs no width. `usize n = -1;` was accepted before.
+
+**The record below is what it was.**
 
 `int8 s = 300;` parses fine: it is an `Int32Node`, and nothing checks it against the destination. This
 needs no grammar change and no literal retyping — it is milestone 2's rule at a different site.

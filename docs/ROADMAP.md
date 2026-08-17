@@ -34,7 +34,7 @@ no ordinary safe-kama construct miscompiles or emits invalid C.*
 
 | # | item | why it gates the tag | detail |
 |---|---|---|---|
-| 1 | **Contextual literal typing** — a literal takes its type from its destination, not always `int32` | prerequisite for 2: **measured**, it is 219 of the 322 sites strict conversion would break. Scoped into three halves, probed | [design/analysis-gap.md](design/analysis-gap.md) |
+| 1 | **Contextual literal typing** — a literal takes its type from its destination, not always `int32` | prerequisite for 2, and it delivered: **5a's `literal` bucket went 219 → 0**, so row 2 is now measured at 103. **5b-A and 5b-C have shipped; 5b-B (a wide literal claimed by a wider destination) is what is left** | [design/analysis-gap.md](design/analysis-gap.md) |
 | 2 | **Strict numeric conversion** — no implicit conversion (Rust/Swift/Go) | **source-breaking**, so it lands before the tag or never. Measured: 103 residual sites, one shape, one subsystem | [design/analysis-gap.md](design/analysis-gap.md) |
 | 3 | **Runtime narrowing casts truncate in silence** — decided: **trap**, with `try cast<T>` as the `Optional` form | source-visible; `try` is already the non-panicking modality (`try new`). The CONSTANT half already rejects | [§2](ROADMAP_DETAIL.md#s2) |
 | 4 | **Uninstantiated generic bodies get no analysis at all** — four distinct errors build clean | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |

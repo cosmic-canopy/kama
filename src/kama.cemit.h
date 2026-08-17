@@ -1246,9 +1246,18 @@ private:
     // compiler has no business asserting — a float, a class, and deliberately `usize`/`isize`, whose
     // width is the target's, not ours. Drives both the constant-cast check and `constValue`'s fold.
     bool primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi);
+    // The same table, reached from a LOWERED C type — the four hand-off positions that hold no type node.
+    // `primIntRange` routes through it, so the numbers live in one place.
+    bool primIntRangeC(const std::string& cType, int64_t& lo, int64_t& hi);
     // The one message for a constant that provably does not fit its cast target. Two paths reach it:
     // the emit walk, and the const folder — a `comptime` constant is resolved only in the folder.
     void rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line);
+    // 5b-A. Is a folded constant PROVABLY outside its destination? The only answer that diagnoses; every
+    // uncertainty is "no". `srcUnsignedWide` says `constValue`'s int64 fold reinterpreted a magnitude
+    // above INT64_MAX as negative, which the range comparison must not read at face value.
+    bool constOutOfRange(const std::string& dstCType, int64_t v, bool srcUnsignedWide);
+    void rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
+                               const char* what, bool isInit, int line);
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
     void emitComptimeAssertsIn(ClassDeclarationNode* cd);      // the type-member form, under the live binding
