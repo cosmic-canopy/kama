@@ -247,7 +247,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   | ~~8~~ | ~~**the compile-time foreach-invalidation guard is dead code**~~ — **RETIRED**: the guard is gone rather than revived; the borrow window is the mechanism that replaces it | language | — |
   | ~~9~~ | ~~one `unsafe { }` disables definite assignment for the whole function~~ — **CLOSED by construction**: `unsafe` IS the function now, so relaxing locals is correct, and `out` params stopped being relaxed at all | language | — |
   | 10 | **an uninstantiated generic body gets no analysis at all** — unsafe gate, escape check, moves, definite assignment all deferred to instantiation. A package author ships `check`-green code and consumers get the errors | language, not UB | M |
-  | 11 | ~~narrowing `cast<int8>(300)` → 44, silently~~ — **HALF CLOSED**: a CONSTANT that does not fit is rejected (`tests/xfail/cast_const_oob*`). A runtime narrowing cast still truncates; decided to trap, with `try cast<T>` as the fallible form | wart | S |
+  | 11 | ~~narrowing `cast<int8>(300)` → 44, silently~~ — **HALF CLOSED**: a CONSTANT that does not fit is rejected (`tests/xfail/cast_const_oob*`). A runtime narrowing cast still truncates; decided to trap, with `try cast<T>` as the fallible form. **Scoped in [design/cast-trap.md](design/cast-trap.md)** — no longer S: milestone 6 made `cast` the only conversion spelling, so the trap lands on 1,015 corpus sites | wart | M |
 
   **Confirmed defended, by probe not assumption:** every arithmetic class (div0, mod0, `INT_MIN/-1`,
   shift width, float-cast, signed overflow — trapped in *every* build, `-fwrapv` in release); bounds on

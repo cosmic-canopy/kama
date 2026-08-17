@@ -34,7 +34,7 @@ no ordinary safe-kama construct miscompiles or emits invalid C.*
 
 | # | item | why it gates the tag | detail |
 |---|---|---|---|
-| 1 | **Runtime narrowing casts truncate in silence** — decided: **trap**, with `try cast<T>` as the `Optional` form | source-visible; `try` is already the non-panicking modality (`try new`). The CONSTANT half already rejects | [§2](ROADMAP_DETAIL.md#s2) |
+| 1 | **Runtime narrowing casts truncate in silence** — decided: **trap**, with `try cast<T>` as the `Optional` form | source-visible, and now on **1,015 corpus casts** — milestone 6 made `cast` the only way to convert. The CONSTANT half already rejects | [design/cast-trap.md](design/cast-trap.md) |
 | 2 | **Uninstantiated generic bodies get no analysis at all** — four distinct errors build clean | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
 | 3 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
 | 4 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. One campaign with 4 — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
