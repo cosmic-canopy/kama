@@ -1,0 +1,7 @@
+// Past 2^64-1 no destination can rescue the literal, because kama has no wider integer type — so this one
+// stays a PARSE error, where it can be answered without knowing anything about the destination. It is the
+// only magnitude that still is.
+fn int32 main() {
+    uint64 a = 184467440737095516151;
+    return 0;
+}

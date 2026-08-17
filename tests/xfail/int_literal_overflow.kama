@@ -1,9 +1,13 @@
-// An unsuffixed integer literal is `int32`. A value that does not FIT int32 used to be truncated in
-// silence — `int64 a = 4294967295;` bound -1, with no kama diagnostic at any width. C/C++/C# widen the
-// literal to the first type that fits; Rust/Go/Zig reject it. kama rejects it, because widening would
-// make a literal's type depend on its magnitude, so editing a constant could silently retype the
-// expression around it.
+// An unsuffixed integer literal is `int32` when NOTHING CONSTRAINS IT, and this one is not constrained by
+// anything: a comparison in an `if` has no declared destination to take a type from. It does not fit
+// int32, so there is no type to give it.
+//
+// This fixture used to hold `int64 a = 4294967295;`, which was a parse error because the parser answered
+// a question that belongs to the destination. Milestone 5b-B moved the answer to where the destination is
+// known, so that spelling now COMPILES and is pinned in tests/int_literal_wide.kama. What survives here
+// is the case the parse error was really protecting: a literal typed by its own MAGNITUDE, which would let
+// editing a constant silently retype the expression around it.
 fn int32 main() {
-    int64 a = 4294967295;   // needs `4294967295i64` (or `ui32`)
-    return cast<int32>(a);
+    if (4294967295 > 3) { return 1; }   // needs `4294967295i64`, or a destination
+    return 0;
 }

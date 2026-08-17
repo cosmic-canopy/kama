@@ -36,5 +36,34 @@ fn int32 main() {
     int64 signedWide = 9223372036854775807i64;
     if (signedWide != 9223372036854775807i64) { return 5; }
 
+    // Milestone 5b-B: the suffix is no longer REQUIRED where a destination says the width. The literal is
+    // built at its natural width and the destination claims it — so these are the same values as above,
+    // written the way someone reaches for first. `int64 a = 4294967295;` was a parse error until then,
+    // because the parser was answering a question that belongs to the destination.
+    uint32 unsuffixed32 = 4294967295;
+    if (unsuffixed32 != assigned) { return 6; }
+
+    int64 unsuffixed64 = 4294967295;
+    if (unsuffixed64 != 4294967295i64) { return 7; }
+
+    uint64 unsuffixedMax = 18446744073709551615;
+    if (unsuffixedMax != wide) { return 8; }
+
+    uint64 unsuffixedHex = 0xFFFFFFFFFF;
+    if (unsuffixedHex != 1099511627775ui64) { return 9; }
+
+    // Governance reaches THROUGH const arithmetic — the destination is just as much the literal's type in
+    // `a + 1` as it is alone, and it does not require the expression to fold.
+    int64 computed = 4294967295 + 1;
+    if (computed != 4294967296i64) { return 10; }
+
+    // The negation folds into the literal at the widest signed type, and INT64_MIN now has an unsuffixed
+    // spelling for the same reason INT32_MIN does (tests/int_literal_min.kama).
+    int64 negWide = -4294967296;
+    if (negWide != 0i64 - 4294967296i64) { return 11; }
+
+    int64 sixtyFourMin = -9223372036854775808;
+    if (sixtyFourMin >= -9223372036854775807i64) { return 12; }
+
     return 42;
 }

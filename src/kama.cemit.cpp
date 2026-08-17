@@ -864,6 +864,21 @@ std::string kamaNameOf(const std::string& ct, const std::string& primKey)
 }
 }  // namespace
 
+// Recurses through exactly the shapes `constValue` folds through, plus the ternary — everywhere a literal
+// can sit and still be governed by the destination of the expression around it. It does NOT require the
+// expression to fold: `int64 a = 4294967295 + v;` claims the literal even though `v` is a runtime value,
+// because the destination is just as much the literal's type there.
+void CEmitter::governWideLiterals(SharedExpression e)
+{
+    if (!e) return;
+    ASTNode* n = e.get();
+    if (e->wideUnsuffixed) _litGoverned.insert(n);
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { governWideLiterals(u->expression); return; }
+    if (auto* c = dynamic_cast<CastNode*>(n))                  { governWideLiterals(c->unaryExpression); return; }
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n))  { governWideLiterals(b->LHS); governWideLiterals(b->RHS); }
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { governWideLiterals(t->LHS); governWideLiterals(t->RHS); }
+}
+
 void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
                                      const char* what, bool isInit, int line)
 {
@@ -901,6 +916,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     noteNumericHandoff(dstCType, value, what, line);   // M5a: measure first, then judge
     // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
     // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
+    if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
     rejectConstOutOfRange(dstCType, value, what, false, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
@@ -918,6 +934,7 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // initializer folding FIRST: this site runs inside `checkDeclaredTypes`, where a type is deliberately
     // half-resolved and the rule below is careful not to lower one unless it must. `constValue` fails in
     // a few dynamic_casts for anything that is not a constant, which is almost every initializer.
+    governWideLiterals(init);                           // 5b-B — a declared type is always a destination
     int64_t folded;
     if (init && constValue(init, folded))
         rejectConstOutOfRange(classifierCType(declType), init, what, true, line);
@@ -2224,6 +2241,18 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) return emitArrayLiteral(al);   // `[…]` -> a Fixed value
     if (auto* iso = dynamic_cast<IsolateNode*>(n)) return emitIsolateExpr(iso);   // `= isolate worker(...)` handle
 
+    // 5b-B. A wide unsuffixed literal that reached emission without a destination claiming it. Contextual
+    // literal typing gives a literal its destination's type and `int32` when nothing constrains it — this
+    // one constrains nothing and does not fit `int32`, so there is no type to give it. Reported HERE
+    // rather than at the parse, because only here is it known whether a destination spoke for it.
+    if (expr->wideUnsuffixed && !_litGoverned.count(n)) {
+        std::string mag;
+        if (auto* s = dynamic_cast<Int64Node*>(n))       mag = std::to_string((long long)s->value);
+        else if (auto* u = dynamic_cast<UInt64Node*>(n)) mag = std::to_string((unsigned long long)u->value);
+        unsupported(("integer literal `" + mag + "` does not fit `int32`, the width of an unsuffixed "
+                     "literal, and nothing here says which width to use — write it (`" + mag + "i64`, `"
+                     + mag + "ui64`), or give it a destination whose type it can take").c_str(), expr->line);
+    }
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int32Node*>(n))  return std::to_string(v->value);

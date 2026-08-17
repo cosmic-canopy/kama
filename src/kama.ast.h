@@ -32,6 +32,14 @@ public:
     // A parser-built node is owned by its CompilationUnit and outlives the emitter, so it is safe to index;
     // nothing the emitter invents is. Set via CEmitter::synthId(), and on every hand-made clone.
     bool synthesized = false;
+    // 5b-B. An UNSUFFIXED integer literal too wide for `int32`, built at its natural width. Contextual
+    // literal typing (D2a) says a literal takes its type from its destination and is `int32` only when
+    // nothing constrains it — so this one is legal exactly where a destination claims it, and the flag is
+    // how the emitter tells the two apart. A hand-off position governs it (CEmitter::governWideLiterals);
+    // a unary minus claims it in the grammar; ungoverned, `emitExpression` reports it. Without the flag,
+    // a literal's type would follow its MAGNITUDE — editing a constant could retype the expression around
+    // it, which is the hazard the rule at makeUnsuffixedInt has always refused.
+    bool wideUnsuffixed = false;
     explicit ASTNode(CodeGenContext& context);
     ASTNode(const ASTNode&) = default;                  // Copy constructor
     ASTNode(ASTNode&&) = default;                       // Move constructor

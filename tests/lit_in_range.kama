@@ -20,7 +20,7 @@ fn int32 main() {
     uint8  ulo       = 0;
     uint8  uhi       = 255;
     int16  wide      = 32767;
-    uint32 big       = 4294967295ui32;   // the suffix is still required — see milestone 5b-B
+    uint32 big       = 4294967295;   // unsuffixed, and wider than int32 — see tests/int_literal_wide
     char   codepoint = 65;
     float32 fromInt  = 3;            // an int literal into a float destination is contextual too
 

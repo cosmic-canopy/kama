@@ -1258,6 +1258,14 @@ private:
     bool constOutOfRange(const std::string& dstCType, int64_t v, bool srcUnsignedWide);
     void rejectConstOutOfRange(const std::string& dstCType, SharedExpression value,
                                const char* what, bool isInit, int line);
+    // 5b-B. A hand-off position has a destination, so every `wideUnsuffixed` literal reachable from the
+    // value it is about to emit is CLAIMED — the fits-check above judges whether it actually fits. One
+    // that no hand-off ever claims is reported by `emitExpression`, which is what stops a literal's type
+    // from following its magnitude. Recorded on the SIDE rather than on the node: the emit walk runs once
+    // per instantiation and again for a build after an analyze, and mutating shared AST across those
+    // passes would make the second one silent.
+    void governWideLiterals(SharedExpression e);
+    std::set<const void*> _litGoverned;
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
     void emitComptimeAssertsIn(ClassDeclarationNode* cd);      // the type-member form, under the live binding

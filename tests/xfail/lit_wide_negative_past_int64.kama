@@ -1,0 +1,7 @@
+// The signed mirror of tests/xfail/lit_wide_past_uint64. A magnitude in (INT64_MAX, UINT64_MAX] is a legal
+// `uint64` literal, but under a unary minus it needs a signed type wider than `int64`, and there is none.
+// Folded at the minus, so this is a parse error too — the negation is not the destination's business.
+fn int32 main() {
+    int64 a = -18446744073709551615;
+    return 0;
+}

@@ -1,0 +1,7 @@
+// A wide unsuffixed literal WITH a destination, which simply cannot hold it. The destination answers, so
+// the diagnostic names it and the range — strictly more than the parse error this replaced could say,
+// which knew only that the literal was not an int32.
+fn int32 main() {
+    int32 a = 4294967295;
+    return a;
+}

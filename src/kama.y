@@ -34,6 +34,7 @@ extern int yylex(YYSTYPE * yylval_param, YYLTYPE * yylloc_param, yyscan_t scanne
 int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg);
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner);
+static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
                                           const std::string& spelling, YYLTYPE* loc, yyscan_t scanner);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
@@ -410,7 +411,9 @@ compilation_unit
       /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
          and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
       harvestUnitFacts(yyget_extra(scanner)->compilationUnit);
-      /* Any 2^31 literal still parked was never claimed by a unary minus, so it really does not fit. */
+      /* A suffixed boundary magnitude (`128i8`) still parked was never claimed by a unary minus, so it
+         really does not fit the width its own suffix states. Wide UNSUFFIXED literals do not come here —
+         a destination may still claim one, so their report is the emitter's (see makeUnsuffixedInt). */
       (SCANNER_CODEGENCONTEXT).reportPendingWideLits();
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
                                                                 yyget_extra(scanner)->identTokens.end()); }
@@ -1536,11 +1539,14 @@ unary_expression
   | bitcast_expression
   | sizeof_expression
   | PLUS unary_expression   { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
-  /* `-2147483648` is INT32_MIN, and the only way to write it: the magnitude is one past INT32_MAX, so
-     the literal alone does not fit. Claiming the parked literal here folds the negation into it — which
-     also removes an emission bug, since the old path wrapped an already-negative Int32Node in another
-     minus and emitted `--2147483648`, read by the C compiler as a pre-decrement of a literal. */
-  | MINUS unary_expression   { if ((SCANNER_CODEGENCONTEXT).takeWideLit($2.get())) { $$ = $2; }
+  /* A minus over a WIDE unsuffixed literal folds into the literal — see negateWideLit. `-2147483648` is
+     INT32_MIN and the only way to write it, and folding is also what keeps the emitter from wrapping an
+     already-negative node in another minus and writing `--2147483648`, which C reads as a pre-decrement.
+     The suffixed boundary (`-128i8`) is a different mechanism, parked in pendingWideLits by
+     createIntegerLiteralNode, because there the author stated the width and no destination may change it. */
+  | MINUS unary_expression   { SharedExpression w = negateWideLit(SCANNER_CODEGENCONTEXT, $2, &@2, scanner);
+                               if (w) { $$ = w; }
+                               else if ((SCANNER_CODEGENCONTEXT).takeWideLit($2.get())) { $$ = $2; }
                                else { $$ = std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, $2); } }
   | pre_increment_expression   { $$ = $1; }
   | pre_decrement_expression   { $$ = $1; }
@@ -1996,42 +2002,73 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
     return n;
 }
 
-/* An unsuffixed integer literal is `int32` — the language's default width, as in Rust. A value that does
- * not FIT int32 used to be truncated in SILENCE: `int64 a = 4294967295;` bound -1, and `-2147483648`
- * emitted `--2147483648`, which clang reads as a pre-decrement and rejects ("expression is not
- * assignable") — so INT32_MIN was not writable at all. Neither of the two conventional answers was in
- * force: C/C++/C# widen the literal to the first type that fits, Rust/Go/Zig make it an error. kama
- * takes the second, because widening would make a literal's TYPE depend on its magnitude — editing a
- * constant could silently retype the expression around it, which is the opposite of explicit.
+/* An unsuffixed integer literal is `int32` — the language's default width, as in Rust — and a value that
+ * does not fit int32 was, until 5b-B, a PARSE ERROR. It had to be: the parser is the wrong place to answer
+ * the question, because the answer is the destination's, and the parser has not met it yet.
  *
- * Applies to every unsuffixed base (decimal, hex, octal, based): a mask is a value like any other, and
- * `0xFFFFFFFFui32` says what it means. */
+ * Contextual literal typing (D2a) settles it. A literal takes its type from its destination and is `int32`
+ * only when nothing constrains it, so a wide one is built at its NATURAL width and marked
+ * `wideUnsuffixed`. A destination then claims it (CEmitter::governWideLiterals, whose fits-check answers
+ * `int64 a = 4294967295;` yes and `int32 a = 4294967295;` no, naming the destination — a better message
+ * than this function could ever give). A unary minus claims it below. Ungoverned, `emitExpression`
+ * reports it, which is what keeps the old rule intact: a literal's type must not follow its MAGNITUDE,
+ * or editing a constant could silently retype the expression around it.
+ *
+ * Applies to every unsuffixed base (decimal, hex, octal, based): a mask is a value like any other. */
 static SharedExpression makeUnsuffixedInt(CodeGenContext& ctx, const std::string& digits, int base,
                                           YYLTYPE* loc, yyscan_t scanner)
 {
     errno = 0;
     unsigned long long v = strtoull(digits.c_str(), NULL, base);
-    if(errno == ERANGE || v > 2147483648ULL)
+    if(errno == ERANGE)
     {
-        yyerror(loc, scanner, ("integer literal `" + digits + "` does not fit `int32`, the width of an "
-                               "unsuffixed literal -- write the width you mean (`" + digits + "i64`, `"
-                               + digits + "ui32`)").c_str());
+        /* Past 2^64-1 there is no kama type at all, so no destination could rescue it. The one case
+           still worth answering here. */
+        yyerror(loc, scanner, ("integer literal `" + digits + "` is too large for any integer type "
+                               "(the widest is `uint64`, 0 to 18446744073709551615)").c_str());
         return std::make_shared<Int32Node>(ctx, 0);
     }
-    if(v == 2147483648ULL)
+    if(v <= 2147483647ULL) return std::make_shared<Int32Node>(ctx, (int32_t)v);
+
+    SharedExpression n = (v <= 9223372036854775807ULL)
+        ? std::static_pointer_cast<ExpressionNode>(std::make_shared<Int64Node>(ctx, (int64_t)v))
+        : std::static_pointer_cast<ExpressionNode>(std::make_shared<UInt64Node>(ctx, v));
+    n->wideUnsuffixed = true;
+    return n;
+}
+
+/* The unary minus over a wide unsuffixed literal, folded into the literal. Returns null if `e` is not one,
+ * which is the overwhelmingly common case.
+ *
+ * The negation is why this cannot be left to a `SimpleUnaryExpressionNode`: for the magnitude exactly one
+ * past INT32_MAX the answer is INT32_MIN, an ORDINARY int32 that no destination needs to claim — and
+ * `-2147483648` is the only way to write it, which tests/int_literal_min.kama pins. Wrapping the literal
+ * in a minus instead would emit `--2147483648`, which C reads as a pre-decrement. */
+static SharedExpression negateWideLit(CodeGenContext& ctx, SharedExpression e, YYLTYPE* loc, yyscan_t scanner)
+{
+    if(!e || !e->wideUnsuffixed) return nullptr;
+    unsigned long long m;
+    if(auto* s = dynamic_cast<Int64Node*>(e.get()))       m = (unsigned long long)s->value;
+    else if(auto* u = dynamic_cast<UInt64Node*>(e.get())) m = (unsigned long long)u->value;
+    else return nullptr;
+
+    if(m == 2147483648ULL) return std::make_shared<Int32Node>(ctx, (int32_t)-2147483648LL);
+    if(m <= 9223372036854775807ULL)
     {
-        /* Exactly 2^31 — one past INT32_MAX, and the ONLY out-of-range magnitude a unary minus can
-           rescue: `-2147483648` is INT32_MIN. Park it rather than diagnose it; the MINUS rule takes the
-           entry, and compilation_unit reports it if nothing did. The wrapped int32 IS the answer for the
-           negated form, which is why the node needs no fixing up when it is claimed. */
-        auto n = std::make_shared<Int32Node>(ctx, (int32_t)v);
-        ctx.pendingWideLits[n.get()] = CodeGenContext::WideLit{
-            "integer literal `" + digits + "` does not fit `int32`, the width of an unsuffixed literal"
-            " -- write the width you mean (`" + digits + "i64`, `" + digits + "ui32`)",
-            loc ? loc->first_line : ctx.line, loc ? loc->first_column : ctx.col };
+        auto n = std::make_shared<Int64Node>(ctx, -(int64_t)m);
+        n->wideUnsuffixed = true;      /* still needs int64, so a destination must still admit it */
         return n;
     }
-    return std::make_shared<Int32Node>(ctx, (int32_t)v);
+    if(m == 9223372036854775808ULL)
+    {
+        auto n = std::make_shared<Int64Node>(ctx, (int64_t)m);   /* wraps to INT64_MIN, which is the answer */
+        n->wideUnsuffixed = true;
+        return n;
+    }
+    yyerror(loc, scanner, ("integer literal `-" + std::to_string(m) + "` does not fit `int64` "
+                           "(-9223372036854775808 to 9223372036854775807), and no signed type is wider")
+                          .c_str());
+    return std::make_shared<Int32Node>(ctx, 0);
 }
 
 /* `str` is the token with any base prefix already stripped (the grammar hands `0x1FFi8` in as `1FFi8`);

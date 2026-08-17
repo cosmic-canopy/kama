@@ -3,12 +3,12 @@
 *In-flight design doc. **Delete this file when the work ships**, once SPEC + ROADMAP carry the record — see
 the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 
-**→ START HERE for the next session.** Milestones **0–5a, 5b-A and 5b-C have SHIPPED** — see the table
-below for what each one turned out to be. The next task is **milestone 5b-B** (a wide unsuffixed literal
-whose destination is wider — [ROADMAP.md](../ROADMAP.md) row 1), then 6 and 7. **Row 6's size is now
-settled at 103**: 5b-A drove 5a's `literal` bucket from 219 to zero, so what the sweep still reports is
-what the strict rule will actually have to migrate. **Read *The 5a measurement* below before scoping 6** —
-it says something the brief did not predict. The
+**→ START HERE for the next session.** Milestones **0 through 5b have SHIPPED** — see the table below for
+what each one turned out to be. The next task is **milestone 6, strict numeric conversion**
+([ROADMAP.md](../ROADMAP.md) row 1), then 7. **Row 6's size is settled at 103**: 5b-A drove 5a's `literal`
+bucket from 219 to zero, so what the sweep still reports is what the strict rule will actually have to
+migrate. **Read *The 5a measurement* below before scoping it** — it says something the brief did not
+predict, and note that milestone 6 **will fail both boundary guards by design**. The
 design is settled otherwise: read *Decisions taken* and the *Milestones* table. The traps table is not
 background — every row in it is a thing that bit the implementation directly, and the ones marked ✅ are
 the ones that already did.
@@ -27,8 +27,8 @@ the ones that already did.
 | **Closed by the view window** | ④⑤⑥ (the window rule, the freeze, `ref`/`out` view params, view-root aliasing) and ⑦ (`foreach` is a window; `mods` bumped in `growTo`). `1655e8a`…`19fc999` |
 | **Closed by the spine (M0–M4)** | ⑩ *by kind* at all five hand-off positions, and ⑪ *for constants*. `10b8f30`…`9794284` |
 | **Closed by M5/5a** | ⑩ *by type* at **six** positions (assignment was the sixth, and unwired), and the row-3 migration is now measured rather than guessed. `db9e3e1`…`c0be0ad` |
-| **Closed by 5b-A/5b-C** | a constant that does not FIT its destination, at all six positions, and a suffixed literal that does not fit its own suffix. `59edf78`… |
-| **OPEN — this document** | 5b-B (a wide unsuffixed literal), ⑩ by WIDTH (milestone 6), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
+| **Closed by 5b** | CONTEXTUAL LITERAL TYPING, all three halves: a constant that does not fit its destination at all six positions (A), a wide unsuffixed literal a wider destination can claim (B), and a suffixed literal against its own suffix (C). `59edf78`… |
+| **OPEN — this document** | ⑩ by WIDTH (milestone 6), ⑪ at runtime (milestone 7), the uninstantiated-generic half (8–9), the test-infra holes |
 
 ## What the probes established
 
@@ -143,6 +143,7 @@ instrument; do not scope M6 before it has run.**
 | **5a** ✅ | **SHIPPED `c0be0ad`.** `--strict-numeric`, hidden (no `usage()`, no docs) — a **TSV on stdout**, not warnings: the soft `warning()` channel was deliberately deleted and `run_tests.sh` fails any fixture whose stderr matches `/warning/i`. ⚠️ It reports **its own blind spot as a bucket** (`unknown-src`), which is what forced the arithmetic arm — that count was **29,282** without it and **1,752** with it, so the first draft measured 0.7% of the corpus and would have read as "no migration". Taxonomy below. | rides M5 | ~120 LOC |
 | **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. **Measured before starting: 5b has ZERO corpus migration** — of 5a's 219 `literal` rows only 21 have a range-checkable destination and none is out of range, none of the 105 unsigned-wide rows passes a negative, and all 885 suffixed literals fit their suffix. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
 | **5b-C** ✅ | **SHIPPED.** The suffixed range check, at every width. ⚠️ **Not the latent hole this brief filed it as** — the negative boundary was a live bug emitting invalid C; see the section below. | `createIntegerLiteralNode`, `WideLit`, `emitExpression`'s `Int64Node` arm | ~45 LOC, 4 fixtures, **0** corpus migration |
+| **5b-B** ✅ | **SHIPPED.** A wide unsuffixed literal is built at its natural width and marked; a hand-off claims it, `emitExpression` reports one nothing claimed. ⚠️ **The parser→emitter channel this brief scoped was not needed** — the record belongs on the NODE. `pendingWideLits` stays, for 5b-C. | `makeUnsuffixedInt`, `negateWideLit`, `governWideLiterals`, `ASTNode::wideUnsuffixed` | ~80 LOC, 5 fixtures, **0** corpus migration |
 | **5b-A** ✅ | **SHIPPED.** The fits-check at all six hand-off positions, reach = whatever `constValue` folds. **5a's `literal` bucket went 219 → 0**, so row 2 is now measured at 103. ⚠️ Two things the plan did not foresee: a `uint64` fold reads as NEGATIVE, and `usize`/`uint64` deserve a sign rule even with no asserted range. | `primIntRangeC`, `constOutOfRange`, `rejectConstOutOfRange`, `noteNumericHandoff` | ~90 LOC, 10 fixtures, **0** corpus migration |
 | **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b must land first, or the migration carries thousands of literal suffixes 5b would have made unnecessary. Note the kind rule already owns the four-family half, so 6 is purely about WIDTH. | `kindOfCType`'s callers | ~200 LOC + migration sized by 5a |
 | **7** | **⑪-runtime** (D1) — trap, plus `try cast<T>`. `try` is contextual and today parses only before `new`; extend to `cast`. Reuses `try new`'s `Optional<T>` static-result path. The constant half already rejects there, so the site and the range helper (`primIntRange`) exist. Fixtures: `tests/cast_try_ok.kama`, `tests/trap/cast_narrow_runtime`, `tests/xfail/cast_try_bad_type` (mirror `xfail/try_new_bad_type`). | `emitExpression`'s `CastNode` arm, `src/kama.y` | ~120 LOC |
@@ -223,7 +224,31 @@ records only that source and destination types differ, never whether the value f
 presumably do. Measure before scoping: the cheapest way is to run 5b-A's check in warn-only mode over
 the corpus the way `--strict-numeric` already does.
 
-### 5b-B — a literal too wide for `int32` whose destination is wider (the grammar half)
+### 5b-B ✅ SHIPPED — a literal too wide for `int32` whose destination is wider
+
+⚠️ **The parser→emitter channel was not built, and was not needed.** The brief's design put the record of
+"this literal has no width yet" in `CodeGenContext::pendingWideLits`, a table that dies with the parse —
+hence the channel. Putting it **on the AST node** (`ASTNode::wideUnsuffixed`) removes the problem: the
+emitter already holds the node. `makeUnsuffixedInt` builds a wide literal at its NATURAL width and marks
+it; `governWideLiterals` claims every marked literal reachable from a hand-off's value, called from the
+same two functions 5b-A hooks; `emitExpression` reports one nothing claimed. Governance is recorded in a
+**set on the emitter, not on the node** — the emit walk runs once per instantiation and again for a build
+after an analyze, and mutating shared AST across those passes would make the second pass silent.
+
+⚠️ **`pendingWideLits` was NOT retired** — 5b-C still needs it. A suffixed boundary literal states its own
+width, so no destination may claim it and its report belongs at end of parse, where full coverage
+(including uninstantiated generics) comes free. Only the unsuffixed producer moved off it.
+
+**Two magnitudes stay parse errors**, because no destination could rescue them: past `uint64`'s maximum,
+and a negated magnitude past `int64`'s. The negation folds at the `MINUS` rule (`negateWideLit`), which is
+also where `-2147483648` keeps producing an ordinary `Int32Node` — and `-9223372036854775808` now has an
+unsuffixed spelling for the same reason.
+
+**Accepted cost:** the emit walk skips uninstantiated template bodies, so an ungoverned wide literal inside
+a generic nobody instantiates is no longer caught. It mentions no type parameter, so milestone 8's
+concrete-only walk is positioned to reach it — an expectation, not a guarantee.
+
+**The record below is what it was.**
 
 `int64 a = 4294967295;` dies in `makeUnsuffixedInt` ([kama.y](../../src/kama.y)) before any destination
 is known. This is the half `pendingWideLits` is for — but note what is actually parked and where:
