@@ -465,7 +465,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   unrelated reason — the emitter wrote `--2147483648`, which the C compiler reads as a pre-decrement.
   Guarded by `tests/int_literal_min.kama`.
 
-  **Still open, same family: a SUFFIXED literal is not range-checked against its own suffix.** `300i8`
+  **Still open, same family: a SUFFIXED literal is not range-checked against its own suffix.**
+  ⚠️ **Scheduled — it rides milestone 5b as "5b-C"** ([design/analysis-gap.md](design/analysis-gap.md)),
+  because it is the same range test as the contextual-literal rule at a second site. Do not start it as
+  its own campaign, and delete this paragraph and row 30's mention of it when 5b lands. `300i8`
   truncates to 44 and `2147483648i32` to INT32_MIN, both in silence — `createIntegerLiteralNode` narrows
   with a C cast and never compares. The unsuffixed path checks; the suffixed one, where the author has
   *stated* the width, does not. Corpus-clean today (no suffixed literal anywhere exceeds its suffix), so

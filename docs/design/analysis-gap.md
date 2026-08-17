@@ -138,7 +138,7 @@ instrument; do not scope M6 before it has run.**
 | **4** ✅ | **SHIPPED `81b7612`.** Duplicate-diagnostic dedupe. ⚠️ Keyed on **(file, line, message)**, not the brief's `(ASTNode*, message)` — `unsupported()` is handed a LINE, not a node. Guarded in `check-diag-file.sh` (a count assertion has no shape in the xfail harness). It also made it safe to diagnose from `constValue`, which milestone 2 needed. | `unsupported()` | ~15 LOC |
 | **5** ✅ | **SHIPPED `db9e3e1`, `a5b118d`, `c0be0ad`.** `typeOfExpr` — the lowered C type of any expression, `""` when not certain, `""` never diagnoses; `exprKind` is one line over it. ⚠️ **The brief's `ParamSig` claim was FALSE** (see below), and a **SIXTH hand-off position existed**: plain assignment, unwired by the spine, so `x = "oops";` still failed at clang. Two extractions the plan did not foresee: `indexElemTypeRaw` (`exprClass` filtered the user `operator[]`'s `ref T` through `isClass`, so a container of primitives answered "unknown") and `classifierCType` (`cType` DIAGNOSES on `This`/`Base`). | `exprClass`, `callReturnTypeRaw`, `receiverScalarCType`, `lvalueCType`, `operatorResultClass` | ~330 LOC, 10 fixtures, **0** corpus migration |
 | **5a** ✅ | **SHIPPED `c0be0ad`.** `--strict-numeric`, hidden (no `usage()`, no docs) — a **TSV on stdout**, not warnings: the soft `warning()` channel was deliberately deleted and `run_tests.sh` fails any fixture whose stderr matches `/warning/i`. ⚠️ It reports **its own blind spot as a bucket** (`unknown-src`), which is what forced the arithmetic arm — that count was **29,282** without it and **1,752** with it, so the first draft measured 0.7% of the corpus and would have read as "no migration". Taxonomy below. | rides M5 | ~120 LOC |
-| **5b** | **Contextual literal typing** (D2a). Generalize `pendingWideLits` from one parked magnitude to any — it was built to defer exactly 2^31 for the unary-minus rule, which is the same mechanism. Move the "does not fit `int32`" diagnostic out of `makeUnsuffixedInt` into the checker, since the parser cannot know the destination; `compilation_unit` already reports unclaimed parked literals. **Fixtures:** `int64 a = 4294967295;` must now *compile* (today a hard parse error demanding `4294967295i64`); `int8 s = 300;` must be rejected at the literal; `tests/int_literal_min.kama` must still hold. | `kama.y`: `makeUnsuffixedInt`, `pendingWideLits` + M5's target-type channel | ~180 LOC |
+| **5b** | **Contextual literal typing** (D2a) — **THREE problems with different sizes; see *Milestone 5b, scoped* below.** ⚠️ The earlier sketch here was wrong twice: there is **no "M5 target-type channel"** (`typeOfExpr` answers the SOURCE type; the destination was already at every site), and `pendingWideLits` is needed for only ONE of the two halves. | 5b-A: `rejectConstCastOverflow`'s callers · 5b-B: `kama.y` + a parser→emitter channel that does not exist yet | A: small · B: ~180 LOC |
 | **6** | **Strict numeric conversion** (D2) — the source-breaking rule **plus its corpus migration in ONE commit**. 5b must land first, or the migration carries thousands of literal suffixes 5b would have made unnecessary. Note the kind rule already owns the four-family half, so 6 is purely about WIDTH. | `kindOfCType`'s callers | ~200 LOC + migration sized by 5a |
 | **7** | **⑪-runtime** (D1) — trap, plus `try cast<T>`. `try` is contextual and today parses only before `new`; extend to `cast`. Reuses `try new`'s `Optional<T>` static-result path. The constant half already rejects there, so the site and the range helper (`primIntRange`) exist. Fixtures: `tests/cast_try_ok.kama`, `tests/trap/cast_narrow_runtime`, `tests/xfail/cast_try_bad_type` (mirror `xfail/try_new_bad_type`). | `emitExpression`'s `CastNode` arm, `src/kama.y` | ~120 LOC |
 | **8** | **⑩b-cheap** — a concrete-only template-body walk as a new pass after the `checkDeclaredTypes(units)` call in `analyze`, reusing `collectBindings` (`kama.query.cpp`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors in uninstantiated templates. | new pass | ~150 LOC |
@@ -167,6 +167,73 @@ family, at **six** hand-off positions. It still does not check WIDTH — `kama c
 spells them (161 `cast<usize>` alone, 335 `cast<int32>`), which is why `widening` is empty. What row 3
 will actually hit is **C's integer promotion of sub-`int` arithmetic surfacing at a return**, and that
 is 103 well-bounded sites in one subsystem, not a corpus-wide sweep.
+
+## Milestone 5b, scoped — START HERE
+
+**Every claim below was probed against `0.9.18` on 2026-08-16.** `.scratch/m5b/` held the probes; the
+commands are one-liners, re-run them rather than trusting this table.
+
+| probe | today |
+|---|---|
+| `int64 a = 4294967295;` | **Parse error** — "does not fit `int32`, the width of an unsuffixed literal" |
+| `int8 s = 300;` | **accepted** (silently truncates) |
+| `f(x: 300)` into `fn void f(int8 x)` | **accepted** |
+| `fn int8 g() { return 300; }` | **accepted** |
+| `int32 m = -2147483648;` | accepted — `tests/int_literal_min.kama` pins it, and it must keep working |
+
+These are **three problems** (A, B and the C rider below), and conflating them is what made the
+old estimate meaningless.
+
+### 5b-A — a literal that does not FIT its destination (the common half)
+
+`int8 s = 300;` parses fine: it is an `Int32Node`, and nothing checks it against the destination. This
+needs no grammar change and no literal retyping — it is milestone 2's rule at a different site.
+`rejectConstCastOverflow(target, value, lo, hi, line)` already exists and already says the right thing
+for `cast<int8>(300)`; `primIntRange` gives the range from a declared type and `constValue` folds the
+value. Wire that trio at the six hand-off positions the kind rule already visits.
+
+⚠️ **Corpus impact is UNMEASURED.** The population it draws from is 5a's 219 `literal` rows, but 5a
+records only that source and destination types differ, never whether the value fits — most of those 219
+presumably do. Measure before scoping: the cheapest way is to run 5b-A's check in warn-only mode over
+the corpus the way `--strict-numeric` already does.
+
+### 5b-B — a literal too wide for `int32` whose destination is wider (the grammar half)
+
+`int64 a = 4294967295;` dies in `makeUnsuffixedInt` ([kama.y](../../src/kama.y)) before any destination
+is known. This is the half `pendingWideLits` is for — but note what is actually parked and where:
+
+- `pendingWideLits` holds **exactly one magnitude**, 2^31, parked so the unary-minus rule can claim it
+  (`kama.y:1542`, `takeWideLit`) and make `INT32_MIN` writable. Everything larger is a hard error on
+  the spot. Generalizing it to *any* magnitude is the change.
+- ⚠️ **`reportPendingWideLits()` runs at `kama.y:413` — inside `compilation_unit`, at END OF PARSE.**
+  So an unclaimed parked literal is a *parse* error, reported long before the emitter runs. For a
+  DESTINATION to claim one, that report has to move to after resolution.
+- ⚠️ **There is no parser→emitter channel for it.** `CEmitter` holds only `_synthCtx`, a context it
+  makes for its own synthesized nodes — not the parse's `CodeGenContext`. Building that channel is the
+  real work here, and no earlier draft of this brief accounted for it.
+
+### 5b-C — the rider: a SUFFIXED literal is not range-checked against its own suffix
+
+Filed today under ROADMAP row 30 ("remaining language limitations") and reasoned about in
+[§2](../ROADMAP_DETAIL.md#s2), but it is the SAME rule as 5b-A and should ride with it rather than wait
+for a campaign of its own. Verified still live on `0.9.18`:
+
+```kama
+int8 a = 300i8;            // -> 44, silently. `kama check` says OK; the program exits 44
+int32 b = 2147483648i32;   // -> INT32_MIN, silently
+```
+
+`createIntegerLiteralNode` ([kama.y](../../src/kama.y)) narrows with a C cast and never compares. The
+unsuffixed path checks; the suffixed one — where the author has *stated* the width — does not, which is
+the wrong way round. Fix = the same range test against the suffix's width, with the negation fold
+extended to cover `-128i8` / `-2147483648i32`. **Corpus-clean** (no suffixed literal anywhere exceeds
+its suffix), so it is a latent hole and carries no migration. Delete the row-30 entry when it lands.
+
+### Ordering
+
+5b-A and 5b-C are the same rule at two sites and should land together; neither needs the grammar
+channel. 5b-B is the one that does. **All three before milestone 6**, or its migration carries literal
+suffixes 5b would have made unnecessary.
 
 **Re-run 5a after 5b** — the `literal` bucket should go to zero, and what remains is row 6's real size.
 The command:
