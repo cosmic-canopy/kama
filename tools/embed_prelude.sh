@@ -28,7 +28,12 @@ global=$1; shift
   for m in "$@"; do
     printf '  { R"KAMASRC(\n'
     cat "$m"
-    printf ')KAMASRC" },\n'
+    printf ')KAMASRC",\n'
+    # What a diagnostic raised inside this module's body names. The leading `<` is load-bearing, not
+    # decoration: setPackageResolver (kama.driver.cpp) treats a `<`-prefixed unit as synthetic and skips
+    # the filesystem walk. A bare `prelude/std/...` would send it climbing from the working directory and
+    # attribute the prelude's conformances to whatever project happens to be there.
+    printf '    "<prelude>/%s" },\n' "${m#prelude/}"
     n=$((n + 1))
   done
   printf '};\n'

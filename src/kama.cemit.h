@@ -692,6 +692,12 @@ private:
     struct ModuleSite { std::string display; const CompilationUnit* unit = nullptr; SrcRange range; };
     std::map<std::string, ModuleSite> _modules;
     const CompilationUnit* _refUnit = nullptr;   // unit whose bodies are being walked (set in emitModuleContent)
+    // The file that owns the body being emitted, when it is NOT the module currently being written: a
+    // generic INSTANCE is emitted from the header pass, before any module's path is current. Scoped by
+    // emitGenericInst / emitGenericTypeInst; read by diagFile(). `_refUnit` cannot serve — it is null for
+    // a prelude/std template on purpose (that is how reference recording is disabled for them), and those
+    // are exactly the templates a user program instantiates most.
+    std::string _emitDeclFile;
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
     void recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
@@ -982,6 +988,7 @@ private:
     // discovery and records the target per call node, so emission is a lookup, not re-inference.
     struct GenericInst { std::string templateKey; std::string mangledName; std::vector<SharedIdentifier> typeArgs; };
     std::map<std::string, FunctionDeclarationNode*> _generics;      // template cName -> node
+    std::map<std::string, std::string> _genericDeclFile;            // template cName -> declaring file (diagFile)
     std::map<std::string, NsCtx>                    _genericCtx;    // template cName -> home namespace ctx
     std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call

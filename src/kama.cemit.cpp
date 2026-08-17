@@ -51,10 +51,21 @@ int CEmitter::analyze(const std::vector<SharedCompilationUnit>& units)
         emit(units[0]);                  // writes to `_analysisSink` (the analysis-mode `_out`)
     } else {
         // Multi-file: the same shared-header + per-module emission a build uses, but every stream is the
-        // one throwaway sink. `_sourcePath` (for #line) is irrelevant when the output is discarded.
+        // one throwaway sink.
+        //
+        // Each unit gets ITS OWN path. `_sourcePath` for every unit is what a discarded `#line` does not
+        // care about — and what a DIAGNOSTIC does: `diagFile()` reads the same field, so handing the entry
+        // file's path to every module reported every imported module's body against the file being
+        // checked. Line right, file wrong, which is `check-diag-file.sh`'s whole subject; it guarded the
+        // collect path, where `_collectingUnitPath` already wins, and this is the emit path underneath it.
+        // Measured on the corpus before the fix: 1,174 of 1,848 `--strict-numeric` rows named a line past
+        // the end of the file they named. `u->name` is the same spelling `collectProgram` scopes
+        // `_collectingUnitPath` from, so the two paths now agree by construction rather than by accident.
         std::ostringstream sink;
         std::vector<std::ostream*> moduleStreams(units.size(), &sink);
-        std::vector<std::string>   paths(units.size(), _sourcePath);
+        std::vector<std::string>   paths;
+        paths.reserve(units.size());
+        for (auto& u : units) paths.push_back(u && u->name ? *u->name : _sourcePath);
         emitProgram(units, "<analysis>.h", sink, moduleStreams, paths);
         _out = &_analysisSink;           // restore (emitProgram left `_out` at the now-dying local sink)
     }
@@ -170,9 +181,16 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
 // The LINE was right and the FILE was wrong, which is the worst shape a diagnostic can take: it points a
 // reader (or an editor's go-to) confidently at an innocent line of the wrong file. `ScopedStr` restores the
 // previous value at the end of each collect pass, so body emission is unaffected.
+//
+// `_emitDeclFile` sits between them, for the one body the per-module loop does not own: a GENERIC INSTANCE
+// is emitted from the HEADER pass, before any module's path is current, so `_sourcePath` there is whatever
+// the emitter was constructed with — the entry file. It names the TEMPLATE's file, which is what owns the
+// line. Ordered under `_collectingUnitPath` and over `_sourcePath` for the same reason: most specific wins.
 const std::string& CEmitter::diagFile() const
 {
-    return !_collectingUnitPath.empty() ? _collectingUnitPath : _sourcePath;
+    if (!_collectingUnitPath.empty()) return _collectingUnitPath;
+    if (!_emitDeclFile.empty())       return _emitDeclFile;
+    return _sourcePath;
 }
 
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
@@ -5312,6 +5330,10 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         if (fn->typeParams && !fn->typeParams->empty()) {
             _generics[sig.cName]   = fn;
             _genericCtx[sig.cName] = _nsCtx;   // resolve the body's type refs in its home scope
+            // The template's own file, for a diagnostic raised while re-walking this body per
+            // instantiation — that happens in the HEADER pass, where `_sourcePath` names the entry file.
+            // Same record `ClassInfo::declFile` keeps for a generic type.
+            _genericDeclFile[sig.cName] = _collectingUnitPath;
         }
     }
 }
@@ -8997,6 +9019,10 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     // declaration's references across every caller's file at the template's own coordinates. A prelude/std
     // template yields nullptr, which correctly disables recording for a body the user cannot edit.
     RefUnitScope refScope(this, unitOfDecl(tmpl));
+    // …but a DIAGNOSTIC still belongs to that file even when recording is off, so it reads the file
+    // directly rather than through `unitOfDecl`, which answers nothing for a prelude/std template.
+    auto dfIt = _genericDeclFile.find(gi.templateKey);
+    ScopedStr _edf(_emitDeclFile, dfIt == _genericDeclFile.end() ? std::string() : dfIt->second);
 
     NsCtx savedCtx = _nsCtx;
     auto cit = _genericCtx.find(gi.templateKey);
@@ -17934,6 +17960,10 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     // template ClassInfo lives in _genericTypes (never in _classes), and its `.node` is the template decl.
     auto tmplIt = _genericTypes.find(gi.templateKey);
     RefUnitScope refScope(this, tmplIt == _genericTypes.end() ? nullptr : unitOfDecl(tmplIt->second.node));
+    // A diagnostic raised in this body belongs to the TEMPLATE's file, not to whichever module happens to
+    // instantiate it. `declFile` is recorded at collection for exactly this, and unlike `unitOfDecl` it
+    // answers for a prelude/std template too — `Shared<T>` and `Weak<T>` are the ones every program hits.
+    ScopedStr _edf(_emitDeclFile, tmplIt == _genericTypes.end() ? std::string() : tmplIt->second.declFile);
     NsCtx savedCtx = _nsCtx;
     // emit under the USE-SITE ctx (so a prelude template's user-type args resolve); for a
     // same-scope user generic this equals the template's home ctx.

@@ -1324,7 +1324,8 @@ const std::vector<SharedCompilationUnit>& preludeModuleUnits()
     static const std::vector<SharedCompilationUnit> units = [] {
         std::vector<SharedCompilationUnit> v;
         for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
-            SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src, "<prelude-module>");
+            SharedCompilationUnit u = parseString(KAMA_PRELUDE_MODULES[i].src,
+                                                  KAMA_PRELUDE_MODULES[i].name);
             if (u) v.push_back(u);
         }
         return v;
@@ -1631,7 +1632,7 @@ static void configureEmitter(CEmitter& e)
     // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
     // packages claim the same conformance, so it is a callback rather than a precomputed per-unit table:
     // the walk is filesystem work the emitter has no business doing, and it runs at most once per error.
-    // A synthetic unit (`<prelude>`, `<prelude-module>`) has no path — `dirName` would hand back "." and
+    // A synthetic unit (`<prelude>`, `<prelude>/std/…`) has no path — `dirName` would hand back "." and
     // the walk would climb into whatever project happens to be the working directory, attributing the
     // prelude's conformances to the user.
     e.setPackageResolver([](const std::string& unitPath) -> std::string {
