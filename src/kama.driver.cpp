@@ -1336,6 +1336,11 @@ const std::vector<SharedCompilationUnit>& preludeModuleUnits()
 // subset). Threaded to each CEmitter via `setNoHeap`. File-scope like the other build config, set in main.
 static bool g_noHeap = false;
 
+// `--strict-numeric` (M5a): TALLY every numeric hand-off whose source and destination types differ,
+// as a TSV on stdout. Rejects nothing. Hidden — deliberately absent from `usage()` and the docs,
+// because it exists to SIZE the strict-conversion rule and is deleted when that rule lands.
+static bool g_strictNumeric = false;
+
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
 static bool g_release = false;
@@ -1619,6 +1624,7 @@ static void configureEmitter(CEmitter& e)
 {
     e.setPrelude(preludeUnit());       // Optional/Result available implicitly
     e.setNoHeap(g_noHeap);             // `--no-heap`: reject heap allocation program-wide
+    e.setStrictNumeric(g_strictNumeric);   // `--strict-numeric` (M5a): measure numeric hand-offs
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
@@ -6334,6 +6340,7 @@ int main(int argc, char** argv)
         // picks the OUTPUT kind rather than how the runtime is linked.
         else if (a == "--dynamic-runtime")        dynamicRuntime = true;
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
+        else if (a == "--strict-numeric")         g_strictNumeric = true;   // M5a: measure, don't reject (hidden)
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE

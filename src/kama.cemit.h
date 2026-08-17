@@ -531,6 +531,10 @@ public:
     // `--target embedded`. Per-region `@noheap` on a fn is handled per-body; both funnel through
     // `rejectIfNoHeap`. Set from the driver before emission.
     void setNoHeap(bool on) { _noHeapProgram = on; }
+    // M5a: measure the strict-numeric migration. Hidden, off by default, deleted when that rule
+    // lands — its whole job is to answer "how big is the corpus change" with a count instead of a
+    // guess. See `noteNumericHandoff`.
+    void setStrictNumeric(bool on) { _strictNumericScan = on; }
 
 
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
@@ -1023,6 +1027,8 @@ private:
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
+    bool                                      _strictNumericScan = false;  // `--strict-numeric`: TALLY numeric hand-offs, reject nothing
+    std::set<std::string>                     _strictNumericSeen;          // dedupe: a template body is emitted once per instantiation
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
     bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
@@ -1722,6 +1728,8 @@ private:
     // rule above reads it through `kindOfCType`, and width/conversion checking will read it directly.
     std::string typeOfExpr(SharedExpression e);
     std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
+    void noteNumericHandoff(const std::string& dstCType, SharedExpression value,
+                            const char* what, int line);   // M5a measurement; silent unless the flag is on
     std::string indexElemTypeRaw(SharedExpression e);    // `a[i]`'s element type, class OR primitive
     static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
     // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".

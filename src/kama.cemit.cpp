@@ -645,10 +645,24 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
         if (!oc.empty()) return oc;
         // `string + string` is the one built-in binary operator over a non-numeric type.
         if (be->token == PLUS && (exprIsString(be->LHS) || exprIsString(be->RHS))) return "kama_string";
-        // ARITHMETIC over numbers is deliberately "": C's usual arithmetic conversions decide the width
-        // of `a + b`, and modelling them is the strict-conversion milestone's job. Answering with a guess
-        // here would give that milestone a wrong number to argue with. The KIND is not at risk — both
-        // operands are already `Num` or the operator rule above rejected them.
+        // ARITHMETIC over two operands of the SAME numeric type. This is C's rule stated exactly, not a
+        // guess: integer promotion takes anything narrower than `int` to `int`, and two operands already
+        // agreeing need no further conversion. `i = i + 1` — by far the commonest shape in the corpus —
+        // resolves here, and `int8 x = a + b;` correctly answers `int32_t`, which is a real narrowing on
+        // the way back out.
+        //
+        // MIXED operand types stay "". That is where the usual arithmetic conversions get interesting,
+        // and the strict-conversion rule has to DECIDE what kama does there (C's answer may not be it)
+        // rather than inherit an answer from this classifier.
+        {
+            const std::string lt = typeOfExpr(be->LHS), rt = typeOfExpr(be->RHS);
+            if (!lt.empty() && lt == rt) {
+                if (lt == "float" || lt == "double" || lt == "int32_t" || lt == "uint32_t"
+                 || lt == "int64_t" || lt == "uint64_t" || lt == "size_t" || lt == "ptrdiff_t") return lt;
+                if (lt == "int8_t" || lt == "int16_t" || lt == "uint8_t" || lt == "uint16_t")
+                    return "int32_t";     // C integer promotion: both fit in `int`
+            }
+        }
         return "";
     }
     if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
@@ -704,9 +718,108 @@ CEmitter::TKind CEmitter::exprKind(SharedExpression e)
 // The same rule where the destination is already a LOWERED C type rather than a declared type node — a
 // return value, a `match` arm, a call argument. Those sites never hold the kama type; they hold the C
 // type they are about to assign through, which is exactly what `kindOfCType` wants.
+// ---------------------------------------------------------------------------------------------------
+// M5a — the MEASURING instrument for strict numeric conversion (ROADMAP row 3).
+//
+// That rule is source-breaking, so its size has to be known before it is scoped, and the size is not
+// grep-able: two naive regexes over 31k lines find 126 sites and miss assignments, arguments, returns,
+// field initializers and compound operators entirely. This rides the five hand-off positions the kind
+// rule already visits, which is every place a value crosses into a destination of a stated type.
+//
+// It REJECTS NOTHING and it must not print `warning:` — the soft warning channel was deliberately
+// deleted, because a warning is the compiler saying it does not believe its own output, and
+// `run_tests.sh` fails any fixture whose stderr matches /warning/i. So this is a TSV on STDOUT,
+// emitted only under the hidden flag, aggregated with `sort | uniq -c`.
+//
+// The taxonomy is the brief's four buckets plus two the brief folded together and should not have:
+// a signedness flip at equal width changes the value without changing the width, and an int/float
+// crossing is a conversion in a category of its own. Both would otherwise be counted as "widening".
+namespace {
+// Width in bits of a numeric C type, 0 if it is not one. `size_t`/`ptrdiff_t` are TARGET-width by
+// definition — reported as their own bucket rather than assigned a number this compiler cannot know.
+int cNumBits(const std::string& ct)
+{
+    if (ct == "int8_t"  || ct == "uint8_t")  return 8;
+    if (ct == "int16_t" || ct == "uint16_t") return 16;
+    if (ct == "int32_t" || ct == "uint32_t" || ct == "float") return 32;
+    if (ct == "int64_t" || ct == "uint64_t" || ct == "double") return 64;
+    return 0;
+}
+bool cNumSigned(const std::string& ct)
+{
+    return ct == "int8_t" || ct == "int16_t" || ct == "int32_t" || ct == "int64_t"
+        || ct == "float"  || ct == "double"  || ct == "ptrdiff_t";
+}
+bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
+bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t"; }
+
+// Is this expression a NUMERIC LITERAL the author wrote — including one behind a sign? That bucket is
+// the whole point of the measurement: contextual literal typing (row 2) absorbs it for free, so the
+// row-3 migration is what is LEFT once it is subtracted.
+bool isNumericLiteral(const ASTNode* n)
+{
+    if (!n) return false;
+    if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n))
+        return isNumericLiteral(u->expression.get());
+    return dynamic_cast<const Int8Node*>(n)   || dynamic_cast<const Int16Node*>(n)
+        || dynamic_cast<const Int32Node*>(n)  || dynamic_cast<const Int64Node*>(n)
+        || dynamic_cast<const UInt8Node*>(n)  || dynamic_cast<const UInt16Node*>(n)
+        || dynamic_cast<const UInt32Node*>(n) || dynamic_cast<const UInt64Node*>(n)
+        || dynamic_cast<const Float32Node*>(n)|| dynamic_cast<const Float64Node*>(n)
+        || dynamic_cast<const CharNode*>(n);
+}
+}  // namespace
+
+void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression value,
+                                  const char* what, int line)
+{
+    if (!_strictNumericScan || !value || dstCType.empty()) return;
+    const bool dstNum = cNumBits(dstCType) || cNumTargetWidth(dstCType);
+    if (!dstNum) return;
+    const std::string src = typeOfExpr(value);
+    // A NUMERIC destination the classifier cannot answer the source of. Reported as its own bucket
+    // rather than dropped, because it is the instrument's own blind spot and a measurement that hides
+    // its blind spot is worse than no measurement: arithmetic is deliberately uncertain (C's usual
+    // conversions decide `a + b`'s width, which is the strict rule's own problem to model), and an
+    // intrinsic with a NULL `returnType` — `s.length()` and its `usize` siblings — records no type at
+    // all. This count is the upper bound on what a later pass could still find.
+    if (src.empty()) {
+        std::string u = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line)
+                      + "\t?\t" + dstCType + "\tunknown-src\t" + (what ? what : "");
+        size_t t = u.find('`'); if (t != std::string::npos) u = u.substr(0, t);
+        if (_strictNumericSeen.insert(u).second) std::fprintf(stdout, "%s\n", u.c_str());
+        return;
+    }
+    if (src == dstCType) return;
+    if (!cNumBits(src) && !cNumTargetWidth(src)) return;   // a kind crossing, which is already an ERROR
+
+    const char* cat;
+    if (isNumericLiteral(value.get()))                            cat = "literal";
+    else if (cNumTargetWidth(src) || cNumTargetWidth(dstCType))   cat = "usize-width";
+    else if (cNumFloat(src) != cNumFloat(dstCType))               cat = "int-float";
+    else if (cNumBits(dstCType) <  cNumBits(src))                 cat = "narrowing";
+    else if (cNumSigned(src)   != cNumSigned(dstCType))           cat = "signedness";
+    else                                                          cat = "widening";
+
+    // The POSITION, normalized: the callers spell a name into it (``argument `x` ``), and a per-name
+    // bucket would not aggregate.
+    std::string pos(what ? what : "");
+    size_t tick = pos.find('`');
+    if (tick != std::string::npos) pos = pos.substr(0, tick);
+    while (!pos.empty() && pos.back() == ' ') pos.pop_back();
+
+    std::string row = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+                    + src + "\t" + dstCType + "\t" + cat + "\t" + pos;
+    // A generic body is emitted once per instantiation and the prelude is analyzed once per unit, so
+    // the same site arrives many times. Same dedupe key as `unsupported`, for the same reason.
+    if (!_strictNumericSeen.insert(row).second) return;
+    std::fprintf(stdout, "%s\n", row.c_str());
+}
+
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                        const char* what, int line)
 {
+    noteNumericHandoff(dstCType, value, what, line);   // M5a: measure first, then judge
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -718,6 +831,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
 void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init,
                                       const char* what, int line)
 {
+    if (_strictNumericScan) noteNumericHandoff(classifierCType(declType), init, what, line);
     // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
     // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where
     // a type is deliberately half-resolved.
@@ -4324,6 +4438,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // pinning the placement rule would report two errors, one of them beside the point.
         if (isThisBase(as->unaryExpression)) return;
 #endif
+        // The kind rule in ASSIGNMENT position — the SIXTH hand-off, and the one the spine missed. It
+        // wired the five that hand a value into a *declared* destination (initializer, return, `match`
+        // arm, argument, variant payload) and left the plainest one open: `int32 x = 0; x = "oops";`
+        // passed `kama check` clean and failed at clang, which is the exact defect this whole campaign
+        // exists to close, one statement later than the fixture that pinned it.
+        //
+        // `EQ` only. A compound operator (`+=`, `<<=`) is an arithmetic rule, not a hand-off, and
+        // `string += string` is a shipped concatenation. `typeOfExpr` on the LHS place answers through
+        // the same map the ownership branch below already trusts.
+        if (as->token == EQ) {
+            SharedExpression rhs = as->expression;
+            if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) rhs = h->value;   // judge on the value
+            rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
+        }
         // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`, which is how a factory
         // builds a value) — FILLS the hole: it is a live value from here on, so its destructor comes back
         // and ordinary move tracking takes over. Done once here rather than in each of the assignment

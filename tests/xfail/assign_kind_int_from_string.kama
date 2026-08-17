@@ -1,0 +1,9 @@
+// The SIXTH hand-off position. The spine wired the five that hand a value into a declared destination
+// — initializer, return, `match` arm, argument, variant payload — and left the plainest one open, so
+// the campaign's own headline defect survived one statement later than the fixture pinning it:
+// this passed `kama check` clean and failed at clang, against C the author never wrote.
+fn int32 main() {
+    int32 x = 0;
+    x = "not an int";
+    return 0;
+}
