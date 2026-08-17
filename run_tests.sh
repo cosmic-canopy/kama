@@ -174,11 +174,25 @@ build_one() {
 }
 # Run a fixture under a WATCHDOG, because a fixture that hangs used to wedge the whole suite forever.
 #
-# `tests/fs_raii.kama` has hung the wasm leg twice (2026-08-13, 2026-08-15), `node` blocked at 0% CPU
-# with an alive event loop. Neither time produced a single byte of evidence: there was no time bound, so
-# the runner simply waited, the log's mtime froze, and the only way to learn WHICH fixture was stuck was
-# `podman exec ps`. Both times a re-run passed, so it was written off as a flake — 0% CPU is *blocked*,
-# not slow, and a flake does not pick the same fixture twice.
+# `tests/fs_raii.kama` has hung the wasm leg three times (2026-08-13, 2026-08-15, 2026-08-17), `node`
+# blocked at 0% CPU. The first two produced no evidence at all: there was no time bound, so the runner
+# simply waited, the log's mtime froze, and the only way to learn WHICH fixture was stuck was
+# `podman exec ps`. Every time a re-run passed, so it was written off as a flake — 0% CPU is *blocked*,
+# not slow, and a flake does not pick the same fixture three times.
+#
+# ⚠️ The third catch (2026-08-17) refuted this comment's own reading of the first two. It said "an alive
+# event loop"; had that been true, `--report-on-signal` would have written a report, and it wrote none.
+# An idle-but-alive loop is exactly the one shape that DOES produce one (probed; see watchdog_run). So
+# the fixture is not idle-waiting on a handle — it is parked in a synchronous syscall, which also reads
+# as 0% CPU under `ps` and is what the first two catches actually saw.
+#
+# That fits what the fixture is: `fs_raii` opens and closes the same file 5,000 times to prove `File`
+# closes its fd on drop, and under emscripten NODEFS every one of those is a blocking node `fs` call.
+# It is by a wide margin the corpus's heaviest syscall user, so it is the fixture most exposed to
+# container I/O contention while the leg runs fixtures in parallel chunks. And it was not deadlocked:
+# the third catch ran 123,908 ms against a 1,909 ms normal time — 65x slow, killed at the cap, not
+# stopped. Before treating a fourth catch as a deadlock, read the `state:` line the watchdog now
+# captures: `R` is spinning, `D` is uninterruptible I/O, and only `S` would support the old reading.
 #
 # So: bound it, and make the timeout produce the evidence the hang never did. On expiry the child gets
 # SIGUSR2 first — for `node` that writes a diagnostic report naming every live libuv handle (`timer`,
@@ -199,6 +213,22 @@ watchdog_run() {
     ( sleep "$KAMA_FIXTURE_TIMEOUT"
       kill -0 "$child" 2>/dev/null || exit 0          # finished in time — nothing to do
       : >"$mark"
+      # Native-level evidence FIRST, while the process is still alive and before any signal. It is the
+      # only kind that survives every hang shape. `--report-on-signal` below covers exactly one of the
+      # three: node writes its report on the MAIN THREAD, so a loop that is idle-waiting on a handle
+      # produces one, while a thread that is spinning or parked in a synchronous syscall produces
+      # nothing at all. Probed on node v26 (2026-08-17): idle `setInterval` -> report written;
+      # `while(true){}` -> no report; `fs.readFileSync(<fifo>)` -> no report. Two of the three shapes
+      # were invisible, and both are what a filesystem fixture under emscripten NODEFS actually does.
+      { if [ -r "/proc/$child/status" ]; then                    # Linux (the container legs)
+            echo "  state:   $(awk '/^State:/{ $1=""; print }' "/proc/$child/status" 2>/dev/null)"
+            echo "  wchan:   $(cat "/proc/$child/wchan" 2>/dev/null)"
+            echo "  syscall: $(cut -d' ' -f1 "/proc/$child/syscall" 2>/dev/null)"
+            echo "  open fds: $(ls "/proc/$child/fd" 2>/dev/null | wc -l)"
+        else                                                     # macOS host leg
+            ps -o state=,wchan=,time= -p "$child" 2>/dev/null | sed 's/^/  ps: /'
+        fi
+      } >"${mark%/*}/hang_native.txt" 2>/dev/null
       kill -s USR2 "$child" 2>/dev/null               # ask node to dump WHY it is still alive
       sleep 3
       kill -s KILL "$child" 2>/dev/null ) &
@@ -231,8 +261,22 @@ run_one() {
 
 timed_out() { [ -f "$1/timed_out" ]; }
 hang_evidence() {   # $1 = the fixture's build dir
+    [ -f "$1/hang_native.txt" ] && cat "$1/hang_native.txt"
     local r="$1/hang.json"
-    [ -f "$r" ] || { echo "  (no node report — a native fixture, or the report never got written)"; return; }
+    # The report's ABSENCE is evidence, not a gap in the instrumentation — say so, because reading it as
+    # "the hook did not fire" is what let the first two catches be written off. On the wasm leg node is
+    # always the child and `--report-on-signal` is always armed, so no report means the main thread was
+    # not idle-waiting on a handle: it was spinning or parked in a synchronous syscall. Combined with the
+    # `state:` line above (R = spinning, D/S = parked) that narrows it to one.
+    if [ ! -f "$r" ]; then
+        if [ "$WASM" = 1 ]; then
+            echo "  (no node report — its ABSENCE means the main thread was spinning or blocked in a"
+            echo "   syscall; an idle-but-alive event loop DOES write one. See \`state:\` above.)"
+        else
+            echo "  (no node report — a native fixture; the node report is a wasm-leg instrument)"
+        fi
+        return
+    fi
     node -e '
       const r = require(process.argv[1]);
       const h = [...new Set((r.libuv || []).filter(x => x.is_active).map(x => x.type))];
