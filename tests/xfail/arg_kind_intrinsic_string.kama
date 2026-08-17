@@ -1,0 +1,9 @@
+// The argument kind rule reaches an INTRINSIC signature. A `ParamSig`'s `className` is the C type
+// spelling — `paramSigsOf` fills it that way for every declared parameter — but the synthesized
+// string/InlineArray signatures left it empty, so the rule was silent on exactly the methods reached
+// first. An offset is a `size_t`, per `include/kama_runtime.h`.
+fn int32 main() {
+    string s = "hello";
+    string t = s.substring(start: "no", end: 3);
+    return 0;
+}

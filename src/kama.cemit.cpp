@@ -6934,31 +6934,39 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         ci.methods[mname] = mi;
     };
     {   // `string`'s intrinsic method set — the only one left (everything else diverted above)
+        // The argument kind rule was silent on every intrinsic, because these synthesized signatures
+        // name no parameter type at all — `s.substring(start: "x", end: 3)` compiled. The type goes in
+        // `kindCType`, NOT `className`: that field also drives `ownsByValue`, and the read-only
+        // `kama_string__*` intrinsics BORROW their string argument, so naming it there would demand a
+        // `give`/`copy` marker on `s.contains(substring: t)`. `include/kama_runtime.h` is the authority
+        // for each spelling — an offset is a `size_t`, a needle or piece is a `kama_string`.
+        auto SZ = [](const char* n) { ParamSig p; p.name = n; p.byRef = false; p.kindCType = "size_t"; return p; };
+        auto ST = [](const char* n) { ParamSig p; p.name = n; p.byRef = false; p.kindCType = "kama_string"; return p; };
         addMethod("length", {}, SharedIdentifier());
-        addMethod("equals", { ParamSig{"other", false, ""} }, SharedIdentifier());
-        addMethod("concat", { ParamSig{"other", false, ""} }, collType);   // returns a string
+        addMethod("equals", { ST("other") }, SharedIdentifier());
+        addMethod("concat", { ST("other") }, collType);   // returns a string
         addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
-        addMethod("get",    { ParamSig{"index", false, ""} }, elem);        // `s[i]` -> the i-th byte (uint8)
+        addMethod("get",    { SZ("index") }, elem);        // `s[i]` -> the i-th byte (uint8)
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
         addMethod("chars",  {}, synthId("Chars"));   // codepoint iterator
         // Phase 3 ergonomics. Bool-returning methods pass a NULL returnType (the `equals` pattern — the
         // emitter emits the raw C call and the C `bool` return governs). `substring`/`trim`/`replace`/case
         // return `collType` (a `string`), so their owned result is RAII-freed exactly like `.concat()`.
-        addMethod("substring", { ParamSig{"start", false, ""}, ParamSig{"end", false, ""} }, collType);
+        addMethod("substring", { SZ("start"), SZ("end") }, collType);
         // `substring` traps on an offset that splits a character, so the safe path has to be reachable:
         // `floorCharBoundary` snaps an arbitrary offset DOWN to a boundary (total, O(1)) and `truncate`
         // names the budget case on top of it. A `usize`-returning intrinsic passes a NULL returnType, like
         // `length` — the C return type governs.
-        addMethod("floorCharBoundary", { ParamSig{"at", false, ""} }, SharedIdentifier());
-        addMethod("truncate", { ParamSig{"maxBytes", false, ""} }, collType);   // owned result, like trim
-        addMethod("contains",   { ParamSig{"substring", false, ""} }, SharedIdentifier());
-        addMethod("startsWith", { ParamSig{"prefix", false, ""} },    SharedIdentifier());
-        addMethod("endsWith",   { ParamSig{"suffix", false, ""} },    SharedIdentifier());
+        addMethod("floorCharBoundary", { SZ("at") }, SharedIdentifier());
+        addMethod("truncate", { SZ("maxBytes") }, collType);   // owned result, like trim
+        addMethod("contains",   { ST("substring") }, SharedIdentifier());
+        addMethod("startsWith", { ST("prefix") },    SharedIdentifier());
+        addMethod("endsWith",   { ST("suffix") },    SharedIdentifier());
         addMethod("isEmpty",    {}, SharedIdentifier());
         addMethod("trim",       {}, collType);
         addMethod("trimStart",  {}, collType);
         addMethod("trimEnd",    {}, collType);
-        addMethod("replace",    { ParamSig{"old", false, ""}, ParamSig{"with", false, ""} }, collType);  // `with:` (`new` is reserved)
+        addMethod("replace",    { ST("old"), ST("with") }, collType);  // `with:` (`new` is reserved)
         addMethod("toLower",    {}, collType);
         addMethod("toUpper",    {}, collType);
         // `find` -> Optional<usize> (null-safe byte offset). Register the Optional<usize> instance so its C
@@ -6973,11 +6981,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
             optRet->genericArg  = usizeArg;
             optRet->genericArgs = std::make_shared<IdentifierList>();
             optRet->genericArgs->push_back(usizeArg);
-            addMethod("find", { ParamSig{"substring", false, ""} }, optRet);
+            addMethod("find", { ST("substring") }, optRet);
         }
         // `split(separator:)` -> a lazy `Split` iterator (prelude value type; see the `.split()`
         // special-case in emitMethodCall). No collections import: pieces come out one at a time.
-        addMethod("split", { ParamSig{"separator", false, ""} },
+        addMethod("split", { ST("separator") },
                   synthId("Split"));
     }
 
@@ -7048,8 +7056,14 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
         mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
         ci.methods[mname] = mi;
     };
-    addMethod("get",    { ParamSig{"index", false, ""} }, elem, true);
-    addMethod("set",    { ParamSig{"index", false, ""}, ParamSig{"value", false, elemClass} },
+    // Same split as the string intrinsics above: `className` keeps its ownership/upcast meaning
+    // (`elemClass`, empty for a primitive element) and the kind rule reads `kindCType`, which is the
+    // element's real C type. `KAMA_FIXED_FUNCS` in include/kama_runtime.h is the authority for both.
+    ParamSig ixGet; ixGet.name = "index"; ixGet.byRef = false; ixGet.kindCType = "size_t";
+    ParamSig ixSet = ixGet;
+    ParamSig val;   val.name = "value"; val.byRef = false; val.className = elemClass; val.kindCType = elemCType;
+    addMethod("get",    { ixGet }, elem, true);
+    addMethod("set",    { ixSet, val },
               SharedIdentifier(), false);   // the one intrinsic here that writes
     addMethod("length", {}, SharedIdentifier(), true);
     _classes[cName] = ci;
@@ -12126,17 +12140,17 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
-        // The kind rule in ARGUMENT position, as far as the signature can carry it. `ParamSig` records a
-        // param's `className` and leaves it EMPTY for a primitive, so this reaches the `string` and
-        // class/aggregate parameters and stays silent on the numeric ones — a partial rule, and partial in
-        // the safe direction: an empty className reads as Unknown and says nothing. Giving `ParamSig` a C
-        // type for its primitives is what would complete it, and that is a signature change reaching every
-        // construction site including the synthesized intrinsic ones.
+        // The kind rule in ARGUMENT position. `className` already IS the C type for every DECLARED
+        // parameter (`paramSigsOf` fills it with `cType`, primitives included), so the only signatures
+        // it could not answer for were the SYNTHESIZED intrinsics, which name no type at all. Those
+        // carry `kindCType` instead — see the ParamSig field, which explains why it cannot be the
+        // same field.
         //
         // A CONTRACT param is exempt for the same reason a contract destination is: `hashVia(h: 22)` widens
         // a primitive into a fat pointer, so it accepts every kind by design.
-        if (!p.className.empty() && !isInterface(p.className))
-            rejectValueKindMismatch(p.className, argExpr,
+        const std::string& pKindCType = p.kindCType.empty() ? p.className : p.kindCType;
+        if (!pKindCType.empty() && !isInterface(pKindCType))
+            rejectValueKindMismatch(pKindCType, argExpr,
                                     ("argument `" + p.name + "`").c_str(), srcLine);
         // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
         // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is

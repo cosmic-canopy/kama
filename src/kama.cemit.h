@@ -66,7 +66,10 @@
 // against these to recover C's positional order at each call site.
 struct ParamSig {
     std::string name;
-    bool        byRef;        // ref/out => passed as a pointer (call site emits &arg)
+    // DEFAULTED, and it has to be: a default-constructed `ParamSig` left this indeterminate, so a
+    // synthesized signature built field-by-field passed `&i` where the runtime wanted a `size_t`. It
+    // compiled clean on one host and failed on another, which is the worst way to find out.
+    bool        byRef = false;   // ref/out => passed as a pointer (call site emits &arg)
     std::string className;    // class type (for ref upcast at call sites), "" if primitive
     // `out T x` — a WRITE-ONLY borrow: the callee must assign it on every path before returning, and may
     // not read the incoming value. Lowers identically to `ref` (a `T*`); the difference is entirely in the
@@ -79,6 +82,14 @@ struct ParamSig {
     // is what lets a call-site LABEL be indexed as a reference to it (LSP M6 A2). Analysis-only; null for
     // the synthesized signatures of string/collection intrinsics, which have no source declaration.
     const IdentifierNode* declSite = nullptr;
+    // The C type for the KIND rule alone. `className` cannot carry it for a SYNTHESIZED intrinsic
+    // signature, because that field is overloaded: `ownsByValue(p.className)` is what makes a
+    // by-value collection argument demand `give`/`copy`, and the read-only `kama_string__*` intrinsics
+    // are deliberately exempt from that — they borrow. Naming their parameter `kama_string` to teach
+    // the kind rule made 51 fixtures demand a hand-off marker for `s.contains(substring: t)`. So the
+    // type checker gets a field that means exactly one thing. Empty => fall back to `className`,
+    // which for every DECLARED parameter already IS the C type spelling (`paramSigsOf`).
+    std::string kindCType;
 };
 
 struct FuncSig {

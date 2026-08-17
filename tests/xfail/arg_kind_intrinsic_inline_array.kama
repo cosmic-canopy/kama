@@ -1,0 +1,7 @@
+// The same for `InlineArray<T, N>.set`, whose VALUE parameter carried only the element CLASS — empty
+// for a primitive element, so a `string` into an array of `int32` crossed unexamined.
+fn int32 main() {
+    InlineArray<int32, 3> a = [0; 3];
+    a.set(index: 0, value: "no");
+    return 0;
+}
