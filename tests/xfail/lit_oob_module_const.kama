@@ -1,0 +1,12 @@
+// A module-level `comptime` constant, which is the shape that got past the rule once already.
+// `_moduleConsts` folds the VALUE and records no type, and `exprClass` — the only classifier that reached
+// a module static — filtered it through `isClass`, so a static of PRIMITIVE type answered "unknown". The
+// rule is silent on an unknown source by design (it cannot tell a real negative from `constValue`'s int64
+// reinterpretation of a magnitude above INT64_MAX), so this compiled and the C said 255.
+//
+// `moduleStaticCTypeRaw` is the unfiltered lookup, the same extraction `indexElemTypeRaw` is.
+comptime int32 NEG = -1;
+fn int32 main() {
+    uint8 u = NEG;
+    return cast<int32>(u);
+}

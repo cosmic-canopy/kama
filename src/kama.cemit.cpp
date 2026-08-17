@@ -608,6 +608,7 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
         // they cover different shapes.
         std::string ct = lvalueCType(e);
         if (ct.empty()) ct = receiverScalarCType(e);
+        if (ct.empty()) ct = moduleStaticCTypeRaw(e);
         if (ct.empty()) ct = exprClass(e);
         return ct;
     }
@@ -877,6 +878,21 @@ std::string kamaNameOf(const std::string& ct, const std::string& primKey)
     return primKey;
 }
 }  // namespace
+
+// A module-level `static` / `comptime`, UNFILTERED. `exprClass` already reaches one, but runs it through
+// `isClass` — so a static of PRIMITIVE type answers "", which is the same filtering that hid a container's
+// element type from the spine (see `indexElemTypeRaw`, extracted for exactly this reason). It matters here
+// because `_moduleConsts` folds such a constant's VALUE while nothing could state its TYPE, and a rule
+// that must tell a real negative from `constValue`'s int64 reinterpretation is blind without one:
+// `comptime int32 N = -1;` at module scope let `uint8 u = N;` through, and the C it emitted said 255.
+// A local of the same name shadows it, which the two lookups ahead of this one already handle.
+std::string CEmitter::moduleStaticCTypeRaw(SharedExpression e)
+{
+    auto* id = dynamic_cast<IdentifierNode*>(e.get());
+    if (!id || !id->value) return "";
+    auto ms = _moduleStatics.find(qualify(*id->value));
+    return ms == _moduleStatics.end() ? "" : classifierCType(ms->second);
+}
 
 // Recurses through exactly the shapes `constValue` folds through, plus the ternary — everywhere a literal
 // can sit and still be governed by the destination of the expression around it. It does NOT require the

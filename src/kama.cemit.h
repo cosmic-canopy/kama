@@ -1266,6 +1266,7 @@ private:
     // per instantiation and again for a build after an analyze, and mutating shared AST across those
     // passes would make the second one silent.
     void governWideLiterals(SharedExpression e);
+    std::string moduleStaticCTypeRaw(SharedExpression e);   // a module static's type, NOT filtered by isClass
     std::set<const void*> _litGoverned;
     // M7 `comptime assert(cond:, msg:)` — one surface, two lowerings (see the block above its definition).
     void emitComptimeAssert(ComptimeAssertNode* a);
