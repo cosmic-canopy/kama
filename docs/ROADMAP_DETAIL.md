@@ -77,6 +77,31 @@ This is the same defect class as the constant `cast<int8>(300)` the compiler alr
 `string.length()`, whose intrinsic carried a NULL return type until the isize campaign named it — `int8 n
 = s.length();` silently truncated for exactly this reason.
 
+**Both probes re-verified at `0.9.30`** (after the cast trap shipped): each builds clean and returns **44**.
+Copy them as the starting fixtures —
+
+```kama
+fn Optional<int64> big() { return Optional::Some(value: 300i64); }
+int8 n = match (big()) { case Some(value: c): c; case None: 0i8; };     // 44, no diagnostic
+foreach (int64 x in xs) { int8 n = x; }                                 // 44, no diagnostic
+```
+
+**The size of the migration is already measured, and it is the reason this is a campaign.** The cast-trap
+milestone tried the obvious fix — write `_localCTypes[nm]` at the two `foreach` binding sites so
+`typeOfExpr` answers — and **19 fixtures failed immediately**: `bit_set`, `view`, `viewable_attribute`,
+`const_generic_arith`, `const_local_size`, `import_transitive_iter`, `fs_roundtrip`, `net_tcp_options`,
+and the whole `proc_*` family through `tests/support/procutil.kama`. They are not wrong fixtures — they are
+real `isize`-vs-`int32` operand mismatches that milestone 6 would have rejected had the classifier been
+able to see them. That is the work: the diagnostics arrive all at once, so the corpus migration comes with
+them, and the `foreach` half alone is ~19 files before the `match` half is touched.
+
+**Part of the plumbing already exists.** `_localTypeNodes[nm]` has always held the binding's element type
+node, and `narrowCheck` reads it directly (added by the cast trap, deliberately scoped to that one caller)
+— so the type is *available*, and the open question is only whether `typeOfExpr` may serve it to every rule.
+That also means the gap has a **runtime cost**, not only a correctness one: before `narrowCheck` read it, a
+widening `cast<int64>(v)` out of an `int32` loop binding emitted a runtime check that could never fire,
+worth ~19% of a 2M-iteration loop in `bench/src/kama/alloc.kama`.
+
 ⚠️ **The fix is NOT to make the numeric rules fire on an unknown source.** `rejectNumericConversion`'s own
 header calls silence-on-unknown "the single most important constraint in the campaign": a rule built on a
 classifier that conflates "primitive" with "no idea" is either silent on every primitive or unlandable.
