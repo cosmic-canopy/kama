@@ -6,7 +6,7 @@ fn int32 main() {
     InlineArray<int32, (CAP)> buf = [0; (CAP)];   // type size AND fill count both fold CAP -> 4
     int32 i = 0;
     while (i < CAP) { buf[i] = i + 1; i = i + 1; } // 1, 2, 3, 4
-    isize t = 0;
-    foreach (int32 e in buf) { t = t + cast<isize>(e); }   // `t` is the wider accumulator — it also adds `length()`
-    return cast<int32>(t + buf.length());          // (1+2+3+4) + 4 = 14
+    int32 t = 0;                                   // a sum of `int32` ELEMENTS, so it is an `int32`
+    foreach (int32 e in buf) { t = t + e; }
+    return t + cast<int32>(buf.length());          // (1+2+3+4) + 4 = 14 — the one real conversion
 }

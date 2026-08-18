@@ -17,8 +17,10 @@ fn int32 main() {
 
         Optional<isize> f20 = binarySearch(items: v, target: t20);
         Optional<isize> f35 = binarySearch(items: v, target: t35);
-        a = match (f20) { case Some(value: i): i; case None: 99; };   // 1 — the FIRST of the duplicates
-        b = match (f35) { case Some(value: i): i; case None: 7; };    // 7 — absent
+        // An INDEX is an `isize`; these six all fold into one `int32` return, so they convert at the same
+        // point and in the same spelling as the four `lowerBound` lines below.
+        a = match (f20) { case Some(value: i): cast<int32>(i); case None: 99; };   // 1 — the FIRST of the duplicates
+        b = match (f35) { case Some(value: i): cast<int32>(i); case None: 7; };    // 7 — absent
 
         c = cast<int32>(lowerBound(items: v, target: t35));   // 4 — first index whose element is >= 35
         d = cast<int32>(lowerBound(items: v, target: t5));    // 0 — before everything

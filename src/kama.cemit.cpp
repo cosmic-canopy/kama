@@ -873,18 +873,26 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
             return v;
         };
         if (mx->arms) {
+            bool anyValueArm = false;                            // a non-literal arm EXISTS, answered or not
             for (auto& a : *mx->arms) {                          // a NON-literal arm speaks first
                 SharedExpression v = armValue(a);
                 if (!v || isLiteralExpr(v.get())) continue;      // diverging, or contextually typed
+                anyValueArm = true;
                 std::string ac = typeOfExpr(v);
                 if (!ac.empty()) return ac;
             }
-            for (auto& a : *mx->arms) {                          // every arm literal — they type the match
-                SharedExpression v = armValue(a);
-                if (!v) continue;
-                std::string ac = typeOfExpr(v);
-                if (!ac.empty()) return ac;
-            }
+            // Pass 2 belongs to "EVERY arm is a literal", which is what its comment always claimed — but it
+            // used to run whenever pass 1 produced no ANSWER, which is not the same test. A payload arm the
+            // classifier cannot type is still a value arm, and letting the error arm's `0` speak for the
+            // match typed `isize written = match (wr) { case Ok(value: w): w; case Err(error: e): 0; }` as
+            // an `int32` and rejected the initializer. Unknown is the honest answer there.
+            if (!anyValueArm)
+                for (auto& a : *mx->arms) {                      // every arm literal — they type the match
+                    SharedExpression v = armValue(a);
+                    if (!v) continue;
+                    std::string ac = typeOfExpr(v);
+                    if (!ac.empty()) return ac;
+                }
         }
         return "";
     }
@@ -15338,7 +15346,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 
         // Fresh arm scope; bind the payload fields (borrowed copies — same as a foreach element).
         Scope sc; _scopes.push_back(sc);
-        struct Saved { std::string name; bool had; std::string prev; };
+        struct Saved { std::string name; bool had; std::string prev; bool hadNode; SharedIdentifier prevNode; };
         std::vector<Saved> savedTypes;
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
         bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
@@ -15419,8 +15427,21 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     _borrowedMatchBindings.insert(bn);
                     borrowedHere.push_back(bn);
                 }
-                savedTypes.push_back({bn, (bool)_localTypes.count(bn), _localTypes.count(bn) ? _localTypes[bn] : std::string()});
+                savedTypes.push_back({bn, (bool)_localTypes.count(bn),
+                                      _localTypes.count(bn) ? _localTypes[bn] : std::string(),
+                                      (bool)_localTypeNodes.count(bn),
+                                      _localTypeNodes.count(bn) ? _localTypeNodes[bn] : SharedIdentifier()});
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
+                // …and the TYPE NODE, which `_localTypes` deliberately drops (it keeps classes only, so a
+                // primitive payload records ""). Without it the classifier cannot answer for a payload
+                // binding, and milestone 6's rule did not hold through one: `int8 n = match (big()) { case
+                // Some(value: c): c; … }` truncated an `int64` 300 to 44 in silence.
+                //
+                // SUBSTITUTED, for the reason the `namesUnsafePtr` check above is: a generic instance
+                // stores its payload in the TEMPLATE's `T`, so `Optional<int64>` has `pf.type == T` and the
+                // raw node would classify as nothing. `instSubst` has already bound `_typeSubst` for the
+                // whole switch, which is what makes this resolve concretely.
+                _localTypeNodes[bn] = deepSubstType(pf.type);
             }
         }
 
@@ -15475,7 +15496,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         }
         indent(depth + 2); *_out << "break;\n";
 
-        for (auto& sv : savedTypes) { if (sv.had) _localTypes[sv.name] = sv.prev; else _localTypes.erase(sv.name); }
+        for (auto& sv : savedTypes) {
+            if (sv.had)     _localTypes[sv.name]     = sv.prev;     else _localTypes.erase(sv.name);
+            if (sv.hadNode) _localTypeNodes[sv.name] = sv.prevNode; else _localTypeNodes.erase(sv.name);
+        }
         for (auto& bn : borrowedHere) _borrowedMatchBindings.erase(bn);
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);

@@ -7,9 +7,9 @@ fn int32 padSum<const N: int32>(InlineArray<int32, N> a) {
     int32 i = 0;
     foreach (int32 e in a) { buf[i] = e; i = i + 1; }
     buf[i] = 100;                                     // the extra padding slot
-    isize t = 0;
-    foreach (int32 e in buf) { t = t + cast<isize>(e); }   // `t` is the wider accumulator — it also adds `length()`
-    return cast<int32>(t + buf.length());             // length() == N+1
+    int32 t = 0;                                      // a sum of `int32` ELEMENTS, so it is an `int32`
+    foreach (int32 e in buf) { t = t + e; }
+    return t + cast<int32>(buf.length());             // length() == N+1 — the one real conversion
 }
 fn int32 main() {
     InlineArray<int32, 3> v = [4, 5, 6];              // N = 3

@@ -180,8 +180,11 @@ type resource BufWriter<W: Writer> implements Writer {
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
-                    if (m == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
-                    off = off + cast<isize>(m);
+                    // `Writer.write` answers `Result<isize, IoError>`, so `m` is already an `isize` —
+                    // both casts here were residue from when it answered `usize`, and the `==` compared
+                    // across the two. Nothing caught it because the payload binding had no type.
+                    if (m == 0) { return Result::Err(error: IoError::WouldBlock); }
+                    off = off + m;
                 }
             };
         }

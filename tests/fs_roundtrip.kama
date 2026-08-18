@@ -30,8 +30,9 @@ fn int32 main() {
     }
 
     Result<isize, IoError> wr = writeFile(path: p, bytes: data);
-    usize written = match (wr) { case Ok(value: w): w; case Err(error: e): cast<usize>(0); };
-    if (written != cast<usize>(n)) { return 50; }
+    // A BYTE COUNT, which is what `isize` is for — and what `writeFile` already answers.
+    isize written = match (wr) { case Ok(value: w): w; case Err(error: e): 0; };
+    if (written != cast<isize>(n)) { return 50; }
 
     int32 stCode = match (stat(path: p)) {
         case Ok(value: m): (m.isDir ? 51 : ((m.size == cast<usize>(n)) ? 0 : 52));

@@ -37,9 +37,9 @@ fn int32 main() {
     doubleAll(v: a.slice(from: 1, count: 2));                               // a -> {10, 40, 60, 40}
     if (a[0] == 10 && a[1] == 40 && a[2] == 60 && a[3] == 40) { r = r + 1; }// 4
 
-    isize s = 0;
+    int32 s = 0;                                                            // a sum of `int32` ELEMENTS
     borrow a.view() as forSum {
-        foreach (int32 x in forSum) { s = s + cast<isize>(x); }             // 150
+        foreach (int32 x in forSum) { s = s + x; }                          // 150
     }
     if (s == 150) { r = r + 1; }                                           // 5
 

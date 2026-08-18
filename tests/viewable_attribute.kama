@@ -35,7 +35,7 @@ type resource Buf implements Spanned<Span>, Counted {
 fn int32 main() {
     Buf b = Buf.empty();
     b.add(v: 10); b.add(v: 20); b.add(v: 12);
-    isize sum = 0;
-    foreach (int32 v in b.span()) { sum = sum + cast<isize>(v); }   // `sum` is the wider accumulator — it also adds `size()`
-    return cast<int32>(sum + b.size());   // 42 + 3 = 45
+    int32 sum = 0;                                    // a sum of `int32` ELEMENTS, so it is an `int32`
+    foreach (int32 v in b.span()) { sum = sum + v; }
+    return sum + cast<int32>(b.size());   // 42 + 3 = 45 — the one real conversion
 }
