@@ -735,6 +735,23 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
         if (ct.empty()) ct = receiverScalarCType(e);
         if (ct.empty()) ct = moduleStaticCTypeRaw(e);
         if (ct.empty()) ct = exprClass(e);
+        // A BINDING — a `foreach` element or a `match`-arm payload. None of the four resolvers above
+        // reaches one: they answer for a declared local, a param, a field or a module static, and a
+        // binding is none of those. So the rule the author can see two tokens away (`foreach (int64 x in
+        // xs)`, `case Some(value: c)`) did not hold through it, and `int8 n = x;` truncated in silence.
+        //
+        // `_localTypeNodes` is the map that HAS held the answer all along, and it is deliberately the one
+        // consulted rather than `_localCTypes`: that map is read by `lvalueCType`, the compound-assignment
+        // path and the ownership/RAII paths, where a `foreach (string s in …)` binding is a BORROW on the
+        // indexed path and an OWNED value on the iterator path — teaching it about bindings perturbs
+        // `ownsByValue` LHS detection. This one is read only by `neverNullType` and the numeric rules,
+        // which is exactly the blast radius this answer should have.
+        if (ct.empty())
+            if (auto* id = dynamic_cast<IdentifierNode*>(n))
+                if (id->value && (!id->qualifier || id->qualifier->empty())) {
+                    auto it = _localTypeNodes.find(*id->value);
+                    if (it != _localTypeNodes.end()) ct = classifierCType(it->second);
+                }
         return ct;
     }
 
@@ -4999,6 +5016,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         bool hadType = _localTypes.count(nm);
         std::string prevType = hadType ? _localTypes[nm] : std::string();
         _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
+        // Saved/restored like `_localTypes` beside it — the binding's type must not outlive the loop. It
+        // never was, which was latent only while `narrowCheck` alone read this map; now that `typeOfExpr`
+        // serves it to every numeric rule, a leaked entry types a same-named local in the enclosing scope.
+        bool hadNode = _localTypeNodes.count(nm);
+        SharedIdentifier prevNode = hadNode ? _localTypeNodes[nm] : SharedIdentifier();
         if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
 
         // `foreach (ref T e …)` binds each element by PLACE (a bounds-checked `T*` via `__at`), so
@@ -5023,6 +5045,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
         if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
+        if (hadNode) _localTypeNodes[nm] = prevNode; else _localTypeNodes.erase(nm);
         if (fe->isRef && !hadRef) _refParams.erase(nm);
         popScope();
 
@@ -7006,22 +7029,13 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
     // check that survives folds away at `-O2`.
     int64_t clo, chi, cv;
     if (primIntRangeC(dstCType, clo, chi) && constValue(value, cv)) return "";
+    // A `foreach` element or a `match`-arm payload binding used to need its own `_localTypeNodes` lookup
+    // right here, because the classifier could not answer for one. It answers now, so this reads the same
+    // map through the same call every other rule uses — and the reason it is worth answering is not
+    // theoretical: `int64 s = …; s += cast<int64>(v)` over `int32` elements is a WIDENING that cannot
+    // fail, and an unanswered source paid a full runtime check per element (~19% of a 2M-iteration loop
+    // in bench/src/kama/alloc.kama).
     std::string src = typeOfExpr(value);
-    // A `foreach` BINDING, whose type the author wrote two tokens away (`foreach (int32 v in xs)`) but
-    // which `typeOfExpr` does not answer for — the classifier gap that is ROADMAP row 1. `_localTypeNodes`
-    // has held the element's type node all along, so read it HERE rather than teaching the classifier:
-    // widening the classifier turns on milestone 6's operand rule for every loop binding at once, which is
-    // row 1's campaign and its own corpus migration, not this milestone's.
-    //
-    // It is worth reaching for because the cost is not theoretical. `int64 s = …; s += cast<int64>(v)`
-    // over `int32` elements is a WIDENING that cannot fail, and without this it paid a full runtime check
-    // per element — measured at ~19% of a 2M-iteration loop in bench/src/kama/alloc.kama.
-    if (src.empty())
-        if (auto* id = dynamic_cast<IdentifierNode*>(value.get()))
-            if (id->value) {
-                auto it = _localTypeNodes.find(*id->value);
-                if (it != _localTypeNodes.end()) src = classifierCType(it->second);
-            }
     if (!src.empty()) {
         // A kind crossing (a `bool`, a `string`, an enum) is a different rule's error, not a narrowing.
         if (!cNumBits(src) && !cNumTargetWidth(src)) return "";
@@ -10134,6 +10148,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     bool hadType = _localTypes.count(nm);
     std::string prevType = hadType ? _localTypes[nm] : std::string();
     _localTypes[nm] = elemClass;
+    bool hadNode = _localTypeNodes.count(nm);              // restored below, like `_localTypes` — see the indexed path
+    SharedIdentifier prevNode = hadNode ? _localTypeNodes[nm] : SharedIdentifier();
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     bool hadRef = _refParams.count(nm);
     if (fe->isRef) {
@@ -10161,6 +10177,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
 
     if (hadType) _localTypes[nm] = prevType; else _localTypes.erase(nm);
+    if (hadNode) _localTypeNodes[nm] = prevNode; else _localTypeNodes.erase(nm);
     if (fe->isRef && !hadRef) _refParams.erase(nm);
     popScope();
 

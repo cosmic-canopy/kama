@@ -27,7 +27,9 @@ fn int32 main() {
     // (b) iterate SET bits, ascending.
     BitSet it = BitSet.empty();
     it.set(index: 1); it.set(index: 70); it.set(index: 3);
-    int32 sum = 0; int32 cnt = 0; int32 lastSeen = 0 - 1; bool ordered = true;
+    // `sum` and `lastSeen` hold bit INDICES, which the iterator yields as `isize` — so they are `isize`
+    // too. `cnt` counts iterations against literals only, so it stays the `int32` the return wants.
+    isize sum = 0; int32 cnt = 0; isize lastSeen = 0 - 1; bool ordered = true;
     foreach (isize i in it) {
         if (i <= lastSeen) { ordered = false; }
         lastSeen = i; sum = sum + i; cnt = cnt + 1;

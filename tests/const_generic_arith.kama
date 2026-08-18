@@ -8,7 +8,7 @@ fn int32 padSum<const N: int32>(InlineArray<int32, N> a) {
     foreach (int32 e in a) { buf[i] = e; i = i + 1; }
     buf[i] = 100;                                     // the extra padding slot
     isize t = 0;
-    foreach (int32 e in buf) { t = t + e; }
+    foreach (int32 e in buf) { t = t + cast<isize>(e); }   // `t` is the wider accumulator — it also adds `length()`
     return cast<int32>(t + buf.length());             // length() == N+1
 }
 fn int32 main() {
