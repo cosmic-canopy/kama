@@ -1,0 +1,58 @@
+// The three conversion verbs, told apart by what each PRESERVES — and the escapes from the trap.
+//
+//   cast<T>(x)      the VALUE     any width          traps when the value does not fit
+//   truncate<T>(x)  the LOW BITS  narrower or equal  cannot fail
+//   bitcast<T>(x)   ALL the bits  same width         cannot fail
+//
+// `cast`'s trap is exercised in tests/trap/cast_narrow_*.kama, because a trap aborts the process and
+// cannot share a fixture with anything after it. What is here is everything the rule must NOT break plus
+// both escapes — and every operand goes through a LOCAL, since a constant that does not fit is a compile
+// error instead (xfail/cast_const_oob) and a constant that does fits needs no check at all.
+import std::num::{int32Max};
+fn int32 main() {
+    int32 r = 0;
+
+    // --- cast: the conversions that stay silent, because no value can be lost -----------------------
+    int8 s8 = 42i8;
+    if (cast<int32>(s8) == 42)                        { r = r + 3; }   // widening, sign-extends
+    uint8 u8 = 200ui8;
+    if (cast<int32>(u8) == 200)                       { r = r + 3; }   // unsigned widening, zero-extends
+    int32 n42 = 42;
+    if (cast<int8>(n42) == 42i8)                      { r = r + 3; }   // narrowing, but IN RANGE
+    if (cast<int32>(n42) == 42)                       { r = r + 3; }   // same type
+    if (cast<int32>(3.9f64) == 3)                     { r = r + 3; }   // float->int truncates toward zero
+    if (cast<int32>(0.0f64 - 3.9f64) == 0 - 3)        { r = r + 3; }   // ...toward zero on the negative side
+
+    // --- truncate: the wrapping form, which is why the trap did not have to break working code -------
+    int32 n300 = int32Max() - int32Max() + 300;                        // 300, runtime-opaque
+    if (truncate<int8>(n300) == 44i8)                 { r = r + 3; }   // 300 - 256
+    int32 n511 = int32Max() - int32Max() + 511;
+    if (truncate<uint8>(n511) == 255ui8)              { r = r + 3; }   // 511 & 0xFF
+    // The case that proves `cast<T>(x & 0xFF)` could NOT have replaced this verb: the round trip through
+    // the unsigned peer, which is how a binary format reads a negative back. 200 as a `uint8` is -56 as an
+    // `int8`, and 0..255 is itself outside `int8` — so masking first would trap in turn.
+    if (truncate<int8>(u8) == 0i8 - 56i8)             { r = r + 3; }
+    // EQUAL width is allowed too — "narrower or equal". A signedness flip loses no bits, so there is
+    // nothing for the widening rejection to complain about, and `cast` would trap on exactly this value.
+    int32 negOne = int32Max() - int32Max() - 1;
+    if (truncate<uint32>(negOne) == 4294967295ui32)   { r = r + 3; }
+
+    // --- try cast: the fallible form. A typed local, like `try new` --------------------------------
+    Optional<int8> fits = try cast<int8>(n42);
+    int32 gotFits = match (fits) { case Some(value: x): cast<int32>(x); case None: 0; };
+    if (gotFits == 42)                                { r = r + 3; }
+    Optional<int8> nope = try cast<int8>(n300);
+    int32 gotNope = match (nope) { case Some(value: x): cast<int32>(x); case None: 0 - 1; };
+    if (gotNope == 0 - 1)                             { r = r + 3; }   // None, where `cast` would trap
+    // Both ends: a negative into an unsigned target is `None` for the same reason 300 is.
+    int32 neg = int32Max() - int32Max() - 1;
+    Optional<uint8> negU = try cast<uint8>(neg);
+    int32 gotNegU = match (negU) { case Some(value: x): cast<int32>(x); case None: 0 - 1; };
+    if (gotNegU == 0 - 1)                             { r = r + 3; }
+
+    // --- bitcast is untouched by any of it: same width, all the bits --------------------------------
+    int8 neg56 = 0i8 - 56i8;
+    if (bitcast<uint8>(neg56) == 200ui8)              { r = r + 3; }
+
+    return r;   // 42
+}

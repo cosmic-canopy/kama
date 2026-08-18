@@ -18,7 +18,7 @@ fn int32 main() {
     input.add(item: cast<uint8>(104));   // 'h'
     input.add(item: cast<uint8>(105));   // 'i'
     input.add(item: cast<uint8>(10));    // '\n'
-    Result<usize, IoError> wr = p.stdin().writeAll(bytes: input);
+    Result<isize, IoError> wr = p.stdin().writeAll(bytes: input);
     int32 w = match (wr) { case Ok(value: n): 0; case Err(error: e): 141; };
     if (w != 0) { return w; }
     p.closeStdin();                       // EOF so `cat` finishes

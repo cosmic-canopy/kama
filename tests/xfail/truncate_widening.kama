@@ -1,0 +1,8 @@
+// `truncate<T>` keeps the LOW BITS, so a widening target is a contradiction: there are no high bits to
+// drop, and the verb would mean exactly what `cast` means. Zig rejects a widening `@truncate` for the same
+// reason. Only a PROVABLE widening is rejected — an unknown source stays silent, like every rule here.
+fn int32 main() {
+    int8 s = 42i8;
+    int32 w = truncate<int32>(s);
+    return w;
+}

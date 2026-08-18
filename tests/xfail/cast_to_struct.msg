@@ -1,1 +1,1 @@
-a cast converts between scalars and pointers
+a conversion works between scalars and pointers

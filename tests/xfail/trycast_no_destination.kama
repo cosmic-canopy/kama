@@ -1,0 +1,7 @@
+// `try cast<T>(x)` yields `Optional<T>` and, like `try new`, reads that result type off the DECLARED
+// destination — so it is a typed-local initializer, not a free expression. Written anywhere else there is
+// no `Optional<T>` to read, and the diagnostic must name the two verbs that DO work in this position.
+fn int32 main() {
+    int32 v = 300;
+    return cast<int32>(try cast<int8>(v));
+}

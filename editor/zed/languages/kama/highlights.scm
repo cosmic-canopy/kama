@@ -36,7 +36,7 @@
   "while" "do" "foreach" "parallel_for"
   "break" "continue" "return"
   "spawn" "scope" "borrow"
-  "new" "try" "cast" "bitcast" "sizeof" "alignof"
+  "new" "try" "cast" "bitcast" "truncate" "sizeof" "alignof"
 ] @keyword
 
 (modifier) @keyword

@@ -592,6 +592,44 @@ bool cNumSigned(const std::string& ct)
 bool cNumFloat(const std::string& ct) { return ct == "float" || ct == "double"; }
 bool cNumTargetWidth(const std::string& ct) { return ct == "size_t" || ct == "ptrdiff_t"; }
 
+// A numeric target's range as C TEXT, for the runtime narrowing check. Deliberately not numbers:
+// `size_t`/`ptrdiff_t` have no width this compiler can know, and `<stdint.h>`'s macros are exactly the
+// right answer on every target. `lo` is a `long long` expression, `hi` an `unsigned long long` one —
+// the two argument types `kama_narrow_chk_s`/`_u` take.
+//
+// Distinct from `primIntRangeC`, which answers for the CONSTANT-fold rule and stops where an `int64_t`
+// stops holding every fold. This one has to cover the 64-bit and target-width targets too, because a
+// RUNTIME uint64 -> int64 can fail where no constant can.
+bool cNumRangeText(const std::string& ct, std::string& lo, std::string& hi)
+{
+    if (ct == "int8_t")    { lo = "INT8_MIN";    hi = "INT8_MAX";    return true; }
+    if (ct == "int16_t")   { lo = "INT16_MIN";   hi = "INT16_MAX";   return true; }
+    if (ct == "int32_t")   { lo = "INT32_MIN";   hi = "INT32_MAX";   return true; }
+    if (ct == "int64_t")   { lo = "INT64_MIN";   hi = "INT64_MAX";   return true; }
+    if (ct == "uint8_t")   { lo = "0";           hi = "UINT8_MAX";   return true; }
+    if (ct == "uint16_t")  { lo = "0";           hi = "UINT16_MAX";  return true; }
+    if (ct == "uint32_t")  { lo = "0";           hi = "UINT32_MAX";  return true; }
+    if (ct == "uint64_t")  { lo = "0";           hi = "UINT64_MAX";  return true; }
+    if (ct == "ptrdiff_t") { lo = "PTRDIFF_MIN"; hi = "PTRDIFF_MAX"; return true; }
+    if (ct == "size_t")    { lo = "0";           hi = "SIZE_MAX";    return true; }
+    return false;   // float/double (see below) and everything that is not a number
+}
+
+// Is every value of the integer type `src` representable in the integer type `dst`? The predicate that
+// decides whether a cast needs a check at all — both sides are integers, the caller having already
+// answered for floats. Conservative by construction: a target-width type (`size_t`/`ptrdiff_t`) reports
+// width 0, so it is only ever "contained" in itself, and the check that survives costs nothing —
+// `lo`/`hi` are compile-time constants, so a comparison that cannot fail folds away at `-O2`.
+bool cNumContains(const std::string& dst, const std::string& src)
+{
+    if (dst == src) return true;
+    const int ds = cNumBits(dst), ss = cNumBits(src);
+    if (!ds || !ss) return false;                       // a target-width type on either side
+    if (cNumSigned(dst) == cNumSigned(src)) return ds >= ss;
+    if (cNumSigned(dst)) return ds > ss;                // unsigned -> signed needs a strictly wider dst
+    return false;                                       // signed -> unsigned: the negatives have nowhere to go
+}
+
 // Is this expression a NUMERIC LITERAL the author wrote — including one behind a sign? That bucket is
 // the whole point of the measurement: contextual literal typing (row 2) absorbs it for free, so the
 // row-3 migration is what is LEFT once it is subtracted.
@@ -715,7 +753,12 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     }
 
     // --- conversions --------------------------------------------------------------------------------
-    if (auto* c  = dynamic_cast<CastNode*>(n))    return classifierCType(c->type);
+    // `try cast<T>(x)` is the one cast whose type is NOT its type argument: it yields `Optional<T>`, the
+    // same shape `.as<T>()` has, so it gets the same answer. Without this every rule downstream reads it
+    // as a bare `T` — and the kind rule then rejects `Optional<int8> r = try cast<int8>(v);` as a number
+    // initializing a type.
+    if (auto* c  = dynamic_cast<CastNode*>(n))
+        return c->isTry ? classifierCType(optionalTypeNode(c->type)) : classifierCType(c->type);
     if (auto* bc = dynamic_cast<BitcastNode*>(n)) return classifierCType(bc->type);
     if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) return classifierCType(optionalTypeNode(ad->type));
     if (dynamic_cast<SizeofNode*>(n)) return "size_t";   // `sizeof`/`alignof` are a `usize`
@@ -3004,6 +3047,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
+        // `try cast` is a STATEMENT form (see emitTryCast) — the declaration path intercepts it before the
+        // expression walk. Arriving here means it was written somewhere that has no `Optional<T>`
+        // destination to read, which is `try new`'s rule and its diagnostic's shape.
+        if (v->isTry) {
+            unsupported(("`try cast<" + nm + ">(…)` must initialize a declared `Optional<" + nm
+                         + ">` local — that is where its result type comes from. For a value that must "
+                           "not fail use `cast<" + nm + ">(…)`, and to keep the low bits use `truncate<"
+                         + nm + ">(…)`").c_str(), v->line);
+            return "0";
+        }
         // Containment: `cast<UnsafePtr<T>>(…)` MAKES a raw pointer out of an integer or another pointer —
         // one of the two production sites (the other is `addr(of:)`). It stays possible, which is what
         // keeps MMIO writable; it just cannot happen in a function carrying no marker.
@@ -3017,17 +3070,20 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // deliberately NOT a whitelist of scalars: an FFI type is opaque to kama (`cast<CompareFn>(c)` in
         // tests/callback_qsort.d, a C function-pointer typedef reached through `extern`), and a plain enum
         // is a C enum. Both must stay legal, and neither is something kama can prove scalar.
+        // Three verbs share this node, so a diagnostic must name the one that was WRITTEN. Reporting
+        // `truncate<string>(…)` as `cast<string>(…)` sends the reader to a line that does not say `cast`.
+        const std::string verb = v->isTruncate ? "truncate" : (v->isTry ? "try cast" : "cast");
         if (isInterface(target)) {
             // A contract value is a fat pointer that BORROWS its object; a cast has no object to borrow.
-            unsupported(("`cast<" + nm + ">(…)` — a contract is not a conversion target: a contract value "
-                         "borrows its object, so you get one by binding it (`" + nm + " x = obj;`) or by "
-                         "passing the object where a `" + nm + "` is expected").c_str(), v->line);
+            unsupported(("`" + verb + "<" + nm + ">(…)` — a contract is not a conversion target: a contract "
+                         "value borrows its object, so you get one by binding it (`" + nm + " x = obj;`) or "
+                         "by passing the object where a `" + nm + "` is expected").c_str(), v->line);
             return "0";
         }
         if (_classes.count(target)) {
-            unsupported(("`cast<" + nm + ">(…)` — a cast converts between scalars and pointers, and `" + nm
-                         + "` is neither. To reinterpret a scalar's bits use `bitcast`; to narrow a contract "
-                           "value to a concrete type use `expr.as<T>()`").c_str(), v->line);
+            unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
+                         "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
+                         "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v->line);
             return "0";
         }
         // A CONSTANT that provably does not fit the target. `cast<int8>(300)` silently produced 44, and
@@ -3036,12 +3092,35 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // different number. Precedent: xfail/constgen_oob rejects a constant out-of-range array index
         // while a dynamic one traps at runtime.
         //
-        // Only the CONSTANT half. A runtime narrowing cast still truncates in silence; that is a
-        // separate, source-visible decision (trap, plus `try cast<T>`) and its own milestone.
         int64_t lo, hi, cv;
         if (primIntRange(v->type, lo, hi) && constValue(v->unaryExpression, cv) && (cv < lo || cv > hi)) {
             rejectConstCastOverflow(v->type, cv, lo, hi, v->line);
             return "0";
+        }
+        // `truncate<T>` keeps the LOW BITS, so a widening target is a contradiction: there are no bits to
+        // drop, and the two verbs would mean the same thing. Zig rejects a widening `@truncate` for the
+        // same reason. Only a PROVABLE widening is rejected — an unknown source stays silent, like every
+        // other rule in this campaign.
+        if (v->isTruncate) {
+            std::string tlo, thi;
+            const std::string src = typeOfExpr(v->unaryExpression);
+            if (!cNumRangeText(target, tlo, thi))
+                unsupported(("`truncate<" + nm + ">(…)` keeps the low bits of an integer, and `" + nm
+                             + "` is not one. To reinterpret a scalar's bits use `bitcast`, and to convert "
+                               "a value use `cast`").c_str(), v->line);
+            else if (!src.empty() && (cNumBits(src) || cNumTargetWidth(src)) && !cNumFloat(src)
+                     && cNumContains(target, src) && target != src)
+                unsupported(("`truncate<" + nm + ">(…)` drops the high bits, but every `"
+                             + kamaNameOf(src, primKeyOfCType(src)) + "` already fits `" + nm
+                             + "` — write `cast<" + nm + ">(…)`").c_str(), v->line);
+        }
+        // And the RUNTIME half, which the sentence above used to defer. `cast<T>` preserves the VALUE, so
+        // a value that does not fit `T` is not a conversion but a different number — the same reasoning,
+        // now applied where the number is only knowable at runtime. `truncate<T>` keeps the low bits and
+        // `try cast<T>` yields `Optional<T>`; both skip this.
+        if (!v->isTruncate && !v->isTry) {
+            const std::string checked = narrowCheck(target, v->unaryExpression);
+            if (!checked.empty()) return checked;
         }
         return "((" + target + ")(" + emitExpression(v->unaryExpression) + "))";
     }
@@ -4281,6 +4360,20 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (rn == ty || (g != _genericTypeInstOf.end() && g->second == rn))
                             stackCtor = iv;
                     }
+
+                // `Optional<T> r = try cast<T>(x);` — the fallible conversion, handled here for the same
+                // reason `try new` is: the `Some` payload type comes from the DECLARED destination, and
+                // the operand needs a statement slot so it is evaluated once.
+                if (auto* cst = dynamic_cast<CastNode*>(init.get())) {
+                    if (cst->isTry) {
+                        line(n->line);
+                        bool ph = _hoistOK; _hoistOK = true;
+                        std::string s = emitTryCast(ty, nm, cst, n->line);
+                        _hoistOK = ph; flushHoisted(depth);
+                        if (!s.empty()) { indent(depth); *_out << s << "\n"; }
+                        return;
+                    }
+                }
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
                     checkNamelessNewBanned(oc, n->line);   // M8 Phase E: no nameless `new Type(...)`
@@ -6891,6 +6984,61 @@ void CEmitter::rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64
                  + "), so this is not a conversion but a different number. Write a value in range, "
                    "or mask first if the truncation is what you mean (`cast<" + nm + ">(x & 0xFF)`)")
                 .c_str(), line);
+}
+
+// The RUNTIME narrowing check for one `cast<T>(x)`. Returns the checked C expression, or "" when the
+// conversion provably cannot fail and must stay a bare cast.
+//
+// The gate is the TARGET being a number, which is what keeps the ~200 `cast<UnsafePtr<T>>` sites — a
+// pointer conversion, and the unsafe seam's one production site — out of this entirely, along with an FFI
+// typedef and a plain enum. `cNumRangeText` answering false IS that gate.
+std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression value)
+{
+    std::string lo, hi;
+    if (!value || !cNumRangeText(dstCType, lo, hi)) return "";
+    // A CONSTANT into a target whose width this compiler knows has already been judged, one arm up:
+    // `primIntRange` + `constValue` rejected it if it did not fit, so anything still here fits. Same
+    // admitted set as `primIntRangeC`, which is why that call is the test.
+    //
+    // A constant into `usize`/`isize` keeps its check on purpose: their width is the TARGET's, so
+    // `cast<usize>(70000)` fits on a 64-bit host and does not on a 16-bit one, and the constant rule
+    // declines to answer for exactly that reason. `lo`/`hi` are compile-time constants there too, so the
+    // check that survives folds away at `-O2`.
+    int64_t clo, chi, cv;
+    if (primIntRangeC(dstCType, clo, chi) && constValue(value, cv)) return "";
+    std::string src = typeOfExpr(value);
+    // A `foreach` BINDING, whose type the author wrote two tokens away (`foreach (int32 v in xs)`) but
+    // which `typeOfExpr` does not answer for — the classifier gap that is ROADMAP row 1. `_localTypeNodes`
+    // has held the element's type node all along, so read it HERE rather than teaching the classifier:
+    // widening the classifier turns on milestone 6's operand rule for every loop binding at once, which is
+    // row 1's campaign and its own corpus migration, not this milestone's.
+    //
+    // It is worth reaching for because the cost is not theoretical. `int64 s = …; s += cast<int64>(v)`
+    // over `int32` elements is a WIDENING that cannot fail, and without this it paid a full runtime check
+    // per element — measured at ~19% of a 2M-iteration loop in bench/src/kama/alloc.kama.
+    if (src.empty())
+        if (auto* id = dynamic_cast<IdentifierNode*>(value.get()))
+            if (id->value) {
+                auto it = _localTypeNodes.find(*id->value);
+                if (it != _localTypeNodes.end()) src = classifierCType(it->second);
+            }
+    if (!src.empty()) {
+        // A kind crossing (a `bool`, a `string`, an enum) is a different rule's error, not a narrowing.
+        if (!cNumBits(src) && !cNumTargetWidth(src)) return "";
+        // float -> int needs no check of ours: out of range already traps in EVERY build via
+        // `-fsanitize-trap=float-cast-overflow`, and in range must keep truncating toward zero.
+        if (cNumFloat(src)) return "";
+        if (cNumContains(dstCType, src)) return "";
+        const bool sgn = cNumSigned(src);
+        return "((" + dstCType + ")kama_narrow_chk_"
+             + (sgn ? "s((long long)(" : "u((unsigned long long)(")
+             + emitExpression(value) + "), " + lo + ", " + hi + "))";
+    }
+    // An UNKNOWN source — a type parameter, a `foreach` binding, an intrinsic with no recorded return
+    // type, mixed arithmetic. ⚠️ NEVER a guess and never a skip: `_Generic` asks C the question this
+    // classifier could not answer, and evaluates the operand exactly once. The whole-corpus reason this
+    // matters is that `""` is common; see ROADMAP row 2, which is about making the classifier answer.
+    return "((" + dstCType + ")KAMA_NARROW(" + emitExpression(value) + ", " + lo + ", " + hi + "))";
 }
 
 bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
@@ -19333,6 +19481,72 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
              + adoptM->cName + "(" + hp + ") } }; ";
     s += "}";
+    return s;
+}
+
+// `Optional<T> r = try cast<T>(x);` — the FALLIBLE conversion. Same rule as `try new` above and for the
+// same reason: the `Some` payload type is read off the DECLARED destination, so the destination is what
+// makes the expression well-typed. `lval` is declared + RAII-tracked by the caller and assigned on both
+// branches.
+//
+// A statement, not an expression, because the operand must be evaluated ONCE and C11 has no statement
+// expression: the value goes into a temp, the range test reads the temp, and both arms build their
+// compound literal from it. `KAMA_NARROW`'s `_Generic` cannot serve here — it TRAPS, and this is the verb
+// that must not.
+std::string CEmitter::emitTryCast(const std::string& target, const std::string& lval,
+                                  CastNode* cst, int srcLine)
+{
+    const std::string dst = cType(cst->type);
+    const std::string disp = (cst->type && cst->type->value) ? *cst->type->value : dst;
+    std::string lo, hi;
+    if (!cNumRangeText(dst, lo, hi)) {
+        unsupported(("`try cast<" + disp + ">(…)` — only a NUMERIC conversion can fail, and `" + disp
+                     + "` is not one. Use `cast<" + disp + ">(…)`").c_str(), srcLine);
+        return "";
+    }
+    // Read `Some`'s payload off the monomorphized Optional, exactly as emitTryNewBox does.
+    ClassInfo* rc = _classes.count(target) ? &_classes[target] : nullptr;
+    VariantCase* someV = nullptr;
+    if (rc && rc->isVariant)
+        for (auto& v : rc->variants) if (v.name == "Some") { someV = &v; break; }
+    if (!someV || someV->payload.empty()) {
+        unsupported(("`try cast<" + disp + ">(…)` must initialize a declared `Optional<" + disp
+                     + ">` — it yields the converted value or `None` where a plain `cast` would "
+                       "trap").c_str(), srcLine);
+        return "";
+    }
+    const std::string S = cTypeInInstance(target, someV->payload[0].type);
+    if (S != dst) {
+        unsupported(("`try cast<" + disp + ">(…)` yields `Optional<" + disp + ">`, but this destination "
+                     "holds `" + S + "`").c_str(), srcLine);
+        return "";
+    }
+    const std::string someName = someV->payload[0].name;              // "value"
+    // The temp is the WIDEST integer of the operand's signedness, so the test sees the true value: a
+    // `uint64` above LLONG_MAX must not arrive as a negative, and a negative must not arrive as huge.
+    const std::string src = typeOfExpr(cst->unaryExpression);
+    // A FLOAT source is refused rather than half-answered. Reaching the range test means converting to an
+    // integer first, and an out-of-range float->int conversion TRAPS on the way (float-cast-overflow) — so
+    // the `None` this verb promises would never be produced. Testing in `double` instead trades that for a
+    // rounding error at a 64-bit boundary (`INT64_MAX` is not representable), which is the same bug wearing
+    // a different hat. Clamp in float, then convert.
+    if (!src.empty() && cNumFloat(src)) {
+        unsupported(("`try cast<" + disp + ">(…)` has no float form — an out-of-range float conversion "
+                     "traps before it could answer `None`. Compare the value first, then "
+                     "`cast<" + disp + ">(…)`").c_str(), srcLine);
+        return "";
+    }
+    const bool unsignedSrc = !src.empty() && !cNumSigned(src) && !cNumFloat(src);
+    const std::string tt = unsignedSrc ? "unsigned long long" : "long long";
+    const std::string t = "__trycast" + std::to_string(_tempCounter++);
+    const std::string test = unsignedSrc ? (t + " > (unsigned long long)(" + hi + ")")
+                                        : (t + " < (long long)(" + lo + ") || (" + t + " >= 0 && "
+                                           "(unsigned long long)" + t + " > (unsigned long long)(" + hi + "))");
+    std::string s;
+    s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";
+    s += "if (" + test + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
+    s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = ("
+             + dst + ")" + t + " } }; }";
     return s;
 }
 

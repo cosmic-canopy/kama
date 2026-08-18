@@ -854,6 +854,12 @@ member_access
        `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
   | primary_expression DOT BASE
   | qualified_identifier_no_generic DOT BASE
+    /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
+       named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
+       contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
+       only where a conversion can start, an ordinary member name after a DOT. */
+  | primary_expression DOT TRUNCATE
+  | qualified_identifier_no_generic DOT TRUNCATE
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
@@ -1007,6 +1013,17 @@ cast_expression
        operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
        parens — the surrounding `( … )` already delimits it. */
   : CAST LT  type GT  LPAREN expression RPAREN
+    /* `try cast<T>(x)` — the FALLIBLE conversion: `Optional<T>`, `None` where the plain `cast` traps.
+       Sits beside `try new` (the language's other `try`) and follows its rule: a typed destination is
+       required, because that is where the `Some` payload type is read from. `try` stays a contextual
+       keyword — it introduces `new` and `cast` and nothing else. */
+  | TRY CAST LT  type GT  LPAREN expression RPAREN
+    /* `truncate<T>(x)` — the WRAPPING conversion: keep the low bits, target narrower or equal. Required,
+       not a convenience: with `cast` trapping, `cast<int8>(x & 0xFF)` cannot express it (0..255 is itself
+       outside `int8`, so it would trap in turn), and every language that traps ships a named truncating
+       form (Swift `truncatingIfNeeded:`, Zig `@truncate`, C# `unchecked`). Same node as `cast`, one flag —
+       the three verbs lower to the same C cast and differ only in the check around it. */
+  | TRUNCATE LT  type GT  LPAREN expression RPAREN
   ;
 bitcast_expression
     /* `bitcast<T>(expr)` — a same-width bit reinterpret, parsed exactly like `cast<T>(...)` (the mid-rules
@@ -1192,6 +1209,7 @@ method_name
   : IDENTIFIER
   | COPY
   | GIVE
+  | TRUNCATE        /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

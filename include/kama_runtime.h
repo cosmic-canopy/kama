@@ -337,11 +337,20 @@ static inline long kama_raw_write(int fd, const void* bytes, size_t n) {
 
 // Bounds-check trap: a clean panic (not undefined behavior) on out-of-range.
 // Formats its own message and writes to stderr (fd 2) so it needs no <stdio.h>.
-static inline void kama_u64_to_buf(char* buf, size_t* p, size_t v) {
+// `unsigned long long`, not `size_t`: the widest value these messages carry is a 64-bit one, and a
+// `size_t` parameter would silently truncate it to 32 bits on wasm32 / thumbv6m. 20 digits is UINT64_MAX.
+static inline void kama_u64_to_buf(char* buf, size_t* p, unsigned long long v) {
     char tmp[20]; int t = 0;
     if (v == 0) tmp[t++] = '0';
     while (v) { tmp[t++] = (char)('0' + (v % 10)); v /= 10; }
     while (t) buf[(*p)++] = tmp[--t];
+}
+// The signed twin. Negating LLONG_MIN would itself overflow, so the magnitude is taken in unsigned math.
+static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
+    unsigned long long m;
+    if (v < 0) { buf[(*p)++] = '-'; m = (unsigned long long)(-(v + 1)) + 1ULL; }
+    else       { m = (unsigned long long)v; }
+    kama_u64_to_buf(buf, p, m);
 }
 #if defined(KAMA_TARGET_EMBEDDED)
 // Freestanding trap policy (MCU campaign step 3). On a bare-metal target there is no fd 2 to write
@@ -354,6 +363,16 @@ static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     (void)i; (void)len;
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
+}
+static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
+    (void)v; (void)lo; (void)hi;
+    kama_panic_handler();
+    for (;;) {}
+}
+static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
+    (void)v; (void)lo; (void)hi;
+    kama_panic_handler();
+    for (;;) {}
 }
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
@@ -398,6 +417,38 @@ static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 }
+// A `cast<T>` whose runtime value does not FIT `T`. Distinct from kama_bounds_fail: nothing is indexed,
+// so the message names the value and the range it missed. Same clean abort, same overridable hook.
+static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
+    extern void abort(void);
+    char buf[160]; size_t p = 0;
+    const char* a = "kama: value ";                 while (*a) buf[p++] = *a++;
+    kama_i64_to_buf(buf, &p, v);
+    const char* b = " does not fit the target range [";  while (*b) buf[p++] = *b++;
+    kama_i64_to_buf(buf, &p, lo);
+    const char* c = ", ";                           while (*c) buf[p++] = *c++;
+    kama_u64_to_buf(buf, &p, hi);
+    const char* d = "]\n";                          while (*d) buf[p++] = *d++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
+    abort();
+}
+// The unsigned-source twin: the value cannot be printed as signed (it may exceed LLONG_MAX), while the
+// target's floor still can be. Splitting the two is what keeps both ends of the message exact.
+static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
+    extern void abort(void);
+    char buf[160]; size_t p = 0;
+    const char* a = "kama: value ";                 while (*a) buf[p++] = *a++;
+    kama_u64_to_buf(buf, &p, v);
+    const char* b = " does not fit the target range [";  while (*b) buf[p++] = *b++;
+    kama_i64_to_buf(buf, &p, lo);
+    const char* c = ", ";                           while (*c) buf[p++] = *c++;
+    kama_u64_to_buf(buf, &p, hi);
+    const char* d = "]\n";                          while (*d) buf[p++] = *d++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();
+    abort();
+}
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
@@ -411,6 +462,62 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     abort();
 }
 #endif
+
+// A NARROWING CAST TRAPS. `cast<T>(x)` preserves the VALUE, so a runtime value that does not fit `T` is
+// not a conversion but a different number — the same reasoning that already rejects the constant
+// `cast<int8>(300)` at compile time, and the same policy C's out-of-range float->int conversion already
+// gets (`-fsanitize-trap=float-cast-overflow`, every build). The escapes are `truncate<T>(x)` (keep the
+// low bits) and `try cast<T>(x)` (`Optional<T>`), which emit no check.
+//
+// TWO checkers, not one per target: the target's bounds arrive as ARGUMENTS the way `kama_bounds_fail`
+// takes a length, so the range table stays in the compiler (`cNumRangeText`) and is stated once. They
+// split on the SOURCE's signedness, which is what a single checker cannot do: a `uint64_t` above
+// LLONG_MAX cannot be examined as `long long`, and a negative source cannot be examined as unsigned.
+//
+// `lo`/`hi` are compile-time constants at every call site, so the comparison that cannot fail folds away
+// -- an `int32 -> int64` widening costs nothing and a `uint64 -> int32` narrowing costs one branch. That
+// is why there is no hand-written one-sided variant: `-O2` already emits it.
+static inline long long kama_narrow_chk_s(long long v, long long lo, unsigned long long hi) {
+    if (v < lo) kama_narrow_fail_s(v, lo, hi);
+    if (v >= 0 && (unsigned long long)v > hi) kama_narrow_fail_s(v, lo, hi);
+    return v;
+}
+// No `lo` test: every numeric target in the language has a floor of 0 or below, so an unsigned source is
+// never under it. `lo` is still carried, for the message.
+static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long long lo, unsigned long long hi) {
+    if (v > hi) kama_narrow_fail_u(v, lo, hi);
+    return v;
+}
+// The emitter calls a checker DIRECTLY when it knows the source's signedness. When it does not — a type
+// parameter, a `foreach` binding, an intrinsic with no recorded return type — it emits this instead, and
+// C answers the question it could not: `_Generic` selects on the operand's static type and evaluates ONLY
+// the selected branch, so a side-effecting operand (`cast<int8>(f())`) is still evaluated exactly once
+// (`kama_lshift` below leans on the same property). A statement expression would be the obvious
+// alternative and is not available: kama emits strict ISO C11, where `({ … })` is a GNU extension.
+//
+// ⚠️ The associations are C's BUILTIN types, never the <stdint.h> typedefs: on Linux x86_64 `size_t` and
+// `uint64_t` are both `unsigned long`, and two `_Generic` associations for one type does not compile.
+// The 10 integer builtins + plain `char` cover every numeric type kama can emit.
+//
+// float/double are deliberately NOT checked here. An out-of-range float->int conversion already traps in
+// every build via `-fsanitize-trap=float-cast-overflow`, and an in-range one must keep truncating toward
+// zero (`cast<int32>(3.9f64) == 3`), so this hands the value straight to the caller's cast.
+#define KAMA_NARROW(x, LO, HI) _Generic((x),                                    \
+    signed char:        kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    char:               kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    short:              kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    int:                kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    long:               kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    long long:          kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
+    unsigned char:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    unsigned short:     kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    unsigned int:       kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    unsigned long:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    unsigned long long: kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    _Bool:              kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
+    float:  (x),                                                                \
+    double: (x),                                                                \
+    default: (x))
 
 // Left shift with NO undefined behavior. A signed left shift into/past the sign bit is UB in C; do the
 // shift in the matching UNSIGNED type (a defined two's-complement bitwise shift) and convert back. Unsigned

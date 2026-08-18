@@ -56,7 +56,7 @@
 ["break" "continue" "return"] @keyword.control.return
 ["spawn" "scope" "borrow"] @keyword.control
 ["new" "try"] @keyword.operator
-["cast" "bitcast" "sizeof" "alignof"] @keyword.operator
+["cast" "bitcast" "truncate" "sizeof" "alignof"] @keyword.operator
 
 (modifier) @keyword.storage.modifier
 (function_modifier) @keyword.storage.modifier

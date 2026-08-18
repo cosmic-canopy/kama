@@ -45,6 +45,7 @@ class ForEachNode;
 class ThisAccessNode;
 class ObjectCreationNode;
 class AsDowncastNode;
+class CastNode;
 class BitcastNode;
 class EnumMemberDeclarationNode;
 class EnumDeclarationNode;

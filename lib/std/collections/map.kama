@@ -193,7 +193,12 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
     unsafe const fn isize slotOf(const ref K key) {
         if (this.cap == 0) { return 0 - 1; }
-        isize i = cast<isize>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
+        // `truncate`, not `cast`: a hash is a BIT PATTERN, so taking its low bits is the operation — and a
+        // `cast` would trap on any hash above PTRDIFF_MAX, which is half of them. The truncated value may
+        // be negative; `& (cap - 1)` still lands in [0, cap) because the mask holds only low bits, and
+        // masking in the isize domain also drops the `cast<uint64>(cap - 1)` that used to ride along.
+        // This is the map's hottest line — two runtime checks per lookup, before.
+        isize i = truncate<isize>(this.hashKey(k: key)) & (this.cap - 1);   // low bits of the hash — see slotOf
         while (true) {
             uint8 s = this.state[i];
             if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
@@ -271,7 +276,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // re-move on a later iteration — here the loop can't, but the check is conservative).
     public unsafe fn void put(K key, V value) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
-        isize i = cast<isize>(this.hashKey(k: key) & cast<uint64>(this.cap - 1));   // cap is a power of two -> mask == % cap
+        isize i = truncate<isize>(this.hashKey(k: key)) & (this.cap - 1);   // cap is a power of two -> mask == % cap
         isize chosen = 0 - 1;                                                   // the chosen slot (set = loop done)
         isize free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
@@ -357,7 +362,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             uint8 s = this.state[i];
             if (s == 1ui8) {
                 isize j = 0;
-                j = cast<isize>(this.hashKey(k: this.keys[i]) & cast<uint64>(nc - 1));   // nc is a power of two
+                j = truncate<isize>(this.hashKey(k: this.keys[i])) & (nc - 1);   // nc is a power of two
                 while (ns[j] == 1ui8) { j = j + 1; if (j >= nc) { j = 0; } }
                 nk[j] = this.keys[i]; nv[j] = this.vals[i]; ns[j] = 1ui8;   // bitwise relocate (no drop)
             }

@@ -723,10 +723,17 @@ public:
         : ASTNode(context),  ExpressionNode(context), token(token), expression(expression) { }
 };
 
+// `cast<T>(expr)` — a VALUE conversion, which is why a runtime value that does not fit `T` traps rather
+// than truncating. The two flags are the escapes, and they share this node because all three verbs lower
+// to the same C cast and differ only in the check around it:
+//   isTruncate  `truncate<T>(expr)` — keep the low bits (a narrowing target only), no check
+//   isTry       `try cast<T>(expr)` — `Optional<T>`: `None` instead of the trap
 class CastNode : public ExpressionNode {
 public:
     SharedIdentifier type;
     SharedExpression unaryExpression;
+    bool isTruncate = false;
+    bool isTry = false;
     CastNode(CodeGenContext& context, SharedIdentifier type, SharedExpression unaryExpression)
         : ASTNode(context),  ExpressionNode(context)
         , type(type)

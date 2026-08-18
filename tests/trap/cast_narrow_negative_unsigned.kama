@@ -1,0 +1,9 @@
+// A NEGATIVE value into an unsigned target traps — the case a width-only rule would miss entirely, since
+// -1 into a `uint8` loses no width, only the sign. This is the shape that made the size type signed:
+// unsigned does not prevent the invalid state, it makes it unrepresentable (see SPEC § isize).
+import std::num::{int32Max};
+fn int32 main() {
+    int32 neg = int32Max() - int32Max() - 1;   // -1, opaque
+    uint8 a = cast<uint8>(neg);                 // negative into unsigned -> narrowing trap
+    return cast<int32>(a);
+}

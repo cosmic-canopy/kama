@@ -73,6 +73,20 @@ A **literal** is typed by its destination, so it is not a conversion and needs n
 (`int8 a = 300;`, `cast<int8>(300)`) is an error rather than 44. A **named** constant is not a literal —
 `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a cast like any other value.
 
+**A `cast` that does not fit TRAPS at runtime** — `cast<T>` preserves the *value*, so `cast<int8>(big)`
+on a 300 aborts rather than binding 44, in every build. Two escapes, and reaching for the right one is the
+whole skill here:
+
+- **`truncate<T>(x)`** keeps the low bits — the wrapping conversion (a checksum, a byte written to a wire,
+  a deliberate mod-2ⁿ). Target must be narrower or equal.
+- **`try cast<T>(x)`** yields `Optional<T>`, `None` where the plain cast would trap. Use it for any value
+  that came from **outside the program** — a parsed document, a file, a network read — where a bad value
+  is bad input, not a bug. Like `try new` it needs a declared destination:
+  `Optional<int8> v = try cast<int8>(n);`.
+
+Do NOT reach for these to silence a trap you did not expect: the trap means the value did not fit, and
+the fix is usually a wider destination.
+
 ## Rules an LLM trained on C#, Rust, TypeScript or Go will get wrong
 
 These are the ones that actually cost time. kama is deliberately stricter; the strictness is the

@@ -858,6 +858,7 @@ module.exports = grammar({
         $.handoff_expression,
         $.cast_expression,
         $.bitcast_expression,
+        $.truncate_expression,
         $.sizeof_expression,
       ),
 
@@ -995,11 +996,16 @@ module.exports = grammar({
         ),
       ),
 
+    // `cast` traps on a value that does not fit; `try cast` yields Optional<T> instead, and `truncate`
+    // keeps the low bits. Three spellings of one conversion, so one rule with an optional prefix.
     cast_expression: ($) =>
-      seq('cast', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
+      seq(optional('try'), 'cast', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
 
     bitcast_expression: ($) =>
       seq('bitcast', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
+
+    truncate_expression: ($) =>
+      seq('truncate', '<', field('type', $._type), '>', '(', field('value', $._expression), ')'),
 
     // These take a TYPE, not an expression.
     sizeof_expression: ($) =>

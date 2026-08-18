@@ -200,6 +200,13 @@ anything involving `usize`/`isize`. If two types differ, the conversion is writt
 collection. `usize` is for the C ABI only (`sizeof`, allocation, `extern fn`). Declare loop counters `isize`
 and the casts disappear. Bare `int`/`uint`/`double`/`float` are not kama types.
 
+**And the cast itself is checked at runtime.** `cast<T>` preserves the *value*, so one that does not fit
+`T` **traps** — in every build, the way an out-of-range `float → int` already did. The escapes say which
+meaning was intended: **`truncate<T>(x)`** keeps the low bits (wrapping, for a checksum or a wire byte),
+and **`try cast<T>(x)`** yields `Optional<T>` for a value that came from outside the program, where a bad
+value is bad input rather than a bug. An agent's failure mode here is reaching for `truncate` to quiet an
+unexpected trap; the trap usually means the destination is too narrow.
+
 It also applies **between an operator's two operands**, which is where an LLM writing kama is most
 likely to trip: `int32 + uint8` does not compile, and neither does `i < n` with an `int32` counter
 against a `usize` length — the single commonest shape to get wrong. Write `cast<usize>(i) < n`.

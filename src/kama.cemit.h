@@ -1259,6 +1259,10 @@ private:
     // The one message for a constant that provably does not fit its cast target. Two paths reach it:
     // the emit walk, and the const folder — a `comptime` constant is resolved only in the folder.
     void rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64_t lo, int64_t hi, int line);
+    // The RUNTIME half of the same rule: the checked C expression for a `cast<T>(x)` whose value is only
+    // knowable at runtime, or "" when the conversion provably cannot fail. Gated on a numeric target, so
+    // `cast<UnsafePtr<T>>` never reaches the check.
+    std::string narrowCheck(const std::string& dstCType, SharedExpression value);
     // 5b-A. Is a folded constant PROVABLY outside its destination? The only answer that diagnoses; every
     // uncertainty is "no". `srcCType` is the SOURCE's lowered type and may be "" — it is what tells a
     // genuinely negative value apart from `constValue`'s int64 reinterpretation of a magnitude above
@@ -1833,6 +1837,8 @@ private:
                                    ObjectCreationNode* oc, int srcLine);
     std::string emitTryNewBox(const std::string& target, const std::string& lval,      // M-step5: try new -> Optional<Owned<T>>
                               ObjectCreationNode* oc, int srcLine);
+    std::string emitTryCast(const std::string& target, const std::string& lval,        // try cast<T> -> Optional<T>
+                            CastNode* cst, int srcLine);
     // Model C (P2): box an enum VALUE (`enumCType`, given by `enumValExpr`) into an `Owned<C>`/`Shared<C>`
     // fat handle (`ownedCType`, C a poly-dispatch contract), heap-copying the enum in. Emits the
     // malloc+move+vtbl[+ctrl] as a HOISTED statement (needs a statement slot) and returns the temp name.

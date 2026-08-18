@@ -14,7 +14,12 @@ fn int32 main()
         uint64 s = 0;
         foreach (int32 v in xs)
         {
-            s += cast<uint64>(v);
+            // `truncate`, not `cast`, to keep this apples-to-apples: every peer in the table converts
+            // UNCHECKED here — C `(uint64_t)xs[k]`, Rust `*v as u64`, Go `uint64(v)` — and `cast` would
+            // add a signed->unsigned range check none of them pay, in the inner loop of a benchmark whose
+            // subject is allocation churn, not conversion. (Measured: 2.86ms vs 2.46ms.) The values are
+            // 1..1000, so the two verbs agree on every one of them.
+            s += truncate<uint64>(v);
         }
         total += s;
         // xs drops here -> DynamicArray_int32__dtor frees the buffer (no GC)

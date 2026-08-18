@@ -89,10 +89,10 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     public fn void beginArray(usize count) { this.byte(b: 18ui8); }   // self-delimiting; count unused
     public fn void endArray()    { this.byte(b: 19ui8); }
     public fn void fieldName(string name) { this.putStr(s: ref name); }
-    public fn void writeI8(int8 v)   { this.byte(b: 1ui8); this.putU(v: cast<uint64>(cast<uint8>(v)),  n: 1); }
-    public fn void writeI16(int16 v) { this.byte(b: 2ui8); this.putU(v: cast<uint64>(cast<uint16>(v)), n: 2); }
-    public fn void writeI32(int32 v) { this.byte(b: 3ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
-    public fn void writeI64(int64 v) { this.byte(b: 4ui8); this.putU(v: cast<uint64>(v),               n: 8); }
+    public fn void writeI8(int8 v)   { this.byte(b: 1ui8); this.putU(v: cast<uint64>(bitcast<uint8>(v)),  n: 1); }
+    public fn void writeI16(int16 v) { this.byte(b: 2ui8); this.putU(v: cast<uint64>(bitcast<uint16>(v)), n: 2); }
+    public fn void writeI32(int32 v) { this.byte(b: 3ui8); this.putU(v: cast<uint64>(bitcast<uint32>(v)), n: 4); }
+    public fn void writeI64(int64 v) { this.byte(b: 4ui8); this.putU(v: bitcast<uint64>(v),            n: 8); }
     public fn void writeU8(uint8 v)   { this.byte(b: 5ui8); this.putU(v: cast<uint64>(v), n: 1); }
     public fn void writeU16(uint16 v) { this.byte(b: 6ui8); this.putU(v: cast<uint64>(v), n: 2); }
     public fn void writeU32(uint32 v) { this.byte(b: 7ui8); this.putU(v: cast<uint64>(v), n: 4); }
@@ -191,10 +191,14 @@ type resource BinaryReader implements Deserializer {
     public fn string fieldName() { return this.readStr(); }
 
     // --- scalars ---
-    public fn int8  readI8()  { this.expectTag(t: 1ui8); return cast<int8>(cast<uint8>(this.getU(n: 1))); }
-    public fn int16 readI16() { this.expectTag(t: 2ui8); return cast<int16>(cast<uint16>(this.getU(n: 2))); }
-    public fn int32 readI32() { this.expectTag(t: 3ui8); return cast<int32>(cast<uint32>(this.getU(n: 4))); }
-    public fn int64 readI64() { this.expectTag(t: 4ui8); return cast<int64>(this.getU(n: 8)); }
+    // A signed scalar goes onto the wire as its unsigned peer's BIT PATTERN and comes back the same way,
+    // so each crossing is a `bitcast` (same width, all the bits) and not a `cast` (which preserves the
+    // VALUE, and so traps: -56 is not a `uint8`, and 200 is not an `int8`). The reads bind a local first
+    // because `bitcast` resolves its operand's type statically — SPEC § bitcast.
+    public fn int8  readI8()  { this.expectTag(t: 1ui8); uint8  u = cast<uint8>(this.getU(n: 1));  return bitcast<int8>(u); }
+    public fn int16 readI16() { this.expectTag(t: 2ui8); uint16 u = cast<uint16>(this.getU(n: 2)); return bitcast<int16>(u); }
+    public fn int32 readI32() { this.expectTag(t: 3ui8); uint32 u = cast<uint32>(this.getU(n: 4)); return bitcast<int32>(u); }
+    public fn int64 readI64() { this.expectTag(t: 4ui8); uint64 u = this.getU(n: 8);               return bitcast<int64>(u); }
     public fn uint8  readU8()  { this.expectTag(t: 5ui8); return cast<uint8>(this.getU(n: 1)); }
     public fn uint16 readU16() { this.expectTag(t: 6ui8); return cast<uint16>(this.getU(n: 2)); }
     public fn uint32 readU32() { this.expectTag(t: 7ui8); return cast<uint32>(this.getU(n: 4)); }
@@ -265,7 +269,7 @@ fn Result<T, Owned<Error>> decode<T: Deserialize>(DynamicArray<uint8> src) {
 // into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
 fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
     StringWriter sw = StringWriter.make();
-    Result<usize, IoError> pr = pump(from: from, to: sw);
+    Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     BinaryReader r = BinaryReader.make(src: give sw.takeBytes());
     return T.deserialize(r: r);

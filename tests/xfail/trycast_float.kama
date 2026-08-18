@@ -1,0 +1,9 @@
+// `try cast` has no float form. Reaching the range test means converting to an integer first, and an
+// out-of-range float->int conversion TRAPS on the way (float-cast-overflow, every build) — so the `None`
+// this verb promises could never be produced. Testing in `double` instead would trade that for a rounding
+// error at a 64-bit boundary, which is the same bug wearing a different hat.
+fn int32 main() {
+    float64 d = 3.9f64;
+    Optional<int8> r = try cast<int8>(d);
+    return match (r) { case Some(value: x): cast<int32>(x); case None: 0; };
+}

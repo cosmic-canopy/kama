@@ -326,13 +326,43 @@ type resource JsonReader implements Deserializer {
         }
         return v;
     }
-    public fn int8  readI8()  { return cast<int8>(this.readInt()); }
-    public fn int16 readI16() { return cast<int16>(this.readInt()); }
-    public fn int32 readI32() { return cast<int32>(this.readInt()); }
+    // A number that does not FIT the field it is being read into is a bad DOCUMENT, not a bug in this
+    // program — so it fails the reader, exactly like a malformed token does, and never traps. That is
+    // what `try cast` is for: a plain `cast` would abort the process on `{"n": 300}` into an `int8`, and
+    // a deserializer that aborts on untrusted input is not a deserializer. `TypeMismatch` is the closest
+    // existing `DeError`; the range is a property of the destination type, which is what the value failed
+    // to match.
+    public fn int8 readI8() {
+        Optional<int8> v = try cast<int8>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0i8;
+    }
+    public fn int16 readI16() {
+        Optional<int16> v = try cast<int16>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0i16;
+    }
+    public fn int32 readI32() {
+        Optional<int32> v = try cast<int32>(this.readInt());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0;
+    }
     public fn int64 readI64() { return this.readInt(); }
-    public fn uint8  readU8()  { return cast<uint8>(this.readUint()); }
-    public fn uint16 readU16() { return cast<uint16>(this.readUint()); }
-    public fn uint32 readU32() { return cast<uint32>(this.readUint()); }
+    public fn uint8 readU8() {
+        Optional<uint8> v = try cast<uint8>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0ui8;
+    }
+    public fn uint16 readU16() {
+        Optional<uint16> v = try cast<uint16>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0ui16;
+    }
+    public fn uint32 readU32() {
+        Optional<uint32> v = try cast<uint32>(this.readUint());
+        match (v) { case Some(value: x): { return x; } case None: {} };
+        this.failWith(e: DeError::TypeMismatch); return 0ui32;
+    }
     public fn uint64 readU64() { return this.readUint(); }
     public unsafe fn float64 readF64() { string t = this.numToken(); return kama_parse_f64(s: ref t); }
     public unsafe fn float32 readF32() { string t = this.numToken(); return cast<float32>(kama_parse_f64(s: ref t)); }

@@ -265,7 +265,7 @@ struct kamayystype {
 
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BORROW BREAK
-%token <string> CASE CAST BITCAST COMPTIME CONST CONTINUE CTOR DEFAULT
+%token <string> CASE CAST BITCAST TRUNCATE COMPTIME CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
@@ -1390,6 +1390,12 @@ member_access
        `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
   | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+    /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
+       named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
+       contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
+       only where a conversion can start, an ordinary member name after a DOT. */
+  | primary_expression DOT TRUNCATE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT TRUNCATE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
@@ -1573,6 +1579,17 @@ cast_expression
        operand is a full `expression` (like a parenthesized primary) so `cast<T>(a + b)` needs no inner
        parens — the surrounding `( … )` already delimits it. */
   : CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { $$ = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); }
+    /* `try cast<T>(x)` — the FALLIBLE conversion: `Optional<T>`, `None` where the plain `cast` traps.
+       Sits beside `try new` (the language's other `try`) and follows its rule: a typed destination is
+       required, because that is where the `Some` payload type is read from. `try` stays a contextual
+       keyword — it introduces `new` and `cast` and nothing else. */
+  | TRY CAST LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { auto c = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $5, $9 ); c->isTry = true; $$ = c; }
+    /* `truncate<T>(x)` — the WRAPPING conversion: keep the low bits, target narrower or equal. Required,
+       not a convenience: with `cast` trapping, `cast<int8>(x & 0xFF)` cannot express it (0..255 is itself
+       outside `int8`, so it would trap in turn), and every language that traps ships a named truncating
+       form (Swift `truncatingIfNeeded:`, Zig `@truncate`, C# `unchecked`). Same node as `cast`, one flag —
+       the three verbs lower to the same C cast and differ only in the check around it. */
+  | TRUNCATE LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN expression RPAREN   { auto c = std::make_shared<CastNode>(SCANNER_CODEGENCONTEXT,  $4, $8 ); c->isTruncate = true; $$ = c; }
   ;
 bitcast_expression
     /* `bitcast<T>(expr)` — a same-width bit reinterpret, parsed exactly like `cast<T>(...)` (the mid-rules
@@ -1774,6 +1791,7 @@ method_name
   : IDENTIFIER   { $$ = $1; }
   | COPY         { $$ = $1; }
   | GIVE         { $$ = $1; }
+  | TRUNCATE     { $$ = $1; }   /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

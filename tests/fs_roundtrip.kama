@@ -29,7 +29,7 @@ fn int32 main() {
         i = i + 1;
     }
 
-    Result<usize, IoError> wr = writeFile(path: p, bytes: data);
+    Result<isize, IoError> wr = writeFile(path: p, bytes: data);
     usize written = match (wr) { case Ok(value: w): w; case Err(error: e): cast<usize>(0); };
     if (written != cast<usize>(n)) { return 50; }
 

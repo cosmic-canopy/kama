@@ -57,11 +57,11 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     }
 
     // `Reader`: read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
-    public unsafe fn Result<usize, IoError> read(View<uint8> into) {
-        if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
-            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
@@ -82,11 +82,11 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 
     // `Writer` primitive: single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the
     // socket buffer is full). EINTR-retried. Callers wanting every byte sent use the free `std::io::writeAll`.
-    public unsafe fn Result<usize, IoError> write(View<uint8> bytes) {
-        if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+    public unsafe fn Result<isize, IoError> write(View<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
             isize n = kama_send(fd: this.fd, buf: addr(of: bytes[0]), n: cast<usize>(bytes.length()));
-            if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+            if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }

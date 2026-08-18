@@ -1064,7 +1064,15 @@ UB:
 - **Divide by zero** and **`INT_MIN / -1`** **trap** (a clean abort) in every build — always bugs, never UB.
 - **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
   (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
-- **Out-of-range `float → int`** **traps**; in-range truncates toward zero. Integer narrowing wraps mod 2ⁿ.
+- **Out-of-range `float → int`** **traps**; in-range truncates toward zero.
+- **A narrowing `cast<T>(x)` whose value does not fit `T`** **traps**, in every build — the integer sibling
+  of the line above, and the same policy for the same reason. `cast` preserves the *value*, so a value that
+  does not fit is not a conversion but a different number: `int32 big = 300; int8 a = cast<int8>(big);`
+  aborts rather than binding 44. A **constant** that does not fit is rejected at compile time instead. The
+  escapes are explicit and cost nothing: **`truncate<T>(x)`** keeps the low bits, **`try cast<T>(x)`** hands
+  back `Optional<T>`. A widening, a same-type cast, and one whose operand provably fits emit no check at
+  all, and where the check remains its bounds are compile-time constants — so the comparison that cannot
+  fail folds away.
 - ⚠️ **The signed-overflow trap is a property of `int32`/`int64`, not of every signed type.** `int8 s =
   100i8; s + s` is `-56`, silently: the operands promote to `int` in the emitted C, where 200 does not
   overflow, and the rule above then narrows the result — and a narrowing *conversion* is what the trap
@@ -1523,6 +1531,25 @@ be written **in the language** rather than baked into the compiler. Three builti
   at 4/8) are `_Static_assert`ed in `kama_runtime.h`, so the C compiler verifies them for the real target
   on every build. What kama will not fold, **[`comptime assert`](#compile-time-assertions--comptime-assert-)**
   lets you assert anyway — it hands an aggregate/`alignof` predicate to the C compiler as a `_Static_assert`.
+- **The three conversion verbs, told apart by what each PRESERVES.** One conversion needs one spelling, so
+  the verb is chosen by intent and the compiler holds you to it:
+
+  | verb | preserves | width rule | can fail? |
+  |---|---|---|---|
+  | `cast<T>(x)` | the **value** | any | **yes — traps** |
+  | `truncate<T>(x)` | the **low bits** | target narrower or equal | no |
+  | `bitcast<T>(x)` | **all the bits** | **same width** | no |
+
+  **`cast<T>(x)` traps on a value that does not fit `T`**, in every build — see *No undefined behavior in
+  arithmetic*. `truncate<T>(x)` is the wrapping form and is **required, not a convenience**: masking first
+  cannot express it (`cast<int8>(x & 0xFF)` yields 0..255, which is itself outside `int8`, so it would trap
+  in turn), and every language that traps ships a named truncating form — Swift `truncatingIfNeeded:`, Zig
+  `@truncate`, C# `unchecked`. A **provably widening** `truncate` is rejected: there are no high bits to
+  drop, so `cast` is what was meant. **`try cast<T>(x)`** is the fallible form, yielding `Optional<T>` —
+  `None` exactly where `cast` would trap. Like `try new` it is a **typed-local initializer**
+  (`Optional<int8> r = try cast<int8>(n);`), because the declared destination is where its result type
+  comes from. `truncate` is a **contextual** keyword: a keyword only where a conversion can start, so
+  `string`'s `truncate(maxBytes:)` — and any method of that name — still reads as a member.
 - **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/

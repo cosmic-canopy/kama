@@ -69,7 +69,7 @@ unsafe fn int32 run() {
         Result<DynamicArray<uint8>, IoError> rd = input.readAll();
         return match (give rd) {
             case Ok(value: got): {
-                Result<usize, IoError> wr = outp.writeAll(bytes: got);
+                Result<isize, IoError> wr = outp.writeAll(bytes: got);
                 := match (wr) { case Ok(value: nb): 0; case Err(error: e): 1; };
             }
             case Err(error: e): { := 1; }

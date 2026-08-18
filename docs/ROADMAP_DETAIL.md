@@ -45,6 +45,25 @@ library's entry point for importers — the opposite end of the word), and `out`
 root. Both are read by `kama seed`, which is what would otherwise have propagated a wrong name into every
 project created after it.
 
+**A contract conformance is not return-type checked.** An `implements` clause is a promise the compiler
+does not verify: `type resource File implements Reader, Writer` returned `Result<usize, IoError>` from both
+`read` and `write` while `Reader`/`Writer` declare `Result<isize, IoError>`, and kama emitted it. So did
+`TcpStream` and `WsConnection`. Nothing failed until **clang** rejected the generated C —
+
+```
+error: assigning to 'Result_isize_std__io__IoError' from incompatible type 'Result_usize_std__io__IoError'
+```
+
+— which is how `examples/httpd` came to be un-buildable while `kama check` called the stdlib clean.
+Found 2026-08-18, during the cast-trap milestone; the three signatures are fixed, the hole is not.
+
+Two things make this worse than an ordinary missing check. It is the **one guarantee an `implements`
+clause exists to make**, so a user reading `implements Reader` has been told something untrue. And the
+failure surfaces at the *use* site in generated C, naming mangled types the author never wrote, arbitrarily
+far from the declaration that is actually wrong. The check belongs at the `implements`, against the
+contract's declared signature, and wants an `xfail` fixture per mismatch position (return type first;
+parameter types and arity are the same question).
+
 **The no-implicit-conversion rule is SILENT through an untyped binding.** Milestone 6's headline rule —
 "if two numeric types differ, the conversion is written down" — does not hold wherever `typeOfExpr` cannot
 answer. Both of these compile clean and return **44**, proven 2026-08-18:
@@ -289,7 +308,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   | ~~8~~ | ~~**the compile-time foreach-invalidation guard is dead code**~~ — **RETIRED**: the guard is gone rather than revived; the borrow window is the mechanism that replaces it | language | — |
   | ~~9~~ | ~~one `unsafe { }` disables definite assignment for the whole function~~ — **CLOSED by construction**: `unsafe` IS the function now, so relaxing locals is correct, and `out` params stopped being relaxed at all | language | — |
   | 10 | **an uninstantiated generic body gets no analysis at all** — unsafe gate, escape check, moves, definite assignment all deferred to instantiation. A package author ships `check`-green code and consumers get the errors | language, not UB | M |
-  | 11 | ~~narrowing `cast<int8>(300)` → 44, silently~~ — **HALF CLOSED**: a CONSTANT that does not fit is rejected (`tests/xfail/cast_const_oob*`). A runtime narrowing cast still truncates; decided to trap, with `try cast<T>` as the fallible form. **Scoped in [design/cast-trap.md](design/cast-trap.md)** — no longer S: milestone 6 made `cast` the only conversion spelling, so the trap lands on 1,015 corpus sites | wart | M |
+  | ~~11~~ | ~~narrowing `cast<int8>(300)` → 44, silently~~ — **CLOSED**: a CONSTANT that does not fit is rejected at compile time, and a RUNTIME one now traps in every build, with `truncate<T>` (low bits) and `try cast<T>` (`Optional<T>`) as the two escapes. Record in [SPEC.md](SPEC.md) | wart | — |
 
   **Confirmed defended, by probe not assumption:** every arithmetic class (div0, mod0, `INT_MIN/-1`,
   shift width, float-cast, signed overflow — trapped in *every* build, `-fwrapv` in release); bounds on

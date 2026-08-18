@@ -445,6 +445,7 @@ static struct name_value keywords [] = {
     {"string",      STRING},
     {"this",        THIS},
     {"true",        TRUE},
+    {"truncate",    TRUNCATE},
     {"try",         TRY},
     {"type",        TYPE},
     {"uint16",      UINT16},
