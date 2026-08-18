@@ -1,12 +1,12 @@
-fn int add(int a, int b)
+fn int32 add(int32 a, int32 b)
 {
     return a + b;
 }
-fn int triple(int x)
+fn int32 triple(int32 x)
 {
     return add(a: x, b: add(a: x, b: x));
 }
-fn int main()
+fn int32 main()
 {
     return triple(x: 14);
 }

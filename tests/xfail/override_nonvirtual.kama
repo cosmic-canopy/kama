@@ -8,4 +8,4 @@ type final resource Derived extends Base {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 plain() { return 2; }   // ERROR: plain is not virtual
 }
-fn int main() { Derived d = Derived.make(); return 0; }
+fn int32 main() { Derived d = Derived.make(); return 0; }

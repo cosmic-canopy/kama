@@ -38,14 +38,14 @@ fn int32 main() {
     viaBridge.put(key: 8, value: 8);                       // 8
 
     int32 mv  = match (m.get(key: 1))  { case Some(value: x): x; case None: 0; };   // 7
-    int32 sc  = s.contains(key: 3) ? 1 : 0;                                  // 1
-    int32 dl  = d.length();                                                  // 1
+    isize sc  = s.contains(key: 3) ? 1 : 0;                                  // 1
+    isize dl  = d.length();                                                  // 1
     int32 smv = match (sm.get(handle: h)) { case Some(value: x): x; case None: 0; };// 4
-    int32 bc  = bs.count();                                                  // 1
+    isize bc  = bs.count();                                                  // 1
     int32 pk  = match (pq.peek())      { case Some(value: x): x; case None: 0; };   // 99
     int32 m2v = match (m2.get(key: 2)) { case Some(value: x): x; case None: 0; };   // 6
     int32 bv  = match (viaBridge.get(key: 8)) { case Some(value: x): x; case None: 0; }; // 8
 
     // 30 + 5 + 7 + 1 + 1 + 4 + 1 + 99 + 6 + 8 = 162
-    return a[0] + a[1] + ac[0] + mv + sc + dl + smv + bc + pk + m2v + bv - 100;   // 162 - 100 = 62
+    return a[0] + a[1] + ac[0] + mv + cast<int32>(sc) + cast<int32>(dl) + smv + cast<int32>(bc) + pk + m2v + bv - 100;   // 162 - 100 = 62
 }

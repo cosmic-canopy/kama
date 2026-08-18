@@ -6,7 +6,7 @@ fnptr int64 Op(int64 x);
 fn int64 add1(int64 x) { return x + 1; }
 fn int64 mul3(int64 x) { return x * 3; }
 fn int64 apply(Op op, int64 x) { return op(x: x); }
-fn int main()
+fn int32 main()
 {
     Op a = add1;
     Op b = mul3;
@@ -17,5 +17,5 @@ fn int main()
         else              { sum += cast<uint64>(apply(op: b, x: cast<int64>(i))); }
     }
     uint64 m = sum % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

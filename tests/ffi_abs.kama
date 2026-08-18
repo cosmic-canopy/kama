@@ -1,8 +1,8 @@
 // FFI core: call a libc primitive function (declared by its header).
 extern "<stdlib.h>";
 extern fn int32 abs(int32 x);
-unsafe fn int run() { int32 n = 0 - 42; return abs(x: n); }
+unsafe fn int32 run() { int32 n = 0 - 42; return abs(x: n); }
 
 // The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
 // (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn int main() { return run(); }
+fn int32 main() { return run(); }

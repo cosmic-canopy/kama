@@ -4,7 +4,7 @@ fn void divmod(int32 a, int32 b, out int32 q, out int32 r)
     q = a / b;
     r = a % b;
 }
-fn int main()
+fn int32 main()
 {
     int32 quotient = 0;
     int32 remainder = 0;

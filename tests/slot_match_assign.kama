@@ -65,7 +65,7 @@ fn void nestedMatch(int32 x, out int32 dst) {
     };
 }
 
-fn int main()
+fn int32 main()
 {
     int32 total = 0;
 

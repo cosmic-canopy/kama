@@ -5,7 +5,7 @@ import std::concurrent::{Channel, Sender, Receiver, Isolate};
 
 fn void producer(Sender<int32> tx) { }   // sends nothing; ~Sender() closes the sender side
 
-fn int main() {
+fn int32 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();

@@ -1,8 +1,8 @@
-fn int main()
+fn int32 main()
 {
     Optional<string> a = Optional::Some(value: "hello");
     Optional<string> b = Optional::None;
     int32 la = match (a) { case Some(value: s): cast<int32>(s.length()); case None: 0; };
     int32 lb = match (b) { case Some(value: s): cast<int32>(s.length()); case None: 42; };
-    return la + lb;
+    return cast<int32>(la + lb);
 }

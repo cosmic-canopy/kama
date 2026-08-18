@@ -22,7 +22,7 @@ fn void worker(Payload p) {
     p.run();
 }
 
-fn int main() {
+fn int32 main() {
     int32 a = 0;
     int32 b = 0;
     Payload pa = Payload.make(dst: ref a, value: 10i32);

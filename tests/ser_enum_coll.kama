@@ -3,7 +3,7 @@ import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 @generate(Serialize, Deserialize)
 type enum Tok { Word(string s), Num(int32 n), End }
-fn int main() {
+fn int32 main() {
     DynamicArray<Tok> ts = DynamicArray.empty(); string w = "hi";
     ts.add(item: Tok::Word(s: give w)); ts.add(item: Tok::Num(n: 42)); ts.add(item: Tok::End);
     Result<string, Owned<Error>> __enc = encode(v: ts);
@@ -12,5 +12,5 @@ fn int main() {
     return match (res) { case Ok(value: b):
         (match (b[0]) { case Word(s: s): cast<int32>(s.length()); case Num(n: n): 0; case End: 0; })
         + (match (b[1]) { case Num(n: n): n; case Word(s: s): 0; case End: 0; })
-        + b.length(); case Err(error: e): 0 - 1; };   // 2 + 42 + 3 = 47
+        + cast<int32>(b.length()); case Err(error: e): 0 - 1; };   // 2 + 42 + 3 = 47
 }

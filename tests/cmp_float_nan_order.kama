@@ -6,7 +6,7 @@
 import std::collections::{SortedSet};
 
 fn int32 main() {
-    int32 r = 0;
+    isize r = 0;
     float64 nan = 0.0f64 / 0.0f64;
 
     // Raw operators: still pure IEEE — every ordering comparison against NaN is false, and NaN != NaN.
@@ -26,5 +26,5 @@ fn int32 main() {
     if (s.contains(key: 1.0f64)) { r = r + 1; }
     if (s.contains(key: 2.0f64)) { r = r + 1; }
 
-    return r;   // 3 + 3 + 2 = 8
+    return cast<int32>(r);   // 3 + 3 + 2 = 8
 }

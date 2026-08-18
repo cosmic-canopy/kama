@@ -7,4 +7,4 @@ comptime fn int32 impure() { return runtimeHelper(); }   // ERROR: calls a non-c
 
 comptime int32 BAD = impure();
 
-fn int main() { return BAD; }
+fn int32 main() { return BAD; }

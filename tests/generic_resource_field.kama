@@ -9,9 +9,9 @@ type resource Wrap<T> {
     DynamicArray<T> items;
     public ctor make(T a, T b) { this.items.add(item: a); this.items.add(item: b); }
     public fn T first() { return this.items[0]; }
-    public fn int32 size() { return this.items.length(); }
+    public fn isize size() { return this.items.length(); }
 }
-fn int32 total(Wrap<int32> w) { return w.first() + w.size(); }   // moved-in w drops at fn-end
+fn int32 total(Wrap<int32> w) { return w.first() + cast<int32>(w.size()); }   // moved-in w drops at fn-end
 fn int32 main() {
     Wrap<int32> a = Wrap.make(a: 40, b: 99);
     return total(w: give a);   // 40 + 2 = 42; the moved-in Wrap's list freed exactly once

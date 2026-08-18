@@ -1,5 +1,5 @@
 // `replace(old:, with:)` — owned copy, ALL non-overlapping occurrences; empty `old` -> a copy.
-fn int main() {
+fn int32 main() {
     string s = "a.b.c";
     int32 r = 0;
     if (s.replace(old: ".", with: "-") == "a-b-c") { r = r + 1; }

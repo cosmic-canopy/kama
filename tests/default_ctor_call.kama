@@ -26,7 +26,7 @@ type value Holder<A> {
     public ctor fresh() when [A: default] { this.item = A.default(); }
 }
 
-fn int main()
+fn int32 main()
 {
     // (1) a concrete value type — reached through the election, not the name `empty`
     Thing t = Thing.default();

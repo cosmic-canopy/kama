@@ -7,11 +7,11 @@ type value Circle implements Shape
     public ctor make(int64 r) { this.r = r; }
     public fn int64 area() { return r * r; }
 }
-fn int main()
+fn int32 main()
 {
     Circle c = Circle.make(r: 6);
     Shape s = c;
     int64 a = s.area();
     uint64 m = cast<uint64>(a) % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

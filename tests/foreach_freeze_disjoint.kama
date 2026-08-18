@@ -36,7 +36,7 @@ fn int32 main() {
     foreach (ref int32 e in d) { e = e * 2; }         // element write through the binding — 2 4 6
     foreach (int32 x in d) {
         other.add(item: x);                           // a DISJOINT container may grow freely
-        r = r + d.length();                           // a `const fn` read of the frozen operand
+        r = r + cast<int32>(d.length());                           // a `const fn` read of the frozen operand
     }                                                 // + 9
 
     Map<int32, int32> m = Map.withCapacity(capacity: 8);
@@ -46,5 +46,5 @@ fn int32 main() {
         r = r + got;
     }                                                 // + 11
 
-    return r + other.length() - 52;   // 32 + 9 + 11 + 3 - 52 = 3
+    return cast<int32>(r + cast<int32>(other.length()) - 52);   // 32 + 9 + 11 + 3 - 52 = 3
 }

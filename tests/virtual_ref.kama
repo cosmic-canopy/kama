@@ -4,20 +4,20 @@
 type virtual(maxDepth: 1) resource Shape
 {
     public ctor make() { }
-    public fn int area() { return this.compute(); }
-    protected virtual fn int compute() { return 1; }
+    public fn int32 area() { return this.compute(); }
+    protected virtual fn int32 compute() { return 1; }
 }
 type final resource Square extends Shape
 {
-    int s;
-    public ctor make(int s) { this.base = Base.make(); this.s = s; }
-    protected override fn int compute() { return s * s; }
+    int32 s;
+    public ctor make(int32 s) { this.base = Base.make(); this.s = s; }
+    protected override fn int32 compute() { return s * s; }
 }
-fn int measure(ref Shape sh)
+fn int32 measure(ref Shape sh)
 {
     return sh.area();
 }
-fn int main()
+fn int32 main()
 {
     Square sq = Square.make(s: 6);
     return measure(sh: ref sq);

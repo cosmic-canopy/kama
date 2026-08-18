@@ -5,4 +5,4 @@ fn Nonexistent make()
     return x;
 }
 
-fn int main() { return 42; }
+fn int32 main() { return 42; }

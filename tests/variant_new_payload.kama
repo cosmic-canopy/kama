@@ -3,7 +3,7 @@ type resource Probe { int32 id; public ctor make(int32 id){ this.id=id; } ~Probe
 // A `Shared` factory — `new` heap-places into a local owner that moves out as a fresh rvalue,
 // handed straight into the variant payload with no marker.
 fn Shared<Probe> mk(int32 id) { Shared<Probe> s = new Probe.make(id: id); return s; }
-fn int main()
+fn int32 main()
 {
     Optional<Shared<Probe>> o = Optional::Some(value: mk(id: 42));
     Optional<Shared<Probe>> e = Optional::None;

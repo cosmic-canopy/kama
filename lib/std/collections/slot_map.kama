@@ -8,7 +8,7 @@ export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 // rather than silently aliasing the new occupant. A plain Copyable value: keep it, copy it, pass it around.
 @generate(of)
 type value Handle {
-    public int32 index;
+    public isize index;
     public uint32 generation;
 }
 
@@ -17,8 +17,8 @@ type value Handle {
 // yields each value BY VALUE (a copy). Rejects a structural change (insert/remove) made mid-iteration via the
 // `mods` snapshot — same contract as `MapValueIter`.
 type view SlotMapValueIter<V> implements Iterator<V> {
-    UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> values; UnsafePtr<uint32> gens; isize slotCount; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, isize slotCount, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -26,7 +26,7 @@ type view SlotMapValueIter<V> implements Iterator<V> {
     public unsafe fn Optional<V> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "SlotMap modified during iteration"); }
         while (this.pos < this.slotCount) {
-            int32 p = this.pos; this.pos = this.pos + 1;
+            isize p = this.pos; this.pos = this.pos + 1;
             uint32 g = this.gens[p];
             if ((g & 1ui32) == 1ui32) { return Optional::Some(value: this.cloneVal(v: this.values[p])); }
         }
@@ -38,8 +38,8 @@ type view SlotMapValueIter<V> implements Iterator<V> {
 // type — the borrow that lets a SlotMap of move-only values be walked + mutated in place. `hasNext()` advances
 // to the next OCCUPIED slot (idempotent) and runs the invalidation check; `next()` hands out the `ref V`.
 type view SlotMapValueIterMut<V> implements IteratorMut<V> {
-    UnsafePtr<V> values; UnsafePtr<uint32> gens; int32 slotCount; int32 pos; UnsafePtr<int32> modsp; int32 modsAt;
-    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, int32 slotCount, UnsafePtr<int32> modsp, int32 modsAt) {
+    UnsafePtr<V> values; UnsafePtr<uint32> gens; isize slotCount; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, isize slotCount, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -52,7 +52,7 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
         }
         return false;
     }
-    public unsafe fn ref V next() { int32 p = this.pos; this.pos = this.pos + 1; return this.values[p]; }
+    public unsafe fn ref V next() { isize p = this.pos; this.pos = this.pos + 1; return this.values[p]; }
 }
 
 // A slot map (= Rust `slotmap`; the classic ECS entity / asset registry): `insert` returns a stable `Handle`
@@ -70,14 +70,14 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 type resource SlotMap<V, A: Allocator = GlobalAllocator>
         implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
                    ValuesIterableMut<SlotMapValueIterMut<V>> {
-    UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<int32> freeList = null;
-    int32 slotCount = 0; int32 freeLen = 0; int32 len = 0; int32 cap = 0; int32 mods = 0; A alloc;
+    UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
+    isize slotCount = 0; isize freeLen = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c). `empty()` is the `default` zero-arg build; `empty`/`withCapacity` are the
     // default-allocator conveniences (custom `A` uses the allocator-taking ctors). A bare `SlotMap<V, A> r;`
     // zero-inits the primitive/`UnsafePtr` fields and default-fills `alloc` — the M8d.1 gate proves completeness.
     public default ctor empty() when [A: default] { }
-    public ctor withCapacity(int32 capacity) when [A: default] { this.reserve(n: capacity); }
+    public ctor withCapacity(isize capacity) when [A: default] { this.reserve(n: capacity); }
 
     // Draw the three parallel buffers from a caller-owned allocator (e.g. an `Arena`). The bare `SlotMap()`
     // uses the default zero-size `GlobalAllocator`; this sets the handle before any grow.
@@ -86,23 +86,23 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     }
 
     // Caller-owned allocator AND pre-grown for `capacity` slots — `alloc` set before `reserve`.
-    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+    public ctor withCapacityAndAllocator(A allocator, isize capacity) {
         this.alloc = allocator;
         this.reserve(n: capacity);
     }
 
-    public const fn int32 length() { return this.len; }
+    public const fn isize length() { return this.len; }
     public const fn bool isEmpty() { return this.len == 0; }
 
     // Grow the three parallel buffers so at least `n` slots fit without a later reallocation (a no-op if
     // already big enough). Lets a caller who knows the size up front skip the incremental doublings.
-    public fn void reserve(int32 n) { if (n > this.cap) { this.growTo(nc: n); } }
+    public fn void reserve(isize n) { if (n > this.cap) { this.growTo(nc: n); } }
 
     // Insert `value` (consumes it) and return a fresh handle. Reuses a vacated slot from the free list when
     // one exists, else appends a new slot (growing the buffers first). The chosen slot's generation goes
     // even->odd (occupied) and the odd stamp is handed back in the handle.
     public unsafe fn Handle insert(V value) {
-        int32 idx = 0;
+        isize idx = 0;
         if (this.freeLen > 0) {
             this.freeLen = this.freeLen - 1;
             idx = this.freeList[this.freeLen];         // reuse a vacated slot (gen is even here)
@@ -149,7 +149,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // the free list for reuse. Discard the result to just delete (it drops cleanly).
     public unsafe fn Optional<V> remove(Handle handle) {
         if (!this.valid(h: handle)) { return Optional::None; }
-        int32 idx = handle.index;
+        isize idx = handle.index;
         V v = this.takeVal(at: idx);                           // value relocated OUT (slot now stale)
         this.gens[idx] = this.gens[idx] + 1ui32;      // odd -> even: vacate (stale handles mismatch)
         this.freeList[this.freeLen] = idx;            // remember the slot for reuse (always fits)
@@ -161,7 +161,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // Move the value at `slot` OUT of the buffer into a fresh owned local (the slot is left stale — the caller
     // vacates it). Bitwise-relocate through raw `UnsafePtr<V>` aliases into a zero-init'd local, then `give` — the
     // move-out idiom `Map.takeVal` / `DynamicArray.takeAt` use.
-    unsafe fn V takeVal(int32 at) {
+    unsafe fn V takeVal(isize at) {
         slot V x;                                          // the hole `relocate`'s `out` parameter fills
         relocate(from: this.values, at: at, into: out x);
         return give x;
@@ -182,7 +182,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // slot goes odd->even), so handles minted before the clear stay invalid; the free list is rebuilt with all
     // slots. `slotCount` is retained so a live handle's index stays in range (and reads its now-even, invalid gen).
     public unsafe fn void clear() {
-        int32 i = 0; this.freeLen = 0;
+        isize i = 0; this.freeLen = 0;
         while (i < this.slotCount) {
             if ((this.gens[i] & 1ui32) == 1ui32) { drop(value: this.values[i]); this.gens[i] = this.gens[i] + 1ui32; }
             this.freeList[this.freeLen] = i; this.freeLen = this.freeLen + 1;
@@ -193,19 +193,19 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
 
     // Grow the three buffers to the next capacity (doubling from 8) and relocate the live state.
     fn void grow() { this.growTo(nc: this.cap == 0 ? 8 : this.cap * 2); }
-    unsafe fn void growTo(int32 nc) {
-        UnsafePtr<V> nv = null; UnsafePtr<uint32> ng = null; UnsafePtr<int32> nf = null;
+    unsafe fn void growTo(isize nc) {
+        UnsafePtr<V> nv = null; UnsafePtr<uint32> ng = null; UnsafePtr<isize> nf = null;
         nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V))));
         ng = cast<UnsafePtr<uint32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint32))));
-        nf = cast<UnsafePtr<int32>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(int32))));
-        int32 i = 0;
+        nf = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(isize))));
+        isize i = 0;
         while (i < this.slotCount) { nv[i] = this.values[i]; ng[i] = this.gens[i]; i = i + 1; }  // bitwise relocate
         i = 0;
         while (i < this.freeLen) { nf[i] = this.freeList[i]; i = i + 1; }
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize));
         }
         this.values = nv; this.gens = ng; this.freeList = nf; this.cap = nc;
         // The buffer MOVED, so every live iterator's pointer is now stale — a structural change even
@@ -215,7 +215,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     }
 
     unsafe ~SlotMap() {   // drop each live (occupied) value, then release the three buffers via the allocator
-        int32 i = 0;
+        isize i = 0;
         while (i < this.slotCount) {
             if ((this.gens[i] & 1ui32) == 1ui32) { drop(value: this.values[i]); }
             i = i + 1;
@@ -223,7 +223,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         if (this.cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.values),   bytes: cast<usize>(this.cap) * sizeof(V));
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.gens),     bytes: cast<usize>(this.cap) * sizeof(uint32));
-            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(int32));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.freeList), bytes: cast<usize>(this.cap) * sizeof(isize));
         }
     }
 }

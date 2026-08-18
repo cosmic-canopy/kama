@@ -10,7 +10,7 @@ type enum Box
     Full(Shared<Probe> p),
     Empty
 }
-fn int main()
+fn int32 main()
 {
     Shared<Probe> s = new Probe.make(id: 7);
     Box a = Box::Full(p: copy s);

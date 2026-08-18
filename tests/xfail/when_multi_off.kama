@@ -9,7 +9,7 @@ type resource Box2<A, B> implements Copyable<This>(bare: give) when [A: Copyable
     public ctor copy(ref Box2<A,B> source) when [A: Copyable<A>, B: Copyable<B>] { return Box2::<A,B>.make(a: copy source.a, b: copy source.b); }
 }
 
-fn int main() {
+fn int32 main() {
     Box2<int32, Owned> p = Box2.make(a: 3, b: Owned.make(x: 1));
     Box2<int32, Owned> q = copy p;   // B=Owned not Copyable -> copy() absent -> REJECTED
     return 0;

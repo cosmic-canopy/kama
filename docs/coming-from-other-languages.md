@@ -14,7 +14,7 @@ that, and hitting either means the same fix — give the intermediate a name:
 
 | You write | kama says | Do this |
 | --- | --- | --- |
-| `"len=${a.length()}"` | lexical error in the hole | `int32 n = a.length(); "len=${n}"` |
+| `"len=${a.length()}"` | lexical error in the hole | `isize n = a.length(); "len=${n}"` |
 | `showIt(x: Leaf.make(n: 7))` | *"cannot infer generic type parameter"* | `Leaf lf = Leaf.make(n: 7); showIt(x: lf)` |
 
 The naming is not busywork: an interpolation hole stays statically checked rather than becoming a

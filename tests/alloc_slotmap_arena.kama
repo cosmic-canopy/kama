@@ -4,7 +4,7 @@ import std::collections::{SlotMap, Handle, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena.make(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 65536);
 
     SlotMap<int32, BumpAllocator> sm = SlotMap.withAllocator(allocator: arena.handle());
     Handle h0 = sm.insert(value: 10);

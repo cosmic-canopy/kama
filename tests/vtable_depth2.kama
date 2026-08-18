@@ -19,7 +19,7 @@ type final resource Leaf extends Base
     protected override fn int32 step() { return base.step() + 10; }
 }
 fn int32 measure(ref Base b) { return b.rank(); }
-fn int main()
+fn int32 main()
 {
     Leaf leaf = Leaf.make();
     return measure(b: ref leaf);   // Leaf.step: Base 1 + 10 = 11

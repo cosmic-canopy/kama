@@ -3,7 +3,7 @@
 // would be a second way to say the same thing.
 import std::fmt::{parseRadix, ParseError};
 
-fn int main() {
+fn int32 main() {
     string hex  = "ff";
     string HEX  = "FF";        // case-insensitive
     string bin  = "1011";

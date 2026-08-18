@@ -1,3 +1,3 @@
 // A typo'd / unknown argument name must be rejected, not silently dropped.
 fn int32 add(int32 a, int32 b) { return a + b; }
-fn int main() { return add(a: 1, c: 2); }   // 'c' is not a param
+fn int32 main() { return add(a: 1, c: 2); }   // 'c' is not a param

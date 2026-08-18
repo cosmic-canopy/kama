@@ -28,7 +28,7 @@ fn int32 main() {
     BitSet it = BitSet.empty();
     it.set(index: 1); it.set(index: 70); it.set(index: 3);
     int32 sum = 0; int32 cnt = 0; int32 lastSeen = 0 - 1; bool ordered = true;
-    foreach (int32 i in it) {
+    foreach (isize i in it) {
         if (i <= lastSeen) { ordered = false; }
         lastSeen = i; sum = sum + i; cnt = cnt + 1;
     }

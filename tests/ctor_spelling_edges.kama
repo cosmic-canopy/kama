@@ -29,7 +29,7 @@ fn int32 viaTypeParam<T: Spawnable>(int32 n) {
     return t.v;
 }
 
-fn int main()
+fn int32 main()
 {
     Cell a = Cell.make(v: 10);                    // 1. ctor, dot-on-type
     int32 b = Cell::twice(n: 5);                  // 2. static fn, scope resolution -> 10

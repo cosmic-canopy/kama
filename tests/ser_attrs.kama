@@ -9,12 +9,12 @@ type value Config {
         this.maxRetries = maxRetries; this.internalCounter = internalCounter; this.enabled = enabled;
     }
 }
-fn int main() {
+fn int32 main() {
     Config c = Config.make(maxRetries: 5, internalCounter: 999, enabled: true);
     Result<string, Owned<Error>> j_r = encode(v: c);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"max_retries\":5,\"enabled\":true}") { return 0; }   // internalCounter skipped
-    int32 n = cast<int32>(j.length());
+    isize n = j.length();
     if (n == 0) { return 255; }
-    return n;
+    return cast<int32>(n);
 }

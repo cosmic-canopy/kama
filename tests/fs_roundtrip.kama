@@ -6,16 +6,16 @@ import std::collections::{DynamicArray};
 
 // Checksum a read-back buffer against the expected length + rolling sum (0 = match).
 fn int32 verifyBuf(ref DynamicArray<uint8> got, int32 n, int32 want) {
-    int32 len = cast<int32>(got.length());
-    if (len != n) { return 60; }
+    isize len = got.length();
+    if (len != cast<isize>(n)) { return 60; }
     int32 rsum = 0;
-    int32 k = 0;
+    isize k = 0;
     while (k < len) { rsum = (rsum + cast<int32>(got[k])) % 1000; k = k + 1; }
     if (rsum != want) { return 61; }
     return 0;
 }
 
-fn int main() {
+fn int32 main() {
     string p = "_fs_roundtrip.tmp";
     int32 n = 100000;                       // > 64 KiB scratch buffer -> multi-iteration loops
 

@@ -1,7 +1,7 @@
 // A shift amount >= the operand's bit-width traps, not undefined behavior. The amount is runtime-opaque
 // (40, built from std::num calls) so it isn't folded to a constant or flagged at compile time.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     int32 amt = int32Max() - int32Max() + 40;   // 40, opaque; >= 32-bit width
     int32 one = 1;
     return one << amt;                            // shift past width traps

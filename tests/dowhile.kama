@@ -1,13 +1,13 @@
-fn int pick(int x)
+fn int32 pick(int32 x)
 {
     if (x == 1) { return 10; }
     else if (x == 2) { return 20; }
     else { return 0; }
 }
-fn int main()
+fn int32 main()
 {
-    int total = 0;
-    int i = 0;
+    int32 total = 0;
+    int32 i = 0;
     do
     {
         total += pick(x: i);

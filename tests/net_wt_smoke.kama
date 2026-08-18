@@ -4,7 +4,7 @@
 import std::net::web::{WtConnection, WtState};
 import std::io::{IoError};
 
-fn int main() {
+fn int32 main() {
     string url = "https://127.0.0.1:47681/nope";
     Result<WtConnection, IoError> r = WtConnection.connect(url: url);
     return match (r) { case Ok(value: c): 55; case Err(error: e): 55; };

@@ -7,14 +7,14 @@ import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "echo");
     c.arg(a: "a b\"c\\d");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(value: o): {
-            int32 n = cast<int32>(o.stdout().length());
+            isize n = o.stdout().length();
             int32 code = 42;
             if (n != 8) { code = 80; }
             else if (o.stdout()[1] != cast<uint8>(32))  { code = 81; }   // ' '

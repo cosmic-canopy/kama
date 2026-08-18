@@ -7,25 +7,25 @@
 // never running: it left `Base` unable to require that `x` was ever set at all.
 type virtual(maxDepth: 1) resource Base
 {
-    int x;                                       // private; embedded in the derived layout
-    public ctor make(int x) { this.x = x; }      // the base's own ctor — the only way its data is set
-    protected fn int getX() { return this.x; }   // visible to subclasses, not to the world
-    protected virtual fn int tag() { return 0; }
-    public fn int sum() { return this.sumImpl(); }   // public surface is fixed at the ROOT (decision A)
-    protected virtual fn int sumImpl() { return this.getX(); }
+    int32 x;                                       // private; embedded in the derived layout
+    public ctor make(int32 x) { this.x = x; }      // the base's own ctor — the only way its data is set
+    protected fn int32 getX() { return this.x; }   // visible to subclasses, not to the world
+    protected virtual fn int32 tag() { return 0; }
+    public fn int32 sum() { return this.sumImpl(); }   // public surface is fixed at the ROOT (decision A)
+    protected virtual fn int32 sumImpl() { return this.getX(); }
 }
 type final resource Derived extends Base
 {
-    int y;
-    public ctor make(int x, int y)
+    int32 y;
+    public ctor make(int32 x, int32 y)
     {
         this.base = Base.make(x: x);   // FIRST — the inherited part is built by its own ctor
         this.y = y;
     }
-    protected override fn int tag() { return 1; }
-    protected override fn int sumImpl() { return this.getX() + y; }   // base data via the protected accessor
+    protected override fn int32 tag() { return 1; }
+    protected override fn int32 sumImpl() { return this.getX() + y; }   // base data via the protected accessor
 }
-fn int main()
+fn int32 main()
 {
     Derived d = Derived.make(x: 30, y: 12);
     return d.sum();

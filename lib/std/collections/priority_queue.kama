@@ -31,11 +31,11 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
 
     // Capacity presizing (M8c) rides the backing `DynamicArray` — like C++/Java/Rust priority queues taking a
     // reserve size. Direction stays explicit (min/max); `data` is built via `DynamicArray::withCapacity`.
-    public ctor minHeapWithCapacity(int32 capacity) when [A: default] {
+    public ctor minHeapWithCapacity(isize capacity) when [A: default] {
         this.data = DynamicArray.withCapacity(capacity: capacity);
         this.maxOrder = false;
     }
-    public ctor maxHeapWithCapacity(int32 capacity) when [A: default] {
+    public ctor maxHeapWithCapacity(isize capacity) when [A: default] {
         this.data = DynamicArray.withCapacity(capacity: capacity);
         this.maxOrder = true;
     }
@@ -49,12 +49,12 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     }
 
     // Caller-owned allocator AND presized — both direction and capacity in one arena-backed factory.
-    public ctor withCapacityAndAllocator(A allocator, int32 capacity, bool maxOrder) {
+    public ctor withCapacityAndAllocator(A allocator, isize capacity, bool maxOrder) {
         this.data = DynamicArray.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         this.maxOrder = maxOrder;
     }
 
-    public const fn int32 length() { return this.data.length(); }
+    public const fn isize length() { return this.data.length(); }
     public const fn bool isEmpty() { return this.data.length() == 0; }
 
     // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
@@ -77,9 +77,9 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     }
 
     // Bubble the node at `i` toward the root while it outranks its parent (restores the invariant after a push).
-    fn void siftUp(int32 i) {
+    fn void siftUp(isize i) {
         while (i > 0) {
-            int32 parent = (i - 1) / 2;
+            isize parent = (i - 1) / 2;
             if (!this.higher(a: this.data[i], b: this.data[parent])) { return; }   // in place — done
             this.data.swap(i: i, j: parent);
             i = parent;
@@ -89,7 +89,7 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     // Remove and return the root (the min or max), moved OUT; `None` when empty. Swap the root with the last
     // leaf, pop that leaf (now the old root) OUT, then sink the new root down to restore the heap.
     public fn Optional<T> pop() {
-        int32 n = this.data.length();
+        isize n = this.data.length();
         if (n == 0) { return Optional::None; }
         if (n == 1) { return this.data.pop(); }   // sole element — pop it, nothing to restore
         this.data.swap(i: 0, j: n - 1);           // move the root to the end
@@ -99,12 +99,12 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
     }
 
     // Sink the node at `i` toward the leaves while a child outranks it (restores the invariant after a pop).
-    fn void siftDown(int32 i) {
-        int32 n = this.data.length();
+    fn void siftDown(isize i) {
+        isize n = this.data.length();
         while (true) {
-            int32 l = 2 * i + 1;
-            int32 r = 2 * i + 2;
-            int32 top = i;
+            isize l = 2 * i + 1;
+            isize r = 2 * i + 2;
+            isize top = i;
             if (l < n && this.higher(a: this.data[l], b: this.data[top])) { top = l; }
             if (r < n && this.higher(a: this.data[r], b: this.data[top])) { top = r; }
             if (top == i) { return; }             // parent already outranks both children — done

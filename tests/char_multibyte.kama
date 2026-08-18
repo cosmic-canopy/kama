@@ -1,6 +1,6 @@
 // A multibyte UTF-8 source char literal decodes to its Unicode scalar value — identical to the `'\u{…}'`
 // escape form. `char` is exactly one codepoint, so a 4-byte emoji is one `char` too.
-fn int main() {
+fn int32 main() {
     char e = 'é';                                // U+00E9 = 233 (2-byte UTF-8)
     char smile = '😀';                            // U+1F600 = 128512 (4-byte UTF-8)
     int32 r = 0;

@@ -107,7 +107,7 @@ rm -f "$tmp/pinned/kama.local.json"
 #         `pinned` pins vA; the default is vB. Standing OUTSIDE it and naming its source must give vA.
 #         (The selector cannot parse arguments — it runs before the parse — so it recognizes an input by
 #         "existing file ending in .kama"; hence a real file here, unlike the cases above.)
-printf 'fn int main() { return 0; }\n' > "$tmp/pinned/real.kama"
+printf 'fn int32 main() { return 0; }\n' > "$tmp/pinned/real.kama"
 run sh -c "cd '$tmp' && '$SEL' build pinned/real.kama"
 grep -q "TOOLCHAIN vA" "$tmp/out" \
     || fail "the pin did not follow the input file: building pinned/real.kama from outside used the CWD's toolchain"

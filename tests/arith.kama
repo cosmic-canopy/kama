@@ -1,7 +1,7 @@
-fn int main()
+fn int32 main()
 {
-    int a = 20;
-    int b = 22;
-    int sum = a + b;
+    int32 a = 20;
+    int32 b = 22;
+    int32 sum = a + b;
     return sum;
 }

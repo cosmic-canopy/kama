@@ -1,5 +1,5 @@
 type enum Tree { Node(Tree left), Leaf }
-fn int main()
+fn int32 main()
 {
     Tree t = Tree::Leaf;
     return 0;

@@ -6,15 +6,15 @@
 // admits. tests/vtable_depth3 is the same chain with the seal respected.
 type virtual(maxDepth: 2) resource Root {
     public ctor make() { }
-    protected virtual fn int h() { return 0; }
-    public fn int go() { return this.h(); }
+    protected virtual fn int32 h() { return 0; }
+    public fn int32 go() { return this.h(); }
 }
 type virtual(maxDepth: 1) resource Mid extends Root {
     public ctor make() { this.base = Base.make(); }
-    protected final override fn int h() { return 1; }        // seals h
+    protected final override fn int32 h() { return 1; }        // seals h
 }
 type final resource Leaf extends Mid {
     public ctor make() { this.base = Base.make(); }
-    protected override fn int h() { return 2; }              // ERROR: h is `final` in Mid
+    protected override fn int32 h() { return 2; }              // ERROR: h is `final` in Mid
 }
-fn int main() { Leaf l = Leaf.make(); return l.go(); }
+fn int32 main() { Leaf l = Leaf.make(); return l.go(); }

@@ -41,7 +41,7 @@ type final resource Leaf extends Base
              + base.helper();     // Base's  -> 5      (reachable ONLY because of the friend grant)
     }
 }
-fn int main()
+fn int32 main()
 {
     Leaf l = Leaf.make();
     return l.rank();   // baseSide 5 + derivedSide (6 + 5) = 16

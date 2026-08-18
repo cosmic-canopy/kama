@@ -22,4 +22,4 @@ type virtual(maxDepth: 1) resource Button extends Control       // one level too
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return base.step() + 100; }
 }
-fn int main() { Button b = Button.make(); return b.rank(); }
+fn int32 main() { Button b = Button.make(); return b.rank(); }

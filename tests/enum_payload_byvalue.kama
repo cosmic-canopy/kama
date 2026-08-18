@@ -1,15 +1,15 @@
 @generate(of)
 type value Vec2 { public float64 x; public float64 y; }
 type enum Event { Resize(Vec2 size), Click(int32 x, int32 y), Quit }
-fn int area(Event e)
+fn int32 area(Event e)
 {
     return match (e) {
-        case Resize(size: size): cast<int>(size.x) * cast<int>(size.y);
+        case Resize(size: size): cast<int32>(size.x) * cast<int32>(size.y);
         case Click(x: x, y: y): x + y;
         case Quit: 0;
     };
 }
-fn int main()
+fn int32 main()
 {
     Event a = Event::Resize(size: Vec2.of(x: 4.0, y: 3.0));
     Event b = Event::Click(x: 10, y: 5);

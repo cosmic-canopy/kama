@@ -2,7 +2,7 @@
 // A PRIMITIVE slot has no field-default fill behind it, so this is a genuine uninitialized read. The fill
 // below is real — this pins the ORDER, not the absence of a fill (tests/xfail/slot_never_filled does that).
 fn void fill(out int32 d) { d = 1; }
-fn int main() {
+fn int32 main() {
     slot int32 x;
     int32 r = x;       // ERROR: read before the fill
     fill(d: out x);

@@ -45,6 +45,48 @@ library's entry point for importers — the opposite end of the word), and `out`
 root. Both are read by `kama seed`, which is what would otherwise have propagated a wrong name into every
 project created after it.
 
+**The no-implicit-conversion rule is SILENT through an untyped binding.** Milestone 6's headline rule —
+"if two numeric types differ, the conversion is written down" — does not hold wherever `typeOfExpr` cannot
+answer. Both of these compile clean and return **44**, proven 2026-08-18:
+
+```kama
+int8 n = match (someOptionalInt64) { case Some(value: c): c; case None: 0i8; };   // c is an int64 300
+foreach (int64 x in xs) { int8 n = x; }                                          // same, via the binding
+```
+
+This is the same defect class as the constant `cast<int8>(300)` the compiler already rejects, and as
+`string.length()`, whose intrinsic carried a NULL return type until the isize campaign named it — `int8 n
+= s.length();` silently truncated for exactly this reason.
+
+⚠️ **The fix is NOT to make the numeric rules fire on an unknown source.** `rejectNumericConversion`'s own
+header calls silence-on-unknown "the single most important constraint in the campaign": a rule built on a
+classifier that conflates "primitive" with "no idea" is either silent on every primitive or unlandable.
+The fix is to make the CLASSIFIER answer — a match-arm binding knows its payload type, and a `foreach`
+binding knows its element type; neither is recorded today. `typeOfExpr`'s comment lists the full set it
+gives up on: a type parameter, a const-generic parameter, a `foreach` binding, a `borrow` alias, an
+intrinsic with no recorded return type, an `extern fn` result, and a mixed-arithmetic subexpression. Each
+wants its own answer or its own reason for staying silent, and a fixture per binding form — the corpus
+proves nothing here, since it happened to use the correct widths everywhere.
+
+**Go-to-definition on a compiler built-in lands nowhere.** `string`, `isize`, `usize`, `int32` and the
+`string`/`Fixed`/`View` intrinsic methods are registered in C++ (`registerCollection` in `kama.cemit.cpp`),
+so there is no source location for the LSP to return and the jump silently does nothing. These are the
+most-navigated names in any kama program, so it reads as the language server being broken rather than as a
+deliberate gap. Two shapes are used in the wild:
+
+- **A documentation-only source file** the tooling points at. Go ships `builtin.go` declaring `int`,
+  `string`, `len`, `append` — never compiled as the definition, it exists so docs and `gopls` have a target.
+  Rust does the same with `library/core/src/primitive_docs.rs`. **This is the fit for kama**: the prelude is
+  already a real embedded file, and `agents/`/`seed/` establish the embedded-doc pattern.
+- **A synthesized read-only virtual document** — C#/Roslyn's metadata-as-source. More machinery, and it
+  needs a client that honours a custom URI scheme.
+
+⚠️ The risk with the first is DRIFT: a hand-written `builtin.kama` and the C++ registration are two
+statements of one truth. Whatever lands wants a `tools/check-*.sh` asserting every intrinsic registered in
+`registerCollection` appears in the doc file and vice versa — otherwise it rots exactly the way a prose
+claim does. Hover is a cheaper partial win and worth checking first: if hover already answers for these,
+the gap is only the jump.
+
 **At the tag itself — repoint the Zed grammar pin.** `editor/zed/extension.toml` pins a *commit*, and Zed
 installs the grammar by fetching that rev — so the pin, not the working tree, is what Zed users get. It is
 currently behind (the commit predates `slot` and named match patterns, so neither highlights for them).

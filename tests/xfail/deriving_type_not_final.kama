@@ -15,4 +15,4 @@ type virtual(maxDepth: 1) resource Derived extends Base        // must be `type 
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 step() { return 2; }
 }
-fn int main() { Derived d = Derived.make(); return d.rank(); }
+fn int32 main() { Derived d = Derived.make(); return d.rank(); }

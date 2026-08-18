@@ -4,4 +4,4 @@
 // disagreement between `kama check` and `kama build`; see CEmitter::alwaysExits, and
 // tests/return_paths.kama for the shapes that must still be ACCEPTED.
 fn int32 compute(int32 a) { int32 y = a + 1; }
-fn int main() { return compute(a: 41); }
+fn int32 main() { return compute(a: 41); }

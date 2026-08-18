@@ -6,4 +6,4 @@ type value Account {
     friend audit[balance];   // granted balance only
 }
 fn int32 audit(ref Account a) { return a.pin; }   // ERROR: pin is not in the grant
-fn int main() { Account acc = Account.make(b: 1, p: 2); return audit(a: ref acc); }
+fn int32 main() { Account acc = Account.make(b: 1, p: 2); return audit(a: ref acc); }

@@ -1,7 +1,7 @@
 // `ref` is a borrow of a live value; `out` is a fill of a hole. Passing `ref` to an `out` parameter is
 // the exact confusion the marker exists to prevent.
 fn void fill(out int32 dst) { dst = 7; }
-fn int main() {
+fn int32 main() {
     int32 x = 0;
     fill(dst: ref x);     // ERROR: the parameter is `out`, not `ref`
     return x;

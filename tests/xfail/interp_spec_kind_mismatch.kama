@@ -1,6 +1,6 @@
 // A precision specifier on an integer hole is a compile error — `.N` applies only to a float hole (an
 // integer's base is spelled `0x`/`0o`/`0b` instead).
-fn int main() {
+fn int32 main() {
     int32 n = 42i32;
     string s = "${n:.2}";
     return 0;

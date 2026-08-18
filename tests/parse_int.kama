@@ -2,7 +2,7 @@
 // The turbofish is required because nothing in the arguments mentions `T`.
 import std::fmt::{parse, ParseError};
 
-fn int main() {
+fn int32 main() {
     string a = "41";
     string b = "-7";
     string c = "+12";

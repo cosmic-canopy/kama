@@ -47,7 +47,7 @@ unsafe fn int32 tick(UnsafePtr state) {
     return 1;
 }
 
-unsafe fn int appMain() {
+unsafe fn int32 appMain() {
     UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(128)));
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
     string url = "ws://127.0.0.1:47670";
@@ -61,4 +61,4 @@ unsafe fn int appMain() {
 
 // The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
 // (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn int main() { return appMain(); }
+fn int32 main() { return appMain(); }

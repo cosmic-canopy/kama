@@ -7,6 +7,6 @@ fn int32 main() {
     BitSet bs = BitSet.empty();
     bs.set(index: 3); bs.set(index: 7);
     int32 sum = 0;
-    foreach (int32 i in bs) { sum = sum + i; }
+    foreach (isize i in bs) { sum = sum + i; }
     return sum;   // 3 + 7 = 10
 }

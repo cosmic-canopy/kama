@@ -8,7 +8,7 @@ type resource User {
     public ctor make(string name, int32 id) { this.name = give name; this.id = id; this.loginCount = 0; }
     public fn int32 tag() { return this.id + cast<int32>(this.name.length()); }
 }
-fn int main() {
+fn int32 main() {
     User u = User.make(name: "kai", id: 39);
     Result<string, Owned<Error>> j_r = encode(v: u);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };                       // {"user_name":"kai","id":39}

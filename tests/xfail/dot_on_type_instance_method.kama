@@ -5,4 +5,4 @@ type value Plain {
     public ctor make() { }
     public fn int32 inst() { return 1; }
 }
-fn int main() { return Plain.inst(); }
+fn int32 main() { return Plain.inst(); }

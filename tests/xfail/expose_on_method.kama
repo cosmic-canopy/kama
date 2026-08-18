@@ -1,4 +1,4 @@
 // `expose` is a free-function modifier (the kama->host boundary); it is not a member modifier,
 // so marking a method with it is rejected.
-type value Box { int v; public Box(int v) { this.v = v; } expose fn int get() { return this.v; } }
-fn int main() { return 0; }
+type value Box { int32 v; public Box(int32 v) { this.v = v; } expose fn int32 get() { return this.v; } }
+fn int32 main() { return 0; }

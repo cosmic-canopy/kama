@@ -2,9 +2,9 @@ import std::collections::{DynamicArray};
 // M26f-2 — branch merge: a `resource` value moved on BOTH arms of an if/else is `Moved` at
 // the join (not a conditional-drop). Its scope-exit dtor is skipped; exactly one drop happened
 // (inside sink). One drop of code 7 -> 7. (A broken merge that kept `a` live would fold to 224.)
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;

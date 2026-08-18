@@ -35,7 +35,7 @@ fn int32 viaNestedBlock(int32 x) {                 // an inner block's return st
 fn void voidMayFallThrough(int32 x) {              // `void` is exempt
     if (x > 0) { return; }
 }
-fn int main() {
+fn int32 main() {
     voidMayFallThrough(x: 1);
     return viaIfElse(x: 1) + viaMatch(o: Optional::Some(value: 20))
          + viaInfiniteLoop(x: 0) + viaForever(x: 0) + viaPanic(x: 10)

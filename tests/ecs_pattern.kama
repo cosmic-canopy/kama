@@ -64,7 +64,7 @@ fn int32 tickAll<T: Tickable>(View<T> items) {
     return sum;
 }
 
-fn int main()
+fn int32 main()
 {
     // component storage — one contiguous array per component type
     DynamicArray<Transform> xf = DynamicArray.withCapacity(capacity: 4);

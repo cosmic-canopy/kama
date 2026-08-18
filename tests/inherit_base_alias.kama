@@ -25,7 +25,7 @@ type final resource Dog extends Animal {
     }
 }
 
-fn int main()
+fn int32 main()
 {
     Dog d = Dog.make();
     return d.total();                          // 4 + 3

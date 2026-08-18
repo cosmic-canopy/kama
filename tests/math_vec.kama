@@ -1,6 +1,6 @@
 // Vec2/3/4 operators + methods, exact-value checksums (Pythagorean triples for exact lengths).
 import std::math::{Vec2, Vec3, Vec4};
-fn int main() {
+fn int32 main() {
     Vec3 a = Vec3.of(x: 3.0f32, y: 4.0f32, z: 0.0f32);
     Vec3 b = Vec3.of(x: 1.0f32, y: 2.0f32, z: 2.0f32);
     float32 la = a.length();               // 5   (3-4-5)

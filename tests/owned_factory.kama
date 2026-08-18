@@ -2,9 +2,9 @@ import std::memory::{Owned};
 // Owned<T> factory: a function that returns an Owned<T> moves ownership out to
 // the caller — the pointee survives the callee's unwind and is freed exactly
 // once at the caller's scope exit (no callee-free, no leak, no double-free).
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Node
 {
@@ -19,7 +19,7 @@ fn Owned<Node> make(int32 v)
     return n;                                  // MOVE OUT (make's unwind no-ops)
 }
 
-fn int main()
+fn int32 main()
 {
     {
         Owned<Node> p = make(v: 7);   // p owns the Node

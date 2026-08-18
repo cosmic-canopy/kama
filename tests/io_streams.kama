@@ -20,7 +20,7 @@ fn int32 drainSum(Reader r) {
     FixedArray<uint8> buf = FixedArray.make(size: 8);
     int32 sum = 0;
     while (true) {
-        Result<usize, IoError> rr = r.read(into: buf.view());
+        Result<isize, IoError> rr = r.read(into: buf.view());
         int32 n = match (rr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
         if (n < 0) { return -1; }
         if (n == 0) { return sum; }        // EOF
@@ -29,10 +29,10 @@ fn int32 drainSum(Reader r) {
     }
 }
 
-fn int main() {
+fn int32 main() {
     // 1..=10 → 55 bytes of content; sum of values 1..10 = 55.
     string payload = makePayload(n: 10);
-    if (cast<int32>(payload.length()) != 10) { return 1; }
+    if (payload.length() != 10) { return 1; }
 
     // Direct in-memory round-trip: SliceReader over the payload, drained through an 8-byte buffer (EOF path).
     SliceReader sr = SliceReader.make(src: give payload);
@@ -49,7 +49,7 @@ fn int main() {
     string payload3 = makePayload(n: 10);
     BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
     SliceReader src3 = SliceReader.make(src: give payload3);
-    Result<usize, IoError> cr = pump(from: src3, to: bw);
+    Result<isize, IoError> cr = pump(from: src3, to: bw);
     int32 moved = match (cr) { case Ok(value: k): cast<int32>(k); case Err(error: e): -1; };
     if (moved != 10) { return 4; }
     Result<Unit, IoError> fr = bw.flush();

@@ -4,7 +4,7 @@
 fn int32 main() {
     string a = "-";
     string b = "-";
-    int32 n = 0;
-    foreach (string piece in ("p--q--r").split(separator: a + b)) { n = n + cast<int32>(piece.length()); }
-    return n;   // "p","q","r" -> 1+1+1 = 3
+    isize n = 0;
+    foreach (string piece in ("p--q--r").split(separator: a + b)) { n = n + piece.length(); }
+    return cast<int32>(n);   // "p","q","r" -> 1+1+1 = 3
 }

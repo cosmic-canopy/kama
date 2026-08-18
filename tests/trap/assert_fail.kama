@@ -1,7 +1,7 @@
 // A failing assert aborts cleanly with "assertion failed: <cond> — <msg> (file:line)". The condition is
 // runtime-opaque so the check isn't folded away. Exercises auto-stringify (the `zero == 1` echo) + `msg:`.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     int32 zero = int32Max() - int32Max();   // 0, opaque
     assert(cond: zero == 1, msg: "expected one");   // false -> abort
     return 0;   // unreachable

@@ -6,4 +6,4 @@ type value Account {
     friend audit[get];   // get is already public
 }
 fn int64 audit(ref Account a) { return a.get(); }
-fn int main() { Account acc = Account.make(b: 1); return cast<int>(audit(a: ref acc)); }
+fn int32 main() { Account acc = Account.make(b: 1); return cast<int32>(audit(a: ref acc)); }

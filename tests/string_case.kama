@@ -1,5 +1,5 @@
 // `toLower` / `toUpper` — ASCII-only mapping; bytes >= 0x80 (inside "é") are left untouched (UTF-8-safe).
-fn int main() {
+fn int32 main() {
     string s = "AbC";
     int32 r = 0;
     if (s.toLower() == "abc") { r = r + 1; }

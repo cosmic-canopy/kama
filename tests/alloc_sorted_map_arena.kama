@@ -9,7 +9,7 @@ import std::collections::{SortedMap, SortedSet, DynamicArray, Arena, BumpAllocat
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena.make(capacity: 1 << 16);           // declared FIRST → drops LAST (outlives the containers)
+    Arena arena = Arena.make(capacity: 65536);           // declared FIRST → drops LAST (outlives the containers)
 
     // (a) an arena-backed SortedMap<int32,int32,BumpAllocator>. Insert 40 keys in a scrambled order to
     // force several node splits and at least one root growth (the tree exceeds height 1).

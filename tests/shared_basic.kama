@@ -8,7 +8,7 @@ type value Counter
     public fn int32 get() { return this.value; }
 }
 
-fn int main()
+fn int32 main()
 {
     Shared<Counter> c = new Counter.make(start: 40);
     c.bump();

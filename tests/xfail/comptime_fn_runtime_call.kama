@@ -2,6 +2,6 @@
 // (function-body) position must be rejected with a diagnostic pointing at the `comptime` constant form.
 comptime fn int32 answer() { return 42; }
 
-fn int main() {
+fn int32 main() {
     return answer();   // ERROR: runtime call to a comptime fn
 }

@@ -2,7 +2,7 @@
 // from `Comparable`, and `T` is inferred from the view, so no turbofish is needed.
 import std::collections::{DynamicArray, FixedArray, View, sort, sortUnstable, isSorted};
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 5); xs.add(item: 1); xs.add(item: 4); xs.add(item: 1); xs.add(item: 3);
     int32 a = 0;

@@ -25,7 +25,7 @@ fn int32 check(ref UdpSocket s) {
     return 55;
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     Result<UdpSocket, IoError> r = UdpSocket.bind(host: host, port: cast<uint16>(0));
     return match (r) { case Ok(value: s): check(s: s); case Err(error: e): 70; };

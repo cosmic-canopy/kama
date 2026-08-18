@@ -8,7 +8,7 @@ type resource Counter {
     public fn int32 get() { return this.n; }
 }
 
-fn int main() {
+fn int32 main() {
     Map<int32, Counter> m = Map.empty();
     m.put(key: 1, value: Counter.make(n: 10));
     m.put(key: 2, value: Counter.make(n: 20));
@@ -24,6 +24,6 @@ fn int main() {
     m.remove(key: 1);                                                 // drops Counter(10)
     m.remove(key: 99);                                               // absent -> None, no-op
 
-    r = r + m.length();                                              // 1 (only key 3 remains)
-    return r;   // 21 (m drops Counter(30) at scope exit)
+    r = r + cast<int32>(m.length());                                              // 1 (only key 3 remains)
+    return cast<int32>(r);   // 21 (m drops Counter(30) at scope exit)
 }

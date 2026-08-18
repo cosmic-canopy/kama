@@ -8,6 +8,6 @@ fn int32 pick(int32 x, bool some) {
     };
 }
 
-fn int main() {
+fn int32 main() {
     return pick(x: 42, some: true) + pick(x: 99, some: false);   // 42 + 0 = 42
 }

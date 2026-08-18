@@ -1,20 +1,20 @@
 type value Counter
 {
-    int value;
-    public ctor make(int start)
+    int32 value;
+    public ctor make(int32 start)
     {
         this.value = start;
     }
-    public fn void add(int n)
+    public fn void add(int32 n)
     {
         value = value + n;
     }
-    public fn int get()
+    public fn int32 get()
     {
         return value;
     }
 }
-fn int main()
+fn int32 main()
 {
     Counter c = Counter.make(start: 40);
     c.add(n: 2);

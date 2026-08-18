@@ -1,12 +1,12 @@
-fn int classify(int n)
+fn int32 classify(int32 n)
 {
     if (n > 0) { return 1; }
     else { return 0; }
 }
-fn int main()
+fn int32 main()
 {
-    int i = 0;
-    int count = 0;
+    int32 i = 0;
+    int32 count = 0;
     while (i < 10)
     {
         if (classify(n: i) == 1) { count += 1; }

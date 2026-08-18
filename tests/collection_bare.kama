@@ -3,7 +3,7 @@ import std::collections::{FixedArray};
 // default is `give`, so `b = a` RELOCATES the buffer (a move); `a` is then moved-from and using it
 // would be a compile-time use-after-move error. (This is the case the old `collection_bare` xfail
 // flagged as "ambiguous" before the ownership model gained the `bare:` contract parameter.)
-fn int main() {
+fn int32 main() {
     FixedArray<int32> a = FixedArray.make(size: 2);
     a[0] = 40; a[1] = 2;
     FixedArray<int32> b = a;      // bare = move (FixedArray's bare default is `give`); no `give`/`copy` needed

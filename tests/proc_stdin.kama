@@ -6,7 +6,7 @@ import std::io::{IoError};
 import std::fs::{File};
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "cat");
     c.stdin(s: Stdio::Piped);
@@ -26,7 +26,7 @@ fn int main() {
     Result<DynamicArray<uint8>, IoError> rd = p.stdout().readAll();
     return match (give rd) {
         case Ok(value: got): {
-            int32 n = cast<int32>(got.length());
+            isize n = got.length();
             int32 code = 42;
             if (n != 3) { code = 142; }
             else if (got[0] != cast<uint8>(104)) { code = 143; }

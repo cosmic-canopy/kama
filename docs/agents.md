@@ -196,6 +196,10 @@ It is not only narrowing. **Every** crossing is a conversion and every one wants
 (`int64 a = someInt32`), a signedness flip (`uint8 a = someInt8`), int/float in both directions, and
 anything involving `usize`/`isize`. If two types differ, the conversion is written down.
 
+**`isize` is the size type** — every `length()`/`count()`/index is one, on `string`/`View`/`Fixed` and every
+collection. `usize` is for the C ABI only (`sizeof`, allocation, `extern fn`). Declare loop counters `isize`
+and the casts disappear. Bare `int`/`uint`/`double`/`float` are not kama types.
+
 It also applies **between an operator's two operands**, which is where an LLM writing kama is most
 likely to trip: `int32 + uint8` does not compile, and neither does `i < n` with an `int32` counter
 against a `usize` length — the single commonest shape to get wrong. Write `cast<usize>(i) < n`.

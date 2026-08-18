@@ -1,16 +1,16 @@
 type enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
-fn int score(Msg m)
+fn int32 score(Msg m)
 {
     return match (m) {
         case Move(dx: dx, dy: dy): dx + dy;
         case _: 0;
     };
 }
-fn int main()
+fn int32 main()
 {
     Msg a = Msg::Move(dx: 10, dy: 20);
     Msg b = Msg::Stop;
-    int total = 0;
+    int32 total = 0;
     match (a) {
         case Move(dx: dx, dy: dy): total = dx + dy;
         case Stop: total = 1;

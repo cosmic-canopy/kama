@@ -5,7 +5,7 @@ import std::concurrent::{Atomic};
 
 fn void setter(ref Atomic<int32> f) { f.store(value: 1i32); }
 
-fn int main() {
+fn int32 main() {
     Atomic<int32> flag = Atomic.make(value: 0i32);
     scope { spawn setter(f: ref flag); }     // BARRIER: the store is visible after the join
     int32 seen = flag.load();                // 1

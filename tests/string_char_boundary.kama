@@ -5,35 +5,35 @@
 //   'A' 1 byte  @0      'é' 2 bytes @1..2   'Z' 1 byte  @3
 //   '€' 3 bytes @4..6   '😀' 4 bytes @7..10          length 11
 // so the character boundaries are exactly 0, 1, 3, 4, 7 and 11.
-fn int main()
+fn int32 main()
 {
     string s = "AéZ€😀";
     int32 r = 0;
 
-    if (cast<int32>(s.length()) == 11)                       { r = r + 1; }
+    if (s.length() == 11)                       { r = r + 1; }
 
     // --- floorCharBoundary: already a boundary -> unchanged -------------------------------------
-    if (cast<int32>(s.floorCharBoundary(at: 0))  == 0)       { r = r + 1; }
-    if (cast<int32>(s.floorCharBoundary(at: 1))  == 1)       { r = r + 1; }
-    if (cast<int32>(s.floorCharBoundary(at: 3))  == 3)       { r = r + 1; }
-    if (cast<int32>(s.floorCharBoundary(at: 11)) == 11)      { r = r + 1; }   // the exclusive end IS one
+    if (s.floorCharBoundary(at: 0)  == 0)       { r = r + 1; }
+    if (s.floorCharBoundary(at: 1)  == 1)       { r = r + 1; }
+    if (s.floorCharBoundary(at: 3)  == 3)       { r = r + 1; }
+    if (s.floorCharBoundary(at: 11) == 11)      { r = r + 1; }   // the exclusive end IS one
 
     // --- floorCharBoundary: mid-character -> snaps DOWN, at every width --------------------------
-    if (cast<int32>(s.floorCharBoundary(at: 2))  == 1)       { r = r + 1; }   // inside the 2-byte é
-    if (cast<int32>(s.floorCharBoundary(at: 5))  == 4)       { r = r + 1; }   // inside the 3-byte €
-    if (cast<int32>(s.floorCharBoundary(at: 6))  == 4)       { r = r + 1; }
-    if (cast<int32>(s.floorCharBoundary(at: 8))  == 7)       { r = r + 1; }   // inside the 4-byte 😀
-    if (cast<int32>(s.floorCharBoundary(at: 10)) == 7)       { r = r + 1; }
+    if (s.floorCharBoundary(at: 2)  == 1)       { r = r + 1; }   // inside the 2-byte é
+    if (s.floorCharBoundary(at: 5)  == 4)       { r = r + 1; }   // inside the 3-byte €
+    if (s.floorCharBoundary(at: 6)  == 4)       { r = r + 1; }
+    if (s.floorCharBoundary(at: 8)  == 7)       { r = r + 1; }   // inside the 4-byte 😀
+    if (s.floorCharBoundary(at: 10) == 7)       { r = r + 1; }
 
     // --- floorCharBoundary is TOTAL: past the end clamps rather than trapping --------------------
-    if (cast<int32>(s.floorCharBoundary(at: 99)) == 11)      { r = r + 1; }
+    if (s.floorCharBoundary(at: 99) == 11)      { r = r + 1; }
 
     // --- truncate: a byte BUDGET, never splitting --------------------------------------------
-    if (cast<int32>(s.truncate(maxBytes: 0).length())  == 0)  { r = r + 1; }   // empty
-    if (cast<int32>(s.truncate(maxBytes: 2).length())  == 1)  { r = r + 1; }   // cut inside é -> "A"
-    if (cast<int32>(s.truncate(maxBytes: 3).length())  == 3)  { r = r + 1; }   // exactly "Aé"
-    if (cast<int32>(s.truncate(maxBytes: 6).length())  == 4)  { r = r + 1; }   // cut inside € -> "AéZ"
-    if (cast<int32>(s.truncate(maxBytes: 99).length()) == 11) { r = r + 1; }   // whole string
+    if (s.truncate(maxBytes: 0).length()  == 0)  { r = r + 1; }   // empty
+    if (s.truncate(maxBytes: 2).length()  == 1)  { r = r + 1; }   // cut inside é -> "A"
+    if (s.truncate(maxBytes: 3).length()  == 3)  { r = r + 1; }   // exactly "Aé"
+    if (s.truncate(maxBytes: 6).length()  == 4)  { r = r + 1; }   // cut inside € -> "AéZ"
+    if (s.truncate(maxBytes: 99).length() == 11) { r = r + 1; }   // whole string
     if (s.truncate(maxBytes: 3).equals(other: "Aé"))          { r = r + 1; }
 
     // --- an offset from a SEARCH is boundary-aligned by construction, so substring cannot fail ---
@@ -42,13 +42,13 @@ fn int main()
     // --- chunking: the composition that a prefix-only truncate could not express in linear time.
     //     A budget of 4 is >= the widest UTF-8 character, so `end` always advances past `pos`.
     int32 chunks = 0;
-    int32 total  = 0;
-    usize pos = cast<usize>(0);
+    isize total  = 0;
+    isize pos = 0;
     while (pos < s.length()) {
-        usize end = s.floorCharBoundary(at: pos + cast<usize>(4));
+        isize end = s.floorCharBoundary(at: pos + 4);
         string piece = s.substring(start: pos, end: end);
         chunks = chunks + 1;
-        total  = total + cast<int32>(piece.length());
+        total  = total + piece.length();
         pos = end;
     }
     if (chunks == 3) { r = r + 1; }        // "AéZ" | "€" | "😀"

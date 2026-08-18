@@ -14,7 +14,7 @@ type value Holder
     public ctor make(Pair<int32> pr) { this.p = pr; }
     public fn int32 total() { return this.p.sum(); }  // Pair_int32__sum on the field
 }
-fn int main()
+fn int32 main()
 {
     Pair<int32> pp = Pair.make(x: 3, y: 4);
     Holder h = Holder.make(pr: pp);

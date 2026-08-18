@@ -1,5 +1,5 @@
 // `find(substring:)` -> Optional<usize> (null-safe byte offset; None when absent, 0 for empty needle).
-fn int main() {
+fn int32 main() {
     string s = "hello";
     int32 r = 0;
     int32 hit = match (s.find(substring: "llo")) { case Some(value: i): cast<int32>(i); case None: -1; };

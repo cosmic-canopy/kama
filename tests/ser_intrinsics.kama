@@ -1,7 +1,7 @@
 // The intrinsic Serialize/Deserialize conformances compose inside a collection for every scalar width.
 import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
-fn int main() {
+fn int32 main() {
     DynamicArray<bool> bs = DynamicArray.empty(); bs.add(item: true); bs.add(item: false); bs.add(item: true);
     Result<string, Owned<Error>> __encB = encode(v: bs);
     string __bsj = match (give __encB) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } };

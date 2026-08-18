@@ -8,7 +8,7 @@
 // unnameable rather than merely trapped.
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
     d.add(item: 1); d.add(item: 2);
     int32 t = 0;

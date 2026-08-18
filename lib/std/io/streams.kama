@@ -18,28 +18,28 @@ export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeA
 // destination (an in-memory sink no-ops). Kept to these two so every impl is trivial; `writeAll`/`copy` are
 // free helpers (kama contracts carry no default methods).
 type contract Writer for resource {
-    fn Result<usize, IoError> write(View<uint8> bytes);
+    fn Result<isize, IoError> write(View<uint8> bytes);
     fn Result<Unit, IoError> flush();
 }
 
 // A byte SOURCE. `read` fills UP TO into.length() bytes and returns the count read; `Ok(0)` means EOF. The
 // caller loops until EOF — bounded memory regardless of how much data flows through.
 type contract Reader for resource {
-    fn Result<usize, IoError> read(View<uint8> into);
+    fn Result<isize, IoError> read(View<uint8> into);
 }
 
 // Write EVERY byte, looping over the partial-write primitive until done (or error). A write that makes no
 // progress (returns 0) on a would-block sink surfaces as `WouldBlock` rather than spinning forever.
 fn Result<Unit, IoError> writeAll(Writer w, View<uint8> bytes) {
-    int32 total = bytes.length();
-    int32 off = 0;
+    isize total = bytes.length();
+    isize off = 0;
     while (off < total) {
-        Result<usize, IoError> r = w.write(bytes: bytes.slice(from: off, count: total - off));
+        Result<isize, IoError> r = w.write(bytes: bytes.slice(from: off, count: total - off));
         match (r) {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: n): {
-                if (n == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
-                off = off + cast<int32>(n);
+                if (n == 0) { return Result::Err(error: IoError::WouldBlock); }
+                off = off + cast<isize>(n);
             }
         };
     }
@@ -49,17 +49,16 @@ fn Result<Unit, IoError> writeAll(Writer w, View<uint8> bytes) {
 // Pump every byte from `from` to `to` through ONE fixed 4 KiB scratch buffer (= Go `io.Copy`; named `pump`
 // since `copy` is a keyword) — the idiom for moving unbounded data in bounded memory. Returns the total
 // byte count transferred.
-fn Result<usize, IoError> pump(Reader from, Writer to) {
+fn Result<isize, IoError> pump(Reader from, Writer to) {
     FixedArray<uint8> scratch = FixedArray.make(size: 4096);
-    usize total = cast<usize>(0);
+    isize total = 0;
     while (true) {
-        Result<usize, IoError> rr = from.read(into: scratch.view());
+        Result<isize, IoError> rr = from.read(into: scratch.view());
         match (rr) {
             case Err(error: e): { return Result::Err(error: e); }
             case Ok(value: n): {
-                if (n == cast<usize>(0)) { return Result::Ok(value: total); }   // EOF
-                int32 k = cast<int32>(n);
-                Result<Unit, IoError> wr = writeAll(w: to, bytes: scratch.slice(from: 0, count: k));
+                if (n == 0) { return Result::Ok(value: total); }   // EOF
+                Result<Unit, IoError> wr = writeAll(w: to, bytes: scratch.slice(from: 0, count: n));
                 match (wr) { case Err(error: e2): { return Result::Err(error: e2); } case Ok(value: _): {} };
                 total = total + n;
             }
@@ -73,7 +72,7 @@ fn Result<usize, IoError> pump(Reader from, Writer to) {
 // `encoding/json`'s buffer-a-value model); genuine record-streaming is a separate future API.
 fn Result<string, IoError> readAll(Reader r) {
     StringWriter sw = StringWriter.make();
-    Result<usize, IoError> pr = pump(from: r, to: sw);
+    Result<isize, IoError> pr = pump(from: r, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     return Result::Ok(value: sw.finish());
 }
@@ -88,22 +87,22 @@ type resource StringWriter implements Writer {
         this.buf = give b;
     }
 
-    public fn Result<usize, IoError> write(View<uint8> bytes) {
-        int32 n = bytes.length();
-        int32 i = 0;
+    public fn Result<isize, IoError> write(View<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
-        return Result::Ok(value: cast<usize>(n));
+        return Result::Ok(value: n);
     }
 
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 
     // How many bytes have accumulated so far.
-    public const fn int32 length() { return this.buf.length(); }
+    public const fn isize length() { return this.buf.length(); }
 
     // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
     public unsafe fn string finish() {
         if (this.buf.length() == 0) { return ""; }
-        return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: cast<int32>(this.buf.length()));
+        return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: this.buf.length());
     }
 
     // Move the accumulated bytes out as a raw `DynamicArray<uint8>`, leaving the writer empty. The byte-oriented
@@ -111,8 +110,8 @@ type resource StringWriter implements Writer {
     // so it must NOT go through `string`. Used by the binary serializer's `encode -> DynamicArray<uint8>`.
     public fn DynamicArray<uint8> takeBytes() {
         DynamicArray<uint8> taken = DynamicArray.empty();
-        int32 n = this.buf.length();
-        int32 i = 0;
+        isize n = this.buf.length();
+        isize i = 0;
         while (i < n) { taken.add(item: this.buf[i]); i = i + 1; }
         this.buf.clear();
         return give taken;
@@ -124,24 +123,24 @@ type resource StringWriter implements Writer {
 // buffer (the source itself is held whole — that is the caller's `string`, by design for the sugar path).
 type resource SliceReader implements Reader {
     string src;
-    int32 pos;
-    int32 len;
+    isize pos;
+    isize len;
 
     public ctor make(string src) {
-        this.len = cast<int32>(src.length());
+        this.len = src.length();
         this.src = give src;
         this.pos = 0;
     }
 
-    public fn Result<usize, IoError> read(View<uint8> into) {
-        int32 avail = this.len - this.pos;
-        if (avail <= 0) { return Result::Ok(value: cast<usize>(0)); }   // EOF
-        int32 want = into.length();
-        int32 k = avail < want ? avail : want;
-        int32 i = 0;
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        isize avail = this.len - this.pos;
+        if (avail <= 0) { return Result::Ok(value: 0); }   // EOF
+        isize want = into.length();
+        isize k = avail < want ? avail : want;
+        isize i = 0;
         while (i < k) { into[i] = this.src[this.pos + i]; i = i + 1; }
         this.pos = this.pos + k;
-        return Result::Ok(value: cast<usize>(k));
+        return Result::Ok(value: k);
     }
 }
 
@@ -153,7 +152,7 @@ type resource SliceReader implements Reader {
 type resource BufWriter<W: Writer> implements Writer {
     W inner;
     DynamicArray<uint8> buf;
-    int32 cap;
+    isize cap;
 
     public ctor make(W inner) {
         this.inner = give inner;
@@ -162,27 +161,27 @@ type resource BufWriter<W: Writer> implements Writer {
         this.cap = 4096;
     }
 
-    public fn Result<usize, IoError> write(View<uint8> bytes) {
-        int32 n = bytes.length();
-        int32 i = 0;
+    public fn Result<isize, IoError> write(View<uint8> bytes) {
+        isize n = bytes.length();
+        isize i = 0;
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
         if (this.buf.length() >= this.cap) {
             Result<Unit, IoError> fr = this.flush();
             match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
         }
-        return Result::Ok(value: cast<usize>(n));
+        return Result::Ok(value: n);
     }
 
     public fn Result<Unit, IoError> flush() {
-        int32 total = this.buf.length();
-        int32 off = 0;
+        isize total = this.buf.length();
+        isize off = 0;
         while (off < total) {
-            Result<usize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: off, count: total - off));
+            Result<isize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: off, count: total - off));
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
                     if (m == cast<usize>(0)) { return Result::Err(error: IoError::WouldBlock); }
-                    off = off + cast<int32>(m);
+                    off = off + cast<isize>(m);
                 }
             };
         }
@@ -196,8 +195,8 @@ type resource BufWriter<W: Writer> implements Writer {
 type resource BufReader<R: Reader> implements Reader {
     R inner;
     FixedArray<uint8> buf;
-    int32 pos;    // next unread byte in buf
-    int32 fill;   // count of valid bytes in buf
+    isize pos;    // next unread byte in buf
+    isize fill;   // count of valid bytes in buf
 
     public ctor make(R inner) {
         this.inner = give inner;
@@ -207,21 +206,21 @@ type resource BufReader<R: Reader> implements Reader {
         this.fill = 0;
     }
 
-    public fn Result<usize, IoError> read(View<uint8> into) {
+    public fn Result<isize, IoError> read(View<uint8> into) {
         if (this.pos >= this.fill) {
-            Result<usize, IoError> rr = this.inner.read(into: this.buf.view());
+            Result<isize, IoError> rr = this.inner.read(into: this.buf.view());
             match (rr) {
                 case Err(error: e): { return Result::Err(error: e); }
-                case Ok(value: n): { this.fill = cast<int32>(n); this.pos = 0; }
+                case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
             };
-            if (this.fill == 0) { return Result::Ok(value: cast<usize>(0)); }   // EOF
+            if (this.fill == 0) { return Result::Ok(value: 0); }   // EOF
         }
-        int32 avail = this.fill - this.pos;
-        int32 want = into.length();
-        int32 k = avail < want ? avail : want;
-        int32 i = 0;
+        isize avail = this.fill - this.pos;
+        isize want = into.length();
+        isize k = avail < want ? avail : want;
+        isize i = 0;
         while (i < k) { into[i] = this.buf[this.pos + i]; i = i + 1; }
         this.pos = this.pos + k;
-        return Result::Ok(value: cast<usize>(k));
+        return Result::Ok(value: k);
     }
 }

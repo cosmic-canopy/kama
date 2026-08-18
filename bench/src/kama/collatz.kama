@@ -9,7 +9,7 @@ fn uint64 collatz_len(uint64 n)
     }
     return steps;
 }
-fn int main()
+fn int32 main()
 {
     uint64 sum = 0;
     for (uint64 i = 1; i < 700000; i++)
@@ -17,5 +17,5 @@ fn int main()
         sum += collatz_len(n: i);
     }
     uint64 m = sum % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

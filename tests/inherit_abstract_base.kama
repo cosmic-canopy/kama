@@ -1,8 +1,8 @@
 import std::memory::{Owned};
 
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 // An `abstract` base: the shape where the base declares a seam a subclass MUST fill, which is the one
 // case with a clean contract equivalent — and therefore the case most worth pinning, since `virtual`
@@ -46,7 +46,7 @@ type final resource Doubler extends Codec
     unsafe ~Doubler() { kama_trace(code: 2); }
 }
 
-fn int main()
+fn int32 main()
 {
     int32 sum = 0;
     {

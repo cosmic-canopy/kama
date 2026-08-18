@@ -1,10 +1,10 @@
 // `copy` of a `DynamicArray<string>` is a deep, independent copy — clone and original own separate element
 // buffers, so both free cleanly. ASan-clean proves the independence (a shallow copy would double-free).
 import std::collections::{DynamicArray};
-fn int main() {
+fn int32 main() {
     DynamicArray<string> a = DynamicArray.empty(); a.add(item: "he" + "llo"); a.add(item: "hi");
     DynamicArray<string> b = copy a;
-    int32 t = 0;
-    foreach (string s in b) { t = t + cast<int32>(s.length()); }   // 5 + 2 = 7
-    return t;
+    isize t = 0;
+    foreach (string s in b) { t = t + s.length(); }   // 5 + 2 = 7
+    return cast<int32>(t);
 }

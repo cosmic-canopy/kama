@@ -1,12 +1,12 @@
 // `expose fn` gives a function a bare, unmangled, exported C-ABI symbol (KAMA_EXPORT) so a
 // host can resolve it (`dlsym` on a --shared lib, `Module._add` on wasm). It stays an
 // ordinary function to kama callers too — this call still resolves to the bare symbol.
-expose fn int add(int a, int b)
+expose fn int32 add(int32 a, int32 b)
 {
     return a + b;
 }
 
-fn int main()
+fn int32 main()
 {
     return add(a: 40, b: 2);
 }

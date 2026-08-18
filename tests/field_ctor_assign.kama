@@ -18,7 +18,7 @@ type resource Registry {
     public fn void put(int32 k, int32 v) { this.m.put(key: k, value: v); this.log.add(item: k); }
     public fn void reset() { this.m = Map.empty(); }                 // re-init: drops the old map, builds a fresh one
     public fn void moveOrigin(int32 x, int32 y) { this.origin = Point.of(x: x, y: y); }
-    public fn int32 score() { return this.m.length() + this.log.length() + this.origin.sum(); }
+    public fn int32 score() { return cast<int32>(this.m.length()) + cast<int32>(this.log.length()) + this.origin.sum(); }
 }
 
 fn int32 main() {
@@ -34,5 +34,5 @@ fn int32 main() {
     local = Map.empty();                                                 // re-init the local
     local.put(key: 8, value: 8); local.put(key: 7, value: 7);
 
-    return r.score() + local.length();   // (1 + 4 + 7) + 2 = 14
+    return r.score() + cast<int32>(local.length());   // (1 + 4 + 7) + 2 = 14
 }

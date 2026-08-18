@@ -27,7 +27,7 @@ type value ByValue implements Order<Tag> {
     }
 }
 
-fn int main() {
+fn int32 main() {
     DynamicArray<Tag> ts = DynamicArray::<Tag>.empty();
     ts.add(item: Tag.make(n: 4));
     ts.add(item: Tag.make(n: 1));

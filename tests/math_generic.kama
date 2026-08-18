@@ -6,7 +6,7 @@
 import std::math::{sqrt, pow, floor, ceil, round, trunc, abs, exp, log, log2, log10,
                    sin, cos, atan2, hypot, fmod, cbrt};
 
-fn int main() {
+fn int32 main() {
     int32 t = 0;
     if (sqrt(x: 144.0) == 12.0) { t = t + 1; }
     if (pow(x: 2.0, y: 10.0) == 1024.0) { t = t + 1; }

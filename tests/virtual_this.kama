@@ -3,16 +3,16 @@
 type virtual(maxDepth: 1) resource Shape
 {
     public ctor make() { }
-    public fn int describe() { return this.area(); }
-    protected virtual fn int area() { return 1; }
+    public fn int32 describe() { return this.area(); }
+    protected virtual fn int32 area() { return 1; }
 }
 type final resource Circle extends Shape
 {
-    int r;
-    public ctor make(int r) { this.base = Base.make(); this.r = r; }
-    protected override fn int area() { return r * r; }
+    int32 r;
+    public ctor make(int32 r) { this.base = Base.make(); this.r = r; }
+    protected override fn int32 area() { return r * r; }
 }
-fn int main()
+fn int32 main()
 {
     Circle c = Circle.make(r: 7);
     return c.describe();

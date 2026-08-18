@@ -24,7 +24,7 @@ fn void scan(Shared<Asset> s) {
     }
 }
 
-fn int main() {
+fn int32 main() {
     Vec3 lo = Vec3.make(a: 1i32, b: 2i32, c: 3i32);
     Vec3 hi = Vec3.make(a: 4i32, b: 5i32, c: 6i32);
     Shared<Asset> a = new Asset.make(lo: lo, hi: hi, tag: 42i32);

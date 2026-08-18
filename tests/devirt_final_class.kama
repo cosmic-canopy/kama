@@ -19,7 +19,7 @@ type final resource Cat extends Animal
     protected override fn int32 noise() { return 7; }
     protected override fn int32 meowImpl() { return this.noise(); }   // `this` is a Cat -> direct Cat__noise
 }
-fn int main()
+fn int32 main()
 {
     Cat c = Cat.make();
     return c.meow();

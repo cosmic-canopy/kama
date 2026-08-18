@@ -3,7 +3,7 @@ fn uint64 fib(uint64 n)
     if (n < 2) { return n; }
     return fib(n: n - 1) + fib(n: n - 2);
 }
-fn int main()
+fn int32 main()
 {
     uint64 sum = 0;
     for (uint64 i = 0; i < 32; i++)
@@ -11,5 +11,5 @@ fn int main()
         sum += fib(n: i);
     }
     uint64 m = sum % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

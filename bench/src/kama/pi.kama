@@ -1,4 +1,4 @@
-fn int main()
+fn int32 main()
 {
     float64 pi = 0.0;
     float64 sign = 1.0;
@@ -11,5 +11,5 @@ fn int main()
     float64 scaled = pi * 4000000000.0;
     uint64 check = cast<uint64>(scaled);
     uint64 m = check % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

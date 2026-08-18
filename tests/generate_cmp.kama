@@ -46,7 +46,7 @@ fn int32 main() {
     counts.put(key: red, value: 4);
     counts.put(key: blue, value: 6);
     counts.put(key: red2, value: 10);            // equal key -> overwrite, not a third entry
-    r = r + counts.length();                      // 2
+    r = r + cast<int32>(counts.length());                      // 2
     int32 got = match (counts.get(key: red)) { case Some(value: v): v; case None: 0; };
     r = r + got;                                  // 10
 
@@ -55,7 +55,7 @@ fn int32 main() {
     palette.add(key: red);
     palette.add(key: red2);                       // equal -> deduped
     palette.add(key: blue);
-    r = r + palette.length();                     // 2
+    r = r + cast<int32>(palette.length());                     // 2
 
     // Composition: the string field and the nested user field each dispatch to their own equals.
     Swatch a = Swatch.make(name: "warm", color: red);
@@ -69,5 +69,5 @@ fn int32 main() {
     Session s2 = Session.of(id: 9, nonce: 2);
     if (s1 == s2) { r = r + 1; }
 
-    return r;   // 2 + 2 + 10 + 2 + 2 + 1 = 19
+    return cast<int32>(r);   // 2 + 2 + 10 + 2 + 2 + 1 = 19
 }

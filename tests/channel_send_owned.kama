@@ -16,7 +16,7 @@ fn void producer(Sender<Owned<Box>> tx) {
     tx.send(item: give b);   // the unique box pointer relocates into the queue
 }
 
-fn int main() {
+fn int32 main() {
     Channel<Owned<Box>> ch = Channel.bounded(capacity: 2);
     Sender<Owned<Box>>   tx = ch.sender();
     Receiver<Owned<Box>> rx = ch.receiver();

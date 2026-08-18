@@ -1,7 +1,7 @@
 // The mandatory `msg:` is appended after the auto-stringified condition:
 // "assertion failed: <cond> — <msg> (file:line)". Here the `.msg` matches the user-message part.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     int32 zero = int32Max() - int32Max();   // 0, opaque
     assert(cond: zero == 1, msg: "expected one");   // false -> abort
     return 0;   // unreachable

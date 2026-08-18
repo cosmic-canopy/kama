@@ -23,7 +23,7 @@ fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it
     p.run();
 }
 
-fn int main() {
+fn int32 main() {
     int32 result = 0;
     Payload p = Payload.make(dst: ref result, value: 42i32);
     scope {

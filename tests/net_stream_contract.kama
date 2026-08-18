@@ -8,19 +8,19 @@ import std::collections::{DynamicArray, FixedArray, View};
 // Drive the ReliableStream's Writer primitive to completion through the erased contract (dynamic dispatch on
 // `write`). ReliableStream refines Reader+Writer, so `write`/`read` dispatch through the same fat pointer.
 fn int32 writeVia(ReliableStream s, View<uint8> bytes) {
-    int32 total = bytes.length();
-    int32 off = 0;
+    isize total = bytes.length();
+    isize off = 0;
     while (off < total) {
-        Result<usize, IoError> r = s.write(bytes: bytes.slice(from: off, count: total - off));
+        Result<isize, IoError> r = s.write(bytes: bytes.slice(from: off, count: total - off));
         match (r) {
-            case Ok(value: n): { if (n == cast<usize>(0)) { return -1; } off = off + cast<int32>(n); }
+            case Ok(value: n): { if (n == 0) { return -1; } off = off + n; }
             case Err(error: e): { return -1; }
         };
     }
-    return total;
+    return cast<int32>(total);
 }
 fn int32 readVia(ReliableStream s, View<uint8> into) {
-    Result<usize, IoError> r = s.read(into: into);
+    Result<isize, IoError> r = s.read(into: into);
     return match (r) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
 }
 
@@ -40,7 +40,7 @@ fn int32 clientSend(uint16 port) {
 
 fn int32 serverRecv(ref TcpStream srv) {
     FixedArray<uint8> buf = FixedArray.make(size: 256);
-    int32 total = 0;
+    isize total = 0;
     int32 sum = 0;
     bool done = false;
     while (!done) {
@@ -59,7 +59,7 @@ fn int32 run(ref TcpListener l, uint16 port) {
     return match (ra) { case Ok(value: srv): serverRecv(srv: srv); case Err(error: e): 42; };
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47663);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);

@@ -1,5 +1,5 @@
 import Graphics as Gfx;                          // module alias
-fn int main()
+fn int32 main()
 {
     Gfx::Texture t = Gfx::Texture.make(id: 20);  // alias-qualified type
     return t.get() + Gfx::scale(x: 11);          // 20 + 22 = 42

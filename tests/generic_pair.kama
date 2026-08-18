@@ -9,7 +9,7 @@ type value Pair<A, B>
     public fn A getFirst() { return this.first; }
     public fn B getSecond() { return this.second; }
 }
-fn int main()
+fn int32 main()
 {
     Pair<int32, float64> p = Pair.make(a: 7, b: 2.5);   // Pair_int32_float64
     int32   x = p.getFirst();                       // 7

@@ -20,7 +20,7 @@ comptime fn InlineArray<uint8, 256> crcTable() {
 
 comptime InlineArray<uint8, 256> CRC = crcTable();   // baked: static const InlineArray_uint8_256 CRC = {.v={…}};
 
-fn int main() {
+fn int32 main() {
     int32 mismatches = 0;
     for (int32 i = 0; i < 256; i = i + 1) {
         uint8 c = cast<uint8>(i);

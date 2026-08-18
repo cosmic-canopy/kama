@@ -9,14 +9,14 @@ type value Node {
         this.id = id; this.parent = parent; this.next = next;
     }
 }
-fn int main() {
+fn int32 main() {
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
     Node n = Node.make(id: 7, parent: par, next: nx);
     Result<string, Owned<Error>> j_r = encode(v: n);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     if (j == "{\"id\":7,\"parent\":3,\"next\":null}") { return 0; }
-    int32 k = cast<int32>(j.length());
+    isize k = j.length();
     if (k == 0) { return 255; }
-    return k;
+    return cast<int32>(k);
 }

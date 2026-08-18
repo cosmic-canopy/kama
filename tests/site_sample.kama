@@ -60,7 +60,7 @@ type resource Blade
     ~Blade() { }   // runs here, deterministically, when the owner goes out of scope
 }
 
-fn int main()
+fn int32 main()
 {
     Steel steel = Steel.make(carbon: 3);
 

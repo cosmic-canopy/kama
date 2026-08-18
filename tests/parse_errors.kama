@@ -11,7 +11,7 @@ fn int32 kindOf(ref string s) {
     };
 }
 
-fn int main() {
+fn int32 main() {
     string empty   = "";
     string garbage = "abc";
     string partial = "12x";          // strict: a trailing byte is an error, not a prefix parse

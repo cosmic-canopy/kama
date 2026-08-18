@@ -21,7 +21,7 @@ fn int32 twice(int32 v) { return v * 2; }
 
 fn int32 applyScorer(Scorer f, int32 v) { return f(v: v); }                                     // (3)
 
-fn int main()
+fn int32 main()
 {
     int32 a = pickFirst(a: 20, b: 99);
     Tally t = Tally.make(total: 1).merge(other: Tally.make(total: 1));

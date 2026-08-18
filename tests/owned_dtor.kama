@@ -1,8 +1,8 @@
 import std::memory::{Owned};
 // Owned<T> RAII: the heap pointee's destructor fires exactly once on drop.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -11,14 +11,14 @@ type resource Probe
     unsafe ~Probe() { kama_trace(code: 7); }
 }
 
-fn int build()
+fn int32 build()
 {
     Owned<Probe> p = new Probe.make(id: 1);
     return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
 }
 
-fn int main()
+fn int32 main()
 {
-    int r = build();
+    int32 r = build();
     return traceGet();   // fold(7) = 7
 }

@@ -38,7 +38,7 @@ fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
     };
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47664);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);

@@ -42,11 +42,11 @@ type enum ParseError implements Error {
 // also what lets a signed minimum parse: |int64Min| is one past int64Max and has no signed counterpart.
 // ---------------------------------------------------------------------------------------------------
 
-fn Result<uint64, ParseError> parseDigits(ref string s, int32 from, uint64 limit, uint64 radix) {
-    int32 n = s.length();
+fn Result<uint64, ParseError> parseDigits(ref string s, isize from, uint64 limit, uint64 radix) {
+    isize n = s.length();
     if (from >= n) { return Result::Err(error: ParseError::InvalidDigit); }
     uint64 acc = 0ui64;
-    int32 i = from;
+    isize i = from;
     while (i < n) {
         uint8 c = s[i];
         uint64 d = 0ui64;
@@ -68,7 +68,7 @@ fn Result<int64, ParseError> parseSigned(ref string s, uint64 negLimit, uint64 p
     if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
     uint8 c0 = s[0];
     bool neg = c0 == 45ui8;
-    int32 from = (neg || c0 == 43ui8) ? 1 : 0;
+    isize from = (neg || c0 == 43ui8) ? 1 : 0;
     uint64 limit = neg ? negLimit : posLimit;
     Result<uint64, ParseError> r = parseDigits(s: s, from: from, limit: limit, radix: radix);
     uint64 acc = match (r) {
@@ -85,7 +85,7 @@ fn Result<uint64, ParseError> parseUnsigned(ref string s, uint64 posLimit, uint6
     if (s.length() == 0) { return Result::Err(error: ParseError::Empty); }
     uint8 c0 = s[0];
     if (c0 == 45ui8) { return Result::Err(error: ParseError::InvalidDigit); }   // no sign on an unsigned
-    int32 from = c0 == 43ui8 ? 1 : 0;
+    isize from = c0 == 43ui8 ? 1 : 0;
     return parseDigits(s: s, from: from, limit: posLimit, radix: radix);
 }
 

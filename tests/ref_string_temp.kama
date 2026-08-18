@@ -1,14 +1,14 @@
 // A string RVALUE (literal / concat / call result) binds to a `ref string` borrow: the emitter
 // materializes a scope-freed temp so `&temp` is legal C, the callee borrows read-only, no leak.
 // A named lvalue keeps its direct `&`. Returns 16.
-fn int32 slen(ref string s) { return cast<int32>(s.length()); }
+fn isize slen(ref string s) { return s.length(); }
 fn string mk() { return "abcd"; }
 
-fn int main() {
+fn int32 main() {
     string pre = "xy";
-    int32 a = slen(s: "hello");         // 5  — literal
-    int32 b = slen(s: pre + "zzz");     // 5  — concat rvalue
-    int32 c = slen(s: mk());            // 4  — call result
-    int32 d = slen(s: pre);             // 2  — named lvalue (unchanged path)
-    return a + b + c + d;               // 16
+    isize a = slen(s: "hello");         // 5  — literal
+    isize b = slen(s: pre + "zzz");     // 5  — concat rvalue
+    isize c = slen(s: mk());            // 4  — call result
+    isize d = slen(s: pre);             // 2  — named lvalue (unchanged path)
+    return cast<int32>(a + b + c + d);               // 16
 }

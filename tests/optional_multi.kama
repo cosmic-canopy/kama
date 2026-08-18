@@ -1,8 +1,8 @@
-fn int main()
+fn int32 main()
 {
     Optional<int32>   a = Optional::Some(value: 7);
     Optional<float64> b = Optional::Some(value: 2.5);
     int32 x = match (a) { case Some(value: v): v; case None: 0; };
     float64 y = match (b) { case Some(value: v): v; case None: 0.0; };
-    return x + cast<int>(y);
+    return x + cast<int32>(y);
 }

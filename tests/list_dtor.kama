@@ -6,18 +6,18 @@ import std::collections::{DynamicArray};
 // MOVES on a bare hand-off — so each source local (a,b,c) is moved INTO the list and its
 // own dtor is suppressed (no double-drop). Only the 3 list elements destruct: ~[1,2,4] ->
 // fold ((1*31+2)*31+4)=1027 -> exit 1027 & 0xFF = 3.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
-    int id;
-    public ctor make(int id) { this.id = id; }
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
     unsafe ~Probe() { kama_trace(code: id); }
 }
 
-fn int build()
+fn int32 build()
 {
     DynamicArray<Probe> xs = DynamicArray.empty();
     Probe a = Probe.make(id: 1);
@@ -30,8 +30,8 @@ fn int build()
     // scope exit: a,b,c were moved into xs (dtors suppressed); xs -> ~[1,2,4]
 }
 
-fn int main()
+fn int32 main()
 {
-    int r = build();
+    int32 r = build();
     return traceGet();
 }

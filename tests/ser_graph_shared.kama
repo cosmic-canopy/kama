@@ -15,7 +15,7 @@ type resource Pair {
     public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
 }
 
-fn int main() {
+fn int32 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                    // second owner of the SAME leaf
     Pair p = Pair.make(a: give leaf, b: give l2);

@@ -3,7 +3,7 @@
 // (`kama check` and the LSP share the analysis path, so a silent pass here means the editor shows a
 // clean file that then fails to build.) The sibling case — a type that EXISTS but isn't imported — is
 // reported with the namespace to import; see checkTypeResolves.
-fn int main()
+fn int32 main()
 {
     Nonexistent thing = 0;
     return 42;

@@ -16,7 +16,7 @@ type resource Holder {
     }
     public fn int32 total() { return this.a.get() + this.b.get(); }
 }
-fn int main() {
+fn int32 main() {
     Owned<Box> a = new Box.make(v: 10);
     Shared<Box> b = new Box.make(v: 20);
     Holder h = Holder.make(a: give a, b: give b);

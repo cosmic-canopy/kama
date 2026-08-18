@@ -6,7 +6,7 @@ fn Optional<DynamicArray<int32>> takeIf(bool cond, DynamicArray<int32> xs) {
     if (cond) { return Optional::Some(value: give xs); }
     return Optional::None;
 }
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 40); a.add(item: 2);
 

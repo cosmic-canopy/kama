@@ -17,9 +17,10 @@ borrow — a slice/span), or `type contract` (an interface).
 
 | kama | C |
 |---|---|
-| `int8 int16 int32/int int64` | `int8_t … int64_t` |
+| `int8 int16 int32 int64` | `int8_t … int64_t` |
 | `uint8 uint16 uint32 uint64` | `uint8_t … uint64_t` |
-| `float32` / `float64`/`double` | `float` / `double` |
+| `isize` / `usize` | `ptrdiff_t` / `size_t` — the ONLY platform-varying types (8 bytes on x86_64/arm64, 4 on wasm32/thumbv6m) |
+| `float32` / `float64` | `float` / `double` |
 | `bool` | `bool` |
 | `string` | `kama_string` (borrowed view or heap-owned RAII string) |
 | `void` | `void` |
@@ -271,7 +272,7 @@ DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
 borrow verts.view() as all {                            // a WINDOW — `verts` is frozen inside it
     View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
     foreach (ref float32 x in mid) { x = x * 2.0; }     // mutate-through: writes back to `verts`
-    int32 n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
+    isize n = mid.length();   float32 first = mid[0];   // bounds-checked index (a place)
 }
 uploadToGpu(window: verts.slice(from: 0, count: 3));    // pass a subrange down — no copy, no window needed
 verts.add(item: 1.0);                                   // mutable again: the window has closed
@@ -420,7 +421,7 @@ Map<string, int32> counts = Map.empty();
 counts.put(key: "a", value: 1);
 counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
 int32 v = match (counts.get(key: "a")) { case Some(value: x): x; case None: 0; };   // 2
-counts.remove(key: "a");   bool has = counts.contains(key: "b");   int32 n = counts.length();
+counts.remove(key: "a");   bool has = counts.contains(key: "b");   isize n = counts.length();
 
 Set<string> seen = Set.empty();
 seen.add(key: "x");   bool member = seen.contains(key: "x");
@@ -1017,6 +1018,38 @@ are all conversions. What is **not** a conversion, and needs no cast:
 
 A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
 cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`).
+
+### `isize` is the size type; `usize` is the C ABI
+
+**A length, a count and an index are an `isize`** — every collection's `length()`/`count()`, every
+`operator[]`, every index parameter, `string`/`Fixed`/`View` included. `usize` is reserved for quantities
+crossing into C: `sizeof`, an allocation size, an `extern fn` mirroring a `size_t`.
+
+`isize`/`usize` are the **only** platform-varying types in the language (`ptrdiff_t`/`size_t` — 8 bytes on
+x86_64/arm64, 4 on wasm32/thumbv6m), which is why they keep `size` in their names: the name is what says a
+crossing to a fixed width needs a cast, and `isize → int32` is a genuine narrowing on a 64-bit host.
+
+The size type is **signed**, which is the part that is easy to get wrong. The intuition says a length
+cannot be negative, so make it unsigned — but unsigned does not *prevent* the invalid state, it makes it
+*unrepresentable*, so an erroneous negative becomes an enormous positive instead of an obvious `-1`:
+
+```kama
+usize len = 0;   usize last = len - 1;    // 18446744073709551615 — silently
+isize len = 0;   isize last = len - 1;    // -1, which fails `< length` and trips a bounds check
+```
+
+kama traps signed overflow in every build and lets unsigned wrap (it is defined), so `usize` would put the
+most common length expression, `len - 1`, in the one arithmetic domain with no protection. The collections
+already relied on signedness: `operator[]` bounds-checks `i < 0 || i >= len`, a test that cannot be written
+against an unsigned index. Go's `len() -> int`, Swift's `Int`, Python's `Py_ssize_t` (PEP 353) and C++20's
+`std::ssize()` all landed in the same place; the unsigned camp (C, C++, Rust, Zig) predates the lesson.
+
+**Bare `int` is not a kama type.** It was an alias for `int32` carrying no information of its own, and a
+reader coming from C or Go would expect a *platform* width from the name — the opposite of what it meant.
+Write `int32` for a fixed 32-bit integer, or `isize` for a size. **`double` is gone the same way** — it
+aliased `float64`, and every kama float states its width. Neither `uint` nor `float` ever existed, but both
+get the same diagnostic, because a C or Go reader will try them and "unknown type" would send them hunting
+for a missing import instead of a different spelling.
 
 Where kama cannot be certain of a type it says nothing rather than guessing — a type parameter, a
 const-generic parameter, a `foreach` binding, a `borrow` alias, an `extern fn` result.
@@ -1785,7 +1818,7 @@ declared **`type resource`** and is move-only:
 type resource Buffer {
     DynamicArray<byte> data;                                 // owns heap → resource; fields stay private
     public ctor make(int n) { … }
-    public fn int32 size() { return this.data.length(); }
+    public fn isize size() { return this.data.length(); }
 }
 ```
 
@@ -2360,7 +2393,7 @@ type intrinsic <string> implements Hashable {        // a primitive gains a cont
     public fn uint64 hash() {
         uint64 h = 2166136261ui64;                   // FNV-1a
         int32 i = 0;
-        while (i < cast<int32>(this.length())) { h = (h ^ cast<uint64>(this[i])) * 16777619ui64; i = i + 1; }
+        while (i < this.length()) { h = (h ^ cast<uint64>(this[i])) * 16777619ui64; i = i + 1; }
         return h;
     }
 }

@@ -2,7 +2,7 @@
 // survives at both widths (unlike the lenient reader the JSON path uses, which folds everything to 0.0).
 import std::fmt::{parse, ParseError};
 
-fn int main() {
+fn int32 main() {
     string a = "3.5";
     string b = "-0.25";
     string c = "1e3";

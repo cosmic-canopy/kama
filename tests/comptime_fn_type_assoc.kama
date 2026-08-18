@@ -27,7 +27,7 @@ type value Squares {
 comptime InlineArray<int32, 8> SQ = Squares::table();   // baked: 0,1,4,9,16,25,36,49
 comptime int32 SUM7 = Squares::sumTo(n: 7);             // 28
 
-fn int main() {
+fn int32 main() {
     int32 acc = 0;
     for (int32 i = 0; i < 8; i = i + 1) { acc = acc + SQ.get(index: i); }   // 0+1+4+9+16+25+36+49 = 140
     return acc - SUM7 - 39;                                                  // 140 - 28 - 39 = 73

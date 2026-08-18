@@ -15,7 +15,7 @@ export { relocate };
 // Move `from[at]` OUT of raw storage into `into`, bitwise. The source slot is left STALE — it still holds
 // the bytes, so the caller must vacate it (tombstone the entry, decrement the length) or the value will be
 // dropped twice. `into` is an `out` parameter, so the caller declares a `slot` and the fill is proven here.
-unsafe fn void relocate<T>(UnsafePtr<T> from, int32 at, out T into) {
+unsafe fn void relocate<T>(UnsafePtr<T> from, isize at, out T into) {
     debugAssert(cond: from != null, msg: "relocate: null source buffer");
     UnsafePtr<T> d = addr(of: into);
     d[0] = from[at];

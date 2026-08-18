@@ -10,7 +10,7 @@ type resource Payload {
 
 fn void worker(Payload p) { int32 x = p.value; }
 
-fn int main() {
+fn int32 main() {
     Payload p = Payload.make(value: 1i32);
     spawn worker(p: give p);   // ERROR: bare `spawn` outside a `scope { }`
     return 0;

@@ -7,7 +7,7 @@ type value Circle implements Shape {
     public fn int64 area() { return r * r; }
 }
 fn int64 read(ref Shape sh) { return sh.area(); }
-fn int main() {
+fn int32 main() {
     Circle c = Circle.make(r: 6);
-    return cast<int>(read(sh: ref c));   // ERROR: ref a concrete Circle to `ref Shape`
+    return cast<int32>(read(sh: ref c));   // ERROR: ref a concrete Circle to `ref Shape`
 }

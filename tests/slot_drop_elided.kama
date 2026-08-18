@@ -24,7 +24,7 @@ fn int32 run(bool early) {
     return t.value();                          // live here          -> dtor at this exit
 }
 
-fn int main() {
+fn int32 main() {
     int32 a = run(early: true);                // returns 0, drops nothing
     int32 b = run(early: false);               // returns 1, drops exactly once
     return (drops == 1 && a == 0 && b == 1) ? 7 : 99;

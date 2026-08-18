@@ -4,7 +4,7 @@ fn int32 main() {
     string a = "ab";
     string owned = a.concat(other: a);   // "abab", heap-owned (cap>0)
     string b = copy owned;               // deep copy of a heap-owned string
-    int32 r = owned.length();            // 4  (source still valid)
+    isize r = owned.length();            // 4  (source still valid)
     r = r + b.length();                  // + 4 = 8
-    return r;
+    return cast<int32>(r);
 }

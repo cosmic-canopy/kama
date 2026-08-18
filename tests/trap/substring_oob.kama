@@ -1,9 +1,9 @@
 // substring with an end past the string length (or start > end) traps via the same clean bounds abort
 // as indexing. The range is built from an opaque source so it isn't folded.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     string s = "abc";
-    int32 end = int32Max() - int32Max() + 99;      // 99, opaque; past length 3
-    string sub = s.substring(start: 0, end: cast<usize>(end));   // out-of-range -> bounds trap
+    isize end = cast<isize>(int32Max() - int32Max() + 99);      // 99, opaque; past length 3
+    string sub = s.substring(start: 0, end: end);   // out-of-range -> bounds trap
     return cast<int32>(sub.length());
 }

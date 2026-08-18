@@ -1,5 +1,5 @@
 type enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
-fn int main()
+fn int32 main()
 {
     Shape s = Shape::Rect(w: 3.0, h: 4.0);
     float64 area = match (s) {
@@ -7,5 +7,5 @@ fn int main()
         case Rect(w: w, h: h): w * h;
         case Empty: 0.0;
     };
-    return cast<int>(area);
+    return cast<int32>(area);
 }

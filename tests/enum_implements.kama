@@ -38,12 +38,12 @@ type enum ParseError : uint8 implements Error {
 }
 
 // One monomorphic function over the base contract — the vtbl is what makes `.message()` dynamic.
-fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }
+fn isize describe(Error e) { string m = e.message(); return m.length(); }
 
 fn int32 main() {
     IoError a    = IoError::NotFound;
     ParseError b = ParseError::BadToken;
     IoError c    = IoError::Denied;
     // 2*100 + 3*10 + 6 = 236 — only correct if each dispatched to its own impl.
-    return describe(e: a) * 100 + describe(e: b) * 10 + describe(e: c);
+    return cast<int32>(describe(e: a) * 100 + describe(e: b) * 10 + describe(e: c));
 }

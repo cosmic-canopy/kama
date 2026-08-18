@@ -4,7 +4,7 @@
 // with the key (`iterator()`) and value (`values()`) iterators.
 import std::collections::{Map, Entry};
 
-fn int main() {
+fn int32 main() {
     // (a) int32 -> int32: sum key+value across every entry.
     Map<int32, int32> m = Map.empty();
     m.put(key: 1, value: 10);

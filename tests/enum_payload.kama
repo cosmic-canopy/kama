@@ -5,11 +5,11 @@ type enum Shape
     Empty
 }
 type enum Tag : uint8 { A, B, C }
-fn int main()
+fn int32 main()
 {
     Shape a = Shape::Circle(radius: 2.0);
     Shape b = Shape::Rect(w: 3.0, h: 4.0);
     Shape e = Shape::Empty;
     Tag t = Tag::C;
-    return cast<int>(t);
+    return cast<int32>(t);
 }

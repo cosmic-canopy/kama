@@ -2,14 +2,14 @@
 // declares a local `InlineArray<int32, (N+1)>` — one slot bigger than its input — and a `[v; (N+1)]` fill,
 // both resolving `N+1` via the param binding. Before 6b-1 the `N+1` size silently failed to register
 // (constValue couldn't fold it), surfacing later as an obscure error; now it monomorphizes to size N+1.
-fn int32 padSum<const N: int>(InlineArray<int32, N> a) {
+fn int32 padSum<const N: int32>(InlineArray<int32, N> a) {
     InlineArray<int32, (N + 1)> buf = [0; (N + 1)];   // type size AND fill count both fold N+1
     int32 i = 0;
     foreach (int32 e in a) { buf[i] = e; i = i + 1; }
     buf[i] = 100;                                     // the extra padding slot
-    int32 t = 0;
+    isize t = 0;
     foreach (int32 e in buf) { t = t + e; }
-    return t + cast<int32>(buf.length());             // length() == N+1
+    return cast<int32>(t + buf.length());             // length() == N+1
 }
 fn int32 main() {
     InlineArray<int32, 3> v = [4, 5, 6];              // N = 3

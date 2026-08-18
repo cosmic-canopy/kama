@@ -18,7 +18,7 @@
     public ctor make(string name, int32 n) { this.name = give name; this.n = n; }
 }
 
-fn int main() {
+fn int32 main() {
     int32 r = 0;
 
     Stat s = Stat.of(hp: 30i32, alive: true);

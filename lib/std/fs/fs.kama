@@ -111,16 +111,16 @@ type resource File implements Reader, Writer {
 
     // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
     public unsafe fn Result<usize, IoError> writeAll(ref DynamicArray<uint8> bytes) {
-        int32 total = cast<int32>(bytes.length());
-        int32 off = 0;
+        isize total = bytes.length();
+        isize off = 0;
         while (off < total) {
-            int32 remaining = total - off;
+            isize remaining = total - off;
             isize n = kama_write(fd: this.fd, buf: addr(of: bytes[off]), n: cast<usize>(remaining));
             if (n < 0) {
                 if (kama_last_error() == kama_EINTR()) { continue; }
                 return Result::Err(error: lastError());
             }
-            off = off + cast<int32>(n);
+            off = off + n;
         }
         return Result::Ok(value: cast<usize>(total));
     }

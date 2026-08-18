@@ -39,7 +39,7 @@ type value Line {
     }
 }
 
-fn int main() {
+fn int32 main() {
     // good input -> the override reads both Points, round-trips to Ok
     Line ln = Line.make(start: Point.make(x: 30, y: 12), end: Point.make(x: 3, y: 5));
     Result<string, Owned<Error>> j_r = encode(v: ln);

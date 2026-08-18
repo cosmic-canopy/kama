@@ -17,7 +17,7 @@ type resource Rec {
         return s;
     }
 }
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> tg = DynamicArray.empty(); tg.add(item: 5); tg.add(item: 6);
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;

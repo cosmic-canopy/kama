@@ -62,7 +62,7 @@ fn int32 connectDead(uint16 port) {
     return rc;
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 live = cast<uint16>(47662);
     uint16 dead = cast<uint16>(47669);                 // nothing bound here

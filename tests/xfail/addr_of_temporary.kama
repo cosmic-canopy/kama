@@ -3,11 +3,11 @@
 // `addr` handler (the guard above it was identical and returned first), so it had never fired: the call
 // below used to compile, and only the C compiler complained — about generated code.
 fn int32 five() { return 5; }
-unsafe fn int run() {
+unsafe fn int32 run() {
     UnsafePtr<int32> p = addr(of: five());   // ERROR: not a place
     return p[0];
 }
 
 // The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
 // (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn int main() { return run(); }
+fn int32 main() { return run(); }

@@ -11,4 +11,4 @@ type final resource Leaf extends Base {
     public ctor make(int32 own) { this.own = own; }   // no `this.base = …`
     protected override fn int32 tag() { return this.own; }
 }
-fn int main() { Leaf l = Leaf.make(own: 1); return l.rank(); }
+fn int32 main() { Leaf l = Leaf.make(own: 1); return l.rank(); }

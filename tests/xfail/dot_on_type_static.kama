@@ -4,4 +4,4 @@ type value Plain {
     public ctor make() { }
     public static fn int32 tag() { return 5; }
 }
-fn int main() { return Plain.tag(); }
+fn int32 main() { return Plain.tag(); }

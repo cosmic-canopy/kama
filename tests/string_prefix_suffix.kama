@@ -1,5 +1,5 @@
 // `startsWith(prefix:)` / `endsWith(suffix:)` — true/false, empty and whole-string cases.
-fn int main() {
+fn int32 main() {
     string s = "hello";
     int32 r = 0;
     if (s.startsWith(prefix: "he")) { r = r + 1; }

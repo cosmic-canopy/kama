@@ -11,7 +11,7 @@ type value Square implements Shape {
 }
 fn void swapTo(out Shape sh, Shape other) { sh = other; }   // reseat the caller's handle
 fn int64 read(ref Shape sh) { return sh.area(); }
-fn int main() {
+fn int32 main() {
     Circle c = Circle.make(r: 6);
     Square q = Square.make(s: 5);
     Shape s = c;
@@ -19,5 +19,5 @@ fn int main() {
     swapTo(sh: out s, other: q);  // now s holds the square — `out` reseats, so the call site says `out`
     int64 b = read(sh: ref s);     // 25
     int64 total = a + b;           // 61
-    return cast<int>(total);
+    return cast<int32>(total);
 }

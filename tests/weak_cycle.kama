@@ -17,7 +17,7 @@ type resource Node {
     public fn int32 val() { return this.data[0]; }
 }
 
-fn int main() {
+fn int32 main() {
     Shared<Node> a = new Node.make(v: 10);
     Shared<Node> b = new Node.make(v: 20);
     b.setBack(w: a.downgrade());                        // b -> a (weak back-edge)

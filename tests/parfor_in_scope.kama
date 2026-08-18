@@ -7,7 +7,7 @@ import std::collections::{DynamicArray, View};
 
 fn void bump(ref int32 x) { x = x + 100; }
 
-fn int main() {
+fn int32 main() {
     int32 side = 0;
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
@@ -21,7 +21,7 @@ fn int main() {
     }                                                  // scope barrier: `bump` joined here
 
     int32 s = side;                                    // 100
-    int32 j = 0;
+    isize j = 0;
     while (j < a.length()) { s = s + a[j]; j = j + 1; }   // 100 + 6*2 = 112
-    return s % 256;                                       // 112
+    return cast<int32>(s % 256);                                       // 112
 }

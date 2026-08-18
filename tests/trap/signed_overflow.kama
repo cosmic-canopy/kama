@@ -1,7 +1,7 @@
 // Signed integer overflow traps in a debug build (the accidental-overflow guard); a release build wraps
 // it instead, so this asserts the default debug behavior the suite builds with. Operands are opaque.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     int32 m = int32Max();
     int32 one = int32Max() - int32Max() + 1;   // 1, opaque
     return m + one;                             // int32Max + 1 overflows -> trap (debug)

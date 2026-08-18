@@ -56,7 +56,7 @@ fn int32 runServer(ref TcpListener listener, uint16 port, int32 n) {
     return match (ra) { case Ok(value: server): serverRecv(s: server, expectSum: sentSum, expectLen: n); case Err(error: e): 86; };
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47654);
     int32 n = 8000;

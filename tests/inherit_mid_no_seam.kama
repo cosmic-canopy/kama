@@ -29,7 +29,7 @@ type final resource Leaf extends Mid
     protected override fn int32 hook() { return this.b_() + 100; }   // fills the ROOT's seam
 }
 
-fn int main()
+fn int32 main()
 {
     Leaf l = Leaf.make();
     return l.total();                                       // 1 + (20 + 100) = 121

@@ -1,9 +1,9 @@
 import std::memory::{Shared, Weak};
 // Weak<T> RAII: a weak doesn't keep the pointee alive and doesn't double-free or
 // leak the control block. One construction, one destruction despite the weak ref.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -12,7 +12,7 @@ type resource Probe
     unsafe ~Probe() { kama_trace(code: 2); }
 }
 
-fn int build()
+fn int32 build()
 {
     Shared<Probe> a = new Probe.make(id: 9);   // construct -> 1 (strong=1)
     Weak<Probe> w = a.downgrade();                 // weak=1 (does not keep alive)
@@ -21,8 +21,8 @@ fn int build()
     //             ~a (strong 1->0: ~Probe -> 2; weak==0: free ctrl)
 }
 
-fn int main()
+fn int32 main()
 {
-    int r = build();
+    int32 r = build();
     return traceGet();   // fold(1,2) = 33
 }

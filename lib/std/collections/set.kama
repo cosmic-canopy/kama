@@ -24,17 +24,17 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
     }
 
     public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }   // idempotent (put overwrites)
-    public fn void reserve(int32 n) { this.m.reserve(n: n); }   // preallocate for a known-size build
+    public fn void reserve(isize n) { this.m.reserve(n: n); }   // preallocate for a known-size build
 
     // Build an empty set already sized for `capacity` entries. M8c: now a `ctor` returning the enclosing
     // `Set<K,H,A>` (was a `static fn`), building the inner map via `Map::withCapacity`.
-    public ctor withCapacity(int32 capacity) when [A: default] {
+    public ctor withCapacity(isize capacity) when [A: default] {
         Map<K, Unit, H, A> inner = Map.withCapacity(capacity: capacity);
         this.m = give inner;
     }
 
     // Caller-owned allocator AND pre-sized — builds the inner map via `Map::withCapacityAndAllocator`.
-    public ctor withCapacityAndAllocator(A allocator, int32 capacity) {
+    public ctor withCapacityAndAllocator(A allocator, isize capacity) {
         Map<K, Unit, H, A> inner = Map.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         this.m = give inner;
     }
@@ -45,7 +45,7 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
         Optional<Unit> hit = this.m.remove(key: key);   // bind first — a method call isn't a valid match subject
         return match (hit) { case Some(value: u): true; case None: false; };
     }
-    public const fn int32 length() { return this.m.length(); }
+    public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
     public fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 

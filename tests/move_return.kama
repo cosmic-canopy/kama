@@ -2,9 +2,9 @@ import std::collections::{DynamicArray};
 // M26f-2 — the factory case: `return give r` moves the local OUT (its dtor is suppressed in
 // the factory), so the returned value is dropped exactly once by the caller — not twice (the
 // "factory landmine"). One drop of code 3 -> trace 3.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;

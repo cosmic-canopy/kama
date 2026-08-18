@@ -9,4 +9,4 @@ type value Widget implements Weighable, Weighable {
     public fn int32 weight() { return this.w; }
 }
 
-fn int main() { return 0; }
+fn int32 main() { return 0; }

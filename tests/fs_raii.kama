@@ -4,7 +4,7 @@ import std::fs::{writeFile, remove, File, OpenMode};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     string self = "_fs_raii.tmp";
     DynamicArray<uint8> data = DynamicArray.empty();
     data.add(item: cast<uint8>(65));

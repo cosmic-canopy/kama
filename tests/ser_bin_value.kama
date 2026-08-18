@@ -18,13 +18,13 @@ type resource Rec {   // owns a `string` -> must be a resource (move-only)
         if (this.x == 42) { ok = ok + 1; }
         if (this.f == 1.5f32) { ok = ok + 1; }                                  // 1.5 is exact -> bit round-trip
         if (this.b) { ok = ok + 1; }
-        if (cast<int32>(this.name.length()) == 4 && this.name[0] == 107ui8 && this.name[3] == 110ui8) { ok = ok + 1; }  // "kbin"
+        if (this.name.length() == 4 && this.name[0] == 107ui8 && this.name[3] == 110ui8) { ok = ok + 1; }  // "kbin"
         if (this.big == 9000000000i64) { ok = ok + 1; }                         // > 2^32, exercises the 8-byte path
         return ok;
     }
 }
 
-fn int main() {
+fn int32 main() {
     Rec v = Rec.make(x: 42, f: 1.5f32, b: true, name: "kbin", big: 9000000000i64);
     Result<DynamicArray<uint8>, Owned<Error>> e_r = encode(v: v);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };

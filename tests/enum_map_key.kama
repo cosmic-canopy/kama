@@ -17,5 +17,5 @@ fn int32 main() {
     m.put(key: Color::Blue, value: 9);
     int32 a = match (m.get(key: Color::Red))  { case Some(value: x): x; case None: 0; };
     int32 b = match (m.get(key: Color::Blue)) { case Some(value: x): x; case None: 0; };
-    return a + b + m.length();   // 5 + 9 + 2 = 16
+    return a + b + cast<int32>(m.length());   // 5 + 9 + 2 = 16
 }

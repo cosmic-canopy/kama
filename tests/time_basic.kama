@@ -2,7 +2,7 @@
 // (no wall-clock-dependent values); the eight flags sum to 255.
 import std::time::{Duration, Instant, monotonicNow};
 
-fn int main() {
+fn int32 main() {
     int32 r = 0;
 
     Duration a = Duration.fromMillis(ms: 5i64);     // 5_000_000 ns

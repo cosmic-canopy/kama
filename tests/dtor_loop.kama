@@ -1,15 +1,15 @@
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res
 {
-    int id;
-    public ctor make(int id) { this.id = id; }
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
     unsafe ~Res() { kama_trace(code: id); }
 }
 
-fn int f()
+fn int32 f()
 {
     Res outer = Res.make(id: 1);
     while (true)
@@ -20,8 +20,8 @@ fn int f()
     return 0;
 }
 
-fn int main()
+fn int32 main()
 {
-    int r = f();
+    int32 r = f();
     return traceGet();
 }

@@ -9,13 +9,13 @@ fn string keyN(int32 n) {
     return s;
 }
 
-fn int main() {
+fn int32 main() {
     Map<string, int32> m = Map.empty();
     int32 i = 0;
     while (i < 50) { m.put(key: keyN(n: i), value: i * 2); i = i + 1; }   // forces several grows
 
     int32 r = 0;
-    r = r + m.length();                              // 50
+    r = r + cast<int32>(m.length());                              // 50
     i = 0; int32 ok = 0;
     while (i < 50) {
         int32 v = match (m.get(key: keyN(n: i))) { case Some(value: x): x; case None: 0 - 1; };
@@ -23,5 +23,5 @@ fn int main() {
         i = i + 1;
     }
     r = r + ok;                                      // +50 -> 100
-    return r;   // 100
+    return cast<int32>(r);   // 100
 }

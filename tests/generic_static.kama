@@ -28,7 +28,7 @@ type value Plain {
     public static fn int32 tag() { return 5; }
 }
 
-fn int main()
+fn int32 main()
 {
     // `.` constructs, `::` resolves scope — on the SAME generic type, in both spellings.
     Box<int32> b = Box::<int32>.make(v: 30);       // ctor   — dot after the turbofish

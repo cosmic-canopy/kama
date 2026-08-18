@@ -21,9 +21,9 @@ fn string tag(Band b) {
     };
 }
 
-fn int32 slen(ref string s) { return cast<int32>(s.length()); }
+fn isize slen(ref string s) { return s.length(); }
 
-fn int main() {
+fn int32 main() {
     if (score(b: Band::Low,  n: 0)  != 0)   { return 90; }
     if (score(b: Band::High, n: 5)  != 110) { return 92; }
     if (slen(s: tag(b: Band::Mid))  != 3)   { return 93; }   // "mid"

@@ -4,4 +4,4 @@ type value Box {
     public fn void put(Nonexistent x) { return; }
 }
 
-fn int main() { return 42; }
+fn int32 main() { return 42; }

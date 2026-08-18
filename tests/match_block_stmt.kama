@@ -1,5 +1,5 @@
 type enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
-fn int main()
+fn int32 main()
 {
     Msg a = Msg::Move(dx: 3, dy: 4);
     int32 total = 100;

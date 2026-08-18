@@ -1,11 +1,11 @@
-fn int unwrap(Optional<int32> o, int32 dflt)
+fn int32 unwrap(Optional<int32> o, int32 dflt)
 {
     return match (o) {
         case Some(value: v): v;
         case None: dflt;
     };
 }
-fn int main()
+fn int32 main()
 {
     Optional<int32> a = Optional::Some(value: 42);
     Optional<int32> b = Optional::None;

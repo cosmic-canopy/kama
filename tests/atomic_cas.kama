@@ -13,7 +13,7 @@ fn void casInc(ref Atomic<int32> c) {
     }
 }
 
-fn int main() {
+fn int32 main() {
     Atomic<int32> c = Atomic.make(value: 0i32);
     scope {
         spawn casInc(c: ref c);

@@ -11,4 +11,4 @@ type resource Bad {
         this.a = give n;
     }
 }
-fn int main() { Bad b = Bad.make(seed: 5); return 0; }
+fn int32 main() { Bad b = Bad.make(seed: 5); return 0; }

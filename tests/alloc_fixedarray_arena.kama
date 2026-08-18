@@ -5,7 +5,7 @@ import std::collections::{FixedArray, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena.make(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 65536);
 
     FixedArray<int32, BumpAllocator> fa = FixedArray.withAllocator(allocator: arena.handle(), size: 16);
     if (fa[0] == 0 && fa[15] == 0) { r = r + 10; }                     // zero-initialized

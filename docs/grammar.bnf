@@ -240,8 +240,7 @@ numeric_type
   | floating_point_type
   ;
 integral_type
-  : INT
-  | UINT8
+  : UINT8
   | UINT16
   | UINT32
   | UINT64
@@ -251,8 +250,7 @@ integral_type
   | INT64
   ;
 floating_point_type
-  : DOUBLE
-  | FLOAT32
+  : FLOAT32
   | FLOAT64
   ;
 class_type

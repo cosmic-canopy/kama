@@ -8,22 +8,22 @@ type resource IntMap {
     FixedArray<int32> keys;
     FixedArray<int64> vals;
     FixedArray<uint8> used;
-    int32 cap;
+    isize cap;
 
-    public ctor make(int32 cap) {
+    public ctor make(isize cap) {
         this.keys = FixedArray.make(size: cap);      // zero-initialized, like C's calloc'd `used`
         this.vals = FixedArray.make(size: cap);
         this.used = FixedArray.make(size: cap);
         this.cap = cap;
     }
 
-    private fn int32 slotFor(int32 k) {
+    private fn isize slotFor(int32 k) {
         uint64 x = cast<uint64>(cast<uint32>(k)) * 2654435761ui64;   // hash
-        return cast<int32>(x % cast<uint64>(this.cap));
+        return cast<isize>(x % cast<uint64>(this.cap));
     }
 
     public fn void put(int32 k, int64 v) {
-        int32 i = this.slotFor(k: k);
+        isize i = this.slotFor(k: k);
         while (this.used[i] != 0ui8) {
             if (this.keys[i] == k) { this.vals[i] = v; return; }
             i = i + 1; if (i >= this.cap) { i = 0; }
@@ -32,7 +32,7 @@ type resource IntMap {
     }
 
     public fn int64 get(int32 k) {
-        int32 i = this.slotFor(k: k);
+        isize i = this.slotFor(k: k);
         while (this.used[i] != 0ui8) {
             if (this.keys[i] == k) { return this.vals[i]; }
             i = i + 1; if (i >= this.cap) { i = 0; }
@@ -41,7 +41,7 @@ type resource IntMap {
     }
 }
 
-fn int main()
+fn int32 main()
 {
     int32 N = 100000;
     int32 PASSES = 10;
@@ -63,5 +63,5 @@ fn int main()
         }
         p = p + 1;
     }
-    return cast<int>(sum % 256ui64);
+    return cast<int32>(sum % 256ui64);
 }

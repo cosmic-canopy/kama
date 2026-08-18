@@ -8,4 +8,4 @@ fn void pickInto(int32 x, out int32 a) {
         case Bad: { int32 r = a; a = r; }    // ERROR: `a` is not assigned on THIS path yet
     };
 }
-fn int main() { slot int32 v; pickInto(x: 1, a: out v); return v; }
+fn int32 main() { slot int32 v; pickInto(x: 1, a: out v); return v; }

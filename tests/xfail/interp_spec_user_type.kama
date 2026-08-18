@@ -6,7 +6,7 @@ type value Pt implements Format {
     public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.x)); }
 }
 
-fn int main() {
+fn int32 main() {
     Pt p = Pt.make(x: 5i32);
     string s = "${p:0x}";
     return 0;

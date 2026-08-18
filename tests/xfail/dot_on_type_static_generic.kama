@@ -5,4 +5,4 @@ type value Box<T> {
     public ctor make(T v) { this.v = v; }
     public static fn int32 tag() { return 7; }
 }
-fn int main() { Box<int32> b = Box::<int32>.make(v: 1); return Box.tag(); }
+fn int32 main() { Box<int32> b = Box::<int32>.make(v: 1); return Box.tag(); }

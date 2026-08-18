@@ -5,7 +5,7 @@
 import std::process::{Command, Output};
 import std::io::{IoError};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: "this_binary_does_not_exist_xyzzy");
     Result<Output, IoError> r = c.run();
     return match (give r) {

@@ -38,7 +38,7 @@ fn int32 sumPlain(View<PlainTick> xs) {
 fn int32 sumDerived(View<DerivedTick> xs) {
     int32 s = 0; foreach (ref DerivedTick t in xs) { s = s + t.tick(); } return s; }
 
-fn int main() {
+fn int32 main() {
     DynamicArray<PlainTick> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: PlainTick.make(n: 10)); a.add(item: PlainTick.make(n: 20));
     DynamicArray<DerivedTick> b = DynamicArray.withCapacity(capacity: 2);

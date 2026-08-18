@@ -29,7 +29,7 @@ fn int32 top<T: Comparable<T>>(ref T a, ref T b) {
     return middle::<T>(a: a, b: b) + outer::<T, Doubler<T>>(a: a, by: d);
 }
 
-fn int main() {
+fn int32 main() {
     int32 x = 3;
     int32 y = 9;
     string p = "aa";

@@ -4,4 +4,4 @@ type value NoDefault {
     public int32 n;
     public ctor make(int32 n) { this.n = n; }
 }
-fn int main() { NoDefault d = NoDefault.default(); return d.n; }
+fn int32 main() { NoDefault d = NoDefault.default(); return d.n; }

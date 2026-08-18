@@ -19,7 +19,7 @@ fn int32 areaOutOfOrder(Shape s) {
     };
 }
 
-fn int main()
+fn int32 main()
 {
     Shape r = Shape::Rect(w: 3, h: 5);
     int32 a = areaInOrder(s: r);        // 15

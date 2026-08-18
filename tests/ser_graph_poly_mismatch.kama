@@ -25,7 +25,7 @@ type resource Scene {
     public ctor make(Shared<Shape> a, Shared<Tag> t) { this.a = give a; this.t = give t; }
 }
 
-fn int main() {
+fn int32 main() {
     // `a` (a `Shared<Shape>`) wrongly points at id 2, whose `__type` is `Tag` (not a `Shape` implementor).
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Scene\",\"a\":2,\"t\":2},\"2\":{\"__type\":\"Tag\",\"n\":9}}}";
     Result<Shared<Scene>, Owned<Error>> res = decode::<Shared<Scene>>(src: give j);

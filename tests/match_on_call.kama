@@ -5,7 +5,7 @@ fn Weak<Counter> orphan()
     Shared<Counter> s = new Counter.make(n: 5);
     return s.downgrade();   // s dies at fn-end -> the returned weak is already expired
 }
-fn int main()
+fn int32 main()
 {
     Shared<Counter> s = new Counter.make(n: 7);
     Weak<Counter> live = s.downgrade();

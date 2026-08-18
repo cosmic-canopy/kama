@@ -49,7 +49,7 @@ type value Plain {
 }
 fn W pick<W>(W a, W b) { if (true) { return a; } return b; }
 
-fn int main()
+fn int32 main()
 {
     // (5) A `match` SUBJECT may be a CALL RESULT — no intermediate binding needed. (This was the page's
     //     one real gap; `tests/match_call_plain_enum.kama` covers every call shape.)
@@ -85,9 +85,9 @@ fn int main()
     // (9) `substring` traps on an offset that splits a character; an offset from a SEARCH cannot.
     //     For one you computed yourself, `truncate` and `floorCharBoundary` are total.
     string acc = "AéZ";
-    int32 keep = cast<int32>(acc.truncate(maxBytes: 2).length());          // 1 — "A", never a split é
-    int32 bnd  = cast<int32>(acc.floorCharBoundary(at: 2));               // 1 — snapped down
+    isize keep = acc.truncate(maxBytes: 2).length();          // 1 — "A", never a split é
+    isize bnd  = acc.floorCharBoundary(at: 2);               // 1 — snapped down
 
-    return a + q + r + v + s + ok - msg.length() + eight - keep - bnd;
+    return a + q + r + v + s + ok - cast<int32>(msg.length()) + eight - cast<int32>(keep) - cast<int32>(bnd);
     // 33 + 8 - 1 - 1 = 39
 }

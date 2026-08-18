@@ -5,7 +5,7 @@
 import std::concurrent;
 import std::collections::{DynamicArray, View};
 
-fn int main() {
+fn int32 main() {
     int32 acc = 0;
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1i32);

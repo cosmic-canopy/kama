@@ -5,4 +5,4 @@ type virtual(depth: 1) resource Root
     public fn int32 rank() { return this.step(); }
     protected virtual fn int32 step() { return 1; }
 }
-fn int main() { return 0; }
+fn int32 main() { return 0; }

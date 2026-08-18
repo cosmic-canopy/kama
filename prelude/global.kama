@@ -103,8 +103,8 @@ type intrinsic <string> implements Equatable<This> { }
 type intrinsic <string> implements Hashable {
     public const fn uint64 hash() {
         uint64 h = 2166136261ui64;
-        int32 i = 0;
-        while (i < cast<int32>(this.length())) {
+        isize i = 0;
+        while (i < this.length()) {
             h = (h ^ cast<uint64>(this[i])) * 16777619ui64;
             i = i + 1;
         }
@@ -158,10 +158,10 @@ type intrinsic <float32, float64> implements Comparable<This> {
 }
 type intrinsic <string> implements Comparable<This> {
     public const fn Ordering compareTo(const ref This other) {
-        int32 n = cast<int32>(this.length());
-        int32 m = cast<int32>(other.length());
-        int32 lim = n; if (m < n) { lim = m; }
-        int32 i = 0;
+        isize n = this.length();
+        isize m = other.length();
+        isize lim = n; if (m < n) { lim = m; }
+        isize i = 0;
         while (i < lim) {
             uint8 a = this[i]; uint8 b = other[i];
             if (a < b) { return Ordering::Less; }
@@ -355,12 +355,12 @@ type view Chars implements Iterator<char> {
 // byte-range copy is done by a tiny runtime helper (kama can't allocate a string from raw bytes on its
 // own). Byte semantics (a literal separator), Go `strings.Split` behaviour: consecutive/trailing
 // separators yield "" pieces; an empty separator yields the whole string once.
-extern fn string kama_string_from_raw(UnsafePtr<uint8> src, int32 start, int32 len);
+extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
 type view Split implements Iterator<string> {
-    UnsafePtr<uint8> data; int32 len; UnsafePtr<uint8> sep; int32 seplen; int32 pos; bool done;
+    UnsafePtr<uint8> data; isize len; UnsafePtr<uint8> sep; isize seplen; isize pos; bool done;
     // As with `Chars.over` — the compiler calls this for `s.split(separator:)`, in place of a six-field
     // positional compound literal that no check tied to the field order above.
-    unsafe ctor over(UnsafePtr<uint8> at, int32 count, UnsafePtr<uint8> sepAt, int32 sepCount) {
+    unsafe ctor over(UnsafePtr<uint8> at, isize count, UnsafePtr<uint8> sepAt, isize sepCount) {
         this.data = at; this.len = count; this.sep = sepAt; this.seplen = sepCount;
         this.pos = 0; this.done = false;
     }
@@ -370,9 +370,9 @@ type view Split implements Iterator<string> {
             this.done = true;
             return Optional::Some(value: kama_string_from_raw(src: this.data, start: this.pos, len: this.len - this.pos));
         }
-        int32 i = this.pos;
+        isize i = this.pos;
         while (i + this.seplen <= this.len) {
-            bool m = true; int32 k = 0;
+            bool m = true; isize k = 0;
             while (k < this.seplen) {
                 uint8 a = 0ui8; uint8 b = 0ui8;
                 a = this.data[i + k]; b = this.sep[k];
@@ -380,7 +380,7 @@ type view Split implements Iterator<string> {
                 k = k + 1;
             }
             if (m) {
-                int32 st = this.pos;
+                isize st = this.pos;
                 this.pos = i + this.seplen;
                 return Optional::Some(value: kama_string_from_raw(src: this.data, start: st, len: i - st));
             }

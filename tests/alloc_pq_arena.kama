@@ -5,7 +5,7 @@ import std::collections::{PriorityQueue, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena.make(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 65536);
 
     PriorityQueue<int32, BumpAllocator> pq = PriorityQueue.withAllocator(allocator: arena.handle(), maxOrder: false);
     pq.push(item: 5); pq.push(item: 1); pq.push(item: 3); pq.push(item: 9); pq.push(item: 2);

@@ -4,14 +4,14 @@ import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "echo2"); c.arg(a: "out"); c.arg(a: "err");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(value: o): {
-            int32 n = cast<int32>(o.stdout().length());
-            int32 e = cast<int32>(o.stderr().length());
+            isize n = o.stdout().length();
+            isize e = o.stderr().length();
             int32 code = 42;
             if (n != 4) { code = 60; }
             else if (e != 4) { code = 61; }

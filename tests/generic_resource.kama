@@ -4,9 +4,9 @@
 // substitution, and that `give` + use-after-move analysis work on a `Box<int32>`. `kama_trace`
 // observes the dtor firing EXACTLY once (the moved-from inner `b` is suppressed; only the returned
 // box drops): fold([7]) = 7.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Box<T> {
     T value;

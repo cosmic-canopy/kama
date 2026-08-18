@@ -1,7 +1,7 @@
 type value Accum
 {
-    int total;
-    public ctor make(int init)
+    int32 total;
+    public ctor make(int32 init)
     {
         this.total = init;
     }
@@ -9,13 +9,13 @@ type value Accum
     {
         this.total = this.total + 1;
     }
-    public fn int run()
+    public fn int32 run()
     {
         this.bump();
         return this.total;
     }
 }
-fn int main()
+fn int32 main()
 {
     Accum a = Accum.make(init: 40);
     a.bump();

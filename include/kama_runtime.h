@@ -8,7 +8,8 @@
 
 #include <stdint.h>    // int32_t … (types only — no callable C functions)
 #include <stdbool.h>   // bool       (type only)
-#include <stddef.h>    // size_t, NULL (types only)
+#include <stddef.h>    // size_t, ptrdiff_t, NULL (types only) — ptrdiff_t IS kama's `isize`, so this is
+                       // load-bearing for every length/index in the runtime, not just for NULL
 #include <limits.h>    // CHAR_BIT   (freestanding header — C11 §4.6, so MCU-safe)
 
 // The premises kama's scalar sizes rest on, checked by the C compiler for the ACTUAL target on every
@@ -429,20 +430,24 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
 // kama reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), the size is
 // part of the type (monomorphized per (T,N)), and the whole thing is a first-class value.
 #define KAMA_FIXED_TYPE(T, N, NAME) typedef struct NAME { T v[N]; } NAME;
+// Indices are `ptrdiff_t` (kama's `isize`), not `size_t`: an index is a SIZE, and kama's size type is
+// signed so that `len - 1` on an empty container is -1 rather than SIZE_MAX. That makes the negative case
+// REACHABLE here, where an unsigned index made it merely unrepresentable, so each check tests it
+// explicitly — the same `i < 0 || i >= len` shape the kama-side collections use.
 #define KAMA_FIXED_FUNCS(T, N, NAME)                                           \
-static inline T      NAME##__get(const NAME* self, size_t i) {                  \
-    if (i >= (size_t)(N)) kama_bounds_fail(i, (size_t)(N));                    \
+static inline T      NAME##__get(const NAME* self, ptrdiff_t i) {               \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
     return self->v[i];                                                          \
 }                                                                               \
-static inline void   NAME##__set(NAME* self, size_t i, T x) {                   \
-    if (i >= (size_t)(N)) kama_bounds_fail(i, (size_t)(N));                    \
+static inline void   NAME##__set(NAME* self, ptrdiff_t i, T x) {                \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
     self->v[i] = x;                                                             \
 }                                                                               \
-static inline T*     NAME##__at(NAME* self, size_t i) {                         \
-    if (i >= (size_t)(N)) kama_bounds_fail(i, (size_t)(N));                    \
+static inline T*     NAME##__at(NAME* self, ptrdiff_t i) {                      \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
     return &self->v[i];                                                         \
 }                                                                               \
-static inline size_t NAME##__length(const NAME* self) { (void)self; return (size_t)(N); } \
+static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (ptrdiff_t)(N); } \
 static inline NAME   NAME##__fill(T x) {                                        \
     NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
 }
@@ -474,7 +479,11 @@ static inline void kama_string__dtor(kama_string* self) {
     if (self->cap) kama_free(self->data);
     self->data = NULL; self->len = 0; self->cap = 0;
 }
-static inline size_t kama_string__length(kama_string* self) { return self->len; }
+// `len`/`cap` stay `size_t` in the struct — they are ALLOCATION sizes, and this layout is the C-facing
+// one. The ACCESSOR returns `ptrdiff_t`, because a length is kama's `isize`. The narrowing is safe by
+// construction: no allocation may exceed PTRDIFF_MAX (the same bound Rust puts on a single allocation,
+// for the same reason — a byte offset between two points in one object must be representable).
+static inline ptrdiff_t kama_string__length(kama_string* self) { return (ptrdiff_t)self->len; }
 // FFI: the underlying NUL-terminated bytes, for passing to a C `const char*`.
 static inline char* kama_string__cstr(kama_string* self) { return self->data; }
 static inline bool kama_string__equals(kama_string* self, kama_string other) {
@@ -660,8 +669,11 @@ static inline kama_string kama_string__toUpper(kama_string* self) {
 // Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
 // iterator hold a borrowed `UnsafePtr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
 // pieces, without exposing raw allocation to kama source. Declared in the prelude as
-// `extern fn string kama_string_from_raw(UnsafePtr<uint8> base, int32 start, int32 len);`. len<=0 -> "".
-static inline kama_string kama_string_from_raw(const uint8_t* base, int32_t start, int32_t len) {
+// `extern fn string kama_string_from_raw(UnsafePtr<uint8> base, isize start, isize len);`. len<=0 -> "".
+// The offsets are `ptrdiff_t`, not `int32_t`: they index a string, and a string's length is an `isize`
+// (kama's size type), so taking them narrower would put a cast on every caller of the one runtime helper
+// that exists precisely so `.split()` need not open-code allocation.
+static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t start, ptrdiff_t len) {
     kama_string r;
     if (start < 0 || len <= 0) { r.data = NULL; r.len = 0; r.cap = 0; return r; }   // defensive: caller (Split) always passes >=0
     char* buf = (char*)kama_alloc((size_t)len + 1);

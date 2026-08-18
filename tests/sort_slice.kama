@@ -3,7 +3,7 @@
 // the elements outside it stay exactly where they were.
 import std::collections::{DynamicArray, View, sort, isSorted};
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 9); xs.add(item: 7); xs.add(item: 5); xs.add(item: 3); xs.add(item: 1); xs.add(item: 8);
     int32 ends = 0; int32 inner = 0; int32 part = 0; int32 all = 0;

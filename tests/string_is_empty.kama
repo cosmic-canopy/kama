@@ -1,5 +1,5 @@
 // `isEmpty()` — true for "" and an empty substring (an rvalue receiver), false otherwise.
-fn int main() {
+fn int32 main() {
     string s = "x";
     string e = "";
     int32 r = 0;

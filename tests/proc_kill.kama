@@ -5,7 +5,7 @@
 import std::process::{Command, Process, ExitStatus};
 import std::io::{IoError};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "sleep"); c.arg(a: "10000");
     Result<Process, IoError> sr = c.start();

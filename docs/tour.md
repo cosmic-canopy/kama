@@ -14,14 +14,14 @@ no hidden allocation.
 A program is a `main` that returns an integer, and that integer is the process exit status.
 
 ```kama
-fn int main()
+fn int32 main()
 {
     println(s: "hello");
     return 0;
 }
 ```
 
-Declarations read *type first, then name* — `fn int main()` is a function returning `int`, and
+Declarations read *type first, then name* — `fn int32 main()` is a function returning `int32`, and
 `int32 x` is a variable. `int` is an alias for `int32`; the sized names (`int8` … `uint64`,
 `float32`, `float64`, `bool`, `char`, `string`) are all spelled out. Comments are `//` and `/* */`.
 
@@ -34,12 +34,12 @@ There are no positional calls. Every argument is named at the call site, and the
 given in any order.
 
 ```kama
-fn int sub(int a, int b)
+fn int32 sub(int32 a, int32 b)
 {
     return a - b;
 }
 
-fn int main()
+fn int32 main()
 {
     return sub(b: 8, a: 50);   // 42
 }
@@ -54,7 +54,7 @@ adds a parameter cannot silently shift the meaning of existing calls.
 ```kama
 fn void bump(ref int32 n) { n = n + 1; }
 
-fn int main()
+fn int32 main()
 {
     int32 count = 41;
     bump(n: ref count);
@@ -155,7 +155,7 @@ type resource Handle
     ~Handle() { int32 n = this.id; println(s: "closing ${n}"); }
 }
 
-fn int main()
+fn int32 main()
 {
     {
         Handle a = Handle.make(id: 1);
@@ -211,7 +211,7 @@ to take one apart, it is exhaustive, and it produces a value:
 ```kama
 type enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
 
-fn int main()
+fn int32 main()
 {
     Shape s = Shape::Rect(w: 3.0, h: 4.0);
     float64 area = match (s) {
@@ -219,7 +219,7 @@ fn int main()
         case Rect(w: width, h: height): width * height;
         case Empty:                     0.0;
     };
-    return cast<int>(area);   // 12
+    return cast<int32>(area);   // 12
 }
 ```
 
@@ -309,7 +309,7 @@ all are RAII, and all take an optional custom allocator as their last type param
 ```kama
 import std::collections::{DynamicArray};
 
-fn int main()
+fn int32 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);
@@ -351,7 +351,7 @@ fn void producer(Sender<int32> tx)
     while (i <= 9) { tx.send(item: i); i = i + 1; }
 }   // the sender closes as it drops, so the receiver sees the end of the stream
 
-fn int main()
+fn int32 main()
 {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
@@ -418,7 +418,7 @@ tree serves native, wasm and bare metal without a preprocessor. See
 kama compiles *to* C, so interoperating with it is direct rather than a foreign-function bridge:
 
 ```kama
-extern fn void kama_trace(int code);
+extern fn void kama_trace(int32 code);
 ```
 
 Pointers and raw memory exist, and they are confined to an `unsafe fn` you can grep for. The

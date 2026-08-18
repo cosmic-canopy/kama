@@ -3,4 +3,4 @@
 fn void fill(out int32 dst, bool cond) {
     if (cond) { dst = 7; }     // only one path assigns
 }                              // ERROR: falls off the end with `dst` unassigned
-fn int main() { int32 x = 0; fill(dst: out x, cond: true); return x; }
+fn int32 main() { int32 x = 0; fill(dst: out x, cond: true); return x; }

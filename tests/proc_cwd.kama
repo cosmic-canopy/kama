@@ -6,7 +6,7 @@
 import std::process::{Command, Output};
 import std::io::{IoError};
 
-fn int main() {
+fn int32 main() {
     Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c1.arg(a: "hasfile"); c1.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
     c1.cwd(dir: envOr(name: "KAMA_PROCUTIL_DIR", dflt: "."));

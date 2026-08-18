@@ -2,10 +2,10 @@
 @generate(of) type value Vec2 { public float64 x; public float64 y; }
 type value Box<T> { public T item; public ctor make(T v){ this.item=v; } public fn T get(){return this.item;} }
 @generate(of) type value Holder { public Rock r; }
-fn int main()
+fn int32 main()
 {
     Box<Rock> b = Box.make(v: Rock.of(g: 7));                // generic-instance -> Rock (by value)
     Holder h = Holder.of(r: Rock.of(g: 3));               // class -> class (by value)
     Box<Vec2> bv = Box.make(v: Vec2.of(x: 4.0, y: 5.0));    // class -> Box<Vec2> -> Vec2 (cross-kind chain)
-    return b.get().g + h.r.g + cast<int>(bv.get().x);   // 7 + 3 + 4 = 14
+    return b.get().g + h.r.g + cast<int32>(bv.get().x);   // 7 + 3 + 4 = 14
 }

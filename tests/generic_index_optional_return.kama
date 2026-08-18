@@ -15,12 +15,12 @@ type resource Store<V> {
 
     // operator[] nested inside `clone(...)`'s argument, inside `Some(...)`, inside a return.
     public fn Optional<V> cloned(int32 i) when [V: Copyable<V>] {
-        if (i < 0 || i >= this.d.length()) { return Optional::None; }
+        if (i < 0 || i >= cast<int32>(this.d.length())) { return Optional::None; }
         return Optional::Some(value: this.clone(v: this.d[i]));
     }
     // bare operator[] directly inside `Some(...)` in a return.
     public fn Optional<V> direct(int32 i) when [V: Copyable<V>] {
-        if (i < 0 || i >= this.d.length()) { return Optional::None; }
+        if (i < 0 || i >= cast<int32>(this.d.length())) { return Optional::None; }
         return Optional::Some(value: this.d[i]);
     }
 }

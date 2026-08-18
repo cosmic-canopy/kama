@@ -17,7 +17,7 @@ type resource Bag {
 
     // The derive. Bounds are checked HERE so the panic names what the author called, then the
     // construction itself is delegated — one mint, narrowed.
-    public unsafe fn View<int32> slice(int32 from, int32 count) {
+    public unsafe fn View<int32> slice(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.buf.length()) { panic(msg: "Bag.slice out of bounds"); }
         return this.buf.view().slice(from: from, count: count);
     }

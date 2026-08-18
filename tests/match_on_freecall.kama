@@ -3,7 +3,7 @@
 type enum Opt { Some(int32 v), None }
 fn Opt poll(int32 x) { if (x > 0) { return Opt::Some(v: x); } return Opt::None; }
 
-fn int main()
+fn int32 main()
 {
     int32 a = match (poll(x: 5)) { case Some(v: v): v; case None: 0; };
     int32 b = match (poll(x: 0)) { case Some(v: v): v; case None: 100; };

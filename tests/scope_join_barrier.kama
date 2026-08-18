@@ -18,7 +18,7 @@ type resource Slot {
 
 fn void writer(Slot s) { s.run(); }   // owns the moved bundle; writes through its own slot
 
-fn int main() {
+fn int32 main() {
     int32 a = 0;
     int32 b = 0;
     Slot sa = Slot.make(cell: ref a, value: 20i32);

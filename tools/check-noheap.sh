@@ -55,7 +55,7 @@ fi
 sortsrc="$tmp/nhsort.kama"
 cat > "$sortsrc" <<'EOF'
 import std::collections::{FixedArray, View, sortUnstable};
-fn int main() {
+fn int32 main() {
     FixedArray<int32> fa = FixedArray::<int32>.make(size: 3);
     fa[0] = 3; fa[1] = 1; fa[2] = 2;
     int32 r = 0;

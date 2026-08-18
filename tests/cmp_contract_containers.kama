@@ -51,5 +51,5 @@ fn int32 main() {
     tiers.add(key: Cents.of(v: 1));
     r = r + cast<int32>(tiers.length());              // 2
 
-    return r;   // 6 + 2 + 42 + 2 = 52
+    return cast<int32>(r);   // 6 + 2 + 42 + 2 = 52
 }

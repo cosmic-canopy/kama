@@ -23,12 +23,12 @@ type resource Parent {
         int32 s = this.id + this.main.weight();
         int32 m = match (this.maybe) { case Some(value: c): c.weight(); case None: 0; };
         s = s + m;
-        for (int32 i = 0; i < this.kids.length(); i = i + 1) { s = s + this.kids[i].weight(); }
-        return s;
+        for (isize i = 0; i < cast<int32>(this.kids.length()); i = i + 1) { s = s + this.kids[i].weight(); }
+        return cast<int32>(s);
     }
 }
 
-fn int main() {
+fn int32 main() {
     Child mainC = Child.make(v: 5, tag: "xyz");            // weight 8
     Child kid1  = Child.make(v: 1, tag: "a");              // weight 2
     Child kid2  = Child.make(v: 2, tag: "bb");             // weight 4

@@ -4,7 +4,7 @@
 import std::process::{Command, Output};
 import std::io::{IoError};
 
-fn int main() {
+fn int32 main() {
     Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c1.arg(a: "printenv"); c1.arg(a: "KAMA_T"); c1.env(key: "KAMA_T", val: "abc");
     Result<Output, IoError> r1 = c1.run();

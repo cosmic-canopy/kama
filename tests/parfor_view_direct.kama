@@ -4,7 +4,7 @@
 import std::concurrent;
 import std::collections::{DynamicArray, View};
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
     while (i < 8) { a.add(item: 1i32); i = i + 1; }   // eight 1s
@@ -16,7 +16,7 @@ fn int main() {
     }
 
     int32 s = 0;
-    int32 j = 0;
+    isize j = 0;
     while (j < a.length()) { s = s + a[j]; j = j + 1; }   // 8 * 5 = 40
-    return s % 256;                                       // 40
+    return cast<int32>(s % 256);                                       // 40
 }

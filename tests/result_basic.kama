@@ -3,7 +3,7 @@ type enum DivErr implements Error {
 
     public const fn string message() { return "div by zero"; }
 }
-fn int divide(int32 a, int32 b)
+fn int32 divide(int32 a, int32 b)
 {
     Result<int32, DivErr> r = b == 0 ? Result::Err(error: DivErr::DivByZero) : Result::Ok(value: a / b);
     return match (r) {
@@ -11,7 +11,7 @@ fn int divide(int32 a, int32 b)
         case Err(error: e): 0 - 1;
     };
 }
-fn int main()
+fn int32 main()
 {
     return divide(a: 20, b: 4) + divide(a: 1, b: 0);
 }

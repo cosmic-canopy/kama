@@ -2,7 +2,7 @@
 type value A { public B b; }
 @generate(of)
 type value B { public A a; }
-fn int main()
+fn int32 main()
 {
     return 0;
 }

@@ -25,7 +25,7 @@ type value ByField implements Order<Rec> {
     }
 }
 
-fn int main() {
+fn int32 main() {
     DynamicArray<Rec> rs = DynamicArray::<Rec>.empty();
     rs.add(item: Rec.make(dept: 2, id: 1));
     rs.add(item: Rec.make(dept: 1, id: 2));

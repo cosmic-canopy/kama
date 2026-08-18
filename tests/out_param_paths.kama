@@ -8,7 +8,7 @@ fn void pick(bool leaf, out int32 v) {
     if (leaf) { v = 10; return; }                    // assigns, then returns, inside a lone `if`
     v = 20;
 }
-fn int main() {
+fn int32 main() {
     int32 a = 0; classify(n: 0 - 3, kind: out a);    // 1
     int32 b = 0; classify(n: 5,     kind: out b);    // 2
     int32 c = 0; pick(leaf: true,   v: out c);       // 10

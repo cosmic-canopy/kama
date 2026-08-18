@@ -1,13 +1,13 @@
 // `substring(start:, end:)` — an owned byte-range copy [start, end); bounds-checked.
-fn int main() {
+fn int32 main() {
     string s = "hello";
     string ell = s.substring(start: 1, end: 4);    // "ell"
     string whole = s.substring(start: 0, end: 5);  // "hello"
     string none = s.substring(start: 2, end: 2);   // ""
-    int32 r = 0;
+    isize r = 0;
     if (ell == "ell") { r = r + 1; }
     if (whole == "hello") { r = r + 2; }
     if (none.isEmpty()) { r = r + 4; }
-    r = r + cast<int32>(ell.length());             // +3
-    return r;                                      // 10
+    r = r + ell.length();             // +3
+    return cast<int32>(r);                                      // 10
 }

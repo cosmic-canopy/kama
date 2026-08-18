@@ -6,7 +6,7 @@
 // the exact-value math fixtures already prove correctness; here we watch whether the ops vectorize.
 import std::math::{Vec4, Mat4, Quat};
 
-fn int main()
+fn int32 main()
 {
     // A fixed small integer matrix (two 1s per column), reused as the Mat4*Vec4 and Mat4*Mat4 operand.
     Vec4 mc0 = Vec4.of(x: 1.0f32, y: 1.0f32, z: 0.0f32, w: 0.0f32);
@@ -41,5 +41,5 @@ fn int main()
     }
     uint64 sum = cast<uint64>(fsum);
     uint64 mres = sum % 256;
-    return cast<int>(mres);
+    return cast<int32>(mres);
 }

@@ -8,7 +8,7 @@ fn int32 firstOr(int32 x) {
         case None:    0 - 1;
     };
 }
-fn int main() {
+fn int32 main() {
     int32 y = 40;
     int32 got = match (Optional::Some(value: y)) {   // subject inferred from the local `y`
         case Some(value: v): v + 2;                          // 42

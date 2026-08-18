@@ -10,7 +10,7 @@ fn string keyN(int32 n) {
     return s;
 }
 
-fn int main() {
+fn int32 main() {
     Map<string, int32> m = Map.empty();
     int32 i = 0;
     while (i < 30) { m.put(key: keyN(n: i), value: i); i = i + 1; }
@@ -18,7 +18,7 @@ fn int main() {
     i = 0; while (i < 30) { if (i % 2 == 0) { m.remove(key: keyN(n: i)); } i = i + 1; }  // 15 tombstones
 
     int32 r = 0;
-    r = r + m.length();                               // 15 (odds remain)
+    r = r + cast<int32>(m.length());                               // 15 (odds remain)
     int32 ok = 0;
     i = 1; while (i < 30) {                            // every odd key still probes correctly past tombstones
         int32 v = match (m.get(key: keyN(n: i))) { case Some(value: x): x; case None: 0 - 1; };
@@ -29,6 +29,6 @@ fn int main() {
     if (!m.contains(key: keyN(n: 4))) { r = r + 5; }  // an even key is gone -> 35
     m.put(key: keyN(n: 4), value: 400);               // reuse a tombstone
     if (m.contains(key: keyN(n: 4))) { r = r + 5; }   // -> 40
-    r = r + m.length();                               // +16 -> 56
-    return r;   // 56
+    r = r + cast<int32>(m.length());                               // +16 -> 56
+    return cast<int32>(r);   // 56
 }

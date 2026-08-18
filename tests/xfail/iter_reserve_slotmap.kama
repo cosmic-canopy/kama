@@ -9,7 +9,7 @@
 // The `SlotMap` arm — `reserve` relocates values, generations and the free list together.
 import std::collections::{SlotMap};
 
-fn int main() {
+fn int32 main() {
     SlotMap<int32> s = SlotMap.withCapacity(capacity: 4);
     s.insert(value: 1); s.insert(value: 2);
     int32 t = 0;

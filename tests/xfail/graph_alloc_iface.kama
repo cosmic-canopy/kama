@@ -21,6 +21,6 @@ type resource Scene {
     public ctor make(Shared<Shape, BumpAllocator> a) { this.a = give a; }
 }
 
-fn int main() {
+fn int32 main() {
     return 0;
 }

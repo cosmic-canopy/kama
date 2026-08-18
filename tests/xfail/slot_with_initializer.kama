@@ -1,7 +1,7 @@
 // `slot` means "no value yet, an `out` argument will supply it", so giving one a value is a contradiction —
 // and would quietly disable the drop of a live object. One way to say each thing.
 fn void fill(out int32 d) { d = 1; }
-fn int main() {
+fn int32 main() {
     slot int32 x = 3;      // ERROR: a slot cannot have an initializer
     fill(d: out x);
     return x;

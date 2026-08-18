@@ -13,7 +13,7 @@ fn void producer(Sender<int32> tx) {
     }
 }   // ~Sender() closes the sender side → a blocked/next recv returns None once drained
 
-fn int main() {
+fn int32 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();

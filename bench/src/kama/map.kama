@@ -2,7 +2,7 @@
 // (bijective LCG-strided) order. Deterministic checksum -> exit code (cross-language cross-check).
 import std::collections::{Map};
 
-fn int main()
+fn int32 main()
 {
     int32 N = 100000;
     int32 PASSES = 10;
@@ -24,5 +24,5 @@ fn int main()
         }
         p = p + 1;
     }
-    return cast<int>(sum % 256ui64);
+    return cast<int32>(sum % 256ui64);
 }

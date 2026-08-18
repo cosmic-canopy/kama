@@ -14,7 +14,7 @@ fn Weak<Counter> orphan()
     return s.downgrade();   // s drops at fn-end -> Counter freed (strong 1->0); ctrl kept (weak=1)
 }
 
-fn int main()
+fn int32 main()
 {
     Weak<Counter> w = orphan();                      // its Shared already died
 

@@ -27,10 +27,10 @@ fn string argAt(int32 i) {
 
 // Parse a non-negative decimal string (the numeric subcommand args are always well-formed digits here).
 unsafe fn int32 parseIntArg(string s) {
-    int32 n = s.length();
+    isize n = s.length();
     UnsafePtr<int8> p = s.cstr();
     int32 v = 0;
-    int32 i = 0;
+    isize i = 0;
     while (i < n) {
         int8 c = 0;
         c = p[i];
@@ -40,7 +40,7 @@ unsafe fn int32 parseIntArg(string s) {
     return v;
 }
 
-unsafe fn int run() {
+unsafe fn int32 run() {
     string cmd = argAt(i: 0);
 
     if (cmd == "echo") {
@@ -104,4 +104,4 @@ unsafe fn int run() {
 
 // The body above is the raw work, so IT carries the marker; `main` may not be `unsafe`
 // (it encloses the whole program). Calling an `unsafe fn` from safe code is allowed.
-fn int main() { return run(); }
+fn int32 main() { return run(); }

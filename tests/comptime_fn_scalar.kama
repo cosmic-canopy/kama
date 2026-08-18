@@ -23,7 +23,7 @@ comptime int32 FIB  = fib(n: 10);     // 55
 comptime uint8 W    = wrap8();        // 44
 comptime bool  BIG  = isBig();        // true
 
-fn int main() {
+fn int32 main() {
     int32 t = NINE + FIB + cast<int32>(W);   // 9 + 55 + 44 = 108
     if (BIG) { t = t + 1; }                   // 109
     return t;

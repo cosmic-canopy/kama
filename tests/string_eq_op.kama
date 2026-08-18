@@ -1,5 +1,5 @@
 // `==` / `!=` on strings, both paths; a borrowed literal and a heap-owned concat compare the same.
-fn int main() {
+fn int32 main() {
     string a = "hello";
     string b = "hello";
     string c = "world";

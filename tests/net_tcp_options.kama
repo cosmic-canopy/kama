@@ -17,7 +17,7 @@ fn int32 checkClient(ref TcpStream c) {
     return 55;
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47660);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);

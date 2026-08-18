@@ -1,6 +1,6 @@
 // `.chars()` — a UTF-8 codepoint iterator over a string. "Aé€" = U+0041, U+00E9, U+20AC:
 // a 1-byte, a 2-byte, and a 3-byte sequence (6 bytes, 3 codepoints).
-fn int main() {
+fn int32 main() {
     string s = "A\u{E9}\u{20AC}";
     int32 count = 0; int32 sum = 0;
     foreach (char c in s.chars()) { count = count + 1; sum = sum + cast<int32>(c); }

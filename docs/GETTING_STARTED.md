@@ -57,11 +57,11 @@ make
 `hello.kama`:
 
 ```kama
-fn int add(int a, int b) { return a + b; }
+fn int32 add(int32 a, int32 b) { return a + b; }
 
-fn int main()
+fn int32 main()
 {
-    int x = add(a: 40, b: 2);   // named arguments
+    int32 x = add(a: 40, b: 2);   // named arguments
     return x;                    // exit code
 }
 ```

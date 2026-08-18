@@ -1,9 +1,9 @@
 import std::memory::{Owned};
 // Owned<T> move: initializing/assigning from an Owned lvalue transfers ownership
 // and invalidates the source, so the pointee is destructed exactly once.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Probe
 {
@@ -12,7 +12,7 @@ type resource Probe
     unsafe ~Probe() { kama_trace(code: 2); }
 }
 
-fn int build()
+fn int32 build()
 {
     Owned<Probe> a = new Probe.make(id: 9);   // construct once -> 1
     Owned<Probe> b = a;                          // MOVE: a now null
@@ -20,8 +20,8 @@ fn int build()
     // scope exit: ~b (real -> 2), ~a (no-op, ptr null)
 }
 
-fn int main()
+fn int32 main()
 {
-    int r = build();
+    int32 r = build();
     return traceGet();   // fold(1,2) = 33
 }

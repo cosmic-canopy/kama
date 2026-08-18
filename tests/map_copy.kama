@@ -2,7 +2,7 @@
 // clone is fully independent of the original — for int keys AND owning string keys.
 import std::collections::{Map};
 
-fn int main() {
+fn int32 main() {
     Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 20) { m.put(key: i, value: i * 10); i = i + 1; }

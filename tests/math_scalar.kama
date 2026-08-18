@@ -1,5 +1,5 @@
 import std::math::{radians, lerp, sqrt, clampf, minf, maxf};
-fn int main() {
+fn int32 main() {
     float32 l = lerp(a: 0.0f32, b: 10.0f32, t: 0.5f32);   // 5
     float32 s = sqrt(x: 25.0f32);                          // 5
     float32 r = radians(deg: 180.0f32);                    // ~3.14159 -> 3

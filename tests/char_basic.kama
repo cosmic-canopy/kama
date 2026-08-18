@@ -1,6 +1,6 @@
 // `char` — a distinct primitive holding a Unicode scalar value (codepoint). Literals: 'a', '\n',
 // '\u{…}'. Backed by uint32; supports equality; converts to/from int via cast (arithmetic is explicit).
-fn int main() {
+fn int32 main() {
     char a = 'a';                  // codepoint 97
     char b = '\u{62}';             // codepoint 98 ('b')
     int32 r = cast<int32>(a) + cast<int32>(b);   // 97 + 98 = 195

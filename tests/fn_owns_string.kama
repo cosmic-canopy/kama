@@ -1,11 +1,11 @@
 // A by-value `string` param TRANSFERS ownership: the caller `give`s (move) or `copy`s; the callee owns
 // it and drops it at fn-end (a bare arg is rejected — pass by `ref` to borrow, or give/copy). ASan-clean.
-fn int32 taken(string s) { return cast<int32>(s.length()); }   // owns `s`, drops it at return
-fn int main() {
+fn isize taken(string s) { return s.length(); }   // owns `s`, drops it at return
+fn int32 main() {
     string a = "ab" + "cd";
-    int32 r = taken(s: give a);          // move `a` in -> 4
+    isize r = taken(s: give a);          // move `a` in -> 4
     string b = "xy";
     r = r + taken(s: copy b);            // copy `b` in (b survives) -> + 2 => 6
-    r = r + cast<int32>(b.length());     // + 2 => 8
-    return r;
+    r = r + b.length();     // + 2 => 8
+    return cast<int32>(r);
 }

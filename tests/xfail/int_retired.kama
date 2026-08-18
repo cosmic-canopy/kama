@@ -1,0 +1,9 @@
+// `int` was a bare alias for `int32` — a second spelling for a type that already had one, carrying no
+// information of its own. It was removed rather than repurposed as the platform-width type: kama keeps
+// the `size` in `isize`/`usize`, which is what says WHY they are distinct and why a crossing needs a cast.
+// The diagnostic must name the replacement, not just report the absence — every pre-existing kama program
+// and every C/Java-trained reader lands here.
+fn int32 main() {
+    int x = 5;
+    return x;
+}

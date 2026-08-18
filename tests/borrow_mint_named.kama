@@ -23,7 +23,7 @@ type resource Buf implements Spanned<Span> {
     DynamicArray<int32> a;
     public ctor empty() { this.a = DynamicArray.empty(); }
     public fn void add(int32 v) { this.a.add(item: v); }
-    public unsafe fn Span span() { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+    public unsafe fn Span span() { return Span.over(p: addr(of: this.a[0]), n: cast<int32>(this.a.length())); }
 }
 
 fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }

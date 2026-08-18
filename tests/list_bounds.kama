@@ -3,7 +3,7 @@
 // ops (universally `Equatable`); a `DynamicArray<int32>.contains` currently also needs `int32`'s Equatable in scope
 // (import Map) — a tracked DX wart. FixedArray index bounds use int32 (no equality needed).
 import std::collections::{DynamicArray, FixedArray};
-fn int main() {
+fn int32 main() {
     int32 r = 0;
     DynamicArray<string> xs = DynamicArray.empty();
     if (xs.length() == 0)             { r = r + 2; }   // empty

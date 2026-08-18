@@ -91,12 +91,12 @@ unsafe fn ExitStatus statusOf(int32 st) {
 
 // Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
 unsafe fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
-    int32 n = 1 + args.length();
-    UnsafePtr v = kama_argv_new(n: n);
+    isize n = 1 + args.length();
+    UnsafePtr v = kama_argv_new(n: cast<int32>(n));
     kama_argv_set(v: v, i: 0, s: program.cstr());
-    int32 i = 0;
+    isize i = 0;
     while (i < args.length()) {
-        kama_argv_set(v: v, i: i + 1, s: args[i].cstr());
+        kama_argv_set(v: v, i: cast<int32>(i) + 1, s: args[i].cstr());
         i = i + 1;
     }
     return v;
@@ -105,12 +105,12 @@ unsafe fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args)
 // Build the child's envp = inherited environ (unless `clear`) with each KEY=VALUE override applied. The
 // merge (incl. replacing a matching KEY) is done in C; here we just marshal the overrides. Freed by caller.
 unsafe fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref DynamicArray<string> vals) {
-    int32 n = keys.length();
-    UnsafePtr ov = kama_argv_new(n: n);
-    int32 i = 0;
+    isize n = keys.length();
+    UnsafePtr ov = kama_argv_new(n: cast<int32>(n));
+    isize i = 0;
     while (i < n) {
         string kv = keys[i] + "=" + vals[i];
-        kama_argv_set(v: ov, i: i, s: kv.cstr());
+        kama_argv_set(v: ov, i: cast<int32>(i), s: kv.cstr());
         i = i + 1;
     }
     UnsafePtr envp = kama_envp_build(overrides: ov, clear: clear ? 1 : 0);
@@ -121,10 +121,10 @@ unsafe fn UnsafePtr buildEnvp(bool clear, ref DynamicArray<string> keys, ref Dyn
 // Copy `n` bytes out of a raw heap buffer (produced by kama_capture2) into an owned DynamicArray<uint8>.
 // The caller frees the source buffer with kama_free afterwards.
 unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
-    int32 c = cast<int32>(n);
+    isize c = cast<isize>(n);
     DynamicArray<uint8> a = DynamicArray.withCapacity(capacity: c);
     UnsafePtr<uint8> src = cast<UnsafePtr<uint8>>(raw);
-    int32 i = 0;
+    isize i = 0;
     while (i < c) { a.add(item: src[i]); i = i + 1; }
     return give a;
 }
@@ -166,7 +166,7 @@ type resource Command {
 
     public fn void arg(string a) { this.args.add(item: give a); }
     public fn void args(ref DynamicArray<string> list) {
-        int32 i = 0;
+        isize i = 0;
         while (i < list.length()) { this.args.add(item: copy list[i]); i = i + 1; }
     }
     public fn void cwd(string dir) { this.cwd = give dir; }

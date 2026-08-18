@@ -7,7 +7,7 @@ type value Point {
     public ctor make(int32 x) { this.x = x; }
 }
 fn Point origin() { return Point.make(x: 0); }
-fn int main() {
+fn int32 main() {
     int32 r = match (origin()) { case Ok: 1; case _: 0; };
     return r;
 }

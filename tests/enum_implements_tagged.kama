@@ -39,5 +39,5 @@ fn int32 main() {
     r = r + describe(e: d);             // 14 + 4 = 18
     DiskError m = DiskError::Missing;
     r = r + describe(e: m);             // 18 + 4 = 22
-    return r;
+    return cast<int32>(r);
 }

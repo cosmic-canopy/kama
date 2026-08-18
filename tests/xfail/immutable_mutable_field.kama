@@ -7,6 +7,6 @@ type immutable value Bad {
     public UnsafePtr<int32> raw;   // ERROR: a raw pointer is a mutable alias — `Bad` is not deeply immutable
 }
 
-fn int main() {
+fn int32 main() {
     return 0;
 }

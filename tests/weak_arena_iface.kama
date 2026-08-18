@@ -20,8 +20,8 @@ fn Weak<Shape, BumpAllocator> orphan(BumpAllocator alloc) {
     return give w;
 }
 
-fn int main() {
-    Arena arena = Arena.make(capacity: 1 << 12);                        // outlives the returned Weak
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);                        // outlives the returned Weak
     Weak<Shape, BumpAllocator> w = orphan(alloc: arena.handle());  // its Shared already died
 
     Optional<Shared<Shape, BumpAllocator>> up = w.tryUpgrade();    // expired → None

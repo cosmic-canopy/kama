@@ -9,7 +9,7 @@ fn Result<int32, Owned<Error>> rewrap(Result<int32, Owned<Error>> r) {
     };
     return Result::Ok(value: 0);
 }
-fn int main() {
+fn int32 main() {
     Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed);
     Result<int32, Owned<Error>> res = rewrap(r: give r);
     match (res) { case Ok(value: v): { } case Err(error: e): { } };

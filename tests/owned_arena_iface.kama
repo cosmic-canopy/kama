@@ -14,7 +14,7 @@ type value Circle implements Shape {
 }
 
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 1 << 12);         // declared FIRST → drops LAST (outlives the boxes)
+    Arena arena = Arena.make(capacity: 4096);         // declared FIRST → drops LAST (outlives the boxes)
 
     Owned<Shape, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 5);   // 25, via the vtbl
     Owned<Shape, BumpAllocator> b = new(allocator: arena.handle()) Circle.make(r: 4);   // 16

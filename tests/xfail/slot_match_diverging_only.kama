@@ -9,4 +9,4 @@ fn void pickInto(int32 x, out int32 a) {
         case Bad: { a = 5; return; }     // diverges (and assigns, so this arm is not the problem)
     };
 }                                        // ERROR: 'a' not assigned on every path
-fn int main() { slot int32 v; pickInto(x: 1, a: out v); return v; }
+fn int32 main() { slot int32 v; pickInto(x: 1, a: out v); return v; }

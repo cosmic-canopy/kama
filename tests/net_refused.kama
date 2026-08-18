@@ -4,7 +4,7 @@ import std::io::{IoError};
 
 fn int32 isRefused(IoError e) { return match (e) { case ConnectionRefused: 1; case _: 0; }; }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47655);              // nothing bound here
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);

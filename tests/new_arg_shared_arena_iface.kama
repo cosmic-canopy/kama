@@ -20,7 +20,7 @@ fn Shared<Shape, BumpAllocator> make(BumpAllocator alloc, int32 r) {
 fn int32 areaOf(Shared<Shape, BumpAllocator> s) { return s.area(); }
 
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 1 << 12);
+    Arena arena = Arena.make(capacity: 4096);
     Shared<Shape, BumpAllocator> s = make(alloc: arena.handle(), r: 9);   // 81, via return-position new
     int32 viaArg = areaOf(s: make(alloc: arena.handle(), r: 4));          // 16, via arg-position hoisted new
     return s.area() + viaArg;                                             // 97

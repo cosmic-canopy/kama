@@ -5,7 +5,7 @@ import std::collections::{BitSet, Arena, BumpAllocator};
 
 fn int32 main() {
     int32 r = 0;
-    Arena arena = Arena.make(capacity: 1 << 16);
+    Arena arena = Arena.make(capacity: 65536);
 
     BitSet<BumpAllocator> b = BitSet.withAllocator(allocator: arena.handle());
     b.set(index: 3); b.set(index: 100); b.set(index: 250);            // grows the word buffer twice

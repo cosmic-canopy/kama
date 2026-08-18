@@ -44,7 +44,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         this.keys = give k; this.vals = give v; this.kids = give c; this.leaf = leaf; this.alloc = allocator;
     }
 
-    public const fn int32 keyCount() { return this.keys.length(); }
+    public const fn isize keyCount() { return this.keys.length(); }
     public const fn bool isLeaf() { return this.leaf; }
     public const fn bool full() { return this.keys.length() >= 11; }      // 2B-1
 
@@ -56,23 +56,23 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 
     // --- element hand-off helpers (move-only-safe; delegate to the tested DynamicArray ops) ---
     fn void pushKeyVal(K key, V value) { this.keys.add(item: give key); this.vals.add(item: give value); }
-    fn void insertKeyVal(int32 i, K key, V value) {
+    fn void insertKeyVal(isize i, K key, V value) {
         this.keys.insertAt(index: i, item: give key); this.vals.insertAt(index: i, item: give value);
     }
-    fn K takeKeyAt(int32 i) { return this.keys.remove(index: i); }   // move the key out (+ shift)
-    fn V takeValAt(int32 i) { return this.vals.remove(index: i); }
+    fn K takeKeyAt(isize i) { return this.keys.remove(index: i); }   // move the key out (+ shift)
+    fn V takeValAt(isize i) { return this.vals.remove(index: i); }
     fn void pushKid(Owned<BTreeNode<K,V,A>, A> c) { this.kids.add(item: give c); }
-    fn void insertKidAt(int32 i, Owned<BTreeNode<K,V,A>, A> c) { this.kids.insertAt(index: i, item: give c); }
-    fn Owned<BTreeNode<K,V,A>, A> takeKidAt(int32 i) { return this.kids.remove(index: i); }
+    fn void insertKidAt(isize i, Owned<BTreeNode<K,V,A>, A> c) { this.kids.insertAt(index: i, item: give c); }
+    fn Owned<BTreeNode<K,V,A>, A> takeKidAt(isize i) { return this.kids.remove(index: i); }
     // Overwrite the value at `i` in place: move the old value out (drop it), install the new one.
-    fn void overwriteVal(int32 i, V value) {
+    fn void overwriteVal(isize i, V value) {
         V old = this.vals.remove(index: i); drop(value: old);
         this.vals.insertAt(index: i, item: give value);
     }
 
     // --- read paths ---
     public const fn bool contains(const ref K key) {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
@@ -85,7 +85,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
 
     public fn Optional<V> get(ref K key) when [V: Copyable<V>] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
@@ -102,7 +102,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // like `Map.getRef`. The returned `ref V` chains up through each node's `getRef` (a place-returning call
     // whose receiver roots at `this`); it dangles if held across a structural change, the usual borrow rule.
     public fn ref V getRef(ref K key) {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Equal: 0; case Greater: 1; case Less: 2; };
@@ -118,12 +118,12 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // Split the FULL child at index `i` of THIS (non-full) node: its median key/value rises into this node at
     // `i`, its right half (keys/vals MEDIAN+1.., children MEDIAN+1..) migrates into a fresh right sibling `z`
     // inserted at `i+1`, and the child keeps its left half. The child had 11 keys (0..10); median index = 5.
-    fn void splitChild(int32 i) {
+    fn void splitChild(isize i) {
         bool childLeaf = this.kids[i].isLeaf();
         Owned<BTreeNode<K,V,A>, A> z = new(allocator: this.alloc) BTreeNode<K,V,A>.make(leaf: childLeaf, allocator: this.alloc);
         // Move the child's right-half keys/vals (old indices 6..10) into z, in order. Removing at index 6
         // repeatedly pulls each successive right-half element down to index 6 (the DynamicArray shift).
-        int32 t = 0;
+        isize t = 0;
         while (t < 5) {                                  // MINKEYS = 5 right-half keys
             K rk = this.kids[i].takeKeyAt(i: 6);
             V rv = this.kids[i].takeValAt(i: 6);
@@ -131,7 +131,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
             t = t + 1;
         }
         if (!childLeaf) {                                // move the right-half children (old indices 6..11)
-            int32 u = 0;
+            isize u = 0;
             while (u < 6) {                              // B = 6 right-half children
                 Owned<BTreeNode<K,V,A>, A> gc = this.kids[i].takeKidAt(i: 6);
                 z.pushKid(c: give gc);
@@ -167,7 +167,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // added (false on overwrite) so the map can track `len`. Splits a full target child before descending.
     public fn bool insertNonFull(K key, V value) {
         // Find the first index i where key <= keys[i] (linear — a node has <= 11 keys).
-        int32 i = 0; int32 n = this.keys.length(); bool stop = false;
+        isize i = 0; isize n = this.keys.length(); bool stop = false;
         while (i < n && !stop) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             match (o) { case Less: { i = i + 1; } case Equal: { stop = true; } case Greater: { stop = true; } };
@@ -203,7 +203,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
     public fn Optional<K> maxKey() when [K: Copyable<K>] {
         if (this.leaf) {
-            int32 n = this.keys.length();
+            isize n = this.keys.length();
             if (n == 0) { return Optional::None; }
             return Optional::Some(value: this.cloneKey(k: this.keys[n - 1]));
         }
@@ -213,7 +213,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // Greatest key <= `key` (floor) / least key >= `key` (ceil), None if none. A root-to-leaf descent
     // tracking the best candidate at each level, preferring a closer one found deeper in the subtree.
     public fn Optional<K> floor(ref K key) when [K: Copyable<K>] {
-        int32 i = 0; int32 n = this.keys.length(); int32 cand = 0 - 1;
+        isize i = 0; isize n = this.keys.length(); isize cand = 0 - 1;
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
@@ -230,7 +230,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         return Optional::None;
     }
     public fn Optional<K> ceil(ref K key) when [K: Copyable<K>] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
@@ -250,7 +250,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // In-order (ascending) collection of key/value copies into a caller-owned array — the eager backing for
     // sorted iteration. (A lazy cursor would need raw node pointers, which the `Owned` boxes don't expose.)
     public fn void collectKeys(ref DynamicArray<K> dest) when [K: Copyable<K>] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) { this.kids[i].collectKeys(dest: dest); }
             K k = this.cloneKey(k: this.keys[i]); dest.add(item: give k);
@@ -259,7 +259,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         if (!this.leaf) { this.kids[n].collectKeys(dest: dest); }
     }
     public fn void collectVals(ref DynamicArray<V> dest) when [V: Copyable<V>] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) { this.kids[i].collectVals(dest: dest); }
             V v = this.cloneVal(v: this.vals[i]); dest.add(item: give v);
@@ -269,13 +269,13 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
 
     // --- delete helpers (each delegates to the backing DynamicArray's tested move-out / shift) ---
-    const fn int32 kidCount() { return this.kids.length(); }
+    const fn isize kidCount() { return this.kids.length(); }
     fn Owned<BTreeNode<K,V,A>, A> takeFirstKid() { return this.kids.remove(index: 0); }
     fn Owned<BTreeNode<K,V,A>, A> takeLastKid() { return this.kids.remove(index: this.kids.length() - 1); }
     // Remove + return THIS node's own last (resp. first) pair — the value by return, the key via out-pointer
     // (no tuples; a `resource` pair can't expose fields). Used by the sibling rotations.
     fn V popLastOwnPair(out K outKey) {
-        int32 last = this.keys.length() - 1;
+        isize last = this.keys.length() - 1;
         K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
         outKey = give k; return give v;
     }
@@ -295,12 +295,12 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // the invariant holds — a delete of the extreme key. Value by return, key via out-pointer.
     fn V takeMaxPair(out K outKey) {
         if (this.leaf) {
-            int32 last = this.keys.length() - 1;
+            isize last = this.keys.length() - 1;
             K k = this.keys.remove(index: last); V v = this.vals.remove(index: last);
             outKey = give k; return give v;
         }
-        int32 lastChild = this.keys.length();
-        int32 t = lastChild;
+        isize lastChild = this.keys.length();
+        isize t = lastChild;
         if (this.kids[lastChild].keyCount() < 6) { t = this.fill(i: lastChild); }   // < B == thin
         return this.kids[t].takeMaxPair(outKey: out outKey);
     }
@@ -309,19 +309,19 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
             K k = this.keys.remove(index: 0); V v = this.vals.remove(index: 0);
             outKey = give k; return give v;
         }
-        int32 t = 0;
+        isize t = 0;
         if (this.kids[0].keyCount() < 6) { t = this.fill(i: 0); }
         return this.kids[t].takeMinPair(outKey: out outKey);
     }
     // Merge child i, separator keys[i]/vals[i], and child i+1 into child i (which then holds 2B-1 keys).
-    fn void mergeChildren(int32 i) {
+    fn void mergeChildren(isize i) {
         K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);   // separator out of THIS node
         Owned<BTreeNode<K,V,A>, A> right = this.takeKidAt(i: i + 1);      // right child out of THIS node
         this.kids[i].pushKeyVal(key: give sepK, value: give sepV);
         this.kids[i].absorb(other: give right);                  // right's contents fold onto left child
     }
     // Rotate a key right (child i borrows from left sibling i-1) / left (borrows from right sibling i+1).
-    fn void borrowFromPrev(int32 i) {
+    fn void borrowFromPrev(isize i) {
         K sepK = this.takeKeyAt(i: i - 1); V sepV = this.takeValAt(i: i - 1);
         this.kids[i].insertKeyVal(i: 0, key: give sepK, value: give sepV);            // separator to child front
         if (!this.kids[i].isLeaf()) {
@@ -331,7 +331,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         slot K upK; V upV = this.kids[i - 1].popLastOwnPair(outKey: out upK);         // sibling max up
         this.insertKeyVal(i: i - 1, key: give upK, value: give upV);
     }
-    fn void borrowFromNext(int32 i) {
+    fn void borrowFromNext(isize i) {
         K sepK = this.takeKeyAt(i: i); V sepV = this.takeValAt(i: i);
         this.kids[i].pushKeyVal(key: give sepK, value: give sepV);                     // separator to child end
         if (!this.kids[i].isLeaf()) {
@@ -343,7 +343,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     }
     // Ensure child i has >= B keys before a descend: borrow from a rich sibling, else merge. Returns the child
     // index to descend into (a merge with the LEFT sibling shifts the target to i-1).
-    fn int32 fill(int32 i) {
+    fn isize fill(isize i) {
         if (i != 0) { if (this.kids[i - 1].keyCount() >= 6) { this.borrowFromPrev(i: i); return i; } }
         if (i != this.keys.length()) { if (this.kids[i + 1].keyCount() >= 6) { this.borrowFromNext(i: i); return i; } }
         if (i != this.keys.length()) { this.mergeChildren(i: i); return i; }
@@ -354,7 +354,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // (None if absent). CLRS 3-case delete: leaf; internal (replace with predecessor/successor, or merge);
     // descend (fill a thin child first).
     public fn Optional<V> removeKey(ref K key) {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
             int32 d = match (o) { case Less: 0; case Equal: 1; case Greater: 2; };
@@ -390,7 +390,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         }
 
         if (this.leaf) { return Optional::None; }                // absent
-        int32 t = i;
+        isize t = i;
         if (this.kids[i].keyCount() < 6) { t = this.fill(i: i); }   // fill a thin child before descending
         return this.kids[t].removeKey(key: key);
     }
@@ -407,7 +407,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // In-order collect of the keys in [lo, hi) into `dest` — the ordered range query. Prunes subtrees that
     // can't overlap the window: a child left of a key < lo is skipped, and the walk stops once a key >= hi.
     public fn void collectRange(ref K lo, ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering vsHi = this.cmpKeys(a: this.keys[i], b: hi);
             bool geHi = match (vsHi) { case Less: false; case Equal: true; case Greater: true; };
@@ -433,7 +433,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
     const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
-        int32 i = 0; int32 n = this.keys.length();
+        isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) {
                 Result<Unit, Owned<Error>> __sc = this.kids[i].serializeInto(w: w);
@@ -469,7 +469,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement
     // `new(allocator:)` sites in BTreeNode), so all but this one root box lives in the arena.
     Owned<BTreeNode<K,V,A>> root;
-    int32 len = 0; int32 mods = 0;
+    isize len = 0; uint32 mods = 0;
     A alloc;                                            // the allocator the tree's nodes + arrays draw from
 
     // The canonical zero-arg build (M8c `default`) — a NON-zero default: it builds a live B-tree root. A
@@ -489,7 +489,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         this.root = give r;
     }
 
-    public const fn int32 length() { return this.len; }
+    public const fn isize length() { return this.len; }
     public const fn bool isEmpty() { return this.len == 0; }
     public const fn bool contains(const ref K key) { return this.root.contains(key: key); }
     public fn Optional<V> get(ref K key) when [V: Copyable<V>] { return this.root.get(key: key); }
@@ -550,7 +550,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         DynamicArray<K> ks = source.keys();
         DynamicArray<V> vs = source.values();
         while (ks.length() > 0) {
-            int32 last = ks.length() - 1;
+            isize last = ks.length() - 1;
             K k = ks.remove(index: last); V v = vs.remove(index: last);   // O(1) tail removal
             result.put(key: give k, value: give v);
         }

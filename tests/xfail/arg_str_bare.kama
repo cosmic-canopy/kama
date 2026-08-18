@@ -1,3 +1,3 @@
 // passing a named owned `string` by value to a user fn must say give/copy (or pass by ref).
 fn int32 f(string s) { return cast<int32>(s.length()); }
-fn int main() { string x = "ab"; return f(s: x); }
+fn int32 main() { string x = "ab"; return f(s: x); }

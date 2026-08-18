@@ -3,7 +3,7 @@
 import std::collections::{SortedMap};
 import std::serialization::json::{encode, decode};
 
-fn int main() {
+fn int32 main() {
     SortedMap<string, int32> m = SortedMap.empty();
     m.put(key: "cherry", value: 3); m.put(key: "apple", value: 1);
     m.put(key: "banana", value: 2); m.put(key: "date", value: 4);

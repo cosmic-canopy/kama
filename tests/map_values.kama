@@ -10,7 +10,7 @@ type resource Counter {
     public fn int32 get() { return this.n; }
 }
 
-fn int main() {
+fn int32 main() {
     // (a) valuesMut over a MOVE-ONLY value map, read back via getRef (values() is unavailable for non-Copyable).
     Map<int32, Counter> cm = Map.empty();
     cm.put(key: 1, value: Counter.make(n: 10));

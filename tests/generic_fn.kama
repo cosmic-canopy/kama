@@ -9,7 +9,7 @@ fn T identity<T>(T x)
 {
     return x;
 }
-fn int main()
+fn int32 main()
 {
     int32 hi = max(a: 3, b: 4);        // max__int32   -> 4
     int32 lo = max(a: 10, b: 2);       // same instantiation (dedup) -> 10

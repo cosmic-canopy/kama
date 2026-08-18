@@ -629,6 +629,12 @@ bool isLiteralExpr(const ASTNode* n)
         if (b->token == LTLT || b->token == GTGT) return false;
         return isLiteralExpr(b->LHS.get()) && isLiteralExpr(b->RHS.get());
     }
+    // A ternary whose BOTH arms are literals is itself a literal for typing purposes — every value it can
+    // produce is one, so the destination types the whole expression, exactly as it does for `2 + 3`. Only
+    // the condition varies, and that is a `bool`. Without this, `isize from = neg ? 1 : 0;` was rejected:
+    // the arms defaulted to `int32` and the D2a exemption never fired because the node is not a literal.
+    if (auto* t = dynamic_cast<const TernaryExpressionNode*>(n))
+        return isLiteralExpr(t->LHS.get()) && isLiteralExpr(t->RHS.get());
     return isNumericLiteral(n);
 }
 }  // namespace
@@ -748,6 +754,15 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
         {
             const std::string lt = typeOfExpr(be->LHS), rt = typeOfExpr(be->RHS);
             if (!lt.empty() && lt == rt && (cNumBits(lt) || cNumTargetWidth(lt))) return lt;
+            // ONE operand a literal is NOT a mixed expression. A literal takes its type from the other
+            // operand (the D2a exemption the operand rule already carves out), so `cap * 2` on an `isize`
+            // is an `isize` — answering "" here made it merely SILENT rather than typed, which is why
+            // `isize nc = cap == 0 ? 4 : cap * 2;` was rejected while `isize d = cap * 2;` passed.
+            const bool lLit = isLiteralExpr(be->LHS.get()), rLit = isLiteralExpr(be->RHS.get());
+            if (lLit != rLit) {
+                const std::string& ot = lLit ? rt : lt;
+                if (!ot.empty() && (cNumBits(ot) || cNumTargetWidth(ot))) return ot;
+            }
         }
         return "";
     }
@@ -771,20 +786,46 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     // Every arm shares a type, so the first that resolves is representative — the same walk `exprClass`
     // makes, including a block arm's terminal `:= expr;`.
     if (auto* tx = dynamic_cast<TernaryExpressionNode*>(n)) {
+        // A branch that is a bare LITERAL is not representative of the ternary's type. A literal takes its
+        // type from its DESTINATION (D2a, the same exemption `numericHandoff` and the operand rule apply),
+        // so `cap == 0 ? 4 : cap * 2` is an `isize` expression with a literal in one arm — not an `int32`
+        // one. Taking the first arm that resolved made the literal win by position, which rejected
+        // `isize nc = this.cap == 0 ? 4 : this.cap * 2;` in every collection that grows a buffer.
+        const bool lLit = isLiteralExpr(tx->LHS.get()), rLit = isLiteralExpr(tx->RHS.get());
+        if (lLit != rLit) {                                  // exactly one arm is a literal — ask the other
+            std::string oc = typeOfExpr(lLit ? tx->RHS : tx->LHS);
+            if (!oc.empty()) return oc;
+        }
         std::string lc = typeOfExpr(tx->LHS);
         return !lc.empty() ? lc : typeOfExpr(tx->RHS);
     }
     if (auto* mx = dynamic_cast<MatchNode*>(n)) {
-        if (mx->arms)
-            for (auto& a : *mx->arms) {
-                SharedExpression v = a->body;
-                if (!v && a->block && a->block->statements)
-                    for (auto& st : *a->block->statements)
-                        if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
-                if (!v) continue;                                // a diverging arm has no value
+        // Two passes, for the same reason the ternary above takes one: an arm that is a bare LITERAL is
+        // contextually typed (D2a), so it is not representative of the match. `isize got = match (rr) {
+        // case Ok(value: c): c; case Err(error: e): 0 - 1; }` is an `isize` match with a literal in its
+        // error arm — taking the first arm that RESOLVED made `0 - 1` win whenever the payload arm was
+        // unknown, and typed the whole match `int32`.
+        auto armValue = [](const SharedMatchArm& a) -> SharedExpression {
+            SharedExpression v = a->body;
+            if (!v && a->block && a->block->statements)
+                for (auto& st : *a->block->statements)
+                    if (auto* av = dynamic_cast<ArmValueNode*>(st.get())) v = av->value;
+            return v;
+        };
+        if (mx->arms) {
+            for (auto& a : *mx->arms) {                          // a NON-literal arm speaks first
+                SharedExpression v = armValue(a);
+                if (!v || isLiteralExpr(v.get())) continue;      // diverging, or contextually typed
                 std::string ac = typeOfExpr(v);
                 if (!ac.empty()) return ac;
             }
+            for (auto& a : *mx->arms) {                          // every arm literal — they type the match
+                SharedExpression v = armValue(a);
+                if (!v) continue;
+                std::string ac = typeOfExpr(v);
+                if (!ac.empty()) return ac;
+            }
+        }
         return "";
     }
 
@@ -1257,6 +1298,29 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
     if (isClass(ty) || isInterface(ty) || isEnum(ty) || isSigType(ty)) return;
     if (_genericTypes.count(ty) || _genericContracts.count(ty) || _externNames.count(ty)) return;
     if (isTypeParamName(ty)) return;
+    // RETIRED SPELLINGS. `int` was a bare alias for `int32` and carried no information of its own, so it
+    // was removed rather than repurposed — kama's platform-width types keep the `size` in their names
+    // (`isize`/`usize`), which is what says WHY they are a distinct type and why a crossing needs a cast.
+    // `uint` never existed, but a C/Go reader will try it, and "unknown type" would send them looking for
+    // a missing import instead of a different spelling. Both want the replacement named, not just the
+    // absence reported.
+    if (ty == "int" || ty == "uint") {
+        const bool sign = (ty == "int");
+        unsupported((std::string("`") + ty + "` is not a kama type in " + what + " — write `"
+                     + (sign ? "int32" : "uint32") + "` for a fixed 32-bit integer, or `"
+                     + (sign ? "isize" : "usize") + "` for a platform-width "
+                     + (sign ? "size (the type of a length or index)"
+                             : "size crossing into C (`sizeof`, an allocation, an `extern fn`)")).c_str(), line);
+        return;
+    }
+    // The float half of the same rule. `double` was an alias for `float64` (`float` never existed), and a
+    // C reader reads a WIDTH into both names that kama does not promise. Every kama float states its width.
+    if (ty == "double" || ty == "float") {
+        unsupported((std::string("`") + ty + "` is not a kama type in " + what
+                     + " — every float states its width: write `float64`"
+                     + (ty == "float" ? " or `float32`" : " (`double` was an alias for it)")).c_str(), line);
+        return;
+    }
     std::string ns = namespaceOfType(name);
     if (!ns.empty())
         unsupported((std::string("type `") + name + "` is not imported — it lives in `" + ns
@@ -7276,6 +7340,13 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         auto s = _typeSubst.find(*elem->value);
         if (s != _typeSubst.end()) return mangleElem(s->second);
     }
+    // `isize`/`usize` are PRIMITIVES spelled as plain names — they carry no `builtInVal` (`cType` maps them
+    // by spelling), so the switch below misses them and `default:` hands them to `resolveUserName`, which
+    // does not answer for a primitive. The suffix came back empty and the call site emitted an UNMANGLED
+    // `std__ptr__relocate(...)`, which C rejects as an implicit declaration. Latent until something
+    // instantiated a container at `isize` — `DynamicArray<isize>` never compiled.
+    if (elem->value && !elem->genericArg && (*elem->value == "isize" || *elem->value == "usize"))
+        return *elem->value;
     switch (elem->builtInVal) {
         case IDENTIFIER_STRING_VAL:  return "string";
         case IDENTIFIER_INT8_VAL:    return "int8";
@@ -7541,14 +7612,20 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         // `kama_string__*` intrinsics BORROW their string argument, so naming it there would demand a
         // `give`/`copy` marker on `s.contains(substring: t)`. `include/kama_runtime.h` is the authority
         // for each spelling — an offset is a `size_t`, a needle or piece is a `kama_string`.
-        auto SZ = [](const char* n) { ParamSig p; p.name = n; p.byRef = false; p.kindCType = "size_t"; return p; };
+        // An offset into a string is an `isize` — kama's size type — so `SZ` is `ptrdiff_t`, not `size_t`.
+        auto SZ = [](const char* n) { ParamSig p; p.name = n; p.byRef = false; p.kindCType = "ptrdiff_t"; return p; };
         auto ST = [](const char* n) { ParamSig p; p.name = n; p.byRef = false; p.kindCType = "kama_string"; return p; };
-        addMethod("length", {}, SharedIdentifier());
+        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+        // `length` names its return type instead of passing NULL and letting the C type govern. A NULL
+        // returnType makes `typeOfExpr` answer "" — "I have no idea" — and every numeric rule is silent on
+        // an unknown source by design, so `int8 n = s.length();` COMPILED and silently truncated. Naming it
+        // closes that (milestone 6's rule never reached an intrinsic) and is what lets a caller write
+        // `isize n = s.length();` with no cast at all.
+        addMethod("length", {}, synthId("isize"));
         addMethod("equals", { ST("other") }, SharedIdentifier());
         addMethod("concat", { ST("other") }, collType);   // returns a string
         addMethod("cstr",   {}, SharedIdentifier());                        // FFI: const char*
         addMethod("get",    { SZ("index") }, elem);        // `s[i]` -> the i-th byte (uint8)
-        if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
         addMethod("chars",  {}, synthId("Chars"));   // codepoint iterator
         // Phase 3 ergonomics. Bool-returning methods pass a NULL returnType (the `equals` pattern — the
         // emitter emits the raw C call and the C `bool` return governs). `substring`/`trim`/`replace`/case
@@ -7556,9 +7633,9 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("substring", { SZ("start"), SZ("end") }, collType);
         // `substring` traps on an offset that splits a character, so the safe path has to be reachable:
         // `floorCharBoundary` snaps an arbitrary offset DOWN to a boundary (total, O(1)) and `truncate`
-        // names the budget case on top of it. A `usize`-returning intrinsic passes a NULL returnType, like
-        // `length` — the C return type governs.
-        addMethod("floorCharBoundary", { SZ("at") }, SharedIdentifier());
+        // names the budget case on top of it. It returns an OFFSET, so it names `isize` for the same
+        // reason `length` does — a NULL returnType would leave it invisible to every numeric rule.
+        addMethod("floorCharBoundary", { SZ("at") }, synthId("isize"));
         addMethod("truncate", { SZ("maxBytes") }, collType);   // owned result, like trim
         addMethod("contains",   { ST("substring") }, SharedIdentifier());
         addMethod("startsWith", { ST("prefix") },    SharedIdentifier());
@@ -7660,13 +7737,15 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // Same split as the string intrinsics above: `className` keeps its ownership/upcast meaning
     // (`elemClass`, empty for a primitive element) and the kind rule reads `kindCType`, which is the
     // element's real C type. `KAMA_FIXED_FUNCS` in include/kama_runtime.h is the authority for both.
-    ParamSig ixGet; ixGet.name = "index"; ixGet.byRef = false; ixGet.kindCType = "size_t";
+    // An index is an `isize` (`ptrdiff_t`), matching every other container — see the string block above.
+    ParamSig ixGet; ixGet.name = "index"; ixGet.byRef = false; ixGet.kindCType = "ptrdiff_t";
     ParamSig ixSet = ixGet;
     ParamSig val;   val.name = "value"; val.byRef = false; val.className = elemClass; val.kindCType = elemCType;
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
     addMethod("get",    { ixGet }, elem, true);
     addMethod("set",    { ixSet, val },
               SharedIdentifier(), false);   // the one intrinsic here that writes
-    addMethod("length", {}, SharedIdentifier(), true);
+    addMethod("length", {}, synthId("isize"), true);   // named, not NULL — see the string `length` above
     _classes[cName] = ci;
 }
 
@@ -8867,6 +8946,12 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 {
     if (!t) return false;
     if (t->builtInVal != IDENTIFIER_NONE_VAL) return true;   // primitive
+    // `isize`/`usize` are primitives too, but they are spelled as plain NAMES and carry no `builtInVal`
+    // (`cType` maps them to `ptrdiff_t`/`size_t` by spelling). Without this they fell to the user-type
+    // lookup below, answered "not concrete", and generic inference silently bound NOTHING — so
+    // `relocate(from: this.data, …)` on an `UnsafePtr<isize>` emitted an UNMANGLED `std__ptr__relocate`
+    // and died in the C compiler. Pre-existing: `DynamicArray<isize>` never compiled.
+    if (t->value && !t->genericArg && (*t->value == "isize" || *t->value == "usize")) return true;
     // A generic type argument (`DynamicArray<int32>`, `Shared<Node>`) is concrete exactly when it has
     // already been REGISTERED as an instance — then it names a real struct and can be mangled into an
     // instantiation key. An unregistered one is either still parameterized (an argument that is itself a

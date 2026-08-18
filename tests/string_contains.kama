@@ -1,5 +1,5 @@
 // `contains(substring:)` — true/false, empty needle (true), needle longer than haystack (false).
-fn int main() {
+fn int32 main() {
     string s = "hello";
     int32 r = 0;
     if (s.contains(substring: "ell")) { r = r + 1; }

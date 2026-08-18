@@ -22,7 +22,7 @@ fn void worker(Payload p) {
     p.run();
 }
 
-fn int main() {
+fn int32 main() {
     int32 shared = 0;
     Payload p = Payload.make(dst: ref shared, value: 7i32);
     {

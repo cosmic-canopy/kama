@@ -4,7 +4,7 @@
 import std::concurrent;
 import std::collections::{Map};
 
-fn int main() {
+fn int32 main() {
     Map<int32, int32> m = Map.withCapacity(capacity: 4);
     m.put(key: 1i32, value: 10i32);
     parallel_for (ref int32 e in m) {      // rejected: Map is not contiguous

@@ -10,14 +10,14 @@ type value Point implements Hashable, Equatable<This> {
     public const fn bool equals(const ref Point other) { return this.x == other.x && this.y == other.y; }
 }
 
-fn int main() {
+fn int32 main() {
     Map<Point, int32> m = Map.empty();
     m.put(key: Point.make(x: 1, y: 2), value: 10);
     m.put(key: Point.make(x: 3, y: 4), value: 20);
     m.put(key: Point.make(x: 1, y: 2), value: 99);       // overwrite (equal key)
 
     int32 r = 0;
-    r = r + m.length();                              // 2
+    r = r + cast<int32>(m.length());                              // 2
     Point p12 = Point.make(x: 1, y: 2);
     Point p34 = Point.make(x: 3, y: 4);
     Point p99 = Point.make(x: 9, y: 9);
@@ -25,5 +25,5 @@ fn int main() {
     int32 b = match (m.get(key: p34)) { case Some(value: v): v; case None: 0; };   // 20
     r = r + a + b;
     if (!m.contains(key: p99)) { r = r + 1; }        // absent -> +1
-    return r;   // 2+99+20+1 = 122
+    return cast<int32>(r);   // 2+99+20+1 = 122
 }

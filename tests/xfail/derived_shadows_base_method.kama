@@ -35,4 +35,4 @@ type final resource D extends B {
     protected fn int32 g() { return 2; }              // ERROR: same, at protected
     protected override fn int32 t() { return 2; }
 }
-fn int main() { D d = D.make(); return d.h(); }
+fn int32 main() { D d = D.make(); return d.h(); }

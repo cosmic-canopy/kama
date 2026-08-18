@@ -3,7 +3,7 @@ type resource Probe { int32 id; public ctor make(int32 id){ this.id=id; } ~Probe
 // A `Shared` factory — `new` heap-places into a local owner, which moves out to the caller as a
 // fresh rvalue (so it needs no hand-off marker at the call site).
 fn Shared<Probe> mk(int32 id) { Shared<Probe> s = new Probe.make(id: id); return s; }
-fn int main()
+fn int32 main()
 {
     Optional<Shared<Probe>> h = Optional::Some(value: mk(id: 3));
     h = Optional::Some(value: mk(id: 8));   // old Probe(3) dropped before the new lands

@@ -3,7 +3,7 @@
 // (tests/smartptr_selfassign).
 import std::memory::{Owned};
 type value Probe { int32 id; public Probe(int32 id){ this.id = id; } public fn int32 get(){ return this.id; } }
-fn int main() {
+fn int32 main() {
     Owned<Probe> o = new Probe(id: 20);
     o = o;
     return o.get();

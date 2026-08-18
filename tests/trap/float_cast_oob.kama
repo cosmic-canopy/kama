@@ -1,7 +1,7 @@
 // An out-of-range float->int cast traps; an in-range one truncates toward zero (see num_cast). The huge
 // value is built from a runtime-opaque source so it isn't folded at compile time.
 import std::num::{int32Max};
-fn int main() {
+fn int32 main() {
     float64 huge = cast<float64>(int32Max()) * 1.0e30f64;   // ~2e39, far past int32 range
     return cast<int32>(huge);                                 // out-of-range float->int traps
 }

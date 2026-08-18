@@ -1,3 +1,3 @@
 // A plain class may not declare a virtual method — opt in with `virtual class`.
-type value Shape { protected virtual fn int area() { return 1; } }
-fn int main() { return 0; }
+type value Shape { protected virtual fn int32 area() { return 1; } }
+fn int32 main() { return 0; }

@@ -3,7 +3,7 @@
 // pure-kama `implements Hashable for string`, `equals` structural), so a lookup key built any way hits.
 import std::collections::{Map};
 
-fn int main() {
+fn int32 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "one", value: 1);
     m.put(key: "two", value: 2);
@@ -11,7 +11,7 @@ fn int main() {
     m.put(key: "two", value: 22);        // overwrite — length unchanged, value replaced
 
     int32 r = 0;
-    r = r + m.length();                   // 3
+    r = r + cast<int32>(m.length());                   // 3
     int32 a = match (m.get(key: "one"))  { case Some(value: v): v; case None: 0; };    // 1
     int32 b = match (m.get(key: "t" + "wo")) { case Some(value: v): v; case None: 0; };  // 22 (concat key still hits)
     int32 c = match (m.get(key: "kama")) { case Some(value: v): 100; case None: 5; };  // 5 (absent)
@@ -20,6 +20,6 @@ fn int main() {
     bool had1 = match (m.remove(key: "one")) { case Some(value: v): true; case None: false; };  // remove present -> Some
     if (had1)                     { r = r + 7; }         // +7
     if (!m.contains(key: "one"))  { r = r + 3; }         // +3
-    r = r + m.length();                   // +2
-    return r;   // 3+1+22+5+4+7+3+2 = 47
+    r = r + cast<int32>(m.length());                   // +2
+    return cast<int32>(r);   // 3+1+22+5+4+7+3+2 = 47
 }

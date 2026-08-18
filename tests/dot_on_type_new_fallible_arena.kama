@@ -33,7 +33,7 @@ type value Circle implements Shape {
 }
 
 fn int32 main() {
-    Arena arena = Arena.make(capacity: 1 << 12);   // declared FIRST → drops LAST (outlives the boxes)
+    Arena arena = Arena.make(capacity: 4096);   // declared FIRST → drops LAST (outlives the boxes)
 
     // concrete + placement: `adoptIn(raw, alloc)` into a library HeapOwner box
     Result<Owned<Gauge, BumpAllocator>, OpenErr> g  = new(allocator: arena.handle()) Gauge.open(v: 10);

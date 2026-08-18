@@ -1,4 +1,4 @@
 import std::memory::{Owned};
 // An Owned is unique — it can't be copied. Use `give` to move it.
 type value C { int32 n; public ctor make(int32 n){ this.n = n; } }
-fn int main() { Owned<C> a = new C.make(n: 1); Owned<C> b = copy a; return 0; }
+fn int32 main() { Owned<C> a = new C.make(n: 1); Owned<C> b = copy a; return 0; }

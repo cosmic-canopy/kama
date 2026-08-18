@@ -30,7 +30,7 @@ fn int32 portOf(ref UdpSocket s) {
     return match (r) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);

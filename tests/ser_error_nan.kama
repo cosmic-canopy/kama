@@ -7,7 +7,7 @@ type value Measure {
     @field float64 v;
     public ctor make(float64 v) { this.v = v; }
 }
-fn int main() {
+fn int32 main() {
     // finite -> Ok
     Measure ok = Measure.make(v: 1.5);
     Result<string, Owned<Error>> okr = encode(v: ok);

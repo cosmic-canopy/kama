@@ -19,7 +19,7 @@ type resource Rec {
     public fn int32 verify() { if (this.id == 7 && this.ok && this.name == "hi") { return 0; } return 99; }
 }
 
-fn int main() {
+fn int32 main() {
     Rec r = Rec.make(id: 7, name: "hi", ok: true);
 
     // (a) sugar path — byte-identical to pre-streams output.

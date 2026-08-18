@@ -14,10 +14,10 @@ type value Bank {
 type value Ledger {
     public fn int64 post(ref Account a) { return a.balance; }      // granted method
 }
-fn int main() {
+fn int32 main() {
     Account acc = Account.make(b: 14);
     Bank bk = Bank.zero();      // a stateless method bag still names its constructor
     Ledger lg = Ledger.zero();
     int64 total = readBalance(a: ref acc) + bk.viaBank(a: ref acc) + lg.post(a: ref acc);
-    return cast<int>(total);   // 14 * 3 = 42
+    return cast<int32>(total);   // 14 * 3 = 42
 }

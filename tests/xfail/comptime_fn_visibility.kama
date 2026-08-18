@@ -7,4 +7,4 @@ type value Secret {
 
 comptime int32 BAD = Secret::hidden();   // ERROR: private comptime fn called from module scope
 
-fn int main() { return BAD; }
+fn int32 main() { return BAD; }

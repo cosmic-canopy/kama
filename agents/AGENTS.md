@@ -56,9 +56,17 @@ error and wants `cast<int8>(big)`. That covers every crossing, not just narrowin
 (`int64 a = someInt32`), a signedness flip and int/float are all conversions and all want a `cast`.
 
 The same rule applies **between an operator's two operands**, comparisons included: `int32 + uint8` does
-not compile, and neither does `i < n` with an `int32` counter against a `usize` length — the commonest
-shape to get wrong. Write `cast<usize>(i) < n`. A **shift** is the exception: its right operand is a
-count, so `x << someInt32` on an `int64` is fine.
+not compile, and neither does `i < n` with an `int32` counter against an `isize` length — the commonest
+shape to get wrong. **Declare the counter `isize` and no cast is needed** (`isize i = 0; while (i < xs.length())`);
+reach for `cast<int32>(…)` only where the value genuinely leaves the size domain, such as `main`'s exit
+code. A **shift** is the exception: its right operand is a count, so `x << someInt32` on an `int64` is fine.
+
+**`isize` is the size type.** Every `length()`/`count()`, every index and every `operator[]` is an `isize`
+(`ptrdiff_t`) — `string`, `View`, `Fixed` and every collection alike. `usize` (`size_t`) is reserved for
+crossing into C: `sizeof`, an allocation size, an `extern fn` mirroring a `size_t`. They are the only two
+platform-varying types, which is why a crossing to a fixed width (`cast<int32>(xs.length())`) is a real
+narrowing on a 64-bit host. Bare `int`, `uint`, `double` and `float` are **not** kama types — write
+`int32`/`isize` and `float64`/`float32`.
 
 A **literal** is typed by its destination, so it is not a conversion and needs no cast: `int8 a = 100;`,
 `float32 f = 3;` and `int8 a = 2 + 3;` are all fine, while a constant that does not fit its destination

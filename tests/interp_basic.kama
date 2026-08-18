@@ -10,7 +10,7 @@ type value Pt implements Format {
     }
 }
 
-fn int main() {
+fn int32 main() {
     int32 r = 0;
     int32 n = 7i32;
     string who = "kama";

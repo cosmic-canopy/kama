@@ -1,5 +1,5 @@
 type enum Shape { Circle(float64 radius), Empty }
-fn int main()
+fn int32 main()
 {
     Shape s = Shape::Circle();
     return 0;

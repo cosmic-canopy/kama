@@ -8,4 +8,4 @@ fn void inspect(File handle)
     return;
 }
 
-fn int main() { return 42; }
+fn int32 main() { return 42; }

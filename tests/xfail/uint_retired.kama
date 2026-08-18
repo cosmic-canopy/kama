@@ -1,0 +1,7 @@
+// `uint` never existed in kama, but a C/Go/C# reader will try it. Plain "unknown type" would send them
+// looking for a missing import instead of a different spelling, so the retired-spelling diagnostic covers
+// it too and points at the C-ABI type (`usize`) rather than the size type (`isize`).
+fn int32 main() {
+    uint n = 5;
+    return 0;
+}

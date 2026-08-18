@@ -3,7 +3,7 @@
 @generate(of) type value Plain { public int32 x; }          // constructible, but NOT `implements Format`
 @generate(Format, of) type value Wrap { public Plain p; }
 
-fn int main() {
+fn int32 main() {
     Wrap w = Wrap.of(p: Plain.of(x: 1i32));
     return 0;
 }

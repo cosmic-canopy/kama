@@ -1,15 +1,15 @@
 // A `final class` is a sealed leaf — it cannot be extended further, whatever the budget says.
 type virtual(maxDepth: 2) resource Root {
     public ctor make() { }
-    protected virtual fn int h() { return 0; }
-    public fn int go() { return this.h(); }
+    protected virtual fn int32 h() { return 0; }
+    public fn int32 go() { return this.h(); }
 }
 type final resource Leaf extends Root {
     public ctor make() { this.base = Base.make(); }
-    protected override fn int h() { return 1; }
+    protected override fn int32 h() { return 1; }
 }
 type final resource Bad extends Leaf {                       // ERROR: Leaf is a `final class`
     public ctor make() { this.base = Base.make(); }
-    protected override fn int h() { return 2; }
+    protected override fn int32 h() { return 2; }
 }
-fn int main() { return 0; }
+fn int32 main() { return 0; }

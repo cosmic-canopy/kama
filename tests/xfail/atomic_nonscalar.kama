@@ -8,7 +8,7 @@ type resource Thing {
     public ctor make() { this.x = 0; }
 }
 
-fn int main() {
+fn int32 main() {
     Atomic<Thing> bad = Atomic.make(value: Thing.make());
     return 0;
 }

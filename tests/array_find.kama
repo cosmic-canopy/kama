@@ -9,16 +9,16 @@ type value Tag implements Equatable<This> {
     public const fn bool equals(const ref Tag other) { return this.id == other.id; }
 }
 
-fn int main() {
+fn int32 main() {
     FixedArray<Tag> a = FixedArray.make(size: 3);
     Tag t0 = Tag.make(id: 10); Tag t1 = Tag.make(id: 20); Tag t2 = Tag.make(id: 30);
     a[0] = t0; a[1] = t1; a[2] = t2;
-    int32 r = 0;
+    isize r = 0;
     Tag q20 = Tag.make(id: 20);
     Tag q30 = Tag.make(id: 30);
     Tag q99 = Tag.make(id: 99);
     if (a.contains(item: q20)) { r = r + 10; }   // +10
     r = r + a.indexOf(item: q30);                // +2 -> 12
     if (a.indexOf(item: q99) < 0) { r = r + 8; } // +8 -> 20 (absent)
-    return r;   // 20
+    return cast<int32>(r);   // 20
 }

@@ -25,4 +25,4 @@ type final resource D extends B {
     protected override fn int32 t() { return 2; }
     protected override fn int32 peekImpl() { return base.secret(); }   // ERROR: 'secret' is private in 'B'
 }
-fn int main() { D d = D.make(); return d.peek(); }
+fn int32 main() { D d = D.make(); return d.peek(); }

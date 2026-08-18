@@ -2,6 +2,6 @@
 // pass it explicitly with turbofish `f::<T>()`. Here T is used only in `sizeof(T)`.
 fn int32 byteSize<T>() { return cast<int32>(sizeof(T)); }
 
-fn int main() {
+fn int32 main() {
     return byteSize::<int32>() + byteSize::<uint8>() * 38;   // 4 + 1*38 = 42
 }

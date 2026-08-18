@@ -13,4 +13,4 @@ type final resource Leaf extends Base
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 read() { return 7; }      // drops `const` -> REJECT
 }
-fn int main() { Leaf l = Leaf.make(); return l.go(); }
+fn int32 main() { Leaf l = Leaf.make(); return l.go(); }

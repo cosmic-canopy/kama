@@ -22,4 +22,4 @@ type final resource Derived extends Base {
     protected override fn int32 tag() { return 1; }
     protected override fn int32 own() { return this.y; }
 }
-fn int main() { Derived d = Derived.make(y: 12); return d.sum(); }
+fn int32 main() { Derived d = Derived.make(y: 12); return d.sum(); }

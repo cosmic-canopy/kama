@@ -14,7 +14,7 @@ type value Box<T>
     public ctor make(T v) { this.value = v; }
     public fn T unbox() { return this.value; }
 }
-fn int main()
+fn int32 main()
 {
     Pair<int32, int32> p = Pair.make(x: 3, y: 4);
     Box<Pair<int32, int32>> b = Box.make(v: p);    // nested arg, no space — `>>` splits into two closes

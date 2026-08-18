@@ -14,7 +14,7 @@ type resource Twin {
     public ctor make(Owned<Child> a, Owned<Child> b) { this.a = give a; this.b = give b; }
 }
 
-fn int main() {
+fn int32 main() {
     // Both `a` and `b` reference id 2 — a single owned Child claimed twice.
     string j = "{\"root\":1,\"objects\":{\"1\":{\"__type\":\"Twin\",\"a\":2,\"b\":2},\"2\":{\"__type\":\"Child\",\"v\":5}}}";
     Result<Shared<Twin>, Owned<Error>> res = decode::<Shared<Twin>>(src: give j);

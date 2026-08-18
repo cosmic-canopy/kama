@@ -10,7 +10,7 @@ type value Point implements Hashable, Equatable<This> {
     public const fn bool equals(const ref Point other) { return this.x == other.x && this.y == other.y; }
 }
 
-fn int main() {
+fn int32 main() {
     Map<int32, int32> m = Map.empty();
     m.put(key: 5, value: 50);
     int32 r = 0;

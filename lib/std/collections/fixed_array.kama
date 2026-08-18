@@ -7,21 +7,21 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T> implements Iterator<T> {
-    UnsafePtr<T> data; int32 pos; int32 len;
-    unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafePtr<T> data; isize pos; isize len;
+    unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
-        int32 p = this.pos; this.pos = this.pos + 1;
+        isize p = this.pos; this.pos = this.pos + 1;
         return Optional::Some(value: copy this.data[p]);   // yield a COPY (the array keeps its element)
     }
 }
 
 // A mutable iterator (the `foreach (ref T x in arr)` protocol): hasNext() + a place-returning next().
 type view FixedArrayIterMut<T> implements IteratorMut<T> {
-    UnsafePtr<T> data; int32 pos; int32 len;
-    unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
+    UnsafePtr<T> data; isize pos; isize len;
+    unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
     public const fn bool hasNext() { return this.pos < this.len; }
-    public unsafe fn ref T next() { int32 p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+    public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
@@ -29,18 +29,18 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
                                   Serialize when [T: Serialize] {
-    UnsafePtr<T> data = null; int32 size = 0; A alloc;
+    UnsafePtr<T> data = null; isize size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
     // growable containers the allocator can't be post-assigned after a bare ctor. The ctor allocates through
     // `this.alloc` — the default zero-size `GlobalAllocator` for the bare `FixedArray.make(size:)` path (gated
     // `when [A: default]`) — and the arena path goes through `withAllocator`, which sets the handle FIRST.
-    public ctor make(int32 size) when [A: default] { this.allocBuffer(size: size); }
+    public ctor make(isize size) when [A: default] { this.allocBuffer(size: size); }
 
     // Zero-initialized buffer from `this.alloc` (`allocate` returns UNINITIALIZED bytes, so `memset` restores
     // the documented zero-init semantics — a bump allocator also hands back dirty reused memory). `size <= 0`
     // leaves a null buffer so the dtor's guard skips a deallocate.
-    unsafe fn void allocBuffer(int32 size) {
+    unsafe fn void allocBuffer(isize size) {
         if (size > 0) {
             this.data = cast<UnsafePtr<T>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(size) * sizeof(T))));
             memset(p: cast<UnsafePtr>(this.data), value: 0, n: cast<usize>(size) * sizeof(T));
@@ -53,14 +53,14 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Build an `size`-element array drawn from a caller-owned allocator (e.g. an `Arena`). Sets the handle
     // on a bare (zero-init) local FIRST, then allocates through it — the eager-ctor analogue of
     // DynamicArray.withCapacityAndAllocator (no nameless-primary detour).
-    public ctor withAllocator(A allocator, int32 size) {
+    public ctor withAllocator(A allocator, isize size) {
         this.alloc = allocator;
         this.allocBuffer(size: size);
     }
 
-    public const fn int32 length() { return this.size; }
+    public const fn isize length() { return this.size; }
 
-    public unsafe ref T operator[](int32 i) {
+    public unsafe ref T operator[](isize i) {
         if (i < 0 || i >= this.size) { panic(msg: "FixedArray index out of bounds"); }
         return this.data[i];
     }
@@ -72,7 +72,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // DynamicArray.view/slice; a `FixedArray` never resizes, so a view over it stays valid for the
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
     public unsafe fn View<T> view() { return View::<T>.over(at: this.data, count: this.size); }
-    public unsafe fn View<T> slice(int32 from, int32 count) {
+    public unsafe fn View<T> slice(isize from, isize count) {
         // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
@@ -87,8 +87,8 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).
     public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
-    public const fn int32 indexOf(const ref T item) when [T: Equatable<T>] {
-        int32 i = 0;
+    public const fn isize indexOf(const ref T item) when [T: Equatable<T>] {
+        isize i = 0;
         // `item.equals(other: this[i])` (receiver is the `ref T` identifier) so a primitive element resolves
         // — see DynamicArray.indexOf. `equals` is symmetric.
         while (i < this.size) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
@@ -98,7 +98,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // Present ONLY for a Copyable element — a deep copy (fresh buffer, each element copied).
     public ctor copy(ref FixedArray<T, A> source) {
         FixedArray<T, A> result = FixedArray.withAllocator(allocator: source.alloc, size: source.size);  // same arena
-        int32 i = 0;
+        isize i = 0;
         while (i < source.size) { result[i] = copy source[i]; i = i + 1; }
         return result;
     }
@@ -109,7 +109,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
         w.beginArray(count: cast<usize>(this.size));
-        int32 i = 0;
+        isize i = 0;
         while (i < this.size) {
             Result<Unit, Owned<Error>> __sr = this.serElem(e: this[i], w: w);
             match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
@@ -120,7 +120,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     }
 
     unsafe ~FixedArray() {   // drop each element (a no-op for a value), then release the buffer via the allocator
-        int32 i = 0;
+        isize i = 0;
         while (i < this.size) { drop(value: this[i]); i = i + 1; }
         if (this.size > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(this.data), bytes: cast<usize>(this.size) * sizeof(T));

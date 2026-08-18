@@ -4,7 +4,7 @@
 import std::ascii::{isDigit, isHexDigit, isAlpha, isAlnum, isSpace, isUpper, isLower, isPunct,
                     isControl, isAscii, toLower, toUpper, digitValue};
 
-fn int main() {
+fn int32 main() {
     char a  = 'a';
     char Z  = 'Z';
     char n7 = '7';

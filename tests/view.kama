@@ -5,9 +5,9 @@ import std::collections::{DynamicArray, FixedArray, View};
 // A view flows DOWN the call stack as a by-value parameter (zero copy).
 fn int32 sumView(View<int32> v) {
     int32 s = 0;
-    int32 i = 0;
+    isize i = 0;
     while (i < v.length()) { s = s + v[i]; i = i + 1; }
-    return s;
+    return cast<int32>(s);
 }
 
 // `const View<T>` expresses read-only intent at the boundary.
@@ -37,7 +37,7 @@ fn int32 main() {
     doubleAll(v: a.slice(from: 1, count: 2));                               // a -> {10, 40, 60, 40}
     if (a[0] == 10 && a[1] == 40 && a[2] == 60 && a[3] == 40) { r = r + 1; }// 4
 
-    int32 s = 0;
+    isize s = 0;
     borrow a.view() as forSum {
         foreach (int32 x in forSum) { s = s + x; }                          // 150
     }

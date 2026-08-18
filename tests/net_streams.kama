@@ -9,8 +9,8 @@ import std::collections::{DynamicArray};
 fn DynamicArray<uint8> payload() {
     string msg = "hello streams";
     DynamicArray<uint8> data = DynamicArray.empty();
-    int32 i = 0;
-    while (i < cast<int32>(msg.length())) { data.add(item: msg[i]); i = i + 1; }
+    isize i = 0;
+    while (i < msg.length()) { data.add(item: msg[i]); i = i + 1; }
     return give data;
 }
 
@@ -21,7 +21,7 @@ fn int32 clientSend(uint16 port) {
     return match (rc) {
         case Ok(value: c): {
             DynamicArray<uint8> data = payload();
-            := match (writeAll(w: c, bytes: data.view())) { case Ok(value: u): data.length(); case Err(error: e): -1; };
+            := match (writeAll(w: c, bytes: data.view())) { case Ok(value: u): cast<int32>(data.length()); case Err(error: e): -1; };
         }
         case Err(error: e): -1;
     };
@@ -32,8 +32,8 @@ fn int32 serverRecv(ref TcpStream srv) {
     return match (readAll(r: srv)) {
         case Ok(value: s): {
             DynamicArray<uint8> want = payload();
-            bool ok = cast<int32>(s.length()) == want.length();
-            int32 i = 0;
+            bool ok = s.length() == want.length();
+            isize i = 0;
             while (ok && i < want.length()) { if (s[i] != want[i]) { ok = false; } i = i + 1; }
             := ok ? 55 : 40;
         }
@@ -48,7 +48,7 @@ fn int32 run(ref TcpListener l, uint16 port) {
     return match (ra) { case Ok(value: srv): serverRecv(srv: srv); case Err(error: e): 42; };
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 port = cast<uint16>(47665);
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);

@@ -11,4 +11,4 @@ type value P {
         this.y = other.y;
     }
 }
-fn int main() { P p = P.flipped(x: 2, y: 5); return p.x * 10 + p.y; }   // 5*10 + 2 = 52
+fn int32 main() { P p = P.flipped(x: 2, y: 5); return p.x * 10 + p.y; }   // 5*10 + 2 = 52

@@ -5,4 +5,4 @@
 fn void pick(bool c, out int32 x) {
     if (c) { x = 1; }      // only one path assigns
 }                          // ERROR: 'x' not assigned on every path before this function returns
-fn int main() { slot int32 v; pick(c: true, x: out v); return v; }
+fn int32 main() { slot int32 v; pick(c: true, x: out v); return v; }

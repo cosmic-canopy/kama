@@ -1,4 +1,4 @@
-fn int main()
+fn int32 main()
 {
     Optional<Optional<int32>> nn = Optional::Some(value: Optional::Some(value: 5));
     Optional<Optional<int32>> no = Optional::Some(value: Optional::None);

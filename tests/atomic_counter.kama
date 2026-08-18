@@ -10,7 +10,7 @@ fn void bump(ref Atomic<int32> c) {
     while (i < 25) { c.fetchAdd(delta: 1i32); i = i + 1; }
 }
 
-fn int main() {
+fn int32 main() {
     Atomic<int32> counter = Atomic.make(value: 0i32);
     scope {
         spawn bump(c: ref counter);

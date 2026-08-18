@@ -3,7 +3,7 @@
 import std::num::{int8Max, int8Min, int16Max, int16Min, int32Max, int32Min, int64Max, int64Min,
                   uint8Max, uint16Max, uint32Max, uint64Max, float32Max, float32MinNormal, float32Epsilon};
 
-fn int main() {
+fn int32 main() {
     int32 r = 0;
     if (int8Max()  == 127i8)                             { r = r + 3; }
     if (int8Min()  == 0i8 - 127i8 - 1i8)                 { r = r + 3; }

@@ -7,7 +7,7 @@ type resource Impl implements Child, Parent {
     public fn int32 take(View<uint8> bytes) { return this.n + cast<int32>(bytes.length()); }
     public fn int32 extra() { return this.n + 1; }
 }
-fn int main() {
+fn int32 main() {
     Impl i = Impl.make(n: 41);
     Child c = i;
     return c.extra();

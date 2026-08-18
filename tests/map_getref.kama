@@ -10,7 +10,7 @@ type resource Counter {
     public fn int32 get() { return this.n; }
 }
 
-fn int main() {
+fn int32 main() {
     Map<int32, Counter> m = Map.empty();
     m.put(key: 1, value: Counter.make(n: 10));
     m.put(key: 2, value: Counter.make(n: 20));

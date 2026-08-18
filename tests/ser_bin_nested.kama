@@ -16,11 +16,11 @@ type resource Scene {
     }
     public fn int32 score() {   // resource fields are private -> expose the check through a method
         int32 sum = this.ids[0] + this.ids[1] + this.pts[0].x + this.pts[0].y + this.pts[1].x + this.pts[1].y;   // 25
-        return (cast<int32>(this.name.length()) == 4) ? sum : 0;
+        return (this.name.length() == 4) ? sum : 0;
     }
 }
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
     DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);

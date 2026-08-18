@@ -2,7 +2,7 @@
 // `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b`, where the leading `0` you type is echoed so `0x` output round-trips as a
 // kama literal, and the letter's case controls hex-digit case. A signed-negative hex value round-trips via
 // width masking (the unsigned bit pattern of the declared width). Exit is a bitset (255 = all eight checks).
-fn int main() {
+fn int32 main() {
     int32 r = 0;
 
     float64 pi = 3.14159;

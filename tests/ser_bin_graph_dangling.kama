@@ -17,7 +17,7 @@ type resource Pair {
     public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
 }
 
-fn int main() {
+fn int32 main() {
     // Craft {root:1, objects:{ 1:{__type:Pair, a:ref(2), b:ref(2)} }} — id 2 (the Leaf) is MISSING.
     BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
     w.beginGraph(rootId: cast<uint64>(1));

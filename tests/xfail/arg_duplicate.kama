@@ -1,3 +1,3 @@
 // A duplicate argument name must be rejected, not silently last-wins.
 fn int32 add(int32 a, int32 b) { return a + b; }
-fn int main() { return add(a: 1, a: 2, b: 3); }
+fn int32 main() { return add(a: 1, a: 2, b: 3); }

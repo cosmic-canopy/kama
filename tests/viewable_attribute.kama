@@ -27,15 +27,15 @@ type resource Buf implements Spanned<Span>, Counted {
     DynamicArray<int32> a;
     public ctor empty() { this.a = DynamicArray.empty(); }
     public fn void add(int32 v) { this.a.add(item: v); }
-    public fn int32 size() { return this.a.length(); }
-    public unsafe fn Span span()    { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+    public fn isize size() { return this.a.length(); }
+    public unsafe fn Span span()    { return Span.over(p: addr(of: this.a[0]), n: cast<int32>(this.a.length())); }
     public unsafe fn Span counter() { return this.span(); }
 }
 
 fn int32 main() {
     Buf b = Buf.empty();
     b.add(v: 10); b.add(v: 20); b.add(v: 12);
-    int32 sum = 0;
+    isize sum = 0;
     foreach (int32 v in b.span()) { sum = sum + v; }
-    return sum + b.size();   // 42 + 3 = 45
+    return cast<int32>(sum + b.size());   // 42 + 3 = 45
 }

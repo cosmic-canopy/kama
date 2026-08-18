@@ -2,9 +2,9 @@
 // bounds-checked lookup), not twice (a read then a separate write). We prove it with a side-effecting
 // index: idx() records one trace event per call (acc = acc*31 + code), so a single evaluation leaves the
 // accumulator at 1, while a double evaluation would leave it at 32.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 unsafe fn int32 idx() { kama_trace(code: 1); return 1; }   // side effect: one event; returns index 1
 

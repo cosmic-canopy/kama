@@ -3,9 +3,9 @@
 // `inner` slot: a raw-handle dtor has NO drop-safe zero (here it traces a fixed code; for a real fd it
 // would close(0)=stdin). Handle's dtor is GUARD-FREE on purpose — correctness must come from the
 // compiler never dropping the non-live slot, not from an author band-aid.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Handle {
     int32 h;
@@ -20,14 +20,14 @@ type resource Wrapper {
     public fn int32 val() { return this.inner.val(); }
 }
 
-fn int build() {
+fn int32 build() {
     Handle h = Handle.open(v: 7);
     Wrapper w = Wrapper.wrap(hh: give h);            // h moves into w.inner (its scope-drop suppressed)
     return w.val();                                  // w drops here -> Wrapper__dtor -> Handle__dtor -> trace(5) ONCE
 }
 
-fn int main() {
-    int v = build();
+fn int32 main() {
+    int32 v = build();
     // exactly ONE Handle drop (the live one). fold of a single trace(5): 0*31 + 5 = 5.
     // A spurious drop of the zeroed `inner` at the field-first-write would fold in a second 5 -> 160.
     if (v != 7) { return 90; }

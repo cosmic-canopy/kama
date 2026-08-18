@@ -8,7 +8,7 @@ type value Box<T>
     public fn T get() { return this.value; }
     public fn T twice() { return this.value + this.value; }
 }
-fn int main()
+fn int32 main()
 {
     Box<int32>   bi = Box.make(v: 7);     // Box_int32__ctor(&bi, 7)
     Box<float64> bf = Box.make(v: 2.5);   // Box_float64 (a distinct instantiation)

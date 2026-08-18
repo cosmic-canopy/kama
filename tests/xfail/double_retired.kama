@@ -1,0 +1,8 @@
+// `double` was an alias for `float64` — a second spelling for a type that already had one, and a C reader
+// reads a WIDTH into the name that kama does not promise. Removed alongside bare `int` (which aliased
+// `int32`); every kama float now states its width. `float` never existed as a keyword but gets the same
+// diagnostic, because a C/Java reader will try it and "unknown type" would send them hunting an import.
+fn int32 main() {
+    double d = 1.0;
+    return 0;
+}

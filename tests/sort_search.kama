@@ -3,7 +3,7 @@
 // "where is it" as an `Optional`, and `lowerBound` answers "where would it go" as a total `int32`.
 import std::collections::{DynamicArray, View, sort, binarySearch, lowerBound};
 
-fn int main() {
+fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 20); xs.add(item: 30); xs.add(item: 40);
     int32 a = 0; int32 b = 0; int32 c = 0; int32 d = 0; int32 e = 0; int32 g = 0;
@@ -15,15 +15,15 @@ fn int main() {
         int32 t5  = 5;
         int32 t99 = 99;
 
-        Optional<int32> f20 = binarySearch(items: v, target: t20);
-        Optional<int32> f35 = binarySearch(items: v, target: t35);
+        Optional<isize> f20 = binarySearch(items: v, target: t20);
+        Optional<isize> f35 = binarySearch(items: v, target: t35);
         a = match (f20) { case Some(value: i): i; case None: 99; };   // 1 — the FIRST of the duplicates
         b = match (f35) { case Some(value: i): i; case None: 7; };    // 7 — absent
 
-        c = lowerBound(items: v, target: t35);   // 4 — first index whose element is >= 35
-        d = lowerBound(items: v, target: t5);    // 0 — before everything
-        e = lowerBound(items: v, target: t99);   // 5 — past the end
-        g = lowerBound(items: v, target: t20);   // 1 — first position a 20 could go
+        c = cast<int32>(lowerBound(items: v, target: t35));   // 4 — first index whose element is >= 35
+        d = cast<int32>(lowerBound(items: v, target: t5));    // 0 — before everything
+        e = cast<int32>(lowerBound(items: v, target: t99));   // 5 — past the end
+        g = cast<int32>(lowerBound(items: v, target: t20));   // 1 — first position a 20 could go
     }
 
     return a + b + c + d + e + g;   // 1 + 7 + 4 + 0 + 5 + 1 = 18

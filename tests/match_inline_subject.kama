@@ -5,7 +5,7 @@
 type enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Empty }
 type enum Level { Low, High }
 
-fn int main()
+fn int32 main()
 {
     int32 a = match (Shape::Circle(r: 4)) {          // tagged union, built inline
         case Circle(r: x):        x;                  // 4

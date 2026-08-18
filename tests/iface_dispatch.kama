@@ -17,7 +17,7 @@ fn int64 measure(Shape sh)
 {
     return sh.area();
 }
-fn int main()
+fn int32 main()
 {
     Circle c = Circle.make(r: 7);
     Square q = Square.make(s: 5);
@@ -25,5 +25,5 @@ fn int main()
     int64 b = measure(sh: q);
     uint64 sum = cast<uint64>(a) + cast<uint64>(b);
     uint64 m = sum % 256;
-    return cast<int>(m);
+    return cast<int32>(m);
 }

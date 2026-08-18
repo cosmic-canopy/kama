@@ -1,6 +1,6 @@
 import std::collections::{DynamicArray};
 type enum Bag { Items(DynamicArray<int32> xs), Empty }
-fn int main()
+fn int32 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 40); xs.add(item: 2);

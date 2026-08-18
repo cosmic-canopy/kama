@@ -18,4 +18,4 @@ type final resource Derived extends Base {
     public Derived(int32 x, int32 y) : base(x: x) { this.y = y; }   // ERROR: no base delegation
     protected override fn int32 tag() { return 1; }
 }
-fn int main() { Derived d = Derived.make(x: 1, y: 2); return 0; }
+fn int32 main() { Derived d = Derived.make(x: 1, y: 2); return 0; }

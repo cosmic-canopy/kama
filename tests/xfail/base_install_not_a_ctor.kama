@@ -12,4 +12,4 @@ type final resource Leaf extends Base {
     public ctor make(int32 own) { this.base = makeOne(); this.own = own; }
     protected override fn int32 tag() { return this.own; }
 }
-fn int main() { Leaf l = Leaf.make(own: 1); return l.rank(); }
+fn int32 main() { Leaf l = Leaf.make(own: 1); return l.rank(); }

@@ -19,4 +19,4 @@ type final resource Exposer extends Base
     protected override fn int32 secretHook() { return 2; }
     public fn int32 hook() { return this.secretHook(); }       // ERROR: republishes a protected seam
 }
-fn int main() { Exposer e = Exposer.make(); return e.hook(); }
+fn int32 main() { Exposer e = Exposer.make(); return e.hook(); }

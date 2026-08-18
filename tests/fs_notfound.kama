@@ -5,7 +5,7 @@ import std::collections::{DynamicArray};
 
 fn int32 isNotFound(IoError e) { return match (e) { case NotFound: 1; case _: 0; }; }
 
-fn int main() {
+fn int32 main() {
     string missing = "_no_such_file_zzz.tmp";
 
     int32 a = match (readFile(path: missing)) { case Ok(value: b): 10; case Err(error: e): isNotFound(e: e); };

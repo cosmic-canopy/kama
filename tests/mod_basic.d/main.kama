@@ -4,7 +4,7 @@ import std::collections::{DynamicArray};
 import Math::{add, Counter};
 import Shapes::{Box};
 
-fn int main()
+fn int32 main()
 {
     int32 s = add(a: 10, b: 5);            // 15
     Counter c = Counter.make(start: 0);

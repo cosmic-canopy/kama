@@ -5,4 +5,4 @@ type enum Shape {
     Filled(Nonexistent what)
 }
 
-fn int main() { return 42; }
+fn int32 main() { return 42; }

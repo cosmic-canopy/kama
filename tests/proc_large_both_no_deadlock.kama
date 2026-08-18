@@ -6,14 +6,14 @@ import std::process::{Command, Output};
 import std::io::{IoError};
 import std::collections::{DynamicArray};
 
-fn int main() {
+fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "spew"); c.arg(a: "8000");
     Result<Output, IoError> r = c.run();
     return match (give r) {
         case Ok(value: o): {
-            int32 n = cast<int32>(o.stdout().length());
-            int32 e = cast<int32>(o.stderr().length());
+            isize n = o.stdout().length();
+            isize e = o.stderr().length();
             int32 code = 42;
             if (n != 160000) { code = 70; }
             else if (e != 160000) { code = 71; }

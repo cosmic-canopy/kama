@@ -266,10 +266,10 @@ struct kamayystype {
 /* KEYWORDS */ 
 %token <string> ABSTRACT BASE BOOL BORROW BREAK
 %token <string> CASE CAST BITCAST COMPTIME CONST CONTINUE CTOR DEFAULT
-%token <string> AS CHAR DO DOUBLE ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
+%token <string> AS CHAR DO ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
-%token <string> INT INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
+%token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
 %token <string> MATCH
 %token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
@@ -654,8 +654,7 @@ numeric_type
   | floating_point_type
   ;
 integral_type
-  : INT   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_INT32_VAL); }
-  | UINT8   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_UINT8_VAL); }
+  : UINT8   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_UINT8_VAL); }
   | UINT16   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_UINT16_VAL); }
   | UINT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_UINT32_VAL); }
   | UINT64   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_UINT64_VAL); }
@@ -665,8 +664,7 @@ integral_type
   | INT64   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_INT64_VAL); }
   ;
 floating_point_type
-  : DOUBLE   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT64_VAL); }
-  | FLOAT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT32_VAL); }
+  : FLOAT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT32_VAL); }
   | FLOAT64   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT64_VAL); }
   ;
 class_type

@@ -8,7 +8,7 @@ type value Plain {
     public ctor make(int32 h) { this.hidden = h; }
 }
 
-fn int main() {
+fn int32 main() {
     Plain p = Plain.make(h: 1);
     return p.hidden;                                 // rejected: reading a private field
 }

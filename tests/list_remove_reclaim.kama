@@ -9,7 +9,7 @@ type resource Box {
     public fn int32 get() { return this.v; }
 }
 
-fn int main() {
+fn int32 main() {
     DynamicArray<Box> xs = DynamicArray.empty();
     xs.add(item: Box.make(v: 1)); xs.add(item: Box.make(v: 2)); xs.add(item: Box.make(v: 3)); xs.add(item: Box.make(v: 4));
 
@@ -25,7 +25,7 @@ fn int main() {
 
     // DISCARD a removed element (the returned Box drops) -> [3]
     xs.remove(index: 0);                 // drops Box(1)
-    r = r + xs.length();                 // 1
+    r = r + cast<int32>(xs.length());                 // 1
     r = r + xs[0].get();                 // 3
 
     // pop to empty, then pop empty -> None
@@ -36,5 +36,5 @@ fn int main() {
     int32 p2v = match (p2) { case Some(value: b): b.get(); case None: 100; };     // 100
     r = r + p2v;
 
-    return r;   // 2+4+1+3+3+100 = 113
+    return cast<int32>(r);   // 2+4+1+3+3+100 = 113
 }

@@ -2,7 +2,7 @@ import std::collections::{FixedArray};
 // `copy` of an `FixedArray<T>` whose element is Copyable makes a deep, independent copy (fresh buffer,
 // each element copied). Mutating the copy must not touch the original. ASan proves independence:
 // a shallow copy would alias + double-free the one buffer at scope exit.
-fn int main() {
+fn int32 main() {
     FixedArray<int32> a = FixedArray.make(size: 3);
     a[0] = 10; a[1] = 20; a[2] = 12;
     FixedArray<int32> b = copy a;     // deep copy — b owns its own buffer

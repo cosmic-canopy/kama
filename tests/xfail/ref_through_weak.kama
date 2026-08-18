@@ -2,8 +2,8 @@ import std::memory::{Shared, Weak};
 // You can't borrow the object through a Weak (it may be dead) — tryUpgrade to a Shared first.
 type value Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
 fn int32 read(ref Counter c) { return c.get(); }
-fn int main() {
+fn int32 main() {
     Shared<Counter> s = new Counter(n: 1);
     Weak<Counter> w = s.downgrade();
-    return cast<int>(read(c: ref w));   // ERROR: borrow through a Weak
+    return cast<int32>(read(c: ref w));   // ERROR: borrow through a Weak
 }

@@ -10,14 +10,14 @@ import std::collections::{DynamicArray};
 type resource R {
     DynamicArray<int32> xs;
     public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1); this.xs.add(item: 2); }
-    public fn int32 n() { return this.xs.length(); }
+    public fn isize n() { return this.xs.length(); }
 }
 fn DynamicArray<int32> make(int32 n) { DynamicArray<int32> xs = DynamicArray.empty(); xs.add(item: n); xs.add(item: n + 1); return give xs; }
-fn int32 sumLen(DynamicArray<int32> a, DynamicArray<int32> b) { return a.length() + b.length(); }
+fn isize sumLen(DynamicArray<int32> a, DynamicArray<int32> b) { return a.length() + b.length(); }
 
 fn int32 main() {
-    int32 a = make(n: 1).length();                    // free-function-call owned receiver (was: leak)
-    int32 b = R.make().n();                                // inline-ctor owned resource receiver (was: leak)
-    int32 c = sumLen(a: make(n: 1), b: make(n: 5));   // owned rvalues moved into owning params (sound; guard)
-    return a + b + c;   // 2 + 2 + (2 + 2) = 8
+    isize a = make(n: 1).length();                    // free-function-call owned receiver (was: leak)
+    isize b = R.make().n();                                // inline-ctor owned resource receiver (was: leak)
+    isize c = sumLen(a: make(n: 1), b: make(n: 5));   // owned rvalues moved into owning params (sound; guard)
+    return cast<int32>(a + b + c);   // 2 + 2 + (2 + 2) = 8
 }

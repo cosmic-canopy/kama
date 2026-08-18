@@ -77,7 +77,7 @@ members (`Owned`/`Shared`/`Weak`/collections).
 ```kama
 type resource Buffer {
     DynamicArray<byte> data;                       // owned → Buffer is a resource; fields stay private
-    public fn int32 size() { return this.data.length(); }
+    public fn isize size() { return this.data.length(); }
 }
 
 type resource Token { }   // owns nothing, but move-only by *identity* — a capability / linear token

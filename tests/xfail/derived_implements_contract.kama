@@ -20,4 +20,4 @@ type final resource Icon extends Widget implements Clickable
     protected override fn int32 step() { return 2; }
     public fn int32 click() { return 3; }
 }
-fn int main() { Icon i = Icon.make(); return i.rank(); }
+fn int32 main() { Icon i = Icon.make(); return i.rank(); }

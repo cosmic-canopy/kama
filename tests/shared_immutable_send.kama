@@ -21,7 +21,7 @@ fn void reader(Shared<Leaf> s) {
     }
 }
 
-fn int main() {
+fn int32 main() {
     Shared<Leaf> a = new Leaf.make(x: 3i32, y: 4i32);
     scope {
         Shared<Leaf> c1 = a;         // retain a handle for each child (strong++)

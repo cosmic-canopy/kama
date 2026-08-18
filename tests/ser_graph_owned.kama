@@ -15,7 +15,7 @@ type resource Parent {
     public ctor make(Owned<Child> kid) { this.kid = give kid; }
 }
 
-fn int main() {
+fn int32 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
     Result<string, Owned<Error>> j_r = encode(v: p);

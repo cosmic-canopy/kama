@@ -9,7 +9,7 @@ fn int32 lo(int32 p, int32 q)
 {
     return min(a: p, b: q);        // args typed from lo's params -> min__int32
 }
-fn int main()
+fn int32 main()
 {
     int32 x = lo(p: 5, q: 9);      // via lo()  -> min__int32 -> 5
     int32 y = min(a: 42, b: 99);   // direct    -> min__int32 -> 42 (same instantiation)

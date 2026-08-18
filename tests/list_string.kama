@@ -1,9 +1,9 @@
 import std::collections::{DynamicArray};
-fn int main()
+fn int32 main()
 {
     DynamicArray<string> xs = DynamicArray.empty();
     xs.add(item: "ab"); xs.add(item: "cde"); xs.add(item: "f");
-    int32 total = 0;
-    foreach (ref string s in xs) { total = total + cast<int32>(s.length()); }
-    return total;
+    isize total = 0;
+    foreach (ref string s in xs) { total = total + s.length(); }
+    return cast<int32>(total);
 }

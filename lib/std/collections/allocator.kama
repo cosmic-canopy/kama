@@ -17,9 +17,9 @@ extern fn void free(UnsafePtr p);
 // into this Arena's mutable `offset`, so N containers can draw from ONE arena. The Arena must
 // OUTLIVE every container built from `handle()` — declare it first so it drops last.
 type resource Arena {
-    UnsafePtr<uint8> buffer = null; int32 capacity = 0; int32 offset = 0;
+    UnsafePtr<uint8> buffer = null; isize capacity = 0; isize offset = 0;
 
-    public unsafe ctor make(int32 capacity) {
+    public unsafe ctor make(isize capacity) {
         this.buffer = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(capacity)));
         if (cast<usize>(this.buffer) == cast<usize>(0)) { panic(msg: "Arena: out of memory"); }
         this.capacity = capacity; this.offset = 0;
@@ -46,15 +46,15 @@ type resource Arena {
 // yields `None`); `deallocate` is a no-op (the Arena bulk-frees via `reset()` / its dtor). It NEVER
 // frees the arena buffer.
 type value BumpAllocator implements Allocator {
-    UnsafePtr<uint8> buffer; UnsafePtr<int32> offset; int32 capacity;
+    UnsafePtr<uint8> buffer; UnsafePtr<isize> offset; isize capacity;
 
-    public unsafe ctor make(UnsafePtr<uint8> buffer, UnsafePtr<int32> offset, int32 capacity) {
+    public unsafe ctor make(UnsafePtr<uint8> buffer, UnsafePtr<isize> offset, isize capacity) {
         this.buffer = buffer; this.offset = offset; this.capacity = capacity;
     }
 
     public unsafe fn Optional<UnsafePtr> allocate(usize bytes) {
-        int32 b = cast<int32>(bytes);
-        int32 o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
+        isize b = cast<isize>(bytes);
+        isize o = ((this.offset[0] + 7) / 8) * 8;                 // 8-byte align the bump pointer
         if (o + b > this.capacity) { return Optional::None; }     // exhausted — fallible, never panics
         this.offset[0] = o + b;
         return Optional::Some(value: cast<UnsafePtr>(addr(of: this.buffer[o])));

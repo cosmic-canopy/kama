@@ -1,4 +1,4 @@
-fn int main()
+fn int32 main()
 {
     Optional<int32> inner = Optional::Some(value: 5);
     Optional<Optional<int32>> outer = Optional::Some(value: inner);

@@ -17,7 +17,7 @@ type resource Node {
     public fn void setBack(Weak<Node> w) { this.back = Optional::Some(value: give w); }
 }
 
-fn int main() {
+fn int32 main() {
     Shared<Node> a = new Node.make(id: 1);
     Shared<Node> b = new Node.make(id: 2);
     b.setBack(w: a.downgrade());          // b -> a (weak)

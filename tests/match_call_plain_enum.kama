@@ -19,7 +19,7 @@ type value Grader {
     public static fn Code always() { return Code::Ok; }
 }
 
-fn int main()
+fn int32 main()
 {
     // (1) a FREE function call
     int32 a = match (classify(x: 1))  { case Ok: 10; case Bad: 0; };

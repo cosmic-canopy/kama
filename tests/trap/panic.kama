@@ -1,5 +1,5 @@
 // panic(msg:) is a clean, unconditional abort with a message on stderr ("kama: panic: <msg>").
-fn int main() {
+fn int32 main() {
     panic(msg: "boom");
     return 0;   // unreachable
 }

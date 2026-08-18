@@ -1,0 +1,26 @@
+// A container instantiated at `isize`/`usize`. These two are primitives spelled as plain NAMES — they
+// carry no `builtInVal`, because `cType` maps them to `ptrdiff_t`/`size_t` by spelling — and two places
+// tested primitive-ness by asking for a `builtInVal`:
+//
+//   * `isConcreteTypeArg` answered "not concrete", so generic inference bound NOTHING. The call
+//     `relocate(from: this.data, at: idx, into: out x)` inside `DynamicArray.remove` then emitted an
+//     UNMANGLED `std__ptr__relocate(...)`, which the C compiler rejects as an implicit declaration.
+//   * `mangleElem` fell to the user-type arm, which does not answer for a primitive.
+//
+// So `DynamicArray<isize>` never compiled, latent until the size type became the stdlib's own. Returns 55.
+import std::collections::{DynamicArray};
+
+fn int32 main() {
+    DynamicArray<isize> a = DynamicArray::<isize>.empty();
+    a.add(item: 40);
+    a.add(item: 15);
+    isize first = a.remove(index: 0);        // the `relocate<isize>` monomorph this pins
+    isize rest  = a[0];
+    if (a.length() != 1) { return 1; }
+
+    DynamicArray<usize> u = DynamicArray::<usize>.empty();
+    u.add(item: cast<usize>(0));
+    if (u.length() != 1) { return 2; }
+
+    return cast<int32>(first + rest);        // 40 + 15
+}

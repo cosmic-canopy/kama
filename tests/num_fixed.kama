@@ -7,7 +7,7 @@
 // is what says the generic re-derives exactly what the hand-rolled one did. The generic's OWN behaviour —
 // a second backing, a second F, the bad-pairing rejection — is tests/num_fixed_generic.kama.
 import std::num::{Fixed};
-fn int main() {
+fn int32 main() {
     Fixed<int32, 16> one  = Fixed::<int32, 16>.one();
     Fixed<int32, 16> f1   = Fixed::<int32, 16>.fromInt(n: 1);
     Fixed<int32, 16> f2   = Fixed::<int32, 16>.fromInt(n: 2);

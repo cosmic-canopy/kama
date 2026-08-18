@@ -11,7 +11,7 @@ unsafe fn void onPanic() {
     panic(msg: "re-entrant");   // must NOT recurse — the guard skips the hook and aborts
 }
 
-fn int main() {
+fn int32 main() {
     setPanicHandler(handler: onPanic);
     panic(msg: "boom");
     return 0;   // unreachable

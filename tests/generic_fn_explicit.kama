@@ -3,10 +3,10 @@
 fn T zero<T>() { return cast<T>(0); }
 fn T pick<T>(T a, T b, bool useA) { if (useA) { return a; } return b; }
 
-fn int main()
+fn int32 main()
 {
     int32 x = zero::<int32>();
     int64 y = zero::<int64>();
     int32 z = pick::<int32>(a: 40, b: 99, useA: true);
-    return cast<int>(x) + cast<int>(y) + cast<int>(z) + 2;   // 0 + 0 + 40 + 2
+    return cast<int32>(x) + cast<int32>(y) + cast<int32>(z) + 2;   // 0 + 0 + 40 + 2
 }

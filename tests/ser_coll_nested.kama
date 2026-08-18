@@ -3,7 +3,7 @@ import std::serialization::json::{encode, decode};
 import std::collections::{DynamicArray};
 @generate(Serialize, Deserialize, of)
 type value Point { @field public int32 x; @field public int32 y; }
-fn int main() {
+fn int32 main() {
     DynamicArray<Point> ps = DynamicArray.empty(); ps.add(item: Point.of(x: 1, y: 2)); ps.add(item: Point.of(x: 3, y: 4));
     Result<string, Owned<Error>> __enc1 = encode(v: ps);
     string __encStr1 = match (give __enc1) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };

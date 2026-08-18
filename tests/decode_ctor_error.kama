@@ -9,7 +9,7 @@ type value Point {
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn int32 sum() { return this.x + this.y; }
 }
-fn int main() {
+fn int32 main() {
     // good input -> Ok
     Point p = Point.make(x: 30, y: 12);
     Result<string, Owned<Error>> j_r = encode(v: p);

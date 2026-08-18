@@ -1,11 +1,11 @@
 // Reassigning a `string` transfers ownership — a bare `s = t` would alias (double-free), so it needs
 // `copy` (deep) or `give` (move). ASan-clean proves each buffer frees exactly once.
-fn int main() {
+fn int32 main() {
     string s = "ab"; string t = "cd";
     s = copy t;                                            // s := deep copy of t; t survives
-    int32 r = cast<int32>(s.length()) + cast<int32>(t.length());   // 2 + 2 = 4
+    isize r = s.length() + t.length();   // 2 + 2 = 4
     string u = "xy";
     s = give u;                                            // s := u (move); u consumed
-    r = r + cast<int32>(s.length());                       // + 2 => 6
-    return r;
+    r = r + s.length();                       // + 2 => 6
+    return cast<int32>(r);
 }

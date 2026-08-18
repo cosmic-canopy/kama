@@ -18,7 +18,7 @@ type resource Slot {
 
 fn void writer(Slot s) { s.run(); }
 
-fn int main() {
+fn int32 main() {
     int32 c0 = 0;
     int32 c1 = 0;
     int32 c2 = 0;

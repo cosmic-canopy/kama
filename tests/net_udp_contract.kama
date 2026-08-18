@@ -38,7 +38,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b) {
     return 55;
 }
 
-fn int main() {
+fn int32 main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);

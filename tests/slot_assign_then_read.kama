@@ -6,7 +6,7 @@ fn void pick(bool hi, out int32 v) {
     if (hi) { v = 30; } else { v = 12; }   // both arms assign -> definite at the join
 }
 fn void five(out int32 v) { v = 5; }
-fn int main() {
+fn int32 main() {
     slot int32 a;   five(v: out a);
     slot int32 hi;  pick(hi: true,  v: out hi);
     slot int32 lo;  pick(hi: false, v: out lo);

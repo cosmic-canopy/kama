@@ -1,8 +1,8 @@
-fn int main()
+fn int32 main()
 {
-    int a = 100;
-    int b = 7;
-    int q = a / b;
-    int r = a % b;
+    int32 a = 100;
+    int32 b = 7;
+    int32 q = a / b;
+    int32 r = a % b;
     return q + r;
 }

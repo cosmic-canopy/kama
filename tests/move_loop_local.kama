@@ -2,9 +2,9 @@ import std::collections::{DynamicArray};
 // M26f-2 — moving a `resource` value DECLARED INSIDE a loop body is fine (it's fresh each
 // iteration). 3 iterations, each moves its own `a` into sink -> 3 drops of code 1:
 // ((1*31+1)*31+1)=993 -> exit 993 & 0xFF = 225.
-extern fn void kama_trace(int code);
-extern fn int kama_trace_get();
-unsafe fn int traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
 type resource Res {
     DynamicArray<int32> items;

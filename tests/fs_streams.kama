@@ -38,7 +38,7 @@ fn int32 readRec(ref string path) {
     return 0;
 }
 
-fn int main() {
+fn int32 main() {
     string p = "_fs_streams.tmp";
     Rec r = Rec.make(id: 7, name: "hi", ok: true);
 

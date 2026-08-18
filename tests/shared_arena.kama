@@ -13,8 +13,8 @@ type value Counter {
     public fn int32 get() { return this.value; }
 }
 
-fn int main() {
-    Arena arena = Arena.make(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);              // declared FIRST → drops LAST (outlives the boxes)
 
     Shared<Counter, BumpAllocator> c = new(allocator: arena.handle()) Counter.make(start: 40);
     Shared<Counter, BumpAllocator> d = c;                // copy → strong=2, shares the arena-backed ctrl

@@ -1,6 +1,6 @@
 // A char literal whose bytes form a well-shaped UTF-8 sequence but decode to an invalid scalar (here a
 // surrogate, U+D800) is a lex error â€” char is a Unicode scalar value, not an arbitrary byte sequence.
-fn int main() {
+fn int32 main() {
     char c = 'í €';
     return cast<int32>(c);
 }

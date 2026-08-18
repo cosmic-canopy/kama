@@ -70,16 +70,16 @@ type resource BinaryWriter<W: Writer> implements Serializer {
         };
     }
     // Write the low `n` bytes of `v`, little-endian.
-    fn void putU(uint64 v, int32 n) {
-        int32 i = 0;
+    fn void putU(uint64 v, isize n) {
+        isize i = 0;
         while (i < n) { this.byte(b: cast<uint8>(v & 255ui64)); v = v >> 8ui64; i = i + 1; }
     }
     // A tagged string: 0x0F + u32 LE length + raw bytes. Used for both string VALUES and field NAMES.
     fn void putStr(const ref string s) {
         this.byte(b: 15ui8);
-        int32 n = cast<int32>(s.length());
+        isize n = s.length();
         this.putU(v: cast<uint64>(cast<uint32>(n)), n: 4);
-        int32 i = 0;
+        isize i = 0;
         while (i < n) { this.byte(b: s[i]); i = i + 1; }
     }
 
@@ -131,14 +131,14 @@ type resource BinaryWriter<W: Writer> implements Serializer {
 // two-pass object-graph decode can `rewindGraph` to the table — the same bounded-memory boundary as JSON.
 type resource BinaryReader implements Deserializer {
     DynamicArray<uint8> buf;
-    int32 pos;
-    int32 len;
+    isize pos;
+    isize len;
     bool err;
-    int32 objMark;      // byte offset of the graph objects table (for the two-pass rewind)
+    isize objMark;      // byte offset of the graph objects table (for the two-pass rewind)
     DeError code;
 
     public ctor make(DynamicArray<uint8> src) {
-        this.len = cast<int32>(src.length());
+        this.len = src.length();
         this.buf = give src;
         this.pos = 0;
         this.err = false;
@@ -157,9 +157,9 @@ type resource BinaryReader implements Deserializer {
         this.pos = this.pos + 1;
         return b;
     }
-    fn uint64 getU(int32 n) {                        // read n LE bytes
+    fn uint64 getU(isize n) {                        // read n LE bytes
         uint64 v = 0ui64;
-        int32 i = 0;
+        isize i = 0;
         while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
         return v;
     }
@@ -167,10 +167,10 @@ type resource BinaryReader implements Deserializer {
     unsafe fn string readStr() {
         this.expectTag(t: 15ui8);
         if (this.err) { return ""; }
-        int32 n = cast<int32>(this.getU(n: 4));
+        isize n = cast<isize>(this.getU(n: 4));
         if (n == 0) { return ""; }
         if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
-        int32 start = this.pos;
+        isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
     }
@@ -221,7 +221,7 @@ type resource BinaryReader implements Deserializer {
         else if (t == 3ui8 || t == 7ui8 || t == 9ui8 || t == 14ui8) { this.pos = this.pos + 4; }
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8 || t == 22ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
-        else if (t == 15ui8) { int32 n = cast<int32>(this.getU(n: 4)); this.pos = this.pos + n; }
+        else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
         else if (t == 16ui8) { while (this.moreFields()) { string k = this.fieldName(); this.skipValue(); } }
         else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }

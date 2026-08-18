@@ -1,16 +1,16 @@
 type value Box
 {
-    int w = 6;
-    int h = 7;
+    int32 w = 6;
+    int32 h = 7;
     public ctor make()
     {
     }
-    public fn int area()
+    public fn int32 area()
     {
         return w * h;
     }
 }
-fn int main()
+fn int32 main()
 {
     Box b = Box.make();
     return b.area();

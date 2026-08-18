@@ -13,8 +13,8 @@ type value Circle implements Shape {
     public fn int32 area() { return this.r * this.r; }
 }
 
-fn int main() {
-    Arena arena = Arena.make(capacity: 1 << 12);              // declared FIRST → drops LAST (outlives the boxes)
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);              // declared FIRST → drops LAST (outlives the boxes)
 
     Shared<Shape, BumpAllocator> c = new(allocator: arena.handle()) Circle.make(r: 6);   // area 36
     Shared<Shape, BumpAllocator> d = c;                  // retain → strong=2, shares the arena-backed ctrl

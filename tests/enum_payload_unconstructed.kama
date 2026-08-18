@@ -15,7 +15,7 @@ type enum Holder {
     Boxed(Shared<Probe> p)
 }
 
-fn int main()
+fn int32 main()
 {
     Holder h = Holder::Plain;
     return match (h) {
