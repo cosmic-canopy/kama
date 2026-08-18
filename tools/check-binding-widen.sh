@@ -3,14 +3,18 @@
 #
 # The cast trap emits a narrowing check for `cast<T>(x)` whenever it cannot prove the conversion safe, and
 # "cannot prove" includes "cannot type the source". An unanswered source falls back to `KAMA_NARROW`, a
-# `_Generic` that asks C the question the classifier could not — correct, but paid per evaluation. A
-# `foreach` element and a `match`-arm payload were both unanswered sources, so a widening out of either
-# carried a check that could never fire: measured at ~19% of a 2M-iteration loop in
-# bench/src/kama/alloc.kama before `narrowCheck` could see a loop binding.
+# `_Generic` that asks C the question the classifier could not. A `foreach` element and a `match`-arm
+# payload were both unanswered sources, so a widening out of either carried a check that could never fire.
 #
-# This is an EMITTED-C check because it has to be. `tests/binding_widen.kama` returns 22 either way — a
-# bare cast and a checked one compute the same answer, so the exit code cannot tell them apart and the
-# corpus would go on passing while every widening quietly paid for a check. That is the same shape of
+# ⚠️ What this guards is the emitted CODE, not release wall-clock — measured 2026-08-18, so that the next
+# reader does not over-claim it. At `-O2`/`-O3` clang inlines `kama_narrow_chk_s`, proves an int32 always
+# fits an int64 and deletes the check: the same loop with and without it timed identically (0.11s both,
+# same clang, same flags, a one-token diff in the C). The cost is real in a DEBUG build, and it is real in
+# `--keep-c` output — which is what the README's "drops into an existing C codebase" rests on.
+#
+# It is an EMITTED-C check because it has to be. `tests/binding_widen.kama` returns 22 either way — a bare
+# cast and a checked one compute the same answer, so neither the exit code NOR a timing can tell them
+# apart, and the corpus would go on passing while every widening carried a check. That is the shape of
 # hole the repo's house rule is about: the fixture proves the arithmetic, this proves the claim.
 #
 # Native leg, no compiler build of its own (transpile only), private mktemp -d.

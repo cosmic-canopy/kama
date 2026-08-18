@@ -7044,10 +7044,15 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
     if (primIntRangeC(dstCType, clo, chi) && constValue(value, cv)) return "";
     // A `foreach` element or a `match`-arm payload binding used to need its own `_localTypeNodes` lookup
     // right here, because the classifier could not answer for one. It answers now, so this reads the same
-    // map through the same call every other rule uses — and the reason it is worth answering is not
-    // theoretical: `int64 s = …; s += cast<int64>(v)` over `int32` elements is a WIDENING that cannot
-    // fail, and an unanswered source paid a full runtime check per element (~19% of a 2M-iteration loop
-    // in bench/src/kama/alloc.kama).
+    // map through the same call every other rule uses.
+    //
+    // ⚠️ The payoff is CODE, not release speed, and the difference was measured 2026-08-18 rather than
+    // assumed. A widening `cast<int64>(v)` out of an `int32` binding emits `KAMA_NARROW` when the source
+    // is unknown — a real call to `kama_narrow_chk_s` — but at `-O2`/`-O3` clang inlines it, proves an
+    // int32 always fits an int64, and deletes it: the same loop compiled with and without the check timed
+    // identically (0.11s both, same clang, same flags, one-token diff in the emitted C). It costs in a
+    // DEBUG build, and it costs readability and `--keep-c` output in every build. Do not repeat the
+    // "~19% of a 2M-iteration loop" figure for this shape — that number does not reproduce at -O3.
     std::string src = typeOfExpr(value);
     if (!src.empty()) {
         // A kind crossing (a `bool`, a `string`, an enum) is a different rule's error, not a narrowing.

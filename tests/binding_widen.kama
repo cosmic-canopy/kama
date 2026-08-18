@@ -1,12 +1,11 @@
 // A WIDENING conversion out of a binding cannot fail, so it must emit a bare C cast — not the runtime
 // narrowing check. That is only true once the classifier can type the binding: an unanswered source
-// falls back to `KAMA_NARROW`, a `_Generic` that asks C the question the compiler could not, and pays
-// for it on every iteration. Measured at ~19% of a 2M-iteration loop in bench/src/kama/alloc.kama
-// before `narrowCheck` could see a `foreach` binding; the `match`-arm payload binding was still paying
-// it until the classifier learned to answer for one too.
+// falls back to `KAMA_NARROW`, a `_Generic` that asks C the question the compiler could not.
 //
 // The exit code proves the ARITHMETIC; `tools/check-binding-widen.sh` proves the emitted SHAPE, because
-// a bare cast and a checked one compute the same answer and only the C tells them apart.
+// a bare cast and a checked one compute the same answer. And a timing cannot tell them apart either:
+// at -O2/-O3 clang folds the check away entirely (measured — identical wall-clock), so the C is the
+// only place the difference is visible at all. It shows up in a debug build and in `--keep-c` output.
 fn Optional<int32> src() { return Optional::Some(value: 7i32); }
 
 fn int32 main() {

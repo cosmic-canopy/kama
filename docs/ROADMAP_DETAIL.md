@@ -109,11 +109,15 @@ the ownership paths reacting to a map they had no business seeing a binding in. 
 beyond the count: a `foreach (string s in …)` binding is a borrow on the indexed path and an owned value on
 the iterator path, so teaching `_localCTypes` about bindings perturbs `ownsByValue` LHS detection.
 
-**The gap had a runtime cost too**, now guarded by `tools/check-binding-widen.sh`: an unanswered source
-falls back to `KAMA_NARROW`, a `_Generic` that cannot be proved away, so a *widening* `cast<int64>(v)` out
-of a binding paid a check that could never fire — ~19% of a 2M-iteration loop in `bench/src/kama/alloc.kama`.
-The exit code cannot see this (a bare cast and a checked one compute the same answer), which is why that
-guard reads the emitted C.
+**The gap showed in the emitted CODE**, now guarded by `tools/check-binding-widen.sh`: an unanswered source
+falls back to `KAMA_NARROW`, so a *widening* `cast<int64>(v)` out of a binding carried a check that could
+never fire. ⚠️ **It is not a release-speed claim, and this was measured rather than assumed** (2026-08-18):
+at `-O2`/`-O3` clang inlines `kama_narrow_chk_s`, proves an `int32` always fits an `int64` and deletes it —
+the same loop compiled with and without the check timed **identically** (0.11 s both, same clang, same
+flags, a one-token diff in the C). The cost is a debug build and `--keep-c` readability, which is what the
+README's "drops into an existing C codebase" rests on. **The "~19% of a 2M-iteration loop" figure recorded
+during the cast trap does not reproduce for this shape** — do not repeat it without re-measuring what it
+was actually about. Neither the exit code nor a timing can see this, which is why the guard reads the C.
 
 **Go-to-definition on a compiler built-in lands nowhere.** `string`, `isize`, `usize`, `int32` and the
 `string`/`Fixed`/`View` intrinsic methods are registered in C++ (`registerCollection` in `kama.cemit.cpp`),
