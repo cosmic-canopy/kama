@@ -1,0 +1,23 @@
+// A WIDENING conversion out of a binding cannot fail, so it must emit a bare C cast — not the runtime
+// narrowing check. That is only true once the classifier can type the binding: an unanswered source
+// falls back to `KAMA_NARROW`, a `_Generic` that asks C the question the compiler could not, and pays
+// for it on every iteration. Measured at ~19% of a 2M-iteration loop in bench/src/kama/alloc.kama
+// before `narrowCheck` could see a `foreach` binding; the `match`-arm payload binding was still paying
+// it until the classifier learned to answer for one too.
+//
+// The exit code proves the ARITHMETIC; `tools/check-binding-widen.sh` proves the emitted SHAPE, because
+// a bare cast and a checked one compute the same answer and only the C tells them apart.
+fn Optional<int32> src() { return Optional::Some(value: 7i32); }
+
+fn int32 main() {
+    int64 s = 0i64;
+
+    // (a) a `match`-arm payload binding — `v` is an `int32`, so `cast<int64>` is a widening.
+    match (src()) { case Some(value: v): { s = s + cast<int64>(v); } case None: { } };
+
+    // (b) a `foreach` binding — same widening, the other binding form.
+    InlineArray<int32, 3> xs = [5i32; 3];
+    foreach (int32 e in xs) { s = s + cast<int64>(e); }
+
+    return cast<int32>(s);   // 7 + (5 * 3) = 22
+}

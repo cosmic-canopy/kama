@@ -1051,8 +1051,19 @@ aliased `float64`, and every kama float states its width. Neither `uint` nor `fl
 get the same diagnostic, because a C or Go reader will try them and "unknown type" would send them hunting
 for a missing import instead of a different spelling.
 
-Where kama cannot be certain of a type it says nothing rather than guessing — a type parameter, a
-const-generic parameter, a `foreach` binding, a `borrow` alias, an `extern fn` result.
+**The rule holds through a binding.** A `foreach` element and a `match`-arm payload are typed values like
+any other, so both of these are errors wanting a cast — they are not a hole the rule quietly skips:
+
+```kama
+foreach (int64 x in xs) { int8 n = x; }                              // error, not 44
+int8 n = match (big()) { case Some(value: c): c; case None: 0i8; };  // error, not 44
+```
+
+Where kama cannot be certain of a type it still says nothing rather than guessing — a type parameter, a
+const-generic parameter, an `extern fn` result, an intrinsic with no declared return type, and a
+value-producing `match` seen before its arms are bound. Silence there is deliberate: a rule built on a
+classifier that confuses "this is a primitive" with "I have no idea" is either silent on every primitive or
+fires on every unresolved name.
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:

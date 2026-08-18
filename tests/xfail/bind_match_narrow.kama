@@ -1,0 +1,4 @@
+// A `match`-arm payload binding knows its type — the variant's payload field. `_localTypes` kept classes
+// only, so a PRIMITIVE payload recorded "" and this truncated an `int64` 300 to 44 with no diagnostic.
+fn Optional<int64> big() { return Optional::Some(value: 300i64); }
+fn int32 main() { int8 n = match (big()) { case Some(value: c): c; case None: 0i8; }; return cast<int32>(n); }

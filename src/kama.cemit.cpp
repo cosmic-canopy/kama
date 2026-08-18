@@ -493,8 +493,9 @@ void CEmitter::rejectNullInit(SharedIdentifier declType, SharedExpression init, 
 // callers depend on that conflation, so a checker built on it either says nothing about primitives (the
 // exact bug) or fires on every unresolved name (unlandable). Here the two are distinct, and `Unknown`
 // NEVER diagnoses. Everything the classifier is not certain about — array literals, bare variant
-// constructors, value-producing `match`, `borrow` aliases, `foreach` bindings, primitive `match` payload
-// bindings, `extern fn` results, an unresolved name — becomes `Unknown` and is left alone.
+// constructors, a value-producing `match` at check time, `extern fn` results, an unresolved name —
+// becomes `Unknown` and is left alone. (`borrow` aliases, `foreach` bindings and primitive `match`
+// payload bindings were on this list; the classifier answers for all three now.)
 const char* CEmitter::kindName(TKind k)
 {
     switch (k) {
@@ -898,7 +899,9 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     }
 
     // Everything else is deliberately silent: an array literal and a bare variant constructor take their
-    // type from context, a `borrow` alias has no written type, an `extern fn` result is opaque.
+    // type from context, and an `extern fn` result is opaque. (A `borrow` alias used to be listed here and
+    // is NOT one — the borrow site records both its C type and its type node, so indexing through one
+    // types correctly. Probed 2026-08-18; the claim had outlived the code.)
     return "";
 }
 
@@ -1190,8 +1193,10 @@ void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpressi
 // rest of the campaign made legal:
 //
 //   - an UNKNOWN source is silent. `typeOfExpr` returns "" for a type parameter, a const-generic
-//     parameter, a `foreach` binding, a `borrow` alias, an intrinsic with no recorded return type, an
-//     `extern fn` result and a mixed-arithmetic subexpression. Every one of those must compile, and this
+//     parameter, an intrinsic with no recorded return type, an `extern fn` result, a mixed-arithmetic
+//     subexpression, and a value-producing `match` whose arm binding is not yet bound at CHECK time.
+//     A `foreach` binding, a `match`-arm payload binding and a `borrow` alias were on this list and are
+//     not any more — the classifier answers for all three. Every survivor must still compile, and this
 //     is the single most important constraint in the campaign — a rule built on a classifier that
 //     conflates "primitive" with "no idea" is either silent on every primitive or unlandable.
 //   - a LITERAL is contextually typed (D2a), so it is already of its destination's type and there is no
@@ -7056,10 +7061,11 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
              + (sgn ? "s((long long)(" : "u((unsigned long long)(")
              + emitExpression(value) + "), " + lo + ", " + hi + "))";
     }
-    // An UNKNOWN source — a type parameter, a `foreach` binding, an intrinsic with no recorded return
-    // type, mixed arithmetic. ⚠️ NEVER a guess and never a skip: `_Generic` asks C the question this
-    // classifier could not answer, and evaluates the operand exactly once. The whole-corpus reason this
-    // matters is that `""` is common; see ROADMAP row 2, which is about making the classifier answer.
+    // An UNKNOWN source — a type parameter, a const-generic parameter, an intrinsic with no recorded
+    // return type, an `extern fn` result, mixed arithmetic. ⚠️ NEVER a guess and never a skip: `_Generic`
+    // asks C the question this classifier could not answer, and evaluates the operand exactly once. Each
+    // one that stays unanswered is a check that cannot be proved away, which is why it is worth answering:
+    // `tools/check-binding-widen.sh` pins the two binding forms that no longer land here.
     return "((" + dstCType + ")KAMA_NARROW(" + emitExpression(value) + ", " + lo + ", " + hi + "))";
 }
 

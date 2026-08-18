@@ -64,53 +64,56 @@ far from the declaration that is actually wrong. The check belongs at the `imple
 contract's declared signature, and wants an `xfail` fixture per mismatch position (return type first;
 parameter types and arity are the same question).
 
-**The no-implicit-conversion rule is SILENT through an untyped binding.** Milestone 6's headline rule —
-"if two numeric types differ, the conversion is written down" — does not hold wherever `typeOfExpr` cannot
-answer. Both of these compile clean and return **44**, proven 2026-08-18:
+**A value-producing `match` is untyped at CHECK time.** The binding milestone (shipped 2026-08-18, `0.9.32`)
+closed the `foreach` and `match`-arm payload bindings, and the measurement it produced named this as what
+is left. `emitMatchSwitch` records an arm's payload binding in `_localTypeNodes` **during emission**, but
+`rejectInitKindMismatch` runs inside `checkDeclaredTypes` — a different, earlier pass. So the value arm of
 
 ```kama
-int8 n = match (someOptionalInt64) { case Some(value: c): c; case None: 0i8; };   // c is an int64 300
-foreach (int64 x in xs) { int8 n = x; }                                          // same, via the binding
+int32 a = match (ok) { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };
 ```
 
-This is the same defect class as the constant `cast<int8>(300)` the compiler already rejects, and as
-`string.length()`, whose intrinsic carried a NULL return type until the isize campaign named it — `int8 n
-= s.length();` silently truncated for exactly this reason.
+cannot be resolved when the initializer is checked, and `typeOfExpr` answers `""` for the whole `match`.
 
-**Both probes re-verified at `0.9.30`** (after the cast trap shipped): each builds clean and returns **44**.
-Copy them as the starting fixtures —
+It is **220 of the 368 remaining blind lines** — by far the largest survivor, and unlike the others it is
+not a "kama cannot know this" case: the payload's type is the variant's declared field type, statically
+available at check time. What is missing is only that nothing binds it before that pass runs.
 
-```kama
-fn Optional<int64> big() { return Optional::Some(value: 300i64); }
-int8 n = match (big()) { case Some(value: c): c; case None: 0i8; };     // 44, no diagnostic
-foreach (int64 x in xs) { int8 n = x; }                                 // 44, no diagnostic
-```
+⚠️ The obvious shortcut is the one that was just removed. `typeOfExpr`'s match walk used to fall back to a
+**literal** arm when no value arm resolved, which made this shape *look* typed — and that answer was never
+coverage. A literal is contextually typed (D2a), so it can only echo the destination (catching nothing) or
+contradict it (a false positive; `isize written = match (wr) { case Ok(value: w): w; case Err(error: e): 0; }`
+was rejected as an `int32`). Do not restore it. The fix is to bind the payload types, not to guess.
 
-**The size of the migration is already measured, and it is the reason this is a campaign.** The cast-trap
-milestone tried the obvious fix — write `_localCTypes[nm]` at the two `foreach` binding sites so
-`typeOfExpr` answers — and **19 fixtures failed immediately**: `bit_set`, `view`, `viewable_attribute`,
-`const_generic_arith`, `const_local_size`, `import_transitive_iter`, `fs_roundtrip`, `net_tcp_options`,
-and the whole `proc_*` family through `tests/support/procutil.kama`. They are not wrong fixtures — they are
-real `isize`-vs-`int32` operand mismatches that milestone 6 would have rejected had the classifier been
-able to see them. That is the work: the diagnostics arrive all at once, so the corpus migration comes with
-them, and the `foreach` half alone is ~19 files before the `match` half is touched.
+**The classifier's blind spots, surveyed 2026-08-18** — measured with `kama check --strict-numeric` over
+`tests/*.kama`, counting distinct source lines in the `unknown-src` + `op-unknown` buckets. The list in
+`typeOfExpr`'s comment had drifted from the code in two places, both found by probe rather than by reading:
 
-**Part of the plumbing already exists.** `_localTypeNodes[nm]` has always held the binding's element type
-node, and `narrowCheck` reads it directly (added by the cast trap, deliberately scoped to that one caller)
-— so the type is *available*, and the open question is only whether `typeOfExpr` may serve it to every rule.
-That also means the gap has a **runtime cost**, not only a correctness one: before `narrowCheck` read it, a
-widening `cast<int64>(v)` out of an `int32` loop binding emitted a runtime check that could never fire,
-worth ~19% of a 2M-iteration loop in `bench/src/kama/alloc.kama`.
+| source | status | size |
+|---|---|---|
+| `foreach` binding | **closed** `0.9.31` | −69 lines |
+| `match`-arm payload binding | **closed** `0.9.32` | −64 lines |
+| `borrow` alias | **was already closed** — the comment outlived the code; the borrow site records both the C type and the type node | 0 |
+| mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
+| value-producing `match` at check time | open — **row 2** | 220 |
+| type parameter | open — subsumed by **row 3** (uninstantiated generic bodies get no analysis at all) | ~24 |
+| const-generic parameter | open — same family as row 3; concentrated in `lib/std/num/fixed.kama` | ~19 |
+| intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 
-⚠️ **The fix is NOT to make the numeric rules fire on an unknown source.** `rejectNumericConversion`'s own
-header calls silence-on-unknown "the single most important constraint in the campaign": a rule built on a
-classifier that conflates "primitive" with "no idea" is either silent on every primitive or unlandable.
-The fix is to make the CLASSIFIER answer — a match-arm binding knows its payload type, and a `foreach`
-binding knows its element type; neither is recorded today. `typeOfExpr`'s comment lists the full set it
-gives up on: a type parameter, a const-generic parameter, a `foreach` binding, a `borrow` alias, an
-intrinsic with no recorded return type, an `extern fn` result, and a mixed-arithmetic subexpression. Each
-wants its own answer or its own reason for staying silent, and a fixture per binding form — the corpus
-proves nothing here, since it happened to use the correct widths everywhere.
+**What the binding milestone corrected about its own brief.** The migration was recorded here as 19
+fixtures, measured by writing `_localCTypes[nm]` at the two `foreach` sites. The landed fix routes through
+`_localTypeNodes` instead — read only by `neverNullType` and the numeric rules, where `_localCTypes` is
+also read by `lvalueCType`, the compound-assignment path and the ownership/RAII paths — and breaks **six**.
+`fs_roundtrip`, `net_tcp_options` and the `proc_*` family never fail through the classifier; those 13 were
+the ownership paths reacting to a map they had no business seeing a binding in. The distinction matters
+beyond the count: a `foreach (string s in …)` binding is a borrow on the indexed path and an owned value on
+the iterator path, so teaching `_localCTypes` about bindings perturbs `ownsByValue` LHS detection.
+
+**The gap had a runtime cost too**, now guarded by `tools/check-binding-widen.sh`: an unanswered source
+falls back to `KAMA_NARROW`, a `_Generic` that cannot be proved away, so a *widening* `cast<int64>(v)` out
+of a binding paid a check that could never fire — ~19% of a 2M-iteration loop in `bench/src/kama/alloc.kama`.
+The exit code cannot see this (a bare cast and a checked one compute the same answer), which is why that
+guard reads the emitted C.
 
 **Go-to-definition on a compiler built-in lands nowhere.** `string`, `isize`, `usize`, `int32` and the
 `string`/`Fixed`/`View` intrinsic methods are registered in C++ (`registerCollection` in `kama.cemit.cpp`),
