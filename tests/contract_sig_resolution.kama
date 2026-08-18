@@ -1,0 +1,53 @@
+// A conformance's signatures are checked against the contract's, and the comparison is on the RESOLVED
+// type — so every spelling that means the same type must compare EQUAL. Each pair here is a correct
+// conformance that a naive comparison would reject:
+//
+//   * a namespaced `type intrinsic` block, whose target is a primitive with no namespace context of its
+//     own (this one WAS rejected during development — the contract's `M::Wrapped` was compared against
+//     the implementation's bare `Wrapped`);
+//   * a generic contract implemented at a concrete argument (`Boxed<int32>` supplying `int32`, where the
+//     contract member still spells the raw parameter `T`);
+//   * a refined contract, whose inherited member is merged in from the parent;
+//   * a `ref` parameter and a `const fn` member, where the marker agrees on both sides;
+//   * a contract-declared OPERATOR, whose signature hangs off a declarator rather than a method node.
+//
+// The negative direction lives in tests/xfail/contract_*_mismatch*.
+namespace M;
+
+type value Wrapped { public int32 v; public ctor of(int32 v) { this.v = v; } }
+
+type contract Boxer for intrinsic { fn Wrapped boxed(); }
+type intrinsic <int32> implements Boxer { public fn Wrapped boxed() { return Wrapped.of(v: this); } }
+
+type contract Get<T> for value { const fn T get(); }
+type value Cell implements Get<int32> {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public const fn int32 get() { return this.n; }        // the member spells `T`; this is its argument
+}
+
+type contract Addable for value { int32 operator+(int32 rhs); }
+type value N implements Addable {
+    int32 v;
+    public ctor of(int32 v) { this.v = v; }
+    public int32 operator+(int32 rhs) { return this.v + rhs; }
+}
+
+type contract Named for value { fn int32 tag(); }
+type contract Titled for value implements Named { fn int32 rank(ref Wrapped w); }
+type value Card implements Titled {
+    public ctor make() { }
+    public fn int32 tag() { return 3; }                    // inherited from the refined parent
+    public fn int32 rank(ref Wrapped w) { return w.v; }    // `ref` on both sides
+}
+
+fn int32 main() {
+    int32 x = 4;
+    Boxer b = x;
+    Cell c = Cell.of(n: 10);
+    Card k = Card.make();
+    Wrapped w = Wrapped.of(v: 20);
+    N      n = N.of(v: 2);
+    // 4 + 10 + 3 + 20 + 5 = 42
+    return b.boxed().v + c.get() + k.tag() + k.rank(w: w) + (n + 3);
+}

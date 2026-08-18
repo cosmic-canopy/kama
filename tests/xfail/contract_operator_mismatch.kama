@@ -1,0 +1,11 @@
+// A contract may declare an OPERATOR — the generic-math bound shape (`IArithmetic` declares
+// `This operator+(This rhs)`) — and it is a slot like any other, so its signature is a promise like any
+// other. It reaches the check by a different road than an ordinary method: an operator is not a
+// `ClassMethodDeclarationNode`, so its signature hangs off the declarator rather than a method node.
+type contract Addable for value { int32 operator+(int32 rhs); }
+type value N implements Addable {
+    int32 v;
+    public ctor of(int32 v) { this.v = v; }
+    public int64 operator+(int64 rhs) { return cast<int64>(this.v) + rhs; }   // contract says `int32` -> REJECT
+}
+fn int32 main() { N a = N.of(v: 1); return 0; }

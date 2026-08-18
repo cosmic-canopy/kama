@@ -1,0 +1,7 @@
+// …and an enum's, which arrives by the same path (collectEnumConformances -> checkImplCompleteness).
+type contract Counter for enum { fn int32 count(); }
+type enum Color implements Counter {
+    Red, Green;
+    public fn int64 count() { return 2; }                     // contract says `int32` -> REJECT
+}
+fn int32 main() { Color c = Color::Red; return cast<int32>(c.count()) - 2; }

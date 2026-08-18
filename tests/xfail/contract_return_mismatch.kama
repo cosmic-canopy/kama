@@ -1,0 +1,12 @@
+// An `implements` clause promises the contract's SIGNATURE, and the return type is the position that
+// shipped broken: `File`/`TcpStream`/`WsConnection` returned `Result<usize, IoError>` where `Reader`
+// and `Writer` declare `Result<isize, IoError>`, and nothing objected until clang did, at the use
+// sites, naming mangled types. Through the contract the mismatch is not merely un-diagnosed but
+// WRONG: the vtbl slot is a cast, so `count` below ran and returned the low 32 bits of 2^32 — zero.
+type contract Counter for value { fn int32 count(); }
+type value Bad implements Counter {
+    public ctor make() { }
+    public fn int64 count() { return 4294967296; }        // contract says `int32` -> REJECT
+}
+fn int32 viaContract(Counter c) { return c.count(); }
+fn int32 main() { Bad b = Bad.make(); return viaContract(c: b); }

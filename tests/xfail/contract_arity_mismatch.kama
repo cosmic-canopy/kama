@@ -1,0 +1,9 @@
+// Arity is the third position of the same rule, and the one a caller through the contract cannot
+// even spell: the slot has one parameter, so the second would be read from whatever follows it.
+// Reported alone — a count mismatch makes every positional comparison after it meaningless.
+type contract Adder for value { fn int32 add(int32 x); }
+type value Bad implements Adder {
+    public ctor make() { }
+    public fn int32 add(int32 x, int32 y) { return x + y; }   // contract declares ONE parameter -> REJECT
+}
+fn int32 main() { Bad b = Bad.make(); return b.add(x: 0, y: 0); }

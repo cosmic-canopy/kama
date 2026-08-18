@@ -1,0 +1,6 @@
+// The same rule reaches a primitive's conformance, which the `_classes` sweep cannot see: a scalar's
+// contract methods live in `_primConformances`, so this arrives via checkImplCompleteness — the path
+// an `enum`'s conformance shares.
+type contract Counter for intrinsic { fn int32 count(); }
+type intrinsic <int32> implements Counter { public fn int64 count() { return 1; } }
+fn int32 main() { return 0; }

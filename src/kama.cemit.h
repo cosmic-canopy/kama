@@ -1542,6 +1542,20 @@ private:
     // parameters that carry no borrow — such a view could only borrow a constructor local. Rejected at the
     // `implements`, because no body can satisfy it.
     void checkViewContractCtors();
+    // An `implements` clause promises the contract's SIGNATURES — return type, parameter types, arity —
+    // and until this check it promised nothing: a vtable slot is filled with a cast, so a mismatch
+    // reached the C compiler at the use sites (or, on a direct call, ran and truncated silently).
+    // Detected on the C spelling (ground truth after aliases/imports/substitution); reported in kama.
+    struct ConfSig;
+    ConfSig contractSigOf(InterfaceInfo& ii, const InterfaceMethod& m);
+    ConfSig implSigOf(ClassInfo& tci, ClassInfo* owner, MethodInfo* mi);
+    std::string kamaTypeText(SharedIdentifier t);
+    void checkConformanceSignature(ClassInfo& tci, const std::string& contract,
+                                   const std::string& tkey, int line);
+    void checkConformanceSignatures();   // the `_classes` sweep; enums/intrinsics come via checkImplCompleteness
+    // One report per (type-or-template, contract, member): a generic type's conformance is checked on
+    // its INSTANCES, so a template-level mismatch would otherwise repeat per instantiation.
+    std::set<std::string> _conformanceSigChecked;
     void checkViewableContracts();   // a `@viewable` contract must have a member that could mint
     bool paramCanCarryBorrow(FunctionParameterNode* p, const std::string& selfParam) const;
     // The `UnsafePtr` containment rule (the unsafe seam). `namesUnsafePtr` is TRUE when a type node IS

@@ -1,0 +1,9 @@
+// A parameter's type is the same promise as the return type's: dispatch goes through a slot whose
+// signature the contract fixes, so an implementation that widens a parameter is reading a different
+// value than every caller bound by the contract passed.
+type contract Adder for value { fn int32 add(int32 x); }
+type value Bad implements Adder {
+    public ctor make() { }
+    public fn int32 add(int64 x) { return cast<int32>(x); }   // contract says `int32` -> REJECT
+}
+fn int32 main() { Bad b = Bad.make(); return b.add(x: 0); }

@@ -45,25 +45,6 @@ library's entry point for importers — the opposite end of the word), and `out`
 root. Both are read by `kama seed`, which is what would otherwise have propagated a wrong name into every
 project created after it.
 
-**A contract conformance is not return-type checked.** An `implements` clause is a promise the compiler
-does not verify: `type resource File implements Reader, Writer` returned `Result<usize, IoError>` from both
-`read` and `write` while `Reader`/`Writer` declare `Result<isize, IoError>`, and kama emitted it. So did
-`TcpStream` and `WsConnection`. Nothing failed until **clang** rejected the generated C —
-
-```
-error: assigning to 'Result_isize_std__io__IoError' from incompatible type 'Result_usize_std__io__IoError'
-```
-
-— which is how `examples/httpd` came to be un-buildable while `kama check` called the stdlib clean.
-Found 2026-08-18, during the cast-trap milestone; the three signatures are fixed, the hole is not.
-
-Two things make this worse than an ordinary missing check. It is the **one guarantee an `implements`
-clause exists to make**, so a user reading `implements Reader` has been told something untrue. And the
-failure surfaces at the *use* site in generated C, naming mangled types the author never wrote, arbitrarily
-far from the declaration that is actually wrong. The check belongs at the `implements`, against the
-contract's declared signature, and wants an `xfail` fixture per mismatch position (return type first;
-parameter types and arity are the same question).
-
 **A value-producing `match` is untyped at CHECK time.** The binding milestone (shipped 2026-08-18, `0.9.32`)
 closed the `foreach` and `match`-arm payload bindings, and the measurement it produced named this as what
 is left. `emitMatchSwitch` records an arm's payload binding in `_localTypeNodes` **during emission**, but
@@ -95,9 +76,9 @@ was rejected as an `int32`). Do not restore it. The fix is to bind the payload t
 | `match`-arm payload binding | **closed** `0.9.32` | −64 lines |
 | `borrow` alias | **was already closed** — the comment outlived the code; the borrow site records both the C type and the type node | 0 |
 | mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
-| value-producing `match` at check time | open — **row 2** | 220 |
-| type parameter | open — subsumed by **row 3** (uninstantiated generic bodies get no analysis at all) | ~24 |
-| const-generic parameter | open — same family as row 3; concentrated in `lib/std/num/fixed.kama` | ~19 |
+| value-producing `match` at check time | open — **row 1** | 220 |
+| type parameter | open — subsumed by **row 2** (uninstantiated generic bodies get no analysis at all) | ~24 |
+| const-generic parameter | open — same family as row 2; concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 
 **What the binding milestone corrected about its own brief.** The migration was recorded here as 19

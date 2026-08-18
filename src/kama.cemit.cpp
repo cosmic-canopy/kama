@@ -11956,6 +11956,221 @@ void CEmitter::checkViewContractCtors()
     }
 }
 
+// Render a type node back in KAMA spelling (`Result<isize, IoError>`), resolving a bound parameter
+// through `_typeSubst` so a generic contract's `T` prints as the argument the conformance bound it to.
+// The C spelling is what a signature MISMATCH is detected on — it is what clang would eventually
+// object to — but it is not what a diagnostic may say: `Result_isize_std__io__IoError` names a type
+// the author never wrote, which is precisely what made the original failure unreadable.
+//
+// Bare, unqualified names only. That is the spelling a conformance is written in, and a qualifier
+// reconstructed from `qualifier` would print `std::io::IoError` where the source says `IoError`.
+std::string CEmitter::kamaTypeText(SharedIdentifier t)
+{
+    if (!t || !t->value) return "";
+    auto s = _typeSubst.find(*t->value);
+    if (s != _typeSubst.end() && s->second && s->second.get() != t.get() && s->second->value)
+        return kamaTypeText(s->second);
+    std::string out = *t->value;
+    if (t->genericArgs && !t->genericArgs->empty()) {
+        out += "<";
+        for (size_t i = 0; i < t->genericArgs->size(); ++i) {
+            if (i) out += ", ";
+            out += kamaTypeText((*t->genericArgs)[i]);
+        }
+        out += ">";
+    } else if (t->genericArg) {
+        out += "<" + kamaTypeText(t->genericArg) + ">";
+    }
+    return out;
+}
+
+// One member's signature, rendered for comparison: the C spelling (what the mismatch is DETECTED on)
+// beside the kama spelling (what the diagnostic may say).
+struct CEmitter::ConfSig {
+    std::string cRet, kamaRet;
+    std::vector<std::string> cParam, kamaParam;
+    std::vector<bool> byRef, isOut;
+};
+
+// The signature of a contract member, rendered under the CONTRACT's own name-resolution scope — its
+// imports, not the implementing unit's — with a generic-contract instance's `T` bound to its argument.
+// The same two-part dance `emitClassInterfaceVtables` does before it casts a function into a slot; a
+// generic instance copies the template's methods verbatim, so their signatures still spell the raw
+// parameter name (`B`), never the argument.
+CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMethod& m)
+{
+    ConfSig s;
+    NsCtx saved = _nsCtx;
+    if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+    {
+        ContractSubst _cs(*this, ii);
+        if (m.returnType) {
+            s.cRet    = cType(m.returnType) + (m.isPlaceReturn ? "*" : "");
+            s.kamaRet = (m.isPlaceReturn ? "ref " : "") + kamaTypeText(m.returnType);
+        }
+        if (m.params)
+            for (auto& p : *m.params) {
+                s.cParam.push_back(p && p->type ? cType(p->type) : "");
+                s.kamaParam.push_back(p && p->type ? kamaTypeText(p->type) : "");
+                s.byRef.push_back(p ? paramByRef(p.get()) : false);
+                s.isOut.push_back(p ? paramIsOut(p.get()) : false);
+            }
+    }
+    _nsCtx = saved;
+    return s;
+}
+
+// The signature of the method that answers for it, rendered under the DECLARING type's scope with
+// `This` bound — and, for a generic instance, with the instance's type arguments bound, so a `T`-typed
+// return resolves to the concrete monomorph (`cTypeInInstance`) rather than to the bare parameter.
+//
+// The type NODES are re-rendered here rather than read back off `mi->params[i].className`, which was
+// computed at collection — possibly, as `paramSigsOf` says of itself, before the class table existed.
+// Two spellings produced at two different times are exactly the thing a comparison must not rest on.
+//
+// A COMPILER-BUILT entry (a primitive's synthetic conformance ClassInfo, a collection) records no scope
+// of its own, and reseating from it would resolve every bare name in an empty namespace: `type intrinsic
+// <int32> implements Boxer { … Wrapped … }` inside `namespace M` rendered the contract's `M::Wrapped`
+// against the implementation's unqualified `Wrapped` and called them different (probed, and it was a
+// false positive on a correct conformance). Those arrive here from checkImplCompleteness, mid-collection,
+// where the DECLARING unit's context is already live and is the right one — so leave it alone.
+CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodInfo* mi)
+{
+    ConfSig s;
+    ClassInfo& src = owner ? *owner : tci;
+    NsCtx saved = _nsCtx;
+    if (!src.scope.empty()) { _nsCtx.scope = src.scope; _nsCtx.usings = src.usings; _nsCtx.symbolAliases = src.symbolAliases; }
+    {
+        ScopedStr  _ts(_thisType, tci.name);
+        ScopedThis _tt(_typeSubst, synthId(tci.name));
+        if (mi->returnType) {
+            s.cRet    = cTypeInInstance(tci.name, mi->returnType) + (mi->isPlaceReturn ? "*" : "");
+            s.kamaRet = (mi->isPlaceReturn ? "ref " : "") + kamaTypeText(mi->returnType);
+        }
+        // The declaration's own parameter nodes when there are any; an intrinsic/synthesized method has
+        // no node, and its recorded `className` IS the C spelling — the only answer available there.
+        // An OPERATOR is neither: it is not a ClassMethodDeclarationNode, so `node` is null, but its
+        // declarator carries real type nodes — and the contract side built its own list from exactly
+        // this call (`collectInterfaces`), so the two are rendered the same way rather than one from
+        // nodes and one from a C spelling recorded at collection.
+        SharedParameterList ps = mi->node ? mi->node->params
+                               : mi->isOperator && mi->opDecl && mi->opDecl->operatorDeclarator
+                                   ? operatorParamList(mi->opDecl->operatorDeclarator.get())
+                                   : SharedParameterList();
+        if (ps) {
+            for (auto& p : *ps) {
+                s.cParam.push_back(p && p->type ? cTypeInInstance(tci.name, p->type) : "");
+                s.kamaParam.push_back(p && p->type ? kamaTypeText(p->type) : "");
+                s.byRef.push_back(p ? paramByRef(p.get()) : false);
+                s.isOut.push_back(p ? paramIsOut(p.get()) : false);
+            }
+        } else {
+            for (auto& p : mi->params) {
+                s.cParam.push_back(p.className);
+                s.kamaParam.push_back("");      // no node to render: the message falls back to the C name
+                s.byRef.push_back(p.byRef);
+                s.isOut.push_back(p.isOut);
+            }
+        }
+    }
+    _nsCtx = saved;
+    return s;
+}
+
+// An `implements` clause is a promise about SIGNATURES, and it was the one thing not being checked.
+// `type resource File implements Reader, Writer` returned `Result<usize, IoError>` from `read` and
+// `write` where both contracts declare `Result<isize, IoError>`; so did `TcpStream` and `WsConnection`.
+// Nothing objected — a vtable slot is filled with a CAST to the erased signature, which is exactly what
+// silences the C compiler at the declaration and defers the complaint to the use sites, where it names
+// mangled types the author never wrote. `examples/httpd` became un-buildable while `kama check` called
+// the stdlib clean.
+//
+// The direct call is worse than un-diagnosed, it is wrong: dispatching `fn int64 count()` through an
+// `fn int32 count()` slot compiled, ran, and silently returned the low 32 bits (probed 2026-08-18).
+//
+// Detection is on the C spelling — that is the ground truth about whether two signatures are the same
+// after aliases, imports and substitution — while the message says the kama one.
+void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& contract,
+                                         const std::string& tkey, int line)
+{
+    auto ifIt = _interfaces.find(contract);
+    if (ifIt == _interfaces.end()) return;   // a base class, or unresolved — already diagnosed
+    InterfaceInfo& ii = ifIt->second;
+    if (ii.isViewable) return;               // a mint protocol declares a grant, not a callable slot
+
+    // A generic type's conformance is checked on its INSTANCES (the template's `implements` is resolved
+    // per instance), so a template-level mismatch would otherwise report once per instantiation.
+    auto gi = _genericTypeInsts.find(tci.name);
+    const std::string subject = gi != _genericTypeInsts.end() ? gi->second.templateKey : tci.name;
+    const std::string shown = !ii.templateKey.empty() ? ii.templateKey : contract;
+
+    for (auto& m : ii.methods) {
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = findMethod(&tci, m.name, &owner);
+        if (!mi) continue;                   // presence is checkImplCompleteness'/the vtable's job
+        if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
+
+        ConfSig want = contractSigOf(ii, m);
+        ConfSig have = implSigOf(tci, owner, mi);
+        const int at = mi->node ? mi->node->line : mi->opDecl ? mi->opDecl->line : line;
+        // An operator is registered under a SYNTHETIC name (`op_add`); say what the author wrote.
+        const std::string member = mi->isOperator && mi->opDecl && mi->opDecl->operatorDeclarator
+                                 ? "operator" + binaryOperator(mi->opDecl->operatorDeclarator->opToken)
+                                 : m.name;
+        const std::string lead = "`" + tkey + "` implements `" + shown + "`, but its `" + member + "` ";
+        const std::string tail = "; a conformance must match the signature the contract declares";
+        // Prefer the kama spelling; an intrinsic/synthesized side has no node to render one from.
+        auto shownType = [](const std::string& kama, const std::string& c) { return kama.empty() ? c : kama; };
+
+        // Arity first, and alone: a count mismatch makes every positional comparison below meaningless,
+        // and reporting both would name one cause twice.
+        if (want.cParam.size() != have.cParam.size()) {
+            unsupported((lead + "takes " + std::to_string(have.cParam.size()) + " parameter(s) — the "
+                         "contract declares " + std::to_string(want.cParam.size()) + tail).c_str(), at);
+            continue;
+        }
+        if (!want.cRet.empty() && !have.cRet.empty() && want.cRet != have.cRet)
+            unsupported((lead + "returns `" + shownType(have.kamaRet, have.cRet) + "` — the contract "
+                         "declares `" + shownType(want.kamaRet, want.cRet) + "`" + tail).c_str(), at);
+        for (size_t i = 0; i < want.cParam.size(); ++i) {
+            if (want.cParam[i].empty() || have.cParam[i].empty()) continue;   // nothing to compare against
+            const std::string pos = "parameter " + std::to_string(i + 1);
+            if (want.cParam[i] != have.cParam[i])
+                unsupported((lead + "takes `" + shownType(have.kamaParam[i], have.cParam[i]) + "` as "
+                             + pos + " — the contract declares `"
+                             + shownType(want.kamaParam[i], want.cParam[i]) + "`" + tail).c_str(), at);
+            // `ref`/`out` is not decoration: it is what makes the parameter a pointer in the lowered
+            // slot, so a disagreement here is the same class of mismatch as a disagreeing type.
+            else if (want.byRef[i] != have.byRef[i] || want.isOut[i] != have.isOut[i])
+                unsupported((lead + "passes " + pos + " " + (have.isOut[i] ? "`out`" : have.byRef[i] ? "`ref`" : "by value")
+                             + " — the contract declares it "
+                             + (want.isOut[i] ? "`out`" : want.byRef[i] ? "`ref`" : "by value") + tail).c_str(), at);
+        }
+    }
+}
+
+// The sweep. Mirrors checkViewContractCtors' shape: every `_classes` entry against every contract it
+// declares, late enough that bases, interfaces and generic instances are all resolved.
+//
+// This reaches conformances the vtable path cannot. `emitClassInterfaceVtables` skips a static-only
+// (impl-block, monomorphized) conformance entirely — no fat pointer is emitted for one — so the only
+// place its signatures could ever be compared is here.
+void CEmitter::checkConformanceSignatures()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        // A compiler-built entry — a collection, a smart pointer — carries no namespace context to
+        // resolve its own signatures in, and this pass is far too late to recover one. Its conformances
+        // are declared by `type intrinsic` blocks and reach the same comparator through
+        // checkImplCompleteness, while the declaring unit's context is still live. See implSigOf.
+        if (ci.scope.empty()) continue;
+        // A whole-program check has no unit context of its own, so borrow the declaring file's —
+        // otherwise every rejection here reports an empty file in a multi-file build. See diagFile().
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);
+        for (auto& c : ci.interfaces) checkConformanceSignature(ci, c, ci.name, ci.declLine());
+    }
+}
+
 // A `@viewable` contract must be able to grant something. The mark is spent by an IMPLEMENTATION whose
 // return type is a `type view`, so a member can only ever mint if its declared return type is a view
 // (`fn Span span()`) or a contract a view may implement (`fn Iterator<T> iterator()` — the shape every
@@ -12468,6 +12683,10 @@ void CEmitter::checkImplCompleteness(ClassInfo& tci, const std::string& contract
                                "holding a const receiver may call it; declare the implementation "
                                "`const fn` too").c_str(), line);
         }
+    // The rest of the promise — return type, parameter types, arity. This is the ONLY path that reaches
+    // an enum's or a `type intrinsic` block's conformance: a scalar's lands in `_primConformances` and
+    // `string`'s on a collection ClassInfo, neither of which the `_classes` sweep looks at.
+    checkConformanceSignature(tci, contract, tkey, line);
 }
 
 // a concrete type satisfies a contract BOUND when it has every one of the contract's methods,
@@ -20902,6 +21121,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                          + kw + " can't implement it").c_str(), ci.declLine());
         }
     }
+
+    // …and the signatures it promised. After the kind gate for the same reason: a type that may not
+    // implement the contract at all should hear THAT, not a list of its members' disagreements.
+    checkConformanceSignatures();
 
     // A `view` may not promise a contract that requires it to be CONSTRUCTED out of nothing borrowable.
     // After the kind gate, so a view failing a `for resource` clause hears that first — it is the more
