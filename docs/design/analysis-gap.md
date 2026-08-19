@@ -13,7 +13,12 @@ git log. What remains here is the two rows that still point at this file:
   half of a body — both now MEASURED rather than estimated; see §1.
 - **ROADMAP row 17 — test-infra holes** (§2 below). Unchanged and still open.
 
-## 1. A never-instantiated generic body gets no analysis
+## 1. A never-instantiated generic body — half analyzed, half still not
+
+**When the rest of this ships, the SPEC record it owes is a claim the *Generics* section does not
+currently make at all: what is checked at a generic's DECLARATION versus at its instantiation.** The
+guards for that claim already exist — `tests/xfail/generic_uninst_{type_error,unknown_fn,unknown_method}`
+and the silent-half fixture `tests/generic_uninst_ok.kama`.
 
 The original repro, and what each line does today:
 

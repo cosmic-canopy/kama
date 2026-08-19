@@ -103,7 +103,7 @@ miscompile above and an honest instrument, never 220 silent numeric rules.*
 | `borrow` alias | **was already closed** — the comment outlived the code; the borrow site records both the C type and the type node | 0 |
 | mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
 | value-producing `match` at check time | **closed** `0.9.37` | −204 lines |
-| type parameter | open — subsumed by **row 1** (uninstantiated generic bodies get no analysis at all) | ~24 |
+| type parameter | open — subsumed by **row 1**, whose remaining half IS this: an expression typed by `T` has no resolvable type until a binding exists | ~24 |
 | const-generic parameter | open — same family as row 1; concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 | a user **operator overload**'s result | open, small — **the table's missing row**, found 2026-08-18 by probe while writing the conformance fixtures: `(n + 3)` is `?` even though `operator+` declares `-> int32`. The operator-heavy files (`math/vec`, `quat`, `num/fixed`) are blind mostly for the *generic* reason above, so this is its own small bucket, not their cause | ~5 |
