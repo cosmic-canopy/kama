@@ -34,7 +34,7 @@ no ordinary safe-kama construct miscompiles or emits invalid C.*
 
 | # | item | why it gates the tag | detail |
 |---|---|---|---|
-| 1 | **Uninstantiated generic bodies get no analysis at all** — four distinct errors build clean | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
+| 1 | **Uninstantiated generic TYPES get no analysis, and a `T`-typed receiver is unresolvable** — the generic-FUNCTION half shipped `0.9.38`; measured reach on method calls is 5% | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
 | 2 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
 | 3 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. One campaign with 4 — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
 | 4 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |

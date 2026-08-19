@@ -8,49 +8,105 @@ the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 values of one type* and *There is no implicit numeric conversion*), [docs/agents.md](../agents.md) and the
 git log. What remains here is the two rows that still point at this file:
 
-- **ROADMAP row 1 — uninstantiated generic bodies get no analysis** (§1 below). Still open, and
-  **re-probed 2026-08-18 on `0.9.37`: unchanged — `check` is silent and `build` succeeds.**
+- **ROADMAP row 1 — uninstantiated generic bodies get no analysis** (§1 below). **The generic-FUNCTION
+  half shipped 2026-08-18 at `0.9.38`.** What is left is generic TYPES and the type-parameter-dependent
+  half of a body — both now MEASURED rather than estimated; see §1.
 - **ROADMAP row 17 — test-infra holes** (§2 below). Unchanged and still open.
 
-## 1. A never-instantiated generic body gets **no analysis whatsoever**
+## 1. A never-instantiated generic body gets no analysis
 
-Probed 2026-08-15 and still reproducing:
+The original repro, and what each line does today:
 
 ```kama
 fn void wrong<T>(ref DynamicArray<T> d) {
-    View<T> v = d.view();          // window-rule violation
-    int32 x = "not an int";        // type error
-    undefinedFunction(a: 1);       // unresolved name
-    d.nonexistentMethod();         // unresolved method
+    View<T> v = d.view();          // still missed  (receiver's type needs `T` bound)
+    int32 x = "not an int";        // NOW CAUGHT
+    undefinedFunction(a: 1);       // NOW CAUGHT
+    d.nonexistentMethod();         // still missed  (same reason as line 1)
 }
 fn int32 main() { return 0; }
 ```
 
-```sh
-kama check g_never.kama          # -> OK
-kama build g_never.kama -o /tmp/gn   # -> "kama: built /tmp/gn"     <-- FOUR errors, builds clean
-```
+Before `0.9.38`, `kama check` said OK and `kama build` succeeded on all four.
 
-Not just types: **name resolution, method resolution and the view rules are all deferred to
-instantiation.** This is the half that hits package authors — ship `check`-green, consumers get the
-errors.
+⚠️ **The root cause was structural, and is now fixed at the root.** `analyze()` IS `emit()`, and the
+emit walk **skipped template bodies** (`emitModuleContent`'s `fn->typeParams` continue), so every rule
+in the emitter was invisible there by construction. `checkUninstantiatedTemplates` stops the skipping:
+it re-emits every uninstantiated generic FUNCTION into a throwaway sink with the type params left
+symbolic — `emitGenericInst` minus `bindInstParams` — from both `emit()` and `emitProgram()`, so
+`build`, `check` and the LSP still agree. The whole rule set now applies inside a template body, and
+keeps applying as rules are added.
 
-⚠️ **The root cause is structural and is not going to be fixed by a rule.** `analyze()` IS `emit()`
-(`CEmitter::analyze` emits into a throwaway sink), and the emit walk **skips template bodies** —
-`emitModuleContent`'s `fn->typeParams` continue. So every rule in the emitter is invisible there by
-construction, including the two milestone 6 just added.
-
-Two sizes, and they are genuinely different projects:
+### What the measurement says — `--probe-templates`, over `tests/ lib/ prelude/ examples/ bench/`
 
 | | |
 |---|---|
-| **cheap** | a concrete-only template-body walk as a new pass after the `checkDeclaredTypes(units)` call in `analyze`, reusing `collectBindings` (`kama.query.cpp`), skipping any expression that mentions a type parameter. Catches unresolved names + concrete type errors. ~150 LOC |
-| **full** | opaque type parameters answering `findMethod` from declared bounds (`MethodInfo::whenParams`/`whenBounds`). Bounded quantification; **wants its own design doc.** ~600–900 LOC |
+| distinct uninstantiated templates walked | **52** |
+| of those, fully seen (nothing deferred) | **2** |
+| of those, with at least one blind spot | **50** |
+| method call sites the walk RESOLVED | **5** |
+| method call sites it had to DEFER | **90** |
+| **method-resolution reach** | **5 %** |
 
-**One thing the cheap pass would also recover.** Milestone 5b-B accepted a known cost: the emit walk
-skips uninstantiated template bodies, so an ungoverned wide literal inside a generic nobody instantiates
-is not caught. It mentions no type parameter, so the concrete-only walk is positioned to reach it — an
-expectation, not a guarantee.
+**Read that number precisely: it is method-call resolution, not total coverage.** The pass fully
+checks everything that needs no binding for `T` — declared types (a missing import inside a template
+body is caught), literal and numeric rules, unresolved free-function names, and method calls on a
+CONCRETE receiver. What it cannot do is resolve a receiver whose type mentions `T`, and in real
+generic code almost every receiver does. That is why 50 of 52 templates have a blind spot: a generic
+function is, definitionally, mostly about its type parameter.
+
+⚠️ **Two premises this work started with were wrong. Both were measured, not argued.**
+
+1. **"An unbound `T` will go quiet on its own"** — because `cType` hands an unresolved name straight
+   back, landing it in the `exprClass == ""` bucket ~40 callers read as "not a class". FALSE for four
+   rules, which fire on an *unknown* type rather than a *wrong* one: `method call on unresolved
+   receiver`, the turbofish and scope-qualified-call rejections, and `cannot tell which X to
+   construct`. Unguarded they rejected **81 of 640 corpus fixtures, every one valid generic code**.
+   They now route through `deferUnknownWhileProbing`, which is also what produces the tally above —
+   the blind spot is counted, never silently swallowed.
+
+2. **"The cheap pass is ~150 LOC of hand-written walk re-implementing four rules."** It is ~60 lines
+   that re-use the emitter, and re-implementing anything would have been the wrong shape: a second
+   copy of name/type/method resolution goes stale the next time a rule lands. But the *reach* that
+   estimate implied was far too generous — see the 5 % above.
+
+### What is LEFT, and what it costs
+
+**(a) Generic TYPES and generic enums get no analysis at all** — the same hole in the other table
+(`_genericTypes`), and the half a package author is most likely to ship: a library's public generic
+type whose methods no fixture in that library instantiates. Probed 2026-08-18:
+
+```kama
+type value Holder<T> {
+    T item;
+    public ctor make(T x) { this.item = give x; }
+    public fn void broken() { int32 x = "not an int"; undefinedFunction(a: 1); }
+}
+```
+→ `kama check` says OK.
+
+⚠️ **The obvious fix does not work, and this is the load-bearing finding for whoever picks this up.**
+Calling `emitClassDefinitions` on the template's `ClassInfo` — the exact analogue of what works for a
+function — **fails 628 of 641 corpus fixtures across six rule families.** The reason is that a
+template `ClassInfo` in `_genericTypes` is a *shape awaiting specialization*, not a class: its
+`when [A: default]` member gates are unevaluated and its `ctors` map is not the one an instance gets.
+`registerGenericTypeInst` is what turns the shape into a class, and it needs real type arguments to do
+it. Identity substitution (binding each param to itself) is **not** the shortcut: that is the exact
+input that once made `mangleElem` recurse on its own result until the compiler died, which is why
+`explicitGenericInst` defers an unbound argument instead.
+
+So the type half is not a loop away — it needs a shape built with *distinct synthetic* arguments,
+which is (b).
+
+**(b) Opaque type parameters** — a synthetic type per parameter answering `findMethod`/`cType` from
+the declared bounds (`MethodInfo::whenParams`/`whenBounds`, `_genericTypeBounds`). Bounded
+quantification. This is where the other 95 % of method sites live, AND it is the same machinery (a)
+needs to build a probe shape, so the two are one project rather than two. **Wants its own design doc.**
+The earlier ~600–900 LOC estimate is untested; the 5 % reach number is what should size it.
+
+**Recovered by (a)+(b), not by what shipped.** Milestone 5b-B accepted a known cost: an ungoverned
+wide literal inside a generic nobody instantiates was not caught. One that mentions no type parameter
+is now reached; one that does still is not.
 
 ## 2. Test-infra holes
 
