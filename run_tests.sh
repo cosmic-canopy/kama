@@ -225,6 +225,18 @@ watchdog_run() {
             echo "  wchan:   $(cat "/proc/$child/wchan" 2>/dev/null)"
             echo "  syscall: $(cut -d' ' -f1 "/proc/$child/syscall" 2>/dev/null)"
             echo "  open fds: $(ls "/proc/$child/fd" 2>/dev/null | wc -l)"
+            # EVERY thread, not just the main one. A `futex_do_wait` on the main thread says a lock is
+            # held; it cannot say by whom, and that is the only question worth asking about a deadlock.
+            # node under emscripten NODEFS runs a libuv threadpool, so the shape that matters is whether
+            # the workers are idle (main thread waiting on work that never arrives) or themselves parked
+            # (a real cycle). Free to collect, readable without privileges — unlike a native backtrace,
+            # which needs elfutils/gdb in the image AND ptrace, neither of which the container has.
+            for t in "/proc/$child/task"/*; do
+                [ -d "$t" ] || continue
+                echo "  thread ${t##*/}: state=$(awk '/^State:/{ print $2 }' "$t/status" 2>/dev/null)" \
+                     "wchan=$(cat "$t/wchan" 2>/dev/null)" \
+                     "syscall=$(cut -d' ' -f1 "$t/syscall" 2>/dev/null)"
+            done
         else                                                     # macOS host leg
             ps -o state=,wchan=,time= -p "$child" 2>/dev/null | sed 's/^/  ps: /'
         fi

@@ -1,0 +1,44 @@
+// `fetchAdd`/`fetchSub` over SIGNED elements, and over negative values and negative deltas — the half of
+// the atomic surface no fixture covered.
+//
+// It was broken. The prior value crossed the C boundary as a `uint64` and the kama surface wrote
+// `cast<T>(prior)` back; the delta went the other way as `cast<uint64>(delta)`. Both were correct only
+// while a narrowing `cast` TRUNCATED. Since `0.9.30` it TRAPS, so `Atomic<int8>` holding -1 aborted with
+// "value 255 does not fit the target range [-128, 127]", and any negative delta aborted with "value -5
+// does not fit [0, 18446744073709551615]". Nothing converts now — the shim moves `sizeof(T)` bytes — and
+// that is also what leaves no `cast<T>` in `Atomic`, so an uninstantiated `Atomic<T>` is fully analyzable.
+//
+// Returns 55.
+import std::concurrent::{Atomic};
+
+fn int32 main() {
+    // int8, negative prior
+    Atomic<int8> b = Atomic.make(value: -1i8);
+    int8 pb = b.fetchAdd(delta: 1i8);
+    if (pb != -1i8) { return 1; }
+    if (b.load() != 0i8) { return 2; }
+
+    // int32, negative delta
+    Atomic<int32> a = Atomic.make(value: 10i32);
+    int32 pa = a.fetchAdd(delta: -5i32);
+    if (pa != 10i32) { return 3; }
+    if (a.load() != 5i32) { return 4; }
+
+    // fetchSub across zero, into negative territory
+    int32 ps = a.fetchSub(delta: 8i32);
+    if (ps != 5i32) { return 5; }
+    if (a.load() != -3i32) { return 6; }
+
+    // and a negative delta to fetchSub (i.e. an add)
+    int32 pn = a.fetchSub(delta: -3i32);
+    if (pn != -3i32) { return 7; }
+    if (a.load() != 0i32) { return 8; }
+
+    // unsigned still behaves
+    Atomic<uint16> u = Atomic.make(value: 5ui16);
+    uint16 pu = u.fetchSub(delta: 2ui16);
+    if (pu != 5ui16) { return 9; }
+    if (u.load() != 3ui16) { return 10; }
+
+    return 55;
+}

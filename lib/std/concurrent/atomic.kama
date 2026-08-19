@@ -60,8 +60,8 @@ extern fn void   kama_atomic_load     (UnsafePtr cell, UnsafePtr dst, usize widt
 extern fn void   kama_atomic_store    (UnsafePtr cell, UnsafePtr val, usize width, int32 mo);
 extern fn void   kama_atomic_swap     (UnsafePtr cell, UnsafePtr val, UnsafePtr dst, usize width, int32 mo);
 extern fn int32  kama_atomic_cas      (UnsafePtr cell, UnsafePtr expected, UnsafePtr desired, usize width, int32 smo, int32 fmo);
-extern fn uint64 kama_atomic_fetch_add(UnsafePtr cell, uint64 delta, usize width, int32 mo);
-extern fn uint64 kama_atomic_fetch_sub(UnsafePtr cell, uint64 delta, usize width, int32 mo);
+extern fn void   kama_atomic_fetch_add(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
+extern fn void   kama_atomic_fetch_sub(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
 
 type resource Atomic<T> {
     T value;   // the one shared cell; naturally aligned (a single-field struct), so the ops are lock-free
@@ -124,21 +124,35 @@ type resource Atomic<T> {
     }
 
     // Atomically add `delta` and return the PRIOR value (integer elements; seq-cst). Wraps two's-complement.
+    //
+    // The prior value crosses the C boundary through an `out` parameter, exactly as `load` and `swap` do
+    // above, rather than as a `uint64` converted on both sides. Converting was correct only while a
+    // narrowing `cast` truncated; since it TRAPS, `Atomic<int8>` aborted on any negative prior and any
+    // negative delta. Moving `sizeof(T)` bytes converts nothing — and it leaves no `cast<T>` in this type,
+    // which is what lets an uninstantiated `Atomic<T>` be checked as thoroughly as an instantiated one.
     public fn T fetchAdd(T delta) { return this.fetchAddExplicit(delta: delta, order: MemoryOrder::SeqCst); }
-    public unsafe fn T fetchAddExplicit(T delta, MemoryOrder order) {
-        uint64 prior = 0ui64;
-        prior = kama_atomic_fetch_add(cell: cast<UnsafePtr>(addr(of: this.value)), delta: cast<uint64>(delta),
-                                      width: sizeof(T), mo: orderBits(o: order));
-        return cast<T>(prior);
+    public fn T fetchAddExplicit(T delta, MemoryOrder order) {
+        slot T result;
+        this.fetchAddInto(delta: delta, order: order, dst: out result);
+        return result;
+    }
+    unsafe fn void fetchAddInto(T delta, MemoryOrder order, out T dst) {
+        kama_atomic_fetch_add(cell: cast<UnsafePtr>(addr(of: this.value)),
+                              delta: cast<UnsafePtr>(addr(of: delta)), dst: cast<UnsafePtr>(addr(of: dst)),
+                              width: sizeof(T), mo: orderBits(o: order));
     }
 
     // Atomically subtract `delta` and return the PRIOR value (integer elements; seq-cst). Wraps two's-complement.
     public fn T fetchSub(T delta) { return this.fetchSubExplicit(delta: delta, order: MemoryOrder::SeqCst); }
-    public unsafe fn T fetchSubExplicit(T delta, MemoryOrder order) {
-        uint64 prior = 0ui64;
-        prior = kama_atomic_fetch_sub(cell: cast<UnsafePtr>(addr(of: this.value)), delta: cast<uint64>(delta),
-                                      width: sizeof(T), mo: orderBits(o: order));
-        return cast<T>(prior);
+    public fn T fetchSubExplicit(T delta, MemoryOrder order) {
+        slot T result;
+        this.fetchSubInto(delta: delta, order: order, dst: out result);
+        return result;
+    }
+    unsafe fn void fetchSubInto(T delta, MemoryOrder order, out T dst) {
+        kama_atomic_fetch_sub(cell: cast<UnsafePtr>(addr(of: this.value)),
+                              delta: cast<UnsafePtr>(addr(of: delta)), dst: cast<UnsafePtr>(addr(of: dst)),
+                              width: sizeof(T), mo: orderBits(o: order));
     }
 
     ~Atomic() { }   // owns nothing — the cell is inline; a zero value is drop-safe (INVARIANT #0)

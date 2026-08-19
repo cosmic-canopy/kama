@@ -22,6 +22,30 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
 - `tests/trap/` is **skipped** under `KAMA_SAN`, `KAMA_WASM`, and on Windows/MSYS2 (`run_tests.sh`, the
   `TRAP_OK`/`WASM`/`SAN_FLAGS` gate) — UBSan intercepts the trap and node's abort codes differ.
 - **No leg runs MSan.** MSan-origins catches what ASan and wasm both miss.
+- **`fs_raii` hangs on the wasm leg intermittently, and a HUNG kill cannot say why.** Seen once in a full
+  `./dev matrix` (2026-08-19); the harness captured `state: S (sleeping)`, `wchan: futex_do_wait`,
+  `syscall: 98` (futex), `open fds: 18` — so the fd RAII the fixture exists to test was working, and the
+  process was blocked on a lock, not leaking or spinning on I/O.
+
+  **Pre-existing, and established as unrelated to whatever is in flight** rather than assumed: the fixture
+  ran 40/40 clean under node in isolation, its emitted C never references the shims that changed, and that
+  C was byte-identical before and after. It needs the LOADED leg — ~1160 fixtures fanned across every core
+  plus the leg's background node servers — which is exactly the shape that makes it rare and useless to
+  bisect.
+
+  **The watchdog now also samples EVERY thread**, not just the main one, which is the question a
+  `futex_do_wait` actually raises: a lock is held, by whom? Under emscripten NODEFS node runs a libuv
+  threadpool, so the shape that matters is whether the workers are idle (the main thread is waiting on
+  work that never arrives) or themselves parked (a real cycle). Verified against a live threaded node
+  process rather than assumed — the capture separates `ep_poll` threads from `futex_do_wait` ones.
+
+  ⚠️ **Still missing, and it needs an image change: a native backtrace.** The container has no `eu-stack`,
+  `gdb`, `lldb` or `pstack`, and `/proc/<pid>/stack` is privileged — so naming the actual frame would take
+  elfutils in the image plus `CAP_SYS_PTRACE`. Worth doing only if the per-thread picture turns out not to
+  be enough. Note that node's own report cannot cover this: its ABSENCE is itself the finding, because an
+  idle-but-alive event loop writes one and a main thread parked in a syscall never reaches the handler.
+  Until it is diagnosed, this is a known watch item, not a green-suite guarantee — which is the whole
+  subject of this section.
 - **An `xfail` fixture never links, so it never reaches ASan.** This is why a campaign about *rejection*
   cannot take a green suite as its acceptance test: the view-window campaign's findings ④⑤⑥ survived all
   three legs and 34 guards. The discipline that works is a probe ledger walking every branch of the rule

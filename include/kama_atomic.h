@@ -70,28 +70,33 @@ static inline int32_t kama_atomic_cas(void* cell, void* expected, void* desired,
     return 0;
 }
 
-// ---- fetch-add / fetch-sub: return the PRIOR value, widened to 64 bits -----------------------------------
-// Two's-complement add/sub is signedness-agnostic, so the unsigned-width op is correct for a signed `T`
-// too; the kama surface truncates the returned prior value back to `T`. On an `UnsafePtr` cell this is byte
-// arithmetic over the raw bits — well-defined here, though rarely meaningful (use load/store/CAS instead).
-static inline uint64_t kama_atomic_fetch_add(void* cell, uint64_t delta, size_t width, int32_t mo) {
+// ---- fetch-add / fetch-sub: write the PRIOR value through `dst` ------------------------------------------
+// Two's-complement add/sub is signedness-agnostic, so the unsigned-width op is correct for a signed `T`.
+// On an `UnsafePtr` cell this is byte arithmetic over the raw bits — well-defined here, though rarely
+// meaningful (use load/store/CAS instead).
+//
+// ⚠️ `delta` and `dst` are ADDRESSES of `width` bytes, not a `uint64`, and that is the whole point. They
+// used to be a `uint64` in and a `uint64` out, with the kama surface converting on both sides — which was
+// correct only while a narrowing `cast` truncated. Since `0.9.30` it TRAPS, so `Atomic<int8>` aborted on
+// any negative prior value ("255 does not fit [-128, 127]") and any negative delta ("-5 does not fit
+// [0, 18446744073709551615]"). Moving `width` bytes converts nothing and cannot trap, and it matches
+// `kama_atomic_swap` directly above — same (cell, val, dst, width, mo) shape.
+static inline void kama_atomic_fetch_add(void* cell, void* delta, void* dst, size_t width, int32_t mo) {
     switch (width) {
-        case 1: return (uint64_t)__atomic_fetch_add((uint8_t *)cell, (uint8_t )delta, mo);
-        case 2: return (uint64_t)__atomic_fetch_add((uint16_t*)cell, (uint16_t)delta, mo);
-        case 4: return (uint64_t)__atomic_fetch_add((uint32_t*)cell, (uint32_t)delta, mo);
-        case 8: return (uint64_t)__atomic_fetch_add((uint64_t*)cell, (uint64_t)delta, mo);
+        case 1: { uint8_t  p = __atomic_fetch_add((uint8_t *)cell, *(uint8_t *)delta, mo); *(uint8_t *)dst = p; break; }
+        case 2: { uint16_t p = __atomic_fetch_add((uint16_t*)cell, *(uint16_t*)delta, mo); *(uint16_t*)dst = p; break; }
+        case 4: { uint32_t p = __atomic_fetch_add((uint32_t*)cell, *(uint32_t*)delta, mo); *(uint32_t*)dst = p; break; }
+        case 8: { uint64_t p = __atomic_fetch_add((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; break; }
     }
-    return 0;
 }
 
-static inline uint64_t kama_atomic_fetch_sub(void* cell, uint64_t delta, size_t width, int32_t mo) {
+static inline void kama_atomic_fetch_sub(void* cell, void* delta, void* dst, size_t width, int32_t mo) {
     switch (width) {
-        case 1: return (uint64_t)__atomic_fetch_sub((uint8_t *)cell, (uint8_t )delta, mo);
-        case 2: return (uint64_t)__atomic_fetch_sub((uint16_t*)cell, (uint16_t)delta, mo);
-        case 4: return (uint64_t)__atomic_fetch_sub((uint32_t*)cell, (uint32_t)delta, mo);
-        case 8: return (uint64_t)__atomic_fetch_sub((uint64_t*)cell, (uint64_t)delta, mo);
+        case 1: { uint8_t  p = __atomic_fetch_sub((uint8_t *)cell, *(uint8_t *)delta, mo); *(uint8_t *)dst = p; break; }
+        case 2: { uint16_t p = __atomic_fetch_sub((uint16_t*)cell, *(uint16_t*)delta, mo); *(uint16_t*)dst = p; break; }
+        case 4: { uint32_t p = __atomic_fetch_sub((uint32_t*)cell, *(uint32_t*)delta, mo); *(uint32_t*)dst = p; break; }
+        case 8: { uint64_t p = __atomic_fetch_sub((uint64_t*)cell, *(uint64_t*)delta, mo); *(uint64_t*)dst = p; break; }
     }
-    return 0;
 }
 
 #endif  // KAMA_ATOMIC_H

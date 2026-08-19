@@ -7615,6 +7615,10 @@ void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector
     if (cti == _genericTypeConstTypes.end()) return;
     const std::vector<SharedIdentifier>& cts = cti->second;
     const std::vector<std::string>& ps = _genericTypeParams[tmplKey];
+    // While PROBING the argument is a placeholder (see probeConstArg), so binding it would fold every
+    // expression that reads `N` against a number nobody wrote. Leave it unbound: the function half has
+    // always walked a `const` parameter that way, and a type error in the body is caught either way.
+    if (_probingTemplate) return;
     for (size_t i = 0; i < ps.size() && i < args.size() && i < cts.size(); ++i) {
         if (!cts[i]) continue;                       // a type param — already bound in _typeSubst
         int64_t v;
@@ -9874,6 +9878,18 @@ bool CEmitter::rejectUnprovenBound(const std::string& cls, const std::string& me
     return true;
 }
 
+// The stand-in a probe puts in a `const N: int32` slot. Its VALUE is deliberately never read — see the
+// call site — so it exists only to be a well-formed argument for mangling and arity checking. `1` rather
+// than `0` because a zero is the value most likely to be meaningful if it ever did leak into a fold.
+SharedIdentifier CEmitter::probeConstArg()
+{
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
+    id->synthesized = true;
+    id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, 1);
+    return id;
+}
+
 std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& templateKey,
                                                      SharedStringList typeParams,
                                                      SharedBoundsList typeBounds,
@@ -10131,15 +10147,18 @@ void CEmitter::checkUninstantiatedTypeTemplates()
         if (pit == _genericTypeParams.end() || pit->second.empty()) continue;
         const std::vector<std::string> params = pit->second;
 
-        // A `const N: int32` parameter stands for a VALUE, and there is no value to invent. Picking one
-        // would decide the template's own `comptime assert` — `Fixed<B, const F>` asserts on `F` — so the
-        // walk would report whatever the number happened to prove. Skipped, and counted, because a
-        // measurement that hides its blind spot is worse than no measurement.
+        // A `const N: int32` parameter stands for a VALUE, not a type, so the instance still needs an
+        // argument in that slot for `registerGenericTypeInst` to mangle and validate. It gets a
+        // placeholder — and the placeholder is NOT then bound as `N`'s value: `bindInstConstParams` skips
+        // it while probing, so the body walks with `N` unbound, exactly as the FUNCTION half already does
+        // (`fn f<const S: int32>` has always been walked that way, and catches every type error in its
+        // body). That is what keeps the walk from deciding anything the number would have decided —
+        // notably the template's own `comptime assert`, which is per-instantiation by definition.
         auto ctit = _genericTypeConstTypes.find(tmpl);
-        bool hasConstParam = false;
+        std::vector<bool> isConstSlot(params.size(), false);
         if (ctit != _genericTypeConstTypes.end())
-            for (auto& c : ctit->second) if (c) hasConstParam = true;
-        if (hasConstParam) { ++_probeTypesSkipped; continue; }
+            for (size_t i = 0; i < params.size() && i < ctit->second.size(); ++i)
+                isConstSlot[i] = (bool)ctit->second[i];
 
         auto sp = std::make_shared<StringList>();
         for (auto& p : params) sp->push_back(std::make_shared<std::string>(p));
@@ -10157,7 +10176,11 @@ void CEmitter::checkUninstantiatedTypeTemplates()
 
         auto args = std::make_shared<IdentifierList>();
         bool ok = true;
-        for (auto& o : opq) { if (o.empty()) { ok = false; break; } args->push_back(synthId(o)); }
+        for (size_t i = 0; i < opq.size(); ++i) {
+            if (isConstSlot[i]) { args->push_back(probeConstArg()); continue; }
+            if (opq[i].empty()) { ok = false; break; }
+            args->push_back(synthId(opq[i]));
+        }
         if (ok) {
             const size_t before   = _genericTypeInstOrder.size();
             const int  errsBefore = _unsupported;

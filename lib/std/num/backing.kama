@@ -16,7 +16,8 @@ namespace std::num;
 export { FixedBacking };
 
 type contract FixedBacking<B is This> for value, intrinsic {
-    fn int64 wide();              // widen into the accumulator
+    const fn int64 wide();        // widen into the accumulator — non-mutating, and generic code that is
+                                  // itself `const fn` may only call it if the CONTRACT says so
     ctor B fromWide(int64 v);     // narrow back — the cast TRAPS on overflow, like every base operator
     ctor B clampWide(int64 v);    // narrow back saturating — never traps; what the `sat*` ops need
 }

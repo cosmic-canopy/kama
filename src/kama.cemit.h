@@ -1919,8 +1919,8 @@ private:
     // are exactly what an opaque parameter is. So this registers a probe instance and hands it to
     // `emitGenericTypeInst`, the very function a real instantiation goes through.
     void checkUninstantiatedTypeTemplates();
-    long _probeTypesWalked  = 0;   // generic types given a probe instance
-    long _probeTypesSkipped = 0;   // …and those with a `const N: int32` param, which has no type to invent
+    SharedIdentifier probeConstArg();   // the placeholder a probe puts in a `const N: int32` slot
+    long _probeTypesWalked = 0;    // generic types given a probe instance
     // A qualified type spelling reaches no further than an `import` would: reject one naming a symbol its
     // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
     // clause alone, without the resolution half. Caller owns `_nsCtx`.
