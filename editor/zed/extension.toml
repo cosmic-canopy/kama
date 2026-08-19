@@ -12,11 +12,21 @@ repository = "https://github.com/cosmic-canopy/kama"
 # ⚠️ Zed does NOT read the working tree. It runs `git init` + `git fetch --depth 1 origin <rev>`, so only
 # COMMITTED grammar changes are visible to it, and `rev` must name a commit the remote will serve.
 #
-# ⚠️ `rev` must be a commit that actually CONTAINS tree-sitter-kama/. It is not a release tag today because
-# no tag does: the grammar landed after v0.1.76. tools/check-editors.sh verifies this locally so a stale or
-# mistyped rev fails the suite instead of failing silently in someone's editor. Bump it to the release tag
-# once one is cut that includes the grammar.
+# ⚠️ `rev` must be a commit that actually CONTAINS tree-sitter-kama/, and it must be THE COMMIT THAT LAST
+# CHANGED IT. Both are enforced by tools/check-editors.sh §2c/§2d, so a stale or mistyped rev fails the
+# suite instead of failing silently in someone's editor — which is what happened before: this pin sat 16
+# grammar changes behind, and `slot` and named match patterns stopped highlighting with nothing to say so.
+#
+# THE RULE: bump this whenever tree-sitter-kama/ changes — NOT on a VERSION bump. VERSION moves on any
+# src/include/prelude/lib/agents/seed change (346 commits over the stale window, 16 of which touched the
+# grammar); repointing on all of them would ship nothing and make the pin's movement meaningless.
+#
+#   rev = $(git log -1 --format=%H -- tree-sitter-kama)
+#
+# A grammar change is TWO commits — the change, then this pin — because a commit cannot name its own SHA.
+# Pinning an unpushed commit is fine and normal: the pin travels in the same push as the grammar it names,
+# so no PUBLISHED state ever points at something the remote cannot serve.
 [grammars.kama]
 repository = "https://github.com/cosmic-canopy/kama"
-rev = "f143f315f1dc582740a643de41afe242e510e6be"
+rev = "c3bdbf717c0081a1721d5fcb89e6f4235b11d1b0"
 path = "tree-sitter-kama"

@@ -146,14 +146,29 @@ statements of one truth. Whatever lands wants a `tools/check-*.sh` asserting eve
 claim does. Hover is a cheaper partial win and worth checking first: if hover already answers for these,
 the gap is only the jump.
 
-**At the tag itself — repoint the Zed grammar pin.** `editor/zed/extension.toml` pins a *commit*, and Zed
-installs the grammar by fetching that rev — so the pin, not the working tree, is what Zed users get. It is
-currently behind (the commit predates `slot` and named match patterns, so neither highlights for them).
-Bump `rev` to the release tag when 1.0.0 is cut, and add the guard that cannot exist while it is a moving
-SHA: assert the tag's `tree-sitter-kama/grammar.js` + `queries/` match the tree. Doing it at the tag is what
-dissolves the chicken-and-egg — a content check against a *commit* pin would fail the very commit that
-changes the grammar. `tools/check-editors.sh` §2c today proves only that the rev resolves and carries a
-grammar, never that it is the current one.
+**The Zed grammar pin follows the GRAMMAR — done, and no longer a scheduled row.** `editor/zed/extension.toml`
+pins a *commit* and Zed fetches that rev, so the pin — not the working tree — is what Zed users get. It had
+drifted 16 grammar changes and 19 days behind, which is why `slot` and named match patterns stopped
+highlighting with nothing to say so.
+
+This used to be scheduled as *"repoint it at the 1.0 tag"*, on the reasoning that a content guard could not
+exist against a moving SHA — it would fail the very commit that changes the grammar. Two things were wrong
+with that:
+
+- **The trigger is the grammar, not the release.** Tying it to `VERSION` would fire on all 346 commits of
+  that drift window when only 16 touched the grammar, and a pin that always moves signals nothing by moving.
+- **The chicken-and-egg is one commit deep, not fatal.** The target is *computable* —
+  `git log -1 --format=%H -- tree-sitter-kama` — and, decisively, **stable under its own fix**: the pin lives
+  in `editor/zed/`, outside the grammar directory, so correcting it never moves the answer. So the guard
+  converges in one step, and a grammar change simply lands as TWO commits (the change, then the pin), the
+  same shape the `VERSION` rule already has.
+
+Also wrong was a worry about pinning an unpushed commit: the pin travels in the same push as the grammar it
+names, so no *published* state ever points at something the remote cannot serve.
+
+`tools/check-editors.sh` §2d now asserts the pin IS the last grammar commit and prints the exact fix; §2c
+still proves the rev resolves and carries a grammar at all. A tag pin was considered and rejected — a tag
+only moves at releases, so it would be stale by this rule for the whole window between them.
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 

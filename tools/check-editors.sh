@@ -100,6 +100,34 @@ if [ -f "$ZED_TOML" ]; then
         elif [ -z "$(git -C "$ROOT" ls-tree --name-only "$rev" -- tree-sitter-kama 2>/dev/null)" ]; then
             bad "editor/zed/extension.toml pins rev=$rev, which does NOT contain tree-sitter-kama/ — Zed would fetch a tree with no grammar and the extension would fail to load"
         fi
+
+        # 2d. THE REV MUST BE THE CURRENT GRAMMAR. §2c proves the pin fetches *a* grammar; this proves it
+        #     fetches THIS one. Zed installs what the pin names, not the working tree, so a pin left behind
+        #     ships stale highlighting and nothing says so — measured once at 16 grammar changes and 19 days
+        #     behind, which is how `slot` and named match patterns quietly stopped highlighting.
+        #
+        #     Gated on the GRAMMAR changing, not on VERSION. VERSION bumps on any src/include/prelude/lib/
+        #     agents/seed change — 346 commits since that stale pin, of which 16 touched the grammar. Moving
+        #     the pin on all 346 would ship nothing and destroy its value as a signal: a pin that always
+        #     moves tells you nothing by moving.
+        #
+        #     The target is COMPUTABLE and — the property that makes this automatable at all — STABLE UNDER
+        #     ITS OWN FIX: the pin lives in editor/zed/, outside tree-sitter-kama/, so correcting it does not
+        #     move the answer. No oscillation, so the guard converges in one step.
+        #
+        #     A grammar change therefore lands as TWO commits (the change, then the pin), because a commit
+        #     cannot name its own SHA. Same shape as the VERSION rule, and this guard is what makes the
+        #     second one impossible to forget rather than a thing someone remembers.
+        #
+        #     Skipped on a SHALLOW clone, where `git log -- <path>` sees only the tip and would report the
+        #     tip as "the last grammar commit" whenever it happens to touch the grammar.
+        if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null)" != true ]; then
+            last=$(git -C "$ROOT" log -1 --format=%H -- tree-sitter-kama 2>/dev/null)
+            if [ -n "$last" ] && [ "$rev" != "$last" ]; then
+                behind=$(git -C "$ROOT" rev-list --count "$rev".."$last" -- tree-sitter-kama 2>/dev/null || echo '?')
+                bad "editor/zed/extension.toml pins rev=$rev, but the grammar last changed in $last ($behind grammar change(s) later) — Zed installs the PIN, so users would get stale highlighting. Fix: set rev to $last (\`git log -1 --format=%H -- tree-sitter-kama\`). A grammar change is two commits: the change, then the pin."
+            fi
+        fi
     fi
 fi
 
