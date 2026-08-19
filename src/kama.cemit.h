@@ -543,10 +543,15 @@ public:
     // guess. See `noteNumericHandoff`.
     void setStrictNumeric(bool on) { _strictNumericScan = on; }
     // Measure what `checkUninstantiatedTemplates` reaches. Hidden, off by default, same shape and same
-    // reason as `--strict-numeric`: one TSV row per probed template on stdout, whose last column is the
-    // count of diagnostics DEFERRED because a type was unknown rather than wrong. That column is the
-    // point — it is the half of an uninstantiated body this pass cannot see, and a measurement that hid
-    // its own blind spot would be worse than no measurement.
+    // reason as `--strict-numeric`: one TSV row per probed template on stdout, reporting the diagnostics
+    // DEFERRED because a type was unknown rather than wrong. That is the point — it is the half of an
+    // uninstantiated body this pass cannot see, and a measurement that hid its own blind spot would be
+    // worse than no measurement.
+    //
+    // Row: `probe` key file line #params errors deferred resolved, then one column per DeferKind, in
+    // enum order. The buckets are the second half of the instrument and were added to size the follow-on:
+    // a deferral a compiler change can close and one only a SOURCE change can close are different
+    // projects, and a single total cannot tell them apart.
     void setProbeReport(bool on) { _probeReport = on; }
 
 
@@ -1009,6 +1014,12 @@ private:
     // `_typeSubst` is deliberately empty during a probe (that is what keeps `T` symbolic). Without this
     // every probed `T` would reach `checkTypeResolves` as an unknown type. Read by `isTypeParamName`.
     std::set<std::string>                           _probeTypeParams;
+    // The same params' declared contract bounds (`<T: Comparable<T>, C: Order<T>>` -> T:[Comparable], …),
+    // resolved names, empty vector = unbounded. Only the CLASSIFIER reads it: a deferred call on a bare
+    // `T` receiver means something different when `T` carries a bound (a future opaque parameter will
+    // resolve it from the bound) than when it does not (the body is calling something `T` never promised,
+    // and closing that needs a bound ADDED at the declaration — a source change, not a compiler one).
+    std::map<std::string, std::vector<std::string>>  _probeParamBounds;
     bool                                            _probingTemplate = false;  // inside the probe walk
     long                                            _probeDeferred   = 0;      // the blind-spot tally
     long                                            _probeResolved   = 0;      // its denominator: sites fully checked
@@ -1029,7 +1040,31 @@ private:
     // Note what does NOT come through here: a receiver whose class IS resolved and lacks the method, an
     // `int32` initialized with a string, a call to a name that exists nowhere. Those are wrong at every
     // instantiation, so the probe reports them, which is the whole reason the pass exists.
-    bool deferUnknownWhileProbing() { if (!_probingTemplate) return false; ++_probeDeferred; return true; }
+    //
+    // WHY THE TALLY IS BUCKETED. One number says how much the pass gave up on; it does not say who can
+    // close it, and those are different projects. A receiver spelled `View<T>` waits on a compiler change
+    // (bind the parameter to a synthetic type and the instance is ordinary); a receiver spelled `T` with
+    // no bound waits on a SOURCE change in every generic that does it. Sizing the second from the first
+    // is how the 5 %-reach estimate went wrong the last time — so the instrument reports the split.
+    enum DeferKind {
+        DK_RecvGeneric = 0,  // receiver's type is `Foo<T>` — a generic type mentioning a probed param
+        DK_RecvBound,        // receiver's type IS a probed param, and that param declares a bound
+        DK_RecvUnbound,      // receiver's type IS a probed param with NO bound  <- the source-migration cost
+        DK_RecvUnknown,      // receiver's type node is unrecoverable (a collection element, an index)
+        DK_Turbofish,        // `sortWith::<T, C>` — forwards the enclosing params, no instance to route to
+        DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
+        DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
+        DK_Count
+    };
+    static const char* deferKindName(int k);
+    long _probeDeferBy[DK_Count] = {0};
+    bool deferUnknownWhileProbing(DeferKind k)
+    { if (!_probingTemplate) return false; ++_probeDeferred; ++_probeDeferBy[k]; return true; }
+    // Which bucket a deferred call on `recv` belongs to — the DK_Recv* split above. Reads the receiver's
+    // declared kama type NODE (`receiverTypeNode`), never its C type: `Foo<T>` and `T` lower to nothing
+    // distinguishable once the parameter is unbound, and the distinction is the whole measurement.
+    DeferKind classifyDeferredReceiver(SharedExpression recv);
+    bool typeMentionsProbedParam(const SharedIdentifier& t) const;
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
     // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different

@@ -9719,6 +9719,57 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     _nsCtx = savedCtx;
 }
 
+const char* CEmitter::deferKindName(int k)
+{
+    switch (k) {
+        case DK_RecvGeneric: return "recv-generic";
+        case DK_RecvBound:   return "recv-param-bounded";
+        case DK_RecvUnbound: return "recv-param-unbound";
+        case DK_RecvUnknown: return "recv-unknown";
+        case DK_Turbofish:   return "turbofish";
+        case DK_ScopeQual:   return "scope-qual";
+        case DK_DotCtor:     return "dot-ctor";
+    }
+    return "?";
+}
+
+// Does `t` name — at any depth — one of the params of the template being probed? `View<T>` and
+// `Optional<Pair<K, V>>` both do; `View<int32>` does not. Deliberately narrower than `isTypeParamName`,
+// which answers for EVERY template's params: here the question is whether THIS body's own parameter is
+// what makes the type unresolvable, and a name that merely collides with some other template's `T` is not.
+bool CEmitter::typeMentionsProbedParam(const SharedIdentifier& t) const
+{
+    if (!t || !t->value) return false;
+    if (!t->genericArg && _probeTypeParams.count(*t->value)) return true;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) if (typeMentionsProbedParam(a)) return true;
+    return false;
+}
+
+CEmitter::DeferKind CEmitter::classifyDeferredReceiver(SharedExpression recv)
+{
+    // The receiver may be the PARAMETER ITSELF rather than a value of it — `T.fromStr(s: s)`,
+    // `T.deserialize(r: r)`: a static reached through the type parameter, which is how every bounded
+    // static in the stdlib is called. `receiverTypeNode` answers nothing for a type receiver (it looks up
+    // locals and fields), so ask the spelling directly, or these land in the "cannot tell" bucket and
+    // overstate the residual. Same bounded/unbound split — a bound is what carries the static too.
+    if (auto* id = dynamic_cast<IdentifierNode*>(recv.get()))
+        if (id->value && _probeTypeParams.count(*id->value)) {
+            auto b = _probeParamBounds.find(*id->value);
+            return (b != _probeParamBounds.end() && !b->second.empty()) ? DK_RecvBound : DK_RecvUnbound;
+        }
+    SharedIdentifier tn = receiverTypeNode(recv);
+    if (!tn || !tn->value) return DK_RecvUnknown;
+    // A BARE parameter (`T x` — no generic args): the split that decides who can close the site. With a
+    // bound, a synthetic type standing for `T` answers the call from the contract; without one there is
+    // nothing to answer FROM, and the fix is a bound added at the declaration.
+    if (!tn->genericArg && _probeTypeParams.count(*tn->value)) {
+        auto b = _probeParamBounds.find(*tn->value);
+        return (b != _probeParamBounds.end() && !b->second.empty()) ? DK_RecvBound : DK_RecvUnbound;
+    }
+    if (typeMentionsProbedParam(tn)) return DK_RecvGeneric;   // `View<T>`, `DynamicArray<T>`
+    return DK_RecvUnknown;
+}
+
 // Walk every generic template NOBODY instantiates, for its diagnostics alone. See the header for why this
 // exists at all (short version: `analyze()` IS `emit()`, and the emit walk skips a template body, so every
 // rule in this file was invisible inside an uninstantiated generic by construction).
@@ -9762,26 +9813,46 @@ void CEmitter::checkUninstantiatedTemplates()
         // than accumulated: two templates' `T`s are different types, and a name that is a param HERE must
         // not stay one for the next body walked.
         std::set<std::string> savedProbe = _probeTypeParams;
+        auto savedBounds = _probeParamBounds;
         _probeTypeParams.clear();
+        _probeParamBounds.clear();
         for (auto& tp : *tmpl->typeParams) if (tp) _probeTypeParams.insert(*tp);
+        // The bounds are index-parallel to the params (an empty entry = unbounded). Stored by their
+        // SPELLED name, not resolved: the classifier only asks "is there a bound at all", and resolving
+        // would need the template's home ctx for a benefit no column reads.
+        if (tmpl->typeBounds)
+            for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i) {
+                SharedIdentifierList bl = (*tmpl->typeBounds)[i];
+                if (!bl || !(*tmpl->typeParams)[i]) continue;
+                auto& slot = _probeParamBounds[*(*tmpl->typeParams)[i]];
+                for (auto& b : *bl) if (b && b->value) slot.push_back(*b->value);
+            }
 
         const int  errsBefore = _unsupported;
         const long defBefore = _probeDeferred;
         const long resBefore = _probeResolved;
+        long byBefore[DK_Count];
+        for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
         const std::string probeName = key + "__probe";
         emitFunction(tmpl, &probeName);   // nameOverride => `static` linkage, and no entry-point mangling
 
-        // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred. The last
-        // two columns are the blind spot and its denominator — what a bound `T` would have let this walk
-        // decide and an unbound one could not, against what it decided anyway. See setProbeReport.
-        if (_probeReport)
-            std::fprintf(stdout, "probe\t%s\t%s\t%d\t%zu\t%ld\t%ld\t%ld\n",
+        // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred,
+        // diagnostics resolved, then ONE COLUMN PER DEFERRAL BUCKET (see DeferKind). The deferred total is
+        // the blind spot and `resolved` is its denominator; the buckets say who can close it — a compiler
+        // change (recv-generic, recv-param-bounded, turbofish, scope-qual, dot-ctor) or a SOURCE change in
+        // every generic that calls through an unbounded parameter (recv-param-unbound). See setProbeReport.
+        if (_probeReport) {
+            std::fprintf(stdout, "probe\t%s\t%s\t%d\t%zu\t%ld\t%ld\t%ld",
                          key.c_str(), _emitDeclFile.empty() ? "<prelude>" : _emitDeclFile.c_str(),
                          tmpl->line, tmpl->typeParams->size(),
                          (long)(_unsupported - errsBefore), _probeDeferred - defBefore,
                          _probeResolved - resBefore);
+            for (int i = 0; i < DK_Count; ++i) std::fprintf(stdout, "\t%ld", _probeDeferBy[i] - byBefore[i]);
+            std::fprintf(stdout, "\n");
+        }
 
         _probeTypeParams = savedProbe;
+        _probeParamBounds = savedBounds;
         sink.str(std::string());          // one body's worth of C at a time, not the whole corpus
     }
 
@@ -9789,6 +9860,7 @@ void CEmitter::checkUninstantiatedTemplates()
     _out = savedOut;
     _nsCtx = savedCtx;
     _probeTypeParams.clear();
+    _probeParamBounds.clear();
 }
 
 // MCU 6b-1: after generic instantiations are discovered, register any collection whose size DERIVES from a
@@ -16737,7 +16809,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (call->identifier->genericArgs) {
         // A turbofish inside an uninstantiated template forwards the enclosing `T` (`sortWith::<T, C>`), so
         // `explicitGenericInst` deferred it and there is no instantiation to route to — absence, not error.
-        if (deferUnknownWhileProbing()) return "0";
+        if (deferUnknownWhileProbing(DK_Turbofish)) return "0";
         unsupported(("`" + name + "::<…>` — turbofish type arguments are only valid on a generic function").c_str(), call->line);
         return "0";
     }
@@ -16966,7 +17038,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             return "0";
         }
         // `Natural<T>::compare(...)` — the qualifier names a generic instance that has none yet.
-        if (deferUnknownWhileProbing()) return "0";
+        if (deferUnknownWhileProbing(DK_ScopeQual)) return "0";
         unsupported(("`" + *qual->back() + "::" + name + "` — scope-qualified call resolves to no known "
                      "function").c_str(), call->line);
         return "0";
@@ -20362,7 +20434,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // The sibling branch above stays live under a probe: calling a static through dot-on-type is the
         // wrong spelling whatever `T` turns out to be. THIS one is pure absence — `DynamicArray<T>.new()`
         // has no instance to name until something instantiates the enclosing template.
-        else if (!deferUnknownWhileProbing())
+        else if (!deferUnknownWhileProbing(DK_DotCtor))
             unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
                          + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "
                          "inferred").c_str(), call->line);
@@ -20806,7 +20878,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         }
     }
     if (cls.empty() || !_classes.count(cls)) {
-        if (deferUnknownWhileProbing()) return "0";   // `d.length()` on a `DynamicArray<T>` — see the header
+        // `d.length()` on a `DynamicArray<T>` — see the header. The bucket is read off the RECEIVER's
+        // declared type node, because that is what says whether a compiler change or a source change is
+        // what closes this site.
+        if (deferUnknownWhileProbing(classifyDeferredReceiver(receiver))) return "0";
         unsupported("method call on unresolved receiver", call->line);
         return "0";
     }
