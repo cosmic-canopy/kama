@@ -1,0 +1,14 @@
+// `emitMatchSwitch` never cleared the match's target around an arm's NON-FINAL statements, so they ran
+// under the outer match's result type. At top level this assignment is rejected (the target is "" there);
+// only inside a value-producing arm did the inherited `int64` turn the guard into a false pass.
+type enum E { A(int64 v), B(int64 w) }
+fn int32 main() {
+    E e = E::A(v: 300);
+    int8 t = 0i8;
+    int64 x = match (e) {
+        case A(v: v): { t = true ? match (e) { case A(v: a): a; case B(w: b): b; }
+                                 : match (e) { case A(v: a): a; case B(w: b): b; }; := v; }
+        case B(w: w): w;
+    };
+    return cast<int32>(x) + cast<int32>(t);
+}

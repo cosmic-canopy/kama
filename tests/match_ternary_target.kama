@@ -1,0 +1,17 @@
+// The legal half of the ternary-threading fix. `needsTargetType` looks THROUGH a ternary, so a
+// value-producing `match` reached from an argument or an assignment still gets its destination threaded
+// down to the arms — which is what makes these compile at all. Before the fix they compiled too, but by
+// inheriting whatever target an enclosing position had left behind, which is the bug
+// `xfail/match_ternary_arg_narrow` pins. Both must hold: the wrong types rejected, these accepted.
+type enum E { A(int64 v), B(int64 w) }
+fn int64 pick(int64 p) { return p; }
+fn int32 main() {
+    E e = E::A(v: 30);
+    // ARGUMENT position, through a ternary
+    int64 a = pick(p: true ? match (e) { case A(v: v): v; case B(w: w): w; }
+                           : match (e) { case A(v: v): v; case B(w: w): w; });
+    // ASSIGNMENT position, where the same gate lives — and only one branch is a match
+    int64 b = 0i64;
+    b = false ? match (e) { case A(v: v): v; case B(w: w): w; } : 12i64;
+    return cast<int32>(a) + cast<int32>(b);   // 30 + 12 = 42
+}

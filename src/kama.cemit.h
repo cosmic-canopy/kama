@@ -1782,6 +1782,22 @@ private:
     // rule above reads it through `kindOfCType`, and width/conversion checking will read it directly.
     std::string typeOfExpr(SharedExpression e);
     std::string classifierCType(SharedIdentifier type);  // cType, but "" wherever cType would DIAGNOSE
+    // A saved `_localTypes` / `_localTypeNodes` entry, so a scoped binding can be undone. Both the match
+    // emitter and the classifier bind arm payloads; only the emitter may diagnose, so they share the
+    // save/restore shape rather than the install.
+    struct SavedLocalType { std::string name; bool had; std::string prev; bool hadNode; SharedIdentifier prevNode; };
+    void restoreLocalTypeBindings(const std::vector<SavedLocalType>& saved);
+    // The `match` subject's variant class, QUIETLY — the same four-step recovery `emitMatchSwitch` does
+    // (`exprClass`, through a `give` hand-off, the discovery-stashed inline instance, the qualified
+    // variant name), with no diagnostic on failure. "" when it is not a resolvable variant class, which
+    // is the only answer a total classifier may give. `inlineSubj` (optional) reports steps 3–4.
+    std::string matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj = nullptr);
+    // Bind a generic instance's type args into `_typeSubst` so a payload's `T` resolves concretely
+    // (`Optional<int64>` stores its payload in the TEMPLATE's `T`). Returns false — and touches nothing —
+    // when `cls` is not a generic instance. Restore `_typeSubst` from `saved` when it returns true.
+    bool bindInstSubst(const std::string& cls, std::map<std::string, SharedIdentifier>& saved);
+    // Install one arm's payload bindings for the duration of classifying that arm's value.
+    std::vector<SavedLocalType> bindArmPayloadTypes(const ClassInfo& ci, const SharedMatchArm& a);
     void noteNumericHandoff(const std::string& dstCType, SharedExpression value,
                             const char* what, int line);   // M5a measurement; silent unless the flag is on
     void noteNumericOperands(int opToken, SharedExpression lhs, SharedExpression rhs,

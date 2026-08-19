@@ -3047,7 +3047,9 @@ An arm is either a **single expression** (`case X: <expr>;`) or a **block** (`ca
 arm names the value it produces with a **`:= <expr>;`** statement, which must be the block's **final**
 statement (single-exit) — it accepts any expression, and reads as "bind this value out" (a `match` in a
 typed position *is* an assignment from the outside, `x = match … { … := v; }`). `:=` is distinct from
-`return`, which leaves the enclosing function:
+`return`, which leaves the enclosing function. An arm of a value-producing `match` must therefore either
+end in `:=` or **diverge** (`return` / `break` / `continue`); in particular a block arm cannot be *empty*,
+since it would leave the match's value unset:
 
 ```kama
 string label = match (reading) {

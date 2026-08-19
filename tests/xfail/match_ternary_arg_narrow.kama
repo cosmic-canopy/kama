@@ -1,0 +1,12 @@
+// The gate that threads a call argument's type into a value-producing `match` tested the ARGUMENT NODE
+// for being a `MatchNode`, so the same match wrapped in a ternary slipped past it — and because a
+// non-threading position left `_matchTargetCType` alone instead of clearing it, the match adopted
+// whatever target an enclosing position had left behind. This built clean and returned 44, not 300.
+type enum E { A(int64 v), B(int64 w) }
+fn int64 f(int8 p) { return cast<int64>(p); }
+fn int32 main() {
+    E e = E::A(v: 300);
+    int64 y = f(p: true ? match (e) { case A(v: v): v; case B(w: w): w; }
+                        : match (e) { case A(v: v): v; case B(w: w): w; });
+    return cast<int32>(y);
+}

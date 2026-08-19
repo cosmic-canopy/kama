@@ -1,0 +1,10 @@
+// Both of the arm-block checks live INSIDE the `for (i < nstmt)` loop, so an EMPTY block arm reached
+// neither: the result temp was never assigned and the emitted C read it uninitialized. clang's
+// -Wsometimes-uninitialized was the only thing that noticed, i.e. the diagnostic came from the C
+// compiler rather than from kama.
+type enum E { A(int64 v), B }
+fn int32 main() {
+    E e = E::B;
+    int64 x = match (e) { case A(v: v): v; case B: { } };
+    return cast<int32>(x);
+}

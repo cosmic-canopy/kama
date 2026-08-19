@@ -1,0 +1,9 @@
+// The KIND half of the same hole: the inherited target let a number reach a `bool` parameter.
+type enum E { A(int64 v), B(int64 w) }
+fn int64 f(bool p) { return 0i64; }
+fn int32 main() {
+    E e = E::A(v: 300);
+    int64 y = f(p: true ? match (e) { case A(v: v): v; case B(w: w): w; }
+                        : match (e) { case A(v: v): v; case B(w: w): w; });
+    return cast<int32>(y);
+}

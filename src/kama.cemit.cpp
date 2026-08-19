@@ -676,7 +676,116 @@ bool isLiteralExpr(const ASTNode* n)
         return isLiteralExpr(t->LHS.get()) && isLiteralExpr(t->RHS.get());
     return isNumericLiteral(n);
 }
+
+// A value-producing expression that carries NO type of its own and must be HANDED its destination —
+// a `match`, an array literal, or a ternary that yields one.
+//
+// The two gates that thread a destination (the call-argument path and the assignment path) each used to
+// test `dynamic_cast<MatchNode*>` on the argument/RHS node ITSELF. So the identical `match`, wrapped in a
+// ternary, slipped past both — and because a position that does not thread leaves `_matchTargetCType`
+// alone rather than clearing it, the match silently adopted whatever target an ENCLOSING position had
+// left behind. Probed 2026-08-18: `fn int64 f(int8 p)` called as
+// `f(p: c ? match (e) {…int64 arms…} : match (e) {…})` inherited the `int64` of the surrounding
+// `int64 y = …`, passed the arm check, built with no diagnostic and TRUNCATED 300 to 44. The kind rule
+// went the same way — the same call with a `bool p` was accepted.
+//
+// Recursing through the ternary is what makes the gate see the shape; clearing at the non-threading
+// positions is what makes the miss FAIL CLOSED (the existing "must appear in a typed position" error)
+// rather than silently wrong.
+static bool needsTargetType(const ASTNode* n)
+{
+    if (!n) return false;
+    if (dynamic_cast<const MatchNode*>(n))        return true;
+    if (dynamic_cast<const ArrayLiteralNode*>(n)) return true;
+    if (auto* t = dynamic_cast<const TernaryExpressionNode*>(n))
+        return needsTargetType(t->LHS.get()) || needsTargetType(t->RHS.get());
+    return false;
+}
 }  // namespace
+
+void CEmitter::restoreLocalTypeBindings(const std::vector<SavedLocalType>& saved)
+{
+    for (auto& sv : saved) {
+        if (sv.had)     _localTypes[sv.name]     = sv.prev;     else _localTypes.erase(sv.name);
+        if (sv.hadNode) _localTypeNodes[sv.name] = sv.prevNode; else _localTypeNodes.erase(sv.name);
+    }
+}
+
+std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj)
+{
+    if (inlineSubj) *inlineSubj = false;
+    if (!m) return "";
+    std::string subjCls = exprClass(m->subject);
+    // `match (give x)` — the consuming form resolves through the hand-off to x's class.
+    if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
+    // A value-producing variant ctor as the SUBJECT: the concrete instance was inferred + registered at
+    // discovery and its mangled name stashed, because it cannot be re-inferred here.
+    if (subjCls.empty()) {
+        auto it = _matchSubjInst.find(m);
+        if (it != _matchSubjInst.end() && _classes.count(it->second)) {
+            subjCls = it->second;
+            if (inlineSubj) *inlineSubj = true;
+        }
+    }
+    // A NON-generic user enum built inline (`match (Shape::Circle(r: 3))`) has no instance to infer, so it
+    // never reached `_matchSubjInst`; its enum is recoverable straight from the qualified variant name.
+    if (subjCls.empty()) {
+        std::string vt = variantExprEnumCType(m->subject);
+        if (!vt.empty() && _classes.count(vt)) {
+            subjCls = vt;
+            if (inlineSubj) *inlineSubj = true;
+        }
+    }
+    return subjCls;
+}
+
+bool CEmitter::bindInstSubst(const std::string& cls, std::map<std::string, SharedIdentifier>& saved)
+{
+    auto cit = _classes.find(cls);
+    if (cit == _classes.end() || !cit->second.isGenericInst || !_genericTypeInsts.count(cls)) return false;
+    saved = _typeSubst;
+    _typeSubst.clear();
+    const GenericTypeInst& gi = _genericTypeInsts[cls];
+    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    return true;
+}
+
+// The classifier's half of the arm-payload binding. `emitMatchSwitch` does the same lookup, but it also
+// emits, indexes for the LSP, checks containment and tracks moves — and it may DIAGNOSE, which a total
+// classifier may not. So the two share the lookup shape and the save/restore, not the install: everything
+// unresolvable here is skipped silently and simply leaves the arm unanswered.
+//
+// ⚠️ `_localTypes` + `_localTypeNodes` ONLY, never `_localCTypes` — that map is read by `lvalueCType`, the
+// compound-assignment path and the ownership/RAII paths, where a `foreach (string s in …)` binding is a
+// BORROW on the indexed path and an OWNED value on the iterator path, so a binding in it perturbs
+// `ownsByValue` LHS detection (the binding milestone broke 19 fixtures that way, and 6 this way).
+std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassInfo& ci, const SharedMatchArm& a)
+{
+    std::vector<SavedLocalType> saved;
+    if (!a || a->isWildcard() || !a->variantName || !a->bindings || !a->labels) return saved;
+    const VariantCase* vc = nullptr;
+    for (auto& v : ci.variants) if (v.name == *a->variantName) { vc = &v; break; }
+    if (!vc) return saved;
+    for (size_t i = 0; i < a->bindings->size() && i < a->labels->size(); ++i) {
+        const std::string& lbl = *(*a->labels)[i];
+        const FieldInfo* pf = nullptr;
+        for (auto& f : vc->payload) if (f.name == lbl) { pf = &f; break; }
+        if (!pf) continue;                       // an unknown label is emitMatchSwitch's to report
+        const std::string bn = *(*a->bindings)[i];
+        saved.push_back({bn, (bool)_localTypes.count(bn),
+                         _localTypes.count(bn) ? _localTypes[bn] : std::string(),
+                         (bool)_localTypeNodes.count(bn),
+                         _localTypeNodes.count(bn) ? _localTypeNodes[bn] : SharedIdentifier()});
+        // SUBSTITUTED — a generic instance stores its payload in the TEMPLATE's `T`, so the raw node
+        // would classify as nothing. The caller has bound `_typeSubst` for the whole match.
+        SharedIdentifier ty = deepSubstType(pf->type);
+        const std::string bcty = classifierCType(ty);   // classifier-safe: "" where cType would diagnose
+        _localTypes[bn]     = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
+        _localTypeNodes[bn] = ty;
+    }
+    return saved;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // `typeOfExpr` — the total expression classifier.
@@ -874,14 +983,32 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
             return v;
         };
         if (mx->arms) {
+            // An arm's payload binding is bound by `emitMatchSwitch` during EMISSION, which is too late for
+            // every rule that asks this classifier — so `case Some(value: x): x;` answered "" and the whole
+            // match with it. Bind the payload types HERE too, for exactly as long as it takes to classify
+            // one arm's value. The payload's type is the variant's declared field type, statically
+            // available, so this is not a guess (which is why the removed literal fallback below must stay
+            // removed — see the pass-2 comment).
+            std::string subjCls = matchSubjectClassQuiet(mx);
+            auto scit = _classes.find(subjCls);
+            const ClassInfo* mci = (scit != _classes.end() && scit->second.isVariant) ? &scit->second : nullptr;
+            std::map<std::string, SharedIdentifier> savedSubst;
+            const bool instSubst = mci && bindInstSubst(subjCls, savedSubst);
+
             bool anyValueArm = false;                            // a non-literal arm EXISTS, answered or not
+            std::string answer;
             for (auto& a : *mx->arms) {                          // a NON-literal arm speaks first
                 SharedExpression v = armValue(a);
                 if (!v || isLiteralExpr(v.get())) continue;      // diverging, or contextually typed
                 anyValueArm = true;
+                std::vector<SavedLocalType> bound;
+                if (mci) bound = bindArmPayloadTypes(*mci, a);
                 std::string ac = typeOfExpr(v);
-                if (!ac.empty()) return ac;
+                restoreLocalTypeBindings(bound);
+                if (!ac.empty()) { answer = ac; break; }
             }
+            if (instSubst) _typeSubst = savedSubst;
+            if (!answer.empty()) return answer;
             // Pass 2 belongs to "EVERY arm is a literal", which is what its comment always claimed — but it
             // used to run whenever pass 1 produced no ANSWER, which is not the same test. A payload arm the
             // classifier cannot type is still a value arm, and letting the error arm's `0` speak for the
@@ -5482,7 +5609,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         if (as->token == EQ) {
             ASTNode* r = as->expression.get();
-            bool isMatch = dynamic_cast<MatchNode*>(r) != nullptr;
+            bool isMatch = needsTargetType(r);   // a `match`, or a ternary yielding one — see needsTargetType
             // an array literal RHS (`v = [1,2,3]`) is value-producing too — it needs the LHS Fixed
             // type threaded so the compound literal / `__fill` names the right struct.
             bool isArrayLit = dynamic_cast<ArrayLiteralNode*>(r) != nullptr;
@@ -13370,7 +13497,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 argIsVariant = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
             }
         }
-        bool argIsMatch = dynamic_cast<MatchNode*>(argExpr.get()) != nullptr;
+        bool argIsMatch = needsTargetType(argExpr.get());   // incl. a ternary yielding a match / array literal
         // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
         // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
@@ -13491,7 +13618,14 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 _matchTargetCType = pmt; _variantTargetType = pvt;
                 valHoisted = true;   // union/match compound literal — keep its existing addressable form
             } else {
+                // FAIL CLOSED: an argument that does NOT get a destination threaded must not inherit the
+                // one an enclosing position left behind. Leaving it set is what let a `match` reachable
+                // from here adopt an ancestor's type and truncate in silence; cleared, the same shape hits
+                // the existing "a value-producing `match` must appear in a typed position" error instead.
+                std::string pmt = _matchTargetCType, pvt = _variantTargetType;
+                _matchTargetCType.clear(); _variantTargetType.clear();
                 val = st.empty() ? emitExpression(argExpr) : st;
+                _matchTargetCType = pmt; _variantTargetType = pvt;
                 valHoisted = !st.empty();   // st => a hoisted string/primitive temp; else a bare rvalue
             }
         }
@@ -15516,26 +15650,11 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
 
 void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth)
 {
-    std::string subjCls = exprClass(m->subject);
-    // `match (give x)` — the consuming form (destructure-move): resolve through the hand-off to x's class.
-    if (subjCls.empty()) if (auto* h = dynamic_cast<HandoffNode*>(m->subject.get())) subjCls = exprClass(h->value);
-    // A1: a value-producing variant ctor as the SUBJECT (`match (Optional::Some(x))`) — the concrete instance
-    // was inferred + registered at discovery, its mangled name stashed. Adopt it (so the switch + payload
-    // types resolve) and pin `_variantTargetType` while the subject is materialized (below) so the same
-    // instance is constructed.
+    // A1: an inline variant ctor as the SUBJECT pins `_variantTargetType` while the subject is
+    // materialized (below) so the same instance is constructed. The recovery itself is shared with the
+    // classifier, which needs the identical answer and may not diagnose — see `matchSubjectClassQuiet`.
     bool inlineVariantSubj = false;
-    if (subjCls.empty()) {
-        auto it = _matchSubjInst.find(m);
-        if (it != _matchSubjInst.end() && _classes.count(it->second)) { subjCls = it->second; inlineVariantSubj = true; }
-    }
-    // A NON-generic user enum built inline (`match (Shape::Circle(r: 3))`) has no instance to infer, so it
-    // never reached `_matchSubjInst` and fell through to "requires an enum subject" — while the generic
-    // prelude enums (`match (Optional::Some(value: x))`) worked. The subject's enum is recoverable straight
-    // from the qualified variant name, so both spellings behave the same now.
-    if (subjCls.empty()) {
-        std::string vt = variantExprEnumCType(m->subject);
-        if (!vt.empty() && _classes.count(vt)) { subjCls = vt; inlineVariantSubj = true; }
-    }
+    std::string subjCls = matchSubjectClassQuiet(m, &inlineVariantSubj);
     auto cit = _classes.find(subjCls);
     if (cit == _classes.end() || !cit->second.isVariant) {
         std::string enumTy = exprEnumType(m->subject);
@@ -15556,14 +15675,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // `T`; bind the instance's type args so payload binding types resolve concretely (mirrors
     // computeDestructible). Restored at the end; arm bodies contain no `T`, so a whole-switch scope is safe.
     std::map<std::string, SharedIdentifier> savedSubst;
-    bool instSubst = ci.isGenericInst && _genericTypeInsts.count(subjCls);
-    if (instSubst) {
-        savedSubst = _typeSubst;
-        _typeSubst.clear();
-        const GenericTypeInst& gi = _genericTypeInsts[subjCls];
-        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-        for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-    }
+    bool instSubst = bindInstSubst(subjCls, savedSubst);
 
     // Exhaustiveness (compile-time): every variant handled exactly once, unless a `_` wildcard is present.
     bool hasWildcard = false;
@@ -15651,8 +15763,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 
         // Fresh arm scope; bind the payload fields (borrowed copies — same as a foreach element).
         Scope sc; _scopes.push_back(sc);
-        struct Saved { std::string name; bool had; std::string prev; bool hadNode; SharedIdentifier prevNode; };
-        std::vector<Saved> savedTypes;
+        std::vector<SavedLocalType> savedTypes;   // shared shape with the classifier's arm binding
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
         bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
         if (a->bindings && !a->bindings->empty()) {
@@ -15768,6 +15879,15 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             // (locals, side effects) run normally, RAII-dropped by the arm's scope cleanup.
             SharedStatementList stmts = a->block->statements;
             size_t nstmt = stmts ? stmts->size() : 0;
+            // An EMPTY block arm reaches NEITHER check below, because both live inside the loop — so
+            // `int64 x = match (e) { case A(v: v): v; case B: { } };` left the result temp unassigned and
+            // emitted C that reads it. The only thing that ever noticed was clang's
+            // -Wsometimes-uninitialized, i.e. the diagnostic came from the C compiler, not from kama.
+            // A statement-position arm (`resultTemp == nullptr`) yields nothing, so an empty block is
+            // legal there and stays legal.
+            if (resultTemp && nstmt == 0)
+                unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
+                            "(return/break/continue)", a->line);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
@@ -15784,7 +15904,18 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
+                    // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
+                    // Leaving the target set here let a nested value-producing `match` inside the arm
+                    // adopt the OUTER match's result type: an assignment `t = <ternary of matches>` inside
+                    // an arm of `int64 x = match …` typed those inner matches `int64` and blitted them into
+                    // an `int8` local. At top level the same assignment is REJECTED — the target is "" there,
+                    // so "must appear in a typed position" fires — so it is the inherited value alone that
+                    // turned the guard into a false pass. Every position that legitimately threads a
+                    // destination sets its own, so clearing costs nothing.
+                    std::string pmt = _matchTargetCType, pvt = _variantTargetType;
+                    _matchTargetCType.clear(); _variantTargetType.clear();
                     emitStatement(st, depth + 2);
+                    _matchTargetCType = pmt; _variantTargetType = pvt;
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
@@ -15801,10 +15932,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         }
         indent(depth + 2); *_out << "break;\n";
 
-        for (auto& sv : savedTypes) {
-            if (sv.had)     _localTypes[sv.name]     = sv.prev;     else _localTypes.erase(sv.name);
-            if (sv.hadNode) _localTypeNodes[sv.name] = sv.prevNode; else _localTypeNodes.erase(sv.name);
-        }
+        restoreLocalTypeBindings(savedTypes);
         for (auto& bn : borrowedHere) _borrowedMatchBindings.erase(bn);
         armEnds.push_back(_moveState);
         armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
@@ -15974,6 +16102,9 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         if (a->block) {
             SharedStatementList stmts = a->block->statements;
             size_t nstmt = stmts ? stmts->size() : 0;
+            if (resultTemp && nstmt == 0)   // the same empty-block hole as the tagged-union path above
+                unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
+                            "(return/break/continue)", a->line);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
@@ -15990,7 +16121,18 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
+                    // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
+                    // Leaving the target set here let a nested value-producing `match` inside the arm
+                    // adopt the OUTER match's result type: an assignment `t = <ternary of matches>` inside
+                    // an arm of `int64 x = match …` typed those inner matches `int64` and blitted them into
+                    // an `int8` local. At top level the same assignment is REJECTED — the target is "" there,
+                    // so "must appear in a typed position" fires — so it is the inherited value alone that
+                    // turned the guard into a false pass. Every position that legitimately threads a
+                    // destination sets its own, so clearing costs nothing.
+                    std::string pmt = _matchTargetCType, pvt = _variantTargetType;
+                    _matchTargetCType.clear(); _variantTargetType.clear();
                     emitStatement(st, depth + 2);
+                    _matchTargetCType = pmt; _variantTargetType = pvt;
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
