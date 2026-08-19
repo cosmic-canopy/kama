@@ -1,0 +1,18 @@
+// The generic-TYPE half. `docs/design/analysis-gap.md` recorded this exact shape as "`kama check` says
+// OK", and it did: the emit walk reached generic FUNCTIONS only, so a library's public generic container
+// could ship green with two errors in a member body nothing in that library instantiated.
+//
+// It is not one loop away from the function half, which is why the note was worth keeping: handing the
+// template's own `ClassInfo` to `emitClassDefinitions` failed 628 of 641 corpus fixtures, because a
+// `_genericTypes` entry is a SHAPE AWAITING SPECIALIZATION — its `when` gates unevaluated, its `ctors` map
+// not the one an instance gets. What turns a shape into a class is `registerGenericTypeInst`, and it needs
+// real arguments; distinct synthetic ones are exactly what an opaque parameter is.
+type value Holder<T> {
+    T item;
+    public ctor make(T x) { this.item = give x; }
+    public fn void broken() {
+        int32 x = "not an int";      // ERROR: a `string` cannot initialize an `int32`
+        undefinedFunction(a: 1);     // ERROR: no such function, at any instantiation
+    }
+}
+fn int32 main() { return 0; }

@@ -1061,6 +1061,7 @@ private:
         DK_Turbofish,        // `sortWith::<T, C>` — forwards the enclosing params, no instance to route to
         DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
         DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
+        DK_OpaqueScalar,     // `cast<T>(…)` — kama has NO bound that says "an integer primitive"
         DK_Count
     };
     static const char* deferKindName(int k);
@@ -1105,6 +1106,18 @@ private:
     // fix is a bound, not a method — so this says so, and lists the bounds `T` does carry. Reports and
     // returns true when it applies; false leaves the caller's own diagnostic to fire.
     bool rejectUnprovenBound(const std::string& cls, const std::string& member, int line);
+    // True when `cls` is an opaque parameter, so a rule that needs to know whether it is a SCALAR cannot
+    // decide. There is no contract in kama that means "an integer primitive" — `Atomic<T>`'s element
+    // restriction is enforced by the compiler at the instantiation, not by a bound — so a template that
+    // casts through its own parameter has no way to promise what it needs, and demanding one would be
+    // demanding a bound the language cannot spell. Deferred and counted, not waved through.
+    bool opaqueScalarUnknown(const std::string& cls)
+    {
+        if (!_probingTemplate) return false;
+        auto it = _classes.find(cls);
+        if (it == _classes.end() || !it->second.isOpaqueParam) return false;
+        return deferUnknownWhileProbing(DK_OpaqueScalar);
+    }
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
     // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
@@ -1889,6 +1902,16 @@ private:
     // Runs LAST, after every real emission: instantiation discovery is finished by then, so the walk
     // cannot register work the program does not use, and nothing downstream reads what it touches.
     void checkUninstantiatedTemplates();
+    // The same walk for a generic TYPE or `enum` nobody instantiates. It could not exist before opaque
+    // parameters: a `_genericTypes` entry is a SHAPE AWAITING SPECIALIZATION, not a class — its `when`
+    // gates are unevaluated and its `ctors` map is not the one an instance gets — so handing it straight
+    // to `emitClassDefinitions` failed 628 of 641 corpus fixtures when it was tried. What turns a shape
+    // into a class is `registerGenericTypeInst`, and that needs real arguments; distinct synthetic ones
+    // are exactly what an opaque parameter is. So this registers a probe instance and hands it to
+    // `emitGenericTypeInst`, the very function a real instantiation goes through.
+    void checkUninstantiatedTypeTemplates();
+    long _probeTypesWalked  = 0;   // generic types given a probe instance
+    long _probeTypesSkipped = 0;   // …and those with a `const N: int32` param, which has no type to invent
     // A qualified type spelling reaches no further than an `import` would: reject one naming a symbol its
     // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
     // clause alone, without the resolution half. Caller owns `_nsCtx`.

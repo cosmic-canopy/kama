@@ -6,7 +6,7 @@ extern "<string.h>";
 extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
-type view FixedArrayIter<T> implements Iterator<T> {
+type view FixedArrayIter<T: Copyable<T>> implements Iterator<T> {
     UnsafePtr<T> data; isize pos; isize len;
     unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {

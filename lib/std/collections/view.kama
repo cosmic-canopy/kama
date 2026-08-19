@@ -6,7 +6,7 @@ export { View, ViewIter, ViewIterMut };
 // FIXED borrow, so — unlike the growable containers — there is no `mods` counter to snapshot (nothing
 // structural can change under it; the borrowed buffer's owner is responsible for not resizing while a
 // view is live). Mirrors `FixedArrayIter`.
-type view ViewIter<T> implements Iterator<T> {
+type view ViewIter<T: Copyable<T>> implements Iterator<T> {
     UnsafePtr<T> data; isize pos; isize len;
     unsafe ctor make(UnsafePtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {

@@ -16,7 +16,7 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // It borrows the map's key + state buffers, walks only FULL slots, and yields each key BY VALUE (a copy),
 // so it exists only for a `Copyable` key. Like `DynamicArrayIter` it snapshots the map's mutation counter and
 // rejects a structural change (a `put`/`remove` that could rehash) made mid-iteration.
-type view MapKeyIter<K> implements Iterator<K> {
+type view MapKeyIter<K: Copyable<K>> implements Iterator<K> {
     UnsafePtr<K> keys; UnsafePtr<uint8> state; isize cap; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<K> keys, UnsafePtr<uint8> state, isize cap, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
@@ -38,7 +38,7 @@ type view MapKeyIter<K> implements Iterator<K> {
 // A by-value iterator over a map's VALUES (`foreach (V v in map.values())`), present only for a Copyable
 // value. Like `MapKeyIter` it borrows the value + state buffers, walks only FULL slots, yields each value BY
 // VALUE (a copy), and rejects a structural change made mid-iteration via the `mods` snapshot.
-type view MapValueIter<V> implements Iterator<V> {
+type view MapValueIter<V: Copyable<V>> implements Iterator<V> {
     UnsafePtr<V> vals; UnsafePtr<uint8> state; isize cap; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<V> vals, UnsafePtr<uint8> state, isize cap, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
@@ -98,7 +98,7 @@ type resource Entry<K, V> {
 // BOTH key and value are Copyable — the pair analogue of `MapKeyIter`/`MapValueIter`. It borrows the key +
 // value + state buffers, walks only FULL slots, yields each pair BY VALUE (a deep copy of both), and rejects
 // a structural change made mid-iteration via the `mods` snapshot.
-type view MapEntryIter<K, V> implements Iterator<Entry<K,V>> {
+type view MapEntryIter<K: Copyable<K>, V: Copyable<V>> implements Iterator<Entry<K,V>> {
     UnsafePtr<K> keys; UnsafePtr<V> vals; UnsafePtr<uint8> state; isize cap; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<K> keys, UnsafePtr<V> vals, UnsafePtr<uint8> state, isize cap, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.keys = keys; this.vals = vals; this.state = state; this.cap = cap; this.pos = 0;

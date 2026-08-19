@@ -6,7 +6,7 @@ export { Deque, DequeIter, DequeIterMut };
 // Like the DynamicArray iterator it snapshots the deque's mutation counter and rejects a structural change
 // made mid-iteration (a push may have reallocated + re-homed the buffer, so a cursor would dangle). The
 // logical position `pos` maps to the physical slot `(head + pos) % cap` — the ring wraps.
-type view DequeIter<T> implements Iterator<T> {
+type view DequeIter<T: Copyable<T>> implements Iterator<T> {
     UnsafePtr<T> data; isize head; isize cap; isize pos; isize len; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<T> data, isize head, isize cap, isize len, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;

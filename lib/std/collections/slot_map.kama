@@ -16,7 +16,7 @@ type value Handle {
 // Copyable value. It borrows the value + generation buffers, walks only OCCUPIED slots (odd generation), and
 // yields each value BY VALUE (a copy). Rejects a structural change (insert/remove) made mid-iteration via the
 // `mods` snapshot — same contract as `MapValueIter`.
-type view SlotMapValueIter<V> implements Iterator<V> {
+type view SlotMapValueIter<V: Copyable<V>> implements Iterator<V> {
     UnsafePtr<V> values; UnsafePtr<uint32> gens; isize slotCount; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, isize slotCount, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;

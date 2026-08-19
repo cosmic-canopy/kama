@@ -3246,6 +3246,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             return "0";
         }
         if (_classes.count(target)) {
+            if (opaqueScalarUnknown(target)) return "0";   // an opaque param — see the header
             unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
                          "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
                          "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v->line);
@@ -8331,10 +8332,21 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // concrete, so nothing is skipped there — `ListIter<int32>` etc. are unaffected. Mirrors `Fixed<T,N>`'s
     // unbound-`N` skip.)
     for (auto& c : concrete) if (argCarriesUnboundParam(c)) return;
+    // An OPAQUE type argument stands for "any `T` an instantiation might bind", so the two use-site
+    // rejections below cannot be decided here: an opaque is neither provably a lock-free machine word
+    // nor provably a view, and rejecting it would fail every probe of a template that names `Atomic<T>`
+    // or buffers a `T`. The real instantiation runs both checks with the real argument, which is where
+    // the answer exists and where the user wants the diagnostic pointed.
+    bool opaqueArg = false;
+    if (_probingTemplate)
+        for (auto& c : concrete) {
+            auto oi = c ? _classes.find(cType(c)) : _classes.end();
+            if (oi != _classes.end() && oi->second.isOpaqueParam) { opaqueArg = true; break; }
+        }
     // `Atomic<T>` (M6): the element must be a lock-free machine word — an integer primitive, `usize`/`isize`,
     // or `UnsafePtr`. A struct/`resource`/contract element can't be one atomic cell (atomicity is a hardware
     // property of a word), so reject it here at the user's use-site with a clear message.
-    if (!_atomicTmpl.empty() && tmpl == _atomicTmpl && !concrete.empty() && concrete[0]) {
+    if (!opaqueArg && !_atomicTmpl.empty() && tmpl == _atomicTmpl && !concrete.empty() && concrete[0]) {
         SharedIdentifier el = concrete[0];
         bool isInt  = el->builtInVal >= IDENTIFIER_INT8_VAL && el->builtInVal <= IDENTIFIER_UINT64_VAL;
         bool isSize = el->value && !el->genericArg && (*el->value == "usize" || *el->value == "isize");
@@ -8352,7 +8364,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // element-returning library method (a diagnostic pointing at a library line, not the user's decl). Reject
     // here at the instantiation, at the user's use-site line. Skip variant/enum templates (`Optional<View>`) —
     // the payload guard at the tail of this function owns those with its own message.
-    if (_genericTypes.count(tmpl) && _genericTypes[tmpl].variants.empty())
+    if (!opaqueArg && _genericTypes.count(tmpl) && _genericTypes[tmpl].variants.empty())
         for (auto& c : concrete) {
             std::string base = (c && c->value) ? resolveUserName(*c->value, c->qualifier) : "";
             bool viewArg = (!base.empty() && _genericTypes.count(base) && _genericTypes[base].isBorrow)
@@ -9739,6 +9751,7 @@ const char* CEmitter::deferKindName(int k)
         case DK_Turbofish:   return "turbofish";
         case DK_ScopeQual:   return "scope-qual";
         case DK_DotCtor:     return "dot-ctor";
+        case DK_OpaqueScalar: return "opaque-scalar";
     }
     return "?";
 }
@@ -9894,12 +9907,25 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
         if (names[i].empty()) continue;
         SharedIdentifierList bl = (*typeBounds)[i];
         if (!bl) continue;
+        // A bound's `for` clause says which KINDS may satisfy it, and that is information about the
+        // parameter, not just about its implementers: `A: Allocator` where `Allocator` is declared
+        // `for value` can only ever be bound to a value, and a value is bitwise-copyable. Intersecting the
+        // clauses is what keeps the move-only default from being wrong — without it `Shared<T, A>.copy`
+        // reads `source.alloc` as a move out of a field, which is true for a resource `A` and impossible
+        // for the `A` its own bound permits. 0 means the clause was missing or already diagnosed, so it
+        // narrows nothing.
+        unsigned allowedKinds = ~0u;
+        bool sawKinds = false;
         for (auto& b : *bl) {
             if (!b || !b->value) continue;
             // A bound names a contract in the scope where the TEMPLATE was written, not where it is
             // probed — the same rule checkBounds follows, and for the same reason.
             std::string contract;
             { BoundCtxScope bc(this, templateKey); contract = resolveUserName(*b->value, b->qualifier); }
+            // `Copyable` is the one bound whose meaning is a CAPABILITY rather than a method set, and it
+            // is declared `for resource`, so the kind intersection below would read it as "resource, so
+            // assume move-only" — the exact opposite of what the bound says. Read it directly.
+            if (contract == "Copyable") _classes[names[i]].copyable = true;
             // `T: Comparable<T>` — a GENERIC contract. Mint its instance over the (now bound) arguments,
             // so its method signatures are substituted rather than still spelling the contract's own `T`.
             if (b->genericArg && _genericContracts.count(contract)) {
@@ -9908,6 +9934,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
             }
             const std::vector<InterfaceMethod>* ms = contractMethods(contract);
             if (!ms) continue;      // unknown contract — checkBounds owns that diagnostic, not this
+            if (unsigned k = implKindsOf(contract, *b->value)) { allowedKinds &= k; sawKinds = true; }
             _classes[names[i]].interfaces.push_back(contract);
             // A refinement (`type contract Animated implements Drawable`) has already had its parent's
             // slots merged into `methods` by linkContracts, so one pass over `ms` is the full promise.
@@ -9943,6 +9970,14 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                         CtorInfo{ nullptr, mi.params, Visibility::Public, (bool)m.returnType, m.returnType, false };
             }
         }
+        // No bound admits a `resource` => the parameter is a value at every instantiation, so it is
+        // bitwise-copyable and `when [P: Copyable<P>]` members are present. This is READ off the
+        // declaration, never assumed: an unbounded parameter, or one whose bounds admit a resource, keeps
+        // the move-only default it was minted with.
+        if (sawKinds && !(allowedKinds & IK_Resource) && allowedKinds != 0) {
+            _classes[names[i]].kind     = TypeKind::Value;
+            _classes[names[i]].copyable = true;
+        }
     }
     return names;
 }
@@ -9959,7 +9994,9 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
 // walk answer `x.compareTo(…)` and `d.length()` instead of stepping around them.
 void CEmitter::checkUninstantiatedTemplates()
 {
-    if (_generics.empty()) return;
+    // BOTH tables, or a file with generic types and no generic functions is walked by neither — which is
+    // precisely a library shipping a generic container, the case this whole pass exists for.
+    if (_generics.empty() && _genericTypes.empty()) return;
 
     // Which templates a real instantiation already covered. Built once — `_genericInsts` is keyed by
     // MANGLED name, so the template key is in the value, and asking per template would be quadratic.
@@ -10058,6 +10095,8 @@ void CEmitter::checkUninstantiatedTemplates()
         sink.str(std::string());          // one body's worth of C at a time, not the whole corpus
     }
 
+    checkUninstantiatedTypeTemplates();   // the other table, same walk — see the header
+
     _probingTemplate = false;
     probeSandboxEnd();         // every opaque type and every instance built over one goes here
     _out = savedOut;
@@ -10065,6 +10104,91 @@ void CEmitter::checkUninstantiatedTemplates()
     _typeSubst = savedSubst;
     _probeTypeParams.clear();
     _probeParamBounds.clear();
+}
+
+// Runs inside checkUninstantiatedTemplates' sink, probe flag and sandbox — so a diagnostic defers the
+// same way, and every instance registered here is erased the same way.
+void CEmitter::checkUninstantiatedTypeTemplates()
+{
+    if (_genericTypes.empty()) return;
+
+    std::set<std::string> instantiated;
+    for (auto& kv : _genericTypeInsts) instantiated.insert(kv.second.templateKey);
+
+    // Snapshot the keys: registering a probe instance walks the template's members transitively, and a
+    // sibling template reached that way must not be visited mid-iteration.
+    std::vector<std::string> tmpls;
+    for (auto& kv : _genericTypes) tmpls.push_back(kv.first);
+
+    NsCtx savedCtx = _nsCtx;
+    for (const std::string& tmpl : tmpls) {
+        if (instantiated.count(tmpl)) continue;         // a real instantiation already walked it
+        auto pit = _genericTypeParams.find(tmpl);
+        if (pit == _genericTypeParams.end() || pit->second.empty()) continue;
+        const std::vector<std::string> params = pit->second;
+
+        // A `const N: int32` parameter stands for a VALUE, and there is no value to invent. Picking one
+        // would decide the template's own `comptime assert` — `Fixed<B, const F>` asserts on `F` — so the
+        // walk would report whatever the number happened to prove. Skipped, and counted, because a
+        // measurement that hides its blind spot is worse than no measurement.
+        auto ctit = _genericTypeConstTypes.find(tmpl);
+        bool hasConstParam = false;
+        if (ctit != _genericTypeConstTypes.end())
+            for (auto& c : ctit->second) if (c) hasConstParam = true;
+        if (hasConstParam) { ++_probeTypesSkipped; continue; }
+
+        auto sp = std::make_shared<StringList>();
+        for (auto& p : params) sp->push_back(std::make_shared<std::string>(p));
+        SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl]
+                                                                 : SharedBoundsList();
+
+        // Bound names resolve in the scope the TEMPLATE was written in, exactly as `checkBounds` reads
+        // them — a stdlib-namespaced bound is invisible from anywhere else.
+        auto gtc = _genericTypeCtx.find(tmpl);
+        _nsCtx = (gtc != _genericTypeCtx.end()) ? gtc->second : savedCtx;
+
+        std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        _typeSubst.clear();
+        std::vector<std::string> opq = buildOpaqueParams(tmpl, sp, bounds, SharedIdentifierList());
+
+        auto args = std::make_shared<IdentifierList>();
+        bool ok = true;
+        for (auto& o : opq) { if (o.empty()) { ok = false; break; } args->push_back(synthId(o)); }
+        if (ok) {
+            const size_t before   = _genericTypeInstOrder.size();
+            const int  errsBefore = _unsupported;
+            const long defBefore  = _probeDeferred;
+            const long resBefore  = _probeResolved;
+            long byBefore[DK_Count];
+            for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
+            registerGenericTypeInst(tmpl, args);
+            // The instance this template just got — the transitive scan appends others behind it, so
+            // match on the template rather than taking the last entry.
+            for (size_t i = before; i < _genericTypeInstOrder.size(); ++i) {
+                auto oit = _genericTypeInstOf.find(_genericTypeInstOrder[i]);
+                if (oit == _genericTypeInstOf.end() || oit->second != tmpl) continue;
+                auto git = _genericTypeInsts.find(_genericTypeInstOrder[i]);
+                if (git == _genericTypeInsts.end()) continue;
+                ++_probeTypesWalked;
+                emitGenericTypeInst(git->second, 2);   // phase 2 = vtables + member BODIES, the rules
+                break;
+            }
+            // Same columns as a function row, under a `probe-type` tag so the two halves can be told
+            // apart in one run — they close different halves of the same gap and are sized separately.
+            if (_probeReport) {
+                const ClassInfo& tci = _genericTypes[tmpl];
+                std::fprintf(stdout, "probe-type\t%s\t%s\t%d\t%zu\t%ld\t%ld\t%ld",
+                             tmpl.c_str(), tci.declFile.empty() ? "<prelude>" : tci.declFile.c_str(),
+                             tci.node ? tci.node->line : 0, params.size(),
+                             (long)(_unsupported - errsBefore), _probeDeferred - defBefore,
+                             _probeResolved - resBefore);
+                for (int i = 0; i < DK_Count; ++i) std::fprintf(stdout, "\t%ld", _probeDeferBy[i] - byBefore[i]);
+                std::fprintf(stdout, "\n");
+            }
+        }
+        _typeSubst = savedSubst;
+    }
+    _nsCtx = savedCtx;
 }
 
 // MCU 6b-1: after generic instantiations are discovered, register any collection whose size DERIVES from a
@@ -13569,7 +13693,13 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
             if (elem == contract) boxed = true;
             else if (_classes.count(elem) && classSatisfiesBound(&_classes[elem], contract)) boxed = true;
         }
-        if (!declared && !boxed && (!ci || !classSatisfiesBound(ci, contract)))
+        // A PRIMITIVE has no `_classes` entry, so `ci` is null and every bound would read as unsatisfied.
+        // `satisfiesBound` is the other half of this same question and it answers for one — `Copyable` is
+        // structural there (a primitive is bitwise-copyable, as is any `value`) — so consult it rather
+        // than let the two disagree. They did: `<T: Copyable<T>>` was unusable as a DECLARED bound while
+        // `when [T: Copyable<T>]` worked, because the gate goes through `satisfiesBound` and this did not.
+        bool structural = !ci && satisfiesBound(rkey, contract);
+        if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract)))
             unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                          + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
     }
@@ -17450,6 +17580,12 @@ bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
 void CEmitter::rejectIfNoHeap(const char* what, int line)
 {
     if (!_noHeapProgram && !_noHeapActive) return;
+    // A PROBE emits nothing. `--no-heap` is a promise about the code a build actually produces, and a
+    // template nobody instantiates produces none — so a library type that allocates somewhere in its API
+    // must not fail a no-heap program that merely has it in scope. (`SortedMap` allocates in three
+    // methods; before this, importing the module was enough.) A real instantiation reaches this gate
+    // through the ordinary path, where the allocation is real.
+    if (_probingTemplate) return;
     unsupported((std::string("heap allocation (") + what + ") is forbidden here — this code is "
                  "`@noheap`/`--no-heap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
                  "with no dynamic growth").c_str(), line);

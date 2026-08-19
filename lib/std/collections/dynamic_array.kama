@@ -6,7 +6,7 @@ export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
-type view DynamicArrayIter<T> implements Iterator<T> {
+type view DynamicArrayIter<T: Copyable<T>> implements Iterator<T> {
     UnsafePtr<T> data; isize pos; isize len; UnsafePtr<uint32> modsp; uint32 modsAt;
     unsafe ctor make(UnsafePtr<T> data, isize len, UnsafePtr<uint32> modsp, uint32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
