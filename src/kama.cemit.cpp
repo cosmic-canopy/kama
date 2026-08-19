@@ -115,6 +115,13 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
         while (i < msg.size() && identChar(msg[i])) ++i;
         std::string tok = msg.substr(start, i - start);
 
+        // An OPAQUE TYPE PARAMETER renders as the parameter the user wrote. It is checked first because
+        // its mangle contains the template key, which the `__` rewriting below would otherwise turn into
+        // a namespace path — `DynamicArray<__opq::F4::neverCalled3_T>` for what the source calls
+        // `DynamicArray<T>`. The mistake being reported is in the user's generic; the type there is `T`.
+        auto od = _opaqueDisplay.find(tok);
+        if (od != _opaqueDisplay.end()) { out += od->second; continue; }
+
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
         auto gi = _genericTypeInsts.find(tok);
@@ -9729,6 +9736,7 @@ const char* CEmitter::deferKindName(int k)
         case DK_Turbofish:   return "turbofish";
         case DK_ScopeQual:   return "scope-qual";
         case DK_DotCtor:     return "dot-ctor";
+        case DK_UnprovenBound: return "unproven-bound";
     }
     return "?";
 }
@@ -9770,15 +9778,152 @@ CEmitter::DeferKind CEmitter::classifyDeferredReceiver(SharedExpression recv)
     return DK_RecvUnknown;
 }
 
+// ---- The probe sandbox --------------------------------------------------------------------------
+// A probe registers real instances (`View<__opq_f_T>` goes through registerGenericTypeInst like any
+// other) and those registrations are the point — they are what makes `items.length()` resolvable. But
+// they describe a body nobody instantiated, so nothing downstream may see them. Snapshot the keys, erase
+// what appeared. Keyed rather than instrumented at each insertion site because the registration paths are
+// deep and transitive: a missed site would leak silently, and "silently" is the failure mode this whole
+// campaign is about.
+template <class M> static void snapKeys(const M& m, std::set<std::string>& out)
+{ out.clear(); for (auto& kv : m) out.insert(kv.first); }
+template <class M> static void eraseNew(M& m, const std::set<std::string>& snap)
+{ for (auto it = m.begin(); it != m.end(); ) { if (snap.count(it->first)) ++it; else it = m.erase(it); } }
+
+void CEmitter::probeSandboxBegin()
+{
+    snapKeys(_classes,               _probeSnap.classes);
+    snapKeys(_interfaces,            _probeSnap.interfaces);
+    snapKeys(_genericTypeInsts,      _probeSnap.typeInsts);
+    snapKeys(_genericTypeInstOf,     _probeSnap.typeInstOf);
+    snapKeys(_genericTypeInstCtx,    _probeSnap.typeInstCtx);
+    snapKeys(_collections,           _probeSnap.collections);
+    snapKeys(_genericContractInstCtx,_probeSnap.contractInstCtx);
+    snapKeys(_primConformances,      _probeSnap.primConf);
+    _probeSnap.contractInsts = _genericContractInsts;             // already a set of names
+    _probeSnap.typeInstOrder   = _genericTypeInstOrder.size();
+    _probeSnap.collectionOrder = _collectionOrder.size();
+}
+
+void CEmitter::probeSandboxEnd()
+{
+    eraseNew(_classes,                _probeSnap.classes);
+    eraseNew(_interfaces,             _probeSnap.interfaces);
+    eraseNew(_genericTypeInsts,       _probeSnap.typeInsts);
+    eraseNew(_genericTypeInstOf,      _probeSnap.typeInstOf);
+    eraseNew(_genericTypeInstCtx,     _probeSnap.typeInstCtx);
+    eraseNew(_collections,            _probeSnap.collections);
+    eraseNew(_genericContractInstCtx, _probeSnap.contractInstCtx);
+    eraseNew(_primConformances,       _probeSnap.primConf);
+    _genericContractInsts = _probeSnap.contractInsts;
+    _opaqueDisplay.clear();          // diagnostics render eagerly, so nothing needs this past the walk
+    // The two ORDER vectors are append-only registration logs; a probe can only have pushed onto the end.
+    if (_genericTypeInstOrder.size() > _probeSnap.typeInstOrder)
+        _genericTypeInstOrder.resize(_probeSnap.typeInstOrder);
+    if (_collectionOrder.size() > _probeSnap.collectionOrder)
+        _collectionOrder.resize(_probeSnap.collectionOrder);
+}
+
+std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& templateKey,
+                                                     SharedStringList typeParams,
+                                                     SharedBoundsList typeBounds,
+                                                     SharedIdentifierList constTypes)
+{
+    std::vector<std::string> names;
+    if (!typeParams) return names;
+
+    // PASS 1 — every parameter becomes a bare type first. A bound may name a SIBLING parameter
+    // (`<T, C: Order<T>>`), and `Order<T>` cannot mangle to an instance until `T` is something to mangle.
+    for (size_t i = 0; i < typeParams->size(); ++i) {
+        SharedString p = (*typeParams)[i];
+        bool isConstParam = constTypes && i < constTypes->size() && (*constTypes)[i];
+        if (!p || isConstParam) { names.push_back(std::string()); continue; }   // a const param stands for a VALUE
+        std::string on = "__opq_" + templateKey + "_" + *p;
+        ClassInfo ci;
+        ci.name          = on;
+        ci.isOpaqueParam = true;
+        // A RESOURCE that has not opted into Copyable — the conservative reading, and the honest one: an
+        // instantiation may bind `T` to a move-only type, so a `when [T: Copyable<T>]` member legitimately
+        // does not exist here. Treating an unbounded `T` as a `value` would make the probe pass bodies a
+        // move-only argument rejects, which is a blind spot HIDDEN rather than counted.
+        ci.kind      = TypeKind::Resource;
+        ci.copyable  = false;
+        _classes[on] = ci;
+        _typeSubst[*p] = synthId(on);
+        _opaqueDisplay[on] = *p;      // every diagnostic reads `T` back, never the mangle
+        names.push_back(on);
+    }
+
+    // PASS 2 — project each bound's promises onto the parameter that declared it. This is the whole of
+    // bounded quantification: what the bound names is what the body may call.
+    if (!typeBounds) return names;
+    for (size_t i = 0; i < typeParams->size() && i < typeBounds->size(); ++i) {
+        if (names[i].empty()) continue;
+        SharedIdentifierList bl = (*typeBounds)[i];
+        if (!bl) continue;
+        for (auto& b : *bl) {
+            if (!b || !b->value) continue;
+            // A bound names a contract in the scope where the TEMPLATE was written, not where it is
+            // probed — the same rule checkBounds follows, and for the same reason.
+            std::string contract;
+            { BoundCtxScope bc(this, templateKey); contract = resolveUserName(*b->value, b->qualifier); }
+            // `T: Comparable<T>` — a GENERIC contract. Mint its instance over the (now bound) arguments,
+            // so its method signatures are substituted rather than still spelling the contract's own `T`.
+            if (b->genericArg && _genericContracts.count(contract)) {
+                registerGenericContractInst(contract, b->genericArgs);
+                contract = genericTypeMangle(contract, b->genericArgs);
+            }
+            const std::vector<InterfaceMethod>* ms = contractMethods(contract);
+            if (!ms) continue;      // unknown contract — checkBounds owns that diagnostic, not this
+            _classes[names[i]].interfaces.push_back(contract);
+            // A refinement (`type contract Animated implements Drawable`) has already had its parent's
+            // slots merged into `methods` by linkContracts, so one pass over `ms` is the full promise.
+            for (auto& m : *ms) {
+                if (m.name.empty() || _classes[names[i]].methods.count(m.name)) continue;
+                MethodInfo mi;
+                mi.cName        = names[i] + "__" + m.name;   // never emitted; a probe body is discarded
+                mi.returnType   = m.returnType;
+                mi.params       = paramSigsOf(m.params);
+                mi.isConst      = m.isConst;
+                mi.isStatic     = m.isStatic;
+                mi.isCtor       = m.isCtor;
+                mi.isPlaceReturn = m.isPlaceReturn;
+                mi.visibility   = Visibility::Public;         // a contract's methods are public
+                mi.fromContract = contract;
+                mi.isAbstract   = true;                       // a promise, not a body — never emit one
+                // An operator reaches the contract's method list under the SAME synthetic name a concrete
+                // class uses (`op_add`), and `nameId` is null only for that arm. Operator dispatch gates
+                // on `isOperator` + `arity`, so both have to be set or `a + b` on a bounded `T` — the
+                // whole point of generic math — silently reports "no operator for type".
+                if (!m.nameId && m.name.compare(0, 3, "op_") == 0) {
+                    mi.isOperator = true;
+                    mi.arity      = m.params ? (int)m.params->size() : 0;
+                }
+                _classes[names[i]].methods[m.name] = mi;
+                // A contract may REQUIRE a ctor (`FromStr` requires `fromStr`, `HeapOwner` requires
+                // `adopt`), and construction resolves through `ctors`, not `methods` — the two are
+                // populated together everywhere else, and populating only one here made `T.fromStr(s: s)`
+                // report "`T` cannot be constructed — it has no `ctor`" against a bound that supplies
+                // exactly that. A written return type means fallible, the same rule the class path uses.
+                if (m.isCtor)
+                    _classes[names[i]].ctors[m.name] =
+                        CtorInfo{ nullptr, mi.params, Visibility::Public, (bool)m.returnType, m.returnType, false };
+            }
+        }
+    }
+    return names;
+}
+
 // Walk every generic template NOBODY instantiates, for its diagnostics alone. See the header for why this
 // exists at all (short version: `analyze()` IS `emit()`, and the emit walk skips a template body, so every
 // rule in this file was invisible inside an uninstantiated generic by construction).
 //
-// This is `emitGenericInst` minus `bindInstParams` and aimed at a throwaway sink: same ref-unit scope, same
-// declaring-file scope, same home namespace, so a diagnostic lands on the template's own file and line and
-// a reference recorded from the body belongs to the template's unit. The one thing an instantiation has
-// that a probe does not is a type binding, and leaving `_typeSubst` empty is the entire difference — `T`
-// stays `T`, which is what makes the walk safe to run without inventing an argument nobody wrote.
+// This is `emitGenericInst` aimed at a throwaway sink: same ref-unit scope, same declaring-file scope, same
+// home namespace, so a diagnostic lands on the template's own file and line and a reference recorded from
+// the body belongs to the template's unit. The one thing an instantiation has that a probe does not is a
+// real type argument — so the probe invents one, an OPAQUE PARAMETER standing for `T` and promising exactly
+// what `T`'s bounds promise. That is the whole difference from `emitGenericInst`, and it is what makes the
+// walk answer `x.compareTo(…)` and `d.length()` instead of stepping around them.
 void CEmitter::checkUninstantiatedTemplates()
 {
     if (_generics.empty()) return;
@@ -9791,8 +9936,10 @@ void CEmitter::checkUninstantiatedTemplates()
     std::ostringstream sink;
     std::ostream* savedOut = _out;
     NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
     _out = &sink;
     _probingTemplate = true;   // unknown-type diagnostics defer from here on — see deferUnknownWhileProbing
+    probeSandboxBegin();       // …and every instance the walk registers is erased on the way out
 
     // `_generics` is a std::map, so this order is the sorted template key — a diagnostic's position in the
     // output must not depend on hash iteration order.
@@ -9828,6 +9975,28 @@ void CEmitter::checkUninstantiatedTemplates()
                 for (auto& b : *bl) if (b && b->value) slot.push_back(*b->value);
             }
 
+        // One opaque type per parameter, bound into `_typeSubst` — cleared per template, because two
+        // templates' `T`s are different types and a binding that outlived its body would silently retype
+        // the next one.
+        _typeSubst.clear();
+        buildOpaqueParams(key, tmpl->typeParams, tmpl->typeBounds, tmpl->constTypes);
+
+        // Then register every generic instance the body names, over those opaque arguments: `View<T>`
+        // becomes `View<__opq_f_T>`, an ORDINARY instance with an ordinary `operator[]` and `length()`.
+        // Without this the receiver stays unresolved and index lowering falls back to raw C `p[i]` — which
+        // the unsafe seam then rejects, a false positive against a body that only ever indexes a view.
+        // Mirrors registerInstColls: seed the parameter types, then walk the block.
+        _scanLocalTys.clear();
+        _constLocalVals.clear();
+        if (tmpl->parameters)
+            for (auto& p : *tmpl->parameters) {
+                if (!p || !p->type) continue;
+                if (p->identifier && p->identifier->value) _scanLocalTys[*p->identifier->value] = p->type;
+                scanTypeForCollections(p->type);
+            }
+        scanTypeForCollections(tmpl->returnType);
+        scanStmtForCollections(tmpl->block);
+
         const int  errsBefore = _unsupported;
         const long defBefore = _probeDeferred;
         const long resBefore = _probeResolved;
@@ -9857,8 +10026,10 @@ void CEmitter::checkUninstantiatedTemplates()
     }
 
     _probingTemplate = false;
+    probeSandboxEnd();         // every opaque type and every instance built over one goes here
     _out = savedOut;
     _nsCtx = savedCtx;
+    _typeSubst = savedSubst;
     _probeTypeParams.clear();
     _probeParamBounds.clear();
 }
@@ -19734,6 +19905,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
             return emitDispatch(tgt, derefed, method, args, srcLine, site);
         }
+        if (deferUnprovenBound(clsName)) return "0";   // the BOUND does not promise it — see the header
         unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
@@ -20499,6 +20671,11 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                          + "` is a field. Read it from a value (`obj." + method + "`)").c_str(), call->line);
             return "0";
         }
+        // The receiver is an opaque parameter and its bounds promise no such ctor — the BOUND is what is
+        // missing, not the type, and saying "`T` cannot be constructed" would name the wrong problem and
+        // the wrong fix. Counted, and turned into a bound-shaped error once the stdlib's marker contracts
+        // declare their members (see the header).
+        if (deferUnprovenBound(stci->name)) return "0";
         // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the
         // context-aware advice (which offers `of`/`zero` only for a transparent value).
         if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))

@@ -6,12 +6,23 @@
 // Measured while this pass was being built: before unknown-type diagnostics learned to defer, the walk
 // rejected 81 of 640 corpus fixtures — all of them valid — on four rules that fire on an UNRESOLVED type
 // rather than a wrong one. Each shape below is one of those four.
+//
+// ⚠️ TWO OF THESE WERE NOT VALID, and this fixture asserted they were for as long as it has existed.
+// Once opaque type parameters made `T` a real type, `DynamicArray<T>` became an ordinary instance and the
+// ordinary rules reached it: case 1 borrowed a view with nothing bounding its storage, and case 3 called
+// a `get` that `DynamicArray` does not have. Both are wrong at EVERY instantiation — the concrete
+// spelling of case 1 has been rejected since the view-window campaign shipped. That is the whole point of
+// the pass, found in the one fixture built to prove it was not needed.
 import std::collections::{DynamicArray, View};
 
-// 1. a method call on a `T`-parameterized receiver — no class to resolve until `T` is bound
+// 1. a method call on a `T`-parameterized receiver — `DynamicArray<T>` resolves through the opaque
+//    parameter, so the view-window rule applies here exactly as it does to `DynamicArray<int32>`: a view
+//    local must be rooted in a `borrow` window that holds its storage still.
 fn isize neverCalled1<T>(ref DynamicArray<T> d) {
     isize n = d.length();
-    View<T> v = d.view();
+    borrow d.view() as v {
+        n = n + v.length();
+    }
     return n;
 }
 
@@ -20,10 +31,12 @@ fn void neverCalled2<T>(ref DynamicArray<T> d) {
     neverCalled1::<T>(d: d);
 }
 
-// 3. dot-on-type construction of a generic whose arguments come from the enclosing template
+// 3. dot-on-type construction of a generic whose arguments come from the enclosing template.
+//    `remove` is the element read that HANDS THE ELEMENT OVER, which is what `give` into `add` needs —
+//    and what an unbounded `T` supports, since nothing here promises it is copyable.
 fn void neverCalled3<T>(ref DynamicArray<T> src) {
     DynamicArray<T> d = DynamicArray.empty();
-    d.add(item: give src.get(index: 0));
+    d.add(item: give src.remove(index: 0));
 }
 
 // 4. mutual recursion between two templates — the walk must terminate, not chase instantiations

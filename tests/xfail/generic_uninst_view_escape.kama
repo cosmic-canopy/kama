@@ -1,0 +1,14 @@
+// A rule that is not about types at all, reaching inside a template for the first time. The view-window
+// campaign made a view local's root have to be BOUNDED — `View<int32> v = d.view();` has been rejected
+// since it shipped. The generic spelling was invisible, because with nothing bound to `T` the receiver
+// never resolved and the rule never ran.
+//
+// This is what "the whole rule set now applies inside a template body" has to mean to be worth anything:
+// not just type errors, but every rule, including the ones written years apart from this pass.
+import std::collections::{DynamicArray, View};
+
+fn isize neverCalled<T>(ref DynamicArray<T> d) {
+    View<T> v = d.view();                // ERROR: nothing bounds the storage `v` views
+    return v.length();
+}
+fn int32 main() { return 0; }

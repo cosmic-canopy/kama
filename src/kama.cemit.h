@@ -369,6 +369,13 @@ struct ClassInfo {
     CollKind                          collKind = CollKind::String;   // arbitrary: only read when isIntrinsicColl
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)
+    // An OPAQUE TYPE PARAMETER: the synthetic type that stands in for a template's `T` while
+    // `checkUninstantiatedTemplates` walks a body nobody instantiated. Its methods are exactly what the
+    // parameter's declared bounds promise, which is what makes `x.compareTo(…)` resolvable — and what
+    // makes a call the bounds do NOT promise a diagnosable error at the declaration instead of a surprise
+    // at every consumer's use site. Never emitted: the probe erases it before anything can read it as a
+    // real type (see probeSandboxEnd).
+    bool                              isOpaqueParam = false;
     // A synthetic ClassInfo for a PRIMITIVE target of `type intrinsic <int32> implements C` — it carries
     // only the injected contract methods, whose receiver `this` is the SCALAR itself (by value), not a
     // `T* self`. So `k.hash()` -> `int32_t__hash(k)` (value), and the method emits `int32_t self`.
@@ -1054,9 +1061,37 @@ private:
         DK_Turbofish,        // `sortWith::<T, C>` — forwards the enclosing params, no instance to route to
         DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
         DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
+        DK_UnprovenBound,    // the receiver IS an opaque param and its bounds do not promise the member
         DK_Count
     };
     static const char* deferKindName(int k);
+    // Mint one opaque type per type parameter of `templateKey` and bind it into `_typeSubst`, so a probe
+    // walk resolves `T` instead of stepping around it. Returns the synthetic names, index-parallel to
+    // `typeParams` — empty for a const param, which stands for a VALUE and has no type to synthesize.
+    // Two passes internally: every parameter is registered bare before any bound is projected, because a
+    // bound may name a sibling parameter (`<T, C: Order<T>>`) and `Order<T>` cannot mangle until `T` is
+    // a type.
+    std::vector<std::string> buildOpaqueParams(const std::string& templateKey,
+                                               SharedStringList typeParams,
+                                               SharedBoundsList typeBounds,
+                                               SharedIdentifierList constTypes);
+    // Everything a probe registers is an artifact of a body that was never instantiated, and must not
+    // outlive the walk: `analyze()` builds the query index AFTER the probe, so a `View___opq_f_T` left in
+    // `_classes` becomes a type the LSP offers. Begin snapshots the key sets; End erases every key that
+    // appeared in between. Erasing from a `std::map` keeps references to the surviving elements valid,
+    // which is what lets resolved `ClassInfo::base` pointers stay good across the cleanup.
+    void probeSandboxBegin();
+    void probeSandboxEnd();
+    // opaque class name -> the parameter's SOURCE name (`__opq_..._T` -> `T`). A user must never read
+    // `__opq` in a diagnostic: the mistake is in their generic, and the type they wrote there is `T`.
+    // Consulted by `demangleForDisplay`, which is the one place every message passes through.
+    std::map<std::string, std::string> _opaqueDisplay;
+    struct ProbeSnapshot {
+        std::set<std::string> classes, interfaces, typeInsts, typeInstOf, typeInstCtx,
+                              collections, contractInsts, contractInstCtx, primConf;
+        size_t typeInstOrder = 0, collectionOrder = 0;
+    };
+    ProbeSnapshot _probeSnap;
     long _probeDeferBy[DK_Count] = {0};
     bool deferUnknownWhileProbing(DeferKind k)
     { if (!_probingTemplate) return false; ++_probeDeferred; ++_probeDeferBy[k]; return true; }
@@ -1065,6 +1100,18 @@ private:
     // distinguishable once the parameter is unbound, and the distinction is the whole measurement.
     DeferKind classifyDeferredReceiver(SharedExpression recv);
     bool typeMentionsProbedParam(const SharedIdentifier& t) const;
+    // A member missing from an OPAQUE PARAMETER is a different claim from a member missing from a real
+    // type. "`DynamicArray<T>` has no `get`" is wrong at every instantiation and is reported. "`T` has no
+    // `fromStr`" says the BOUND does not promise it — true, and the fix is a bound (or a contract that
+    // actually declares its member), which is a SOURCE change across the stdlib. Staged: counted here,
+    // turned into the error it should be once the migration lands, so no commit is ever red in between.
+    bool deferUnprovenBound(const std::string& cls)
+    {
+        if (!_probingTemplate) return false;
+        auto it = _classes.find(cls);
+        if (it == _classes.end() || !it->second.isOpaqueParam) return false;
+        return deferUnknownWhileProbing(DK_UnprovenBound);
+    }
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
     // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
