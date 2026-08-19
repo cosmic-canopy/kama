@@ -47,4 +47,20 @@ RUN mkdir -p /opt/pw && cd /opt/pw && npm init -y >/dev/null 2>&1 \
  && pip3 install --no-cache-dir --break-system-packages aioquic \
  && rm -rf /var/lib/apt/lists/*
 
+# Hang diagnostics for the test watchdog. `run_tests.sh` kills a fixture that overruns and prints what it
+# can see: process state, wchan, syscall, open fds, per-thread state, and node's own report. Two of the
+# three hang shapes write NO node report — node produces one on the MAIN THREAD, so a thread spinning or
+# parked in a synchronous syscall is invisible to it, and that is exactly what a filesystem fixture under
+# emscripten NODEFS does. `eu-stack -p <pid>` is the only thing that names the frame in that case.
+#
+# elfutils, not gdb: it is a few MB against gdb's hundred-plus, and `eu-stack` is the whole of what the
+# watchdog wants. Verified before adding that the container can already ptrace a sibling process
+# (`ptrace_scope` is 0 and the container runs as uid 0), so this needs no --cap-add and no seccomp change.
+#
+# LAST layer on purpose: everything above it — the apt toolchain, and especially the Chromium/Playwright
+# install — is expensive and cached, and putting a new package in the first RUN would rebuild all of it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends elfutils \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /work

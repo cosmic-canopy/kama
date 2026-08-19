@@ -11,7 +11,10 @@ set -u
 
 ROOT="."                        # run_tests.sh already assumes cwd == repo root
 . tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
-TESTS_DIR="tests"
+# Overridable so a SINGLE fixture can be run in isolation — which is what diagnosing an intermittent
+# hang needs, and what was missing while `fs_raii` was being chased (it had to be rebuilt and looped by
+# hand outside the harness, so the harness's own watchdog was never the thing under test).
+TESTS_DIR="${KAMA_TESTS_DIR:-tests}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -237,8 +240,33 @@ watchdog_run() {
                      "wchan=$(cat "$t/wchan" 2>/dev/null)" \
                      "syscall=$(cut -d' ' -f1 "$t/syscall" 2>/dev/null)"
             done
+            # ...and the frames, which is the only thing that NAMES the lock. `eu-stack` (elfutils) is in
+            # the image for this; the container can already ptrace a sibling (`ptrace_scope` 0, uid 0), so
+            # no capability change was needed. Rehearsed against a futex-parked node before being wired in
+            # — it resolves `FutexEmulation::WaitJs32`, `uv_run`, `uv_cond_wait` and friends per thread.
+            # Taken BEFORE the USR2 below because this is the shape node's own report cannot cover: a main
+            # thread parked in a syscall never reaches the handler that would write one.
+            if command -v eu-stack >/dev/null 2>&1; then
+                echo "  --- eu-stack (first 80 frames) ---"
+                timeout 20 eu-stack -p "$child" 2>&1 | head -80 | sed 's/^/  /'
+            else
+                echo "  (no eu-stack — install elfutils in the image to name the blocking frame)"
+            fi
         else                                                     # macOS host leg
             ps -o state=,wchan=,time= -p "$child" 2>/dev/null | sed 's/^/  ps: /'
+            # `sample` ships with the Xcode command line tools; absent, this is simply skipped. NOT
+            # wrapped in `timeout`: macOS has neither `timeout` nor `gtimeout`, so the wrapper silently
+            # swallowed the whole thing (found by rehearsing this path, not by reading it). `sample`
+            # self-terminates after its duration argument, so it needs no wrapper anyway.
+            if command -v sample >/dev/null 2>&1; then
+                echo "  --- sample (1s) ---"
+                # Just the call graph. `sample` frames it with ~25 lines of process header and then a
+                # `Binary Images:` dump of every loaded dylib, which is longer than the graph and says
+                # nothing about the hang — left in, it pushed the frames out of the budget entirely.
+                sample "$child" 1 -mayDie 2>/dev/null \
+                    | sed -n '/^Call graph:/,/^Binary Images:/p' | grep -v '^Binary Images:' \
+                    | head -60 | sed 's/^/  /'
+            fi
         fi
       } >"${mark%/*}/hang_native.txt" 2>/dev/null
       kill -s USR2 "$child" 2>/dev/null               # ask node to dump WHY it is still alive
@@ -462,7 +490,7 @@ for src in "$TESTS_DIR"/*.kama; do
     spawn test_one "$src"
     fixture_pids+=($!)
 done
-wait "${fixture_pids[@]}" 2>/dev/null
+if [ ${#fixture_pids[@]} -gt 0 ]; then wait "${fixture_pids[@]}" 2>/dev/null; fi
 phase_end
 # Tally in fixture order (stable output regardless of completion order). Parameter expansion and `$(<f)`
 # rather than `basename`/`cat`: this loop is serial and runs once per fixture, so each fork here is paid
@@ -591,7 +619,7 @@ for src in "$TESTS_DIR"/xfail/*.kama; do
     spawn xfail_one "$src"
     xfail_pids+=($!)
 done
-wait "${xfail_pids[@]}" 2>/dev/null
+if [ ${#xfail_pids[@]} -gt 0 ]; then wait "${xfail_pids[@]}" 2>/dev/null; fi
 phase_end
 # Tally in fixture order, so output is identical to the serial version regardless of completion order.
 for src in "$TESTS_DIR"/xfail/*.kama; do

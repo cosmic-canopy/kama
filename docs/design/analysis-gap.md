@@ -33,19 +33,31 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
   plus the leg's background node servers — which is exactly the shape that makes it rare and useless to
   bisect.
 
-  **The watchdog now also samples EVERY thread**, not just the main one, which is the question a
-  `futex_do_wait` actually raises: a lock is held, by whom? Under emscripten NODEFS node runs a libuv
-  threadpool, so the shape that matters is whether the workers are idle (the main thread is waiting on
-  work that never arrives) or themselves parked (a real cycle). Verified against a live threaded node
-  process rather than assumed — the capture separates `ep_poll` threads from `futex_do_wait` ones.
+  **The watchdog is now instrumented for the next occurrence**, which is the only useful response to a
+  hang that will not reproduce on demand. On the kill it captures, before any signal:
 
-  ⚠️ **Still missing, and it needs an image change: a native backtrace.** The container has no `eu-stack`,
-  `gdb`, `lldb` or `pstack`, and `/proc/<pid>/stack` is privileged — so naming the actual frame would take
-  elfutils in the image plus `CAP_SYS_PTRACE`. Worth doing only if the per-thread picture turns out not to
-  be enough. Note that node's own report cannot cover this: its ABSENCE is itself the finding, because an
-  idle-but-alive event loop writes one and a main thread parked in a syscall never reaches the handler.
-  Until it is diagnosed, this is a known watch item, not a green-suite guarantee — which is the whole
-  subject of this section.
+  - **every thread's** state/wchan/syscall, not just the main one — the question a `futex_do_wait` raises
+    is *a lock is held, by whom*, and under emscripten NODEFS node runs a libuv threadpool, so what
+    matters is whether the workers are idle (main waiting on work that never arrives) or parked too;
+  - **`eu-stack -p`** (elfutils, added to the image) — the frames. It resolves real symbols on a parked
+    node: `FutexEmulation::WaitJs32`, `uv_run`, `uv_cond_wait`, per thread;
+  - on the macOS leg, **`sample`**, trimmed to the call graph — which names the kama source line.
+
+  No capability change was needed: checked first, and the container already ptraces a sibling
+  (`ptrace_scope` is 0, it runs as uid 0). elfutils rather than gdb — a few MB against a hundred-plus —
+  and as the LAST image layer, so the Chromium/Playwright layers stay cached.
+
+  All of it rehearsed end-to-end through `run_tests.sh` against a deliberately hanging fixture, on both
+  legs, rather than reasoned about. That rehearsal found three things wrong with the instrumentation
+  itself: `timeout` does not exist on macOS (so the wrapper silently swallowed the whole `sample` call),
+  `sample`'s `Binary Images:` dump pushed the frames out of the line budget, and `wait "${arr[@]}"` on an
+  empty array aborts the runner under `set -u`. `KAMA_TESTS_DIR` now overrides the fixture directory,
+  which is what makes a single-fixture rehearsal — or an isolation loop on a flaky one — possible at all.
+
+  Node's own report still cannot cover this shape, and its ABSENCE remains the finding: an idle-but-alive
+  event loop writes one, and a main thread parked in a syscall never reaches the handler. Until the hang
+  is actually diagnosed this is a known watch item, not a green-suite guarantee — the subject of this
+  section.
 - **An `xfail` fixture never links, so it never reaches ASan.** This is why a campaign about *rejection*
   cannot take a green suite as its acceptance test: the view-window campaign's findings ④⑤⑥ survived all
   three legs and 34 guards. The discipline that works is a probe ledger walking every branch of the rule
