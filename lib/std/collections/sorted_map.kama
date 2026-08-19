@@ -463,7 +463,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
                    Serialize when [K: Serialize, V: Serialize],
-                   Deserialize when [K: Deserialize, V: Deserialize] {
+                   Deserialize<This> when [K: Deserialize<K>, V: Deserialize<V>] {
     // The ROOT box is drawn from `GlobalAllocator` (the `Owned`'s A defaults to Global), independent of
     // the node's own `A`: a bare `new` into a stateless-allocator box is allowed for any pointee A and
     // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement
@@ -569,7 +569,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // Deserialize is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the
     // first `put`). Same convention as the other collections' A-ignoring deserialize.
-    public ctor Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize, V: Deserialize] {
+    public ctor Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize<K>, V: Deserialize<V>] {
         SortedMap<K,V> result = SortedMap.empty();
         r.beginArray();
         while (r.moreElems()) {

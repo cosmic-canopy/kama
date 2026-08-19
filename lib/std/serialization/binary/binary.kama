@@ -260,14 +260,14 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serialize v) {
 
 // Deserialize a KBIN byte buffer into a `Deserialize` type. Name the target with turbofish:
 // `binary::decode::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
-fn Result<T, Owned<Error>> decode<T: Deserialize>(DynamicArray<uint8> src) {
+fn Result<T, Owned<Error>> decode<T: Deserialize<T>>(DynamicArray<uint8> src) {
     BinaryReader r = BinaryReader.make(src: give src);
     return T.deserialize(r: r);
 }
 
 // Deserialize from any `Reader` (a file, socket, …) — the streaming twin of `decode`. Drains the reader fully
 // into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
-fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
+fn Result<T, Owned<Error>> decodeFrom<T: Deserialize<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };

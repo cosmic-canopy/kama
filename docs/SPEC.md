@@ -2828,7 +2828,7 @@ boxing; identical layout and cost to the built-in collections).
 
 ```kama
 type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ Pair<A, B> r; r.a = a; r.b = b; return give r; } }
-fn T max<T>(T a, T b) { return a > b ? a : b; }         // generic fn — type args INFERRED from the call
+fn T max<T: Comparable<T>>(T a, T b) { return a > b ? a : b; }   // generic fn — args INFERRED from the call
 Pair<int32, string> p = Pair.make(a: 1, b: "x");       // generic type (args inferred from the LHS)
 int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
 DynamicArray<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
@@ -3352,7 +3352,7 @@ and the smart-pointer internals), so it emits them directly and correctly rather
 restrictions — and nothing leaks into the public API.
 
 **Three layers.**
-- **User-facing (opt-in):** the marker contracts `Serialize` / `Deserialize`, the attributes
+- **User-facing (opt-in):** the contracts `Serialize` / `Deserialize<T is This>`, the attributes
   `@generate(Serialize, Deserialize)` (per-direction) + `@field` / `@field(name: "wire")` / `@skip`, and one
   entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).

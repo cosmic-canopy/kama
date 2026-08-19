@@ -38,7 +38,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
-                                  Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
+                                  Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
     // (force-explicit-field-init: a primitive or raw `UnsafePtr` no longer rides silently on `= {0}`).
     UnsafePtr<T> data = null; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
@@ -264,7 +264,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     }
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).
-    public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
+    public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize<T>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

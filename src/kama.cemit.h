@@ -1061,7 +1061,6 @@ private:
         DK_Turbofish,        // `sortWith::<T, C>` — forwards the enclosing params, no instance to route to
         DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
         DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
-        DK_UnprovenBound,    // the receiver IS an opaque param and its bounds do not promise the member
         DK_Count
     };
     static const char* deferKindName(int k);
@@ -1101,17 +1100,11 @@ private:
     DeferKind classifyDeferredReceiver(SharedExpression recv);
     bool typeMentionsProbedParam(const SharedIdentifier& t) const;
     // A member missing from an OPAQUE PARAMETER is a different claim from a member missing from a real
-    // type. "`DynamicArray<T>` has no `get`" is wrong at every instantiation and is reported. "`T` has no
-    // `fromStr`" says the BOUND does not promise it — true, and the fix is a bound (or a contract that
-    // actually declares its member), which is a SOURCE change across the stdlib. Staged: counted here,
-    // turned into the error it should be once the migration lands, so no commit is ever red in between.
-    bool deferUnprovenBound(const std::string& cls)
-    {
-        if (!_probingTemplate) return false;
-        auto it = _classes.find(cls);
-        if (it == _classes.end() || !it->second.isOpaqueParam) return false;
-        return deferUnknownWhileProbing(DK_UnprovenBound);
-    }
+    // type, and it deserves a different message. "`DynamicArray<T>` has no `get`" names a type that does
+    // not have a method. "`T` has no bound providing `fromStr`" names a PROMISE that was never made — the
+    // fix is a bound, not a method — so this says so, and lists the bounds `T` does carry. Reports and
+    // returns true when it applies; false leaves the caller's own diagnostic to fire.
+    bool rejectUnprovenBound(const std::string& cls, const std::string& member, int line);
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
     // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
@@ -1631,6 +1624,9 @@ private:
     // deep-copies via copy(), `give` moves.
     bool isCopyable(const std::string& cls) const;
     std::string pinnedInstanceName(const std::string& bare, const std::string& t) const;
+    // The name a COMPILER-SYNTHESIZED conformance must record — `pinnedInstanceName`, plus minting the
+    // instance, since there is no `implements` clause to drive the usual path. See its definition.
+    std::string synthConformanceName(const std::string& bare, const std::string& typeName);
     bool satisfiesBound(const std::string& t, const std::string& bound) const;   // does concrete C-type `t` satisfy contract `bound`? (Copyable: value/primitive yes, resource iff it implements it)
     void markMoved(const std::string& cVar);                // state -> Moved
     void checkNotMoved(const std::string& cVar, int line);  // reject a use of a moved local

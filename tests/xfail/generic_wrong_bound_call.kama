@@ -1,0 +1,7 @@
+// The other half of the same rule: `T` IS bounded, and the bound is simply not the one that declares the
+// member being called. The diagnostic lists the bounds `T` does carry, because "add a bound" is unhelpful
+// advice to someone who already added one.
+fn void neverCalled<T: Comparable<T>>(T x) {
+    x.hash();                  // ERROR: `Comparable` declares `compareTo`, not `hash`
+}
+fn int32 main() { return 0; }

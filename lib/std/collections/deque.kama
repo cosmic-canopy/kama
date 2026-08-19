@@ -43,7 +43,7 @@ type view DequeIterMut<T> implements IteratorMut<T> {
 // slot of the front element; the `len` live elements occupy `data[(head + i) % cap]` for i in 0..len, so the
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
 type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
-                            Serialize when [T: Serialize], Deserialize when [T: Deserialize] {
+                            Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>] {
     UnsafePtr<T> data = null; isize head = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
@@ -191,7 +191,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize] {
+    public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize<T>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

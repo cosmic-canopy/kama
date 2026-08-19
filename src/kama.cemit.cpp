@@ -6251,7 +6251,10 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 for (auto& v : ci.variants) if (v.payload.empty()) { hasUnit = true; break; }
                 if (ede && hasUnit) {
                     ci.genDeserialize = true;
-                    ci.interfaces.push_back("Deserialize"); ci.staticOnlyInterfaces.push_back("Deserialize");
+                    {   // pinned: the conformance is `Deserialize_<Enum>`, not the bare name — see synthConformanceName
+                        std::string dn = synthConformanceName("Deserialize", name);
+                        ci.interfaces.push_back(dn); ci.staticOnlyInterfaces.push_back(dn);
+                    }
                     MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
                     // A ctor, exactly like the value/resource synthesis below: `deserialize` CONSTRUCTS, so
                     // it is one across every type that has it. Registered as a static-only method here left
@@ -6952,7 +6955,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 }
             }
             if (ci.genDeserialize) {
-                if (!hasItf("Deserialize")) ci.interfaces.push_back("Deserialize");
+                if (!hasItf("Deserialize")) ci.interfaces.push_back(synthConformanceName("Deserialize", ci.name));
                 if (!ci.methods.count("deserialize")) {
                     MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
                     // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
@@ -9736,7 +9739,6 @@ const char* CEmitter::deferKindName(int k)
         case DK_Turbofish:   return "turbofish";
         case DK_ScopeQual:   return "scope-qual";
         case DK_DotCtor:     return "dot-ctor";
-        case DK_UnprovenBound: return "unproven-bound";
     }
     return "?";
 }
@@ -9822,6 +9824,37 @@ void CEmitter::probeSandboxEnd()
         _genericTypeInstOrder.resize(_probeSnap.typeInstOrder);
     if (_collectionOrder.size() > _probeSnap.collectionOrder)
         _collectionOrder.resize(_probeSnap.collectionOrder);
+}
+
+// Bounded quantification, said out loud. SPEC has always claimed it — "a bound lets the body call the
+// contract's methods on a type-param value" — and nothing enforced it, so a generic could call whatever it
+// liked and find out at each consumer's use site. The message names the fix, because the fix is not the one
+// a "no such method" would suggest: nothing is missing from `T`, the promise is.
+bool CEmitter::rejectUnprovenBound(const std::string& cls, const std::string& member, int line)
+{
+    if (!_probingTemplate) return false;
+    auto it = _classes.find(cls);
+    if (it == _classes.end() || !it->second.isOpaqueParam) return false;
+
+    auto dn = _opaqueDisplay.find(cls);
+    const std::string p = (dn == _opaqueDisplay.end()) ? cls : dn->second;
+    // Show a bound as the contract the user WROTE (`Comparable`), not the instance minted over the
+    // opaque (`Comparable___opq_f_T`) — `templateKey` is the specialization's own record of it.
+    std::string bounds;
+    for (auto& itf : it->second.interfaces) {
+        auto ii = _interfaces.find(itf);
+        const std::string shown = (ii != _interfaces.end() && !ii->second.templateKey.empty())
+                                ? ii->second.templateKey : itf;
+        if (!bounds.empty()) bounds += "`, `";
+        bounds += shown;
+    }
+    const bool many = it->second.interfaces.size() > 1;
+    unsupported((bounds.empty()
+        ? "`" + p + "` has no bound providing `" + member + "` — an unbounded type parameter promises "
+          "nothing, so bound it with a contract that declares `" + member + "`: `<" + p + ": …>`"
+        : "`" + p + "` has no bound providing `" + member + "` — its bound" + (many ? "s (`" : " (`")
+          + bounds + "`) declare" + (many ? "" : "s") + " no such member; add one that does").c_str(), line);
+    return true;
 }
 
 std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& templateKey,
@@ -10995,6 +11028,23 @@ std::string CEmitter::pinnedInstanceName(const std::string& bare, const std::str
     auto ps = _genericContractParams.find(bare);
     if (ps == _genericContractParams.end() || ps->second.size() != 1) return bare;
     return bare + "_" + t;
+}
+
+// Record a compiler-synthesized conformance to a contract that may be PINNED. `@generate(Deserialize)`
+// pushes the contract's name straight into `ci.interfaces` — there is no `implements` clause for
+// resolveInterfaceNames to mangle — so a bare name is right only while the contract has no parameters.
+// Once `Deserialize` declared its factory it had to become `Deserialize<T is This>` (a contract may not
+// name `This` in a signature), and a bare `"Deserialize"` would then match nothing `satisfiesBound` looks
+// for: every `when [T: Deserialize<T>]` gate would silently read as unsatisfied, which is a whole
+// subsystem quietly not emitted rather than a diagnostic. Mint the instance and hand back its name.
+std::string CEmitter::synthConformanceName(const std::string& bare, const std::string& typeName)
+{
+    std::string inst = pinnedInstanceName(bare, typeName);
+    if (inst == bare) return bare;                    // not pinned (Serialize) — the bare name IS the name
+    auto args = std::make_shared<IdentifierList>();
+    args->push_back(synthId(typeName));
+    registerGenericContractInst(bare, args);
+    return inst;
 }
 
 bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) const
@@ -12561,6 +12611,14 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
         MethodInfo* mi = findMethod(&tci, m.name, &owner);
         if (!mi) continue;                   // presence is checkImplCompleteness'/the vtable's job
         if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
+        // A GRAPH NODE's `deserialize` is the compiler's two-pass driver and returns `Result<Shared<This>,
+        // …>`, not `Result<This, …>` — rebuilding a cyclic object graph cannot hand back a value, so the
+        // root arrives behind a handle. BOTH sides here are compiler-written: `@generate(Deserialize)`
+        // synthesizes the method and records the conformance, and there is no `implements` clause anyone
+        // authored. This check exists to catch a DECLARED promise that drifted from its contract; there is
+        // no such promise to hold. (Surfaced the moment `Deserialize` stopped being an empty marker and
+        // started declaring its factory — the mismatch was always there, with nothing to compare against.)
+        if (mi->isSynthDe && tci.graphDeserialize) continue;
 
         const int at = mi->node ? mi->node->line : mi->opDecl ? mi->opDecl->line : line;
         // An operator is registered under a SYNTHETIC name (`op_add`); say what the author wrote.
@@ -19905,7 +19963,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
             return emitDispatch(tgt, derefed, method, args, srcLine, site);
         }
-        if (deferUnprovenBound(clsName)) return "0";   // the BOUND does not promise it — see the header
+        if (rejectUnprovenBound(clsName, method, srcLine)) return "0";   // the BOUND, not the type
         unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
@@ -20672,10 +20730,9 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
             return "0";
         }
         // The receiver is an opaque parameter and its bounds promise no such ctor — the BOUND is what is
-        // missing, not the type, and saying "`T` cannot be constructed" would name the wrong problem and
-        // the wrong fix. Counted, and turned into a bound-shaped error once the stdlib's marker contracts
-        // declare their members (see the header).
-        if (deferUnprovenBound(stci->name)) return "0";
+        // missing, not the type, and "`T` cannot be constructed" would name the wrong problem and the
+        // wrong fix.
+        if (rejectUnprovenBound(stci->name, method, call->line)) return "0";
         // No ctor AT ALL is the "not constructible" case, not a misspelled name — route it through the
         // context-aware advice (which offers `of`/`zero` only for a transparent value).
         if (stci->ctors.empty() && rejectNamelessConstruction(*stci, disp, /*viaNew=*/false, call->line))

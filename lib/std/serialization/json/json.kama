@@ -535,7 +535,7 @@ type resource JsonReader implements Deserializer {
 // `json::decode::<Point>(src)`. The generated `deserialize` returns the reconstructed `T` directly (bypass-
 // ctor: zero-init + field-set), carrying any parse failure in the reader's sticky error flag; this wraps that
 // into a `Result` after checking `failed()`.
-fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
+fn Result<T, Owned<Error>> decode<T: Deserialize<T>>(string src) {
     JsonReader r = JsonReader.make(src: give src);
     return T.deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
 }
@@ -543,7 +543,7 @@ fn Result<T, Owned<Error>> decode<T: Deserialize>(string src) {
 // Deserialize from any `Reader` — the streaming twin of `decode`. Drains the reader fully into a string
 // first (`readAll`), then parses: JSON graph decode seeks backward (`rewindGraph`), so the source must be
 // whole — the accepted bounded-memory boundary. A read `IoError` auto-boxes into `Owned<Error>`.
-fn Result<T, Owned<Error>> decodeFrom<T: Deserialize>(Reader from) {
+fn Result<T, Owned<Error>> decodeFrom<T: Deserialize<T>>(Reader from) {
     Result<string, IoError> rr = readAll(r: from);
     string src = match (give rr) {
         case Ok(value: s):  { := give s; }

@@ -7,7 +7,7 @@ export { Set };
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
 type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable<K>],
-        Serialize when [K: Serialize, K: Copyable<K>], Deserialize when [K: Deserialize] {
+        Serialize when [K: Serialize, K: Copyable<K>], Deserialize<This> when [K: Deserialize<K>] {
     Map<K, Unit, H, A> m;
 
     // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
@@ -62,7 +62,7 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public ctor Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize] {
+    public ctor Result<Set<K,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize<K>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject

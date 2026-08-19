@@ -1,0 +1,11 @@
+// Bounded quantification, enforced. SPEC has always said a bound is what lets a body call a contract's
+// methods on a type-parameter value; until opaque type parameters existed there was nothing to check it
+// against, so a generic could call whatever it liked and the error surfaced at each CONSUMER's use site
+// instead of at the declaration that was wrong.
+//
+// The message has to name the fix, and the fix is not the one "no such method" would suggest: nothing is
+// missing from `T` — the promise is.
+fn void neverCalled<T>(T x) {
+    x.compareTo(other: x);     // ERROR: `T` is unbounded, so it promises nothing
+}
+fn int32 main() { return 0; }
