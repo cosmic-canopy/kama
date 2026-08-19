@@ -45,34 +45,56 @@ library's entry point for importers — the opposite end of the word), and `out`
 root. Both are read by `kama seed`, which is what would otherwise have propagated a wrong name into every
 project created after it.
 
-**A value-producing `match` is untyped at CHECK time.** The binding milestone (shipped 2026-08-18, `0.9.32`)
-closed the `foreach` and `match`-arm payload bindings, and the measurement it produced named this as what
-is left. `emitMatchSwitch` records an arm's payload binding in `_localTypeNodes` **during emission**, but
-`rejectInitKindMismatch` runs inside `checkDeclaredTypes` — a different, earlier pass. So the value arm of
+**A value-producing `match` is typed at CHECK time — shipped `0.9.37`.** ⚠️ **The row that tracked this was
+right about the blind spot and wrong about what it cost, and the correction is the part worth keeping.**
+
+The row said the cause was pass ordering: `emitMatchSwitch` binds an arm's payload during emission while
+`rejectInitKindMismatch` runs earlier in `checkDeclaredTypes`. That path is **unreachable** — the only
+shape `checkDeclaredTypes` could see is a `match` in a field initializer, and that is refused outright
+(*"a value-producing `match` here needs a statement slot"*). Twenty probes across every ordinary position
+— local init, assignment, return, free/method/collection argument, operand, ternary branch, nested match,
+block arm, `ref` param, interpolation, `cast<T>(match …)`, `isize`/`usize` vs `int64`/`uint64`, and this
+section's own `p.v` member-access example — were **already rejected**, because the destination is threaded
+into `_matchTargetCType` and the rule fires on the ARM, one level down.
+
+The real defect was **stale target inheritance**, and it was a silent miscompile:
 
 ```kama
-int32 a = match (ok) { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };
+fn int64 f(int8 p) { return cast<int64>(p); }
+int64 y = f(p: true ? match (e) { case A(v: v): v; … } : match (e) { … });   // built clean, returned 44
 ```
 
-cannot be resolved when the initializer is checked, and `typeOfExpr` answers `""` for the whole `match`.
+Both gates that thread a destination (call argument, assignment) tested the node itself for being a
+`MatchNode`, so the same match **wrapped in a ternary** slipped past — and a non-threading position left
+`_matchTargetCType` alone rather than clearing it, so the match adopted the enclosing `int64`. The arm
+check then passed, and an `int64` 300 reached an `int8` parameter as 44. The kind rule went the same way
+(a number into a `bool p` was accepted). Two locks had to fail at once: the target was inherited, **and**
+the argument-level check that should have caught it was silent because `typeOfExpr` answered `""` for a
+`match` — which is the blind spot the row named.
 
-It is **~220 of the 369 remaining blind lines** — by far the largest survivor, and unlike the others it is
-not a "kama cannot know this" case: the payload's type is the variant's declared field type, statically
-available at check time. What is missing is only that nothing binds it before that pass runs.
+Both are closed. `needsTargetType` looks through a ternary; non-threading positions now **clear** the
+target so a miss fails closed on the existing "must appear in a typed position" error; `typeOfExpr` binds
+each arm's payload types (via `matchSubjectClassQuiet` + `bindInstSubst` + `bindArmPayloadTypes`, shared
+with the emitter) while classifying that arm. Two neighbours fell out and are fixed with it: the target
+was also stale across an arm's **non-final statements**, and an **empty block arm** reached neither
+arm-block check, emitting C that read the result temp uninitialized — caught only by clang, never by kama.
 
-⚠️ The obvious shortcut is the one that was just removed. `typeOfExpr`'s match walk used to fall back to a
-**literal** arm when no value arm resolved, which made this shape *look* typed — and that answer was never
-coverage. A literal is contextually typed (D2a), so it can only echo the destination (catching nothing) or
-contradict it (a false positive; `isize written = match (wr) { case Ok(value: w): w; case Err(error: e): 0; }`
-was rejected as an `int32`). Do not restore it. The fix is to bind the payload types, not to guess.
+⚠️ Do not restore the **literal** fallback in `typeOfExpr`'s pass 2. A literal is contextually typed (D2a),
+so it can only echo the destination (catching nothing) or contradict it (a false positive; `isize written =
+match (wr) { case Ok(value: w): w; case Err(error: e): 0; }` was rejected as an `int32`). The fix is to
+bind the payload types, not to guess — the `anyValueArm` gate stays exactly as it is.
 
 **The classifier's blind spots, surveyed 2026-08-18** — measured with `kama check --strict-numeric` over
 `tests/*.kama` **one file at a time** (checking them together makes one program and every `main` collides),
 counting distinct `file:line` in the `unknown-src` + `op-unknown` buckets. The list in `typeOfExpr`'s
 comment had drifted from the code in two places, both found by probe rather than by reading.
 
-*Re-measured after the conformance work (2026-08-18, `0.9.36`): **369** distinct blind lines, i.e.
-unchanged — the +1 is a new positive fixture, and it is what turned up the operator row below.*
+*Re-measured after the value-producing-`match` work (2026-08-18, `0.9.37`): **369 → 165** distinct blind
+lines, and the `match`-shaped ones **220 → 16**. The 16 that remain are the generic-body family (row 1)
+plus arms whose values are literal ternaries, not a residue of the match typing itself. **The corpus needed
+no migration at all** — 1234 fixtures green with zero edits — which is itself the evidence that the arm
+rule had been enforcing the same constraint all along, and therefore that this milestone's payoff was the
+miscompile above and an honest instrument, never 220 silent numeric rules.*
 
 | source | status | size |
 |---|---|---|
@@ -80,9 +102,9 @@ unchanged — the +1 is a new positive fixture, and it is what turned up the ope
 | `match`-arm payload binding | **closed** `0.9.32` | −64 lines |
 | `borrow` alias | **was already closed** — the comment outlived the code; the borrow site records both the C type and the type node | 0 |
 | mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
-| value-producing `match` at check time | open — **row 1** | 220 |
-| type parameter | open — subsumed by **row 2** (uninstantiated generic bodies get no analysis at all) | ~24 |
-| const-generic parameter | open — same family as row 2; concentrated in `lib/std/num/fixed.kama` | ~19 |
+| value-producing `match` at check time | **closed** `0.9.37` | −204 lines |
+| type parameter | open — subsumed by **row 1** (uninstantiated generic bodies get no analysis at all) | ~24 |
+| const-generic parameter | open — same family as row 1; concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 | a user **operator overload**'s result | open, small — **the table's missing row**, found 2026-08-18 by probe while writing the conformance fixtures: `(n + 3)` is `?` even though `operator+` declares `-> int32`. The operator-heavy files (`math/vec`, `quat`, `num/fixed`) are blind mostly for the *generic* reason above, so this is its own small bucket, not their cause | ~5 |
 
@@ -1156,7 +1178,7 @@ rather than here, so there is one number to keep current. Forward work:
   the cascade above lands on `lib/std/collections/map.kama:190`, which is where it belongs. Guarded by
   `tools/check-diag-file.sh` cases 4 and 5.)*
 
-- **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** *(SCHEDULED — working-order row 4.)* README promises
+- **C SYMBOL NAMING — one campaign, because its two halves pull against each other.** *(SCHEDULED — working-order row 3.)* README promises
   *"the output IS readable C, so kama drops into an existing C codebase one file at a time"*, and `--keep-c`
   exists for exactly that. Two things stand between the promise and the output, and they want opposite
   things from the naming rules — so they get decided together, not separately.

@@ -34,13 +34,12 @@ no ordinary safe-kama construct miscompiles or emits invalid C.*
 
 | # | item | why it gates the tag | detail |
 |---|---|---|---|
-| 1 | **A value-producing `match` is untyped at CHECK time** — its arm bindings are recorded during emission, so `checkDeclaredTypes` cannot see them and the whole `match` classifies as unknown | the largest surviving classifier blind spot at **~220 of 369 corpus lines**, and the one the binding milestone could not reach; every numeric rule is silent across it | [§1](ROADMAP_DETAIL.md#s1) |
-| 2 | **Uninstantiated generic bodies get no analysis at all** — four distinct errors build clean | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
-| 3 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
-| 4 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. One campaign with 4 — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
-| 5 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |
-| 6 | **Docs/naming reconcile** | 1.0 fixes naming and case conventions | [§1](ROADMAP_DETAIL.md#s1) |
-| 7 | **Repoint the Zed grammar pin at the tag** | Zed installs the grammar by fetching a pinned commit, currently behind | [§1](ROADMAP_DETAIL.md#s1) |
+| 1 | **Uninstantiated generic bodies get no analysis at all** — four distinct errors build clean | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
+| 2 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
+| 3 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. One campaign with 4 — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
+| 4 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |
+| 5 | **Docs/naming reconcile** | 1.0 fixes naming and case conventions | [§1](ROADMAP_DETAIL.md#s1) |
+| 6 | **Repoint the Zed grammar pin at the tag** | Zed installs the grammar by fetching a pinned commit, currently behind | [§1](ROADMAP_DETAIL.md#s1) |
 
 ## NEXT — engine unblock
 
