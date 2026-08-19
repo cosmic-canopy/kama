@@ -8,8 +8,9 @@ the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 values of one type* and *There is no implicit numeric conversion*), [docs/agents.md](../agents.md) and the
 git log. What remains here is the two rows that still point at this file:
 
-- **ROADMAP row 2 — uninstantiated generic bodies get no analysis** (§1 below). Unchanged and still open.
-- **ROADMAP row 18 — test-infra holes** (§2 below). Unchanged and still open.
+- **ROADMAP row 1 — uninstantiated generic bodies get no analysis** (§1 below). Still open, and
+  **re-probed 2026-08-18 on `0.9.37`: unchanged — `check` is silent and `build` succeeds.**
+- **ROADMAP row 17 — test-infra holes** (§2 below). Unchanged and still open.
 
 ## 1. A never-instantiated generic body gets **no analysis whatsoever**
 

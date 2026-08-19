@@ -55,7 +55,7 @@ fi
 # unknown source; `kama_narrow_chk_` is the typed one. A widening needs neither.
 if printf '%s\n' "$body" | grep -q 'KAMA_NARROW'; then
     echo "check-binding-widen: FAIL — a widening out of a binding emitted the KAMA_NARROW _Generic" >&2
-    echo "  fallback, so the classifier could not type the binding. See ROADMAP row 1's record in SPEC.md." >&2
+    echo "  fallback, so the classifier could not type the binding. See the binding rule's record in SPEC.md." >&2
     printf '%s\n' "$body" | grep -n 'KAMA_NARROW' >&2
     exit 1
 fi
