@@ -2878,9 +2878,12 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   parameter — each reported at the use site that chose the argument, naming it.
 
   The one thing neither can check is a constraint the language cannot spell. `cast<T>(…)` inside a generic
-  needs `T` to be a scalar, and there is no contract meaning "an integer primitive" — so a template that
-  casts through its own parameter is checked at each instantiation instead. `Atomic<T>` is the case in the
-  stdlib, and its element restriction is enforced by the compiler at the use site for the same reason.
+  needs `T` to be a scalar, and no contract means "an integer primitive" — so a template that converts
+  through its own parameter is checked at each instantiation instead. The stdlib has no such template: a
+  value crossing a type-erased boundary is passed by ADDRESS and moved as `sizeof(T)` bytes, which
+  converts nothing and needs no such promise. That is the idiom to reach for; `Atomic<T>` is written that
+  way throughout, and its element restriction — a lock-free machine word — is enforced by the compiler at
+  the use site, being likewise unspellable as a bound.
 - **Const generic parameters** — a parameter may be a **value** instead of a type: `const N: int32`, in the
   same parameter list, supplied at the same use sites. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:
