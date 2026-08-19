@@ -56,7 +56,7 @@ int32 a = match (ok) { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };
 
 cannot be resolved when the initializer is checked, and `typeOfExpr` answers `""` for the whole `match`.
 
-It is **220 of the 368 remaining blind lines** — by far the largest survivor, and unlike the others it is
+It is **~220 of the 369 remaining blind lines** — by far the largest survivor, and unlike the others it is
 not a "kama cannot know this" case: the payload's type is the variant's declared field type, statically
 available at check time. What is missing is only that nothing binds it before that pass runs.
 
@@ -67,8 +67,12 @@ contradict it (a false positive; `isize written = match (wr) { case Ok(value: w)
 was rejected as an `int32`). Do not restore it. The fix is to bind the payload types, not to guess.
 
 **The classifier's blind spots, surveyed 2026-08-18** — measured with `kama check --strict-numeric` over
-`tests/*.kama`, counting distinct source lines in the `unknown-src` + `op-unknown` buckets. The list in
-`typeOfExpr`'s comment had drifted from the code in two places, both found by probe rather than by reading:
+`tests/*.kama` **one file at a time** (checking them together makes one program and every `main` collides),
+counting distinct `file:line` in the `unknown-src` + `op-unknown` buckets. The list in `typeOfExpr`'s
+comment had drifted from the code in two places, both found by probe rather than by reading.
+
+*Re-measured after the conformance work (2026-08-18, `0.9.36`): **369** distinct blind lines, i.e.
+unchanged — the +1 is a new positive fixture, and it is what turned up the operator row below.*
 
 | source | status | size |
 |---|---|---|
@@ -80,6 +84,7 @@ was rejected as an `int32`). Do not restore it. The fix is to bind the payload t
 | type parameter | open — subsumed by **row 2** (uninstantiated generic bodies get no analysis at all) | ~24 |
 | const-generic parameter | open — same family as row 2; concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
+| a user **operator overload**'s result | open, small — **the table's missing row**, found 2026-08-18 by probe while writing the conformance fixtures: `(n + 3)` is `?` even though `operator+` declares `-> int32`. The operator-heavy files (`math/vec`, `quat`, `num/fixed`) are blind mostly for the *generic* reason above, so this is its own small bucket, not their cause | ~5 |
 
 **What the binding milestone corrected about its own brief.** The migration was recorded here as 19
 fixtures, measured by writing `_localCTypes[nm]` at the two `foreach` sites. The landed fix routes through
