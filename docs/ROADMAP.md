@@ -29,43 +29,42 @@
 
 ## NOW — the 1.0 gate
 
-**The tag needs exactly this list and nothing below it.** The gate is: *no source-breaking change left, and
-no ordinary safe-kama construct miscompiles or emits invalid C.*
+**The tag needs exactly this list and nothing below it.** The gate is: *no source-breaking change left, no
+ordinary safe-kama construct miscompiles or emits invalid C, and the diagnostics can be trusted.*
 
-| # | item | why it gates the tag | detail |
-|---|---|---|---|
-| 1 | **Uninstantiated generic TYPES get no analysis, and a `T`-typed receiver is unresolvable** — the generic-FUNCTION half shipped `0.9.38`; measured reach on method calls is 5% | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
-| 2 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
-| 3 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. One campaign with 4 — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
-| 4 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |
-| 5 | **Docs/naming reconcile** | 1.0 fixes naming and case conventions | [§1](ROADMAP_DETAIL.md#s1) |
-| 6 | **Repoint the Zed grammar pin at the tag** | Zed installs the grammar by fetching a pinned commit, currently behind | [§1](ROADMAP_DETAIL.md#s1) |
+**Size** is a batching hint, not a commitment: **S** fits beside others in one session · **M** is about a
+session · **L** is several · **XL** wants its own design doc before any code. It is read off the linked
+detail, so it is only as good as that reasoning — `?` marks one the detail itself says is unprobed, and
+`+` marks two rows that are one piece of work and should be taken together. **LATER rows carry no size on
+purpose:** sizing work nobody has scoped yet would be invention, not estimation.
+
+| # | item | size | why it gates the tag | detail |
+|---|---|---|---|---|
+| 1 | **Uninstantiated generic TYPES get no analysis, and a `T`-typed receiver is unresolvable** — the generic-FUNCTION half shipped `0.9.38`; measured reach on method calls is 5% | XL | hits package authors hardest: ship `check`-green, consumers get the errors | [design/analysis-gap.md](design/analysis-gap.md) |
+| 2 | **C keyword collisions** — `int32 switch = 3;` emits invalid C (25 of C11's 44 keywords are legal kama identifiers) | L+ | a live correctness bug, not polish; exposure is locals, params, struct fields | [§10](ROADMAP_DETAIL.md#s10) |
+| 3 | **File-private C symbols are POSITIONAL** — `_F4__Holder` vs `_F5__Holder` by argument order | L+ | `--keep-c` is non-reproducible, which is what the README's "drops into an existing C codebase" rests on. **One campaign with C keyword collisions above** — the halves want opposite naming rules | [§10](ROADMAP_DETAIL.md#s10) |
+| 4 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return | M | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |
+| 5 | **Docs/naming reconcile** | M | 1.0 fixes naming and case conventions | [§1](ROADMAP_DETAIL.md#s1) |
+| 6 | **Layout control `@align(N)` / `@packed`** — passthrough lowering, the shape `@section` already has | S | an engine's first vertex buffer or `std140` block; a packed MMIO register block on MCU | [§2](ROADMAP_DETAIL.md#s2) |
+| 7 | **`spawn` disjointness: ROOT → PLACE granularity** — `w.bodies` + `w.springs` are rejected as "the same root `w`" | M? | the first parallel system. **Settle the design first** — relaxing a concurrency rule across a thread boundary | [§3](ROADMAP_DETAIL.md#s3) |
+| 8 | **Value-producing `match` over `enum X : IntType` does not compile** | S | render-command enums; the C compiler can't prove a plain-integer tag exhaustive | [§2](ROADMAP_DETAIL.md#s2) |
+| 9 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
+| 10 | **Nothing in the repo checks a diagnostic's line number** — all 439 xfail fixtures would pass with every line wrong | M+ | the guard *is* the work, and it is the one the next row needs | [§2](ROADMAP_DETAIL.md#s2) |
+| 11 | **A top-level `fn`'s diagnostics point at the PREVIOUS declaration** | S+ | ~10 `fn->line` sites; **take it with the line-number guard above**, which is what keeps it fixed | [§2](ROADMAP_DETAIL.md#s2) |
+| 12 | **A failed generic bound still instantiates**, so one bad type argument emits a cascade of follow-on errors | S | consequences reported as findings | [§10](ROADMAP_DETAIL.md#s10) |
+| 13 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | M | a prose claim that something is rejected is unguarded without one — the house rule, learned the hard way | [§2](ROADMAP_DETAIL.md#s2) |
+| 14 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
+| 15 | **Repoint the Zed grammar pin at the tag** | S | Zed installs the grammar by fetching a pinned commit. **Last — it pins the tag itself** | [§1](ROADMAP_DETAIL.md#s1) |
 
 ## NEXT — engine unblock
 
 The engine is a **separate consumer project**. Its first phase (math, ECS, windowing, renderer spine) is
-buildable today. These are the kama-side gaps it hits, ordered by when a renderer actually reaches them.
+buildable today. These are the kama-side gaps it hits that the tag does not gate.
 
-| # | item | bites at | detail |
-|---|---|---|---|
-| 7 | **Layout control `@align(N)` / `@packed`** — passthrough lowering, the shape `@section` already has | **week 2** — the first vertex buffer or `std140` uniform block | [§2](ROADMAP_DETAIL.md#s2) |
-| 8 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select. Wants 8 first | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
-| 9 | **`spawn` disjointness: ROOT → PLACE granularity** — `w.bodies` + `w.springs` are rejected as "the same root `w`" | the first parallel system | [§3](ROADMAP_DETAIL.md#s3) |
-| 10 | **Value-producing `match` over `enum X : IntType` does not compile** | render-command enums | [§2](ROADMAP_DETAIL.md#s2) |
-| 11 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
-| 12 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | ship day | [§2](ROADMAP_DETAIL.md#s2) |
-
-## NEXT — diagnostics you can trust
-
-Nothing here miscompiles; all of it costs every user every day.
-
-| # | item | detail |
-|---|---|---|
-| 13 | **Nothing in the repo checks a diagnostic's line number** — all 439 xfail fixtures would pass with every line wrong. The guard *is* the work, and it is the one 17–18 need | [§2](ROADMAP_DETAIL.md#s2) |
-| 14 | **A top-level `fn`'s diagnostics point at the PREVIOUS declaration** | [§2](ROADMAP_DETAIL.md#s2) |
-| 15 | **A failed generic bound still instantiates**, so one bad type argument emits a cascade of follow-on errors | [§10](ROADMAP_DETAIL.md#s10) |
-| 16 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | [§2](ROADMAP_DETAIL.md#s2) |
-| 17 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | [design/analysis-gap.md](design/analysis-gap.md) |
+| # | item | size | bites at | detail |
+|---|---|---|---|---|
+| 16 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select. Wants **layout control** (row 6) first | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
+| 17 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — stdlib & platform reach
 

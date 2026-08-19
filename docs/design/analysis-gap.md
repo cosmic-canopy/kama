@@ -11,7 +11,8 @@ git log. What remains here is the two rows that still point at this file:
 - **ROADMAP row 1 — uninstantiated generic bodies get no analysis** (§1 below). **The generic-FUNCTION
   half shipped 2026-08-18 at `0.9.38`.** What is left is generic TYPES and the type-parameter-dependent
   half of a body — both now MEASURED rather than estimated; see §1.
-- **ROADMAP row 17 — test-infra holes** (§2 below). Unchanged and still open.
+- **ROADMAP row 14 — test-infra holes** (§2 below). Unchanged and still open; it moved into the 1.0 gate
+  2026-08-19, so it is no longer a NEXT-track item.
 
 ## 1. A never-instantiated generic body — half analyzed, half still not
 
