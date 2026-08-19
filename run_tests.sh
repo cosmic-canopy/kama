@@ -11,9 +11,10 @@ set -u
 
 ROOT="."                        # run_tests.sh already assumes cwd == repo root
 . tools/kama-bin.sh             # sets $KAMA — this platform's build, else the root ./kama symlink
-# Overridable so a SINGLE fixture can be run in isolation — which is what diagnosing an intermittent
-# hang needs, and what was missing while `fs_raii` was being chased (it had to be rebuilt and looped by
-# hand outside the harness, so the harness's own watchdog was never the thing under test).
+# Overridable so THIS HARNESS can be pointed at a chosen fixture set. `./dev fixture <name>` already runs
+# one fixture, but on the host only and without the watchdog — so neither the wasm leg nor the hang
+# instrumentation could be exercised on a single fixture, which is exactly what diagnosing an intermittent
+# hang (or rehearsing the diagnostics for one) needs.
 TESTS_DIR="${KAMA_TESTS_DIR:-tests}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

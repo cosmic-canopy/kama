@@ -51,8 +51,9 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
   legs, rather than reasoned about. That rehearsal found three things wrong with the instrumentation
   itself: `timeout` does not exist on macOS (so the wrapper silently swallowed the whole `sample` call),
   `sample`'s `Binary Images:` dump pushed the frames out of the line budget, and `wait "${arr[@]}"` on an
-  empty array aborts the runner under `set -u`. `KAMA_TESTS_DIR` now overrides the fixture directory,
-  which is what makes a single-fixture rehearsal — or an isolation loop on a flaky one — possible at all.
+  empty array aborts the runner under `set -u`. `KAMA_TESTS_DIR` now points the harness at a chosen
+  fixture set: `./dev fixture <name>` already ran one fixture, but on the host only and without the
+  watchdog, so neither the wasm leg nor the hang instrumentation could be exercised on a single fixture.
 
   Node's own report still cannot cover this shape, and its ABSENCE remains the finding: an idle-but-alive
   event loop writes one, and a main thread parked in a syscall never reaches the handler. Until the hang
