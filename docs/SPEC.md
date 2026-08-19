@@ -2851,6 +2851,36 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   **AND** (all listed contracts). A bound lets the body call the contract's methods on a type-param value;
   because it's monomorphized, those calls are **static direct calls** (zero cost, no vtable). Each concrete
   type argument is checked to satisfy its bounds, else a clean compile error.
+
+  **A bound is what the body may call, and nothing else.** Reaching a member the bounds do not declare is
+  an error at the DECLARATION, naming the bound that is missing rather than the method that is not there:
+
+  ```kama
+  fn T largest<T>(T a, T b) { return a.compareTo(other: b) == Ordering::Greater ? a : b; }
+  // error: `T` has no bound providing `compareTo` — an unbounded type parameter promises nothing,
+  //        so bound it with a contract that declares `compareTo`: `<T: …>`
+  ```
+
+  An unbounded parameter therefore promises nothing at all — it is not "anything", it is a type with no
+  API — and it is treated as move-only, because an instantiation may bind it to one. A parameter whose
+  bounds are all declared `for value` is a value at every instantiation, so it is copyable
+  (`tests/xfail/generic_unbounded_call`, `tests/xfail/generic_wrong_bound_call`).
+- **What is checked at a generic's DECLARATION, versus at its instantiation.** A generic **nobody
+  instantiates is still fully analyzed** — every rule in the language applies inside its body, with each
+  type parameter standing for a type that promises exactly what its bounds promise. That is what makes
+  `kama check` on a library a real answer: a package's public generic, which its own tests may never
+  instantiate, cannot ship green and hand its consumers the errors. It holds for a generic **function**, a
+  generic **type** and a generic **`enum`** alike, and for `build`, `check` and the language server
+  identically (`tests/generic_uninst_ok.kama`, `tests/xfail/generic_uninst_*`).
+
+  What waits for the instantiation is only what a concrete type argument decides: whether that argument
+  satisfies the bounds, which `when [T: …]` members exist for it, and a `comptime assert` over a const
+  parameter — each reported at the use site that chose the argument, naming it.
+
+  The one thing neither can check is a constraint the language cannot spell. `cast<T>(…)` inside a generic
+  needs `T` to be a scalar, and there is no contract meaning "an integer primitive" — so a template that
+  casts through its own parameter is checked at each instantiation instead. `Atomic<T>` is the case in the
+  stdlib, and its element restriction is enforced by the compiler at the use site for the same reason.
 - **Const generic parameters** — a parameter may be a **value** instead of a type: `const N: int32`, in the
   same parameter list, supplied at the same use sites. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:

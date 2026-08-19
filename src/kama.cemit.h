@@ -555,10 +555,16 @@ public:
     // uninstantiated body this pass cannot see, and a measurement that hid its own blind spot would be
     // worse than no measurement.
     //
-    // Row: `probe` key file line #params errors deferred resolved, then one column per DeferKind, in
-    // enum order. The buckets are the second half of the instrument and were added to size the follow-on:
-    // a deferral a compiler change can close and one only a SOURCE change can close are different
-    // projects, and a single total cannot tell them apart.
+    // Row: `probe` (a generic FUNCTION) or `probe-type` (a generic TYPE or `enum`), then key file line
+    // #params errors deferred resolved, then one column per DeferKind in enum order.
+    //
+    // ⚠️ It said here that it would be DELETED when the work it sized landed. That work has landed —
+    // deferrals went 87 -> 0 for functions, and the type half walks 35 templates and resolves 265 sites —
+    // and it is staying, for the reason it was built: **a pass that reports "checked" while meaning
+    // "checked except two sites" is the failure mode this instrument exists to prevent.** Two sites still
+    // defer (`opaque-scalar`: `cast<T>` inside `Atomic<T>`, which no bound in the language can license),
+    // and reach can regress silently in a way no fixture would catch. Same standing as `--strict-numeric`,
+    // which was kept for the same reason and sized this campaign.
     void setProbeReport(bool on) { _probeReport = on; }
 
 

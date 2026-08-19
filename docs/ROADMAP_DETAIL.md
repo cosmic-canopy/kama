@@ -90,7 +90,7 @@ counting distinct `file:line` in the `unknown-src` + `op-unknown` buckets. The l
 comment had drifted from the code in two places, both found by probe rather than by reading.
 
 *Re-measured after the value-producing-`match` work (2026-08-18, `0.9.37`): **369 → 165** distinct blind
-lines, and the `match`-shaped ones **220 → 16**. The 16 that remain are the generic-body family (row 1)
+lines, and the `match`-shaped ones **220 → 16**. The 16 that remain were the generic-body family (closed `0.9.43`)
 plus arms whose values are literal ternaries, not a residue of the match typing itself. **The corpus needed
 no migration at all** — 1234 fixtures green with zero edits — which is itself the evidence that the arm
 rule had been enforcing the same constraint all along, and therefore that this milestone's payoff was the
@@ -103,8 +103,8 @@ miscompile above and an honest instrument, never 220 silent numeric rules.*
 | `borrow` alias | **was already closed** — the comment outlived the code; the borrow site records both the C type and the type node | 0 |
 | mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
 | value-producing `match` at check time | **closed** `0.9.37` | −204 lines |
-| type parameter | open — subsumed by **row 1**, whose remaining half IS this: an expression typed by `T` has no resolvable type until a binding exists | ~24 |
-| const-generic parameter | open — same family as row 1; concentrated in `lib/std/num/fixed.kama` | ~19 |
+| type parameter | **closed** `0.9.40`–`0.9.43` — an opaque type parameter gives `T` a type that promises what its bounds promise, so an expression typed by `T` resolves at the declaration | ~24 |
+| const-generic parameter | open — the residue of that work: a `const N: int32` stands for a VALUE, and a probe has none to invent without deciding the template's own `comptime assert`. Concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 | a user **operator overload**'s result | open, small — **the table's missing row**, found 2026-08-18 by probe while writing the conformance fixtures: `(n + 3)` is `?` even though `operator+` declares `-> int32`. The operator-heavy files (`math/vec`, `quat`, `num/fixed`) are blind mostly for the *generic* reason above, so this is its own small bucket, not their cause | ~5 |
 

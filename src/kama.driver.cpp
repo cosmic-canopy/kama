@@ -1346,8 +1346,9 @@ static bool g_strictNumeric = false;
 // `checkUninstantiatedTemplates` walked, how many errors it raised, how many diagnostics it had to
 // DEFER because a type was unknown rather than wrong, and — one column per `CEmitter::DeferKind` — WHY
 // each deferral happened, which is what says whether a compiler change or a source change closes it.
-// Hidden, for the same reason `--strict-numeric` is: it exists to size the follow-on (opaque type params
-// answering method lookup from declared bounds), and it goes when that lands.
+// Hidden, for the same reason `--strict-numeric` is. It sized the opaque-type-parameter campaign and is
+// KEPT rather than deleted — see `setProbeReport` for why: the walk still has a named residual, and reach
+// is the kind of thing that regresses without any fixture noticing.
 static bool g_probeTemplates = false;
 
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope

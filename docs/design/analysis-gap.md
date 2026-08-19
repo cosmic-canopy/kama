@@ -11,14 +11,11 @@ git log. One row still points at this file:
 - **ROADMAP row 14 — test-infra holes** (§2 below). Unchanged and still open; it moved into the 1.0 gate
   2026-08-19, so it is no longer a NEXT-track item.
 
-§1 — the uninstantiated-generic gap — **moved to
-[opaque-type-params.md](opaque-type-params.md)** once its two premises stopped being estimates: the
-generic-FUNCTION probe shipped at `0.9.38`, and `0.9.39` measured *which* deferrals a compiler change can
-close (all 87) versus a source change (none). Row 1 points there now. The one finding worth carrying
-across, because it cost a cycle and the code no longer shows why: **calling `emitClassDefinitions` on a
-template's own `ClassInfo` fails 628 of 641 fixtures** — a `_genericTypes` entry is a shape awaiting
-specialization, not a class — and identity substitution is not the shortcut, because binding a parameter
-to itself is what once made `mangleElem` recurse until the compiler died.
+§1 — the uninstantiated-generic gap — **SHIPPED** `0.9.38`–`0.9.43`, and its design doc is deleted with
+this note in its place. A generic nobody instantiates is now fully analyzed — function, type and `enum`
+alike — because each type parameter stands for an opaque type promising exactly what its bounds promise.
+The record is in [SPEC.md](../SPEC.md) (*Generics*: what is checked at a declaration versus at its
+instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
 
 ## 2. Test-infra holes
 
