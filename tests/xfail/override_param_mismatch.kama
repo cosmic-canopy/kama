@@ -1,0 +1,13 @@
+// The parameter-type position of the same rule. This one happened to produce the right answer on this
+// target, which is worse than failing: nothing about that is guaranteed, and it is exactly why the check
+// cannot be left to whether a test noticed.
+type virtual(maxDepth: 1) resource Animal {
+    public ctor make() { }
+    protected virtual fn int32 own(int32 n) { return n; }
+    public fn int32 total() { return this.own(n: 2); }
+}
+type final resource Dog extends Animal {
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int32 own(int64 n) { return cast<int32>(n); }   // base declares int32
+}
+fn int32 main() { Dog d = Dog.make(); return d.total() - 2; }

@@ -1,0 +1,12 @@
+// The same rule on the inheritance axis. A caller holding the BASE writes the base's label, so a
+// subclass that renames the parameter has changed the surface for everyone who holds it as a base.
+type virtual(maxDepth: 1) resource Animal {
+    public ctor make() { }
+    protected virtual fn int32 own(int32 n) { return n; }
+    public fn int32 total() { return this.own(n: 2); }
+}
+type final resource Dog extends Animal {
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int32 own(int32 count) { return count; }   // the base calls it `n` -> REJECT
+}
+fn int32 main() { Dog d = Dog.make(); return d.total() - 2; }

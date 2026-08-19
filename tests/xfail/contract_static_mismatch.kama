@@ -1,0 +1,15 @@
+// The RECEIVER is part of a signature too, and it is the parameter nobody writes. A contract may
+// require a `static fn` — `Hasher::finish` is zero-state, so `H::finish(raw)` monomorphizes to a
+// direct call with no receiver — so this is a MATCH rule, not a ban on `static`.
+//
+// This direction: a `static fn` satisfying an INSTANCE member. The slot passes the object as the first
+// argument and the static body never declared one, so every argument shifts. Probed before the fix: it
+// built clean out of safe kama and returned the receiver read as an `int32`.
+type contract Maker for value { fn int32 make2(int32 n); }
+type value M implements Maker {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public static fn int32 make2(int32 n) { return n; }   // contract declares an instance method -> REJECT
+}
+fn int32 viaContract(Maker m) { return m.make2(n: 7); }
+fn int32 main() { M m = M.make(v: 3); return viaContract(m: m) - 7; }

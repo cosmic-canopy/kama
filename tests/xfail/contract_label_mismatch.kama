@@ -1,0 +1,14 @@
+// kama call sites are LABEL-based, so a parameter's label is part of the call surface a conformance
+// promises — not decoration. Let it diverge and one operation gets two spellings depending on how the
+// receiver is held (`w.put(bytes:)` through the contract, `w.put(data:)` on the type), and any generic
+// body written against the contract fails to compile for THIS implementer, reported in the generic's
+// own file, naming a label its author wrote correctly.
+//
+// Measured at zero divergences across lib/prelude/tests/examples/bench before the rule was turned on:
+// the convention was already universal, so the rule costs nothing and only stops it from rotting.
+type contract Writer2 for value { fn int32 put(int32 bytes); }
+type value W implements Writer2 {
+    public ctor make() { }
+    public fn int32 put(int32 data) { return data; }     // the contract calls it `bytes` -> REJECT
+}
+fn int32 main() { W w = W.make(); return w.put(data: 0); }

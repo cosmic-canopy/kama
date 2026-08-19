@@ -1,0 +1,17 @@
+// An `override` is the same promise a conformance makes, one axis over: this callable stands in for that
+// one. It was kept no better — all three positions compiled. A derived method is reached through the
+// BASE's slot, so a changed signature means the caller's argument list and the callee's are two
+// different lists. The damage is not theoretical: see override_arity_mismatch.
+//
+// The realistic way in is a base whose signature CHANGES — `int32 area()` becomes `isize area()` — while
+// a subclass in another file, or in a consumer's package, still says `override fn int32 area()`.
+type virtual(maxDepth: 1) resource Animal {
+    public ctor make() { }
+    protected virtual fn int32 own() { return 1; }
+    public fn int32 total() { return this.own(); }
+}
+type final resource Dog extends Animal {
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int64 own() { return 2; }      // base declares int32
+}
+fn int32 main() { Dog d = Dog.make(); return d.total() - 2; }

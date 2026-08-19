@@ -439,6 +439,13 @@ struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedPa
                          // pass as receiver, so it is signature-level and the contract may demand it: an
                          // implementation of a `const fn` member must itself be `const fn`.
                          bool isConst = false;
+                         // `static fn` on the member — a contract CAN require one, and `Hasher` does:
+                         // `static fn uint64 finish(uint64 raw)` is zero-state, so `H::finish(raw)`
+                         // monomorphizes to a direct call with no receiver. It is therefore part of the
+                         // signature in BOTH directions: an instance implementation of a static member has
+                         // no `H::` form, and a static implementation of an instance member is handed a
+                         // receiver it never declared, which shifts every argument by one.
+                         bool isStatic = false;
                          // The declaration's NAME identifier, for the reference index (M6 B3c). Null for
                          // the operator arm, which has no name node — as MethodInfo::node already is.
                          SharedIdentifier nameId; };
@@ -1553,6 +1560,9 @@ private:
     void checkConformanceSignature(ClassInfo& tci, const std::string& contract,
                                    const std::string& tkey, int line);
     void checkConformanceSignatures();   // the `_classes` sweep; enums/intrinsics come via checkImplCompleteness
+    void checkOverrideSignatures();      // the same promise one axis over: a derived `override` vs its base
+    void reportSigMismatch(const ConfSig& want, const ConfSig& have, const std::string& lead,
+                           const std::string& authority, const std::string& rule, int at);
     // One report per (type-or-template, contract, member): a generic type's conformance is checked on
     // its INSTANCES, so a template-level mismatch would otherwise repeat per instantiation.
     std::set<std::string> _conformanceSigChecked;

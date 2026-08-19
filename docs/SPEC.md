@@ -1839,18 +1839,31 @@ declaration — not at the call sites, and not by the C compiler:
 - the member **exists**, and is **`public`** (a contract is a public guarantee; a private method
   satisfying it would be reachable through the contract but not by name);
 - its **return type** matches the member's, including a `ref T` place-return;
-- each **parameter type** matches, and so does the **arity** and each parameter's `ref`/`out`;
+- each **parameter type** matches, and so does the **arity**, each parameter's `ref`/`out`, and each
+  parameter's **label** — kama call sites are label-based, so the label is part of the call surface the
+  conformance promises, not decoration;
+- the **receiver** matches: a contract member may be declared `static fn` (`Hasher::finish` is
+  zero-state, so `H::finish(raw)` monomorphizes to a direct call), and `static` must then agree on both
+  sides. A required `ctor` is exempt — one is static by construction;
 - **`const fn`** on the member is honored, and so is **`const`** on a parameter. Only in one
   direction: an implementation may be *more* const than the member asks, which widens where it can be
   called and breaks nothing.
 
 Matching is on the **resolved** type, so an alias, an import spelling, or a generic contract's
 substituted parameter (`Iterator<T>` implemented at `T = int32`) compares equal — what differs is what
-the two would lower to. Parameter **names** are not part of the check.
+the two would lower to.
 
 This applies to every kind that can conform, including an `enum`'s conformance and a `type intrinsic`
 block's, to a contract-declared **operator** (`int32 operator+(int32 rhs)` — the generic-math bound
-shape), and to a conformance that dispatches only statically. It has to be checked here: a
+shape), and to a conformance that dispatches only statically. A **`@viewable`** contract is the one
+exception: it emits no vtable and no fat-pointer type, so its members are nominal markers rather than
+slots — `Iterable<T>` declares `fn Iterator<T> iterator()` and every container correctly returns its own
+concrete iterator type.
+
+**`override` keeps the same promise, and is checked the same way.** A derived method stands in for the
+base's through the base's slot, so its signature must match in every position above. It is **not**
+covariance-aware: a derived return type would be a language feature with its own rules and its own
+lowering, and accepting "any subtype" here would let a hierarchy promise what the vtable cannot keep. It has to be checked here: a
 contract's vtable slot is filled with a **cast**, so a mismatch is invisible to the C compiler at the
 declaration and surfaces — if at all — at a use site, naming mangled types the author never wrote. A
 mismatched member reached *through* the contract does not fail, it silently does the wrong thing

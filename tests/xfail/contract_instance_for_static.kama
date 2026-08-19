@@ -1,0 +1,8 @@
+// …and the other direction: an instance method where the contract declares `static fn`. There is no
+// `M::make2(n:)` to call, so a bound written `H::finish(raw)` has nothing to resolve to.
+type contract Maker for value { static fn int32 make2(int32 n); }
+type value M implements Maker {
+    public ctor make() { }
+    public fn int32 make2(int32 n) { return n; }          // contract declares `static fn` -> REJECT
+}
+fn int32 main() { return 0; }

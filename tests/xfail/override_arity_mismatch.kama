@@ -1,0 +1,13 @@
+// The arity position, and the one that showed the damage: the base's slot passes NO argument, the
+// derived body reads one, so it returns whatever was in the argument register. Probed before the fix —
+// this built clean out of safe kama, with no `unsafe` anywhere, and exited 168 instead of 0.
+type virtual(maxDepth: 1) resource Animal {
+    public ctor make() { }
+    protected virtual fn int32 own() { return 1; }
+    public fn int32 total() { return this.own(); }
+}
+type final resource Dog extends Animal {
+    public ctor make() { this.base = Base.make(); }
+    protected override fn int32 own(int32 extra) { return extra; }   // base takes none
+}
+fn int32 main() { Dog d = Dog.make(); return d.total() - 0; }

@@ -5916,7 +5916,8 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         bool bad = namesThis(md->returnType);
                         if (md->params) for (auto& pp : *md->params) if (pp && namesThis(pp->type)) bad = true;
                         if (bad) rejectThis(*md->name->value, md->line);
-                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst, md->name});
+                        ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst,
+                                              modHas(md->modifiers, "static"), md->name});
                     }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
@@ -11988,7 +11989,7 @@ std::string CEmitter::kamaTypeText(SharedIdentifier t)
 // beside the kama spelling (what the diagnostic may say).
 struct CEmitter::ConfSig {
     std::string cRet, kamaRet;
-    std::vector<std::string> cParam, kamaParam;
+    std::vector<std::string> cParam, kamaParam, label;
     std::vector<bool> byRef, isOut;
 };
 
@@ -12012,6 +12013,7 @@ CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMeth
             for (auto& p : *m.params) {
                 s.cParam.push_back(p && p->type ? cType(p->type) : "");
                 s.kamaParam.push_back(p && p->type ? kamaTypeText(p->type) : "");
+                s.label.push_back(p && p->identifier && p->identifier->value ? *p->identifier->value : "");
                 s.byRef.push_back(p ? paramByRef(p.get()) : false);
                 s.isOut.push_back(p ? paramIsOut(p.get()) : false);
             }
@@ -12061,12 +12063,14 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
             for (auto& p : *ps) {
                 s.cParam.push_back(p && p->type ? cTypeInInstance(tci.name, p->type) : "");
                 s.kamaParam.push_back(p && p->type ? kamaTypeText(p->type) : "");
+                s.label.push_back(p && p->identifier && p->identifier->value ? *p->identifier->value : "");
                 s.byRef.push_back(p ? paramByRef(p.get()) : false);
                 s.isOut.push_back(p ? paramIsOut(p.get()) : false);
             }
         } else {
             for (auto& p : mi->params) {
                 s.cParam.push_back(p.className);
+                s.label.push_back(p.name);
                 s.kamaParam.push_back("");      // no node to render: the message falls back to the C name
                 s.byRef.push_back(p.byRef);
                 s.isOut.push_back(p.isOut);
@@ -12096,7 +12100,12 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
     auto ifIt = _interfaces.find(contract);
     if (ifIt == _interfaces.end()) return;   // a base class, or unresolved — already diagnosed
     InterfaceInfo& ii = ifIt->second;
-    if (ii.isViewable) return;               // a mint protocol declares a grant, not a callable slot
+    // A `@viewable` contract emits NO vtable and no fat-pointer type (see emitInterfaceTypes), so its
+    // members are nominal markers rather than slots — nothing lowers through them, and exact match is the
+    // wrong rule. Probed by removing this line: `Iterable<T>` declares `fn Iterator<T> iterator()` while
+    // every container returns its own concrete `DynamicArrayIter<T>`, which is how the mint protocol is
+    // meant to read; the corpus lit up with eight such "mismatches", all of them correct code.
+    if (ii.isViewable) return;
 
     // A generic type's conformance is checked on its INSTANCES (the template's `implements` is resolved
     // per instance), so a template-level mismatch would otherwise report once per instantiation.
@@ -12110,42 +12119,75 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
         if (!mi) continue;                   // presence is checkImplCompleteness'/the vtable's job
         if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
 
-        ConfSig want = contractSigOf(ii, m);
-        ConfSig have = implSigOf(tci, owner, mi);
         const int at = mi->node ? mi->node->line : mi->opDecl ? mi->opDecl->line : line;
         // An operator is registered under a SYNTHETIC name (`op_add`); say what the author wrote.
         const std::string member = mi->isOperator && mi->opDecl && mi->opDecl->operatorDeclarator
                                  ? "operator" + binaryOperator(mi->opDecl->operatorDeclarator->opToken)
                                  : m.name;
-        const std::string lead = "`" + tkey + "` implements `" + shown + "`, but its `" + member + "` ";
-        const std::string tail = "; a conformance must match the signature the contract declares";
-        // Prefer the kama spelling; an intrinsic/synthesized side has no node to render one from.
-        auto shownType = [](const std::string& kama, const std::string& c) { return kama.empty() ? c : kama; };
-
-        // Arity first, and alone: a count mismatch makes every positional comparison below meaningless,
-        // and reporting both would name one cause twice.
-        if (want.cParam.size() != have.cParam.size()) {
-            unsupported((lead + "takes " + std::to_string(have.cParam.size()) + " parameter(s) — the "
-                         "contract declares " + std::to_string(want.cParam.size()) + tail).c_str(), at);
+        // The receiver is part of the signature too, and it is the parameter no one writes. A contract
+        // CAN require a `static fn` (`Hasher::finish` is zero-state, so `H::finish(raw)` monomorphizes to
+        // a direct call) — so this is a MATCH, not a ban. Probed both ways before it was written: a
+        // `static fn` satisfying an instance member built clean and returned the receiver read as its
+        // first argument. A required `ctor` is exempt — one is static by construction, with no `self`.
+        if (!m.isCtor && m.isStatic != mi->isStatic) {
+            unsupported(("`" + tkey + "` implements `" + shown + "`, but its `" + member + "` is "
+                         + (mi->isStatic ? "`static fn` where the contract declares an instance method, "
+                                           "which is called on a receiver"
+                                         : "an instance method where the contract declares `static fn`, "
+                                           "which is called on the type")
+                         + "; a conformance must match the signature the contract declares").c_str(), at);
             continue;
         }
-        if (!want.cRet.empty() && !have.cRet.empty() && want.cRet != have.cRet)
-            unsupported((lead + "returns `" + shownType(have.kamaRet, have.cRet) + "` — the contract "
-                         "declares `" + shownType(want.kamaRet, want.cRet) + "`" + tail).c_str(), at);
-        for (size_t i = 0; i < want.cParam.size(); ++i) {
-            if (want.cParam[i].empty() || have.cParam[i].empty()) continue;   // nothing to compare against
-            const std::string pos = "parameter " + std::to_string(i + 1);
-            if (want.cParam[i] != have.cParam[i])
-                unsupported((lead + "takes `" + shownType(have.kamaParam[i], have.cParam[i]) + "` as "
-                             + pos + " — the contract declares `"
-                             + shownType(want.kamaParam[i], want.cParam[i]) + "`" + tail).c_str(), at);
-            // `ref`/`out` is not decoration: it is what makes the parameter a pointer in the lowered
-            // slot, so a disagreement here is the same class of mismatch as a disagreeing type.
-            else if (want.byRef[i] != have.byRef[i] || want.isOut[i] != have.isOut[i])
-                unsupported((lead + "passes " + pos + " " + (have.isOut[i] ? "`out`" : have.byRef[i] ? "`ref`" : "by value")
-                             + " — the contract declares it "
-                             + (want.isOut[i] ? "`out`" : want.byRef[i] ? "`ref`" : "by value") + tail).c_str(), at);
-        }
+        reportSigMismatch(contractSigOf(ii, m), implSigOf(tci, owner, mi),
+                          "`" + tkey + "` implements `" + shown + "`, but its `" + member + "` ",
+                          "the contract", "a conformance must match the signature the contract declares", at);
+    }
+}
+
+// The comparison itself, shared by the two promises in the language that have a signature to keep: a
+// contract conformance, and an `override`. Both are the same claim — "this callable stands in for that
+// one" — and both were being made without anyone checking, so they get one comparison rather than two
+// that can drift apart. `lead` names the pair, `authority` is what the other side is called in the
+// message ("the contract" / "the base"), `tail` states the rule.
+void CEmitter::reportSigMismatch(const ConfSig& want, const ConfSig& have, const std::string& lead,
+                                 const std::string& authority, const std::string& rule, int at)
+{
+    const std::string tail = "; " + rule;
+    // Prefer the kama spelling; an intrinsic/synthesized side has no node to render one from.
+    auto shownType = [](const std::string& kama, const std::string& c) { return kama.empty() ? c : kama; };
+
+    // Arity first, and alone: a count mismatch makes every positional comparison below meaningless,
+    // and reporting both would name one cause twice.
+    if (want.cParam.size() != have.cParam.size()) {
+        unsupported((lead + "takes " + std::to_string(have.cParam.size()) + " parameter(s) — " + authority
+                     + " declares " + std::to_string(want.cParam.size()) + tail).c_str(), at);
+        return;
+    }
+    if (!want.cRet.empty() && !have.cRet.empty() && want.cRet != have.cRet)
+        unsupported((lead + "returns `" + shownType(have.kamaRet, have.cRet) + "` — " + authority
+                     + " declares `" + shownType(want.kamaRet, want.cRet) + "`" + tail).c_str(), at);
+    for (size_t i = 0; i < want.cParam.size(); ++i) {
+        if (want.cParam[i].empty() || have.cParam[i].empty()) continue;   // nothing to compare against
+        const std::string pos = "parameter " + std::to_string(i + 1);
+        // The LABEL is part of the call surface, not decoration: kama call sites are label-based, so a
+        // divergence gives one operation two spellings depending on how the receiver is held — and a
+        // generic body written against the contract (`w.write(bytes: b)`) fails to compile for the
+        // implementer that renamed it, reported in the GENERIC's file, naming a label its author wrote
+        // correctly. Measured at zero divergences corpus-wide before this was turned on.
+        if (i < want.label.size() && i < have.label.size()
+            && !want.label[i].empty() && !have.label[i].empty() && want.label[i] != have.label[i])
+            unsupported((lead + "names " + pos + " `" + have.label[i] + "` — " + authority + " calls it `"
+                         + want.label[i] + "`, and a caller writes the label" + tail).c_str(), at);
+        if (want.cParam[i] != have.cParam[i])
+            unsupported((lead + "takes `" + shownType(have.kamaParam[i], have.cParam[i]) + "` as "
+                         + pos + " — " + authority + " declares `"
+                         + shownType(want.kamaParam[i], want.cParam[i]) + "`" + tail).c_str(), at);
+        // `ref`/`out` is not decoration: it is what makes the parameter a pointer in the lowered
+        // slot, so a disagreement here is the same class of mismatch as a disagreeing type.
+        else if (want.byRef[i] != have.byRef[i] || want.isOut[i] != have.isOut[i])
+            unsupported((lead + "passes " + pos + " " + (have.isOut[i] ? "`out`" : have.byRef[i] ? "`ref`" : "by value")
+                         + " — " + authority + " declares it "
+                         + (want.isOut[i] ? "`out`" : want.byRef[i] ? "`ref`" : "by value") + tail).c_str(), at);
     }
 }
 
@@ -12168,6 +12210,39 @@ void CEmitter::checkConformanceSignatures()
         // otherwise every rejection here reports an empty file in a multi-file build. See diagFile().
         ScopedStr _cu(_collectingUnitPath, ci.declFile);
         for (auto& c : ci.interfaces) checkConformanceSignature(ci, c, ci.name, ci.declLine());
+    }
+}
+
+// `override` is the same promise one axis over, and it was kept no better. A derived method that
+// changes the signature it overrides is reached through the BASE's slot, so the arguments the caller
+// passed and the ones the callee reads are two different lists — probed: an override taking a parameter
+// the base's slot never passes read a garbage argument register and returned it, deterministically, out
+// of safe kama with no `unsafe` anywhere. The return-type and parameter-type variants happened to
+// survive on this target, which is worse, not better: nothing about that is guaranteed.
+//
+// Deliberately NOT covariance-aware. A derived return type would be a real language feature — with its
+// own rules about what may narrow and a lowering that can carry it — and inventing one here by
+// accepting "any subtype" would let a hierarchy make a promise the vtable cannot keep. Exact match.
+void CEmitter::checkOverrideSignatures()
+{
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.base) continue;
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);
+        for (auto& mkv : ci.methods) {
+            MethodInfo& mi = mkv.second;
+            if (!mi.isOverride) continue;
+            ClassInfo* baseOwner = nullptr;
+            MethodInfo* bmi = findMethod(ci.base, mkv.first, &baseOwner);
+            // Nothing to compare against: "overrides no virtual method" is its own diagnostic, raised
+            // where the `override` marker is validated, and saying it twice helps no one.
+            if (!bmi || !baseOwner) continue;
+            const int at = mi.node ? mi.node->line : mi.opDecl ? mi.opDecl->line : ci.declLine();
+            reportSigMismatch(implSigOf(*baseOwner, baseOwner, bmi), implSigOf(ci, &ci, &mi),
+                              "`" + ci.name + "` overrides `" + baseOwner->name + "." + mkv.first
+                                  + "`, but its `" + mkv.first + "` ",
+                              "the base", "an override must match the signature it overrides", at);
+        }
     }
 }
 
@@ -21125,6 +21200,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // …and the signatures it promised. After the kind gate for the same reason: a type that may not
     // implement the contract at all should hear THAT, not a list of its members' disagreements.
     checkConformanceSignatures();
+#if KAMA_INHERITANCE
+    checkOverrideSignatures();
+#endif
 
     // A `view` may not promise a contract that requires it to be CONSTRUCTED out of nothing borrowable.
     // After the kind gate, so a view failing a `for resource` clause hears that first — it is the more
