@@ -1,0 +1,33 @@
+// The SILENT half of the uninstantiated-template probe, and the reason this fixture is worth as much as
+// the three `xfail/generic_uninst_*` ones: a pass about rejection is only as good as the valid code it
+// leaves alone. Every generic below is never instantiated, so `checkUninstantiatedTemplates` walks all of
+// them; every one is correct, so it must say nothing.
+//
+// Measured while this pass was being built: before unknown-type diagnostics learned to defer, the walk
+// rejected 81 of 640 corpus fixtures — all of them valid — on four rules that fire on an UNRESOLVED type
+// rather than a wrong one. Each shape below is one of those four.
+import std::collections::{DynamicArray, View};
+
+// 1. a method call on a `T`-parameterized receiver — no class to resolve until `T` is bound
+fn isize neverCalled1<T>(ref DynamicArray<T> d) {
+    isize n = d.length();
+    View<T> v = d.view();
+    return n;
+}
+
+// 2. a turbofish forwarding the enclosing type parameter — no instantiation to route to
+fn void neverCalled2<T>(ref DynamicArray<T> d) {
+    neverCalled1::<T>(d: d);
+}
+
+// 3. dot-on-type construction of a generic whose arguments come from the enclosing template
+fn void neverCalled3<T>(ref DynamicArray<T> src) {
+    DynamicArray<T> d = DynamicArray.empty();
+    d.add(item: give src.get(index: 0));
+}
+
+// 4. mutual recursion between two templates — the walk must terminate, not chase instantiations
+fn void pingNeverCalled<T>(T x) { pongNeverCalled::<T>(x: x); }
+fn void pongNeverCalled<T>(T x) { pingNeverCalled::<T>(x: x); }
+
+fn int32 main() { return 0; }

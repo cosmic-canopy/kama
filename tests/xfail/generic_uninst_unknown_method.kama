@@ -1,0 +1,9 @@
+// Method resolution inside an uninstantiated generic body, on a receiver whose type is CONCRETE.
+// This is the line that separates the probe walk from a blanket "skip anything in a template": a receiver
+// typed by `T` has no class to look at and is deferred (see deferUnknownWhileProbing), but a `string` is a
+// `string` at every instantiation, so its methods are checked here exactly as anywhere else.
+fn void neverCalled<T>(T unused) {
+    string s = "x";
+    s.noSuchMethod();            // ERROR: concrete receiver, no such method
+}
+fn int32 main() { return 0; }

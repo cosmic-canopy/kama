@@ -1,0 +1,9 @@
+// A concrete type error inside a generic body NOBODY instantiates is still an error.
+// `analyze()` IS `emit()`, and the emit walk used to skip a template body entirely, so this built clean —
+// which is worst for a package author: ship `check`-green, and every consumer gets the error instead.
+// `checkUninstantiatedTemplates` walks the body once with `T` left symbolic; the `int32` line mentions no
+// type parameter, so the ordinary rule sees it.
+fn void neverCalled<T>(T unused) {
+    int32 x = "not an int";      // ERROR: no implicit conversion, and this is concrete
+}
+fn int32 main() { return 0; }

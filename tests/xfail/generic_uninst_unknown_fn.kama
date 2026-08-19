@@ -1,0 +1,7 @@
+// An unresolved NAME inside an uninstantiated generic body. Name resolution was deferred to instantiation
+// along with everything else, so a typo'd call in a template nobody used never surfaced at all.
+// The call mentions no type parameter, so the probe walk resolves it exactly as any other call.
+fn void neverCalled<T>(T unused) {
+    undefinedFunction(a: 1);     // ERROR: no such function
+}
+fn int32 main() { return 0; }

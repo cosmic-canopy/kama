@@ -428,6 +428,7 @@ std::string CEmitter::namespaceOfType(const std::string& value) const
 bool CEmitter::isTypeParamName(const std::string& n) const
 {
     if (_typeSubst.count(n)) return true;
+    if (_probeTypeParams.count(n)) return true;   // the template being probed — see checkUninstantiatedTemplates
     for (auto& kv : _genericTypeParams)
         for (auto& p : kv.second) if (p == n) return true;
     return false;
@@ -9718,6 +9719,78 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     _nsCtx = savedCtx;
 }
 
+// Walk every generic template NOBODY instantiates, for its diagnostics alone. See the header for why this
+// exists at all (short version: `analyze()` IS `emit()`, and the emit walk skips a template body, so every
+// rule in this file was invisible inside an uninstantiated generic by construction).
+//
+// This is `emitGenericInst` minus `bindInstParams` and aimed at a throwaway sink: same ref-unit scope, same
+// declaring-file scope, same home namespace, so a diagnostic lands on the template's own file and line and
+// a reference recorded from the body belongs to the template's unit. The one thing an instantiation has
+// that a probe does not is a type binding, and leaving `_typeSubst` empty is the entire difference — `T`
+// stays `T`, which is what makes the walk safe to run without inventing an argument nobody wrote.
+void CEmitter::checkUninstantiatedTemplates()
+{
+    if (_generics.empty()) return;
+
+    // Which templates a real instantiation already covered. Built once — `_genericInsts` is keyed by
+    // MANGLED name, so the template key is in the value, and asking per template would be quadratic.
+    std::set<std::string> instantiated;
+    for (auto& kv : _genericInsts) instantiated.insert(kv.second.templateKey);
+
+    std::ostringstream sink;
+    std::ostream* savedOut = _out;
+    NsCtx savedCtx = _nsCtx;
+    _out = &sink;
+    _probingTemplate = true;   // unknown-type diagnostics defer from here on — see deferUnknownWhileProbing
+
+    // `_generics` is a std::map, so this order is the sorted template key — a diagnostic's position in the
+    // output must not depend on hash iteration order.
+    for (auto& kv : _generics) {
+        const std::string& key = kv.first;
+        FunctionDeclarationNode* tmpl = kv.second;
+        if (!tmpl || !tmpl->block || !tmpl->typeParams || tmpl->typeParams->empty()) continue;
+        if (instantiated.count(key)) continue;      // already walked, with real types — do not diagnose twice
+
+        RefUnitScope refScope(this, unitOfDecl(tmpl));
+        auto dfIt = _genericDeclFile.find(key);
+        ScopedStr _edf(_emitDeclFile, dfIt == _genericDeclFile.end() ? std::string() : dfIt->second);
+
+        auto cit = _genericCtx.find(key);
+        _nsCtx = (cit != _genericCtx.end()) ? cit->second : savedCtx;
+
+        // The template's own params, so `isTypeParamName` answers for them. Restored per template rather
+        // than accumulated: two templates' `T`s are different types, and a name that is a param HERE must
+        // not stay one for the next body walked.
+        std::set<std::string> savedProbe = _probeTypeParams;
+        _probeTypeParams.clear();
+        for (auto& tp : *tmpl->typeParams) if (tp) _probeTypeParams.insert(*tp);
+
+        const int  errsBefore = _unsupported;
+        const long defBefore = _probeDeferred;
+        const long resBefore = _probeResolved;
+        const std::string probeName = key + "__probe";
+        emitFunction(tmpl, &probeName);   // nameOverride => `static` linkage, and no entry-point mangling
+
+        // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred. The last
+        // two columns are the blind spot and its denominator — what a bound `T` would have let this walk
+        // decide and an unbound one could not, against what it decided anyway. See setProbeReport.
+        if (_probeReport)
+            std::fprintf(stdout, "probe\t%s\t%s\t%d\t%zu\t%ld\t%ld\t%ld\n",
+                         key.c_str(), _emitDeclFile.empty() ? "<prelude>" : _emitDeclFile.c_str(),
+                         tmpl->line, tmpl->typeParams->size(),
+                         (long)(_unsupported - errsBefore), _probeDeferred - defBefore,
+                         _probeResolved - resBefore);
+
+        _probeTypeParams = savedProbe;
+        sink.str(std::string());          // one body's worth of C at a time, not the whole corpus
+    }
+
+    _probingTemplate = false;
+    _out = savedOut;
+    _nsCtx = savedCtx;
+    _probeTypeParams.clear();
+}
+
 // MCU 6b-1: after generic instantiations are discovered, register any collection whose size DERIVES from a
 // const param (`InlineArray<T, (N+1)>`) by binding each instantiation's const args so `constValue` folds
 // the size. The whole-program pre-pass (collectCollections) ran with NO bindings, so it could only register
@@ -16662,6 +16735,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // Turbofish `f::<…>` that didn't resolve to a generic instantiation -> the target isn't a generic
     // function. Reject rather than silently drop the type arguments.
     if (call->identifier->genericArgs) {
+        // A turbofish inside an uninstantiated template forwards the enclosing `T` (`sortWith::<T, C>`), so
+        // `explicitGenericInst` deferred it and there is no instantiation to route to — absence, not error.
+        if (deferUnknownWhileProbing()) return "0";
         unsupported(("`" + name + "::<…>` — turbofish type arguments are only valid on a generic function").c_str(), call->line);
         return "0";
     }
@@ -16889,6 +16965,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          + disp + "::<...>::" + name + "(...)`").c_str(), call->line);
             return "0";
         }
+        // `Natural<T>::compare(...)` — the qualifier names a generic instance that has none yet.
+        if (deferUnknownWhileProbing()) return "0";
         unsupported(("`" + *qual->back() + "::" + name + "` — scope-qualified call resolves to no known "
                      "function").c_str(), call->line);
         return "0";
@@ -20281,7 +20359,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
             unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
                          + "` is a static function — call it with `" + disp + "::<...>::" + method
                          + "(...)`").c_str(), call->line);
-        else
+        // The sibling branch above stays live under a probe: calling a static through dot-on-type is the
+        // wrong spelling whatever `T` turns out to be. THIS one is pure absence — `DynamicArray<T>.new()`
+        // has no instance to name until something instantiates the enclosing template.
+        else if (!deferUnknownWhileProbing())
             unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
                          + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "
                          "inferred").c_str(), call->line);
@@ -20725,9 +20806,14 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         }
     }
     if (cls.empty() || !_classes.count(cls)) {
+        if (deferUnknownWhileProbing()) return "0";   // `d.length()` on a `DynamicArray<T>` — see the header
         unsupported("method call on unresolved receiver", call->line);
         return "0";
     }
+    // The other side of that tally: a receiver the probe DID resolve, so this call site is fully checked.
+    // Deferred-vs-resolved is what makes `--probe-templates` answer "how much of a template body can a
+    // walk with no type binding actually see", rather than just "how much did it give up on".
+    if (_probingTemplate) ++_probeResolved;
     // `.chars()`/`.split()` build a BORROWING iterator (Chars/Split) as a compound literal that reads each
     // operand TWICE (.data/.len) and borrows its bytes for the WHOLE loop. An owned/side-effecting rvalue
     // operand (`s.trim()`, `a + b`) is materialized ONCE into a scope-dtor'd temp (stable + read-once,
@@ -22009,6 +22095,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     collectProgram({unit});
     emitHeaderContent({unit});
     emitModuleContent(unit);
+    checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     return _unsupported;
 }
 
@@ -22039,5 +22126,6 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
         *_out << "#include \"" << headerName << "\"\n\n";
         emitModuleContent(units[i]);
     }
+    checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     return _unsupported;
 }

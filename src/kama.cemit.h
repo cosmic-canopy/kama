@@ -542,6 +542,12 @@ public:
     // lands — its whole job is to answer "how big is the corpus change" with a count instead of a
     // guess. See `noteNumericHandoff`.
     void setStrictNumeric(bool on) { _strictNumericScan = on; }
+    // Measure what `checkUninstantiatedTemplates` reaches. Hidden, off by default, same shape and same
+    // reason as `--strict-numeric`: one TSV row per probed template on stdout, whose last column is the
+    // count of diagnostics DEFERRED because a type was unknown rather than wrong. That column is the
+    // point — it is the half of an uninstantiated body this pass cannot see, and a measurement that hid
+    // its own blind spot would be worse than no measurement.
+    void setProbeReport(bool on) { _probeReport = on; }
 
 
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
@@ -998,6 +1004,32 @@ private:
     std::map<std::string, std::string> _genericDeclFile;            // template cName -> declaring file (diagFile)
     std::map<std::string, NsCtx>                    _genericCtx;    // template cName -> home namespace ctx
     std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
+    // The type params of the template `checkUninstantiatedTemplates` is currently probing. A generic
+    // FUNCTION's params live nowhere else: `_genericTypeParams` holds generic classes'/enums' only, and
+    // `_typeSubst` is deliberately empty during a probe (that is what keeps `T` symbolic). Without this
+    // every probed `T` would reach `checkTypeResolves` as an unknown type. Read by `isTypeParamName`.
+    std::set<std::string>                           _probeTypeParams;
+    bool                                            _probingTemplate = false;  // inside the probe walk
+    long                                            _probeDeferred   = 0;      // the blind-spot tally
+    long                                            _probeResolved   = 0;      // its denominator: sites fully checked
+    bool                                            _probeReport     = false;  // `--probe-templates`
+
+    // A diagnostic that fires because a type is UNKNOWN, not because something is concretely wrong.
+    //
+    // The four that exist ("method call on unresolved receiver", the turbofish and scope-qualified-call
+    // rejections, and "cannot tell which `X` to construct") are all sound at an INSTANTIATION, where every
+    // type is bound — and all four are unsound during a probe, where `T` is symbolic on purpose. Measured
+    // before this existed: they rejected 81 of 640 corpus fixtures, every one of them valid generic code.
+    //
+    // So a probe DEFERS them, to the instantiation that will resolve the type and re-raise them properly,
+    // and counts what it deferred. The tally is the point: it is precisely the half of an uninstantiated
+    // body this pass cannot see, and reporting it is what keeps the pass from reading as "checked" when it
+    // means "checked the concrete half" (`--probe-templates` prints it per template).
+    //
+    // Note what does NOT come through here: a receiver whose class IS resolved and lacks the method, an
+    // `int32` initialized with a string, a call to a name that exists nowhere. Those are wrong at every
+    // instantiation, so the probe reports them, which is the whole reason the pass exists.
+    bool deferUnknownWhileProbing() { if (!_probingTemplate) return false; ++_probeDeferred; return true; }
     // generic call site -> (enclosing type-substitution signature -> instantiation mangled name). A call
     // inside a generic TYPE's member is ONE AST node serving every instantiation of that type, so the node
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
@@ -1763,6 +1795,22 @@ private:
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line);  // unresolved type name -> missing-import / unknown-type diagnostic
     void checkDeclaredTypes(const std::vector<SharedCompilationUnit>& units);  // the same check over every DECLARED type (param/return/field)
+    // Every generic template NOBODY instantiates, walked once for its diagnostics alone.
+    //
+    // `analyze()` IS `emit()`, and the emit walk SKIPS a template body (`emitModuleContent`'s
+    // `fn->typeParams` continues) — so every rule in this file is invisible inside an uninstantiated
+    // generic BY CONSTRUCTION, and four distinct errors in one built clean. The fix is not another rule:
+    // it is to stop skipping the body. This re-emits each such body into a throwaway sink with the type
+    // params left SYMBOLIC (`_typeSubst` empty — `emitGenericInst` minus `bindInstParams`), so the whole
+    // rule set applies to the concrete half of the body and keeps applying as rules are added.
+    //
+    // A `T`-typed expression goes quiet on its own: `cType` hands an unresolved name back unchanged, so it
+    // lands in the `exprClass == ""` bucket ~40 callers already read as "not a class, take the raw-C path".
+    // That is the pass's REACH, not a gap it hides — `--probe-templates` reports it as a column.
+    //
+    // Runs LAST, after every real emission: instantiation discovery is finished by then, so the walk
+    // cannot register work the program does not use, and nothing downstream reads what it touches.
+    void checkUninstantiatedTemplates();
     // A qualified type spelling reaches no further than an `import` would: reject one naming a symbol its
     // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
     // clause alone, without the resolution half. Caller owns `_nsCtx`.
