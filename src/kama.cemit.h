@@ -1088,7 +1088,10 @@ private:
     std::map<std::string, std::string> _opaqueDisplay;
     struct ProbeSnapshot {
         std::set<std::string> classes, interfaces, typeInsts, typeInstOf, typeInstCtx,
-                              collections, contractInsts, contractInstCtx, primConf;
+                              collections, contractInsts, contractInstCtx, primConf, fnInsts;
+        // Keyed by AST node, not by name: a turbofish resolved during the walk records its callee per
+        // call site, and those entries name an instance the walk is about to erase.
+        std::set<const InvocationNode*> callInsts;
         size_t typeInstOrder = 0, collectionOrder = 0;
     };
     ProbeSnapshot _probeSnap;

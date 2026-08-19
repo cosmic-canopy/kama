@@ -9800,9 +9800,9 @@ CEmitter::DeferKind CEmitter::classifyDeferredReceiver(SharedExpression recv)
 // what appeared. Keyed rather than instrumented at each insertion site because the registration paths are
 // deep and transitive: a missed site would leak silently, and "silently" is the failure mode this whole
 // campaign is about.
-template <class M> static void snapKeys(const M& m, std::set<std::string>& out)
+template <class M, class S> static void snapKeys(const M& m, S& out)
 { out.clear(); for (auto& kv : m) out.insert(kv.first); }
-template <class M> static void eraseNew(M& m, const std::set<std::string>& snap)
+template <class M, class S> static void eraseNew(M& m, const S& snap)
 { for (auto it = m.begin(); it != m.end(); ) { if (snap.count(it->first)) ++it; else it = m.erase(it); } }
 
 void CEmitter::probeSandboxBegin()
@@ -9815,6 +9815,8 @@ void CEmitter::probeSandboxBegin()
     snapKeys(_collections,           _probeSnap.collections);
     snapKeys(_genericContractInstCtx,_probeSnap.contractInstCtx);
     snapKeys(_primConformances,      _probeSnap.primConf);
+    snapKeys(_genericInsts,          _probeSnap.fnInsts);      // a turbofish resolved mid-walk registers one
+    snapKeys(_callInst,              _probeSnap.callInsts);
     _probeSnap.contractInsts = _genericContractInsts;             // already a set of names
     _probeSnap.typeInstOrder   = _genericTypeInstOrder.size();
     _probeSnap.collectionOrder = _collectionOrder.size();
@@ -9830,6 +9832,8 @@ void CEmitter::probeSandboxEnd()
     eraseNew(_collections,            _probeSnap.collections);
     eraseNew(_genericContractInstCtx, _probeSnap.contractInstCtx);
     eraseNew(_primConformances,       _probeSnap.primConf);
+    eraseNew(_genericInsts,           _probeSnap.fnInsts);
+    eraseNew(_callInst,               _probeSnap.callInsts);
     _genericContractInsts = _probeSnap.contractInsts;
     _opaqueDisplay.clear();          // diagnostics render eagerly, so nothing needs this past the walk
     // The two ORDER vectors are append-only registration logs; a probe can only have pushed onto the end.
@@ -17166,6 +17170,26 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     // Turbofish `f::<…>` that didn't resolve to a generic instantiation -> the target isn't a generic
     // function. Reject rather than silently drop the type arguments.
     if (call->identifier->genericArgs) {
+        // While PROBING there is no recorded instantiation for a turbofish, because the discovery pass
+        // never walks a body nobody instantiates — `_callInst` is populated there, not here. The type
+        // arguments ARE resolvable now (the enclosing parameters are bound to opaque types), so do what
+        // discovery would have done, on demand. Without this the whole call is skipped, and with it the
+        // callee's parameter names, arity and argument types are checked like any other call.
+        if (_probingTemplate) {
+            const std::string k = resolveFunc(name, call->identifier->qualifier);
+            auto git = _generics.find(k);
+            if (git != _generics.end()) {
+                GenericInst gi;
+                if (explicitGenericInst(git->second, k, call->identifier->genericArgs, call->line, gi)) {
+                    if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
+                    const FuncSig& tsig = _funcs[k];
+                    recordRef(k, call->identifier.get());   // the reference is to the TEMPLATE, as above
+                    ++_probeResolved;
+                    return placeWrap(emitReorderedCall(gi.mangledName, "", tsig.params, call->args,
+                                                       call->line), tsig.isPlaceReturn);
+                }
+            }
+        }
         // A turbofish inside an uninstantiated template forwards the enclosing `T` (`sortWith::<T, C>`), so
         // `explicitGenericInst` deferred it and there is no instantiation to route to — absence, not error.
         if (deferUnknownWhileProbing(DK_Turbofish)) return "0";

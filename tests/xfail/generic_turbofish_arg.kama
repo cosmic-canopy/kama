@@ -1,0 +1,13 @@
+// A turbofish forwarding the enclosing parameters (`helper::<T>`) is how one generic calls another, and it
+// was the last thing in an uninstantiated body that nothing checked: `_callInst` is populated by the
+// DISCOVERY pass, which never walks a body nobody instantiates, so the call was skipped whole — wrong
+// argument name, wrong arity and wrong type all alike.
+//
+// With the enclosing parameters bound to opaque types the call resolves on demand, exactly as discovery
+// would have resolved it, so the callee's signature is checked here.
+fn void helper<T>(T value, isize count) { }
+
+fn void neverCalled<T>(T x) {
+    helper::<T>(value: x, cont: 1);     // ERROR: no parameter named `cont`
+}
+fn int32 main() { return 0; }
