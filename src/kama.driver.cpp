@@ -1908,10 +1908,6 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
-    // Set to notice a manifest still spelling the entry field `main` (renamed pre-1.0). Nothing ACCEPTS
-    // the old key — one way to do a thing — but `kama run` needs to tell "you have no entry" apart from
-    // "your entry is under the old name", which are the same silence to a reader looking at the file.
-    bool* sawLegacyMainOut = nullptr;
     std::vector<std::string>* sourcesOut  = nullptr;
     std::vector<std::string>* projectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
@@ -1932,6 +1928,7 @@ struct ManifestReader {
 
     void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
     bool fail(const char* m) { if (err.empty()) err = m; return false; }
+    bool fail(const std::string& m) { if (err.empty()) err = m; return false; }
 
     bool str(std::string& out) {
         ws(); if (i >= s.size() || s[i] != '"') return fail("expected a string");
@@ -2294,24 +2291,34 @@ struct ManifestReader {
             std::string key; if (!str(key)) return false;
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a key");
             ++i;
+            // RECOGNITION is unconditional; only STORAGE is sink-guarded. Every caller sets one or two
+            // sinks and leaves the rest null, so folding the two together — `key == "sources" && sourcesOut`
+            // — sent a known key the caller did not ask for down the same path as a typo. That is why
+            // rejecting unknown keys could not simply be bolted onto the final `else`: it would have
+            // rejected `name` whenever the reader was loading `sources`. Split, every one of the eleven
+            // loadManifest* wrappers validates the WHOLE file for free.
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "select") { if (!selectObject()) return false; }   // build-config groups
-            else if (key == "dependencies" && deps) { if (!depsObject(deps)) return false; }
-            else if (key == "dev-dependencies" && devDeps) { if (!depsObject(devDeps)) return false; }
-            else if (key == "registries" && registriesOut) { if (!registriesObject(registriesOut)) return false; }
-            else if (key == "overrides" && overridesOut) { if (!depsObject(overridesOut)) return false; }  // kama.local.json dep path-overrides (M5.3)
-            else if (key == "log" && logOut) { if (!logObject()) return false; }   // baked log default (M5)
-            else if (key == "sources" && sourcesOut) { if (!stringArray(*sourcesOut)) return false; }  // LSP project scope
-            else if (key == "projects" && projectsOut) { if (!stringArray(*projectsOut)) return false; } // sub-projects
-            else if (key == "entry" && entryOut) { if (!str(*entryOut)) return false; }   // entry `.kama` (read by `kama run`)
-            else if (key == "out" && outDirOut) { if (!str(*outDirOut)) return false; }   // build output root (default "out")
-            // The pre-1.0 spelling. Not accepted — skipped like any unknown key — but remembered, so the
-            // `kama run` failure can name the rename instead of claiming there is no entry at all.
-            else if (key == "main" && sawLegacyMainOut) { *sawLegacyMainOut = true; if (!skipValue()) return false; }
-            else if (key == "toolchain" && toolchainOut) { if (!str(*toolchainOut)) return false; }   // pin (read by the selector)
-            else if (key == "name" && nameOut) { if (!str(*nameOut)) return false; }
-            else if (key == "version" && versionOut) { if (!str(*versionOut)) return false; }
-            else if (!skipValue()) return false;         // name / version / future package keys
+            else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
+            else if (key == "dev-dependencies") { if (devDeps) { if (!depsObject(devDeps)) return false; } else if (!skipValue()) return false; }
+            else if (key == "registries") { if (registriesOut) { if (!registriesObject(registriesOut)) return false; } else if (!skipValue()) return false; }
+            else if (key == "overrides") { if (overridesOut) { if (!depsObject(overridesOut)) return false; } else if (!skipValue()) return false; }  // kama.local.json dep path-overrides (M5.3)
+            else if (key == "log") { if (logOut) { if (!logObject()) return false; } else if (!skipValue()) return false; }   // baked log default (M5)
+            else if (key == "sources") { if (sourcesOut) { if (!stringArray(*sourcesOut)) return false; } else if (!skipValue()) return false; }  // LSP project scope
+            else if (key == "projects") { if (projectsOut) { if (!stringArray(*projectsOut)) return false; } else if (!skipValue()) return false; } // sub-projects
+            else if (key == "entry") { if (entryOut) { if (!str(*entryOut)) return false; } else if (!skipValue()) return false; }   // entry `.kama` (read by `kama run`)
+            else if (key == "out") { if (outDirOut) { if (!str(*outDirOut)) return false; } else if (!skipValue()) return false; }   // build output root (default "out")
+            // The pre-1.0 spelling of `entry`. Rejected HERE rather than skipped-and-remembered, so every
+            // command says so and not just `kama run` — npm's `main` names a library's entry point for
+            // importers, kama's names the `kama run` target, and silently ignoring it meant a manifest that
+            // visibly declared an entry behaved as though it had none.
+            else if (key == "main")
+                return fail("`main` is now `entry` — npm's `main` names a library's entry point for "
+                            "importers, kama's names the `kama run` target. Rename the key");
+            else if (key == "toolchain") { if (toolchainOut) { if (!str(*toolchainOut)) return false; } else if (!skipValue()) return false; }   // pin (read by the selector)
+            else if (key == "name") { if (nameOut) { if (!str(*nameOut)) return false; } else if (!skipValue()) return false; }
+            else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
+            else return fail("unknown key `" + key + "`");
             ws();
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -2430,11 +2437,10 @@ static bool loadManifestLocalInstall(const std::string& path, std::map<std::stri
 }
 
 // Load a `kama.json` manifest's `entry` field (the entry `.kama`, relative to the manifest). Reuses
-// ManifestReader; `entryOut` is left empty if the field is absent. `sawLegacyMain` reports a manifest
-// still using the pre-1.0 name `main`, so the caller can name the rename rather than the absence.
-// Returns false + sets `err` on malformed JSON. (M2.3 — read by `kama run` when no file is passed.)
-static bool loadManifestEntry(const std::string& path, std::string& entryOut, bool& sawLegacyMain,
-                              std::string& err)
+// ManifestReader; `entryOut` is left empty if the field is absent. Returns false + sets `err` on malformed
+// JSON — which now includes a manifest still spelling the key `main`, rejected by the reader itself.
+// (M2.3 — read by `kama run` when no file is passed.)
+static bool loadManifestEntry(const std::string& path, std::string& entryOut, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
@@ -2442,7 +2448,6 @@ static bool loadManifestEntry(const std::string& path, std::string& entryOut, bo
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
     r.entryOut = &entryOut;
-    r.sawLegacyMainOut = &sawLegacyMain;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -6404,20 +6409,14 @@ int main(int argc, char** argv)
             fprintf(stderr, "kama run: no input file and no kama.json in this directory\n"); return 2;
         }
         std::string entryRel, merr;
-        bool sawLegacyMain = false;
-        if (!loadManifestEntry(manifest, entryRel, sawLegacyMain, merr)) {
+        // The legacy `main` spelling no longer reaches here: ManifestReader rejects it by name, so the
+        // rename is reported for every command rather than only for this one.
+        if (!loadManifestEntry(manifest, entryRel, merr)) {
             fprintf(stderr, "kama run: %s: %s\n", manifest.c_str(), merr.c_str()); return 2;
         }
         if (entryRel.empty()) {
-            // Two silences that look identical in the file. Distinguish them, or a manifest that
-            // visibly names an entry gets told it has none.
-            if (sawLegacyMain)
-                fprintf(stderr, "kama run: %s uses \"main\", which is now \"entry\" — npm's `main` names a "
-                                "library's entry point for importers, kama's names the `kama run` target. "
-                                "Rename the key.\n", manifest.c_str());
-            else
-                fprintf(stderr, "kama run: %s has no \"entry\" (add \"entry\": \"src/app.kama\") or pass a file\n",
-                        manifest.c_str());
+            fprintf(stderr, "kama run: %s has no \"entry\" (add \"entry\": \"src/app.kama\") or pass a file\n",
+                    manifest.c_str());
             return 2;
         }
         std::string mdir = dirName(manifest);

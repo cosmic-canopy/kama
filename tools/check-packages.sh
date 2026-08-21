@@ -313,15 +313,9 @@ if ( cd "$t14" && "$KAMA" run ) >"$tmp/r14b.out" 2>&1; then
     echo "check-packages: FAIL — kama run with no \"entry\" was not rejected" >&2; exit 1; fi
 grep -qi 'no "entry"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-entry run error unclear:" >&2; sed 's/^/  /' "$tmp/r14b.out" >&2; exit 1; }
 
-# 14b. The pre-1.0 spelling. `main` is NOT accepted (one way to do a thing), but a manifest that visibly
-#      names an entry must not be told it has none — the error has to name the rename. A prose claim that
-#      something is rejected has no guard unless a case proves it, so this is that case.
-t14c="$tmp/t14c"; mkdir -p "$t14c/src"
-printf 'fn int32 main() { return 0; }\n' > "$t14c/src/app.kama"
-printf '{ "name": "t14c", "version": "0.1.0", "main": "src/app.kama" }\n' > "$t14c/kama.json"
-if ( cd "$t14c" && "$KAMA" run ) >"$tmp/r14c.out" 2>&1; then
-    echo "check-packages: FAIL — kama run accepted the legacy \"main\" key" >&2; exit 1; fi
-grep -q 'now "entry"' "$tmp/r14c.out" || { echo "check-packages: FAIL — legacy-main error does not name the rename:" >&2; sed 's/^/  /' "$tmp/r14c.out" >&2; exit 1; }
+# 14b. The pre-1.0 `main` spelling MOVED to tools/check-manifest.sh. It stopped being a `kama run` fact
+#      when the manifest reader started rejecting the key by name — every command reports it now, so it
+#      belongs with the rest of the schema rejections rather than here among the run-command cases.
 
 # ---- M3.0: SemVer version ranges (git+version, no rev) -----------------------------------------------
 # A single repo tagged across several versions; each tagged commit returns a version-distinguishable value
