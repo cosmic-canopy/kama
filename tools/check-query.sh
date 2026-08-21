@@ -515,7 +515,7 @@ reject --refs 9:11 -- "gearapp.kama"
 dep="$tmp/depproj"
 mkdir -p "$dep/geo" "$dep/app"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "sources": ["."] }
+{ "name": "geo", "version": "1.0.0", "kind": "library", "sources": ["."] }
 JSON
 cat > "$dep/geo/geo.kama" <<'KAMA'
 namespace geo;
@@ -526,7 +526,7 @@ type value Point {
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
-{ "name": "app", "version": "0.1.0", "entry": "app.kama", "sources": ["."],
+{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "app.kama", "sources": ["."],
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
 cat > "$dep/app/app.kama" <<'KAMA'

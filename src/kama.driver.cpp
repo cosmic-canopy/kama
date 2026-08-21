@@ -1908,6 +1908,7 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* deps = nullptr;      // set to capture `dependencies` (else it's skipped)
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
+    std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::vector<std::string>* sourcesOut  = nullptr;
     std::vector<std::string>* projectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
@@ -2307,6 +2308,15 @@ struct ManifestReader {
             else if (key == "sources") { if (sourcesOut) { if (!stringArray(*sourcesOut)) return false; } else if (!skipValue()) return false; }  // LSP project scope
             else if (key == "projects") { if (projectsOut) { if (!stringArray(*projectsOut)) return false; } else if (!skipValue()) return false; } // sub-projects
             else if (key == "entry") { if (entryOut) { if (!str(*entryOut)) return false; } else if (!skipValue()) return false; }   // entry `.kama` (read by `kama run`)
+            // Validated HERE rather than only where it is consumed, because the value set is closed and a
+            // caller that does not read `kind` would otherwise let `"kind": "libary"` through unexamined.
+            else if (key == "kind") {
+                std::string k;
+                if (!str(k)) return false;
+                if (k != "library" && k != "executable")
+                    return fail("`kind` must be \"library\" or \"executable\", not \"" + k + "\"");
+                if (kindOut) *kindOut = k;
+            }
             else if (key == "out") { if (outDirOut) { if (!str(*outDirOut)) return false; } else if (!skipValue()) return false; }   // build output root (default "out")
             // The pre-1.0 spelling of `entry`. Rejected HERE rather than skipped-and-remembered, so every
             // command says so and not just `kama run` — npm's `main` names a library's entry point for
@@ -2466,6 +2476,21 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
     return true;
 }
 
+// Load a `kama.json` manifest's `kind` — "library" or "executable", the two things a project can be.
+// REQUIRED of a project manifest, so an empty result on success means the key is absent and the caller
+// must reject it; the value itself is validated by the reader. Returns false + `err` on malformed JSON.
+static bool loadManifestKind(const std::string& path, std::string& kindOut, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.kindOut = &kindOut;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
 // Load a `kama.json` manifest's `toolchain` pin (the version the selector should run for this project).
 // `tcOut` is left empty if the field is absent. Returns false + sets `err` only on malformed JSON. Reused by
 // the PATH selector — a cheap read of one key, done *before* any compiler runs. (M1.)
@@ -2606,6 +2631,23 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         const std::string& manifest = req.manifest;
         std::set<std::string> declared, defaults;
         std::string dfltTarget;                       // `select.TARGET` value carrying `"default": true`
+
+        // `kind` is REQUIRED. A project is a library or an executable, and nothing inferred it before —
+        // the only thing that ever read `entry`'s presence was `kama run`, and it read it as an entry
+        // point, not as a kind. Enforced here because this is the one place a manifest is validated as
+        // THIS project's manifest rather than mined for one key.
+        //
+        // Deliberately NOT enforced on a dependency's manifest yet: the rule that reads a dependency's
+        // kind is "only a library can be imported", which does not exist until the visibility phase.
+        // Enforcing it here early would be enforcement with no rule behind it.
+        std::string kind;
+        if (!loadManifestKind(manifest, kind, err)) { err = manifest + ": " + err; return false; }
+        if (kind.empty()) {
+            err = manifest + ": no `kind` — every project states whether it is a \"library\" or an "
+                  "\"executable\" (add \"kind\": \"executable\")";
+            return false;
+        }
+
         if (!loadManifestFlags(manifest, declared, defaults, err)) { err = manifest + ": " + err; return false; }
         if (!reservedFlagCheck(manifest, declared, err)) return false;
         if (!loadManifestTargets(manifest, g_manifestTargets, g_selectGroups, err, &dfltTarget)) {
@@ -4961,9 +5003,13 @@ static std::string seedDefaultName(const std::string& dir)
 // Lowercase because the name is also a path component (.kama/deps/<importName>, the store label), and a
 // case-insensitive filesystem cannot tell `Geo` from `geo`.
 //
-// A LIBRARY is held to more: its name is what an importer writes after `import`, so it must also be a
-// legal kama IDENTIFIER. `import my-lib::{ … }` is a parse error, so a hyphenated library can never be
-// imported at all — better to refuse the name than to ship the dead end.
+// A PROJECT of either kind is held to more: its name is its ROOT NAMESPACE, so it must also be a legal
+// kama IDENTIFIER. `import my-lib::{ … }` is a parse error, so a hyphenated library could never be
+// imported at all — better to refuse the name than to ship the dead end — and an executable's own
+// symbols are qualified by the same name, so it is not the softer case it looks like. (The root-namespace
+// rule itself lands with module identity; seed applies it early so it never creates a project that rule
+// would reject. `mustBeImportable` stays parameterised for the monorepo ROOT, which is an aggregator with
+// no namespace of its own and becomes a workspace file rather than a project.)
 static bool seedValidName(const std::string& name, bool mustBeImportable, std::string& err)
 {
     const std::string ident = importNameOf(name);
@@ -4989,12 +5035,12 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
     if (ident.find('-') != std::string::npos) {
         std::string suggest = ident;
         for (char& c : suggest) if (c == '-') c = '_';
-        err = "a library is imported as `import " + ident + "::{ … }`, and '" + ident + "' is not a legal "
-              "kama identifier — try '" + suggest + "'";
+        err = "a project's name is its root namespace, and '" + ident + "' is not a legal kama identifier "
+              "— try '" + suggest + "'";
         return false;
     }
     if (kamaIsKeyword(ident.c_str())) {
-        err = "'" + ident + "' is a kama keyword, so `import " + ident + "::{ … }` cannot parse";
+        err = "'" + ident + "' is a kama keyword, so it cannot be a project's root namespace";
         return false;
     }
     if (ident == "std" || ident == "core") {
@@ -5045,8 +5091,12 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     std::string m = "{\n";
     m += "  \"name\": \""    + jsonEscape(name)    + "\",\n";
     m += "  \"version\": \"" + jsonEscape(version) + "\"";
-    if (kind == SeedKind::Executable) m += ",\n  \"entry\": \"src/app.kama\",\n  \"sources\": [\"src\"]";
-    else if (kind == SeedKind::Library) m += ",\n  \"sources\": [\"src\"]";
+    // `kind` is required of a project, and a monorepo ROOT is not one — it is a pure aggregator with no
+    // sources, no namespace and nothing to be a library or an executable OF. Emitting a kind for it would
+    // be a lie the reader would then have to make sense of.
+    if (kind == SeedKind::Executable)
+        m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\",\n  \"sources\": [\"src\"]";
+    else if (kind == SeedKind::Library) m += ",\n  \"kind\": \"library\",\n  \"sources\": [\"src\"]";
     else {
         // A monorepo root is a pure aggregator: it contributes no files of its own, only its members'.
         // An explicit list rather than a "libs/*" glob — kama does not get to invent a directory name
@@ -5105,7 +5155,7 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     }
 
     std::string verr;
-    if (!seedValidName(name, kind == SeedKind::Library, verr)) {
+    if (!seedValidName(name, kind != SeedKind::Monorepo, verr)) {
         fprintf(stderr, "kama seed: %s\n", verr.c_str()); return 2;
     }
     SemVer sv;

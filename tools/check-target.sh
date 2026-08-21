@@ -172,7 +172,7 @@ fi
 #     is flat.)
 rt="$tmp/rt"; mkdir -p "$rt"
 cat > "$rt/kama.json" <<'JSON'
-{ "name": "rt-demo", "version": "0.1.0",
+{ "name": "rt-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
 JSON
 cp "$THREADED" "$rt/app.kama"
@@ -183,7 +183,7 @@ if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
     exit 1
 fi
 #     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
-printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0",
+printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
 if "$KAMA" build --release --cc "echo" "$rt/app.kama" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
     echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
@@ -322,7 +322,7 @@ fi
 spec="$tmp/spec"
 mkdir -p "$spec"
 cat > "$spec/kama.json" <<'JSON'
-{ "name": "cross-demo", "version": "0.1.0",
+{ "name": "cross-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
                                    "sysroot": "/opt/rpi-sysroot",
                                    "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
@@ -350,7 +350,7 @@ fi
 dflt="$tmp/dflt"
 mkdir -p "$dflt"
 cat > "$dflt/kama.json" <<'JSON'
-{ "name": "board-only", "version": "0.1.0",
+{ "name": "board-only", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
 JSON
 cat > "$dflt/gated.kama" <<'KAMA'
@@ -426,7 +426,7 @@ fi
 # get yesterday's binary and no diagnostic. Belongs in this guard because the scoping IS the target axis.
 od="$tmp/outdir"; mkdir -p "$od/src"
 printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
-printf '{ "name": "od", "version": "0.1.0", "entry": "src/app.kama", "sources": ["src"] }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sources": ["src"] }\n' > "$od/kama.json"
 
 ( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>"$tmp/od1.err" || {
     echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
@@ -447,7 +447,7 @@ stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
     echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
 
 # the manifest's `out` key relocates the root
-printf '{ "name": "od", "version": "0.1.0", "entry": "src/app.kama", "sources": ["src"], "out": "artifacts" }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sources": ["src"], "out": "artifacts" }\n' > "$od/kama.json"
 ( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>&1
 [ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
     echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }

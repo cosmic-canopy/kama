@@ -187,7 +187,7 @@ LSRC='fn int32 add(int32 lhs, int32 rhs) { return lhs + rhs; }\nfn int32 useIt()
 dep="$tmp/depproj"
 mkdir -p "$dep/geo" "$dep/app"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "sources": ["."] }
+{ "name": "geo", "version": "1.0.0", "kind": "library", "sources": ["."] }
 JSON
 cat > "$dep/geo/geo.kama" <<'KAMA'
 namespace geo;
@@ -198,7 +198,7 @@ type value Point {
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
-{ "name": "app", "version": "0.1.0", "entry": "app.kama", "sources": ["."],
+{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "app.kama", "sources": ["."],
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
 cat > "$dep/app/app.kama" <<'KAMA'
@@ -216,7 +216,7 @@ depok=0
 # while the dependency above is NOT (inside the root, but not ours). A prefix test gets both backwards.
 mkdir -p "$tmp/own/proj" "$tmp/own/shared"
 cat > "$tmp/own/proj/kama.json" <<'JSON'
-{ "name": "own", "version": "0.1.0", "sources": [".", "../shared"] }
+{ "name": "own", "version": "0.1.0", "kind": "library", "sources": [".", "../shared"] }
 JSON
 cat > "$tmp/own/shared/shared.kama" <<'KAMA'
 namespace shared;
@@ -233,7 +233,7 @@ printf 'namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; retu
 # Layout (LSP 0-based): L4 `    public fn Result<usize, IoError> write(...` -> `write` at 37..42.
 mkdir -p "$tmp/impl"
 cat > "$tmp/impl/kama.json" <<'JSON'
-{ "name": "impl", "version": "0.1.0", "sources": ["."] }
+{ "name": "impl", "version": "0.1.0", "kind": "library", "sources": ["."] }
 JSON
 cat > "$tmp/impl/sink.kama" <<'KAMA'
 namespace sink;
@@ -261,7 +261,7 @@ cat > "$frws/kama.json" <<'JSON'
 { "name": "frws", "version": "0.1.0", "projects": ["apps/*", "libs/*"] }
 JSON
 cat > "$frws/libs/config/kama.json" <<'JSON'
-{ "name": "config", "version": "0.1.0", "sources": ["."] }
+{ "name": "config", "version": "0.1.0", "kind": "library", "sources": ["."] }
 JSON
 cat > "$frws/libs/config/config.kama" <<'KAMA'
 namespace config;
@@ -274,13 +274,13 @@ printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap()
 # remains. That is a real editing state — someone dropped the line from the manifest — and it is the state
 # in which the editor must speak up, since the code still resolves and builds where it sits.
 cat > "$frws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "sources": ["."],
+{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."],
   "dependencies": { "config": { "path": "../config" } } }
 JSON
 frok=0
 "$KAMA" pkg install "$frws/libs/net" >/dev/null 2>&1 && frok=1
 cat > "$frws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "sources": ["."] }
+{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."] }
 JSON
 FRURI=$(furi "$frws/libs/net/net.kama")
 FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
@@ -872,7 +872,7 @@ fi
 CFGSRC="$tmp/cfgcopy"
 mkdir -p "$CFGSRC"
 cp "$CFGDIR/app.kama" "$CFGSRC/app.kama"
-printf '{"name":"cfgprobe","version":"0.1.0","sources":["."],"flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
+printf '{"name":"cfgprobe","version":"0.1.0", "kind": "executable","sources":["."],"flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
 CFGB=$(cfgsession "$tmp/cfgB" "$tmp" "$CFGSRC/app.kama")
 cfgexpect "$CFGB" '"name":"onlyWithoutA"' "with the default off, the NEGATED decl is what survives"
 cfgreject "$CFGB" '"name":"onlyWithA"'    "...and the gated one is dropped, as a build would"
@@ -969,7 +969,7 @@ cfgexpect "$CFGA" '"flags":['                   "...plus the resolved @compileFo
 CFGSEL="$tmp/cfgsel"
 mkdir -p "$CFGSEL"
 cp "$CFGDIR/app.kama" "$CFGSEL/app.kama"
-printf '{"name":"cfgsel","version":"0.1.0","sources":["."],"flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
+printf '{"name":"cfgsel","version":"0.1.0", "kind": "executable","sources":["."],"flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
 CFGGRP=$(cfgsession "$tmp/cfgI" "$tmp" "$CFGSEL/app.kama")
 cfgexpect "$CFGGRP" '"CONSOLE":{"values":["XBOX","PS5"],"selected":"XBOX"}' "a project's own select group reaches the picker, with its default selected"
 cfgexpect "$CFGGRP" '"RPI"'                                                 "...and its own TARGET joins the built-in catalog"

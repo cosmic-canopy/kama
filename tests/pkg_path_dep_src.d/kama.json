@@ -1,6 +1,7 @@
 {
   "name": "pkg-path-dep-src",
   "version": "0.1.0",
+  "kind": "executable",
   "dependencies": {
     "geo": { "path": "./vendor/geo" }
   }

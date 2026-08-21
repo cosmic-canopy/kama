@@ -1,1 +1,1 @@
-{ "name": "core", "version": "0.1.0", "sources": ["src"] }
+{ "name": "core", "version": "0.1.0", "kind": "library", "sources": ["src"] }

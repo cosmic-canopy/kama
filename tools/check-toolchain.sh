@@ -82,7 +82,7 @@ grep -q "TOOLCHAIN vB" "$tmp/out" || fail "toolchain default vB did not switch t
 
 # ---- 3. a project pin beats the default (default is now vB) -------------------------------------------
 mkdir -p "$tmp/pinned"
-printf '{ "name": "p", "toolchain": "vA" }\n' > "$tmp/pinned/kama.json"
+printf '{ "name": "p", "kind": "executable", "toolchain": "vA" }\n' > "$tmp/pinned/kama.json"
 run sh -c "cd '$tmp/pinned' && '$SEL' build x.kama"
 grep -q "TOOLCHAIN vA" "$tmp/out" || fail "project pin vA did not beat the default vB"
 
@@ -122,7 +122,7 @@ grep -q "TOOLCHAIN vA" "$tmp/out" \
 
 # ---- 5. a pin to a missing version → a clear, actionable error ---------------------------------------
 mkdir -p "$tmp/missing"
-printf '{ "name": "m", "toolchain": "v9" }\n' > "$tmp/missing/kama.json"
+printf '{ "name": "m", "kind": "executable", "toolchain": "v9" }\n' > "$tmp/missing/kama.json"
 run sh -c "cd '$tmp/missing' && '$SEL' build x.kama"
 [ "$RC" != 0 ] || fail "a pin to a missing version did not error"
 grep -qi "not installed" "$tmp/out" && grep -q "toolchain install" "$tmp/out" \
@@ -130,7 +130,7 @@ grep -qi "not installed" "$tmp/out" && grep -q "toolchain install" "$tmp/out" \
 
 # ---- 6. `toolchain pin` writes the manifest; `uninstall` guards the default ---------------------------
 mkdir -p "$tmp/proj"
-printf '{ "name": "proj", "version": "0.1.0" }\n' > "$tmp/proj/kama.json"
+printf '{ "name": "proj", "version": "0.1.0", "kind": "executable" }\n' > "$tmp/proj/kama.json"
 run sh -c "cd '$tmp/proj' && '$KAMA' toolchain pin vA"
 [ "$RC" = 0 ] || fail "toolchain pin errored"
 grep -q '"toolchain": "vA"' "$tmp/proj/kama.json" || fail "toolchain pin did not write the manifest"

@@ -69,12 +69,12 @@ echo "check-manifest: an unknown key is an error, not a silent skip"
 # exactly like a key that did nothing — and the manifest is about to carry the module map, where a
 # swallowed key would mean a swallowed visibility decision.
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "sourses": ["src"] }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "sourses": ["src"] }
 JSON
 reject typo 'unknown key `sourses`' "a misspelled key names itself"
 
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "sources": ["src"] }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "sources": ["src"] }
 JSON
 accept typo "the correctly spelled key builds"
 
@@ -82,7 +82,7 @@ accept typo "the correctly spelled key builds"
 # recognized. `kama build` never captures `entry`/`version`, and before the split those fell down the
 # same path as a typo — this is the case that would regress if the two were re-fused.
 proj unasked <<'JSON'
-{ "name": "unasked", "version": "0.1.0", "entry": "src/app.kama", "toolchain": "v1",
+{ "name": "unasked", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "toolchain": "v1",
   "out": "artifacts", "sources": ["src"] }
 JSON
 accept unasked "keys this command does not read are still recognized"
@@ -91,7 +91,7 @@ accept unasked "keys this command does not read are still recognized"
 echo "check-manifest: the pre-1.0 \`main\` key names its rename"
 
 proj legacy <<'JSON'
-{ "name": "legacy", "version": "0.1.0", "main": "src/app.kama" }
+{ "name": "legacy", "version": "0.1.0", "kind": "executable", "main": "src/app.kama" }
 JSON
 reject legacy '`main` is now `entry`' "the legacy \`main\` key is refused by name"
 
@@ -106,9 +106,34 @@ else
 fi
 
 proj legacy <<'JSON'
-{ "name": "legacy", "version": "0.1.0", "entry": "src/app.kama" }
+{ "name": "legacy", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
 JSON
 accept legacy "the renamed \`entry\` key builds"
+
+# ---------------------------------------------------------------------------------------------------
+echo "check-manifest: \`kind\` is required, and its value set is closed"
+
+proj nokind <<'JSON'
+{ "name": "nokind", "version": "0.1.0", "sources": ["src"] }
+JSON
+reject nokind 'no `kind`' "a project with no \`kind\` is refused"
+
+# The value set is closed, and it is checked in the READER — so a near-miss is caught even on a command
+# that never reads the key. Without that, `"libary"` would be a well-formed string nobody looked at.
+proj badkind <<'JSON'
+{ "name": "badkind", "version": "0.1.0", "kind": "libary", "sources": ["src"] }
+JSON
+reject badkind '`kind` must be "library" or "executable"' "a misspelled \`kind\` value names the two"
+
+proj badkind <<'JSON'
+{ "name": "badkind", "version": "0.1.0", "kind": "library", "sources": ["src"] }
+JSON
+accept badkind "\`kind\`: library builds"
+
+proj badkind <<'JSON'
+{ "name": "badkind", "version": "0.1.0", "kind": "executable", "sources": ["src"] }
+JSON
+accept badkind "\`kind\`: executable builds"
 
 # ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2

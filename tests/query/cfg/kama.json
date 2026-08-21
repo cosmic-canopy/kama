@@ -1,6 +1,7 @@
 {
   "name": "cfgprobe",
   "version": "0.1.0",
+  "kind": "library",
   "sources": ["."],
   "flags": { "FEATURE_A": { "default": true } }
 }

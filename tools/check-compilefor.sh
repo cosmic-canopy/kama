@@ -57,7 +57,7 @@ fi
 proj="$tmp/proj"
 mkdir -p "$proj"
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "strict-demo", "version": "0.1.0", "flags": { "TELEMETRY": {} } }
+{ "name": "strict-demo", "version": "0.1.0", "kind": "executable", "flags": { "TELEMETRY": {} } }
 JSON
 cat > "$proj/app.kama" <<'KAMA'
 @compileFor(TELMETRY) fn int32 typo() { return 1; }
@@ -80,7 +80,7 @@ fi
 res="$tmp/reserved"
 mkdir -p "$res"
 cat > "$res/kama.json" <<'JSON'
-{ "name": "reserved-demo", "version": "0.1.0", "flags": { "WINDOWS": {} } }
+{ "name": "reserved-demo", "version": "0.1.0", "kind": "executable", "flags": { "WINDOWS": {} } }
 JSON
 cat > "$res/app.kama" <<'KAMA'
 fn int32 main() { return 0; }
@@ -139,7 +139,7 @@ fi
 sel="$tmp/sel"
 mkdir -p "$sel"
 cat > "$sel/kama.json" <<'JSON'
-{ "name": "sel-demo", "version": "0.1.0",
+{ "name": "sel-demo", "version": "0.1.0", "kind": "executable",
   "select": { "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
               "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } } }
 JSON

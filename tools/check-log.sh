@@ -85,7 +85,7 @@ fi
 mkdir -p "$tmp/proj"
 cp "$tmp/log.kama" "$tmp/proj/log.kama"
 cat > "$tmp/proj/kama.json" <<'JSON'
-{ "name": "logtest", "version": "0.1.0", "log": { "level": "info", "tags": { "audio": "debug" } } }
+{ "name": "logtest", "version": "0.1.0", "kind": "executable", "log": { "level": "info", "tags": { "audio": "debug" } } }
 JSON
 "$KAMA" build "$tmp/proj/log.kama" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
     echo "check-log: FAIL — baked-default build failed" >&2; sed 's/^/  /' "$tmp/proj.build.err" >&2; exit 1; }
@@ -118,7 +118,7 @@ fn int32 main() {
 }
 KAMA
 cat > "$tmp/proj/kama.json" <<'JSON'
-{ "name": "logtest", "version": "0.1.0", "log": { "level": "info", "tags": { "net": "trace" } } }
+{ "name": "logtest", "version": "0.1.0", "kind": "executable", "log": { "level": "info", "tags": { "net": "trace" } } }
 JSON
 cat > "$tmp/proj/kama.local.json" <<'JSON'
 { "log": { "level": "warn", "tags": { "audio": "debug" } } }
