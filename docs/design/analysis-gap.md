@@ -8,7 +8,7 @@ the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 values of one type* and *There is no implicit numeric conversion*), [docs/agents.md](../agents.md) and the
 git log. One row still points at this file:
 
-- **ROADMAP row 14 — test-infra holes** (§2 below). Unchanged and still open; it moved into the 1.0 gate
+- **ROADMAP row 12 — test-infra holes** (§2 below). Unchanged and still open; it moved into the 1.0 gate
   2026-08-19, so it is no longer a NEXT-track item.
 
 §1 — the uninstantiated-generic gap — **SHIPPED** `0.9.38`–`0.9.43`, and its design doc is deleted with
