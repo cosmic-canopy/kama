@@ -703,6 +703,15 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   io-adapter layer (§1 transform adapters), not a serde concern.
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `encode`/`decode`. `std::encoding::base64` is a separate small module.
+- **A back end's ENTRY POINTS are a convention, not a contract** — the defect the line above quietly
+  describes. `Serializer`/`Deserializer`/`Serialize`/`Deserialize` are real contracts
+  ([prelude/global.kama:207](../prelude/global.kama)), but `encode`/`decode`/`decodeFrom` are **bare free
+  functions**, duplicated per back end (`json.kama:198,538,546`, `binary.kama:253,263,270`) with nothing
+  checking that a back end supplies them or that their signatures agree. "A drop-in twin of the JSON back
+  end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
+  is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
+  measurement (`encode`, json vs binary) — see [design/module-system.md](design/module-system.md) §2b, which
+  is where it surfaced. Take it with the std-lib cleanup pass, not before.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with

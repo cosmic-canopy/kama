@@ -8,19 +8,27 @@ collisions* and *file-private C symbols are positional*), which are **not shippe
 because both are downstream of the model this doc replaces.
 
 The short version: kama today has **two ways to name a thing** — a `namespace` declaration and a
-filesystem path — and nothing keeps them in agreement. Five separate claims in SPEC.md turn out to be
+filesystem path — and nothing keeps them in agreement. Six separate claims in SPEC.md turn out to be
 prose with no enforcement behind them (§1). The C symbol defects are what that ambiguity looks like once
 it reaches the emitter. Fixing the naming without fixing the model would bake the ambiguity into the C
 ABI, so this is one campaign: **replace the model, and the symbol rule falls out of it.**
+
+The model in one paragraph: **five scopes — workspace → project → module → file → declaration — and only
+the top two get a manifest.** A project is a `kama.json`; its `name` is its root namespace. Modules are a
+**nested map** inside that manifest, mirroring the folder tree, so a module's name is the path of keys you
+read down to it and nothing else can change it. Every node declares a `visibility`, which is a list of
+modules or one of `children` / `internal` / `public`. A file exports with one `export` block; there is no
+`to`, no `private`, and no file is addressable anywhere in the model. The C symbol is
+`project · module path · symbol`, so the file contributes nothing.
 
 ---
 
 ## 1. Why — what was measured, not assumed
 
-Every row below was **run** against `0.9.45+g84c7c58`. The house rule is that a doc is not evidence; that
-rule is what produced this section, since all five were documented behaviors that do not hold.
+Every row below was **run**, not recalled. The house rule is that a doc is not evidence; that rule is what
+produced this section, since all of these were documented behaviors that do not hold.
 
-### 1a. Five unenforced claims
+### 1a. Six unenforced claims
 
 | # | the claim | what actually happens |
 |---|---|---|
@@ -29,9 +37,15 @@ rule is what produced this section, since all five were documented behaviors tha
 | 3 | *"a qualified spelling reaches no further than an `import` would"* — [SPEC:3164](../SPEC.md) | enforced in **type positions only**. `import geo;` then `geo::secretFn()` on a **non-exported** function **builds, links and runs (exit 0)**. Same for `geo::Secret.make(…)`. The per-symbol import of the same name *is* rejected, so the two disagree |
 | 4 | — | `export { … }` in a file with **no** `namespace` is silently accepted and entirely inert: nothing can import such a file |
 | 5 | — | `export { };` is a **syntax error** — there is no way to spell an explicitly empty public surface |
+| 6 | *modules do not nest* — an early draft of §2b | **the stdlib itself nests**, in three places that fixtures import by name: `std::net::web` (2 files), `std::serialization::json`, `std::serialization::binary`. And `json::encode` vs `binary::encode` is the one real name collision in the whole library (§2b), so those two cannot be merged |
 
 Reproductions for 1, 3 and 4 are the smallest cases that show it; keep them as `xfail` fixtures when the
 rules land (§7), because a prose claim that something is rejected is unguarded without one.
+
+**Claim 5 dissolves rather than gets fixed** — see §4/D3. It was only a wart because claim 4 made the
+no-block case ambiguous. Once claim 4 closes, a file with no `export` block has one unambiguous meaning and
+needs no synonym, so `export { }` stays a syntax error. Four claims gain enforcement; the fifth stops
+being a defect.
 
 Two smaller warts found alongside: **unknown `kama.json` keys are silently skipped**
 ([kama.driver.cpp:2314](../../src/kama.driver.cpp)), so `"sourses": ["src"]` is accepted and ignored; and
@@ -53,6 +67,9 @@ cannot depend on a symbol, and a version-controlled `--keep-c` churns for nothin
 **filenames** carry the same index ([kama.driver.cpp:7186](../../src/kama.driver.cpp)). Note also that
 `_F4__` is a leading `_` followed by an uppercase letter — **reserved to the implementation for any use**
 by C11 §7.1.3. Today's output is already in C's reserved namespace.
+
+⚠️ **The `_N` filename suffix is not free to delete.** It exists because two source files may share a
+basename; the replacement must be **path-derived**, not bare-basename (§2e).
 
 **C keyword collisions.** Comparing kama's own 78 reserved words ([kama.l:380](../../src/kama.l)) against
 C11's 44, **27 C11 keywords are legal kama identifiers** — 17 ordinary lowercase words (`auto double
@@ -86,11 +103,60 @@ type enum Event { Resize(int32 union), … }
 The six: **struct fields · parameters · locals and bindings · vtable/contract slot names · enum and
 variant case names · `@generate` bag-ctor parameters** (which derive from field names).
 
+### 1c. Two more holes, found while designing the replacement
+
+**A declared workspace member that is not on disk is silently skipped.** `collectProjectDirs` returns on
+`!fileExists(manifest)` with no diagnostic ([kama.driver.cpp:473](../../src/kama.driver.cpp)), and
+`collectPackageTree` does the same ([:5599](../../src/kama.driver.cpp)). So a **typo'd member path and a
+deliberately-absent one are indistinguishable**. §2a makes absence a declared state.
+
+**Two `main`s are rejected for a reason the diagnostic misstates.** `qualify()` short-circuits on `main`
+*before* any scope prefixing — `if (name == "main") return "kama_main";` precedes the `_nsCtx.scope` check
+([kama.cemit.cpp:309](../../src/kama.cemit.cpp)) — so a `main` declared anywhere becomes `kama_main`
+regardless of scope. Two of them therefore collide where two ordinary names would not. **Run, not assumed:**
+
+```
+$K build a/one.kama b/two.kama          # namespace a; / namespace b;  — each with fn int32 main()
+kama: warning: unsupported duplicate function 'main' — kama has no overloading, so a name may be
+      declared only once in its namespace (first declared at line 2) at b/two.kama:2 (not yet lowered)
+exit 1, no artifact                     # correct outcome
+
+$K build a/one.kama b/two.kama          # same two files, `helper` instead of `main`
+kama: built /tmp/dupns                  # exit 0 — a__helper and b__helper are distinct
+```
+
+So the *behavior* is right: there can be one entry point, and the compiler enforces it before reaching C.
+What is wrong is how it says so — and the cause is that **there is only one message**
+([kama.cemit.cpp:5917](../../src/kama.cemit.cpp)), keyed on the mangled `sig.cName`, serving both the
+ordinary duplicate and the entry point. That single string has to describe two different rules, so for
+`main` it claims the name **"may be declared only once in its namespace"** when the two are in **different**
+namespaces — blaming a rule that did not fire.
+
+**This campaign has to touch it regardless, because the message names `namespace`, which §5 phase 2
+deletes.** Both halves need new wording, and they are not the same rule:
+
+| case | key | correct scope after this campaign |
+|---|---|---|
+| ordinary duplicate (`a__helper`) | project · module · symbol | **"only once in its module"** — the project root when the file is in none |
+| `main` (`kama_main`) | just `kama_main`, always | **"a project has one entry point"** — `main` is scoped by nothing, which is *why* two collide where two ordinary names would not |
+
+Two smaller repairs belong with them: the first location prints as `(first declared at line 2)` with **no
+filename** — the same empty-filename wart §1a notes, and `_funcs` holds the node without its unit, so the
+fix needs the unit threaded through. And it reports as `warning:` + "unlowered construct" rather than an
+error, a shape `run_tests.sh:443` already treats as failure.
+
 ---
 
 ## 2. The model
 
-### 2a. Projects
+### 2a. Projects and the workspace
+
+The scope ladder is **workspace → project → module → file → declaration**, and only the top two get a file:
+
+| file | where | mandatory | affects |
+|---|---|---|---|
+| `kama_workspace.json` | monorepo root | no | **tooling only** — LSP/rename scope, build & orchestration deps |
+| `kama.json` | project root | **yes** | identity, resolution, the module map, visibility, the C symbol |
 
 1. **A project requires a `kama.json`.** It is a **library** or an **executable**, stated by a new `kind`
    key. *Today the kind is inferred from whether `entry` is present and never recorded*
@@ -98,23 +164,118 @@ variant case names · `@generate` bag-ctor parameters** (which derive from field
    implicitly.
 2. **`name` is the root namespace**, for both kinds, and is unique. A library's name is already required
    to be a legal kama identifier because importers write it.
-3. **Projects do not nest.** `projects` is removed; a monorepo is sibling projects under a non-kama
-   parent. Enforced as: **no `kama.json` inside `source`**. (A path dependency vendored under `.kama/`
-   still has its own — that is a separate project, not nesting.)
+3. **Projects do not nest.** `projects` is **removed from `kama.json`** and becomes the `projects` key of
+   `kama_workspace.json`. Enforced as: **no `kama.json` inside `source`**. (A path dependency vendored
+   under `.kama/` still has its own — that is a separate project, not nesting.)
 4. **`sources` → `source`**, singular, defaulting to `"src"`. A list of roots would let `src/shapes/` and
    `gen/shapes/` silently be one module.
 5. **Unknown manifest keys are an error.**
 
-### 2b. Modules
+> **The invariant that makes the split safe: a project never reads its workspace manifest for anything
+> that affects compilation.** That is what keeps a project *extractable* — the property
+> [packages.md:179](../packages.md) already demands and CI-checks — and it is what lets a member be absent
+> at all. A project must build **identically whether or not its siblings are checked out.**
 
-6. **Folders are just folders.** Files and folders under `source` are project-global at any depth.
-7. **A folder becomes a module by containing a `kama_module.json`**, which names it (defaulting to the
-   folder name) and configures it. Nothing is a module by accident, and **folder layout never leaks into
-   the API** — the goal that rules out every derive-from-path scheme.
-8. **Modules do not nest**, by symmetry with projects. A file belongs to its **nearest ancestor module**,
-   else to the project root — the same nearest-manifest walk the driver already does
-   (`projectManifestDir`, [kama.driver.cpp:854](../../src/kama.driver.cpp)), reused rather than reinvented.
-9. **`kama_module.json` carries no `version`.** A project is the smallest shareable unit.
+6. **Every workspace entry states `optional` explicitly.** There is no bare `{}` and no default. A project
+   is the smallest shippable unit, so a checkout is routinely *partial*: sub-repos behind git submodules,
+   role-scoped trees (art vs. engine), a subtree externals are not given. Which members may be absent is
+   the first thing a reader of this file wants to know, so it is spelled at every entry rather than
+   inferred from silence.
+
+```json
+// kama_workspace.json
+{
+  "projects": {
+    "libs/*":         { "optional": false },   // the glob must match at least one project
+    "libs/core":      { "optional": false },   // absent is an ERROR naming the path
+    "tools/codegen":  { "optional": true  },   // absent is fine, contributes nothing
+    "art/pipeline":   { "optional": true  }
+  },
+  "dependencies": { }                           // build-time tooling, host-built — see §2d
+}
+```
+
+7. **`optional` is meaningful on a glob too**, which is why it is required there rather than excused: it
+   asks whether the glob may match *nothing*. `"libs/*": { "optional": false }` catches a mistyped root —
+   `libz/*` expanding to zero directories is the same class of bug as a missing project (§1c).
+
+Everything downstream — LSP file collection, `kama pkg install` across the workspace, build orchestration —
+simply skips absent optional projects, which is what it already does for all of them.
+
+*Non-goal:* the workspace does **not** police dependency edges. A mandatory project that path-depends on an
+optional one is a latent break in a minimal checkout, and only the workspace layer can see it — but it is a
+static lint, not a correctness rule, and the build already fails clearly for whoever hits it.
+
+### 2b. Modules — a nested map in `kama.json`
+
+8. **Folders are just folders.** A folder is a module **only** if it is listed in `modules`; folders
+   without an entry stay invisible. **Nothing joins the API by accident.**
+9. **The map is NESTED, mirroring the folder tree.** Each key is **one path segment** — a folder directly
+   inside its parent — and a node may carry its own `modules` for the folders inside it.
+
+```json
+"modules": {
+  ".":           { "visibility": "internal" },          // the project root: src/*.kama
+  "collections": { "visibility": "public",
+                   "modules": {
+                     "detail": { "visibility": ["collections"] }
+                   } },
+  "net":         { "visibility": "public",
+                   "modules": {
+                     "web": { "visibility": "public" }
+                   } },
+  "serialization": { "visibility": "children",          // holds no .kama files TODAY — it still declares
+                     "modules": {                       // an audience, and a NARROW parent does not
+                       "json":   { "visibility": "public" },   // confine its children: both are public
+                       "binary": { "visibility": "public" }
+                     } }
+}
+```
+
+10. **A module's name is the chain of keys read down to it**, joined by `::` — `net::web`,
+    `serialization::json`. `name` on a node **overrides that one segment**: the escape for a folder whose
+    name is not a legal identifier (`my-lib`) or simply is not the API word you want. A `::`-joined `name`
+    is an error — that would smuggle hierarchy past the nesting.
+11. **`visibility` is required on EVERY node** (§2c), including one whose folder holds no `.kama` files
+    today. Making it conditional on file presence would mean *adding a source file invalidates the
+    manifest* — the wrong coupling entirely. A folder that groups today can hold code tomorrow, and its
+    answer should already be written down.
+12. **`"."` is the project root** — the files under `source` in no module. It is the root's real path, not
+    a reserved word, so no folder can collide with it (none can be named `.`), it needs no escape rule, and
+    it is already established manifest notation (`"sources": ["."]` ships today). It carries `visibility`
+    like everything else and takes no `name`: the root's identity *is* the project name.
+13. **`kama_module.json` does not exist.** An earlier draft had a per-folder manifest, then a single flat
+    map at the source root. Both are superseded: one nested map inside `kama.json` means one file to read
+    and one place where a visibility decision can hide.
+
+> **The invariant that makes the errors unspellable:**
+> **a module's name is the path of keys you literally read down to it.** A sibling cannot change it.
+> Re-parenting it is a visible restructure of this file, not a one-line addition somewhere else. Nothing is
+> derived from anything you cannot see.
+
+**Why nested rather than a flat map with `/` keys — this is the load-bearing part.** Composition is what
+lets a folder tree have a name tree at all, but in a *flat* map composition is inferred from what other
+entries happen to exist, and that is exactly where the errors live: with flat keys, adding or deleting an
+unrelated `"serialization"` entry would silently rename `serialization/json`'s **public API** between
+`std::json` and `std::serialization::json`. Nesting keeps composition and removes the hazard, because the
+structure is written down rather than inferred. It also makes the shape of the manifest the shape of
+`src/`, so the two can be diffed by eye.
+
+14. **Imports match a full module name, not a segment walk.** `import std::serialization::json` resolves
+    project `std`, then the module *named* `serialization::json` — one lookup. So a node holding no files
+    of its own is never half-resolved into on the way past, and `import std::serialization` succeeds or
+    fails purely on that node's own visibility and surface.
+
+**Checks, all cheap and all local:**
+
+| check | catches |
+|---|---|
+| `visibility` present on every node | a module with no declared audience |
+| every key/`name` segment is a legal kama identifier | a folder named `my-lib` — needs an explicit `name` |
+| composed names unique within the project | two paths colliding on one identity |
+| a `name` is one segment, never `::`-joined | smuggling hierarchy past the nesting |
+| `name` ≠ `global`; a module name ≠ the project's own name | shadowing the floor or the root (§2f) |
+| `"."` carries no `name` | the root's identity *is* the project name |
 
 > **Why flat-by-default is safe, measured.** Flatten the whole standard library — 49 files, 245 top-level
 > declarations — into one namespace and you get **183 distinct names and exactly one collision**:
@@ -125,44 +286,99 @@ variant case names · `@generate` bag-ctor parameters** (which derive from field
 > *(The apparent duplicates in a first pass were `type intrinsic <int32> implements FromStr<This>`
 > conformances — those declare no name. Worth knowing before re-measuring.)*
 
-### 2c. Visibility
+*Deliberately absent: a way to make a folder level contribute **no** name segment* (`src/internal/hashing/`
+→ `hashing` rather than `internal::hashing`). It has **zero demand measured** — `lib/` and `prelude/` have
+no namespace/path divergence at all — and every escape considered re-introduced an identity the nesting
+does not show. Add it if a real case appears.
 
-10. **One `import` block and one `export` block per file.** Nearly free: 388 of 521 importing files
+### 2c. Visibility — one source rung, one manifest key
+
+15. **One `import` block and one `export` block per file.** Nearly free: 388 of 521 importing files
     already have exactly one `import` line, the maximum anywhere is 4, and the largest symbol list is 12.
-11. **The ladder mirrors type member access** — the analogy is deliberate, and it is the language's
-    existing private-by-default instinct applied one level up:
+16. **`export` has exactly one form.** `export { X }` puts X on its module's surface. Omitting the block is
+    how a file exports nothing — **1,372 of 1,451 `.kama` files have no block**, every single-file fixture
+    among them — so the block stays optional and the omission is the one spelling. **`export { }` remains a
+    syntax error** (claim 5, §1a).
+17. **`visibility` per module node**, required, with four forms:
 
-    | spelling | meaning |
+    | `visibility` | who sees the module's surface |
     |---|---|
-    | *(nothing)* | private to the **file** |
-    | `export { X }` | public to the world |
-    | `export { X to [ targets ] }` | friend — visible only to the listed targets |
+    | `["a", "b"]` | its own files **plus** the modules **named** `a` and `b` — **at least one entry** |
+    | `"children"` | its own files plus every module **nested under it**, at any depth |
+    | `"internal"` | its own files plus every module in this project |
+    | `"public"` | all of the above plus **dependent projects** |
 
-    A target is a **module** or a **file**. Note this changes today's semantics: privacy is currently
-    per-**module**, so a sibling in the same directory-module can see an unexported name (verified). Under
-    the new rule that access becomes an explicit `to` grant. **81 stdlib declarations** are the
-    candidates (245 top-level, 164 currently exported).
-12. **A file may export only what it declares.** **No `as` on export** — under folders-are-just-folders
-    the motivating case (surfacing a nested private type at module root) evaporates, since the type is
-    already in the module. `as` on **import** stays: it is the disambiguation escape when two modules
-    export one name, and the compiler already reports that collision.
-13. **`import { … }`** — listing a *module* name imports it for qualified use; listing a *symbol* brings
-    it into scope. One spelling, one block, and the 49 bare-`import geo;` sites survive.
+    The four are one widening ladder — *these modules* ⊂ *my subtree* ⊂ *this project* ⊂ *the world*. Each
+    keyword rung exists because it names a set a list **cannot track**: `children` and `internal` both grow
+    as modules are added. The list is **additive** — a module's own files always see each other — so it
+    never names itself, and it may name modules in **this project only**; reaching a dependent is `public`,
+    full stop.
+
+18. **There is no `to`, in either layer.** An earlier draft had `export { X to [ … ] }` and a separate
+    manifest `to` key. Both collapse into the list form of `visibility`: one key, one place. **No file is
+    addressable anywhere in the model** — not in `import`, not in a grant, not in the C symbol.
+19. **There is no `private` keyword and no empty list.** `private` would mean exactly `[ ]`, and the grants
+    *are* the list now. `[ ]` itself is rejected for a sharper reason: **a module nobody can import is
+    unreachable, so it can only be dead code** — no call path from `main` can enter it. By the same
+    argument **`"children"` on a leaf node is an error**: an empty subtree is an empty audience. With `[ ]`
+    gone, **the manifest alone proves there is no unreachable module in the project**, with no call-graph
+    analysis.
+20. **Every entry is an object** — `{ "visibility": … }`, never a bare value. A shorthand would drop the
+    key that says what the value *means*, and the moment a second key is wanted the format would have to
+    support both forms forever. The object is the extension point.
+
+> **Nesting determines NAME, never ACCESS.** `visibility` does **not** nest, and this is the more
+> surprising half of the model. A child does not inherit, widen, or narrow its parent's audience, and a
+> parent marked narrow does **not** confine its children — `serialization` may be
+> `["serialization::json"]` while `serialization::json` is `"public"`. This follows **Go**, where a
+> subdirectory package has no relationship to its parent in either direction, over **Rust**, whose downward
+> nesting is the implicit grant §3 rejects. `"children"` is the one place the tree touches access at all,
+> and it is opt-in, one-directional, and written by hand.
+
+**The composition.** X, declared in file F of module M, is reachable from L iff:
+
+| L | requires |
+|---|---|
+| F itself | always |
+| another file in M | `export` |
+| another module in this project | `export` **and** M's `visibility` is `internal`, `public`, or a list naming L |
+| a dependent project | `export` **and** M's `visibility` is `public` |
+
+This changes today's semantics: privacy is currently per-**module**, so a sibling in the same
+directory-module can see an unexported name (verified). Under the new rule a name must be `export`ed to
+reach a sibling file. **Migration cost measured at zero**: of `lib/`'s 245 top-level declarations, 18 are
+unexported and **none is referenced from another file**. (A first pass said one — `siftDown` in
+`sort.kama:59` looked used by `priority_queue.kama`, but that file declares its **own** `fn void
+siftDown(isize i)` at `:102` and never calls the free function. Word match, not a reference.)
+
+**All four forms are meaningful for `"."`**, which is what makes the uniform rule safe: `"public"` is a
+library's root surface, `"internal"` is project-wide plumbing, and a list is *"my root is plumbing; import
+my modules instead"* — the case `kind` alone could never express. **`"public"` in an `executable` project
+is allowed and means what `internal` means**: with no dependents to distinguish them it is simply inert,
+and erroring would cost real churn on a `kind` flip to buy a lint.
+
+*Per-symbol granularity is deferred, not rejected.* Narrowing one symbol below its module's level means
+moving it into a module of its own — `"collections/detail": ["collections"]`, which is how Rust spells
+`pub(super)`. Adding `export { X to [ … ] }` later is **source-compatible**, demand is measured at zero, and
+shipping it now would re-split visibility across two places. The cost of being wrong is folder noise —
+one-symbol modules — and that is exactly the signal that would justify the syntax.
 
 ### 2d. Dependencies
 
-14. **`dependencies` / `dev-dependencies` keep their role**: kama projects, from source, key = import
+21. **`dependencies` / `dev-dependencies` keep their role**: kama projects, from source, key = import
     root. Their semantics are already correct — dev deps are off the import path, resolve into
     `.kama/dev-deps`, and a dependency's dev deps are never dragged into your build
     ([packages.md:433–453](../packages.md)).
-15. **Two additive keys, each with a dev counterpart**, for the kinds that contribute no import surface:
-    - **executables run at build time** — built for the **host**, not the target being cross-compiled to.
-      That axis is why Cargo keeps `build-dependencies` separate from `dependencies`, and it is a real
-      difference, not a flag on an existing entry.
-    - **native libraries linked into the output** — C ABI, reached through `extern fn`. **There is no
-      manifest key for this today**: only per-target `select.TARGET.<n>.ldflags` and the CLI `--link`, so
-      a project needing `-lm` on every target has nowhere clean to say so.
-16. **Only a library can be imported.** Depending on an executable for a surface is an error.
+22. **`link` on the project** — `"link": ["m"]`, overridable per `select.TARGET`. Native libraries linked
+    into the output are part of how *this artifact* links. **There is no manifest key for this today**:
+    only per-target `select.TARGET.<n>.ldflags` and the CLI `--link`, so a project needing `-lm` on every
+    target has nowhere clean to say so. The key mirrors the existing flag name
+    ([kama.driver.cpp:6345](../../src/kama.driver.cpp)) rather than inventing a second word.
+23. **Build-time executables go in `kama_workspace.json`'s `dependencies`.** They are built for the
+    **host**, not the target being cross-compiled to — the axis Cargo cites for `build-dependencies` — and
+    that is a tooling/orchestration concern, exactly the layer §2a introduces. **No `build-dependencies`
+    key in `kama.json`**, so nothing ships without a consumer.
+24. **Only a library can be imported.** Depending on an executable for a surface is an error.
 
 > **Why kama libraries are source-only.** `OUTPUT = EXE | SHARED | STATIC | OBJECT` already ships
 > ([kama.driver.cpp:1530](../../src/kama.driver.cpp)) — but a `SHARED` artifact exports *only* `expose`d
@@ -173,18 +389,20 @@ variant case names · `@generate` bag-ctor parameters** (which derive from field
 > and **removed them in 1.13**; Swift is the only peer that made it work, and it cost library-evolution
 > mode plus `.swiftinterface` files, with generics paying a runtime cost across the boundary.
 
-### 2e. The C symbol — rows 1 and 2, falling out
+### 2e. The C symbol — the old rows 1 and 2, falling out
 
-17. **Symbol = `name` · module (if any) · symbol**, joined by `__` exactly as `mangleNs` already joins a
+25. **Symbol = `name` · module path · symbol**, joined by `__` exactly as `mangleNs` already joins a
     namespace path ([kama.cemit.cpp:256](../../src/kama.cemit.cpp)). **The file contributes nothing**, so
     moving a type between two files of one module is a refactor rather than a silent ABI break for anyone
     linking the emitted C.
-18. **Loose files** — a `.kama` with no manifest — keep building and are the **only** remaining `_F<n>`
-    case: basename-derived, symbols unimportable. This is not a small population today (there is no
-    `kama.json` anywhere in this repo outside 16 test fixtures), but it is the one that by definition
-    cannot be imported, so a basename is enough. **This design shrinks the naming problem enormously; it
-    does not dissolve it.**
-19. **C keyword collisions** — rename **only on collision**, every other name emitted exactly as written:
+26. **Generated `.c` filenames become path-derived** — the module-relative path with separators replaced —
+    which drops the positional `_N` without reintroducing the basename collision it was guarding (§1b).
+27. **Loose files** — a `.kama` with no `kama.json` — keep building and are the **only** remaining `_F<n>`
+    case: basename-derived, symbols unimportable, and **two loose files sharing a basename in one build is
+    an error naming both**. This is not a small population today (there is no `kama.json` anywhere in this
+    repo outside 16 test fixtures), but it is the one that by definition cannot be imported. **This design
+    shrinks the naming problem enormously; it does not dissolve it.**
+28. **C keyword collisions** — rename **only on collision**, every other name emitted exactly as written:
     - **Reserved set:** all 44 C11 keywords + the C23 additions — the full sets, not just the 33 kama
       leaves free, since kama's own reserved list may shrink later and the cost of a wider table is zero
       (an extra word only ever fires on an actual collision). One table, following the
@@ -199,6 +417,69 @@ variant case names · `@generate` bag-ctor parameters** (which derive from field
       an error, not a silent rename that would be a miscompile.
     - **Intern once**, where each name enters the emitter's tables, so all ~60 emission sites read an
       already-escaped string. The mangler is **not idempotent**, so applying it per-site is a bug.
+
+### 2f. `global` and `main` — the two names that are not in the model
+
+29. **`global` becomes an ordinary project `name`.** It already exists and is already reserved: `global::X`
+    is the **floor**, the always-in-scope surface usable with no `import` and present under `--no-std`
+    ([kama.cemit.cpp:353](../../src/kama.cemit.cpp), [FLOOR.md](../FLOOR.md),
+    [SPEC:3235](../SPEC.md), `tests/global_alias.kama`, the C# spelling). Today it is held down by nothing
+    but a comment and a sentence of prose — it is not even a lexer keyword.
+
+    Give `prelude/` a `kama.json` with `"name": "global"`, and `global::X` stops being a special form: it
+    is a symbol in a project, resolved by the same rule as `myapp::X`. The name is then reserved by the
+    ordinary uniqueness rule (§2a.2) — **no separate reservation machinery, and no third kind of scope**.
+    The floor's only special property becomes the one that genuinely is special: **it is implicitly
+    imported into every file.** No other project can add to it, because claiming the name is just the
+    duplicate-project error — which matters, since a dependency injecting unqualified names into every
+    consumer is an unresolvable collision (it is why Rust gives only `std` a prelude).
+
+    **One consequence.** `global::` does two jobs today and only the first survives: `global::X` (reach the
+    floor where a local declaration shadows the spelling) is unchanged; `global::a::b::X` (name any
+    namespace absolutely) **is gone**, since it would now mean module `a/b` of project `global`. That job
+    exists only because an `as` alias can shadow a namespace name, so fix it directly: **an `import … as N`
+    whose `N` collides with a known project name is an error.** `tests/global_alias.kama` tests a local
+    declaration shadowing a floor symbol, so it survives intact.
+
+    *Naming:* `base` is already a kama keyword (inheritance), and `root` is ambiguous in exactly the place
+    it would be read — this model says "project root" and "root namespace" constantly. `global` is
+    unambiguous, shipped, tested and documented.
+
+30. **The prelude's `std::memory` claim resolves with it.** Today `prelude/` declares into two roots:
+    `global.kama` into the floor and `prelude/std/memory/*.kama` into `std::memory`, while `lib/` is the
+    project that owns `std`. There is no `lib/std/memory` on disk, so the driver hard-codes
+    `providedWhole.insert("std::memory")` ([kama.driver.cpp:933](../../src/kama.driver.cpp)) to make
+    `import std::memory` a satisfied no-op. Once `prelude/` is the project `global` it cannot also declare
+    into `std`, so **move the triad to `lib/std/memory/`** as module `memory` of project `std`. `--no-std`
+    is preserved for free: embedding is already path-parameterised (`embed_prelude.sh OUT GLOBAL MODULE...`,
+    [Makefile:104](../../Makefile)), so this is a `PRELUDE_MODULES` change, not a script or driver change.
+    The hard-coded line then **deletes**.
+
+31. **`main` is the entry point, not a symbol.** It is reached *below* the visibility system: the user's
+    `main` emits as `kama_main` ([kama.cemit.cpp:5779](../../src/kama.cemit.cpp)) and the emitter
+    synthesizes a real C `main` that calls it directly ([:17813](../../src/kama.cemit.cpp)) after
+    `kama_args_init`. That is a **C-level** call, so no visibility setting can break the entry point.
+
+    Leaving "may you call `main`?" to `"."`'s visibility would be incoherent — `qualify()` short-circuits
+    on `main` before any scope prefixing (§1c), so `main` is not in the root's surface in any sense
+    visibility could gate; and a module's own files always see each other, so another root file could
+    always call it regardless. State it directly instead:
+
+    - **A call to `main` is an error**, wherever it appears. C++ forbids it outright; Rust and Go make it
+      uncallable.
+    - **`main` may not be exported.** It is not a surface name and no importer could reach it.
+    - **`main` must be unique in a PROJECT**, not in a module or a file. Already enforced (§1c); what
+      changes is that it gets **its own diagnostic** instead of borrowing the generic duplicate-function
+      one, which cannot describe both rules at once. The entry-point message says a project has one entry
+      point and that `main` is scoped by nothing — the reason two collide where `a::helper` and
+      `b::helper` do not. The generic message it splits from moves from *namespace* to **module**, which is
+      what the mangled key has always actually meant.
+
+    Its **location** stays unconstrained — anywhere under `source`, so `cmd/`-style layouts and the
+    existing `entry` key keep working. Location simply does not scope it, which is exactly why it is not
+    callable. *(`spawn main()` is already impossible on two independent grounds: a `spawn` entry must
+    return `void` ([:11359](../../src/kama.cemit.cpp)) and take exactly one `give`n bundle argument
+    ([:11361](../../src/kama.cemit.cpp)); `fn int32 main()` fails both.)*
 
 ---
 
@@ -218,15 +499,23 @@ Consulted and verified rather than recalled; the sources are worth re-reading be
 | C# | per-file `namespace` | **no** — only the opt-in IDE0130 analyzer flags divergence | `public`/`internal` |
 | Swift | the build target; folders create **no** namespaces | n/a | `private`/`internal`/`public` |
 | **kama today** | per-file `namespace` | **no, and unchecked** | `export { … }` manifest |
-| **kama proposed** | project `name` + opt-in module folders | n/a — nothing is derived | the ladder in §2c |
+| **kama proposed** | project `name` + a nested module map | the tree supplies the default; `name` overrides one segment | `visibility` per module (§2c) |
+
+**Is folder-derived naming a mistake? No — it is the majority answer.** Five of the seven tie identity to
+the folder: TypeScript/ES, Python and Zig make the path *be* the identity with no declaration at all; Java
+requires the match; Go declares per file but hard-errors when a directory disagrees. Only two decouple —
+C#, which leaves it free and **unchecked** and then shipped an analyzer to flag the divergence, and Swift,
+which sidesteps the question by giving folders no namespace meaning. kama lands between Java and Go, with
+both failure modes closed: a module is **opt-in** (nothing becomes one by accident, unlike Python before
+PEP 420 or TS), the name is **checkable** (unlike C#), and a per-segment `name` is the escape (unlike Java).
 
 Two details that decided §2b and §2c:
 
 - **Rust** nests visibility downward: a private item is visible to its module *and all descendants*, so a
-  child reaches into its parent's privates. That is an implicit grant nobody wrote — rejected here in
-  favour of an explicit `to`.
+  child reaches into its parent's privates. That is an implicit grant nobody wrote — rejected here, and
+  `"children"` is the explicit version of it.
 - **Go** gives a subdirectory package **no** relationship to its parent in either direction; the only
-  hierarchy-aware rule is `internal/`. That is the answer §2b takes.
+  hierarchy-aware rule is `internal/`. That is the answer §2c takes for access.
 
 **C keyword collisions**
 
@@ -240,65 +529,100 @@ Two details that decided §2b and §2c:
 
 We take Vala's *universal* rename rather than its field/method rejection — Vala can reject because it
 offers `[CCode (cname = …)]` as an escape hatch and kama has none, so rejecting would amount to reserving
-25 words. Vala's `_name_` form is also not injective and puts a leading `_` on file-scope names.
+27 words. Vala's `_name_` form is also not injective and puts a leading `_` on file-scope names.
 
 **Determinism.** Rust's legacy mangling embedded a build-dependent hash and v0 exists to make symbols
 reproducible, deriving from the crate's own identity rather than its position — the same lesson as §1b.
 
 ---
 
-## 4. Open decisions
+## 4. Scale
 
-These are **not** settled. Each changes what gets built.
+Source-breaking and pre-1.0, so it lands before the tag or waits for 2.0. Re-measured against the working
+tree (the numbers below replace an earlier set that had drifted):
 
-1. **`to [...]` semantics — friend list or scope boundary?** The §2c analogy is C++ `friend`: the
-   exporter names its consumers. That inverts the dependency direction — a low-level file lists the
-   high-level files permitted to use it, and the list is edited whenever a consumer appears. Rust faced
-   the identical choice and picked a **boundary** (`pub(in path)`) that names nobody. Both defensible;
-   they scale very differently. 81 declarations are the test set.
-2. **Naming of the two new dependency keys**, and whether build-tools and native libraries share an
-   umbrella key or take one each.
-3. **Is a file addressable?** For `to [file]` targets only, or also for direct import? Note it must stay
-   out of the **symbol** either way (§2e.17).
-4. **The loose-file rule** in detail — basename as root, symbols unimportable.
+| | count |
+|---|---|
+| `.kama` files | **1,451** |
+| declaring a `namespace` | **91** — all deleted |
+| with an `export` block | **79** (so 1,372 have none) |
+| carrying `import` statements | **521** files, **692** statements |
+| `kama.json` | **16**, all inside test fixtures |
 
----
+It also touches the resolver, the emitter, the LSP, `kama query`, `kama seed`, and the docs.
 
-## 5. Scale
-
-Source-breaking and pre-1.0, so it lands before the tag or waits for 2.0. In this repo: **1,329 `.kama`
-files** — 90 declaring a `namespace`, 78 with an `export` block, 521 carrying 715 `import` statements,
-and 16 `kama.json`, all inside test fixtures. It also touches the resolver, the emitter, the LSP,
-`kama query`, `kama seed`, and the docs.
-
-One encouraging measurement: `lib/` and `prelude/` have **zero** namespace/path mismatches — the stdlib
-is already congruent with the model, so its migration is mechanical.
+One encouraging measurement, still true: `lib/` and `prelude/` have **zero** namespace/path mismatches — the
+stdlib is already congruent with the model, so its migration is mechanical. Its whole map is 18 module
+nodes plus `"."`, every module `public`, and **not one `name`**, because every stdlib folder is already its
+API word. Any module that turns out to want something narrower is a finding about the stdlib, not about
+this design.
 
 ---
 
-## 6. Phases
+## 5. Phases
 
-**1 — the manifest.** `kind`; `sources` → `source` defaulting to `"src"`; drop `projects`; unknown keys
-become an error; the new dependency keys; reject a `kama.json` under `source`. `kama seed` updated.
+**1 — the manifest.** `kind`; `sources` → `source` defaulting to `"src"`; `projects` removed from
+`kama.json`; unknown keys become an error; `link`; reject a `kama.json` under `source`.
+`kama_workspace.json` parsed (`projects` map with a **required** `optional`, plus its own deps), a missing
+mandatory project — or a glob matching nothing where `optional` is `false` — erroring by path, and wired to
+the LSP ownership path ([kama.driver.cpp:5754](../../src/kama.driver.cpp)), reusing
+`collectPackageTree`/`collectProjectDirs`. `kama seed` updated for all three kinds; `tests/query/mono/`
+migrated.
 
-**2 — identity and resolution.** `name` as the root namespace; `kama_module.json`; nearest-ancestor
-module resolution; delete the `namespace` declaration. **This is where claims 1, 2 and 4 of §1a become
-unrepresentable** rather than merely checked.
+**2 — identity and resolution.** `name` as the root namespace; the nested `modules` map with §2b's checks;
+names composed from the key chain, never inferred from what other entries exist; `visibility` required on
+every node; imports resolved by **full module name**, not a segment walk; nearest-ancestor file→module
+attribution via the existing `projectManifestDir` walk ([kama.driver.cpp:854](../../src/kama.driver.cpp));
+**delete the `namespace` declaration** (91 files). **This is where claims 1, 2 and 4 of §1a become
+unrepresentable** rather than merely checked. §2f lands here too: `prelude/kama.json` named `global`,
+`prelude/std/memory/` → `lib/std/memory/` with `PRELUDE_MODULES` repointed
+([Makefile:104](../../Makefile)), the `providedWhole` line deleted, `global::a::b::X` dropped, and an
+aliasing `import … as N` that collides with a project name rejected.
 
-**3 — visibility.** One import block, one export block, the three rungs, `to [...]`. Closes claim 3 — the
-hole where `geo::secretFn()` bypasses the manifest — and gives claim 5 a spelling.
+> **Deleting `namespace` strands the word wherever the compiler says it out loud.** Swept, so the list is
+> not re-derived — five sites, and one of them is not a wording change:
+>
+> | site | today | after |
+> |---|---|---|
+> | [cemit:2943](../../src/kama.cemit.cpp) | ``` `::` resolves namespaces and types ``` | *modules* and types |
+> | [cemit:17410](../../src/kama.cemit.cpp) | ``` `::` is scope resolution (static functions, enum variants, namespaces) ``` | … *modules* |
+> | [cemit:5917](../../src/kama.cemit.cpp) | *"only once in its namespace"* | **splits in two** — see phase 3 |
+> | [query.cpp:103](../../src/kama.query.cpp) | `CompletionKind::Namespace` prints `"namespace"` | `"module"` — and this merely makes the two front ends **agree**, since [lsp.cpp:337](../../src/kama.lsp.cpp) already maps that kind to LSP `Module` (9) |
+> | [driver:627](../../src/kama.driver.cpp) | `bail("mixed namespaces")` | **a premise to re-derive, not a string to edit** |
+>
+> That last one matters. The closure-pruning path bails when a package's files are not namespace-homogeneous,
+> because *"a package manifest's `sources` can span several directories and namespaces … which breaks the
+> shared-namespace premise the reference closure rests on. No fixture exhibits it today, which is exactly why
+> it would land silently later."* Under this model that premise is simply false by design: one `source` holds
+> many modules on purpose. `source` becoming singular (§2a.4) removes half the hazard it was guarding; what
+> the closure actually needs is to key on **module**, not on a single namespace for the whole package.
+> Re-derive it here rather than renaming the bail.
 
-**4 — the C symbol.** §2e: identity-derived symbols; the `k_` escape interned once where each name enters
-the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`, `VSlot::name`, variant records);
-the loose-file rule; drop the `_N` suffix from generated `.c` filenames.
+**3 — visibility.** One import block, one export block (single form; `export { }` stays a syntax error),
+and required `visibility` per node — list or keyword — enforced as §2c's composition table. **No `to`
+grammar**: the `export` rule is unchanged apart from being made singular, so this phase is almost entirely
+resolver work. Closes claim 3 — the hole where `geo::secretFn()` bypasses the manifest. §2f.31 lands here:
+`main` uncallable, unexportable, unique-per-project — which means **splitting the one duplicate-function
+diagnostic in two** ([kama.cemit.cpp:5917](../../src/kama.cemit.cpp)): an entry-point message scoped to the
+**project**, and a generic one re-worded from *namespace* to **module**, since `namespace` no longer exists
+after phase 2. Both gain the missing filename on the "first declared at" location.
 
-**5 — corpus and docs.** SPEC's *Modules / namespaces* section rewritten; the ROADMAP row and the §10
-"C SYMBOL NAMING" entry deleted; the `_F4__` references updated in `tools/check-ecs-zero-dispatch.sh`
-(4 lines), the comment in `tools/check-slot.sh`, and seven fixtures.
+**4 — the C symbol.** §2e: identity-derived symbols; path-derived `.c` filenames; the `k_` escape interned
+once where each name enters the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`,
+`VSlot::name`, variant records); the loose-file rule.
+
+**5 — corpus and docs.** SPEC's *Modules / namespaces* section rewritten; `docs/packages.md` (the
+`sources`/`projects` section, the monorepo walkthrough, the command table); `docs/targets.md` for `link`;
+[FLOOR.md](../FLOOR.md)'s "the empty namespace" / "no browsable namespace" wording replaced by §2f.29; the
+ROADMAP row and the §10 "C SYMBOL NAMING" entry deleted; the `_F4__` references updated in
+`tools/check-ecs-zero-dispatch.sh` (4 lines), the comment in `tools/check-slot.sh`,
+`docs/ENGINE_READINESS.md`, and seven fixtures.
+
+**6 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
 
 ---
 
-## 7. Verification
+## 6. Verification
 
 - **`tools/check-c-reproducible.sh`** — the guard this campaign exists for. Build one program twice with
   different argument orders into two temp dirs; `diff` the emitted `.c`/`.h` **and their filenames**:
@@ -308,27 +632,47 @@ the loose-file rule; drop the `_N` suffix from generated `.c` filenames.
   the emitted C. Shape follows `tools/check-ecs-zero-dispatch.sh`.
 - **`tools/check-module-visibility.sh`** — assert every rung of §2c, including the **call and
   construction** positions the current model lets through.
-- **`xfail` fixtures**, each `.msg` matching the rule's own wording: one per claim in §1a, plus the `k_*`
-  escape clash, a C keyword on an `expose`d name, a `kama.json` under `source`, an unknown manifest key,
-  and a non-exported symbol reached in call position.
+- **`xfail` fixtures**, each `.msg` matching the rule's own wording:
+  - §1a claims 1, 3 and 4; the `k_*` escape clash; a C keyword on an `expose`d name; a `kama.json` under
+    `source`; an unknown manifest key; a non-exported symbol reached in call position; duplicate loose
+    basenames.
+  - **Workspace**: a missing mandatory project; a `projects` entry with no `optional`; a glob matching
+    nothing where `optional` is `false` — each with its optional twin as a **passing** fixture, since
+    silence is the claim.
+  - **Manifest** (§2b): a node missing `visibility`; a non-identifier segment; colliding composed names; a
+    `::`-joined `name`; a `name` on `"."`.
+  - **Visibility** (§2c): a listed-visibility module imported from a module *not* on its list; an
+    `internal` module imported from a dependent project; an empty `visibility` list; `"children"` on a leaf
+    node; a list naming a module that does not exist. Plus a **passing** fixture proving a narrow parent
+    does **not** confine a `public` child.
+  - **§2f**: a project or module claiming the name `global`; an `import … as N` colliding with a project
+    name; a call to `main`; `export { main }`. Plus **two fixtures for the diagnostic split**, both already
+    rejected today, so each pins the **corrected wording** — two `main`s in one project (the entry-point
+    message, scoped to the project) and two `helper`s in one module (the generic message, which must say
+    *module* and no longer *namespace*). Their `.msg` files are the guard that phase 2's deletion of
+    `namespace` did not leave the word behind in a diagnostic.
 - Guards run in parallel: private `mktemp -d`, no writes to the worktree, no `cd` outside a subshell, and
   the compiler reached through `$KAMA` (`. "$ROOT/tools/kama-bin.sh"`), never the `./kama` symlink.
 - `./dev matrix > /tmp/matrix.log 2>&1; tail -5 /tmp/matrix.log` — once, into a file — then `./dev test
   san` and `./dev test wasm`. The wasm leg emits one `.c` per unit, so it exercises the naming change.
-- **`VERSION` bumps on every phase** — all of them touch `src/`.
+- **`VERSION` bumps on phases 1–5**; phase 6 is docs-only.
 
 ---
 
-## 8. Traps, so they are not re-derived
+## 7. Traps, so they are not re-derived
 
-- **A doc is not evidence** — five documented behaviors in §1a do not hold; the old roadmap entry's
+- **A doc is not evidence** — six documented behaviors in §1a do not hold; the old roadmap entry's
   exposure list was wrong in a way that hid two whole families (vtable slots, variant cases); and its
   keyword count was off (25 stated, 27 measured). Compile the snippet; read the emitted C.
+- **Two numbers in an earlier draft of this doc measured nothing.** "81 declarations would need a `to`" was
+  `lib`+`prelude` decl-lines minus export-list entries — and `prelude` has no `export` block at all,
+  contributing 70 of the 81. The real figure is **zero**. A follow-up "1" was a word match on `siftDown`,
+  not a reference. Derive, then check the derivation.
 - **`comm` is locale-sensitive on macOS**, so a keyword-set diff silently reported nonsense until it was
   redone with `grep -Fxv`. Any set comparison in a guard wants `LC_ALL=C` or no `comm` at all.
 - **`qualify()` is not the site for the keyword fix.** It scope-prefixes *declared* names — exactly the
   set that already cannot collide. The exposed names are emitted by their own paths, and there is no
-  single chokepoint.
+  single chokepoint. *(It is, however, where `main` escapes scoping entirely — §1c.)*
 - **The keyword escape is not idempotent.** `k_switch` would become `k_k_switch`. Intern once, at the
   table, never at the emission site.
 - **A partial fix is worse than none** — a use must agree with its declaration, so renaming a declaration
@@ -337,6 +681,8 @@ the loose-file rule; drop the `_N` suffix from generated `.c` filenames.
   `_F<digits>::` so diagnostics never leak a mangled name (`tests/xfail/diag_no_mangled_name.kama` guards
   it). Changing the scope form means changing that strip — from a *registry* of known scopes, not a
   pattern.
+- **The `_N` on generated `.c` filenames is load-bearing** until something path-derived replaces it: two
+  source files may share a basename.
 - **Measure with a hidden instrument first** if any step needs sizing: `--strict-numeric` and
   `--probe-templates` are the precedent (TSV on stdout, never `warning:` — `run_tests.sh:443` fails any
   fixture whose stderr matches `/warning/i`; full-row dedupe; and a bucket for the blind spot, because a
