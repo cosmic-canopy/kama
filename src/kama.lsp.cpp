@@ -1019,8 +1019,7 @@ struct Server {
     //
     // The authority is the project's own FILE SET, not a path prefix. That matters in both directions: a
     // dependency lives *inside* the project root (`<root>/.kama/deps/...`) and must never be rewritten,
-    // while a `"sources": ["../shared"]` entry lives *outside* it and must be, because the project said so.
-    // A prefix test gets both backwards. It is also what retires the realpath trap that nearly let a rename
+    // A prefix test gets that backwards. It is also what retires the realpath trap that nearly let a rename
     // rewrite the stdlib: module resolution names std relative to the compiler binary
     // (`<exeDir>/../../lib/std/…`), which in a dev tree literally carries the project root as a prefix —
     // but it is not in the file set, so membership excludes it without any string reasoning at all.
@@ -1169,9 +1168,9 @@ struct Server {
                     std::string why = proj.tooLarge
                         ? (proj.root + " holds more than " + std::to_string(proj.cap) +
                            " .kama files, which is a source tree rather than a package. Add a kama.json "
-                           "next to the sources you want indexed")
-                        : std::string("this file is not part of a kama package. Add a kama.json next to "
-                                      "your sources");
+                           "whose `source` root holds the files you want indexed")
+                        : std::string("this file is not part of a kama package. Add a kama.json above it "
+                                      "with a `source` root that contains it");
                     sendError(id, -32803, "cannot rename: this symbol is also used in " + r.uri +
                                           ", and " + why + " so a rename can see every file that uses it.");
                     return;

@@ -397,46 +397,62 @@ std::vector<std::string> splitSearchPath(const char* env)
     return out;
 }
 
-static bool loadManifestSources(const std::string& path, std::vector<std::string>& out, std::string& err);
+static bool loadManifestSource(const std::string& path, std::string& out, std::string& err);
 
-// The source files of the package rooted at `dir`, per its manifest's `sources` — or {} when `dir` is not
-// a package root or declares none, in which case the caller falls back to the flat listing.
+// The source root `manifest` declares, cached by path.
 //
-// This is what lets a dependency use the `src/` layout docs/packages.md teaches for applications: an
-// installed `.kama/deps/geo/` holds only `kama.json`, its sources one level down, so a non-recursive
-// listing of it finds nothing and the package cannot be imported AT ALL. `sources` is precisely the
-// declaration of where a package's files are, so module resolution consults it — which is also what
-// makes the key earn its keep beyond the LSP.
+// ⚠️ THE CONTRACT, and the one distinction the `"src"` default must not destroy:
 //
-// The `sources` a manifest declares, cached by path — this runs for every import of every build and
-// loadManifestSources re-reads the file on every call. Only the DECLARATION is cached, never the expanded
-// file list: `kama lsp` is long-lived, and a newly added `.kama` file has to become visible without
-// restarting the server. Expanding costs a readdir, which is exactly what the flat listing it replaced
-// cost anyway.
-const std::vector<std::string>& manifestSourcesCached(const std::string& manifest)
+//     ""            -> there is no kama.json at `manifest` (or it will not parse). NOT a package root;
+//                      the caller falls back to listing the directory.
+//     anything else -> the source root relative to the manifest — `source` as declared, or "src" when
+//                      the key is absent. A manifest ALWAYS has one.
+//
+// The default is therefore applied HERE and only here, because this is the only reader that knows
+// whether the file exists. Defaulting inside loadManifestSource would return "src" for a directory with
+// no manifest at all, and since that is the dominant case — every ordinary directory-module — `import
+// a::b` would start resolving `a/b/src/*.kama` and silently lose `a/b/*.kama`.
+//
+// A manifest that will not PARSE is deliberately fused with "no manifest": the editor must not stop
+// resolving modules over a JSON typo somewhere up the tree. The cost is that a broken manifest silently
+// downgrades a package to a plain directory-module, which is the lesser of the two failures.
+//
+// Why the declaration is cached but never the expanded file list: `kama lsp` is long-lived, and a newly
+// added `.kama` file has to become visible without restarting the server. Expanding costs a readdir,
+// which is what the flat listing this replaced cost anyway.
+const std::string& manifestSourceCached(const std::string& manifest)
 {
-    static std::map<std::string, std::vector<std::string>> cache;
+    static std::map<std::string, std::string> cache;
     auto it = cache.find(manifest);
     if (it != cache.end()) return it->second;
-    std::vector<std::string> srcs;
-    std::string err;
-    if (!fileExists(manifest) || !loadManifestSources(manifest, srcs, err)) srcs.clear();
-    return cache.emplace(manifest, std::move(srcs)).first->second;
+    std::string src, err;
+    if (!fileExists(manifest) || !loadManifestSource(manifest, src, err)) src.clear();
+    else if (src.empty()) src = "src";                  // the manifest exists and named none
+    return cache.emplace(manifest, std::move(src)).first->second;
 }
 
-std::vector<std::string> packageSourceFiles(const std::string& dir)
+// The source files of the package rooted at `dir`. Returns false when `dir` is NOT a package root, which
+// is the caller's signal to fall back to the flat listing; true with an EMPTY `out` means it is one and
+// its source directory simply is not there yet.
+//
+// This is what lets a dependency use the `src/` layout docs/packages.md teaches: an installed
+// `.kama/deps/geo/` holds only `kama.json`, its sources one level down, so a non-recursive listing of it
+// finds nothing and the package could not be imported AT ALL.
+bool packageSourceFiles(const std::string& dir, std::vector<std::string>& out)
 {
-    std::vector<std::string> out;
-    for (const auto& rel : manifestSourcesCached(dir + "/kama.json")) {
-        // Lexical, not absolutePath: `"sources": ["."]` must not yield `<dir>/./x.kama` (unit names are
-        // matched EXACTLY downstream), but neither may the `.kama/deps` symlink be resolved away.
-        std::string sub = joinPathLexical(dir, rel);
-        if (dirExists(sub))       { size_t seen = 0; collectKamaFiles(sub, "", out, seen, (size_t)-1); }
-        else if (fileExists(sub)) out.push_back(sub);
-        // A listed path that does not exist is skipped, as in collectPackageTree.
-    }
+    const std::string& rel = manifestSourceCached(dir + "/kama.json");
+    if (rel.empty()) return false;                      // not a package root
+    // Lexical, not absolutePath: absolutePath is realpath(), which resolves the `.kama/deps/<name>`
+    // symlink away — and what this returns becomes the UNIT NAME, which CEmitter::unitForUri matches by
+    // exact string equality. Resolve it and go-to-definition lands in the content-addressed store rather
+    // than in the deps view the user can see. (It also collapses any `..` in `dir` itself, which the
+    // stdlib root carries: <exeDir>/../../lib/std/…)
+    std::string sub = joinPathLexical(dir, rel);
+    if (dirExists(sub)) { size_t seen = 0; collectKamaFiles(sub, "", out, seen, (size_t)-1); }
+    // A source root that does not exist yields no files rather than an error: a manifest may name a
+    // directory not created yet, and the build path reports that separately (resolveBuildConfig).
     std::sort(out.begin(), out.end());   // readdir order is not deterministic; emit order must be
-    return out;
+    return true;
 }
 
 static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err);
@@ -521,8 +537,9 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
         if (fileExists(file)) return { file };
         std::string dir = root + "/" + rel;
         if (dirExists(dir)) {
-            auto fs = packageSourceFiles(dir);        // declared: wherever the package says its files are
-            if (fs.empty()) fs = listKamaFiles(dir);  // undeclared: the plain directory-module listing
+            std::vector<std::string> fs;
+            packageSourceFiles(dir, fs);              // a package root: wherever it says its files are
+            if (fs.empty()) fs = listKamaFiles(dir);  // otherwise the plain directory-module listing
             if (!fs.empty()) return fs;
         }
     }
@@ -621,9 +638,11 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
 
     const ModuleIndex& ix = moduleIndexFor(files, cache);
     if (!ix.complete)    return bail("parse failed");
-    // A package manifest's `sources` can span several directories and namespaces (packageSourceFiles is
-    // recursive), which breaks the shared-namespace premise the reference closure rests on. No fixture
-    // exhibits it today, which is exactly why it would land silently later.
+    // A package's `source` root is walked RECURSIVELY, so one package still spans several namespaces —
+    // which breaks the shared-namespace premise the reference closure rests on. `source` becoming
+    // singular removed the "several roots" half of the hazard, not this one. No fixture exhibits it
+    // today, which is exactly why it would land silently later. (The real repair is to key the closure on
+    // MODULE rather than on one namespace per package; that belongs with module identity, not here.)
     if (!ix.homogeneous) return bail("mixed namespaces");
 
     std::vector<size_t>      work;
@@ -1909,7 +1928,7 @@ struct ManifestReader {
     std::map<std::string, DepSpec>* devDeps = nullptr;   // set to capture `dev-dependencies` (else skipped)
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
-    std::vector<std::string>* sourcesOut  = nullptr;
+    std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<std::string>* projectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
@@ -1945,7 +1964,7 @@ struct ManifestReader {
         ++i; return true;
     }
 
-    // A JSON array of strings (`sources`). Rejects a non-array or a non-string element rather than
+    // A JSON array of strings (`projects`). Rejects a non-array or a non-string element rather than
     // tolerating it: this one declares what the tooling may rewrite, so a typo must not silently widen
     // or narrow the set.
     bool stringArray(std::vector<std::string>& out) {
@@ -2305,7 +2324,9 @@ struct ManifestReader {
             else if (key == "registries") { if (registriesOut) { if (!registriesObject(registriesOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "overrides") { if (overridesOut) { if (!depsObject(overridesOut)) return false; } else if (!skipValue()) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log") { if (logOut) { if (!logObject()) return false; } else if (!skipValue()) return false; }   // baked log default (M5)
-            else if (key == "sources") { if (sourcesOut) { if (!stringArray(*sourcesOut)) return false; } else if (!skipValue()) return false; }  // LSP project scope
+            // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
+            // one module, and there is nowhere in the model to say which of them a name came from.
+            else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "projects") { if (projectsOut) { if (!stringArray(*projectsOut)) return false; } else if (!skipValue()) return false; } // sub-projects
             else if (key == "entry") { if (entryOut) { if (!str(*entryOut)) return false; } else if (!skipValue()) return false; }   // entry `.kama` (read by `kama run`)
             // Validated HERE rather than only where it is consumed, because the value set is closed and a
@@ -2506,19 +2527,33 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
     return true;
 }
 
-// Load a `kama.json` manifest's `sources` — the directories/files that make up this package, relative to
-// the manifest. Empty (or absent) means "not declared", and the LSP falls back to walking the whole
-// manifest directory under a file cap. Declaring them is what removes the guess, and with it the cap.
-// Returns false + `err` on malformed JSON. (LSP M3.5.)
-static bool loadManifestSources(const std::string& path, std::vector<std::string>& out, std::string& err)
+// Load a `kama.json` manifest's `source` — THE one directory holding this project's `.kama` files,
+// relative to the manifest. `out` is left empty when the key is absent, which means the default `"src"`;
+// applying that default is manifestSourceCached's job, because only a caller that knows the manifest
+// EXISTS may apply it (see the contract there). Returns false + `err` on malformed JSON or a source root
+// that is not a plain subdirectory name.
+//
+// `source` must name a real SUBDIRECTORY. `"."` is rejected rather than merely discouraged: it would put
+// the manifest itself, `.kama/deps`, `out/` and any vendored project INSIDE the source root, and the rule
+// that no `kama.json` may live under `source` would then need an exemption for each of them. A
+// subdirectory keeps all four structurally outside it and the rule exemption-free.
+static bool loadManifestSource(const std::string& path, std::string& out, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.sourcesOut = &out;
+    r.sourceOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
+    if (out.empty()) return true;                       // absent: the caller applies the default
+
+    const std::string bad =
+        out == "." || out == ".."                          ? "`source` must name a subdirectory, not \"" + out + "\""
+      : out[0] == '/' || (out.size() > 1 && out[1] == ':') ? "`source` must be relative to the manifest, not an absolute path"
+      : out.find("..") != std::string::npos               ? "`source` may not reach outside the project with `..`"
+      : std::string();
+    if (!bad.empty()) { err = bad + " (the default is \"src\")"; out.clear(); return false; }
     return true;
 }
 
@@ -2645,6 +2680,21 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         if (kind.empty()) {
             err = manifest + ": no `kind` — every project states whether it is a \"library\" or an "
                   "\"executable\" (add \"kind\": \"executable\")";
+            return false;
+        }
+
+        // `source` is validated here rather than only in its loader because all three of the loader's
+        // other callers discard `err` on purpose — they run on the resolution and editor paths, which
+        // must stay lenient about a manifest somewhere up the tree. This is the build path, where a
+        // source root that is misspelled or simply absent should be said out loud rather than quietly
+        // resolving to nothing. (The editor still gets it: lspResolveConfig falls back to permissive host
+        // defaults and reports the error to the client, so a broken manifest does not stop analysis.)
+        std::string srcRel;
+        if (!loadManifestSource(manifest, srcRel, err)) { err = manifest + ": " + err; return false; }
+        if (srcRel.empty()) srcRel = "src";
+        const std::string srcDir = joinPathLexical(dirName(manifest), srcRel);
+        if (!dirExists(srcDir)) {
+            err = manifest + ": `source` is \"" + srcRel + "\", but " + srcDir + " does not exist";
             return false;
         }
 
@@ -4875,9 +4925,9 @@ static int cmdAgentsInstall(const std::string& dir, const std::vector<std::strin
 //
 // The manifest is the point. Everything a project needs to be findable, importable and buildable lives
 // in kama.json, and until now the only way to learn its shape was to read docs/packages.md and type it
-// out. Two of its keys are also traps a template closes permanently: a library with src/ and no
-// `sources` is SILENTLY unimportable (see the comment at packageSourceFiles), and a manifest with no
-// `out` scatters build artifacts through the source tree.
+// out. It also closes a trap permanently: a manifest with no `out` scatters build artifacts through the
+// source tree. (The other one it used to close — a library with src/ and no `sources`, silently
+// unimportable — closed for everyone when `source` gained its "src" default.)
 //
 // Named `seed`, not `init`: kama has a toolchain and a package store it could plausibly be
 // initializing, so `init` names the wrong thing about half the time.
@@ -5082,9 +5132,10 @@ static std::vector<std::string> seedSplitMembers(const std::string& s)
 // Json, which serializes compact, on one line, which is strictly worse for a file whose first reader is
 // a person.
 //
-// `sources` is emitted for every kind that HAS files, always. A library with src/ and no `sources` is
-// silently unimportable — it builds for its author and fails for every consumer, which is the worst
-// possible default for a template.
+// `source` is NOT emitted. It used to be, under the name `sources`, because a library with src/ and no
+// such key was silently unimportable — it built for its author and failed for every consumer. `source`
+// now defaults to exactly "src", which is the layout seed writes, so emitting it would be emitting the
+// default. One way to do a thing.
 static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version,
                                 const std::vector<std::string>& members)
 {
@@ -5095,8 +5146,8 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
     // sources, no namespace and nothing to be a library or an executable OF. Emitting a kind for it would
     // be a lie the reader would then have to make sense of.
     if (kind == SeedKind::Executable)
-        m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\",\n  \"sources\": [\"src\"]";
-    else if (kind == SeedKind::Library) m += ",\n  \"kind\": \"library\",\n  \"sources\": [\"src\"]";
+        m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
+    else if (kind == SeedKind::Library) m += ",\n  \"kind\": \"library\"";
     else {
         // A monorepo root is a pure aggregator: it contributes no files of its own, only its members'.
         // An explicit list rather than a "libs/*" glob — kama does not get to invent a directory name
@@ -5634,14 +5685,15 @@ static size_t lspFileBudget()
 
 // Collect one package's sources, recursing into any sub-projects its manifest declares.
 //
-//   `sources`  present -> exactly those files/directories are this package's.
+//   a kama.json here   -> its `source` root, walked recursively, is exactly this package's files.
 //   `projects` present -> each entry is a sub-project directory holding its own kama.json, walked the same
 //                         way. A trailing `/*` ("packages/*") expands to every immediate subdirectory that
 //                         has a manifest, so a monorepo need not edit its root manifest per project.
 //   neither present    -> a leaf: the project's whole directory is its sources.
 //
-// A manifest with `projects` but no `sources` is a pure aggregator and contributes no files of its own —
-// walking its directory would re-collect every member and defeat the precision it just declared.
+//   no kama.json here  -> NOT a project: contributes nothing at all. Walking such a directory wholesale
+//                         is how a `projects` entry naming a manifest-less directory used to swallow it
+//                         as though it had been declared.
 // `visited` (canonical paths) breaks cycles: a manifest may legally name a directory that names it back,
 // and a symlink makes a loop trivial.
 static void collectPackageTree(const std::string& dir, std::vector<std::string>& out,
@@ -5649,28 +5701,27 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
 {
     if (!visited.insert(absolutePath(dir)).second) return;
 
-    std::vector<std::string> srcs, subs2;
+    std::vector<std::string> subs2;
     std::string err;
     const std::string manifest = dir + "/kama.json";
-    if (fileExists(manifest)) {
-        loadManifestSources(manifest, srcs, err);
-        loadManifestProjects(manifest, subs2, err);
-    }
+    const std::string& srcRel = manifestSourceCached(manifest);
+    if (fileExists(manifest)) loadManifestProjects(manifest, subs2, err);
 
     size_t seen = 0;
-    if (!srcs.empty()) {
-        for (const auto& rel : srcs) {
-            // absolutePath, not a bare join: `"sources": ["."]` would otherwise yield `<dir>/./x.kama`,
-            // and CEmitter::unitForUri matches unit names EXACTLY — so every query would miss.
-            std::string abs = absolutePath(dir + "/" + rel);
-            if (dirExists(abs))       collectKamaFiles(abs, "", out, seen, (size_t)-1);
-            else if (fileExists(abs)) out.push_back(abs);
-            // A listed path that does not exist is skipped: a manifest may name a directory not created
-            // yet, and refusing to index everything else over that would be hostile.
-        }
-    } else if (subs2.empty()) {
-        collectKamaFiles(absolutePath(dir), "", out, seen, (size_t)-1);
+    if (!srcRel.empty()) {
+        // absolutePath, not the lexical join packageSourceFiles uses: what THIS returns is handed to
+        // lspAnalyzeWorkspace as CLI inputs and compared against URI-derived absolute paths, so it must
+        // be canonical. The two callers want opposite things from the same data — see packageSourceFiles.
+        std::string abs = absolutePath(dir + "/" + srcRel);
+        if (dirExists(abs)) collectKamaFiles(abs, "", out, seen, (size_t)-1);
+        // A source root that does not exist is skipped: a manifest may name a directory not created yet,
+        // and refusing to index everything else over that would be hostile.
     }
+    // No `else` arm. A directory with no manifest contributes NOTHING — it is not a project, and walking
+    // it wholesale is how a `projects` entry naming a manifest-less directory used to swallow that whole
+    // directory as though it had been declared. (expandProjectsEntry's non-glob branch checks only
+    // dirExists, so that shape is reachable.) With `source` always present for a real manifest, the arm
+    // could otherwise never fire for one anyway.
 
     for (const auto& rel : subs2)
         for (const auto& sub : expandProjectsEntry(dir, rel)) collectPackageTree(sub, out, visited);
@@ -5806,31 +5857,31 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
         cur = parent;
     }
 
-    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via `projects` and/or
-    // `sources`, expanded recursively — then widening to it is not a guess and needs no editor boundary to
-    // license it. Prefer the outermost such manifest (the top of a nest of monorepos), and require that its
-    // expansion actually CONTAINS the open file, so an ancestor that happens to declare unrelated members
-    // is not mistaken for this file's owner.
+    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via its `source` root
+    // and/or `projects`, expanded recursively — then widening to it is not a guess and needs no editor
+    // boundary to license it. Prefer the outermost such manifest (the top of a nest of monorepos).
+    //
+    // CONTAINMENT IS THE WHOLE RULE. There used to be a `srcs.empty() && subs.empty()` guard here reading
+    // "declares nothing: not an owner", and it was load-bearing in a way its comment did not say: it was
+    // the only thing keeping collectPackageTree's whole-directory arm from running for a manifest that
+    // declared nothing, trivially "containing" the open file, and being crowned a DECLARED owner with an
+    // uncapped file set — the guessed set the cap exists to bound, laundered as a declaration. Now that a
+    // manifest always has a source root, the guard would be dead anyway; deleting the arm is what makes
+    // containment sound on its own, so the two changes belong together.
     std::string self = absolutePath(openFilePath);
     for (auto it = manifests.rbegin(); it != manifests.rend() && p.root.empty(); ++it) {
-        std::vector<std::string> srcs, subs;
-        std::string e;
-        loadManifestSources(*it + "/kama.json", srcs, e);
-        loadManifestProjects(*it + "/kama.json", subs, e);
-        if (srcs.empty() && subs.empty()) continue;             // declares nothing: not an owner
         std::vector<std::string> files;
         std::set<std::string> visited;
         collectPackageTree(*it, files, visited);
         for (const auto& f : files)
             if (absolutePath(f) == self) {
-                p.root            = *it;
-                p.hasManifest     = true;
-                p.declaredSources = true;
-                p.files           = files;
+                p.root        = *it;
+                p.hasManifest = true;
+                p.files       = files;
                 break;
             }
     }
-    if (p.declaredSources) {
+    if (!p.root.empty()) {
         std::sort(p.files.begin(), p.files.end());
         p.files.erase(std::unique(p.files.begin(), p.files.end()), p.files.end());
         p.seenCount = p.files.size();
@@ -5852,7 +5903,7 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
 
     // Nothing above declared ownership of this file, so the file set is INFERRED: every .kama under the
     // root. That inference is what the cap bounds — see kLspMaxProjectFiles. A manifest can end it by
-    // declaring `sources` (which files are mine) and/or `projects` (which sub-projects I compose).
+    // a kama.json whose `source` root CONTAINS this file, and/or `projects` (which sub-projects I compose).
     size_t seen = 0, budget = lspFileBudget();
     p.cap = budget;
     collectKamaFiles(p.root, "", p.files, seen, budget);

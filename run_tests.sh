@@ -544,7 +544,11 @@ multi_one() {
             { echo "FAIL $name (pkg install failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
         fi
     fi
-    if ! build_one "$exe" "$src"/*.kama >/dev/null 2>"$TMP/$name.err"; then
+    # A fixture WITH a manifest keeps its sources under the `source` root, which defaults to src/; one
+    # without is a bare pile of .kama files and stays flat. Both shapes are legitimate — a manifest-less
+    # fixture is testing the language, not the project model — so the glob follows the layout.
+    if [ -d "$src/src" ]; then set -- "$src"/src/*.kama; else set -- "$src"/*.kama; fi
+    if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
     run_one "$exe" "$TMP/$name.san"

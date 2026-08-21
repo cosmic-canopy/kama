@@ -35,11 +35,11 @@ export KAMA_STORE="$(kama_native_path "$tmp")/store"   # isolate the store; NOT 
 
 # ---- a tiny package as a local git repo, tagged v1.0.0 -----------------------------------------------
 geo="$tmp/geo-src"
-mkdir -p "$geo"
+mkdir -p "$geo/src"
 cat > "$geo/kama.json" <<'JSON'
 { "name": "geo", "version": "1.0.0", "kind": "library" }
 JSON
-cat > "$geo/geo.kama" <<'KAMA'
+cat > "$geo/src/geo.kama" <<'KAMA'
 namespace geo;
 export { area };
 fn int32 area() { return 30; }
@@ -51,7 +51,7 @@ git -C "$geo" tag v1.0.0
 
 # ---- a consumer project depending on it via a file:// git URL ----------------------------------------
 proj="$tmp/proj"
-mkdir -p "$proj"
+mkdir -p "$proj/src"
 cat > "$proj/kama.json" <<JSON
 {
   "name": "consumer",
@@ -61,7 +61,7 @@ cat > "$proj/kama.json" <<JSON
   }
 }
 JSON
-cat > "$proj/main.kama" <<'KAMA'
+cat > "$proj/src/main.kama" <<'KAMA'
 import geo::{area};
 fn int32 main() { return area(); }   // 30
 KAMA
@@ -90,7 +90,7 @@ case "$target" in
 esac
 
 # ...and the built program actually resolves the dep through the view and returns 30.
-if "$KAMA" build "$proj/main.kama" -o "$tmp/app" >"$tmp/build.out" 2>&1; then
+if "$KAMA" build "$proj/src/main.kama" -o "$tmp/app" >"$tmp/build.out" 2>&1; then
     if "$tmp/app"; then rc=0; else rc=$?; fi
     if [ "$rc" != 30 ]; then echo "check-packages: FAIL — app returned $rc, expected 30" >&2; exit 1; fi
 else
@@ -118,11 +118,11 @@ KAMA
 tar -czf "$tmp/geo2.tgz" -C "$tmp" geo2       # wrapper dir geo2/ -> stripped by --strip-components=1
 
 proj2="$tmp/proj2"
-mkdir -p "$proj2"
+mkdir -p "$proj2/src"
 cat > "$proj2/kama.json" <<JSON
 { "name": "c2", "version": "0.1.0", "kind": "executable", "dependencies": { "geo2": { "url": "file://$tmp/geo2.tgz" } } }
 JSON
-cat > "$proj2/main.kama" <<'KAMA'
+cat > "$proj2/src/main.kama" <<'KAMA'
 import geo2::{area2};
 fn int32 main() { return area2(); }   // 42
 KAMA
@@ -136,12 +136,12 @@ fi
 
 # 4. tamper: pin a WRONG integrity -> install must fail non-zero and not populate the store.
 proj3="$tmp/proj3"
-mkdir -p "$proj3"
+mkdir -p "$proj3/src"
 cat > "$proj3/kama.json" <<JSON
 { "name": "c3", "version": "0.1.0", "kind": "executable",
   "dependencies": { "geo2": { "url": "file://$tmp/geo2.tgz", "integrity": "sha256-0000000000000000000000000000000000000000000000000000000000000000" } } }
 JSON
-cat > "$proj3/main.kama" <<'KAMA'
+cat > "$proj3/src/main.kama" <<'KAMA'
 fn int32 main() { return 0; }
 KAMA
 if "$KAMA" pkg install "$proj3" >"$tmp/tamper.out" 2>&1; then
@@ -157,26 +157,26 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 run() { if "$@"; then RC=0; else RC=$?; fi; }   # capture a program's exit code without tripping `set -e`
 
 # a dev-only helper package, and a middle package that deps on geo (prod) + testkit (DEV).
-tk="$tmp/testkit"; mkdir -p "$tk"
+tk="$tmp/testkit"; mkdir -p "$tk/src"
 printf '{ "name": "testkit", "version": "1.0.0", "kind": "library" }\n' > "$tk/kama.json"
-printf 'namespace testkit;\nexport { helper };\nfn int32 helper() { return 7; }\n' > "$tk/testkit.kama"
+printf 'namespace testkit;\nexport { helper };\nfn int32 helper() { return 7; }\n' > "$tk/src/testkit.kama"
 git -C "$tk" init -q; git -C "$tk" add -A; git -C "$tk" commit -qm init; git -C "$tk" tag v1.0.0
 
-mid="$tmp/mid"; mkdir -p "$mid"
+mid="$tmp/mid"; mkdir -p "$mid/src"
 cat > "$mid/kama.json" <<J
 { "name": "mid", "version": "1.0.0", "kind": "library",
   "dependencies":     { "geo":     { "git": "file://$geo", "rev": "v1.0.0" } },
   "dev-dependencies": { "testkit": { "git": "file://$tk",  "rev": "v1.0.0" } } }
 J
-printf 'namespace mid;\nimport geo::{area};\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/mid.kama"
+printf 'namespace mid;\nimport geo::{area};\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/src/mid.kama"
 git -C "$mid" init -q; git -C "$mid" add -A; git -C "$mid" commit -qm init; git -C "$mid" tag v1.0.0
 
 # 5. transitive: consumer -> mid -> geo. mid's OWN dev-dep (testkit) must NOT propagate.
-t5="$tmp/t5"; mkdir -p "$t5"
+t5="$tmp/t5"; mkdir -p "$t5/src"
 cat > "$t5/kama.json" <<J
 { "name": "t5", "version": "0.1.0", "kind": "executable", "dependencies": { "mid": { "git": "file://$mid", "rev": "v1.0.0" } } }
 J
-printf 'import mid::{boxed};\nfn int32 main() { return boxed(); }\n' > "$t5/main.kama"   # 35
+printf 'import mid::{boxed};\nfn int32 main() { return boxed(); }\n' > "$t5/src/main.kama"   # 35
 if ! "$KAMA" pkg install "$t5" >"$tmp/t5.out" 2>&1; then
     echo "check-packages: FAIL — transitive install errored:" >&2; sed 's/^/  /' "$tmp/t5.out" >&2; exit 1; fi
 if ! grep -q '"mid"' "$t5/kama.lock" || ! grep -q '"geo"' "$t5/kama.lock" \
@@ -184,7 +184,7 @@ if ! grep -q '"mid"' "$t5/kama.lock" || ! grep -q '"geo"' "$t5/kama.lock" \
     echo "check-packages: FAIL — transitive lock missing mid/geo or the mid->geo edge:" >&2; sed 's/^/  /' "$t5/kama.lock" >&2; exit 1; fi
 if grep -q 'testkit' "$t5/kama.lock"; then
     echo "check-packages: FAIL — a fetched package's dev-dependency leaked transitively" >&2; exit 1; fi
-if "$KAMA" build "$t5/main.kama" -o "$tmp/a5" >"$tmp/b5.out" 2>&1; then run "$tmp/a5"
+if "$KAMA" build "$t5/src/main.kama" -o "$tmp/a5" >"$tmp/b5.out" 2>&1; then run "$tmp/a5"
     [ "$RC" = 35 ] || { echo "check-packages: FAIL — transitive app returned $RC, expected 35" >&2; exit 1; }
 else echo "check-packages: FAIL — transitive build failed:" >&2; sed 's/^/  /' "$tmp/b5.out" >&2; exit 1; fi
 
@@ -211,20 +211,20 @@ if ! "$KAMA" pkg install "$t6" >"$tmp/t6b.out" 2>&1 || ! cmp -s "$tmp/t6.lock" "
     echo "check-packages: FAIL — cold-store re-fetch by pinned commit not reproducible:" >&2; sed 's/^/  /' "$tmp/t6b.out" >&2; exit 1; fi
 
 # 8. dev-dependency boundary: dev view separate; prod build can't import it; --dev build can (any opt level).
-t8="$tmp/t8"; mkdir -p "$t8"
+t8="$tmp/t8"; mkdir -p "$t8/src"
 cat > "$t8/kama.json" <<J
 { "name": "t8", "version": "0.1.0", "kind": "executable", "dev-dependencies": { "testkit": { "git": "file://$tk", "rev": "v1.0.0" } } }
 J
-printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t8/main.kama"   # 7
+printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t8/src/main.kama"   # 7
 if ! "$KAMA" pkg install "$t8" >"$tmp/t8.out" 2>&1; then
     echo "check-packages: FAIL — dev-dep install errored:" >&2; sed 's/^/  /' "$tmp/t8.out" >&2; exit 1; fi
 [ -e "$t8/.kama/dev-deps/testkit" ] || { echo "check-packages: FAIL — dev-dep not linked into .kama/dev-deps" >&2; exit 1; }
 [ -e "$t8/.kama/deps/testkit" ]     && { echo "check-packages: FAIL — dev-dep leaked into the prod view" >&2; exit 1; }
 grep -q '"dev": true' "$t8/kama.lock" || { echo "check-packages: FAIL — lock did not tag the dev-dep" >&2; sed 's/^/  /' "$t8/kama.lock" >&2; exit 1; }
-if "$KAMA" build "$t8/main.kama" -o "$tmp/a8" >"$tmp/e8" 2>&1; then
+if "$KAMA" build "$t8/src/main.kama" -o "$tmp/a8" >"$tmp/e8" 2>&1; then
     echo "check-packages: FAIL — a prod build imported a dev-dependency" >&2; exit 1; fi
 grep -qi "cannot resolve module" "$tmp/e8" || { echo "check-packages: FAIL — prod build failed with the wrong error:" >&2; sed 's/^/  /' "$tmp/e8" >&2; exit 1; }
-if "$KAMA" build "$t8/main.kama" --dev -o "$tmp/a8" >"$tmp/e8b" 2>&1; then run "$tmp/a8"
+if "$KAMA" build "$t8/src/main.kama" --dev -o "$tmp/a8" >"$tmp/e8b" 2>&1; then run "$tmp/a8"
     [ "$RC" = 7 ] || { echo "check-packages: FAIL — --dev app returned $RC, expected 7" >&2; exit 1; }
 else echo "check-packages: FAIL — --dev build could not import the dev-dependency:" >&2; sed 's/^/  /' "$tmp/e8b" >&2; exit 1; fi
 
@@ -250,8 +250,8 @@ grep -q '"FANCY"' "$t9/kama.json" && grep -q '"name": "t9"' "$t9/kama.json" \
 # 10. conflict hard-fail: two packages require the same name at different revs (no reconciliation yet).
 git -C "$geo" tag geo-alt v1.0.0
 for m in midA midB; do
-    d="$tmp/$m"; mkdir -p "$d"
-    printf 'namespace %s;\nexport{v};\nfn int32 v(){return 1;}\n' "$m" > "$d/$m.kama"
+    d="$tmp/$m"; mkdir -p "$d/src"
+    printf 'namespace %s;\nexport{v};\nfn int32 v(){return 1;}\n' "$m" > "$d/src/$m.kama"
 done
 cat > "$tmp/midA/kama.json" <<J
 { "name": "midA", "kind": "executable", "dependencies": { "geo": { "git": "file://$geo", "rev": "v1.0.0" } } }
@@ -321,11 +321,11 @@ grep -qi 'no "entry"' "$tmp/r14b.out" || { echo "check-packages: FAIL — no-ent
 # A single repo tagged across several versions; each tagged commit returns a version-distinguishable value
 # from area() so the built program's EXIT CODE proves which tag the resolver selected. A pre-release
 # (v1.3.0-rc1) and a non-SemVer alias (nightly) must be ignored — never selected.
-gv="$tmp/gv-src"; mkdir -p "$gv"
+gv="$tmp/gv-src"; mkdir -p "$gv/src"
 printf '{ "name": "gv", "version": "0.0.0", "kind": "library" }\n' > "$gv/kama.json"
 git -C "$gv" init -q
 gvtag() {   # $1 = return value baked into area(); $2 = tag name
-    printf 'namespace gv;\nexport { area };\nfn int32 area() { return %s; }\n' "$1" > "$gv/gv.kama"
+    printf 'namespace gv;\nexport { area };\nfn int32 area() { return %s; }\n' "$1" > "$gv/src/gv.kama"
     git -C "$gv" add -A; git -C "$gv" commit -qm "$2"; git -C "$gv" tag "$2"
 }
 gvtag 100 v1.0.0
@@ -337,14 +337,14 @@ git -C "$gv" tag nightly    # non-SemVer alias on the newest commit: not a candi
 
 CRDIR=""
 check_range() {   # $1 = range, $2 = expected exit code, $3 = unique suffix
-    d="$tmp/cr$3"; mkdir -p "$d"; CRDIR="$d"
+    d="$tmp/cr$3"; mkdir -p "$d/src"; CRDIR="$d"
     cat > "$d/kama.json" <<J
 { "name": "cr$3", "version": "0.1.0", "kind": "executable", "dependencies": { "gv": { "git": "file://$gv", "version": "$1" } } }
 J
-    printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$d/main.kama"
+    printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$d/src/main.kama"
     if ! "$KAMA" pkg install "$d" >"$tmp/cr$3.out" 2>&1; then
         echo "check-packages: FAIL — range '$1' install errored:" >&2; sed 's/^/  /' "$tmp/cr$3.out" >&2; exit 1; fi
-    if "$KAMA" build "$d/main.kama" -o "$tmp/crapp$3" >"$tmp/crb$3.out" 2>&1; then run "$tmp/crapp$3"
+    if "$KAMA" build "$d/src/main.kama" -o "$tmp/crapp$3" >"$tmp/crb$3.out" 2>&1; then run "$tmp/crapp$3"
         [ "$RC" = "$2" ] || { echo "check-packages: FAIL — range '$1' selected the wrong version (app returned $RC, expected $2)" >&2; exit 1; }
     else echo "check-packages: FAIL — range '$1' consumer build failed:" >&2; sed 's/^/  /' "$tmp/crb$3.out" >&2; exit 1; fi
 }
@@ -361,57 +361,57 @@ check_range "*"      200 15d     # wildcard -> the absolute highest, 2.0.0
 
 # 16. range INTERSECTION across two requestors (compatible): root wants >=1.1.0, midv wants ^1.0.0 ->
 #     >=1.1.0 <2.0.0 -> a single flat gv at 1.2.0.
-midv="$tmp/midv"; mkdir -p "$midv"
+midv="$tmp/midv"; mkdir -p "$midv/src"
 cat > "$midv/kama.json" <<J
 { "name": "midv", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } } }
 J
-printf 'namespace midv;\nimport gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/midv.kama"
+printf 'namespace midv;\nimport gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/src/midv.kama"
 git -C "$midv" init -q; git -C "$midv" add -A; git -C "$midv" commit -qm init; git -C "$midv" tag v1.0.0
-t16="$tmp/t16"; mkdir -p "$t16"
+t16="$tmp/t16"; mkdir -p "$t16/src"
 cat > "$t16/kama.json" <<J
 { "name": "t16", "kind": "executable", "dependencies": {
     "gv":   { "git": "file://$gv",   "version": ">=1.1.0" },
     "midv": { "git": "file://$midv", "rev": "v1.0.0" } } }
 J
-printf 'import gv::{area};\nimport midv::{mv};\nfn int32 main() { return area() + mv()*0; }\n' > "$t16/main.kama"
+printf 'import gv::{area};\nimport midv::{mv};\nfn int32 main() { return area() + mv()*0; }\n' > "$t16/src/main.kama"
 if ! "$KAMA" pkg install "$t16" >"$tmp/t16.out" 2>&1; then
     echo "check-packages: FAIL — intersection install errored:" >&2; sed 's/^/  /' "$tmp/t16.out" >&2; exit 1; fi
 grep -q '"version": "1.2.0"' "$t16/kama.lock" \
     || { echo "check-packages: FAIL — range intersection did not resolve gv to 1.2.0:" >&2; sed 's/^/  /' "$t16/kama.lock" >&2; exit 1; }
-if "$KAMA" build "$t16/main.kama" -o "$tmp/a16" >"$tmp/b16.out" 2>&1; then run "$tmp/a16"
+if "$KAMA" build "$t16/src/main.kama" -o "$tmp/a16" >"$tmp/b16.out" 2>&1; then run "$tmp/a16"
     [ "$RC" = 120 ] || { echo "check-packages: FAIL — intersection app returned $RC, expected 120" >&2; exit 1; }
 else echo "check-packages: FAIL — intersection build failed:" >&2; sed 's/^/  /' "$tmp/b16.out" >&2; exit 1; fi
 
 # 16b. intersection forcing a DOWNGRADE: root picks 1.2.0 for <=1.2.0, then midlo's <=1.1.0 tightens it ->
 #      the resolver re-resolves to 1.1.0 (the restart-with-seeded-constraint path).
-midlo="$tmp/midlo"; mkdir -p "$midlo"
+midlo="$tmp/midlo"; mkdir -p "$midlo/src"
 cat > "$midlo/kama.json" <<J
 { "name": "midlo", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "<=1.1.0" } } }
 J
-printf 'namespace midlo;\nimport gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/midlo.kama"
+printf 'namespace midlo;\nimport gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/src/midlo.kama"
 git -C "$midlo" init -q; git -C "$midlo" add -A; git -C "$midlo" commit -qm init; git -C "$midlo" tag v1.0.0
-t16b="$tmp/t16b"; mkdir -p "$t16b"
+t16b="$tmp/t16b"; mkdir -p "$t16b/src"
 cat > "$t16b/kama.json" <<J
 { "name": "t16b", "kind": "executable", "dependencies": {
     "gv":    { "git": "file://$gv",    "version": "<=1.2.0" },
     "midlo": { "git": "file://$midlo", "rev": "v1.0.0" } } }
 J
-printf 'import gv::{area};\nimport midlo::{ml};\nfn int32 main() { return area() + ml()*0; }\n' > "$t16b/main.kama"
+printf 'import gv::{area};\nimport midlo::{ml};\nfn int32 main() { return area() + ml()*0; }\n' > "$t16b/src/main.kama"
 if ! "$KAMA" pkg install "$t16b" >"$tmp/t16b.out" 2>&1; then
     echo "check-packages: FAIL — downgrade install errored:" >&2; sed 's/^/  /' "$tmp/t16b.out" >&2; exit 1; fi
 grep -q '"version": "1.1.0"' "$t16b/kama.lock" \
     || { echo "check-packages: FAIL — a tighter transitive range did not downgrade gv to 1.1.0:" >&2; sed 's/^/  /' "$t16b/kama.lock" >&2; exit 1; }
-if "$KAMA" build "$t16b/main.kama" -o "$tmp/a16b" >"$tmp/b16b.out" 2>&1; then run "$tmp/a16b"
+if "$KAMA" build "$t16b/src/main.kama" -o "$tmp/a16b" >"$tmp/b16b.out" 2>&1; then run "$tmp/a16b"
     [ "$RC" = 110 ] || { echo "check-packages: FAIL — downgrade app returned $RC, expected 110" >&2; exit 1; }
 else echo "check-packages: FAIL — downgrade build failed:" >&2; sed 's/^/  /' "$tmp/b16b.out" >&2; exit 1; fi
 
 # 17. DISJOINT ranges -> hard fail naming both requestors: midhi needs >=1.2.0, midlo2 needs <1.2.0.
 for m in midhi:'>=1.2.0' midlo2:'<1.2.0'; do
-    name=${m%%:*}; rng=${m#*:}; d="$tmp/$name"; mkdir -p "$d"
+    name=${m%%:*}; rng=${m#*:}; d="$tmp/$name"; mkdir -p "$d/src"
     cat > "$d/kama.json" <<J
 { "name": "$name", "kind": "executable", "dependencies": { "gv": { "git": "file://$gv", "version": "$rng" } } }
 J
-    printf 'namespace %s;\nimport gv::{area};\nexport { v };\nfn int32 v() { return area(); }\n' "$name" > "$d/$name.kama"
+    printf 'namespace %s;\nimport gv::{area};\nexport { v };\nfn int32 v() { return area(); }\n' "$name" > "$d/src/$name.kama"
     git -C "$d" init -q; git -C "$d" add -A; git -C "$d" commit -qm init; git -C "$d" tag v1.0.0
 done
 t17="$tmp/t17"; mkdir -p "$t17"
@@ -427,11 +427,11 @@ grep -q '>=1.2.0' "$tmp/e17" && grep -q '<1.2.0' "$tmp/e17" \
     || { echo "check-packages: FAIL — disjoint conflict did not name both ranges:" >&2; sed 's/^/  /' "$tmp/e17" >&2; exit 1; }
 
 # 18. offline byte-identical re-install: a range dep reuses the locked concrete version WITHOUT ls-remote.
-off="$tmp/off"; mkdir -p "$off"
+off="$tmp/off"; mkdir -p "$off/src"
 cat > "$off/kama.json" <<J
 { "name": "off", "kind": "executable", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } } }
 J
-printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$off/main.kama"
+printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$off/src/main.kama"
 if ! "$KAMA" pkg install "$off" >"$tmp/off.out" 2>&1; then
     echo "check-packages: FAIL — range offline setup install errored:" >&2; sed 's/^/  /' "$tmp/off.out" >&2; exit 1; fi
 cp "$off/kama.lock" "$tmp/off.lock"
@@ -454,9 +454,9 @@ reg="$(kama_native_path "$tmp")/reg"; mkdir -p "$reg"
 
 # publish two versions of `rg` (area() returns a version-distinguishing value) by dogfooding `kama publish`.
 pub_rg() {   # pub_rg <version> <area-return>
-    d="$tmp/rg-src-$1"; mkdir -p "$d"
+    d="$tmp/rg-src-$1"; mkdir -p "$d/src"
     printf '{ "name": "rg", "version": "%s", "kind": "library" }\n' "$1" > "$d/kama.json"
-    printf 'namespace rg;\nexport { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/rg.kama"
+    printf 'namespace rg;\nexport { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/src/rg.kama"
     ( cd "$d" && "$KAMA" publish --registry "file://$reg" )
 }
 # 19. publish → index + tarball + integrity; a second publish of the same version FAILS (immutability).
@@ -471,12 +471,12 @@ grep -qi "immutable" "$tmp/repub.out" || { echo "check-packages: FAIL — republ
 
 # a consumer with a registry dep + a caret range resolves the HIGHEST version (1.2.0), fetches into the
 # store, links the view, records source:"registry" + version + integrity, and the built program runs (=12).
-rc1="$tmp/rc1"; mkdir -p "$rc1"
+rc1="$tmp/rc1"; mkdir -p "$rc1/src"
 cat > "$rc1/kama.json" <<JSON
 { "name": "rc1", "version": "0.1.0", "kind": "executable",
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } } }
 JSON
-printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rc1/main.kama"
+printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rc1/src/main.kama"
 if ! "$KAMA" pkg install "$rc1" >"$tmp/rc1.out" 2>&1; then echo "check-packages: FAIL — registry install errored:" >&2; sed 's/^/  /' "$tmp/rc1.out" >&2; exit 1; fi
 lock="$rc1/kama.lock"
 grep -q '"source": "registry"' "$lock" && grep -q '"version": "1.2.0"' "$lock" && grep -q '"integrity": "sha256-' "$lock" \
@@ -485,30 +485,30 @@ case "$(kama_native_path "$(readlink "$rc1/.kama/deps/rg" 2>/dev/null || echo /n
     "$KAMA_STORE"/rg-*) : ;;
     *) echo "check-packages: FAIL — .kama/deps/rg does not link into the store" >&2; exit 1 ;;
 esac
-if "$KAMA" build "$rc1/main.kama" -o "$tmp/rcapp" >"$tmp/rc1b.out" 2>&1; then
+if "$KAMA" build "$rc1/src/main.kama" -o "$tmp/rcapp" >"$tmp/rc1b.out" 2>&1; then
     if "$tmp/rcapp"; then rrc=0; else rrc=$?; rc=$rrc; fi
     [ "$rc" = 12 ] || { echo "check-packages: FAIL — registry consumer returned $rc, expected 12 (highest = 1.2.0)" >&2; exit 1; }
 else echo "check-packages: FAIL — build of the registry consumer failed:" >&2; sed 's/^/  /' "$tmp/rc1b.out" >&2; exit 1; fi
 
 # 20. transitive from a registry: `hi` (registry) depends on `rg` (registry); a consumer of `hi` resolves
 # both from the fetched manifest (child deps read from the tarball, exactly like a url dep).
-hi="$tmp/hi-src"; mkdir -p "$hi"
+hi="$tmp/hi-src"; mkdir -p "$hi/src"
 cat > "$hi/kama.json" <<JSON
 { "name": "hi", "version": "1.0.0", "kind": "library",
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } } }
 JSON
-printf 'namespace hi;\nimport rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/hi.kama"
+printf 'namespace hi;\nimport rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
 if ! ( cd "$hi" && "$KAMA" publish --registry "file://$reg" ) >"$tmp/hipub.out" 2>&1; then echo "check-packages: FAIL — publish hi errored:" >&2; sed 's/^/  /' "$tmp/hipub.out" >&2; exit 1; fi
-rc2="$tmp/rc2"; mkdir -p "$rc2"
+rc2="$tmp/rc2"; mkdir -p "$rc2/src"
 cat > "$rc2/kama.json" <<JSON
 { "name": "rc2", "version": "0.1.0", "kind": "executable",
   "dependencies": { "hi": { "version": "^1.0.0", "registry": "file://$reg" } } }
 JSON
-printf 'import hi::{total};\nfn int32 main() { return total(); }\n' > "$rc2/main.kama"
+printf 'import hi::{total};\nfn int32 main() { return total(); }\n' > "$rc2/src/main.kama"
 if ! "$KAMA" pkg install "$rc2" >"$tmp/rc2.out" 2>&1; then echo "check-packages: FAIL — transitive registry install errored:" >&2; sed 's/^/  /' "$tmp/rc2.out" >&2; exit 1; fi
 grep -q '"hi"' "$rc2/kama.lock" && grep -q '"rg"' "$rc2/kama.lock" \
     || { echo "check-packages: FAIL — transitive registry install did not resolve both hi and rg:" >&2; sed 's/^/  /' "$rc2/kama.lock" >&2; exit 1; }
-if "$KAMA" build "$rc2/main.kama" -o "$tmp/rc2app" >"$tmp/rc2b.out" 2>&1; then
+if "$KAMA" build "$rc2/src/main.kama" -o "$tmp/rc2app" >"$tmp/rc2b.out" 2>&1; then
     if "$tmp/rc2app"; then rc=0; else rc=$?; fi
     [ "$rc" = 20 ] || { echo "check-packages: FAIL — transitive consumer returned $rc, expected 20 (12 + 8)" >&2; exit 1; }
 else echo "check-packages: FAIL — build of the transitive consumer failed:" >&2; sed 's/^/  /' "$tmp/rc2b.out" >&2; exit 1; fi
@@ -529,21 +529,21 @@ mv "$reg.hidden" "$reg"
 # 22. scoped routing + opt-out-of-default. Publish `@acme/sc` to a scope registry; a consumer routes
 # `@acme` to it (and drops the default), imports it as `sc`, builds, and runs.
 areg="$(kama_native_path "$tmp")/areg"; mkdir -p "$areg"
-sc="$tmp/sc-src"; mkdir -p "$sc"
+sc="$tmp/sc-src"; mkdir -p "$sc/src"
 printf '{ "name": "@acme/sc", "version": "1.0.0", "kind": "library" }\n' > "$sc/kama.json"
-printf 'namespace sc;\nexport { val };\nfn int32 val() { return 7; }\n' > "$sc/sc.kama"
+printf 'namespace sc;\nexport { val };\nfn int32 val() { return 7; }\n' > "$sc/src/sc.kama"
 if ! ( cd "$sc" && "$KAMA" publish --registry "file://$areg" ) >"$tmp/scpub.out" 2>&1; then echo "check-packages: FAIL — publish @acme/sc errored:" >&2; sed 's/^/  /' "$tmp/scpub.out" >&2; exit 1; fi
 [ -f "$areg/@acme/sc/index.json" ] || { echo "check-packages: FAIL — scoped publish path wrong (no @acme/sc/index.json)" >&2; find "$areg" >&2; exit 1; }
-scp="$tmp/scp"; mkdir -p "$scp"
+scp="$tmp/scp"; mkdir -p "$scp/src"
 cat > "$scp/kama.json" <<JSON
 { "name": "scp", "version": "0.1.0", "kind": "library",
   "registries": { "default": false, "@acme": "file://$areg" },
   "dependencies": { "@acme/sc": { "version": "^1.0.0" } } }
 JSON
-printf 'import sc::{val};\nfn int32 main() { return val(); }\n' > "$scp/main.kama"
+printf 'import sc::{val};\nfn int32 main() { return val(); }\n' > "$scp/src/main.kama"
 if ! "$KAMA" pkg install "$scp" >"$tmp/scp.out" 2>&1; then echo "check-packages: FAIL — scoped install errored:" >&2; sed 's/^/  /' "$tmp/scp.out" >&2; exit 1; fi
 [ -L "$scp/.kama/deps/sc" ] || { echo "check-packages: FAIL — scoped dep did not import under its bare name (.kama/deps/sc)" >&2; ls "$scp/.kama/deps" >&2; exit 1; }
-if "$KAMA" build "$scp/main.kama" -o "$tmp/scapp" >"$tmp/scb.out" 2>&1; then
+if "$KAMA" build "$scp/src/main.kama" -o "$tmp/scapp" >"$tmp/scb.out" 2>&1; then
     if "$tmp/scapp"; then rc=0; else rc=$?; fi
     [ "$rc" = 7 ] || { echo "check-packages: FAIL — scoped consumer returned $rc, expected 7" >&2; exit 1; }
 else echo "check-packages: FAIL — build of the scoped consumer failed:" >&2; sed 's/^/  /' "$tmp/scb.out" >&2; exit 1; fi
@@ -562,7 +562,7 @@ grep -qi "no registry configured" "$tmp/opo.out" || { echo "check-packages: FAIL
 # Native-spelled: these three are REGISTRIES (see the note at `reg=` above), not git repos.
 ntmp=$(kama_native_path "$tmp")
 ra="$ntmp/cf-a"; rb="$ntmp/cf-b"; rc_="$ntmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
-mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'namespace cf;\nexport { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/cf.kama"; echo "$d"; }
+mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d/src"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'namespace cf;\nexport { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/src/cf.kama"; echo "$d"; }
 csame=$(mkcf same 3); cdiff=$(mkcf diff 4)
 ( cd "$csame" && "$KAMA" publish --registry "file://$ra" ) >/dev/null 2>&1
 ( cd "$csame" && "$KAMA" publish --registry "file://$rb" ) >/dev/null 2>&1
@@ -585,7 +585,7 @@ grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusio
 
 # 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
 creg="$(kama_native_path "$tmp")/creg"; mkdir -p "$creg"
-for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'namespace cn;\nexport { val };\nfn int32 val() { return 1; }\n' > "$d/cn.kama"; ( cd "$d" && "$KAMA" publish --registry "file://$creg" ) >/dev/null 2>&1; done
+for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'namespace cn;\nexport { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; ( cd "$d" && "$KAMA" publish --registry "file://$creg" ) >/dev/null 2>&1; done
 colp="$tmp/colp"; mkdir -p "$colp"
 cat > "$colp/kama.json" <<JSON
 { "name": "colp", "version": "0.1.0", "kind": "executable",
@@ -601,19 +601,19 @@ grep -qi "collision" "$tmp/colp.out" || { echo "check-packages: FAIL — collisi
 if command -v ssh-keygen >/dev/null 2>&1; then
     sreg="$(kama_native_path "$tmp")/sreg"; mkdir -p "$sreg"
     ssh-keygen -t ed25519 -f "$tmp/pubkey" -N "" -q
-    sg="$tmp/sg-src"; mkdir -p "$sg"
+    sg="$tmp/sg-src"; mkdir -p "$sg/src"
     printf '{ "name": "sg", "version": "1.0.0", "kind": "library" }\n' > "$sg/kama.json"
-    printf 'namespace sg;\nexport { val };\nfn int32 val() { return 5; }\n' > "$sg/sg.kama"
+    printf 'namespace sg;\nexport { val };\nfn int32 val() { return 5; }\n' > "$sg/src/sg.kama"
     if ! ( cd "$sg" && "$KAMA" publish --registry "file://$sreg" --key "$tmp/pubkey" ) >"$tmp/sgpub.out" 2>&1; then
         echo "check-packages: FAIL — signed publish errored:" >&2; sed 's/^/  /' "$tmp/sgpub.out" >&2; exit 1; fi
     grep -q '"signature"' "$sreg/sg/index.json" && grep -q '"key"' "$sreg/sg/index.json" \
         || { echo "check-packages: FAIL — signed publish did not record signature+key in the index" >&2; exit 1; }
-    sgp="$tmp/sgp"; mkdir -p "$sgp"
+    sgp="$tmp/sgp"; mkdir -p "$sgp/src"
     cat > "$sgp/kama.json" <<JSON
 { "name": "sgp", "version": "0.1.0", "kind": "executable",
   "dependencies": { "sg": { "version": "^1.0.0", "registry": "file://$sreg" } } }
 JSON
-    printf 'import sg::{val};\nfn int32 main() { return val(); }\n' > "$sgp/main.kama"
+    printf 'import sg::{val};\nfn int32 main() { return val(); }\n' > "$sgp/src/main.kama"
     # 25a. --verify install of a signed package passes.
     if ! "$KAMA" pkg install "$sgp" --verify >"$tmp/sv.out" 2>&1; then
         echo "check-packages: FAIL — --verify install of a signed package errored:" >&2; sed 's/^/  /' "$tmp/sv.out" >&2; exit 1; fi
@@ -640,25 +640,25 @@ fi
 # 26. dep path-override (patch-style): a git dep is redirected to a LOCAL dir for this dev only. The
 #     committed kama.lock stays BYTE-IDENTICAL (the override is never locked → CI-safe), the view relinks
 #     to the local dir, and the build compiles the local code (77) rather than the published one (30).
-ogeo="$tmp/ogeo-src"; mkdir -p "$ogeo"
+ogeo="$tmp/ogeo-src"; mkdir -p "$ogeo/src"
 printf '{ "name": "ogeo", "version": "1.0.0", "kind": "library" }\n' > "$ogeo/kama.json"
-printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 30; }\n' > "$ogeo/ogeo.kama"
+printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 30; }\n' > "$ogeo/src/ogeo.kama"
 git -C "$ogeo" init -q
 git -C "$ogeo" -c user.email=t@t -c user.name=t add -A
 git -C "$ogeo" -c user.email=t@t -c user.name=t commit -qm init
 git -C "$ogeo" tag v1.0.0
-ovp="$tmp/ovp"; mkdir -p "$ovp"
+ovp="$tmp/ovp"; mkdir -p "$ovp/src"
 cat > "$ovp/kama.json" <<JSON
 { "name": "ovc", "version": "0.1.0", "kind": "executable",
   "dependencies": { "ogeo": { "git": "file://$ogeo", "rev": "v1.0.0" } } }
 JSON
-printf 'import ogeo::{area};\nfn int32 main() { return area(); }\n' > "$ovp/main.kama"
+printf 'import ogeo::{area};\nfn int32 main() { return area(); }\n' > "$ovp/src/main.kama"
 if ! "$KAMA" pkg install "$ovp" >"$tmp/ov1.out" 2>&1; then
     echo "check-packages: FAIL — override base install errored:" >&2; sed 's/^/  /' "$tmp/ov1.out" >&2; exit 1; fi
 cp "$ovp/kama.lock" "$tmp/ov.lock.canon"
-oloc="$tmp/ogeo-local"; mkdir -p "$oloc"
+oloc="$tmp/ogeo-local"; mkdir -p "$oloc/src"
 printf '{ "name": "ogeo", "version": "1.0.0", "kind": "library" }\n' > "$oloc/kama.json"
-printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 77; }\n' > "$oloc/ogeo.kama"
+printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 77; }\n' > "$oloc/src/ogeo.kama"
 cat > "$ovp/kama.local.json" <<JSON
 { "overrides": { "ogeo": { "path": "../ogeo-local" } } }
 JSON
@@ -671,7 +671,7 @@ case "$(readlink "$ovp/.kama/deps/ogeo" 2>/dev/null || true)" in
     *ogeo-local) : ;;
     *) echo "check-packages: FAIL — override did not relink the view to the local dir" >&2; exit 1 ;;
 esac
-if "$KAMA" build "$ovp/main.kama" -o "$tmp/ovapp" >"$tmp/ovb.out" 2>&1; then
+if "$KAMA" build "$ovp/src/main.kama" -o "$tmp/ovapp" >"$tmp/ovb.out" 2>&1; then
     if "$tmp/ovapp"; then orc=0; else orc=$?; fi
     [ "$orc" = 77 ] || { echo "check-packages: FAIL — override app returned $orc, expected 77 (local code)" >&2; exit 1; }
 else echo "check-packages: FAIL — build against the override failed:" >&2; sed 's/^/  /' "$tmp/ovb.out" >&2; exit 1; fi
@@ -688,12 +688,12 @@ grep -qi "not a dependency" "$tmp/ovbad.out" \
 #     fails to resolve (no built-in default in a dev build); a kama.local.json `registries.default`
 #     supplies the base and the dep resolves — proving the local registries override is consulted. (Reuses
 #     the `rg` package published to $reg above.)
-rp="$tmp/rp"; mkdir -p "$rp"
+rp="$tmp/rp"; mkdir -p "$rp/src"
 cat > "$rp/kama.json" <<JSON
 { "name": "rpc", "version": "0.1.0", "kind": "executable",
   "dependencies": { "rg": { "version": "^1.0.0" } } }
 JSON
-printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rp/main.kama"
+printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rp/src/main.kama"
 if "$KAMA" pkg install "$rp" >"$tmp/rp0.out" 2>&1; then
     echo "check-packages: FAIL — registry dep resolved with no registry configured" >&2; exit 1; fi
 cat > "$rp/kama.local.json" <<JSON
@@ -708,14 +708,14 @@ grep -q '"source": "registry"' "$rp/kama.lock" \
 # The five-file monorepo from docs/packages.md § Workspaces: a root that composes `projects`, two
 # libraries, and an app. `libs/net` declares the sibling it imports, which is what makes it extractable.
 ws="$tmp/acme"
-mkdir -p "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"
+mkdir -p "$ws/libs/config/src" "$ws/libs/net/src" "$ws/apps/server/src"
 cat > "$ws/kama.json" <<'JSON'
 { "name": "acme", "version": "0.1.0", "projects": ["libs/*", "apps/server"] }
 JSON
 cat > "$ws/libs/config/kama.json" <<'JSON'
-{ "name": "config", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "config", "version": "0.1.0", "kind": "library" }
 JSON
-cat > "$ws/libs/config/config.kama" <<'KAMA'
+cat > "$ws/libs/config/src/config.kama" <<'KAMA'
 namespace config;
 export { Config };
 
@@ -725,10 +725,10 @@ type value Config {
 }
 KAMA
 cat > "$ws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."],
+{ "name": "net", "version": "0.1.0", "kind": "library",
   "dependencies": { "config": { "path": "../config" } } }
 JSON
-cat > "$ws/libs/net/net.kama" <<'KAMA'
+cat > "$ws/libs/net/src/net.kama" <<'KAMA'
 namespace net;
 import config::{Config};
 export { listenPort };
@@ -738,15 +738,15 @@ KAMA
 # The app declares only what IT imports. `config` therefore reaches the resolver for the first time as a
 # TRANSITIVE request from `net` — a non-root requestor, which is the case the top-level-only rule refused.
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } } }
 JSON
-printf 'import net::{listenPort};\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/main.kama"
+printf 'import net::{listenPort};\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/src/main.kama"
 
 # 28. a workspace member may declare the sibling it imports, and that path dep resolves transitively.
 if ! "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws0.out" 2>&1; then
     echo "check-packages: FAIL — workspace-internal path dep rejected:" >&2; sed 's/^/  /' "$tmp/ws0.out" >&2; exit 1; fi
-"$KAMA" run "$ws/apps/server/main.kama" >/dev/null 2>&1 && wsrc=0 || wsrc=$?
+"$KAMA" run "$ws/apps/server/src/main.kama" >/dev/null 2>&1 && wsrc=0 || wsrc=$?
 [ "$wsrc" = 8 ] || { echo "check-packages: FAIL — workspace app exited $wsrc, expected 8" >&2; exit 1; }
 
 # 29. THE MILESTONE — the sub-project is EXTRACTABLE: it builds on its own, from its own directory, with
@@ -754,14 +754,14 @@ if ! "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws0.out" 2>&1; then
 #     all, so it built where it sat and nowhere else.
 if ! "$KAMA" pkg install "$ws/libs/net" >"$tmp/ws1.out" 2>&1; then
     echo "check-packages: FAIL — sub-project could not install standalone:" >&2; sed 's/^/  /' "$tmp/ws1.out" >&2; exit 1; fi
-if ! "$KAMA" check "$ws/libs/net/net.kama" >"$tmp/ws2.out" 2>&1; then
+if ! "$KAMA" check "$ws/libs/net/src/net.kama" >"$tmp/ws2.out" 2>&1; then
     echo "check-packages: FAIL — sub-project does not build standalone (not extractable):" >&2; sed 's/^/  /' "$tmp/ws2.out" >&2; exit 1; fi
 
 # 30. the app may ALSO declare `config`, and it spells the same directory differently (`../../libs/config`
 #     vs net's `../config`). Paths are relative to the manifest that declared them, so the two must
 #     canonicalize to one package and dedup — comparing the spellings reports "require different sources".
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "config": { "path": "../../libs/config" },
                     "net":    { "path": "../../libs/net" } } }
 JSON
@@ -770,14 +770,14 @@ if ! "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws5.out" 2>&1; then
 
 # 31. a member may NOT reach outside the workspace — that path is not carried by anything, so it is not
 #     reproducible. The declaration is the gate, not adjacency.
-mkdir -p "$tmp/stray/lib"
+mkdir -p "$tmp/stray/lib/src"
 cat > "$tmp/stray/lib/kama.json" <<'JSON'
-{ "name": "stray", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "stray", "version": "0.1.0", "kind": "library" }
 JSON
-printf 'namespace stray;\nexport { v };\nfn int32 v() { return 1; }\n' > "$tmp/stray/lib/stray.kama"
+printf 'namespace stray;\nexport { v };\nfn int32 v() { return 1; }\n' > "$tmp/stray/lib/src/stray.kama"
 cp "$ws/libs/net/kama.json" "$tmp/net-manifest.bak"
 cat > "$ws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."],
+{ "name": "net", "version": "0.1.0", "kind": "library",
   "dependencies": { "config": { "path": "../config" },
                     "stray":  { "path": "../../../stray/lib" } } }
 JSON
@@ -791,7 +791,7 @@ cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
 #     gate is the `projects` declaration and not mere directory adjacency. (The app is back to declaring
 #     only `net`, so `config` is again a first-encounter transitive request.)
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } } }
 JSON
 mv "$ws/kama.json" "$tmp/ws-root.bak"
@@ -803,15 +803,15 @@ mv "$tmp/ws-root.bak" "$ws/kama.json"
 #     declares it. That builds where it sits and nowhere else, so the BUILD FAILS and names the exact line
 #     to add. A hard error — a guarantee nobody is forced to honor is not a guarantee.
 cat > "$ws/apps/server/kama.json" <<'JSON'
-{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "config": { "path": "../../libs/config" },
                     "net":    { "path": "../../libs/net" } } }
 JSON
 cat > "$ws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "net", "version": "0.1.0", "kind": "library" }
 JSON
 "$KAMA" pkg install "$ws/apps/server" >/dev/null 2>&1
-if "$KAMA" run "$ws/apps/server/main.kama" >"$tmp/ws6.out" 2>&1; then
+if "$KAMA" run "$ws/apps/server/src/main.kama" >"$tmp/ws6.out" 2>&1; then
     echo "check-packages: FAIL — a free-riding sub-project still built:" >&2; sed 's/^/  /' "$tmp/ws6.out" >&2; exit 1; fi
 grep -q "error:.*does not declare it" "$tmp/ws6.out" \
     || { echo "check-packages: FAIL — no error for a free-riding sub-project:" >&2; sed 's/^/  /' "$tmp/ws6.out" >&2; exit 1; }
@@ -820,14 +820,14 @@ grep -q '"config": { "path": "../config" }' "$tmp/ws6.out" \
 
 # 33b. the editor must NOT be held to it. `kama query` mirrors the LSP, and refusing to analyze would
 #      strip cross-module hover/definitions over a *manifest* problem when the code itself resolves fine.
-if ! "$KAMA" query "$ws/libs/net/net.kama" --symbols >"$tmp/ws6q.out" 2>&1; then
+if ! "$KAMA" query "$ws/libs/net/src/net.kama" --symbols >"$tmp/ws6q.out" 2>&1; then
     echo "check-packages: FAIL — the query/LSP path must degrade to a warning, not refuse:" >&2; sed 's/^/  /' "$tmp/ws6q.out" >&2; exit 1; fi
 
 # 34. and applying exactly the line it named makes it build — the remedy the diagnostic gives is one the
 #     resolver actually accepts (which it did not, before workspace-internal path deps).
 cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
 "$KAMA" pkg install "$ws/apps/server" >/dev/null 2>&1
-"$KAMA" run "$ws/apps/server/main.kama" >"$tmp/ws7.out" 2>&1 && frrc=0 || frrc=$?
+"$KAMA" run "$ws/apps/server/src/main.kama" >"$tmp/ws7.out" 2>&1 && frrc=0 || frrc=$?
 [ "$frrc" = 8 ] || { echo "check-packages: FAIL — declared workspace build exited $frrc, expected 8:" >&2; sed 's/^/  /' "$tmp/ws7.out" >&2; exit 1; }
 if grep -q "does not declare it" "$tmp/ws7.out"; then
     echo "check-packages: FAIL — still reported after declaring the dependency:" >&2; sed 's/^/  /' "$tmp/ws7.out" >&2; exit 1; fi
@@ -837,26 +837,26 @@ if grep -q "does not declare it" "$tmp/ws7.out"; then
 #     the tree hash naming its store entry — and a path dep out of a fetched package is refused anyway.
 #     So the diagnostic would instruct a destructive action nobody can act on. (`geo` is the git package
 #     built at the top of this file; here a second copy imports `mathx` without declaring it.)
-fr="$tmp/frdep"; mkdir -p "$fr/geosrc" "$fr/mathx" "$fr/app"
+fr="$tmp/frdep"; mkdir -p "$fr/geosrc/src" "$fr/mathx/src" "$fr/app/src"
 cat > "$fr/mathx/kama.json" <<'JSON'
 { "name": "mathx", "version": "1.0.0", "kind": "library" }
 JSON
-printf 'namespace mathx;\nexport { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/mathx.kama"
+printf 'namespace mathx;\nexport { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/src/mathx.kama"
 cat > "$fr/geosrc/kama.json" <<'JSON'
 { "name": "geodep", "version": "1.0.0", "kind": "library" }
 JSON
-printf 'namespace geodep;\nimport mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/geodep.kama"
+printf 'namespace geodep;\nimport mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/src/geodep.kama"
 ( cd "$fr/geosrc" && git init -q . && git add -A \
   && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
 cat > "$fr/app/kama.json" <<JSON
-{ "name": "frapp", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "frapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "geodep": { "git": "file://$fr/geosrc", "rev": "v1.0.0" },
                     "mathx":  { "path": "../mathx" } } }
 JSON
-printf 'import geodep::{area};\nfn int32 main() { return area(); }\n' > "$fr/app/main.kama"
+printf 'import geodep::{area};\nfn int32 main() { return area(); }\n' > "$fr/app/src/main.kama"
 if ! "$KAMA" pkg install "$fr/app" >"$tmp/fr0.out" 2>&1; then
     echo "check-packages: FAIL — fetched free-rider fixture did not install:" >&2; sed 's/^/  /' "$tmp/fr0.out" >&2; exit 1; fi
-"$KAMA" run "$fr/app/main.kama" >"$tmp/fr1.out" 2>&1 && frdrc=0 || frdrc=$?
+"$KAMA" run "$fr/app/src/main.kama" >"$tmp/fr1.out" 2>&1 && frdrc=0 || frdrc=$?
 [ "$frdrc" = 2 ] || { echo "check-packages: FAIL — fetched free-rider build exited $frdrc, expected 2:" >&2; sed 's/^/  /' "$tmp/fr1.out" >&2; exit 1; }
 if grep -q "does not declare it" "$tmp/fr1.out"; then
     echo "check-packages: FAIL — told the user to edit a package inside the store:" >&2; sed 's/^/  /' "$tmp/fr1.out" >&2; exit 1; fi
@@ -882,11 +882,11 @@ done
 #     the type and the contract, which is useless here: neither package's author can see the other, and
 #     the user cannot fix either from one side. It must name BOTH packages. (This is the reason kama needs
 #     no orphan rule: the hazard an orphan rule prevents is detectable directly.)
-dc="$tmp/dupconf"; mkdir -p "$dc/lib" "$dc/app"
+dc="$tmp/dupconf"; mkdir -p "$dc/lib/src" "$dc/app/src"
 cat > "$dc/lib/kama.json" <<'JSON'
 { "name": "marklib", "version": "1.0.0", "kind": "library" }
 JSON
-cat > "$dc/lib/marklib.kama" <<'EOF'
+cat > "$dc/lib/src/marklib.kama" <<'EOF'
 namespace marklib;
 export { Marker, viaMarker };
 type contract Marker for value { fn int32 mark(); }
@@ -894,16 +894,16 @@ type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } 
 fn int32 viaMarker<T: Marker>(ref T v) { return v.mark(); }
 EOF
 cat > "$dc/app/kama.json" <<JSON
-{ "name": "dupapp", "version": "0.1.0", "kind": "executable", "entry": "main.kama",
+{ "name": "dupapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "marklib": { "path": "../lib" } } }
 JSON
-cat > "$dc/app/main.kama" <<'EOF'
+cat > "$dc/app/src/main.kama" <<'EOF'
 import marklib::{Marker, viaMarker};
 type intrinsic <int32> implements Marker { public fn int32 mark() { return 2; } }
 fn int32 main() { int32 x = 5; return viaMarker(v: ref x); }
 EOF
 "$KAMA" pkg install "$dc/app" >/dev/null 2>&1
-if "$KAMA" run "$dc/app/main.kama" >"$tmp/dup.out" 2>&1; then
+if "$KAMA" run "$dc/app/src/main.kama" >"$tmp/dup.out" 2>&1; then
     echo "check-packages: FAIL — two packages claimed one conformance and it still built:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; fi
 grep -q "already implements" "$tmp/dup.out" \
     || { echo "check-packages: FAIL — no duplicate-conformance error:" >&2; sed 's/^/  /' "$tmp/dup.out" >&2; exit 1; }
@@ -914,13 +914,13 @@ grep -q "$dc/app/kama.json" "$tmp/dup.out" \
 
 # 37b. the same duplicate WITHIN one package keeps the plain message — there is no second package to name,
 #      and the author can see both declarations.
-cat > "$dc/app/main.kama" <<'EOF'
+cat > "$dc/app/src/main.kama" <<'EOF'
 type contract Solo for value { fn int32 solo(); }
 type intrinsic <int32> implements Solo { public fn int32 solo() { return 1; } }
 type intrinsic <int32> implements Solo { public fn int32 solo() { return 2; } }
 fn int32 main() { return 0; }
 EOF
-if "$KAMA" run "$dc/app/main.kama" >"$tmp/dup2.out" 2>&1; then
+if "$KAMA" run "$dc/app/src/main.kama" >"$tmp/dup2.out" 2>&1; then
     echo "check-packages: FAIL — a duplicate conformance in one package still built:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; fi
 grep -q "already implements" "$tmp/dup2.out" \
     || { echo "check-packages: FAIL — no duplicate-conformance error within one package:" >&2; sed 's/^/  /' "$tmp/dup2.out" >&2; exit 1; }

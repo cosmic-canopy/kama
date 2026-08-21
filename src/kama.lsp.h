@@ -47,11 +47,13 @@ SharedLspIndex lspAnalyze(const std::string& path, const std::string& text,
 //
 // The enumeration cap — and note what it is actually for. It is NOT a resource limit: 500 trivial files
 // analyze in ~0.3s, faster than 43 real stdlib files, because cost tracks content and import depth rather
-// than file count. It bounds a GUESS. Absent a `sources` declaration, "the project" is inferred as every
-// .kama under a root, and when that inference is wrong — kama itself holds 870, 813 of them independent
-// tests/ fixtures with their own `main` and colliding type names — they get analyzed as ONE program, the
-// symbol tables collide, and rename would confidently rewrite the wrong file. So raising this number is
-// not the fix for a large project; declaring `sources` in kama.json is (which removes the cap entirely).
+// than file count. It bounds a GUESS. With no kama.json owning the file, "the project" is inferred as
+// every .kama under a root, and when that inference is wrong — kama itself holds 870, 813 of them
+// independent tests/ fixtures with their own `main` and colliding type names — they get analyzed as ONE
+// program, the symbol tables collide, and rename would confidently rewrite the wrong file. So raising this
+// number is not the fix for a large project; a kama.json whose `source` root CONTAINS the file is (which
+// removes the cap entirely). Note the containment: a file beside `src/` rather than inside it is owned by
+// nobody and stays on this capped path, which is deliberate.
 // `KAMA_LSP_MAX_FILES` overrides it for a tree the user knows is one program; 0 means unlimited.
 const size_t kLspMaxProjectFiles = 500;
 
@@ -61,7 +63,6 @@ struct LspProject {
     std::string              root;               // project root directory ("" = no project)
     std::vector<std::string> files;              // every *.kama under root, absolute, sorted
     bool                     hasManifest = false;   // root was found via kama.json (vs. the editor's folder)
-    bool                     declaredSources = false;  // kama.json listed `sources` — no guessing, no cap
     bool                     tooLarge    = false;   // enumeration blew the cap; `files` is empty
     size_t                   seenCount   = 0;       // how many were seen before the cap (for the message)
     size_t                   cap         = 0;       // the cap actually in force (KAMA_LSP_MAX_FILES honored)
@@ -76,7 +77,7 @@ struct LspProject {
 // cargo/npm/tsc do. Two things ARE guesses, and each has a manifest key that settles it:
 //
 //   which manifest owns this file  ->  `projects` (a manifest naming its sub-projects, recursively)
-//   which files are in it          ->  `sources`  (a package naming its own files)
+//   which files are in it          ->  `source`   (the one directory holding a project's files)
 //
 // DECLARED first: if an ancestor manifest's expanded tree actually CONTAINS this file, that manifest is
 // the project — outermost such wins (the top of a nest of monorepos), and no editor boundary is needed to

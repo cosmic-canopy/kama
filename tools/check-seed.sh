@@ -68,7 +68,10 @@ done
 ok "executable seed writes the four files"
 grep -q '"kind": "executable"'  "$e/kama.json" && ok "manifest declares its kind" || bad "no kind in the manifest"
 grep -q '"entry": "src/app.kama"' "$e/kama.json" && ok "manifest declares entry" || bad "no entry in the manifest"
-grep -q '"sources": \["src"\]'    "$e/kama.json" && ok "manifest declares sources" || bad "no sources in the manifest"
+# `source` is NOT emitted: it defaults to exactly "src", which is the layout seed writes. Asserting its
+# ABSENCE plus a working build is the stronger claim — it proves the default carries the template.
+grep -q '"source"' "$e/kama.json" && bad "seed emitted a redundant source key" \
+                                  || ok "the manifest leans on the \`source\` default"
 
 # The claim the whole template rests on: it runs.
 if ( cd "$e" && "$KAMA" run ) >"$tmp/run.out" 2>&1; then
@@ -99,7 +102,8 @@ echo "check-seed: library"
 l="$tmp/lib"
 "$KAMA" seed "$l" --yes --kind library --name demolib >/dev/null 2>&1 || bad "seeding a library failed"
 grep -q '"kind": "library"' "$l/kama.json" && ok "library declares its kind" || bad "library has no kind"
-grep -q '"sources"' "$l/kama.json" && ok "library declares sources" || bad "library has no sources"
+grep -q '"source"' "$l/kama.json" && bad "seed emitted a redundant source key" \
+                                  || ok "the library leans on the \`source\` default"
 grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok "library declares no entry"
 [ -f "$l/src/demolib.kama" ] && ok "the library source is named for the package" \
                              || bad "expected src/demolib.kama; got: $(ls "$l/src")"
@@ -114,15 +118,15 @@ w="$tmp/ws"
     || bad "seeding a monorepo failed"
 grep -q '"projects": \["engine", "server"\]' "$w/kama.json" \
     && ok "the root lists its members explicitly" || bad "root manifest: $(cat "$w/kama.json")"
-grep -q '"entry"\|"sources"\|"kind"' "$w/kama.json" && bad "a monorepo root should be a pure aggregator" \
+grep -q '"entry"\|"source"\|"kind"' "$w/kama.json" && bad "a monorepo root should be a pure aggregator" \
                                                    || ok "the root is a pure aggregator, with no kind of its own"
 [ -f "$w/engine/src/engine.kama" ] && [ -f "$w/server/src/server.kama" ] \
     && ok "each member is seeded as a library" || bad "a member is missing its source"
 
 # THE assertion. server imports engine and returns its answer, so the exit code proves the whole chain:
-# the member manifests are right, `sources` makes engine importable, and the root composes them.
-# Deleting `"sources"` from engine/kama.json makes this fail with `cannot resolve module 'engine'` —
-# which is exactly why seed emits that key for every kind that has files.
+# the member manifests are right, the `source` default finds engine's files, and the root composes them.
+# Pointing engine's `source` at a directory that is not src/ makes this fail with
+# `cannot resolve module 'engine'` — which is what the default is carrying.
 ( cd "$w/server" && "$KAMA" pkg add engine --path ../engine ) >/dev/null 2>&1 \
     || bad "pkg add of a sibling failed"
 printf 'import engine::{ answer };\nfn int32 main() { return answer(); }\n' > "$w/server/src/server.kama"

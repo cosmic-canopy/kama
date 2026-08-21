@@ -74,7 +74,7 @@ JSON
 reject typo 'unknown key `sourses`' "a misspelled key names itself"
 
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "kind": "executable", "sources": ["src"] }
+{ "name": "typo", "version": "0.1.0", "kind": "executable" }
 JSON
 accept typo "the correctly spelled key builds"
 
@@ -83,7 +83,7 @@ accept typo "the correctly spelled key builds"
 # same path as a typo — this is the case that would regress if the two were re-fused.
 proj unasked <<'JSON'
 { "name": "unasked", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "toolchain": "v1",
-  "out": "artifacts", "sources": ["src"] }
+  "out": "artifacts" }
 JSON
 accept unasked "keys this command does not read are still recognized"
 
@@ -114,26 +114,80 @@ accept legacy "the renamed \`entry\` key builds"
 echo "check-manifest: \`kind\` is required, and its value set is closed"
 
 proj nokind <<'JSON'
-{ "name": "nokind", "version": "0.1.0", "sources": ["src"] }
+{ "name": "nokind", "version": "0.1.0" }
 JSON
 reject nokind 'no `kind`' "a project with no \`kind\` is refused"
 
 # The value set is closed, and it is checked in the READER — so a near-miss is caught even on a command
 # that never reads the key. Without that, `"libary"` would be a well-formed string nobody looked at.
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "libary", "sources": ["src"] }
+{ "name": "badkind", "version": "0.1.0", "kind": "libary" }
 JSON
 reject badkind '`kind` must be "library" or "executable"' "a misspelled \`kind\` value names the two"
 
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "library", "sources": ["src"] }
+{ "name": "badkind", "version": "0.1.0", "kind": "library" }
 JSON
 accept badkind "\`kind\`: library builds"
 
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "executable", "sources": ["src"] }
+{ "name": "badkind", "version": "0.1.0", "kind": "executable" }
 JSON
 accept badkind "\`kind\`: executable builds"
+
+# ---------------------------------------------------------------------------------------------------
+echo "check-manifest: \`source\` names one real subdirectory"
+
+# The default. Every fixture above already leans on it — this one says so out loud, because the absence
+# of a key is the easiest claim in the file to break without noticing.
+proj dflt <<'JSON'
+{ "name": "dflt", "version": "0.1.0", "kind": "library" }
+JSON
+accept dflt "an absent \`source\` defaults to src/"
+
+# `.` is refused, and this is the rule that keeps "no kama.json under source" exemption-free: with `.`,
+# the manifest itself, .kama/deps, out/ and any vendored project would all sit INSIDE the source root.
+proj dot <<'JSON'
+{ "name": "dot", "version": "0.1.0", "kind": "library", "source": "." }
+JSON
+reject dot '`source` must name a subdirectory' "\`source\`: \".\" is refused"
+
+proj esc <<'JSON'
+{ "name": "esc", "version": "0.1.0", "kind": "library", "source": "../elsewhere" }
+JSON
+reject esc 'may not reach outside the project' "\`source\` may not escape with .."
+
+proj abs <<'JSON'
+{ "name": "abs", "version": "0.1.0", "kind": "library", "source": "/etc" }
+JSON
+reject abs 'must be relative to the manifest' "\`source\` may not be absolute"
+
+# A source root that is simply not there. The build says so rather than resolving to nothing, which is
+# the trap `kama seed` exists to prevent: a project that builds for its author and is empty to everyone.
+proj gone <<'JSON'
+{ "name": "gone", "version": "0.1.0", "kind": "library", "source": "lib" }
+JSON
+reject gone 'does not exist' "a \`source\` naming a missing directory is named"
+
+# A MALFORMED manifest must not stop module resolution. The editor sits above a tree it does not own, and
+# refusing to resolve over a JSON typo somewhere up that tree would strip hover and go-to-definition from
+# code that is itself fine. The build still refuses — that is the split being asserted here.
+#
+# `geo/` is FLAT on purpose: with an unparseable manifest it is not a package root at all, so the only
+# thing that can find its sources is the plain directory-module listing. That is precisely the fallback
+# under test — had the sources been under geo/src/, a pass would prove nothing about it.
+mkdir -p "$tmp/broken/geo"
+printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$tmp/broken/geo/geo.kama"
+printf '{ "name": "geo", oops\n' > "$tmp/broken/geo/kama.json"
+printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$tmp/broken/app.kama"
+rm -f "$tmp/broken/out.bin"
+if "$KAMA" build "$tmp/broken/app.kama" -o "$tmp/broken/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    rc=0; "$tmp/broken/out.bin" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 7 ] && ok "a package with an unparseable manifest still resolves as a directory-module" \
+                    || bad "resolved, but ran with exit $rc"
+else
+    bad "an unparseable manifest on a DEPENDENCY stopped resolution"; head -2 "$tmp/e" >&2
+fi
 
 # ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2

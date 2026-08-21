@@ -151,7 +151,7 @@ IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32
 # M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
-WWURI=$(furi "$ROOT/tests/query/ws/widget.kama")
+WWURI=$(furi "$ROOT/tests/query/ws/src/widget.kama")
 WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
@@ -185,11 +185,11 @@ LSRC='fn int32 add(int32 lhs, int32 rhs) { return lhs + rhs; }\nfn int32 useIt()
 # filters only the built-in prelude, so a dep's units look like ordinary user code and would otherwise be
 # rewritten. Previously this guard was only ever exercised against std.
 dep="$tmp/depproj"
-mkdir -p "$dep/geo" "$dep/app"
+mkdir -p "$dep/geo/src" "$dep/app/src"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "kind": "library", "sources": ["."] }
+{ "name": "geo", "version": "1.0.0", "kind": "library" }
 JSON
-cat > "$dep/geo/geo.kama" <<'KAMA'
+cat > "$dep/geo/src/geo.kama" <<'KAMA'
 namespace geo;
 export { Point };
 type value Point {
@@ -198,10 +198,10 @@ type value Point {
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
-{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "app.kama", "sources": ["."],
+{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
-cat > "$dep/app/app.kama" <<'KAMA'
+cat > "$dep/app/src/app.kama" <<'KAMA'
 import geo::{Point};
 fn int32 main() {
     Point p = Point.of(x: 7);
@@ -211,31 +211,24 @@ KAMA
 depok=0
 (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1) && depok=1
 
-# M3.5 ownership fixture: a project whose `sources` reach OUTSIDE its own directory. Ownership is decided
-# by the project's FILE SET, not by a path prefix — so this file IS renameable (the project declared it),
-# while the dependency above is NOT (inside the root, but not ours). A prefix test gets both backwards.
-mkdir -p "$tmp/own/proj" "$tmp/own/shared"
-cat > "$tmp/own/proj/kama.json" <<'JSON'
-{ "name": "own", "version": "0.1.0", "kind": "library", "sources": [".", "../shared"] }
-JSON
-cat > "$tmp/own/shared/shared.kama" <<'KAMA'
-namespace shared;
-type value Leak { public int32 v;   public ctor zero() { this.v = 0; } }
-KAMA
-OURI=$(furi "$tmp/own/proj/app.kama")
-OSRC='namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n'
-printf 'namespace shared;\nfn int32 main() { Leak l = Leak.zero(); l.v = 1; return l.v; }\n' > "$tmp/own/proj/app.kama"
+# NOTE — a fixture that USED to live here. It declared `"sources": [".", "../shared"]` and proved that
+# ownership is the project's FILE SET rather than a path prefix, in the OUTWARD direction: a declared
+# source outside the project directory is still ours to rename. `source` is now ONE subdirectory, so a
+# project cannot reach outside itself at all and that shape is unrepresentable by design. The invariant
+# is unchanged and `ownsFile` still implements it; only the inward direction is testable now, which the
+# `depproj` fixture above covers (a dependency INSIDE the root that must never be rewritten). Do not
+# re-add the outward case without a `source` that can express it.
 
 # M6 B3c fixture: a project resource implementing a STD contract. `write` here and `Writer.write` in
 # lib/std/io/streams.kama are ONE renameable name, and the contract's half is not ours to rewrite — so
 # rename must refuse outright rather than rewrite the implementation and silently break conformance.
 # Before B3c the two were unrelated symbols and this rename went through.
 # Layout (LSP 0-based): L4 `    public fn Result<usize, IoError> write(...` -> `write` at 37..42.
-mkdir -p "$tmp/impl"
+mkdir -p "$tmp/impl/src"
 cat > "$tmp/impl/kama.json" <<'JSON'
-{ "name": "impl", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "impl", "version": "0.1.0", "kind": "library" }
 JSON
-cat > "$tmp/impl/sink.kama" <<'KAMA'
+cat > "$tmp/impl/src/sink.kama" <<'KAMA'
 namespace sink;
 import std::io::{Writer, IoError};
 type resource Sink implements Writer {
@@ -244,10 +237,10 @@ type resource Sink implements Writer {
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
 }
 KAMA
-CIURI=$(furi "$tmp/impl/sink.kama")
+CIURI=$(furi "$tmp/impl/src/sink.kama")
 CISRC='namespace sink;\nimport std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
-DURI=$(furi "$dep/app/app.kama")
+DURI=$(furi "$dep/app/src/app.kama")
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
 # M6 A3 fixture: a FREE-RIDING sub-project. `libs/net` imports `config`, but only the top-level app
@@ -256,33 +249,33 @@ DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n  
 # would strip cross-module hover and definitions while the code itself resolves fine), so the finding has
 # to arrive as a DIAGNOSTIC on the import statement instead.
 frws="$tmp/frws"
-mkdir -p "$frws/apps/server" "$frws/libs/net" "$frws/libs/config"
+mkdir -p "$frws/apps/server/src" "$frws/libs/net/src" "$frws/libs/config/src"
 cat > "$frws/kama.json" <<'JSON'
 { "name": "frws", "version": "0.1.0", "projects": ["apps/*", "libs/*"] }
 JSON
 cat > "$frws/libs/config/kama.json" <<'JSON'
-{ "name": "config", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "config", "version": "0.1.0", "kind": "library" }
 JSON
-cat > "$frws/libs/config/config.kama" <<'KAMA'
+cat > "$frws/libs/config/src/config.kama" <<'KAMA'
 namespace config;
 export { limit };
 fn int32 limit() { return 5; }
 KAMA
-printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/net.kama"
+printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/src/net.kama"
 # Two steps, because the check only fires for an import that RESOLVES through a dependency view: declare
 # `config` and install (which materializes net/.kama/deps), then remove the declaration while the view
 # remains. That is a real editing state — someone dropped the line from the manifest — and it is the state
 # in which the editor must speak up, since the code still resolves and builds where it sits.
 cat > "$frws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."],
+{ "name": "net", "version": "0.1.0", "kind": "library",
   "dependencies": { "config": { "path": "../config" } } }
 JSON
 frok=0
 "$KAMA" pkg install "$frws/libs/net" >/dev/null 2>&1 && frok=1
 cat > "$frws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library", "sources": ["."] }
+{ "name": "net", "version": "0.1.0", "kind": "library" }
 JSON
-FRURI=$(furi "$frws/libs/net/net.kama")
+FRURI=$(furi "$frws/libs/net/src/net.kama")
 FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
 FRSRC2='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
 
@@ -359,9 +352,6 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":32,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$DURI"'"},"position":{"line":2,"character":4},"newName":"Pt"}}'
 frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"Point"}}'
 fi
-# 34: a type declared in a source the project reaches OUTSIDE its own directory is still ours to rename.
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$OURI"'","languageId":"kama","version":1,"text":"'"$OSRC"'"}}}'
-frame '{"jsonrpc":"2.0","id":34,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$OURI"'"},"position":{"line":1,"character":19},"newName":"Seep"}}' 
 # --- M4: completion + signature help, over the M2 decl-rich buffer (`$SHP`, still open).
 #     Line 4 is `fn int32 use() { slot Point p; Point q = mid(a: p); return q.x; }` (LSP line 3):
 #       char 56 = the `x` of `q.x`  -> a Dot trigger on a `Point` local
@@ -552,17 +542,17 @@ expect '"workspace":{"workspaceFolders":{"supported":true}}' \
                                                         "advertises workspaceFolders support (M3.5)"
 # THE MILESTONE: app.kama is not in widget.kama's import closure, so every one of these would be missing
 # without the project-wide unit set.
-expect '"id":28,"result":[{"uri":"'"$(furi "$ROOT/tests/query/ws/widget.kama")"'"' \
+expect '"id":28,"result":[{"uri":"'"$(furi "$ROOT/tests/query/ws/src/widget.kama")"'"' \
                                                         "references: starts with the declaring file"
-expect '/tests/query/ws/app.kama","range":{"start":{"line":4,"character":3}' \
+expect '/tests/query/ws/src/app.kama","range":{"start":{"line":4,"character":3}' \
                                                         "references REACH app.kama, which widget.kama does not import"
-expect '"id":29,"result":{"changes":{"'"$(furi "$ROOT/tests/query/ws/app.kama")"'":[' \
+expect '"id":29,"result":{"changes":{"'"$(furi "$ROOT/tests/query/ws/src/app.kama")"'":[' \
                                                         "rename: the WorkspaceEdit rewrites the OTHER file too"
 # M6 B3f: the declaring file's edits now START with the `export { Widget, … };` mention, which sorts before
 # the declaration. Until the grammar carried per-segment positions the export manifest was not a reference
 # at all, so this rename left the module exporting a name that no longer existed — it broke a file it had
 # just edited, the same class of silent under-apply as B3a.
-expect '/tests/query/ws/widget.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":15}},"newText":"Gadget"}' \
+expect '/tests/query/ws/src/widget.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":15}},"newText":"Gadget"}' \
                                                         "rename: ... and the export manifest of the declaring file (B3f)"
 expect '{"range":{"start":{"line":2,"character":11},"end":{"line":2,"character":17}},"newText":"Gadget"}' \
                                                         "rename: ... and the declaration itself, keyed separately"
@@ -582,15 +572,11 @@ if [ "$depok" = 1 ]; then
     echo "check-lsp: M3.5 installed dependency"
     expect '"id":32,"error"'                          "rename REFUSES a type declared in a dependency"
     expect 'declared outside the project'             "...naming the dependency source it lives in"
-    expect '/.kama/deps/geo/geo.kama'                 "...which is under the project's package store"
+    expect '/.kama/deps/geo/src/geo.kama'                 "...which is under the project's package store"
     expect '"id":33,"result":[]'                      "workspace/symbol does not offer a dependency's symbols"
 else
     echo "  SKIP: installed-dependency checks (kama pkg install failed)"
 fi
-
-echo "check-lsp: M3.5 ownership is the file SET, not a path prefix"
-expect '"id":34,"result":{"changes":{'          "rename succeeds on a declared source outside the project dir"
-expect '/own/shared/shared.kama":[{"range"'     "...and rewrites that outside file, because the project declared it"
 
 echo "check-lsp: M6 B2 semantic tokens"
 # The legend's ORDER is the wire format — a token's type is sent as an INDEX into it, so this assertion is
@@ -847,7 +833,7 @@ cfgreject() {
 # A. The committed project. Its kama.json declares FEATURE_A `"default": true`, so a plain build keeps
 #    `onlyWithA` and drops `onlyWithoutA` — and so must the editor.
 CFGDIR="$ROOT/tests/query/cfg"
-CFGA=$(cfgsession "$tmp/cfgA" "$ROOT/tests/query" "$CFGDIR/app.kama")
+CFGA=$(cfgsession "$tmp/cfgA" "$ROOT/tests/query" "$CFGDIR/src/app.kama")
 cfgexpect "$CFGA" '"name":"onlyWithA"'   "documentSymbol shows the decl the manifest's default flag KEEPS"
 cfgreject "$CFGA" '"name":"onlyWithoutA"' "...and not the negated one a build would drop"
 cfgexpect "$CFGA" '"name":"always"'      "the ungated decl is there either way"
@@ -860,7 +846,7 @@ cfgreject "$CFGA" '"severity":1'         "no phantom diagnostic from conditional
 # would otherwise join the symbol set and make this compare two different things.
 cfglsp=$(printf '%s' "$CFGA" | tr '\r' '\n' | tr -d '\n' | sed 's/.*"id":47,"result"://' \
          | tr ',' '\n' | grep -o '"name":"[A-Za-z_]*"' | sed 's/.*:"//; s/"//' | sort | tr '\n' ' ')
-cfgcli=$("$KAMA" query "$CFGDIR/app.kama" --symbols 2>/dev/null | awk '{print $NF}' | sort | tr '\n' ' ')
+cfgcli=$("$KAMA" query "$CFGDIR/src/app.kama" --symbols 2>/dev/null | awk '{print $NF}' | sort | tr '\n' ' ')
 if [ "$cfglsp" = "$cfgcli" ]; then
     echo "  ok: the LSP and \`kama query\` agree on the symbol set ($cfgcli)"
 else
@@ -870,10 +856,10 @@ fi
 # B. Drop the default from a COPY's manifest -> the exact complement. This is what proves the flags come
 #    from the manifest rather than from some hard-coded default that happens to match case A.
 CFGSRC="$tmp/cfgcopy"
-mkdir -p "$CFGSRC"
-cp "$CFGDIR/app.kama" "$CFGSRC/app.kama"
-printf '{"name":"cfgprobe","version":"0.1.0", "kind": "executable","sources":["."],"flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
-CFGB=$(cfgsession "$tmp/cfgB" "$tmp" "$CFGSRC/app.kama")
+mkdir -p "$CFGSRC/src"
+cp "$CFGDIR/src/app.kama" "$CFGSRC/src/app.kama"
+printf '{"name":"cfgprobe","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
+CFGB=$(cfgsession "$tmp/cfgB" "$tmp" "$CFGSRC/src/app.kama")
 cfgexpect "$CFGB" '"name":"onlyWithoutA"' "with the default off, the NEGATED decl is what survives"
 cfgreject "$CFGB" '"name":"onlyWithA"'    "...and the gated one is dropped, as a build would"
 
@@ -881,7 +867,7 @@ cfgreject "$CFGB" '"name":"onlyWithA"'    "...and the gated one is dropped, as a
 #    and because it is a file the compiler already reads, `kama build` in the same directory agrees — which
 #    is why the F5 debug path needs no arguments of its own.
 printf '{"flags":{"FEATURE_A":{"default":true}}}' > "$CFGSRC/kama.local.json"
-CFGC=$(cfgsession "$tmp/cfgC" "$tmp" "$CFGSRC/app.kama")
+CFGC=$(cfgsession "$tmp/cfgC" "$tmp" "$CFGSRC/src/app.kama")
 cfgexpect "$CFGC" '"name":"onlyWithA"'    "kama.local.json is the override channel (flag back on)"
 cfgreject "$CFGC" '"name":"onlyWithoutA"' "...and the complement is gone again"
 cfgexpect "$CFGC" 'kama.local.json'       "the config log line names the local override that was applied"
@@ -896,7 +882,7 @@ cfgexpect "$CFGA" 'FEATURE_A'           "...and the active flag set it derived"
 # E. Honest failure. A malformed override must not take the editor down with it: report it visibly, then
 #    analyze under permissive defaults rather than a half-applied configuration.
 printf '{"flags":{ this is not json' > "$CFGSRC/kama.local.json"
-CFGBAD=$(cfgsession "$tmp/cfgE" "$tmp" "$CFGSRC/app.kama")
+CFGBAD=$(cfgsession "$tmp/cfgE" "$tmp" "$CFGSRC/src/app.kama")
 cfgexpect "$CFGBAD" 'window/showMessage' "a malformed kama.local.json is reported to the user"
 cfgexpect "$CFGBAD" '"name":"always"'    "...and the editor keeps answering under permissive defaults"
 rm -f "$CFGSRC/kama.local.json"
@@ -911,10 +897,10 @@ cfgexpect "$CFGTYPO" 'undeclared flag' "a typo'd @compileFor flag is a diagnosti
 #    log lines is the proof — one from the pin, one from the re-resolve.
 : > "$tmp/cfgG"
 session="$tmp/cfgG"
-cfggtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$CFGSRC/app.kama" | awk '{printf "%s\\n", $0}')
+cfggtext=$(sed 's/\\/\\\\/g; s/"/\\"/g' "$CFGSRC/src/app.kama" | awk '{printf "%s\\n", $0}')
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"'"$(furi "$tmp")"'","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$(furi "$CFGSRC/app.kama")"'","languageId":"kama","version":1,"text":"'"$cfggtext"'"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$(furi "$CFGSRC/src/app.kama")"'","languageId":"kama","version":1,"text":"'"$cfggtext"'"}}}'
 frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$(furi "$CFGSRC/kama.json")"'","type":2}]}}'
 frame '{"jsonrpc":"2.0","id":48,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
@@ -967,10 +953,10 @@ cfgexpect "$CFGA" '"flags":['                   "...plus the resolved @compileFo
 # I'. A project's OWN groups and targets reach the picker, or it could only ever offer the built-ins.
 #     `"default": true` on a value is what the picker writes, so `selected` must follow it.
 CFGSEL="$tmp/cfgsel"
-mkdir -p "$CFGSEL"
-cp "$CFGDIR/app.kama" "$CFGSEL/app.kama"
-printf '{"name":"cfgsel","version":"0.1.0", "kind": "executable","sources":["."],"flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
-CFGGRP=$(cfgsession "$tmp/cfgI" "$tmp" "$CFGSEL/app.kama")
+mkdir -p "$CFGSEL/src"
+cp "$CFGDIR/src/app.kama" "$CFGSEL/src/app.kama"
+printf '{"name":"cfgsel","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
+CFGGRP=$(cfgsession "$tmp/cfgI" "$tmp" "$CFGSEL/src/app.kama")
 cfgexpect "$CFGGRP" '"CONSOLE":{"values":["XBOX","PS5"],"selected":"XBOX"}' "a project's own select group reaches the picker, with its default selected"
 cfgexpect "$CFGGRP" '"RPI"'                                                 "...and its own TARGET joins the built-in catalog"
 

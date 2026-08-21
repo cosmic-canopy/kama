@@ -264,11 +264,11 @@ reject --refs 43:14 -- "scopes.kama:40:20"
 # ---------------------------------------------------------------------------------------------------
 # M3.5 — WORKSPACE INDEXING (`--project`).
 #
-# tests/query/ws/ is a two-file package: app.kama imports widget.kama, and widget.kama imports nothing.
+# tests/query/ws/src/ is a two-file package: app.kama imports widget.kama, and widget.kama imports nothing.
 # So widget.kama's own import closure is JUST ITSELF — app.kama's three uses of `Widget` are invisible to
 # it. That asymmetry is the whole reason M3.3 had to refuse cross-file rename, and it is what --project
 # fixes by widening the unit set from one closure to every .kama under the nearest kama.json.
-FIXTURE="$ROOT/tests/query/ws/widget.kama"
+FIXTURE="$ROOT/tests/query/ws/src/widget.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M3.5 workspace indexing"
@@ -304,7 +304,7 @@ fi
 # agent knows what a thing is CALLED, so without this it has to run --symbols, parse it, and come back —
 # and across files it cannot get there at all. Scope is the files asked about, exactly as --refs: the one
 # named file, or the whole package under --project.
-FIXTURE="$ROOT/tests/query/ws/app.kama"
+FIXTURE="$ROOT/tests/query/ws/src/app.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: --search (by name, no cursor)"
@@ -474,27 +474,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
-# M3.5 — DECLARED project scope (`sources` / `packages` in kama.json).
+# M3.5 — DECLARED project scope (`source` / `projects` in kama.json).
 #
 # tests/query/mono/ is a NESTED monorepo. The root declares `"projects": ["libs/*", "group"]`; `group`
-# declares projects of its OWN; each leaf declares `"sources": ["src"]`; and `outside/stray.kama` declares
-# a same-named `Gear` that nothing ever claims. Because the scope is DECLARED rather than inferred, no
-# directory walk of the repo happens, the file cap does not apply, the nested level is still reached, and
-# the stray type cannot collide with the workspace's.
+# declares projects of its OWN; each leaf's `source` root is the default `src/`; and `outside/stray.kama`
+# declares a same-named `Gear` that nothing ever claims. Because the scope is DECLARED rather than
+# inferred, no directory walk of the repo happens, the file cap does not apply, the nested level is still
+# reached, and the stray type cannot collide with the workspace's.
 #
 #   mono/kama.json                  projects: ["libs/*", "group"]
-#     libs/core/kama.json           sources: ["src"]   <- declares Gear
-#     libs/app/kama.json            sources: ["src"]   <- uses Gear
-#     group/kama.json               projects: ["libs/*"]   <- a monorepo INSIDE a monorepo
-#       group/libs/plugin/kama.json sources: ["src"]   <- uses Gear, one level deeper
-#     outside/stray.kama            claimed by nobody  <- must never appear
+#     libs/core/kama.json           source: src/ (default)  <- declares Gear
+#     libs/app/kama.json            source: src/ (default)  <- uses Gear
+#     group/kama.json               projects: ["libs/*"]    <- a monorepo INSIDE a monorepo
+#       group/libs/plugin/kama.json source: src/ (default)  <- uses Gear, one level deeper
+#     outside/stray.kama            claimed by nobody       <- must never appear
 #
 # The member directory is `libs/`, NOT `packages/`: kama.lock uses `packages` for resolved dependencies,
 # so a folder of that name next to a `projects` key would teach exactly the confusion the key avoids.
 FIXTURE="$ROOT/tests/query/mono/libs/core/src/gearcore.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
-echo "check-query: M3.5 declared project scope (sources + packages)"
+echo "check-query: M3.5 declared project scope (source + projects)"
 # The consuming package is reached even though the declaring one never imports it — and reached WITHOUT an
 # editor workspace root, because an ancestor manifest explicitly owns this file.
 expect --project --refs 9:11 -- "gearcore.kama:9:11"        # the declaration
@@ -513,11 +513,11 @@ reject --refs 9:11 -- "gearapp.kama"
 # file set, and rename must refuse to rewrite them (asserted in check-lsp.sh, which has the rename verb).
 # Built here rather than committed: `.kama/deps` is install output, and a path dep needs no network.
 dep="$tmp/depproj"
-mkdir -p "$dep/geo" "$dep/app"
+mkdir -p "$dep/geo/src" "$dep/app/src"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "kind": "library", "sources": ["."] }
+{ "name": "geo", "version": "1.0.0", "kind": "library" }
 JSON
-cat > "$dep/geo/geo.kama" <<'KAMA'
+cat > "$dep/geo/src/geo.kama" <<'KAMA'
 namespace geo;
 export { Point };
 type value Point {
@@ -526,10 +526,10 @@ type value Point {
 }
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
-{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "app.kama", "sources": ["."],
+{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
-cat > "$dep/app/app.kama" <<'KAMA'
+cat > "$dep/app/src/app.kama" <<'KAMA'
 import geo::{Point};
 fn int32 main() {
     Point p = Point.of(x: 7);
@@ -537,13 +537,13 @@ fn int32 main() {
 }
 KAMA
 if (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1); then
-    FIXTURE="$dep/app/app.kama"
+    FIXTURE="$dep/app/src/app.kama"
     echo "check-query: M3.5 installed dependency"
     # The dep's own source is where its declaration lives — go-to-def crosses the package boundary.
-    expect --project --def  3:4 -- "/.kama/deps/geo/geo.kama:3:11"
+    expect --project --def  3:4 -- "/.kama/deps/geo/src/geo.kama:3:11"
     expect --project --type 3:4 -- "value Point"
     expect --project --refs 3:4 -- "app.kama:3:4"                  # our use
-    expect --project --refs 3:4 -- "/.kama/deps/geo/geo.kama:3:11"  # ... and the dep's declaration
+    expect --project --refs 3:4 -- "/.kama/deps/geo/src/geo.kama:3:11"  # ... and the dep's declaration
     # The project's own file set stops at the package boundary: `.kama/` is pruned, so the outline is ours.
     expect --project --symbols -- "2:9 function main"
     reject --project --symbols -- "Point"
@@ -734,7 +734,7 @@ reject --complete 122:34 -- "label	lo:"                              # ... but n
 # The cross-unit direction is the one that matters. A label's key must come from the parameter's DECLARING
 # unit; building it at the call site would embed the CALLER's unit instead — and same-file labels would
 # still appear to work, which is the failure mode a test suite is least able to see.
-FIXTURE="$ROOT/tests/query/labels/lib.kama"
+FIXTURE="$ROOT/tests/query/labels/src/lib.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M6 A2 argument labels"
@@ -746,7 +746,7 @@ expect --project --refs 14:23 -- "use.kama:10:22"       # the call-site LABEL, a
 expect --project --refs 19:31 -- "lib.kama:19:31"
 expect --project --refs 19:31 -- "use.kama:14:12"
 
-FIXTURE="$ROOT/tests/query/labels/use.kama"
+FIXTURE="$ROOT/tests/query/labels/src/use.kama"
 # From the label's side: go-to-definition lands on the parameter, and hover names it as a param rather
 # than echoing the bare spelling.
 expect --def 10:22  -- "lib.kama:14:23"
@@ -768,7 +768,7 @@ reject --type 10:22 -- "param 3"
 # TWO instantiations, in a unit that is not the declaring one. That combination is the whole test: a
 # one-file, one-instantiation fixture passes under designs that canonicalize the instance key onto the
 # template, and those break the moment a second key shape exists.
-FIXTURE="$ROOT/tests/query/generics/lib.kama"
+FIXTURE="$ROOT/tests/query/generics/src/lib.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M6 B3 generic members + method calls"
@@ -789,7 +789,7 @@ expect --project --refs 17:16 -- "lib.kama:17:16"
 expect --project --refs 17:16 -- "use.kama:13:17"
 expect --project --refs 17:16 -- "use.kama:18:16"
 
-FIXTURE="$ROOT/tests/query/generics/use.kama"
+FIXTURE="$ROOT/tests/query/generics/src/use.kama"
 # From the call site: go-to-definition lands on the template's declaration, not on any instance, and hover
 # names the member through the TEMPLATE (`Box.get`, never `Box_int32.get`).
 expect --def 13:17  -- "lib.kama:17:16"
@@ -799,7 +799,7 @@ expect --type 12:7  -- "field v"
 # A generic method's PARAMETER reaches its call-site label too (the A2 path, through a template body).
 expect --def 19:15  -- "lib.kama:19:29"
 
-FIXTURE="$ROOT/tests/query/generics/lib.kama"
+FIXTURE="$ROOT/tests/query/generics/src/lib.kama"
 # M6 B3g: an `import`'s symbol list is a REFERENCE. Renaming `Box` used to rewrite its declaration and its
 # uses and leave `import lib::{Box, …}` spelling the old name — the module then imports a symbol that no
 # longer exists, so the rename breaks a file it did edit. Same class as B3a, across units.

@@ -1,5 +1,5 @@
 // Deliberately OUTSIDE every declared source: a same-named type that must never be confused with the
-// workspace's `Gear`, and must never appear in its references. This is what `sources`/`packages` buy.
+// workspace's `Gear`, and must never appear in its references. This is what `source`/`projects` buy.
 namespace stray;
 
 type value Gear {

@@ -170,13 +170,13 @@ fi
 #     rather than in a select group, because linkage is a toolchain fact and `@compileFor` has no business
 #     branching on it. (A RUNTIME select group would also collide with OUTPUT=STATIC: the flag namespace
 #     is flat.)
-rt="$tmp/rt"; mkdir -p "$rt"
+rt="$tmp/rt"; mkdir -p "$rt/src"
 cat > "$rt/kama.json" <<'JSON'
 { "name": "rt-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
 JSON
-cp "$THREADED" "$rt/app.kama"
-rtline=$("$KAMA" build --release --cc "echo" "$rt/app.kama" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
+cp "$THREADED" "$rt/src/app.kama"
+rtline=$("$KAMA" build --release --cc "echo" "$rt/src/app.kama" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
 if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
     echo "check-target: FAIL — a target's \"runtime\": \"dynamic\" did not reach the link tail" >&2
     printf '%s\n' "$rtline" | sed 's/^/    /' >&2
@@ -185,7 +185,7 @@ fi
 #     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
 printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
-if "$KAMA" build --release --cc "echo" "$rt/app.kama" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
+if "$KAMA" build --release --cc "echo" "$rt/src/app.kama" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
     echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
     exit 1
 fi
@@ -320,15 +320,15 @@ fi
 # 9. TARGET SPECS — a target declared in kama.json carries its own toolchain, so a team shares one
 #    checked-in cross setup instead of each developer remembering flags.
 spec="$tmp/spec"
-mkdir -p "$spec"
+mkdir -p "$spec/src"
 cat > "$spec/kama.json" <<'JSON'
 { "name": "cross-demo", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
                                    "sysroot": "/opt/rpi-sysroot",
                                    "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
 JSON
-cp "$FIXTURE" "$spec/app.kama"
-specline=$("$KAMA" build "$spec/app.kama" --target RPI -o "$spec/app" 2>/dev/null || true)
+cp "$FIXTURE" "$spec/src/app.kama"
+specline=$("$KAMA" build "$spec/src/app.kama" --target RPI -o "$spec/app" 2>/dev/null || true)
 for want in "RPICC:" "--sysroot=" "-mcpu=cortex-a72" "-Wl,--as-needed"; do
     if ! printf '%s' "$specline" | grep -qF -- "$want"; then
         echo "check-target: FAIL — a kama.json target spec did not contribute '$want'" >&2
@@ -337,7 +337,7 @@ for want in "RPICC:" "--sysroot=" "-mcpu=cortex-a72" "-Wl,--as-needed"; do
     fi
 done
 # and its derived flags come from the DECLARED triple, not the host
-if ! "$KAMA" transpile --no-line "$spec/app.kama" --target RPI -o "$spec/app.c" >/dev/null 2>&1; then
+if ! "$KAMA" transpile --no-line "$spec/src/app.kama" --target RPI -o "$spec/app.c" >/dev/null 2>&1; then
     echo "check-target: FAIL — a declared cross target could not be transpiled" >&2
     exit 1
 fi
@@ -348,16 +348,16 @@ fi
 #     editor had no way to know which target to analyze for. Precedence must be:
 #         built-in HOST  <  kama.json default  <  kama.local.json default  <  --target
 dflt="$tmp/dflt"
-mkdir -p "$dflt"
+mkdir -p "$dflt/src"
 cat > "$dflt/kama.json" <<'JSON'
 { "name": "board-only", "version": "0.1.0", "kind": "executable",
   "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
 JSON
-cat > "$dflt/gated.kama" <<'KAMA'
+cat > "$dflt/src/gated.kama" <<'KAMA'
 @compileFor(OS_NONE)  fn int32 bare() { return 1; }
 @compileFor(!OS_NONE) fn int32 hosted() { return 0; }
 KAMA
-symbols() { "$KAMA" query "$dflt/gated.kama" --symbols 2>/dev/null; }
+symbols() { "$KAMA" query "$dflt/src/gated.kama" --symbols 2>/dev/null; }
 if ! symbols | grep -q 'function bare'; then
     echo "check-target: FAIL — a kama.json default target did not take effect (expected OS_NONE)" >&2
     symbols | sed 's/^/    /' >&2; exit 1
@@ -367,7 +367,7 @@ if symbols | grep -q 'function hosted'; then
     exit 1
 fi
 # an explicit --target still wins over the manifest default
-if ! "$KAMA" query "$dflt/gated.kama" --symbols --target HOST 2>/dev/null | grep -q 'function hosted'; then
+if ! "$KAMA" query "$dflt/src/gated.kama" --symbols --target HOST 2>/dev/null | grep -q 'function hosted'; then
     echo "check-target: FAIL — --target did not override the manifest's default target" >&2
     exit 1
 fi
@@ -426,7 +426,7 @@ fi
 # get yesterday's binary and no diagnostic. Belongs in this guard because the scoping IS the target axis.
 od="$tmp/outdir"; mkdir -p "$od/src"
 printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
-printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sources": ["src"] }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }\n' > "$od/kama.json"
 
 ( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>"$tmp/od1.err" || {
     echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
@@ -447,7 +447,7 @@ stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
     echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
 
 # the manifest's `out` key relocates the root
-printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sources": ["src"], "out": "artifacts" }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "out": "artifacts" }\n' > "$od/kama.json"
 ( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>&1
 [ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
     echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }

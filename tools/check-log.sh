@@ -82,12 +82,12 @@ fi
 
 # --- 6. baked kama.json `log` default: compiled into the binary, env/flag still win (M5) ---
 # Build the same program inside a project dir whose kama.json bakes a default filter (global info, audio=debug).
-mkdir -p "$tmp/proj"
-cp "$tmp/log.kama" "$tmp/proj/log.kama"
+mkdir -p "$tmp/proj/src"
+cp "$tmp/log.kama" "$tmp/proj/src/log.kama"
 cat > "$tmp/proj/kama.json" <<'JSON'
 { "name": "logtest", "version": "0.1.0", "kind": "executable", "log": { "level": "info", "tags": { "audio": "debug" } } }
 JSON
-"$KAMA" build "$tmp/proj/log.kama" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
+"$KAMA" build "$tmp/proj/src/log.kama" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
     echo "check-log: FAIL — baked-default build failed" >&2; sed 's/^/  /' "$tmp/proj.build.err" >&2; exit 1; }
 # 6a. bare run: the baked per-tag audio=debug shows an audio debug line; net stays at the baked global info.
 "$tmp/proj/log" >/dev/null 2>"$tmp/e6" || { echo "check-log: FAIL — baked-default run exited nonzero" >&2; exit 1; }
