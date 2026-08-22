@@ -537,9 +537,13 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
         if (fileExists(file)) return { file };
         std::string dir = root + "/" + rel;
         if (dirExists(dir)) {
+            // A package root's `source` is the WHOLE answer — it always has one, so an empty result
+            // means the declared directory is not there, NOT "fall back and guess". Falling back would
+            // silently import a package by a layout it never declared, which is the mirror of the bug
+            // this key exists to prevent. Only a directory with no manifest gets the plain listing, and
+            // that is the ordinary directory-module case.
             std::vector<std::string> fs;
-            packageSourceFiles(dir, fs);              // a package root: wherever it says its files are
-            if (fs.empty()) fs = listKamaFiles(dir);  // otherwise the plain directory-module listing
+            if (!packageSourceFiles(dir, fs)) fs = listKamaFiles(dir);
             if (!fs.empty()) return fs;
         }
     }

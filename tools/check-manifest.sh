@@ -189,6 +189,34 @@ else
     bad "an unparseable manifest on a DEPENDENCY stopped resolution"; head -2 "$tmp/e" >&2
 fi
 
+# A package root's `source` is the WHOLE answer. `geo/` here is a real package whose sources sit BESIDE
+# its source root rather than inside it — that must not resolve. Before the gate the flat listing picked
+# them up, so the package was importable by a layout it had never declared: the mirror of the bug the key
+# exists to prevent, and invisible until a consumer's build changed shape underneath them.
+mkdir -p "$tmp/gate/geo/src"
+printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$tmp/gate/geo/geo.kama"
+printf '{ "name": "geo", "version": "1.0.0", "kind": "library" }\n' > "$tmp/gate/geo/kama.json"
+printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$tmp/gate/app.kama"
+rm -f "$tmp/gate/out.bin"
+if "$KAMA" build "$tmp/gate/app.kama" -o "$tmp/gate/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    bad "a package resolved by a layout it never declared (the flat fallback is not gated)"
+elif grep -qF "cannot resolve module 'geo'" "$tmp/e"; then
+    ok "a package root's \`source\` is the whole answer — no fallback to a flat listing"
+else
+    bad "the ungated-layout import failed for the wrong reason"; head -2 "$tmp/e" >&2
+fi
+
+# ...and the same package resolves the moment its sources are where it says they are.
+mv "$tmp/gate/geo/geo.kama" "$tmp/gate/geo/src/geo.kama"
+rm -f "$tmp/gate/out.bin"
+if "$KAMA" build "$tmp/gate/app.kama" -o "$tmp/gate/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    rc=0; "$tmp/gate/out.bin" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 7 ] && ok "...and it resolves once they are under the source root" \
+                    || bad "resolved, but ran with exit $rc"
+else
+    bad "the declared layout did not resolve"; head -2 "$tmp/e" >&2
+fi
+
 # ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"
