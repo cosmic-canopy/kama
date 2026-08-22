@@ -146,6 +146,36 @@ statements of one truth. Whatever lands wants a `tools/check-*.sh` asserting eve
 claim does. Hover is a cheaper partial win and worth checking first: if hover already answers for these,
 the gap is only the jump.
 
+**Take the PRELUDE with it — and it is the easier half, because the source already exists.** Requested
+2026-08-22. Measured, not assumed: `kama query --def` on `Ordering` (declared at
+[prelude/global.kama:17](../prelude/global.kama)) answers **`no definition`** today. The cause is one line
+— `preludeUnit()` is `parseString(KAMA_PRELUDE_SRC, "<prelude>")`
+([kama.driver.cpp:1410](../src/kama.driver.cpp)) — so the unit's name is the literal string `<prelude>`
+rather than a path, and there is nothing for the LSP to return. The same goes for the embedded built-in
+modules beside it (`KAMA_PRELUDE_MODULES`, the `std::memory` triad, `preludeModuleUnits`).
+
+This is a **different problem from the built-ins above, and strictly smaller**: `string` and `int32` have
+no source location because none exists, while `Optional`, `Result`, `Ordering`, `Deref` and the rest are
+ordinary kama declarations in a real file that merely got embedded into the binary and lost their path on
+the way in. Nothing has to be synthesized or kept in sync — the definition is already written.
+
+Two cases, and they want different answers:
+
+- **A user's project**, where `prelude/` is not on disk at all. The unit needs a stable location the
+  editor can open — an installed `<prefix>/…/prelude/global.kama` if an install ships one, else the
+  read-only virtual document of the second shape above. Whatever is chosen, it is the same machinery the
+  built-ins want, which is why the two belong in one piece of work.
+- **⚠️ The kama compiler's OWN repository, which wants special-casing and is the ask that prompted this.**
+  Here `prelude/global.kama` and `prelude/std/memory/*.kama` ARE in the worktree, and they are files
+  someone edits — so the right answer is not a doc stub or a virtual document but the real path: while
+  working in this repo the LSP should resolve a prelude symbol to the file on disk, and a rename or a
+  find-references over it should behave like any other source. It does not today, and the effect is that
+  the language server is at its least useful precisely where the language is being built.
+
+Worth checking first, the same way hover is above: whether naming the unit by path is enough on its own,
+or whether `unitForUri`/the workspace file set also have to learn about a unit that no CLI input pulled
+in. That measurement decides whether this is a one-line change with a fixture or a real seam.
+
 **The Zed grammar pin follows the GRAMMAR — done, and no longer a scheduled row.** `editor/zed/extension.toml`
 pins a *commit* and Zed fetches that rev, so the pin — not the working tree — is what Zed users get. It had
 drifted 16 grammar changes and 19 days behind, which is why `slot` and named match patterns stopped
