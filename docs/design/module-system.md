@@ -586,16 +586,23 @@ modes are mixed by default, and there is no spelling that means "just these file
     workspace file, and every member still builds identically standalone. Recursion terminates because a
     member's operand is always a `kama.json`.
 
-    > ⚠️ **`KAMA_NO_SELECT` is inherited.** The selector exports it before re-exec as its loop-stopper
-    > ([:5651](../../src/kama.driver.cpp)). A workspace driver that was itself reached by a re-exec carries it
-    > in its environment, so every member it spawns would silently skip selection and build with the
-    > *driver's* compiler. The driver must clear it when spawning members.
+    > ⚠️ **"Run in place" for a workspace is LOAD-BEARING, not an optimization.** The selector exports
+    > `KAMA_NO_SELECT=1` immediately before re-exec, as its loop-stopper
+    > ([:5651](../../src/kama.driver.cpp)), and a child inherits it. Because a workspace operand never
+    > execs, the driver never sets it and each member starts clean and resolves its own pin. Make the
+    > driver select a version *for itself* and that inverts: every member silently skips selection and
+    > builds with the driver's compiler. (A user who exports the variable themselves is using the
+    > documented escape hatch, and having it reach members is then correct.)
 
-    > ⚠️ **Nothing in the suite exercises the selector at all.** `maybeReExec` returns immediately unless the
-    > running binary IS the installed `~/.kama/bin/kama` ([:5637](../../src/kama.driver.cpp)), which no guard
-    > and no fixture is. Every selector claim above was derived by reading; a probe that appears to confirm
-    > one by building successfully has proved nothing. Whatever lands here needs a guard that installs a
-    > selector, or it is unguarded by construction.
+    > **Testing this is already possible — do not conclude otherwise from a failed probe.**
+    > `maybeReExec` returns immediately unless the running binary IS the installed `~/.kama/bin/kama`
+    > ([:5637](../../src/kama.driver.cpp)), so an ordinary probe against a dev build exercises none of it
+    > and a "successful" build there proves nothing. But
+    > [tools/check-toolchain.sh](../../tools/check-toolchain.sh) already sets a throwaway `HOME`, copies the
+    > compiler to `$HOME/.kama/bin/kama` so it genuinely is the selector, installs stubs that announce which
+    > version ran, and unsets `KAMA_NO_SELECT`. Its §4c asserts the pin follows the INPUT FILE when building
+    > from outside a project — the same claim, one spelling earlier. The manifest-operand case is a few
+    > lines in that guard, not new infrastructure.
 
 ### 2h. CLI ↔ manifest coverage — what the audit found
 
