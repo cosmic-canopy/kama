@@ -494,6 +494,138 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     return `void` ([:11359](../../src/kama.cemit.cpp)) and take exactly one `give`n bundle argument
     ([:11361](../../src/kama.cemit.cpp)); `fn int32 main()` fails both.)*
 
+### 2g. The CLI contract — three build modes, spelled by the operand
+
+Decided 2026-08-22, after auditing every CLI option against every manifest key (the matrix is §2h). The
+model has three ways to name a compilation: loose files, a project, a workspace. Nothing above says how a
+*command* selects between them, and today it does not — `kama build src/app.kama` inside a project walks up,
+finds the manifest, and silently applies it ([kama.driver.cpp:6629](../../src/kama.driver.cpp)). So the three
+modes are mixed by default, and there is no spelling that means "just these files".
+
+32. **The operand's BASENAME is the mode.** One rule, checked at argv parse before anything else runs:
+
+    | spelling | mode |
+    |---|---|
+    | `kama build a.kama src/b.kama /abs/c.kama` | **loose** — N source paths, relative or absolute |
+    | `kama build kama.json` · `libs/core/kama.json` | **project** |
+    | `kama build kama_workspace.json` | **workspace** |
+
+    A manifest operand is any path whose basename is `kama.json` or `kama_workspace.json`. No `./` is
+    required — naming the file is what matters, not qualifying it. **Operands are either N `.kama` files, or
+    exactly one manifest.** Mixing is not rejected so much as unspellable, which is the point: there is no
+    argument list that means "these files, and also that project".
+
+33. **A loose `.kama` is NOT a project**, and that is what makes mode 1 coherent rather than a gap in
+    "a project requires a `kama.json`" (§2a.1). It has no identity, no module, no namespace; it cannot
+    `export`, cannot be imported, and its symbols are unaddressable — which is exactly why §2e.27 can give it
+    basename-derived scopes and be done. Every peer keeps this case: `cc a.c b.c`, `rustc main.rs` with
+    `mod helper;`, `zig build-exe m.zig` with `@import`, `swiftc a.swift b.swift` were all **run** and all
+    build multiple files with no project file. Go is the sole exception, and only because it refuses to build
+    outside a module at all.
+
+34. **`--config` and `--project` are deleted.** `--config PATH` named a manifest; the operand *is* the
+    manifest. `--project` widened `kama query` by walking up; the operand *is* the scope. Both were
+    workarounds for the discovery this rule removes.
+
+35. **Commands fall into four groups**, and the manifest means something slightly different in each:
+
+    | group | commands | the manifest operand |
+    |---|---|---|
+    | **unit-set** | `build` `run` `check` `transpile` | XOR with `.kama` files — one form is required |
+    | **target-addressed** | `query` | *optional*; sets SCOPE, then the file being asked about follows |
+    | **project-acting** | `pkg install/add/remove/update` `publish` `agents install` `toolchain pin` | **required** — omitting it would re-introduce "act on the CWD" |
+    | **none** | `seed` `lsp` `agents list/print` `toolchain list/install/uninstall/default` `update` | takes no manifest, correctly |
+
+    `seed` CREATES the manifest, so it still takes a directory. `lsp` is handed buffers and a `rootUri` by an
+    editor and never a path, so discovery there is inherent rather than convenient — it is the one place it
+    survives.
+
+    `query` gains something it cannot express today: `kama query kama_workspace.json libs/core/src/a.kama
+    --refs 9:11` asks a whole workspace, where `--project` could only ever reach the file's own project.
+
+36. **A workspace operand fans out; it never means "one big program".**
+
+    | command | `kama_workspace.json` means |
+    |---|---|
+    | `build` · `check` · `pkg install` | every referenced project, each on its own |
+    | `run` · `publish` | **an error naming the members** — pick one |
+
+    `cargo` was **run** to check this, not recalled: `cargo build` builds every member, while `cargo run`
+    refuses with *"could not determine which binary to run … available binaries: a, b"*. Running a workspace
+    would mean supervising N processes — restart policy, log multiplexing, shutdown order — which is a
+    process supervisor, not a compiler. And running one member is already spellable with no new concept:
+    `kama run apps/server/kama.json`.
+
+37. **The toolchain selector reads the named manifest instead of searching for one.** This is a
+    simplification, and it is also the one place the new spelling would otherwise introduce a **silent**
+    regression, so it is load-bearing.
+
+    `maybeReExec` runs *before* argument parsing — it must, since its job is choosing which binary does the
+    parsing — so it finds the project by scanning raw argv with a heuristic:
+    `selectorInputFile` ([:5472](../../src/kama.driver.cpp)) matches only *an existing file whose name ends
+    in `.kama`*, and `resolvePin` then walks **up** from it. Hand it `kama build ../legacy/kama.json` and
+    nothing matches, so the pin resolves from the **current directory** — building `../legacy` with whatever
+    compiler the CWD pins, saying nothing. That is the same failure the comment at
+    [:5487](../../src/kama.driver.cpp) records having already been fixed once for `.kama` inputs.
+
+    The replacement has no walk and no heuristic:
+
+    | operand | pin |
+    |---|---|
+    | `…/kama.json` | that file's `toolchain` (+ its sibling `kama.local.json`) — **read, not searched for** |
+    | `…/kama_workspace.json` | none: run in place, and re-exec **per member** (below) |
+    | loose files, or none | `--toolchain <v>` → `KAMA_VERSION` → the global default |
+
+    A loose build therefore inherits **no** project's pin, which follows from rule 33 and is a behavior
+    change: today it walks up from the first `.kama` and adopts whatever it finds.
+
+38. **A workspace build re-execs per member**, so each member gets its own pin and there is nothing to
+    reconcile. This is why no `toolchain` key belongs in `kama_workspace.json`: §2a's invariant — *a project
+    never reads its workspace manifest for anything that affects compilation* — plainly covers which compiler
+    runs. Driving each member's own build is exactly the "build & orchestration" job §2a already assigns the
+    workspace file, and every member still builds identically standalone. Recursion terminates because a
+    member's operand is always a `kama.json`.
+
+    > ⚠️ **`KAMA_NO_SELECT` is inherited.** The selector exports it before re-exec as its loop-stopper
+    > ([:5651](../../src/kama.driver.cpp)). A workspace driver that was itself reached by a re-exec carries it
+    > in its environment, so every member it spawns would silently skip selection and build with the
+    > *driver's* compiler. The driver must clear it when spawning members.
+
+    > ⚠️ **Nothing in the suite exercises the selector at all.** `maybeReExec` returns immediately unless the
+    > running binary IS the installed `~/.kama/bin/kama` ([:5637](../../src/kama.driver.cpp)), which no guard
+    > and no fixture is. Every selector claim above was derived by reading; a probe that appears to confirm
+    > one by building successfully has proved nothing. Whatever lands here needs a guard that installs a
+    > selector, or it is unguarded by construction.
+
+### 2h. CLI ↔ manifest coverage — what the audit found
+
+Every CLI option checked against every manifest key, both read from the code rather than the usage text
+(which drifts). Only build-affecting options are listed; command modes (`--each`, `--json`, the `query`
+verbs) and hidden instruments (`--strict-numeric`, `--probe-templates`) have no manifest business.
+
+| CLI | manifest | |
+|---|---|---|
+| `--target N` | `select.TARGET.<N>` + `"default": true` | ✅ |
+| `--release` / `--debug` | `select.BUILD_TYPE.<v>.default` | ✅ *verified by build* |
+| `--shared` | `select.OUTPUT.SHARED.default` | ✅ *verified — emits a real `.dylib`* |
+| `--select G=V` · `--define` / `--undefine` | `select.<G>.<V>.default` · `flags.<N>.default` | ✅ |
+| `--cc` · `--dynamic-runtime` | `select.TARGET.<n>.cc` · `.runtime` | ✅ per-target |
+| `--link L` | `link` + `select.TARGET.<n>.link` | ✅ shipped in phase 1a |
+| `-o P` | `out` | ◐ different jobs — `out` is the output ROOT, `-o` an exact path |
+| **`--webgpu`** | — | ❌ **gap** |
+| **`--no-heap`** | — | ❌ **gap** |
+| `--keep-c` · `--no-line` · `--dev` · `-j` | — | correct as CLI-only (inspection knobs; a per-run choice; a machine property) |
+
+39. **`--webgpu` and `--no-heap` gain manifest keys.** Both are permanent properties of a project rather than
+    per-invocation choices, and `--no-heap` fails **silently** when forgotten: the build simply succeeds with
+    allocation allowed. `--webgpu` is also a *linking* decision, which is the class `link` just gained a key
+    for. (ROADMAP row 14's `subsystem` key is the same shape and already scheduled.)
+
+    Going the other way, one apparent gap is not one: **`log` has no `kama` flag because `--log` belongs to
+    the BUILT PROGRAM** ([SPEC.md:1271](../SPEC.md), `./app --log warn,audio=debug`, parsed by
+    `include/kama_log.h`). The manifest's `log` is a baked runtime default, and its overrides are the
+    produced binary's own flag and `KAMA_LOG`.
+
 ---
 
 ## 3. Prior art
@@ -574,13 +706,28 @@ this design.
 
 ## 5. Phases
 
-**1 — the manifest.** `kind`; `sources` → `source` defaulting to `"src"`; `projects` removed from
-`kama.json`; unknown keys become an error; `link`; reject a `kama.json` under `source`.
-`kama_workspace.json` parsed (`projects` map with a **required** `optional`, plus its own deps), a missing
-mandatory project — or a glob matching nothing where `optional` is `false` — erroring by path, and wired to
-the LSP ownership path ([kama.driver.cpp:5754](../../src/kama.driver.cpp)), reusing
-`collectPackageTree`/`collectProjectDirs`. `kama seed` updated for all three kinds; `tests/query/mono/`
-migrated.
+**1 — the manifest.** Split in three; each lands independently green.
+
+**1a — `kama.json`. SHIPPED 2026-08-21** (`0.9.46`–`0.9.50`, six commits): unknown keys become an error and
+the pre-1.0 `main` key is rejected by name; `kind` required; `sources` → `source`, one subdirectory
+defaulting to `"src"` with `"."` refused; `link`; no `kama.json` under `source`; the flat-listing fallback
+gated; `lspEvictManifestCache`. `kama seed` emits `kind` and no `source`. New guard
+`tools/check-manifest.sh` owns every manifest-schema rejection — **`tests/xfail/` cannot host them**, since
+that leg builds one `.kama` file and a manifest error needs a directory tree.
+
+**1b — `kama_workspace.json`.** Parsed (`projects` map with a **required** `optional`, plus its own deps), a
+missing mandatory project — or a glob matching nothing where `optional` is `false` — erroring by path, and
+wired to the LSP ownership path ([kama.driver.cpp:5754](../../src/kama.driver.cpp)), reusing
+`collectPackageTree`/`collectProjectDirs`. `projects` becomes a rejection in `kama.json` naming the new file
+— **in the same commit that adds the file to migrate to**, never before. `kama seed --kind monorepo` emits a
+workspace file instead of an aggregator `kama.json`; `tests/query/mono/` migrated.
+
+**1c — the CLI contract (§2g).** The three-mode operand rule; `--config` and `--project` deleted; the
+selector rewritten to READ the named manifest rather than search for one, with a guard that can actually
+reach it (§2g.38's second warning); workspace fan-out for `build`/`check`/`pkg install` and a
+member-listing error for `run`/`publish`; per-member re-exec with `KAMA_NO_SELECT` cleared; `--webgpu` and
+`--no-heap` gaining manifest keys (§2h.39). Migration is ~68 call sites across five guards plus
+`run_tests.sh`'s `.d` leg, all of them "build a `.kama` that happens to sit in a project".
 
 **2 — identity and resolution.** `name` as the root namespace; the nested `modules` map with §2b's checks;
 names composed from the key chain, never inferred from what other entries exist; `visibility` required on
