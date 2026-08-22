@@ -167,8 +167,9 @@ The scope ladder is **workspace → project → module → file → declaration*
 2. **`name` is the root namespace**, for both kinds, and is unique. A library's name is already required
    to be a legal kama identifier because importers write it.
 3. **Projects do not nest.** `projects` is **removed from `kama.json`** and becomes the `projects` key of
-   `kama_workspace.json`. Enforced as: **no `kama.json` inside `source`**. (A path dependency vendored
-   under `.kama/` still has its own — that is a separate project, not nesting.)
+   `kama_workspace.json`. Enforced as: **no `kama.json` inside `source`**, and (7c below) none beside the
+   workspace file either. (A path dependency vendored under `.kama/` still has its own — that is a
+   separate project, not nesting.) *(Shipped.)*
 4. **`sources` → `source`**, singular, defaulting to `"src"`. A list of roots would let `src/shapes/` and
    `gen/shapes/` silently be one module. **It must name a real SUBDIRECTORY — `"."` is rejected**, along
    with `..` and absolute paths. This was added while implementing, and it is what makes rule 3
@@ -193,7 +194,7 @@ The scope ladder is **workspace → project → module → file → declaration*
    is the smallest shippable unit, so a checkout is routinely *partial*: sub-repos behind git submodules,
    role-scoped trees (art vs. engine), a subtree externals are not given. Which members may be absent is
    the first thing a reader of this file wants to know, so it is spelled at every entry rather than
-   inferred from silence.
+   inferred from silence. *(Shipped.)*
 
 ```json
 // kama_workspace.json
@@ -211,6 +212,30 @@ The scope ladder is **workspace → project → module → file → declaration*
 7. **`optional` is meaningful on a glob too**, which is why it is required there rather than excused: it
    asks whether the glob may match *nothing*. `"libs/*": { "optional": false }` catches a mistyped root —
    `libz/*` expanding to zero directories is the same class of bug as a missing project (§1c).
+   *(Shipped.)*
+
+**Decided while implementing 1b, and now part of this section:**
+
+7a. **No `name` and no `version`.** A *project* is the smallest sharable unit, so it has both; a workspace
+   is only a collection organizing a workflow, with no sources, no namespace and no artifact to name or to
+   version. Consequence: `kama seed --kind monorepo` **refuses** `--name`/`--version` rather than dropping
+   them silently, asks for the kind *first* (it decides whether the other questions exist), and the old
+   "only a monorepo root may be `my-repo`" name exemption is gone along with the name.
+
+7b. **Workspaces do not nest either**, so there is exactly one of these files per repository and depth is
+   spelled with a deeper glob (`"group/libs/*"`). This is what took "which workspace owns me?" from a
+   cycle-broken tree walk over ancestor manifests to a single lookup: `collectProjectDirs` and its cycle
+   set are deleted, and `collectPackageTree` no longer recurses.
+
+7c. **A workspace root may not also be a project** — a `kama.json` beside a `kama_workspace.json` is an
+   error. Members sit *beside* the file rather than under any `source` root, so §2a.3's "no `kama.json`
+   inside `source`" has nothing to say about them; without this, a root that was both would be a project
+   composing projects, which is the one shape the split exists to remove. Enforced where the workspace is
+   READ, never on a member's build path.
+
+7d. **A member is a directory holding a `kama.json`, in both spellings.** The plain (non-glob) form used to
+   check only that the directory existed, which let a manifest-less directory be named, expand, and then
+   contribute nothing — declared and silently empty.
 
 Everything downstream — LSP file collection, `kama pkg install` across the workspace, build orchestration —
 simply skips absent optional projects, which is what it already does for all of them.
@@ -722,12 +747,19 @@ gated; `lspEvictManifestCache`. `kama seed` emits `kind` and no `source`. New gu
 `tools/check-manifest.sh` owns every manifest-schema rejection — **`tests/xfail/` cannot host them**, since
 that leg builds one `.kama` file and a manifest error needs a directory tree.
 
-**1b — `kama_workspace.json`.** Parsed (`projects` map with a **required** `optional`, plus its own deps), a
-missing mandatory project — or a glob matching nothing where `optional` is `false` — erroring by path, and
-wired to the LSP ownership path ([kama.driver.cpp:5754](../../src/kama.driver.cpp)), reusing
-`collectPackageTree`/`collectProjectDirs`. `projects` becomes a rejection in `kama.json` naming the new file
-— **in the same commit that adds the file to migrate to**, never before. `kama seed --kind monorepo` emits a
-workspace file instead of an aggregator `kama.json`; `tests/query/mono/` migrated.
+**1b — `kama_workspace.json`. SHIPPED 2026-08-22** (`0.9.51`): parsed by `ManifestReader` in a workspace
+mode with its own closed key set (`projects` map with a **required** `optional`, plus `dependencies`); a
+missing mandatory member — or a glob matching nothing where `optional` is `false` — errors by path; wired
+to the LSP ownership path and to `kama pkg install`'s path-dep gate. `projects` is now a rejection in
+`kama.json` naming the new file, in the same commit that added the file to migrate to. `kama seed --kind
+monorepo` emits a workspace file and refuses `--name`/`--version`; `tests/query/mono/` migrated.
+
+Four things were decided while implementing and are recorded in §2a above: **no `name`/`version`** in the
+file · **workspaces do not nest** (`collectProjectDirs` and its cycle break deleted; one file per repo,
+depth by a deeper glob) · **`dependencies` parsed now**, consumed by nothing yet · **a workspace root may
+not also be a project**. The twelve workspace rejections and their passing twins live in
+`tools/check-manifest.sh`; the errors surface from `kama pkg install`, never from a build, since **no
+build path reads the file** — verified by diffing the emitted C of a member with and without it.
 
 **1c — the CLI contract (§2g).** The three-mode operand rule; `--config` and `--project` deleted; the
 selector rewritten to READ the named manifest rather than search for one, with a guard that can actually

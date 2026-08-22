@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "libs/*":       { "optional": false },
+    "group/libs/*": { "optional": false }
+  }
+}

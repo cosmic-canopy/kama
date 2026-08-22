@@ -243,15 +243,15 @@ CISRC='namespace sink;\nimport std::io::{Writer, IoError};\ntype resource Sink i
 DURI=$(furi "$dep/app/src/app.kama")
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
-# M6 A3 fixture: a FREE-RIDING sub-project. `libs/net` imports `config`, but only the top-level app
-# declares it — so net builds where it sits and nowhere else, and nothing in an editor said so. A build
+# M6 A3 fixture: a FREE-RIDING workspace member. `libs/net` imports `config` without declaring it — so
+# net builds where it sits and nowhere else, and nothing in an editor said so. A build
 # makes this a hard error; the editor path stays lenient (refusing to analyze over a *manifest* problem
 # would strip cross-module hover and definitions while the code itself resolves fine), so the finding has
 # to arrive as a DIAGNOSTIC on the import statement instead.
 frws="$tmp/frws"
-mkdir -p "$frws/apps/server/src" "$frws/libs/net/src" "$frws/libs/config/src"
-cat > "$frws/kama.json" <<'JSON'
-{ "name": "frws", "version": "0.1.0", "projects": ["apps/*", "libs/*"] }
+mkdir -p "$frws/libs/net/src" "$frws/libs/config/src"
+cat > "$frws/kama_workspace.json" <<'JSON'
+{ "projects": { "libs/*": { "optional": false } } }
 JSON
 cat > "$frws/libs/config/kama.json" <<'JSON'
 { "name": "config", "version": "0.1.0", "kind": "library" }

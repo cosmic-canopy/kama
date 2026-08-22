@@ -474,34 +474,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
-# M3.5 — DECLARED project scope (`source` / `projects` in kama.json).
+# M3.5 — DECLARED project scope (`kama_workspace.json` + each member's `source`).
 #
-# tests/query/mono/ is a NESTED monorepo. The root declares `"projects": ["libs/*", "group"]`; `group`
-# declares projects of its OWN; each leaf's `source` root is the default `src/`; and `outside/stray.kama`
-# declares a same-named `Gear` that nothing ever claims. Because the scope is DECLARED rather than
-# inferred, no directory walk of the repo happens, the file cap does not apply, the nested level is still
-# reached, and the stray type cannot collide with the workspace's.
+# tests/query/mono/ is a workspace whose members sit at two different DEPTHS. The root file lists
+# `libs/*` and `group/libs/*`; each member's `source` root is the default `src/`; and
+# `outside/stray.kama` declares a same-named `Gear` that nothing ever claims. Because the scope is
+# DECLARED rather than inferred, no directory walk of the repo happens, the file cap does not apply, the
+# deeper member is still reached, and the stray type cannot collide with the workspace's.
 #
-#   mono/kama.json                  projects: ["libs/*", "group"]
+#   mono/kama_workspace.json        projects: libs/* and group/libs/*, both mandatory
 #     libs/core/kama.json           source: src/ (default)  <- declares Gear
 #     libs/app/kama.json            source: src/ (default)  <- uses Gear
-#     group/kama.json               projects: ["libs/*"]    <- a monorepo INSIDE a monorepo
-#       group/libs/plugin/kama.json source: src/ (default)  <- uses Gear, one level deeper
+#     group/libs/plugin/kama.json   source: src/ (default)  <- uses Gear, TWO levels down
 #     outside/stray.kama            claimed by nobody       <- must never appear
 #
+# There is NO manifest at `group/`, and keeping that member is the point: depth is spelled by a deeper
+# GLOB, because a workspace does not nest and neither does a project. This used to be a monorepo inside a
+# monorepo, which made "which manifest owns this file" a cycle-broken tree walk over ancestors.
+#
 # The member directory is `libs/`, NOT `packages/`: kama.lock uses `packages` for resolved dependencies,
-# so a folder of that name next to a `projects` key would teach exactly the confusion the key avoids.
+# so a folder of that name beside a workspace file would teach exactly the confusion the naming avoids.
 FIXTURE="$ROOT/tests/query/mono/libs/core/src/gearcore.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
-echo "check-query: M3.5 declared project scope (source + projects)"
-# The consuming package is reached even though the declaring one never imports it — and reached WITHOUT an
-# editor workspace root, because an ancestor manifest explicitly owns this file.
+echo "check-query: M3.5 declared project scope (kama_workspace.json + source)"
+# The consuming member is reached even though the declaring one never imports it — and reached WITHOUT
+# an editor workspace root, because the workspace file explicitly lists both.
 expect --project --refs 9:11 -- "gearcore.kama:9:11"        # the declaration
-expect --project --refs 9:11 -- "gearapp.kama:7:4"          # a SIBLING project's use
-expect --project --refs 9:11 -- "gearplugin.kama:6:4"       # a NESTED sub-project's use (projects recurses)
+expect --project --refs 9:11 -- "gearapp.kama:7:4"          # a SIBLING member's use
+expect --project --refs 9:11 -- "gearplugin.kama:6:4"       # a member TWO levels down (the deeper glob)
 reject --project --refs 9:11 -- "stray.kama"                # ... and never the undeclared decoy
-# Without --project the sibling package is invisible again (the closure is one file).
+# Without --project the sibling member is invisible again (the closure is one file).
 reject --refs 9:11 -- "gearapp.kama"
 
 # ---------------------------------------------------------------------------------------------------

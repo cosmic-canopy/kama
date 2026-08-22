@@ -270,5 +270,125 @@ printf 'namespace inner;\nexport { w };\nfn int32 w() { return 1; }\n' > "$tmp/n
 accept nest "...while one BESIDE it is just another project"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: the workspace is its own file, with its own schema"
+
+# `projects` moved OUT of kama.json, and the rejection names where it went. This is the migration
+# instruction, so it must fire on the ordinary build path, not only where a workspace is read.
+proj oldws <<'JSON'
+{ "name": "oldws", "version": "0.1.0", "kind": "executable", "projects": ["libs/*"] }
+JSON
+reject oldws 'now lives in kama_workspace.json' "\`projects\` in a kama.json names the file it moved to"
+
+# ---------------------------------------------------------------------------------------------------
+# The workspace file is READ by `kama pkg install` — never by a build, because a project must compile
+# identically whether or not its siblings are checked out (§2a's extractability invariant). So every
+# assertion below drives install, and the fixture is a three-member workspace with path deps along a
+# chain, which needs no network.
+#
+#   ws/kama_workspace.json
+#   ws/libs/core/kama.json     <- a library
+#   ws/libs/net/kama.json      <- depends on ../core BY PATH
+#   ws/libs/app/kama.json      <- depends on ../net; installed FROM here
+#
+# Three links, not two, and that is load-bearing: the top-level-only rule exempts `<root manifest>`, so a
+# dep the installed project declares itself never reaches the gate at all. `core` has to arrive as a
+# TRANSITIVE request from `net` for the workspace to be what permits it.
+ws="$tmp/ws"
+mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from stdin
+    rm -rf "$ws"; mkdir -p "$ws/libs/core/src" "$ws/libs/net/src" "$ws/libs/app/src"
+    printf '{ "name": "core", "version": "0.1.0", "kind": "library" }\n' > "$ws/libs/core/kama.json"
+    printf 'namespace core;\nexport { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/core/src/core.kama"
+    printf '%s\n' '{ "name": "net", "version": "0.1.0", "kind": "library",' \
+                  '  "dependencies": { "core": { "path": "../core" } } }' > "$ws/libs/net/kama.json"
+    printf 'namespace net;\nimport core::{ v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
+    printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "library",' \
+                  '  "dependencies": { "net": { "path": "../net" } } }' > "$ws/libs/app/kama.json"
+    printf 'namespace app;\nimport net::{ u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
+    cat > "$ws/kama_workspace.json"
+}
+
+# The workspace must be REFUSED by install, non-zero, with the error naming $1.
+wsreject() {
+    want="$1"; what="$2"
+    if "$KAMA" pkg install "$ws/libs/app" >"$tmp/o" 2>"$tmp/e"; then
+        bad "$what — accepted, but must be REJECTED"; return
+    fi
+    grep -qF "$want" "$tmp/e" \
+        || { bad "$what — rejected, but the error is missing \"$want\""; head -2 "$tmp/e" >&2; return; }
+    ok "$what"
+}
+
+# Silence is the claim for every `optional: true` rule below, so each has one of these.
+wsaccept() {
+    what="$1"
+    "$KAMA" pkg install "$ws/libs/app" >"$tmp/o" 2>"$tmp/e" \
+        && ok "$what" || { bad "$what — rejected, but must be accepted"; head -3 "$tmp/e" >&2; }
+}
+
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false } } }
+JSON
+wsaccept "a member may path-depend on a sibling the workspace lists"
+
+# The gate is the DECLARATION, not adjacency: the same two directories with no workspace over them.
+rm -f "$ws/kama_workspace.json"
+wsreject 'only allowed at the top level' "...and may not, with no workspace file over them"
+
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false }, "tools/codegen": { "optional": false } } }
+JSON
+wsreject 'no project at `tools/codegen`' "a missing MANDATORY member is refused, by path"
+
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false }, "tools/codegen": { "optional": true } } }
+JSON
+wsaccept "...while an absent OPTIONAL one is silent"
+
+# `optional` means something on a glob too, and it is what catches a mistyped root.
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false }, "libz/*": { "optional": false } } }
+JSON
+wsreject '`libz/*` matched no project' "a MANDATORY glob matching nothing is refused"
+
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false }, "libz/*": { "optional": true } } }
+JSON
+wsaccept "...while an OPTIONAL glob may match nothing"
+
+# There is no default and no bare {}: which members may be absent is stated at every entry.
+mkws <<'JSON'
+{ "projects": { "libs/*": { } } }
+JSON
+wsreject 'does not say whether it is "optional"' "an entry with no \`optional\` is refused"
+
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false, "kind": "library" } } }
+JSON
+wsreject 'unknown key `kind`' "an unknown key INSIDE an entry is refused"
+
+# A different file with a different schema — not kama.json with extra keys tolerated.
+mkws <<'JSON'
+{ "name": "acme", "version": "0.1.0", "projects": { "libs/*": { "optional": false } } }
+JSON
+wsreject 'does not belong in kama_workspace.json' "a project key at the workspace top level is refused"
+
+# `dependencies` is the ONE other legal key: build-time, host-built tooling. Parsed and validated so a
+# typo cannot hide in it, though nothing consumes the entries yet.
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false } },
+  "dependencies": { } }
+JSON
+wsaccept "...while \`dependencies\` is legal there"
+
+# A workspace root is not a project. Members sit BESIDE the file, so "projects do not nest" says nothing
+# about them — but a root that is also a project would be a project composing projects, which is the one
+# shape this whole split exists to remove.
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false } } }
+JSON
+printf '{ "name": "acme", "version": "0.1.0", "kind": "library" }\n' > "$ws/kama.json"
+wsreject 'a workspace root is not a project' "a kama.json beside a kama_workspace.json is refused"
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"

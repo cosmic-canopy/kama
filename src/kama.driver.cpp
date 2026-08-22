@@ -490,10 +490,19 @@ bool packageSourceFiles(const std::string& dir, std::vector<std::string>& out)
     return true;
 }
 
-static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err);
+struct DepSpec;   // defined with the package resolver, far below; only the pointer is needed here
+static bool loadWorkspace(const std::string& path, std::vector<std::pair<std::string, bool>>& out,
+                          std::map<std::string, DepSpec>* depsOut, std::string& err);
 
-// Expand one `projects` entry against `dir`: a plain sub-project directory, or a trailing "/*" meaning
-// every immediate subdirectory that has a manifest. Sorted — readdir order is not deterministic.
+// The basename of the workspace file, in one place: several walks and the LSP's watcher all name it.
+static const char* const kWorkspaceFile = "kama_workspace.json";
+
+// Expand one `projects` entry against `dir`: a plain member directory, or a trailing "/*" meaning every
+// immediate subdirectory that has a manifest. Sorted — readdir order is not deterministic.
+//
+// A member is a directory holding a `kama.json`, in BOTH forms. The plain form used to check only that
+// the directory existed, which let a manifest-less directory be named, expand, and then contribute
+// nothing — declared and silently empty, the shape collectPackageTree's missing `else` arm also guards.
 std::vector<std::string> expandProjectsEntry(const std::string& dir, const std::string& rel)
 {
     std::vector<std::string> out;
@@ -509,51 +518,82 @@ std::vector<std::string> expandProjectsEntry(const std::string& dir, const std::
             closedir(d);
         }
         std::sort(out.begin(), out.end());
-    } else if (dirExists(dir + "/" + rel)) {
+    } else if (fileExists(dir + "/" + rel + "/kama.json")) {
         out.push_back(dir + "/" + rel);
     }
     return out;
 }
 
-// Every package directory in the `projects` tree rooted at `dir`, canonical, INCLUDING `dir` itself.
-// The output set doubles as the cycle break (a manifest may legally name a directory that names it
-// back, and a symlink makes a loop trivial) — the same guard collectPackageTree keeps for files.
-void collectProjectDirs(const std::string& dir, std::set<std::string>& out)
+// Every member directory of the workspace file at `wsDir`, canonical. Returns false + `err` on a
+// malformed file, a mandatory member that is not there, or a mandatory glob that matched nothing.
+//
+// NOT recursive, and it has no cycle break, because neither is representable any more: a workspace does
+// not nest and a project does not nest, so there is exactly one of these files per repository and depth
+// is spelled with a deeper glob ("group/libs/*") rather than a second file. That is what took "which
+// workspace owns me?" from a tree walk to a lookup.
+bool expandWorkspace(const std::string& wsDir, std::set<std::string>& members, std::string& err)
 {
-    if (!out.insert(absolutePath(dir)).second) return;
-    const std::string manifest = dir + "/kama.json";
-    if (!fileExists(manifest)) return;
-    std::vector<std::string> subs;
-    std::string err;
-    loadManifestProjects(manifest, subs, err);
-    for (const auto& rel : subs)
-        for (const auto& sub : expandProjectsEntry(dir, rel)) collectProjectDirs(sub, out);
+    const std::string wsFile = wsDir + "/" + kWorkspaceFile;
+    std::vector<std::pair<std::string, bool>> entries;
+    if (!loadWorkspace(wsFile, entries, nullptr, err)) { err = wsFile + ": " + err; return false; }
+
+    // A workspace root is not a project. Members live beside this file, not under it, so "projects do
+    // not nest" has nothing to say about them — but a root that is ALSO a project would be a project
+    // composing projects, which is the one shape the whole split exists to remove.
+    if (fileExists(wsDir + "/kama.json")) {
+        err = wsFile + ": there is also a kama.json here — a workspace root is not a project. Move the "
+              "project into a directory of its own and list it";
+        return false;
+    }
+
+    for (const auto& e : entries) {
+        const std::string& rel = e.first;
+        const bool optional    = e.second;
+        std::vector<std::string> hits = expandProjectsEntry(wsDir, rel);
+        if (hits.empty() && !optional) {
+            const bool glob = rel.size() > 2 && rel.compare(rel.size() - 2, 2, "/*") == 0;
+            err = wsFile + ": " + (glob
+                ? "`" + rel + "` matched no project — say \"optional\": true if it may match nothing"
+                : "no project at `" + rel + "` (no " + rel + "/kama.json) — it says \"optional\": false");
+            return false;
+        }
+        for (const auto& h : hits) members.insert(absolutePath(h));
+    }
+    return true;
 }
 
-// The workspace that OWNS `projectDir`: the package directories of the outermost ancestor manifest whose
-// `projects` tree, expanded recursively, actually contains `projectDir`. Falls back to `{projectDir}`
-// when no ancestor claims it — no workspace, so a path dep stays top-level only.
-//
-// Mirrors lspFindProject's rule (declared beats inferred, outermost wins, and it must CONTAIN me) so the
-// build and the editor agree on what one workspace is. A `.kama` component stops the walk, so a vendored
-// dependency can never reach out into its host project and call itself a member.
-std::set<std::string> workspaceMembers(const std::string& projectDir)
+// The directory of the workspace file at or above `dir`, or "" if there is none. A `.kama` component
+// stops the walk, so a vendored dependency can never reach out into its host repository and call itself
+// a member.
+std::string workspaceRootFor(const std::string& dir)
 {
-    const std::string self = absolutePath(projectDir);
-    std::vector<std::string> ancestors;
-    for (std::string cur = self;;) {
-        if (baseName(cur) == ".kama") break;
-        if (fileExists(cur + "/kama.json")) ancestors.push_back(cur);
+    for (std::string cur = absolutePath(dir);;) {
+        if (baseName(cur) == ".kama") return "";
+        if (fileExists(cur + "/" + kWorkspaceFile)) return cur;
         std::string parent = dirName(cur);
-        if (parent == cur || parent == ".") break;      // filesystem root
+        if (parent == cur || parent == ".") return "";   // filesystem root
         cur = parent;
     }
-    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
-        std::set<std::string> members;
-        collectProjectDirs(*it, members);
-        if (members.size() > 1 && members.count(self)) return members;
-    }
-    return { self };
+}
+
+// The workspace that OWNS `projectDir`: the members of the nearest ancestor workspace file that actually
+// lists it. Falls back to `{projectDir}` when nothing claims it — no workspace, so a path dep stays
+// top-level only. `err` (optional) carries a malformed or unsatisfiable workspace file; callers that
+// must keep answering on a broken tree pass nullptr and get the fallback.
+//
+// CONTAINMENT is still the whole rule, as it is for lspFindProject, so the build and the editor agree on
+// what one workspace is.
+std::set<std::string> workspaceMembers(const std::string& projectDir, std::string* err = nullptr)
+{
+    const std::string self  = absolutePath(projectDir);
+    const std::string wsDir = workspaceRootFor(self);
+    if (wsDir.empty()) return { self };
+
+    std::set<std::string> members;
+    std::string e;
+    if (!expandWorkspace(wsDir, members, e)) { if (err) *err = e; return { self }; }
+    if (!members.count(self)) return { self };
+    return members;
 }
 
 // Resolve module segments (["std","memory"]) to source file(s) under the first matching
@@ -1978,7 +2018,13 @@ struct ManifestReader {
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
-    std::vector<std::string>* projectsOut = nullptr;
+    // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
+    // rather than a second one. `projects` there is a MAP whose every entry states `optional`, and the
+    // only other legal key is `dependencies` — so the mode is a flag, not a sink, because it changes
+    // which keys are recognized at all.
+    bool workspaceFile = false;
+    // A vector, not a map: the file's own order is the order a validation error names members in.
+    std::vector<std::pair<std::string, bool>>* wsProjectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
     std::string* nameOut = nullptr;                       // set to capture the `name` (else skipped) — `kama publish`
@@ -2028,6 +2074,61 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ']') { ++i; return true; }
             return fail("expected ',' or ']' in a string array");
         }
+    }
+
+    // A JSON boolean. Its own reader because `optional` is REQUIRED and closed: `"optional": "no"` must
+    // be refused by name rather than read through skipValue as though it had said something.
+    bool boolean(bool& out) {
+        ws();
+        if (s.compare(i, 4, "true")  == 0) { i += 4; out = true;  return true; }
+        if (s.compare(i, 5, "false") == 0) { i += 5; out = false; return true; }
+        return fail("expected `true` or `false`");
+    }
+
+    // `kama_workspace.json`'s `projects`: { "<path-or-glob>": { "optional": <bool> }, ... }.
+    //
+    // A MAP rather than the array `kama.json` used to carry, because every entry now states something:
+    // whether the workspace is still well-formed when that member is not checked out. There is no bare
+    // `{}` and no default — a project is the smallest shippable unit, so a partial checkout is routine
+    // (submodules, role-scoped trees), and which members may be absent is the first thing a reader of
+    // this file wants to know. `optional` is required on a GLOB too, where it asks whether matching
+    // nothing is allowed: `libz/*` expanding to zero directories is the same class of typo as a missing
+    // path, and silence would swallow it.
+    bool wsProjectsObject() {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`projects` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string path; if (!str(path)) return false;
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a project path");
+            ++i; ws();
+            if (i >= s.size() || s[i] != '{')
+                return fail("the value for `" + path + "` must be an object stating \"optional\"");
+            ++i; ws();
+            bool optional = false, sawOptional = false;
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a project entry");
+                ++i;
+                // Closed, like the top level: an unknown key here is a swallowed decision about a member.
+                if (k != "optional") return fail("unknown key `" + k + "` in the entry for `" + path + "`");
+                if (!boolean(optional)) return false;
+                sawOptional = true;
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in the entry for `" + path + "`");
+            }
+            if (!sawOptional)
+                return fail("`" + path + "` does not say whether it is \"optional\" — every workspace "
+                            "entry states it, because a partial checkout is routine");
+            if (wsProjectsOut) wsProjectsOut->push_back({ path, optional });
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `projects`");
+        }
+        return true;
     }
 
     bool skipValue() {   // string | number | true/false/null | balanced object/array
@@ -2371,6 +2472,22 @@ struct ManifestReader {
             // rejecting unknown keys could not simply be bolted onto the final `else`: it would have
             // rejected `name` whenever the reader was loading `sources`. Split, every one of the eleven
             // loadManifest* wrappers validates the WHOLE file for free.
+            //
+            // `kama_workspace.json` is a different file, so it gets its own closed key set here rather
+            // than a shared one with per-key mode checks. It holds `projects` and `dependencies` and
+            // nothing else — no `name`, no `version`, no `toolchain`: a workspace is not a project, has
+            // nothing to be a library or executable OF, and §2a's extractability invariant (a project
+            // never reads its workspace file for anything affecting compilation) rules out a pin here.
+            if (workspaceFile) {
+                if (key == "projects") { if (!wsProjectsObject()) return false; }
+                else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
+                else return fail("`" + key + "` does not belong in kama_workspace.json, which holds only "
+                                 "`projects` and `dependencies` — a workspace is not a project");
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' at top level");
+            }
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "select") { if (!selectObject()) return false; }   // build-config groups
             else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
@@ -2382,7 +2499,14 @@ struct ManifestReader {
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "projects") { if (projectsOut) { if (!stringArray(*projectsOut)) return false; } else if (!skipValue()) return false; } // sub-projects
+            // Moved out, not dropped. A monorepo root carrying `projects` was a manifest that looked like
+            // a project while being an aggregator with no `kind`, no `source`, no namespace and no
+            // artifact — the one shape every other rule here needed an exemption for. The workspace is a
+            // scope ABOVE the project now, with its own file, and a project does not nest.
+            else if (key == "projects")
+                return fail("`projects` now lives in kama_workspace.json at the monorepo root — a "
+                            "workspace is not a project. Move it there, one entry per member, each "
+                            "stating \"optional\"");
             else if (key == "entry") { if (entryOut) { if (!str(*entryOut)) return false; } else if (!skipValue()) return false; }   // entry `.kama` (read by `kama run`)
             // Validated HERE rather than only where it is consumed, because the value set is closed and a
             // caller that does not read `kind` would otherwise let `"kind": "libary"` through unexamined.
@@ -2626,20 +2750,29 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
     return true;
 }
 
-// Load a `kama.json` manifest's `projects` — the sub-projects this manifest composes, relative to it,
-// each a directory holding its own kama.json. A trailing `/*` expands to every immediate subdirectory that
-// has one (`"packages/*"`), so a monorepo need not edit its root manifest per project. Declaring this is
-// what turns "is this a monorepo root?" from something the LSP infers from position into something the
-// repository states. NOTE the name: `packages` was rejected because kama.lock already uses that key for
-// resolved DEPENDENCIES — packages are what you consume, projects are what you compose. (LSP M3.5.)
-static bool loadManifestProjects(const std::string& path, std::vector<std::string>& out, std::string& err)
+// Load a `kama_workspace.json` — the members this monorepo composes, relative to the file, each a
+// directory holding its own kama.json, and each stating whether it may be absent. A trailing `/*` expands
+// to every immediate subdirectory that has a manifest (`"libs/*"`), so a workspace need not be edited per
+// project. Declaring this is what turns "is this a monorepo root?" from something the LSP infers from
+// position into something the repository states.
+//
+// NOTE the key name: `packages` was rejected because kama.lock already uses that word for resolved
+// DEPENDENCIES — packages are what you consume, projects are what you compose. (LSP M3.5.)
+//
+// `dependencies` here are BUILD-TIME tooling, built for the host rather than the target being
+// cross-compiled to (§2d.23). Parsed and validated so the file's schema is whole and a typo is caught;
+// nothing consumes them yet.
+static bool loadWorkspace(const std::string& path, std::vector<std::pair<std::string, bool>>& out,
+                          std::map<std::string, DepSpec>* depsOut, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.projectsOut = &out;
+    r.workspaceFile = true;
+    r.wsProjectsOut = &out;
+    r.deps          = depsOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
     return true;
 }
@@ -4088,7 +4221,13 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
 
     // The workspace this project belongs to, if any. Computed ONCE here rather than inside the attempt
     // loop below: it depends only on the manifests on disk, so it is immutable across restarts.
-    const std::set<std::string> wsMembers = workspaceMembers(base);
+    //
+    // This is where a broken workspace file is SAID OUT LOUD. The resolution and editor paths pass no
+    // `err` and quietly get "no workspace", because they must keep answering on a tree mid-edit; install
+    // is the command that acts on the whole thing, so a member that is not there is its problem.
+    std::string wsErr;
+    const std::set<std::string> wsMembers = workspaceMembers(base, &wsErr);
+    if (!wsErr.empty()) { fprintf(stderr, "kama install: %s\n", wsErr.c_str()); return 2; }
 
     // Range deps (git+version) select the highest matching tag. Because the BFS resolves each node on
     // first sight, a *later*, tighter requestor of the same name can invalidate an already-fetched tag.
@@ -4254,13 +4393,13 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     continue;   // dedup (diamond / prod-wins-over-dev)
                 }
                 // A path dep from a FETCHED package is not reproducible — the local directory it names is
-                // not carried with it. Between two members of one declared `projects` workspace it is
-                // exactly as reproducible as the workspace itself, which is what makes a sub-project able
-                // to declare the siblings it imports, and so able to be lifted out and still build.
+                // not carried with it. Between two members of one kama_workspace.json it is exactly as
+                // reproducible as the workspace itself, which is what makes a member able to declare the
+                // siblings it imports, and so able to be lifted out and still build.
                 if (!r.spec.path.empty() && r.requestor != "<root manifest>" &&
                     !(wsMembers.count(absolutePath(r.requestorDir)) && wsMembers.count(r.spec.pathAbs))) {
                     fprintf(stderr, "kama install: path dependency '%s' (required by %s) is only allowed at the "
-                            "top level, or between members of one declared `projects` workspace — a fetched "
+                            "top level, or between two members of one kama_workspace.json — a fetched "
                             "package cannot reference a local path reproducibly\n",
                             r.name.c_str(), r.requestor.c_str());
                     return 1;
@@ -5219,28 +5358,33 @@ static std::vector<std::string> seedSplitMembers(const std::string& s)
 // such key was silently unimportable — it built for its author and failed for every consumer. `source`
 // now defaults to exactly "src", which is the layout seed writes, so emitting it would be emitting the
 // default. One way to do a thing.
-static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version,
-                                const std::vector<std::string>& members)
+static std::string seedManifest(SeedKind kind, const std::string& name, const std::string& version)
 {
     std::string m = "{\n";
     m += "  \"name\": \""    + jsonEscape(name)    + "\",\n";
     m += "  \"version\": \"" + jsonEscape(version) + "\"";
-    // `kind` is required of a project, and a monorepo ROOT is not one — it is a pure aggregator with no
-    // sources, no namespace and nothing to be a library or an executable OF. Emitting a kind for it would
-    // be a lie the reader would then have to make sense of.
     if (kind == SeedKind::Executable)
         m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
-    else if (kind == SeedKind::Library) m += ",\n  \"kind\": \"library\"";
-    else {
-        // A monorepo root is a pure aggregator: it contributes no files of its own, only its members'.
-        // An explicit list rather than a "libs/*" glob — kama does not get to invent a directory name
-        // for somebody else's repository, and the glob is available to anyone who wants it.
-        m += ",\n  \"projects\": [";
-        for (size_t i = 0; i < members.size(); ++i)
-            m += (i ? ", " : "") + std::string("\"") + jsonEscape(members[i]) + "\"";
-        m += "]";
-    }
+    else
+        m += ",\n  \"kind\": \"library\"";
     return m + "\n}\n";
+}
+
+// `kama_workspace.json`. NO name and NO version, and that is the model rather than an omission: a
+// PROJECT is the smallest sharable unit, so it has both; a workspace is only a collection organizing a
+// workflow, with no sources, no namespace and no artifact to name or to version.
+//
+// An explicit member list rather than a "libs/*" glob — kama does not get to invent a directory name for
+// somebody else's repository, and the glob is available to anyone who wants it. Every entry says
+// `optional` because there is no default: which members may be missing from a checkout is the first
+// thing a reader of this file asks.
+static std::string seedWorkspace(const std::vector<std::string>& members)
+{
+    std::string m = "{\n  \"projects\": {\n";
+    for (size_t i = 0; i < members.size(); ++i)
+        m += "    \"" + jsonEscape(members[i]) + "\": { \"optional\": false }"
+           + (i + 1 < members.size() ? ",\n" : "\n");
+    return m + "  }\n}\n";
 }
 
 int cmdSeed(const std::string& dirArg, const SeedOpts& o)
@@ -5255,14 +5399,18 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
         fprintf(stderr, "kama seed: %skama.json exists — this is already a kama project\n", prefix.c_str());
         return 1;
     }
+    if (fileExists(prefix + kWorkspaceFile)) {
+        fprintf(stderr, "kama seed: %s%s exists — this is already a kama workspace\n",
+                prefix.c_str(), kWorkspaceFile);
+        return 1;
+    }
 
     // (2) ANSWERS. A terminal gets a prompt for whatever no flag already settled; anything else behaves
     // as --yes. Both conditions matter: --yes wins over a terminal, and a non-terminal needs no --yes.
+    //
+    // KIND is asked FIRST, because it decides whether the other two questions exist at all: a workspace
+    // has no name and no version to ask for.
     const bool ask = !o.yes && stdinIsTerminal();
-    std::string name = o.nameGiven ? o.name : seedDefaultName(dir);
-    if (ask && !o.nameGiven)    name    = seedAsk("package name", name);
-    std::string version = o.versionGiven ? o.version : "0.1.0";
-    if (ask && !o.versionGiven) version = seedAsk("version", version);
     std::string kindStr = o.kindGiven ? o.kind : "executable";
     if (ask && !o.kindGiven)    kindStr = seedAsk("kind (executable/library/monorepo)", kindStr);
 
@@ -5273,6 +5421,20 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
                 kindStr.c_str());
         return 2;
     }
+
+    // A workspace has neither, so neither flag may be given rather than being silently dropped — the same
+    // reason `--members` on a library is an error. `name` still gets a value here because .gitignore and
+    // README.md are written for a DIRECTORY, not for a manifest entry.
+    if (kind == SeedKind::Monorepo && (o.nameGiven || o.versionGiven)) {
+        fprintf(stderr, "kama seed: --%s does not apply to --kind monorepo — a workspace is not a "
+                        "project: it has no name and no version, only the projects it composes\n",
+                o.nameGiven ? "name" : "version");
+        return 2;
+    }
+    std::string name = o.nameGiven ? o.name : seedDefaultName(dir);
+    if (ask && kind != SeedKind::Monorepo && !o.nameGiven)    name    = seedAsk("package name", name);
+    std::string version = o.versionGiven ? o.version : "0.1.0";
+    if (ask && kind != SeedKind::Monorepo && !o.versionGiven) version = seedAsk("version", version);
 
     std::string membersStr = o.members;
     if (kind == SeedKind::Monorepo && ask && !o.membersGiven)
@@ -5288,13 +5450,19 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
         return 2;
     }
 
+    // Only a project has a name and a version to check. A workspace's `name` here never leaves the
+    // README, so holding it to the importable rule would be refusing a directory name over a manifest
+    // entry that does not exist.
     std::string verr;
-    if (!seedValidName(name, kind != SeedKind::Monorepo, verr)) {
-        fprintf(stderr, "kama seed: %s\n", verr.c_str()); return 2;
-    }
-    SemVer sv;
-    if (!parseSemVer(version, sv)) {
-        fprintf(stderr, "kama seed: '%s' is not a MAJOR.MINOR.PATCH version\n", version.c_str()); return 2;
+    if (kind != SeedKind::Monorepo) {
+        if (!seedValidName(name, true, verr)) {
+            fprintf(stderr, "kama seed: %s\n", verr.c_str()); return 2;
+        }
+        SemVer sv;
+        if (!parseSemVer(version, sv)) {
+            fprintf(stderr, "kama seed: '%s' is not a MAJOR.MINOR.PATCH version\n", version.c_str());
+            return 2;
+        }
     }
     // A member becomes a library, so it is held to the importable rule — and it is checked HERE, with
     // every other answer, so a bad third member costs nothing rather than half a monorepo.
@@ -5316,17 +5484,20 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     // wrong for a monorepo whose fourth member collides after three have landed.
     const std::string ident = importNameOf(name);
     std::vector<std::pair<std::string, std::string>> files;
-    files.push_back({ "kama.json", seedManifest(kind, name, version, members) });
-    if (kind == SeedKind::Executable)
+    if (kind == SeedKind::Executable) {
+        files.push_back({ "kama.json", seedManifest(kind, name, version) });
         files.push_back({ "src/app.kama", seedSubst(KAMA_SEED_APP, name, ident) });
-    else if (kind == SeedKind::Library)
+    } else if (kind == SeedKind::Library) {
+        files.push_back({ "kama.json", seedManifest(kind, name, version) });
         files.push_back({ "src/" + ident + ".kama", seedSubst(KAMA_SEED_LIB, name, ident) });
-    else
+    } else {
+        files.push_back({ kWorkspaceFile, seedWorkspace(members) });
         for (const auto& m : members) {
             const std::string mi = importNameOf(m);
-            files.push_back({ m + "/kama.json", seedManifest(SeedKind::Library, m, version, {}) });
+            files.push_back({ m + "/kama.json", seedManifest(SeedKind::Library, m, version) });
             files.push_back({ m + "/src/" + mi + ".kama", seedSubst(KAMA_SEED_LIB, m, mi) });
         }
+    }
     files.push_back({ ".gitignore", seedSubst(KAMA_SEED_GITIGNORE, name, ident) });
     files.push_back({ "README.md",  seedSubst(KAMA_SEED_README,    name, ident) });
 
@@ -5766,48 +5937,29 @@ static size_t lspFileBudget()
     return kLspMaxProjectFiles;
 }
 
-// Collect one package's sources, recursing into any sub-projects its manifest declares.
+// Collect one project's sources — its `source` root, walked recursively, which is exactly its files.
 //
-//   a kama.json here   -> its `source` root, walked recursively, is exactly this package's files.
-//   `projects` present -> each entry is a sub-project directory holding its own kama.json, walked the same
-//                         way. A trailing `/*` ("packages/*") expands to every immediate subdirectory that
-//                         has a manifest, so a monorepo need not edit its root manifest per project.
-//   neither present    -> a leaf: the project's whole directory is its sources.
+// No recursion into anything, and no cycle break, because a project no longer composes projects: the
+// workspace above it does, and that file cannot nest either. collectWorkspaceFiles is the union.
 //
-//   no kama.json here  -> NOT a project: contributes nothing at all. Walking such a directory wholesale
-//                         is how a `projects` entry naming a manifest-less directory used to swallow it
-//                         as though it had been declared.
-// `visited` (canonical paths) breaks cycles: a manifest may legally name a directory that names it back,
-// and a symlink makes a loop trivial.
-static void collectPackageTree(const std::string& dir, std::vector<std::string>& out,
-                               std::set<std::string>& visited)
+//   no kama.json here -> NOT a project: contributes nothing at all. There is deliberately no `else` arm
+//                        walking the directory wholesale — that is how a member naming a manifest-less
+//                        directory used to swallow the whole directory as though it had been declared.
+//                        (With `source` always present for a real manifest it could never fire for one
+//                        anyway, and expandProjectsEntry now refuses to expand that shape at all.)
+static void collectPackageTree(const std::string& dir, std::vector<std::string>& out)
 {
-    if (!visited.insert(absolutePath(dir)).second) return;
-
-    std::vector<std::string> subs2;
-    std::string err;
-    const std::string manifest = dir + "/kama.json";
-    const std::string& srcRel = manifestSourceCached(manifest);
-    if (fileExists(manifest)) loadManifestProjects(manifest, subs2, err);
-
+    const std::string& srcRel = manifestSourceCached(dir + "/kama.json");
+    if (srcRel.empty()) return;
+    // absolutePath, not the lexical join packageSourceFiles uses: what THIS returns is handed to
+    // lspAnalyzeWorkspace as CLI inputs and compared against URI-derived absolute paths, so it must be
+    // canonical. The two callers want opposite things from the same data — see packageSourceFiles.
+    std::string abs = absolutePath(dir + "/" + srcRel);
+    // A source root that does not exist is skipped: a manifest may name a directory not created yet, and
+    // refusing to index everything else over that would be hostile.
+    if (!dirExists(abs)) return;
     size_t seen = 0;
-    if (!srcRel.empty()) {
-        // absolutePath, not the lexical join packageSourceFiles uses: what THIS returns is handed to
-        // lspAnalyzeWorkspace as CLI inputs and compared against URI-derived absolute paths, so it must
-        // be canonical. The two callers want opposite things from the same data — see packageSourceFiles.
-        std::string abs = absolutePath(dir + "/" + srcRel);
-        if (dirExists(abs)) collectKamaFiles(abs, "", out, seen, (size_t)-1);
-        // A source root that does not exist is skipped: a manifest may name a directory not created yet,
-        // and refusing to index everything else over that would be hostile.
-    }
-    // No `else` arm. A directory with no manifest contributes NOTHING — it is not a project, and walking
-    // it wholesale is how a `projects` entry naming a manifest-less directory used to swallow that whole
-    // directory as though it had been declared. (expandProjectsEntry's non-glob branch checks only
-    // dirExists, so that shape is reachable.) With `source` always present for a real manifest, the arm
-    // could otherwise never fire for one anyway.
-
-    for (const auto& rel : subs2)
-        for (const auto& sub : expandProjectsEntry(dir, rel)) collectPackageTree(sub, out, visited);
+    collectKamaFiles(abs, "", out, seen, (size_t)-1);
 }
 
 std::string lspRealPath(const std::string& path) { return absolutePath(path); }
@@ -5835,7 +5987,7 @@ void lspEvictParsedFile(const std::string& path)
 bool lspIsManifestPath(const std::string& path)
 {
     std::string base = baseName(path);
-    return base == "kama.json" || base == "kama.local.json";
+    return base == "kama.json" || base == "kama.local.json" || base == kWorkspaceFile;
 }
 
 // The single-select axes an editor may switch between, read off the globals a resolve just installed.
@@ -5933,22 +6085,25 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
     bool underWorkspace = !wsRoot.empty() &&
                           (dir == wsRoot || dir.compare(0, wsRoot.size() + 1, wsRoot + "/") == 0);
 
-    // Walk up collecting manifest directories, nearest first. Bounded by the editor's folder when we have
-    // one; a `.kama` component stops the walk so a vendored dep never escapes into its host project.
+    // Walk up collecting manifest directories, nearest first, and noting the workspace file if one is
+    // passed on the way. Bounded by the editor's folder when we have one; a `.kama` component stops the
+    // walk so a vendored dep never escapes into its host project.
     std::vector<std::string> manifests;
+    std::string wsDir;
     std::string cur = dir;
     for (;;) {
         if (baseName(cur) == ".kama") break;
         if (fileExists(cur + "/kama.json")) manifests.push_back(cur);
+        if (wsDir.empty() && fileExists(cur + "/" + kWorkspaceFile)) wsDir = cur;
         if (underWorkspace && cur == wsRoot) break;      // examined it, go no higher
         std::string parent = dirName(cur);
         if (parent == cur || parent == ".") break;       // filesystem root
         cur = parent;
     }
 
-    // DECLARED beats inferred. If an ancestor manifest explicitly OWNS this file — via its `source` root
-    // and/or `projects`, expanded recursively — then widening to it is not a guess and needs no editor
-    // boundary to license it. Prefer the outermost such manifest (the top of a nest of monorepos).
+    // DECLARED beats inferred. If an ancestor manifest's `source` root explicitly OWNS this file, then
+    // widening to it is not a guess and needs no editor boundary to license it. NEAREST wins, because a
+    // project no longer composes projects — a manifest further up cannot own a nearer project's file.
     //
     // CONTAINMENT IS THE WHOLE RULE. There used to be a `srcs.empty() && subs.empty()` guard here reading
     // "declares nothing: not an owner", and it was load-bearing in a way its comment did not say: it was
@@ -5958,10 +6113,9 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
     // manifest always has a source root, the guard would be dead anyway; deleting the arm is what makes
     // containment sound on its own, so the two changes belong together.
     std::string self = absolutePath(openFilePath);
-    for (auto it = manifests.rbegin(); it != manifests.rend() && p.root.empty(); ++it) {
+    for (auto it = manifests.begin(); it != manifests.end() && p.root.empty(); ++it) {
         std::vector<std::string> files;
-        std::set<std::string> visited;
-        collectPackageTree(*it, files, visited);
+        collectPackageTree(*it, files);
         for (const auto& f : files)
             if (absolutePath(f) == self) {
                 p.root        = *it;
@@ -5971,6 +6125,18 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
             }
     }
     if (!p.root.empty()) {
+        // A workspace that LISTS this project widens the scope to every member, which is what makes a
+        // rename in libs/core reach libs/ui. Listing is the whole test: a workspace overhead does not get
+        // to claim a project it never named, and a member is skipped silently when it is not checked out.
+        if (!wsDir.empty()) {
+            std::set<std::string> members;
+            std::string werr;
+            if (expandWorkspace(wsDir, members, werr) && members.count(absolutePath(p.root))) {
+                p.root  = wsDir;
+                p.files.clear();
+                for (const auto& m : members) collectPackageTree(m, p.files);
+            }
+        }
         std::sort(p.files.begin(), p.files.end());
         p.files.erase(std::unique(p.files.begin(), p.files.end()), p.files.end());
         p.seenCount = p.files.size();
@@ -5978,7 +6144,7 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
     }
 
     if (!manifests.empty()) {
-        // Nothing declared ownership, so this IS an inference. Under a declared workspace the outermost
+        // Nothing declared ownership, so this IS an inference. Under the editor's folder the outermost
         // manifest wins (a monorepo root that never said so — over-indexing is the safe direction, since
         // under-indexing is what silently rewrites a caller we never saw). Without an editor boundary only
         // the nearest is defensible: widening could otherwise swallow a stray $HOME manifest.
@@ -5991,8 +6157,8 @@ LspProject lspFindProject(const std::string& openFilePath, const std::string& wo
     }
 
     // Nothing above declared ownership of this file, so the file set is INFERRED: every .kama under the
-    // root. That inference is what the cap bounds — see kLspMaxProjectFiles. A manifest can end it by
-    // a kama.json whose `source` root CONTAINS this file, and/or `projects` (which sub-projects I compose).
+    // root. That inference is what the cap bounds — see kLspMaxProjectFiles. A kama.json whose `source`
+    // root CONTAINS this file ends it, and a kama_workspace.json listing that project widens it.
     size_t seen = 0, budget = lspFileBudget();
     p.cap = budget;
     collectKamaFiles(p.root, "", p.files, seen, budget);

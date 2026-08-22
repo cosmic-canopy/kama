@@ -462,9 +462,12 @@ struct Server {
 
     // The globs to watch, in one place because two things must agree on them: this registration and the
     // VS Code client's static list (editor/vscode/extension.js). `tools/check-editors.sh` asserts they do.
-    // ⚠️ `**/kama.json` does NOT match `kama.local.json` — the two manifests are separate patterns.
+    // ⚠️ `**/kama.json` matches NEITHER `kama.local.json` NOR `kama_workspace.json` — three basenames,
+    // three patterns. The workspace file is watched because it decides the RENAME SCOPE: adding a member
+    // is what makes a rename in one project reach another.
     static const char* const* watchedGlobs(size_t& n) {
-        static const char* const kGlobs[] = { "**/*.kama", "**/kama.json", "**/kama.local.json" };
+        static const char* const kGlobs[] = { "**/*.kama", "**/kama.json", "**/kama.local.json",
+                                              "**/kama_workspace.json" };
         n = sizeof(kGlobs) / sizeof(kGlobs[0]);
         return kGlobs;
     }

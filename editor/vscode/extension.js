@@ -218,12 +218,15 @@ function startLanguageServer() {
     // The two manifests are watched for a DIFFERENT reason (M6 A1): they carry the build configuration the
     // server analyzes under, so editing one changes which `@compileFor` declarations exist — not just a
     // file in the program, but the program. The server re-resolves and republishes every open buffer.
-    // Spelled out separately because `**/kama.json` does not match `kama.local.json`.
+    // Spelled out separately because `**/kama.json` matches neither `kama.local.json` nor
+    // `kama_workspace.json`. The last one decides the RENAME SCOPE: adding a member is what makes a
+    // rename in one project reach another.
     synchronize: {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher('**/*.kama'),
         vscode.workspace.createFileSystemWatcher('**/kama.json'),
         vscode.workspace.createFileSystemWatcher('**/kama.local.json'),
+        vscode.workspace.createFileSystemWatcher('**/kama_workspace.json'),
       ],
     },
   };

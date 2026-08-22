@@ -114,12 +114,18 @@ grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok
 echo "check-seed: monorepo, and that a seeded library is actually importable"
 
 w="$tmp/ws"
-"$KAMA" seed "$w" --yes --kind monorepo --name acme --members engine,server >/dev/null 2>&1 \
+"$KAMA" seed "$w" --yes --kind monorepo --members engine,server >/dev/null 2>&1 \
     || bad "seeding a monorepo failed"
-grep -q '"projects": \["engine", "server"\]' "$w/kama.json" \
-    && ok "the root lists its members explicitly" || bad "root manifest: $(cat "$w/kama.json")"
-grep -q '"entry"\|"source"\|"kind"' "$w/kama.json" && bad "a monorepo root should be a pure aggregator" \
-                                                   || ok "the root is a pure aggregator, with no kind of its own"
+[ -f "$w/kama.json" ] && bad "a workspace root wrote a kama.json — it is not a project" \
+                      || ok "the workspace root is not a project (no kama.json)"
+grep -q '"engine": { "optional": false }' "$w/kama_workspace.json" \
+    && ok "the root lists its members explicitly, each stating \"optional\"" \
+    || bad "workspace file: $(cat "$w/kama_workspace.json")"
+# A workspace has no name and no version: it is not the smallest sharable unit, a PROJECT is. Asserted by
+# key, because "acme" would not appear in the file even if `name` were emitted for something else.
+grep -q '"name"\|"version"\|"kind"\|"entry"' "$w/kama_workspace.json" \
+    && bad "the workspace file carries a project key" \
+    || ok "the workspace has no name, version or kind of its own"
 [ -f "$w/engine/src/engine.kama" ] && [ -f "$w/server/src/server.kama" ] \
     && ok "each member is seeded as a library" || bad "a member is missing its source"
 
@@ -193,9 +199,10 @@ reject "a duplicate member"          --kind monorepo --members a,b,a
 # executable's own symbols are qualified by it, so `my-app` is no more spellable there than in an import.
 reject "a hyphenated executable name" --kind executable --name my-app
 
-# A monorepo ROOT is the one name still exempt: it aggregates members and has no namespace of its own.
-"$KAMA" seed "$tmp/hyph" --yes --kind monorepo --name my-repo --members a,b >/dev/null 2>&1 \
-    && ok "a hyphenated MONOREPO root name is allowed" || bad "a hyphenated monorepo name was refused"
+# A workspace has no name to validate, so the flag itself is refused rather than silently dropped — the
+# same rule as `--members` on a library. (`--version` likewise; the members are seeded at 0.1.0.)
+reject "--name on a monorepo"    --kind monorepo --members a,b --name acme
+reject "--version on a monorepo" --kind monorepo --members a,b --version 2.0.0
 
 # The rejection has to teach, not just refuse.
 grep -q 'root namespace' "$tmp/rej1.out" && ok "the name error explains why (root namespace)" \

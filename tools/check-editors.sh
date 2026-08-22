@@ -4,7 +4,7 @@
 # This is a DRIFT check, not a behaviour test, and the distinction is deliberate: actually exercising the
 # snippets would need Neovim, Vim, Emacs, Sublime, Helix and Kate installed on every machine that runs the
 # suite. What a grep CAN prove is that each documented client still names the command the compiler still
-# provides, that the page has not quietly lost an editor, and that the three watcher globs are spelled the
+# provides, that the page has not quietly lost an editor, and that the four watcher globs are spelled the
 # same in the two places that must agree — the server's dynamic registration (kama.lsp.cpp) and the VS Code
 # client's static list (extension.js). What it CANNOT prove is that a snippet works; that is a manual step,
 # recorded per editor in the page itself.
@@ -136,10 +136,11 @@ for pat in "extension = { kama = 'kama' }" "filetypes\": \[\"kama\"\]" "\\\\.kam
     grep -qE -- "$pat" "$DOC" || bad "docs/editors.md no longer registers the .kama file type via: $pat"
 done
 
-# 4. THE THREE GLOBS, in the two places that must agree. `**/kama.json` does NOT match `kama.local.json`,
-#    which is exactly the mistake this exists to catch: dropping the third glob loses build-configuration
-#    re-resolution and nothing else visibly breaks.
-for glob in '**/*.kama' '**/kama.json' '**/kama.local.json'; do
+# 4. THE FOUR GLOBS, in the two places that must agree. `**/kama.json` matches NEITHER `kama.local.json`
+#    NOR `kama_workspace.json`, which is exactly the mistake this exists to catch: dropping the third
+#    loses build-configuration re-resolution, dropping the fourth loses rename scope, and in both cases
+#    nothing else visibly breaks.
+for glob in '**/*.kama' '**/kama.json' '**/kama.local.json' '**/kama_workspace.json'; do
     grep -qF -- "$glob" "$EXT" || bad "editor/vscode/extension.js no longer watches $glob"
     grep -qF -- "$glob" "$SRV" || bad "kama.lsp.cpp no longer registers $glob for didChangeWatchedFiles"
 done
@@ -188,4 +189,4 @@ fi
 grep -qiF -- 'file icon' "$DOC" || bad "docs/editors.md no longer documents the .kama file icon"
 
 [ "$fail" = 0 ] || { echo "check-editors: see docs/editors.md" >&2; exit 1; }
-echo "check-editors: PASS (8 editors documented, 7 configured, 3 watcher globs agree in server + VS Code client, Zed extension agrees with its docs, .kama file icon present with alpha)"
+echo "check-editors: PASS (8 editors documented, 7 configured, 4 watcher globs agree in server + VS Code client, Zed extension agrees with its docs, .kama file icon present with alpha)"

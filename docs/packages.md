@@ -72,17 +72,18 @@ location, runs it, forwards the exit code, and cleans up. It's **native-only** (
 browser/node, a bare-metal target emits a freestanding object) — for those, use `kama build --target …`;
 see [targets.md](targets.md).
 
-### The three kinds
+### The two kinds, and the workspace above them
 
 A project **states its kind** in the manifest — it is a library or an executable, and nothing infers
-that from the other keys. A monorepo root is neither: it aggregates members and has no sources,
-namespace or artifact of its own, so it carries no `kind` at all.
+that from the other keys. A monorepo root is **not a project at all**: it aggregates members and has no
+sources, namespace or artifact of its own, so it has no `kama.json`, and its own file is a different
+one.
 
-| `--kind` | manifest | on disk |
+| `--kind` | writes | on disk |
 |---|---|---|
-| `executable` | `kind` + `entry` | `src/app.kama` with `fn int32 main()` |
-| `library` | `kind` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
-| `monorepo` | `projects` | one seeded library per `--members` name |
+| `executable` | `kama.json` with `kind` + `entry` | `src/app.kama` with `fn int32 main()` |
+| `library` | `kama.json` with `kind` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
+| `monorepo` | `kama_workspace.json` | one seeded library per `--members` name |
 
 A monorepo takes the member names from you rather than inventing a directory convention:
 
@@ -90,19 +91,28 @@ A monorepo takes the member names from you rather than inventing a directory con
 kama seed acme --kind monorepo --members engine,server
 ```
 ```json
-// acme/kama.json — a pure aggregator: no sources of its own, only its members'
-{ "name": "acme", "version": "0.1.0", "projects": ["engine", "server"] }
+// acme/kama_workspace.json — the members, and nothing else
+{
+  "projects": {
+    "engine": { "optional": false },
+    "server": { "optional": false }
+  }
+}
 ```
+
+Note what is *not* there: **no name and no version**. A **project** is the smallest sharable unit, so it
+has both; a workspace is only a collection organizing a workflow, with nothing to name or to version. So
+`--name` and `--version` are refused with `--kind monorepo` rather than quietly dropped.
 
 Each member is seeded as a library, because that is what most members are; promoting one to an
 executable is adding `entry` and a `main`. A member that imports a sibling still declares it as a path
-dependency — see [Sub-projects are self-contained](#sub-projects-are-self-contained--declare-what-you-import).
+dependency — see [Members are self-contained](#members-are-self-contained--declare-what-you-import).
 
 A **project's name has to be a legal kama identifier**, of either kind, because the name is the
 project's root namespace. `kama seed --kind library --name my-lib` is refused and says to use
 `my_lib`: `import my-lib::{ … }` does not parse, so that package could never be imported by anyone —
 and an executable is not the softer case it looks like, since its own symbols are qualified by the
-same name. Only a monorepo *root* may be `my-repo`: it has no namespace to be.
+same name. A monorepo directory may be called anything: it has no name in any file.
 
 ## Build output — `out`
 
@@ -121,9 +131,9 @@ yesterday's binary and no diagnostic. `-o` still overrides everything.
 A loose `.kama` file with **no manifest** is unchanged: `kama build hello.kama` still writes `./hello`
 beside it. `out/` is a project's concept, and one file is not a project.
 
-## Telling the tooling what your project contains — `source` and `projects`
+## Telling the tooling what your project contains — `source`
 
-Both keys exist to replace an inference with a declaration. Editor tooling (the language server) has to
+This key exists to replace an inference with a declaration. Editor tooling (the language server) has to
 know which files make up your project before it can safely do a project-wide operation like renaming a
 symbol across files. Without a manifest it has to infer — "every `.kama` under here" — and an inference
 can be wrong, so it is **capped at 500 files**; past that, cross-file rename refuses rather than answer
@@ -156,24 +166,30 @@ any vendored dependency *inside* the source root — and a project may not conta
 `kama.json` under its `source`. Keeping the source root one level down makes all of those structurally
 outside it, with no exceptions to remember.
 
-**`projects`** — the sub-projects this manifest composes, each a directory with its own `kama.json`. This
-is how you declare a monorepo. A trailing `/*` expands to every immediate subdirectory that has a
-manifest. (It is *not* called `packages`: `kama.lock` already uses that key for resolved dependencies, and
-the distinction is the useful one — **packages are what you consume, projects are what you compose**. For
-the same reason, name the directory something like `libs/` rather than `packages/`.)
+## Composing projects — `kama_workspace.json`
+
+A **workspace** is the scope above a project: a monorepo root, declaring the projects it composes. It is
+a **separate file**, and everything about it follows from one invariant —
+
+> **A project never reads its workspace file for anything that affects compilation.**
+
+which is what keeps every member *extractable*: it must build identically whether or not its siblings
+are checked out. The workspace file is for tooling — the language server's rename scope, and
+`kama pkg install` across the repo — and never for what the compiler emits.
 
 ```json
-// the workspace root
+// acme/kama_workspace.json
 {
-  "name": "acme",
-  "version": "0.1.0",
-  "projects": ["libs/*", "tools/codegen"]
+  "projects": {
+    "libs/*":        { "optional": false },   // the glob must match at least one project
+    "tools/codegen": { "optional": true  }    // absent is fine, contributes nothing
+  }
 }
 ```
 
 ```
 acme/
-  kama.json                <- projects: ["libs/*", "tools/codegen"]
+  kama_workspace.json      <- libs/* and tools/codegen
   libs/
     core/kama.json         <- source: src/ (the default)
     ui/kama.json           <- source: src/ (the default)
@@ -181,11 +197,33 @@ acme/
   scratch/notes.kama       <- claimed by nobody: never indexed
 ```
 
-`projects` is **recursive** — a sub-project may declare sub-projects of its own, so monorepos nest to any
-depth — and cycles are broken automatically, so a manifest naming a directory that names it back is
-harmless. A manifest with `projects` and no `kind` is a pure aggregator: it contributes no files
-itself, only its sub-projects'. Editing a file in `libs/core` then makes the whole workspace the
-rename scope, so renaming a type there correctly updates `libs/ui`.
+A member is any directory holding its own `kama.json`. A trailing `/*` expands to every immediate
+subdirectory that has one. (The key is *not* called `packages`: `kama.lock` already uses that word for
+resolved dependencies, and the distinction is the useful one — **packages are what you consume, projects
+are what you compose**. For the same reason, name the directory something like `libs/` rather than
+`packages/`.)
+
+Editing a file in `libs/core` makes the whole workspace the rename scope, so renaming a type there
+correctly updates `libs/ui`.
+
+**Every entry states `optional`.** There is no default and no bare `{}`, because a project is the
+smallest shippable unit and a checkout is routinely *partial* — submodules, role-scoped trees, a subtree
+externals are not given. Which members may be absent is the first thing a reader of this file wants to
+know, so it is spelled at every entry rather than inferred from silence:
+
+- `"optional": false` and the directory is not there → an **error naming the path**.
+- `"optional": false` on a **glob** that matches nothing → an error too. That is the question `optional`
+  asks of a glob: `libz/*` expanding to zero directories is the same class of typo as a missing project.
+- `"optional": true` → absent is fine; it simply contributes nothing.
+
+**Neither workspaces nor projects nest.** There is one of these files per repository, and depth is
+spelled with a deeper glob (`"group/libs/*"`) rather than a second file. A `kama.json` beside a
+`kama_workspace.json` is an error for the same reason: a workspace root is not a project.
+
+The only other key is **`dependencies`** — build-time tooling, built for the *host* rather than for the
+target you are cross-compiling to, which is why it lives here rather than in a project. There is no
+`name`, no `version` and no `toolchain`: a workspace is not a project, and which compiler builds a member
+is settled by that member's own manifest.
 
 ### The manifest is checked, not skimmed
 
@@ -196,11 +234,12 @@ command that reads the manifest at all validates the whole file, so the typo is 
 you happen to run.
 
 The same applies to values with a closed set: `"kind": "libary"` is refused by name rather than being
-read as "not an executable".
+read as "not an executable" — and to the workspace file, which has its own closed set: `"name"` there is
+refused rather than ignored, because a workspace does not have one.
 
-### Sub-projects are self-contained — declare what you import
+### Members are self-contained — declare what you import
 
-A sub-project should be **extractable**: liftable out of the monorepo to stand alone. That requires it to
+A member should be **extractable**: liftable out of the monorepo to stand alone. That requires it to
 declare every dependency it *imports*, not merely to be built alongside one that does. So a member
 declares its siblings the same way it declares anything else — as a path dependency:
 
@@ -215,7 +254,7 @@ declares its siblings the same way it declares anything else — as a path depen
 ```
 
 Path dependencies are otherwise top-level-only, because a *fetched* package cannot reference a local path
-reproducibly. Between two members of one declared `projects` tree that objection does not apply — the
+reproducibly. Between two members of one `kama_workspace.json` that objection does not apply — the
 workspace carries them both — so a path dependency there is permitted, and one pointing outside the
 workspace is still refused.
 
@@ -579,7 +618,7 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 
 | Command | What it does |
 |---|---|
-| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project: manifest, starter source, `.gitignore`, README, optionally `AGENTS.md`. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version`, `--members a,b`, `--force`. |
+| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--force`. |
 | `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"entry"`) and run it; native-only. |
 | `kama build <file>… [--dev]` | Build a native/wasm/embedded artifact. |
 | `kama pkg install [<dir>] [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |

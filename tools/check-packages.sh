@@ -705,12 +705,13 @@ grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
 
 # ---- workspace-internal dependencies -----------------------------------------------------------------
-# The five-file monorepo from docs/packages.md § Workspaces: a root that composes `projects`, two
-# libraries, and an app. `libs/net` declares the sibling it imports, which is what makes it extractable.
+# The five-file workspace from docs/packages.md § Workspaces: a root `kama_workspace.json` composing two
+# libraries and an app. `libs/net` declares the sibling it imports, which is what makes it extractable.
+# The root file carries no name and no version: a workspace is not a project.
 ws="$tmp/acme"
 mkdir -p "$ws/libs/config/src" "$ws/libs/net/src" "$ws/apps/server/src"
-cat > "$ws/kama.json" <<'JSON'
-{ "name": "acme", "version": "0.1.0", "projects": ["libs/*", "apps/server"] }
+cat > "$ws/kama_workspace.json" <<'JSON'
+{ "projects": { "libs/*": { "optional": false }, "apps/server": { "optional": false } } }
 JSON
 cat > "$ws/libs/config/kama.json" <<'JSON'
 { "name": "config", "version": "0.1.0", "kind": "library" }
@@ -787,17 +788,17 @@ grep -q "only allowed at the top level" "$tmp/ws3.out" \
     || { echo "check-packages: FAIL — workspace-escape message unclear:" >&2; sed 's/^/  /' "$tmp/ws3.out" >&2; exit 1; }
 cp "$tmp/net-manifest.bak" "$ws/libs/net/kama.json"
 
-# 32. and without a root manifest DECLARING the tree, the very same sibling dep is refused — proving the
-#     gate is the `projects` declaration and not mere directory adjacency. (The app is back to declaring
-#     only `net`, so `config` is again a first-encounter transitive request.)
+# 32. and without a workspace file DECLARING the members, the very same sibling dep is refused — proving
+#     the gate is the declaration and not mere directory adjacency. (The app is back to declaring only
+#     `net`, so `config` is again a first-encounter transitive request.)
 cat > "$ws/apps/server/kama.json" <<'JSON'
 { "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } } }
 JSON
-mv "$ws/kama.json" "$tmp/ws-root.bak"
+mv "$ws/kama_workspace.json" "$tmp/ws-root.bak"
 if "$KAMA" pkg install "$ws/apps/server" >"$tmp/ws4.out" 2>&1; then
     echo "check-packages: FAIL — sibling path dep accepted with no declared workspace" >&2; exit 1; fi
-mv "$tmp/ws-root.bak" "$ws/kama.json"
+mv "$tmp/ws-root.bak" "$ws/kama_workspace.json"
 
 # 33. per-package import checking: `libs/net` imports `config` while declaring nothing, and only the app
 #     declares it. That builds where it sits and nowhere else, so the BUILD FAILS and names the exact line
@@ -862,8 +863,8 @@ if grep -q "does not declare it" "$tmp/fr1.out"; then
     echo "check-packages: FAIL — told the user to edit a package inside the store:" >&2; sed 's/^/  /' "$tmp/fr1.out" >&2; exit 1; fi
 
 # 36. ACCEPTANCE — every member of the workspace builds on its own, from its own directory, with no
-#     ancestor manifest in play. That is what "extractable" means, and it is mechanically checkable: walk
-#     the `projects` tree and install + check each member where it stands. (`libs/config` has no
+#     workspace file in play. That is what "extractable" means, and it is mechanically checkable: walk
+#     the members and install + check each where it stands. (`libs/config` has no
 #     dependencies, `libs/net` has one sibling, `apps/server` has two — all three must stand alone.)
 for member in "$ws/libs/config" "$ws/libs/net" "$ws/apps/server"; do
     if ! "$KAMA" pkg install "$member" >"$tmp/acc.out" 2>&1; then

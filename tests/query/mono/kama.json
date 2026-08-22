@@ -1,5 +1,0 @@
-{
-  "name": "monoroot",
-  "version": "0.1.0",
-  "projects": ["libs/*", "group"]
-}
