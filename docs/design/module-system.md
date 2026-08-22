@@ -159,16 +159,29 @@ The scope ladder is **workspace → project → module → file → declaration*
 | `kama.json` | project root | **yes** | identity, resolution, the module map, visibility, the C symbol |
 
 1. **A project requires a `kama.json`.** It is a **library** or an **executable**, stated by a new `kind`
-   key. *Today the kind is inferred from whether `entry` is present and never recorded*
-   ([kama.driver.cpp:5043](../../src/kama.driver.cpp)) — so this records something that already exists
-   implicitly.
+   key. ⚠️ **Corrected while implementing:** an earlier draft said *"the kind is inferred from whether
+   `entry` is present and never recorded ([kama.driver.cpp:5043](../../src/kama.driver.cpp))"*. That line
+   is `seedManifest`, the seed **writer**, and `SeedKind` never leaves `kama seed`. **Nothing infers a
+   kind today** — the only interpretation of `entry` anywhere is `kama run`'s hard error when it is
+   absent. So `kind` records nothing implicit; it is a genuinely new fact, and is required. *(Shipped.)*
 2. **`name` is the root namespace**, for both kinds, and is unique. A library's name is already required
    to be a legal kama identifier because importers write it.
 3. **Projects do not nest.** `projects` is **removed from `kama.json`** and becomes the `projects` key of
    `kama_workspace.json`. Enforced as: **no `kama.json` inside `source`**. (A path dependency vendored
    under `.kama/` still has its own — that is a separate project, not nesting.)
 4. **`sources` → `source`**, singular, defaulting to `"src"`. A list of roots would let `src/shapes/` and
-   `gen/shapes/` silently be one module.
+   `gen/shapes/` silently be one module. **It must name a real SUBDIRECTORY — `"."` is rejected**, along
+   with `..` and absolute paths. This was added while implementing, and it is what makes rule 3
+   exemption-free: with `"."` the manifest itself, `.kama/deps`, `out/` and any vendored project would all
+   sit *inside* the source root, so "no `kama.json` under `source`" would need a carve-out for each. One
+   level down puts all four structurally outside it. *(Shipped.)*
+
+   ⚠️ **The default may only be applied by a reader that knows the manifest EXISTS.** `sources` was not a
+   tri-state but a four-state, and the code conflated the two that matter: *"a manifest exists and
+   declares nothing"* and *"there is no `kama.json` here"* were both the empty vector — and the second is
+   the dominant case, because it is what makes an ordinary directory-module resolve. Defaulting
+   unconditionally makes `import a::b` resolve `a/b/src/*.kama` and silently lose `a/b/*.kama`. The
+   contract is now: `""` means no manifest; anything else is the source root, declared or defaulted.
 5. **Unknown manifest keys are an error.**
 
 > **The invariant that makes the split safe: a project never reads its workspace manifest for anything

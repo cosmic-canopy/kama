@@ -39,8 +39,8 @@ myapp/
 {
   "name": "myapp",
   "version": "0.1.0",
-  "entry": "src/app.kama",
-  "sources": ["src"]
+  "kind": "executable",
+  "entry": "src/app.kama"
 }
 ```
 
@@ -53,7 +53,10 @@ fn int32 main() {
 
 **`entry`, not `main`** — the key names the file `kama run` builds when you don't name one, which is
 Cargo's `[[bin]] path`. npm's `main` means the opposite thing: the entry point *importers* get. kama
-expresses that with `sources` and `export` instead, so the two never share a name.
+expresses that with `source` and `export` instead, so the two never share a name. Spelling it `main`
+is an error that says so.
+
+There is no `source` key here because it defaults to `"src"`, which is where the seed put the files.
 
 Build and run it in one step — `kama run` uses the manifest's `"entry"` when you don't pass a
 file:
@@ -71,14 +74,14 @@ see [targets.md](targets.md).
 
 ### The three kinds
 
-They differ only in which manifest keys they start with. **`sources` and `projects` are independent**, so
-a kind is a starting shape, not a category — an executable that later composes sub-projects just gains a
-`projects` key.
+A project **states its kind** in the manifest — it is a library or an executable, and nothing infers
+that from the other keys. A monorepo root is neither: it aggregates members and has no sources,
+namespace or artifact of its own, so it carries no `kind` at all.
 
 | `--kind` | manifest | on disk |
 |---|---|---|
-| `executable` | `entry` + `sources` | `src/app.kama` with `fn int32 main()` |
-| `library` | `sources` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
+| `executable` | `kind` + `entry` | `src/app.kama` with `fn int32 main()` |
+| `library` | `kind` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
 | `monorepo` | `projects` | one seeded library per `--members` name |
 
 A monorepo takes the member names from you rather than inventing a directory convention:
@@ -95,10 +98,11 @@ Each member is seeded as a library, because that is what most members are; promo
 executable is adding `entry` and a `main`. A member that imports a sibling still declares it as a path
 dependency — see [Sub-projects are self-contained](#sub-projects-are-self-contained--declare-what-you-import).
 
-A **library's name has to be a legal kama identifier**, because it is what an importer writes after
-`import`. `kama seed --kind library --name my-lib` is refused, and says to use `my_lib`: `import
-my-lib::{ … }` does not parse, so that package could never be imported by anyone. An *executable* may be
-`my-app` — nothing imports it.
+A **project's name has to be a legal kama identifier**, of either kind, because the name is the
+project's root namespace. `kama seed --kind library --name my-lib` is refused and says to use
+`my_lib`: `import my-lib::{ … }` does not parse, so that package could never be imported by anyone —
+and an executable is not the softer case it looks like, since its own symbols are qualified by the
+same name. Only a monorepo *root* may be `my-repo`: it has no namespace to be.
 
 ## Build output — `out`
 
@@ -117,33 +121,40 @@ yesterday's binary and no diagnostic. `-o` still overrides everything.
 A loose `.kama` file with **no manifest** is unchanged: `kama build hello.kama` still writes `./hello`
 beside it. `out/` is a project's concept, and one file is not a project.
 
-## Telling the tooling what your project contains — `sources` and `packages`
+## Telling the tooling what your project contains — `source` and `projects`
 
-Both keys are **optional**, and both exist to replace an inference with a declaration. Editor tooling
-(the language server) has to know which files make up your project before it can safely do a
-project-wide operation like renaming a symbol across files. Without a declaration it has to infer —
-"every `.kama` under here" — and an inference can be wrong, so it is **capped at 500 files**; past that,
-cross-file rename refuses rather than answer from a set it doesn't trust. Declaring removes the guess,
-and with it the cap.
+Both keys exist to replace an inference with a declaration. Editor tooling (the language server) has to
+know which files make up your project before it can safely do a project-wide operation like renaming a
+symbol across files. Without a manifest it has to infer — "every `.kama` under here" — and an inference
+can be wrong, so it is **capped at 500 files**; past that, cross-file rename refuses rather than answer
+from a set it doesn't trust. A manifest removes the guess, and with it the cap.
 
-**`sources`** — which files are this package's, relative to the manifest. Each entry is a directory
-(searched recursively) or a single `.kama` file:
+**`source`** — the one directory holding this project's `.kama` files, relative to the manifest,
+searched recursively. It defaults to `"src"`, so most projects never write it:
 
 ```json
 {
   "name": "myapp",
   "version": "0.1.0",
-  "entry": "src/app.kama",
-  "sources": ["src"]
+  "kind": "executable",
+  "entry": "src/app.kama"
 }
 ```
 
-Now `examples/`, `tests/` and scratch files beside them are not part of the package, so a rename can
+Now `examples/`, `tests/` and scratch files beside them are not part of the project, so a rename can
 never reach into them and a same-named type over there can never be confused with yours.
 
-`sources` is also how **importers** find your files. Without it, a package is importable only if its
-`.kama` files sit directly in its root directory — so a library laid out with `src/` needs this key to be
-importable at all.
+`source` is also what **importers** resolve through: a package's files are found under its source root
+and nowhere else. Files sitting beside `src/` rather than inside it belong to no project — which is the
+point, and the reason a package whose sources are in the wrong place fails to import rather than
+quietly working.
+
+It is **one** directory, not a list. Two roots would let `src/shapes/` and `gen/shapes/` silently be one
+module with nothing in the model able to say which of them a name came from. It must also name a real
+**subdirectory**: `"."` is refused, because it would put the manifest itself, `.kama/deps`, `out/` and
+any vendored dependency *inside* the source root — and a project may not contain another project's
+`kama.json` under its `source`. Keeping the source root one level down makes all of those structurally
+outside it, with no exceptions to remember.
 
 **`projects`** — the sub-projects this manifest composes, each a directory with its own `kama.json`. This
 is how you declare a monorepo. A trailing `/*` expands to every immediate subdirectory that has a
@@ -164,17 +175,28 @@ the same reason, name the directory something like `libs/` rather than `packages
 acme/
   kama.json                <- projects: ["libs/*", "tools/codegen"]
   libs/
-    core/kama.json         <- sources: ["."]
-    ui/kama.json           <- sources: ["."]
+    core/kama.json         <- source: src/ (the default)
+    ui/kama.json           <- source: src/ (the default)
   tools/codegen/kama.json
   scratch/notes.kama       <- claimed by nobody: never indexed
 ```
 
 `projects` is **recursive** — a sub-project may declare sub-projects of its own, so monorepos nest to any
 depth — and cycles are broken automatically, so a manifest naming a directory that names it back is
-harmless. A manifest with `projects` but no `sources` is a pure aggregator: it contributes no files
+harmless. A manifest with `projects` and no `kind` is a pure aggregator: it contributes no files
 itself, only its sub-projects'. Editing a file in `libs/core` then makes the whole workspace the
 rename scope, so renaming a type there correctly updates `libs/ui`.
+
+### The manifest is checked, not skimmed
+
+An **unknown key is an error**. `"sourses": ["src"]` used to be accepted and silently ignored, which
+made a typo indistinguishable from a key that does nothing — and the manifest is where a project's
+public surface is about to be declared, so a swallowed key would mean a swallowed decision. Every
+command that reads the manifest at all validates the whole file, so the typo is caught by whichever one
+you happen to run.
+
+The same applies to values with a closed set: `"kind": "libary"` is refused by name rather than being
+read as "not an executable".
 
 ### Sub-projects are self-contained — declare what you import
 
@@ -187,7 +209,7 @@ declares its siblings the same way it declares anything else — as a path depen
 {
   "name": "net",
   "version": "0.1.0",
-  "sources": ["."],
+  "kind": "library",
   "dependencies": { "config": { "path": "../config" } }
 }
 ```
