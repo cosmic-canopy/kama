@@ -218,5 +218,57 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: \`link\` names native libraries once, per project"
+
+# `--cc echo` prints the command instead of running it, which is how check-target.sh inspects a link tail
+# without needing the library to exist. There was no manifest key for this before: only per-target
+# `ldflags` and the CLI `--link`, so a project needing -lm everywhere had nowhere to say so once.
+mkdir -p "$tmp/lnk/src"
+printf 'fn int32 main() { return 0; }\n' > "$tmp/lnk/src/app.kama"
+cat > "$tmp/lnk/kama.json" <<'JSON'
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "link": ["m"] }
+JSON
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" -o "$tmp/lnk/app" 2>/dev/null || true)
+printf '%s' "$tail_out" | grep -qF -- "-lm" \
+    && ok "a project's \`link\` reaches the link tail" \
+    || { bad "\`link\` did not reach the link tail"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
+
+# A target OVERRIDES it wholesale rather than adding to it — the only way to say "not on this one".
+cat > "$tmp/lnk/kama.json" <<'JSON'
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "link": ["m"],
+  "select": { "TARGET": { "WINDOWS": { "link": ["ws2_32"] } } } }
+JSON
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" --target WINDOWS -o "$tmp/lnk/app" 2>/dev/null || true)
+if printf '%s' "$tail_out" | grep -qF -- "-lws2_32" && ! printf '%s' "$tail_out" | grep -qE -- '-lm( |$)'; then
+    ok "a target's \`link\` REPLACES the project's, rather than adding to it"
+else
+    bad "target \`link\` did not override the project's"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2
+fi
+
+# ...and a target that says nothing about `link` still inherits the project's.
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" -o "$tmp/lnk/app" 2>/dev/null || true)
+printf '%s' "$tail_out" | grep -qE -- '-lm( |$)' \
+    && ok "...while a target that never mentions it inherits" \
+    || { bad "a silent target lost the project's \`link\`"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
+
+# ---------------------------------------------------------------------------------------------------
+echo "check-manifest: projects do not nest"
+
+proj nest <<'JSON'
+{ "name": "nest", "version": "0.1.0", "kind": "executable" }
+JSON
+mkdir -p "$tmp/nest/src/inner"
+printf '{ "name": "inner", "version": "0.1.0", "kind": "library" }\n' > "$tmp/nest/src/inner/kama.json"
+reject nest 'projects do not nest' "a kama.json inside \`source\` is refused"
+
+# The passing twin, and the whole reason `source` may not be "." — a vendored project BESIDE the source
+# root is a separate project, not a nested one, and needs no exemption to stay legal.
+rm -rf "$tmp/nest/src/inner"
+mkdir -p "$tmp/nest/vendor/inner/src"
+printf '{ "name": "inner", "version": "0.1.0", "kind": "library" }\n' > "$tmp/nest/vendor/inner/kama.json"
+printf 'namespace inner;\nexport { w };\nfn int32 w() { return 1; }\n' > "$tmp/nest/vendor/inner/src/inner.kama"
+accept nest "...while one BESIDE it is just another project"
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"

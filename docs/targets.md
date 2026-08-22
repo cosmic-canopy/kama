@@ -64,6 +64,7 @@ Use it. Declare it once in `kama.json` so it is checked in and the whole team ge
 
 ```json
 {
+  "link": ["m"],
   "select": {
     "TARGET": {
       "RPI": {
@@ -73,7 +74,8 @@ Use it. Declare it once in `kama.json` so it is checked in and the whole team ge
         "sysroot": "/opt/rpi-sysroot",
         "cflags":  ["-mcpu=cortex-a72"],
         "ldflags": [],
-        "runtime": "static"
+        "runtime": "static",
+        "link":    ["m", "atomic"]
       }
     }
   }
@@ -86,6 +88,17 @@ kama build app.kama --target RPI
 
 `ar` matters for `OUTPUT=STATIC`: an archive indexed by the host's `ar` may be unreadable to the
 target's linker.
+
+**`link`** names native libraries by their bare name — `["m"]` becomes `-lm`. It is the portable half
+of linking, which is why it sits on the *project* as well as on a target: a project that needs `-lm`
+everywhere says so once, at the top level, instead of repeating it per target or making every caller
+remember `--link m`. `ldflags` remains the raw-linker-text escape hatch for anything that is not a
+library name.
+
+A target's `link` **replaces** the project's rather than adding to it — that is what makes it possible
+to say *"not that one, here"*. This is deliberately the opposite of `cflags`/`ldflags`, which append
+onto the built-in target they merge over. A target that never mentions `link` inherits the project's
+list unchanged. The CLI `--link` is unaffected and still appends, after both.
 
 `runtime` is `"static"` or `"dynamic"` and says how the *language's own* runtime is linked — see
 [Runtime linkage](#runtime-linkage) below. Every key is optional; omitting one takes the target's

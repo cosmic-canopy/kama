@@ -111,6 +111,13 @@ std::string lspRealPath(const std::string& path);
 void lspSetParseCache(bool on);
 void lspEvictParsedFile(const std::string& path);
 
+// Drop the cached `source` root of every manifest. Separate from the parse cache because it caches a
+// DIFFERENT kind of answer, and a heavier one: not a key's value but "is this directory a package root
+// at all", which decides whether module resolution falls back to a flat listing. A long-lived server
+// that watched a kama.json appear, change or vanish would otherwise keep answering from the shape the
+// tree had at startup. Call it wherever lspEvictParsedFile("") is called for a manifest change.
+void lspEvictManifestCache();
+
 // ---- build configuration (M6 A1) -------------------------------------------------------------------
 //
 // Which program is the editor looking at? Until M6 the answer was "not the one you are building":

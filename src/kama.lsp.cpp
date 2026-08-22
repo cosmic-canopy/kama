@@ -811,6 +811,7 @@ struct Server {
         wsDirty = true;
         lspEvictParsedFile("");
         if (manifestChanged) {
+            lspEvictManifestCache();   // a manifest's `source` root decides what is a package at all
             configManifest.clear();
             applyConfig(configHint);
         }

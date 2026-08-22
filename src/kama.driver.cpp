@@ -345,6 +345,35 @@ static void collectKamaFiles(const std::string& root, const std::string& rel,
     closedir(d);
 }
 
+// The first `kama.json` at or below `dir`, or "" if there is none. Projects do not nest: a manifest
+// inside another project's source root would be a second project living inside the first, and every
+// question about it — whose module is that file in, whose symbol prefix does it get — has two answers.
+//
+// This needs no exemptions precisely because `source` must be a real subdirectory: the project's own
+// manifest, its `.kama/deps` view, its `out/` and any vendored dependency beside `src/` are all
+// structurally outside the tree being walked. Skips the same dot-directories and generated roots
+// collectKamaFiles does, for the same reasons.
+static std::string nestedManifestUnder(const std::string& dir)
+{
+    DIR* d = opendir(dir.c_str());
+    if (!d) return std::string();
+    std::string found;
+    while (struct dirent* e = readdir(d)) {
+        std::string n = e->d_name;
+        if (n.empty() || n[0] == '.') continue;
+        const std::string child = dir + "/" + n;
+        if (dirExists(child)) {
+            if (n == "out" || n == "build") continue;
+            found = nestedManifestUnder(child);
+        } else if (n == "kama.json") {
+            found = child;
+        }
+        if (!found.empty()) break;
+    }
+    closedir(d);
+    return found;
+}
+
 // The stdlib root, resolved from the binary like resolveRuntimeDir: <exeDir>/../lib/kama
 // (installed, bin/kama -> ../lib/kama), else <exeDir>/lib (repo root), else <exeDir>/../../lib
 // (dev tree: the Makefile builds to out/<os>-<arch>/kama), else "lib".
@@ -420,9 +449,15 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
 // Why the declaration is cached but never the expanded file list: `kama lsp` is long-lived, and a newly
 // added `.kama` file has to become visible without restarting the server. Expanding costs a readdir,
 // which is what the flat listing this replaced cost anyway.
-const std::string& manifestSourceCached(const std::string& manifest)
+static std::map<std::string, std::string>& manifestSourceCache()
 {
     static std::map<std::string, std::string> cache;
+    return cache;
+}
+
+const std::string& manifestSourceCached(const std::string& manifest)
+{
+    std::map<std::string, std::string>& cache = manifestSourceCache();
     auto it = cache.find(manifest);
     if (it != cache.end()) return it->second;
     std::string src, err;
@@ -1407,6 +1442,11 @@ struct TargetSpec {
     // tail); elsewhere libc IS the system, so there is no non-system runtime to make a choice about.
     std::string runtime;
     std::vector<std::string> cflags, ldflags;
+    // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
+    // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
+    // a project needing `-lm` everywhere says it once instead of per target.
+    std::vector<std::string> link;
+    bool                     linkSet = false;   // this target OVERRODE `link` (vs. inheriting the project's)
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
@@ -1531,6 +1571,9 @@ struct SelectGroup {
 // emitter setup. Defaults to the host so a bare `kama build` needs no configuration at all.
 static TargetSpec g_target;
 static std::map<std::string, TargetSpec> g_manifestTargets;
+// The project-level `link` list. Seeded into g_target after target resolution, unless the selected
+// target overrode it (TargetSpec::linkSet).
+static std::vector<std::string> g_manifestLink;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
 // own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
@@ -1597,6 +1640,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (!u.runtime.empty()) out.runtime = u.runtime;
         out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
         out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
+        if (u.linkSet) { out.link = u.link; out.linkSet = true; }   // replace, per the note in the reader
         if (out.arch.empty() || out.os.empty()) {
             err = "target '" + sel + "' declares no `triple` and is not a built-in";
             return false;
@@ -1933,6 +1977,7 @@ struct ManifestReader {
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
+    std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
     std::vector<std::string>* projectsOut = nullptr;
     std::string* outDirOut = nullptr;                     // set to capture the `out` build-output dir (else skipped)
     std::string* toolchainOut = nullptr;                  // set to capture the `toolchain` pin (else skipped)
@@ -2095,6 +2140,11 @@ struct ManifestReader {
                 }
                 else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
                 else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
+                // A target OVERRIDES the project's `link` rather than adding to it — that is what
+                // "overridable" means, and it is the only way to say "not on this target". Note this is
+                // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
+                // over; the two have always differed and the difference is deliberate.
+                else if (k == "link")    { if (!stringArray(t.link)) return false; t.linkSet = true; }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
                 // builds for one target declares it once instead of retyping `--target`, and the editor
                 // can then analyze for it too. `--target` still wins.
@@ -2331,6 +2381,7 @@ struct ManifestReader {
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
+            else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "projects") { if (projectsOut) { if (!stringArray(*projectsOut)) return false; } else if (!skipValue()) return false; } // sub-projects
             else if (key == "entry") { if (entryOut) { if (!str(*entryOut)) return false; } else if (!skipValue()) return false; }   // entry `.kama` (read by `kama run`)
             // Validated HERE rather than only where it is consumed, because the value set is closed and a
@@ -2501,6 +2552,20 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
     return true;
 }
 
+// Load a `kama.json` manifest's project-level `link` — the native libraries this artifact links, as bare
+// names (`["m"]` -> `-lm`). Left empty if absent. Returns false + `err` on malformed JSON.
+static bool loadManifestLink(const std::string& path, std::vector<std::string>& out, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.linkOut = &out;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
+    return true;
+}
+
 // Load a `kama.json` manifest's `kind` — "library" or "executable", the two things a project can be.
 // REQUIRED of a project manifest, so an empty result on success means the key is absent and the caller
 // must reject it; the value itself is validated by the reader. Returns false + `err` on malformed JSON.
@@ -2654,6 +2719,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_declaredFlags.clear();
     g_selectGroups.clear();
     g_manifestTargets.clear();
+    g_manifestLink.clear();
     g_strictFlags = false;
     g_logDefault.clear();
     g_target  = TargetSpec();
@@ -2701,6 +2767,17 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             err = manifest + ": `source` is \"" + srcRel + "\", but " + srcDir + " does not exist";
             return false;
         }
+        const std::string nested = nestedManifestUnder(srcDir);
+        if (!nested.empty()) {
+            err = manifest + ": " + nested + " is inside this project's `source` root — projects do not "
+                  "nest. Move it beside \"" + srcRel + "\" rather than under it";
+            return false;
+        }
+
+        // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
+        // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one
+        // — the target key exists only to say "not this one" / "something else here".
+        if (!loadManifestLink(manifest, g_manifestLink, err)) { err = manifest + ": " + err; return false; }
 
         if (!loadManifestFlags(manifest, declared, defaults, err)) { err = manifest + ": " + err; return false; }
         if (!reservedFlagCheck(manifest, declared, err)) return false;
@@ -2796,6 +2873,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // An unknown NAME is an error, but anything containing '-' is an anonymous triple, so a one-off
     // cross build needs no config file.
     if (!resolveTarget(selTarget, g_manifestTargets, g_target, err)) return false;
+    // The project's `link` applies to every target that did not override it.
+    if (!g_target.linkSet) g_target.link = g_manifestLink;
 
     // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
     // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
@@ -5733,6 +5812,12 @@ static void collectPackageTree(const std::string& dir, std::vector<std::string>&
 
 std::string lspRealPath(const std::string& path) { return absolutePath(path); }
 
+// Defined HERE rather than beside manifestSourceCache: most of this file sits inside the anonymous
+// namespace opened at the top, which would give this internal linkage and leave kama.lsp.o with an
+// undefined symbol. The cache accessor stays where it is — an anonymous-namespace name is visible
+// through the rest of the translation unit, so reaching back to it from out here is fine.
+void lspEvictManifestCache() { manifestSourceCache().clear(); }
+
 void lspSetParseCache(bool on) { g_parseCache = on; if (!on) g_parseCacheMap.clear(); }
 
 void lspEvictParsedFile(const std::string& path)
@@ -7453,7 +7538,12 @@ int main(int argc, char** argv)
         }
         // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
         // the user supplies startup + linker script — owns library selection).
-        if (!stopsAtObject) for (auto& lib : links) link << "-l" << lib << " ";   // FFI link flags
+        // The manifest's `link` first, then `--link` from the command line — same form, and a one-off on
+        // the CLI should be able to come after what the project always needs.
+        if (!stopsAtObject) {
+            for (const auto& lib : g_target.link) link << "-l" << lib << " ";   // kama.json `link`
+            for (const auto& lib : links)         link << "-l" << lib << " ";   // --link (FFI)
+        }
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm
         // FFI). Native only — wasm/emscripten bundles libm. (--gc-sections still prunes unused code.)
         if (needsLibm && !wasm && !stopsAtObject) link << "-lm ";
