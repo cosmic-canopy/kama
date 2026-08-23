@@ -77,5 +77,64 @@ else
     say_ok "no include/ anywhere: the build fails instead of finding an ambient copy"
 fi
 
+# ---------------------------------------------------------------------------------------------------
+# The STDLIB half. resolveStdlibDir is resolveRuntimeDir's sibling — same three-arm shape, same silent
+# failure mode — and it has the same gap this file was written about: nothing local ever built the tree
+# the release workflow actually stages, so a file the tarball forgets to carry breaks every
+# `import std::…` in the shipped toolchain while the whole suite stays green.
+#
+# That is not hypothetical twice over. The header copy a few lines up says `include/kama_*.h` as a GLOB
+# because naming them individually had already dropped eight. And lib/ now holds a kama.json beside
+# std/ — the manifest that names the project `std` and its module map — which is exactly the kind of
+# single file a `cp -R lib/std` staging step does not notice it is missing.
+#
+# So: stage a payload the way .github/workflows/release.yml does, and compile something that needs the
+# stdlib through it.
+cat > "$tmp/s.kama" <<'KAMA'
+import std::collections::{DynamicArray};
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 7);
+    return xs[0];
+}
+KAMA
+
+# The installed prefix, exactly the tarball tree: bin/ include/ lib/kama/.
+t="$tmp/payload"
+mkdir -p "$t/bin" "$t/include" "$t/lib/kama"
+cp "$KAMA" "$t/bin/kama"
+cp "$ROOT"/include/*.h "$t/include/"
+cp "$ROOT"/lib/kama.json "$t/lib/kama/kama.json"
+cp -R "$ROOT"/lib/std     "$t/lib/kama/std"
+if ( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$t/out.exe" >"$t/err" 2>&1 ); then
+    say_ok "an installed payload resolves \`import std::…\`"
+else
+    say_fail "the staged payload cannot resolve the stdlib — is release.yml still copying everything lib/ needs?"
+    head -5 "$t/err" | sed 's/^/      /' >&2
+fi
+
+# A build SUCCEEDING is not enough on its own: the stdlib resolves by path today, so it would go on
+# working with the manifest missing and this section would pass while shipping a tarball whose `std` has
+# no identity. So assert what the manifest is FOR — read the module a stdlib file derives, which is the
+# probe's fourth column, and require it present with the file and absent without it.
+#
+# ⚠️ Column-precise on purpose. The first cut grepped the whole line for `std::collections`, which
+# matched the DECLARED column (the `namespace` those files still carry) and reported the manifest as
+# read when it had been deleted — a passing assertion that tested nothing.
+derived_module() {   # derived_module <path-fragment> -> the DERIVED module, or "-"
+    ( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$1" --probe-modules 2>/dev/null ) \
+        | awk -F'\t' -v f="$2" '$1=="kama-module" && index($2,f) { print $4; exit }'
+}
+got=$(derived_module "$t/out2.exe" "lib/kama/std/collections/")
+[ "$got" = "std::collections" ] \
+    && say_ok "...and the payload's kama.json is what gives the stdlib its module identity" \
+    || say_fail "a stdlib file derived \"$got\", expected \"std::collections\" — is lib/kama.json in the payload?"
+
+rm -f "$t/lib/kama/kama.json"
+got=$(derived_module "$t/out3.exe" "lib/kama/std/collections/")
+[ "$got" = "-" ] \
+    && say_ok "...and with the manifest removed it has none, so the check above is not vacuous" \
+    || say_fail "a stdlib file still derived \"$got\" with no kama.json present"
+
 [ "$fail" = 0 ] || { echo "check-runtime-dir: FAILED" >&2; exit 1; }
-echo "check-runtime-dir: PASS (installed, flat, dev root, dev build; and no ambient fallback)"
+echo "check-runtime-dir: PASS (installed, flat, dev root, dev build; no ambient fallback; stdlib payload)"

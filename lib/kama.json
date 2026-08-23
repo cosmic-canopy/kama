@@ -1,0 +1,31 @@
+{
+  "name": "std",
+  "kind": "library",
+  "source": "std",
+
+  "modules": {
+    ".":             { "visibility": "public" },
+    "app":           { "visibility": "public" },
+    "ascii":         { "visibility": "public" },
+    "collections":   { "visibility": "public" },
+    "concurrent":    { "visibility": "public" },
+    "fmt":           { "visibility": "public" },
+    "fs":            { "visibility": "public" },
+    "io":            { "visibility": "public" },
+    "log":           { "visibility": "public" },
+    "math":          { "visibility": "public" },
+    "net":           { "visibility": "public",
+                       "modules": {
+                         "web":    { "visibility": "public" }
+                       } },
+    "num":           { "visibility": "public" },
+    "process":       { "visibility": "public" },
+    "ptr":           { "visibility": "public" },
+    "serialization": { "visibility": "public",
+                       "modules": {
+                         "binary": { "visibility": "public" },
+                         "json":   { "visibility": "public" }
+                       } },
+    "time":          { "visibility": "public" }
+  }
+}
