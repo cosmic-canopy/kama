@@ -6,7 +6,7 @@
 // which would break exactly this case while leaving same-file labels apparently working.
 //
 // Its own kama.json (with `sources`) keeps it a declared project, so it is never widened by inference.
-namespace lib;
+namespace labelprobe;
 
 export { scaleBy, Box };
 

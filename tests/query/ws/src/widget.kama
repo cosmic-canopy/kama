@@ -5,7 +5,7 @@
 // — `app.kama` is invisible to it, which is exactly why M3.3 had to refuse cross-file rename rather than
 // half-rewrite. With workspace indexing the project's OTHER files are in the set, so find-references on
 // `Widget` reaches app.kama and rename rewrites both.
-namespace widget;
+namespace wsproj;
 
 export { Widget, defaultSize };
 

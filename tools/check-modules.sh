@@ -15,9 +15,10 @@
 #   §1  the derivation itself, against a purpose-built tree whose answers are known by construction.
 #       These are ordinary assertions and they hold forever.
 #   §2  the CORPUS sweep. Every file whose declared namespace disagrees with its derived module is a
-#       migration item, so the known ones are listed by name below and anything NOT on that list is a
-#       failure. The list shrinks as the corpus migrates and is EMPTY when phase 2b is done — at which
-#       point the identity cutover is a measured fact rather than a hope.
+#       migration item, so they were listed by name below and anything NOT on that list failed. The list
+#       is now EMPTY: every file in the corpus that declares a namespace derives exactly that namespace.
+#       That is the fact the identity cutover rests on — swapping ctxOf from the declaration to the
+#       derivation cannot move a symbol, because the two already agree everywhere.
 #
 # The blind spot is reported rather than hidden (design §7: a measurement that hides its own blind spot
 # is worse than no measurement). `no-project` is a loose file, whose identity §2i derives from the
@@ -87,17 +88,17 @@ derived v.kama      deriv::vendored        "...at any depth below it"
 # ---------------------------------------------------------------------------------------------------
 echo "check-modules: the corpus agrees, or says exactly where it does not"
 
-# Every path here is a file whose declared `namespace` disagrees with its derived module — a migration
-# item, not a defect in the derivation. Phase 2b empties this list; anything reaching the sweep that is
-# NOT on it means the derivation itself moved, which is the thing this guard is for.
+# A file whose declared `namespace` disagrees with its derived module is a migration item, not a defect
+# in the derivation — so they were listed here by name and anything NOT on the list failed.
 #
-# ⚠️ Deleting the last entry does NOT delete the check — an empty list is the strongest form of it.
-cat > "$tmp/known" <<'KNOWN'
-tests/query/generics/src/lib.kama
-tests/query/labels/src/lib.kama
-tests/query/mono/libs/core/src/gearcore.kama
-tests/query/ws/src/widget.kama
-KNOWN
+# **The list is now EMPTY, and that is the strongest form of the check, not the absence of one.** Every
+# file in the corpus that declares a namespace derives exactly that namespace from its path and its
+# project's module map. That is the fact the identity cutover rests on: swapping ctxOf from the
+# declaration to the derivation cannot change a single symbol, because the two already agree everywhere.
+#
+# ⚠️ Do not delete this block because it looks vacuous. A new fixture that declares a namespace its
+# layout does not support will land here, which is exactly when someone needs to be told.
+: > "$tmp/known"   # EMPTY, and that is the assertion — see above.
 
 cd "$ROOT"
 # xfail fixtures are excluded because they are MEANT not to compile; a probe row from one says nothing.
@@ -119,7 +120,12 @@ if [ -n "$new" ]; then
     bad "a file's derived module disagrees with its declaration, and it is not a known migration item:"
     echo "$new" | sed 's/^/        /' >&2
 else
-    ok "every declared/derived disagreement is a listed migration item ($(wc -l < "$tmp/seen" | tr -d ' ') of them)"
+    n=$(wc -l < "$tmp/seen" | tr -d ' ')
+    if [ "$n" = 0 ]; then
+        ok "every file that declares a namespace derives exactly that namespace"
+    else
+        ok "every declared/derived disagreement is a listed migration item ($n of them)"
+    fi
 fi
 
 # A stale entry is not fatal — a fixture migrating is the POINT — but it must be said, or the list rots

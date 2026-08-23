@@ -345,7 +345,7 @@ expect --project --search Widg   -- "widget.kama:12:11 value Widget"
 # It reaches every kind, not just types.
 expect --project --search defaultSize -- "function defaultSize"
 # A miss says so rather than printing nothing, so a caller can tell "no match" from "command broke".
-expect --search Zzzz -- "no symbols"
+expect --project --search Zzzz -- "no symbols"
 # The package boundary holds: std is loaded in the index and must never be offered as the user's own.
 reject --project --search string -- "lib/std"
 # An EMPTY needle lists everything in scope — the whole-package outline that --symbols cannot give.
@@ -360,7 +360,7 @@ fi
 
 echo "check-query: --diagnostics"
 # Same list `kama check` prints, on stdout, without a pass/fail exit.
-expect --diagnostics -- "no diagnostics"
+expect --project --diagnostics -- "no diagnostics"
 dbad="$tmp/diagbad.kama"
 printf 'fn int32 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$dbad"
 if "$KAMA" query "$dbad" --diagnostics 2>/dev/null | grep -q "error: call to unknown function"; then
@@ -777,13 +777,13 @@ expect --project --refs 19:31 -- "use.kama:14:12"
 FIXTURE="$ROOT/tests/query/labels/src/use.kama"
 # From the label's side: go-to-definition lands on the parameter, and hover names it as a param rather
 # than echoing the bare spelling.
-expect --def 10:22  -- "lib.kama:14:23"
-expect --type 10:22 -- "param factor"
-expect --def 14:12  -- "lib.kama:19:31"
-expect --type 14:12 -- "param amount"
+expect --project --def 10:22  -- "lib.kama:14:23"
+expect --project --type 10:22 -- "param factor"
+expect --project --def 14:12  -- "lib.kama:19:31"
+expect --project --type 14:12 -- "param amount"
 # A label is NOT the argument expression: the value after the colon keeps answering as itself, so the
 # label's span cannot have swallowed it.
-reject --type 10:22 -- "param 3"
+reject --project --type 10:22 -- "param 3"
 
 # ---------------------------------------------------------------------------------------------------
 # M6 B3a/B3b — METHOD CALL SITES, and the inside of a GENERIC body.
@@ -820,18 +820,18 @@ expect --project --refs 17:16 -- "use.kama:18:16"
 FIXTURE="$ROOT/tests/query/generics/src/use.kama"
 # From the call site: go-to-definition lands on the template's declaration, not on any instance, and hover
 # names the member through the TEMPLATE (`Box.get`, never `Box_int32.get`).
-expect --def 13:17  -- "lib.kama:17:16"
-expect --type 13:17 -- "method Box.get"
-expect --def 12:7   -- "lib.kama:15:13"
-expect --type 12:7  -- "field v"
+expect --project --def 13:17  -- "lib.kama:17:16"
+expect --project --type 13:17 -- "method Box.get"
+expect --project --def 12:7   -- "lib.kama:15:13"
+expect --project --type 12:7  -- "field v"
 # A generic method's PARAMETER reaches its call-site label too (the A2 path, through a template body).
-expect --def 19:15  -- "lib.kama:19:29"
+expect --project --def 19:15  -- "lib.kama:19:29"
 
 FIXTURE="$ROOT/tests/query/generics/src/lib.kama"
 # M6 B3g: an `import`'s symbol list is a REFERENCE. Renaming `Box` used to rewrite its declaration and its
-# uses and leave `import lib::{Box, …}` spelling the old name — the module then imports a symbol that no
+# uses and leave `import genericprobe::{Box, …}` spelling the old name — the module then imports a symbol that no
 # longer exists, so the rename breaks a file it did edit. Same class as B3a, across units.
-expect --project --refs 13:11 -- "use.kama:7:13"
+expect --project --refs 13:11 -- "use.kama:7:22"
 # M6 B3f: and the matching `export { Box, … };`, which was the other half of that same rename. This line
 # was a `reject` from B3g until the grammar carried per-segment positions for the `::`-separated name
 # lists — it was pinned as a FACT precisely so that closing the gap could not be silent.

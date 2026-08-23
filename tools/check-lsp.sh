@@ -152,7 +152,7 @@ IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
 WWURI=$(furi "$ROOT/tests/query/ws/src/widget.kama")
-WW='namespace widget;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
+WW='namespace wsproj;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 SURI="file:///sem.kama"

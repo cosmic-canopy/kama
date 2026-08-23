@@ -4,7 +4,7 @@
 // common to both.
 
 
-import lib::{Box, firstOr};
+import genericprobe::{Box, firstOr};
 
 fn int32 main() {
     Box<int32> bi = Box::<int32>.of(v: 0);
