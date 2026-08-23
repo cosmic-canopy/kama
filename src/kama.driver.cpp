@@ -8611,11 +8611,35 @@ int main(int argc, char** argv)
                 cmd << "--js-library \"" << webdir << "/kama_net_web.js\" "
                     << "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 ";
         }
-        // std::app's run loop keeps the wasm runtime alive (emscripten_set_main_loop); EXIT_RUNTIME lets
-        // its quit() (emscripten_force_exit) shut down cleanly with a real exit code. The isolate seam needs
-        // it too: under -sPROXY_TO_PTHREAD `main` runs on a worker, and EXIT_RUNTIME is what carries its
-        // return value out as the process exit code (else node sees 0 regardless).
-        if (wasm && (needsApp || needsPthread)) cmd << "-sEXIT_RUNTIME=1 ";
+        // EVERY wasm build, not just the two that used to need it. A kama program is a batch program:
+        // `main` returns an exit code and the process is done. EXIT_RUNTIME is what makes emscripten act
+        // on that — call `exit(status)` and shut the runtime down — instead of returning from `main` and
+        // leaving the runtime alive for node to wind down on its own.
+        //
+        // It was already required for two cases and both still hold: std::app's run loop keeps the
+        // runtime alive (emscripten_set_main_loop) and its quit() (emscripten_force_exit) needs this to
+        // shut down with a real exit code; and under -sPROXY_TO_PTHREAD `main` runs on a worker, where
+        // this is what carries its return value out as the process exit code (else node sees 0 regardless).
+        //
+        // ⚠️ The third reason, and the one that made this unconditional — `tests/fs_raii.kama` hung the
+        // wasm leg four times (2026-08-13/15/17/23) and it was NOT a kama bug. Without EXIT_RUNTIME the
+        // program returns from `main` and node proceeds through its full graceful teardown, which calls
+        // node::NodePlatform::DrainTasks — and that DEADLOCKS against V8's own background threads:
+        //
+        //     main thread   DrainTasks            -> waiting for background tasks to finish
+        //     background    AwaitCollectionBackground -> waiting for the main thread to run a GC
+        //
+        // A closed cycle, with no kama frame in it. Measured rather than reasoned (2026-08-23): the
+        // hang reproduces at ~11-13% under 16-way parallel load on a 6-CPU container, every instance
+        // parked in exactly that pair. `--no-concurrent-recompilation` takes it to 0/200 while
+        // `--no-concurrent-marking` changes nothing, which identifies the background thread as a
+        // concurrent TurboFan compile job — those hold a LocalHeap, allocate on it, and can request the
+        // GC that the cycle turns on. fs_raii is the fixture most exposed because its 5,000-iteration
+        // loop is exactly what triggers optimization, right before it exits.
+        //
+        // With EXIT_RUNTIME the main thread calls process.exit() and never enters that teardown path at
+        // all: 0/300 against 40/300 for the same program built without it, same load, same session.
+        if (wasm) cmd << "-sEXIT_RUNTIME=1 ";
         // ---- The command is three pieces, not one: the compile flags above (`cmd`), the INPUTS
         // (`ccInputs`), and the link tail (`link`). A single invocation is exactly
         // `cmd + inputs + link + -o out`, byte for byte — reassembly is an identity, not a

@@ -178,25 +178,40 @@ build_one() {
 }
 # Run a fixture under a WATCHDOG, because a fixture that hangs used to wedge the whole suite forever.
 #
-# `tests/fs_raii.kama` has hung the wasm leg three times (2026-08-13, 2026-08-15, 2026-08-17), `node`
-# blocked at 0% CPU. The first two produced no evidence at all: there was no time bound, so the runner
-# simply waited, the log's mtime froze, and the only way to learn WHICH fixture was stuck was
-# `podman exec ps`. Every time a re-run passed, so it was written off as a flake — 0% CPU is *blocked*,
-# not slow, and a flake does not pick the same fixture three times.
+# ✅ SOLVED 2026-08-23, after `tests/fs_raii.kama` hung the wasm leg four times (08-13, 08-15, 08-17,
+# 08-23). Kept in full because the watchdog below is what solved it, and because the two readings this
+# comment carried BEFORE the answer were both wrong in instructive ways.
 #
-# ⚠️ The third catch (2026-08-17) refuted this comment's own reading of the first two. It said "an alive
-# event loop"; had that been true, `--report-on-signal` would have written a report, and it wrote none.
-# An idle-but-alive loop is exactly the one shape that DOES produce one (probed; see watchdog_run). So
-# the fixture is not idle-waiting on a handle — it is parked in a synchronous syscall, which also reads
-# as 0% CPU under `ps` and is what the first two catches actually saw.
+# The cause was not kama and not this fixture. Without `-sEXIT_RUNTIME=1` an emscripten program returns
+# from `main` and leaves node to wind the runtime down on its own, which calls
+# node::NodePlatform::DrainTasks — and that deadlocks against V8's own background threads:
 #
-# That fits what the fixture is: `fs_raii` opens and closes the same file 5,000 times to prove `File`
-# closes its fd on drop, and under emscripten NODEFS every one of those is a blocking node `fs` call.
-# It is by a wide margin the corpus's heaviest syscall user, so it is the fixture most exposed to
-# container I/O contention while the leg runs fixtures in parallel chunks. And it was not deadlocked:
-# the third catch ran 123,908 ms against a 1,909 ms normal time — 65x slow, killed at the cap, not
-# stopped. Before treating a fourth catch as a deadlock, read the `state:` line the watchdog now
-# captures: `R` is spinning, `D` is uninterruptible I/O, and only `S` would support the old reading.
+#     main thread   DrainTasks                -> waiting for background tasks to finish
+#     background    AwaitCollectionBackground -> waiting for the main thread to run a GC
+#
+# A closed cycle, no kama frame in it, and it happens AFTER the fixture's work is done. Reproduced at
+# ~11-13% under 16-way parallel load on a 6-CPU container; `--no-concurrent-recompilation` takes it to
+# 0/200 while `--no-concurrent-marking` changes nothing, which names the background thread as a
+# concurrent TurboFan compile job. fs_raii is the most exposed fixture because its 5,000-iteration loop
+# is exactly what triggers optimization, immediately before it exits. The fix is in the driver: every
+# wasm build now sets EXIT_RUNTIME, so the main thread calls process.exit() and never enters that
+# teardown path — 0/300 against 40/300 for the same program without it.
+#
+# ⚠️ Two wrong turns worth keeping, because both are shapes of reasoning to distrust:
+#
+#   1. "0% CPU is blocked, not slow" was RIGHT, and was then talked out of. The first two catches had no
+#      evidence at all — no time bound, so the log's mtime just froze — and each re-run passed, so it was
+#      written off as a flake. A flake does not pick the same fixture four times.
+#   2. The third catch was read as "parked in a synchronous syscall … the corpus's heaviest syscall user
+#      … container I/O contention", and concluded "NOT deadlocked: 123,908 ms against a 1,909 ms normal
+#      time — 65x slow, killed at the cap, not stopped." That inference does not hold: being killed AT
+#      THE CAP is exactly what a deadlock looks like, so elapsed-time-at-the-timeout can never
+#      distinguish slow from stopped. (It was also measured against the wrong baseline — 1,909 ms is
+#      build+run; the program itself runs in 35 ms.) And when the fourth catch finally produced stacks,
+#      no thread was in a filesystem syscall at all.
+#
+# The lesson the watchdog encodes: a hang is only diagnosable if something captures state WHILE it is
+# hung. Three catches produced narrative; the one that produced an eu-stack produced the answer.
 #
 # So: bound it, and make the timeout produce the evidence the hang never did. On expiry the child gets
 # SIGUSR2 first — for `node` that writes a diagnostic report naming every live libuv handle (`timer`,
