@@ -563,6 +563,20 @@ bool kamaIsKeyword(const char *word)
   return bin_search(word, 0, (int)kamaKeywordCount()) != IDENTIFIER;
 }
 
+/* Would this spelling lex as an identifier? A LEXICAL question, so it lives here beside kamaIsKeyword
+   rather than in whichever caller happened to need it first. Two do: the LSP's rename validation (an
+   editor will happily send `2x`, `my var` or `return` as a new name, and writing any of those produces a
+   file that no longer parses) and the manifest reader, where a `modules` key or a `name` override becomes
+   a segment of a module's name and so has to be spellable in an `import`. */
+bool kamaIsIdentifier(const std::string &s)
+{
+  if (s.empty()) return false;
+  if (!(isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
+  for (char ch : s)
+    if (!(isalnum((unsigned char)ch) || ch == '_')) return false;
+  return !kamaIsKeyword(s.c_str());
+}
+
 /* The keyword table, exposed for keyword COMPLETION (LSP M4.3). Same single-source-of-truth reasoning as
    kamaIsKeyword: the completion list and the lexer must never disagree about what a keyword is. */
 size_t kamaKeywordCount(void)

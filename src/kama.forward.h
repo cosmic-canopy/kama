@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <map>
+#include <string>
 
 class ASTNode;
 class CodeGenContext;
@@ -180,6 +181,10 @@ typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
 // Defined in kama.l, over the lexer's own keyword table — so callers that must reject reserved words
 // (the LSP's rename validation) can never drift from what the compiler actually reserves.
 bool kamaIsKeyword(const char* word);
+// Would this spelling lex as an identifier? Same reasoning: a lexical question, answered by the lexer.
+// Callers are the LSP's rename validation and the manifest reader (a `modules` key becomes a segment of
+// a module name, so it has to be spellable in an `import`).
+bool kamaIsIdentifier(const std::string& word);
 // The lexer's keyword table, for keyword completion (LSP M4.3) — one source of truth, as above.
 size_t      kamaKeywordCount();
 const char* kamaKeywordAt(size_t i);

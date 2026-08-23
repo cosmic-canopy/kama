@@ -1859,6 +1859,42 @@ struct LogConfig {
     }
 };
 
+// One node of `kama.json`'s nested `modules` map (design/module-system.md §2b).
+//
+// A module is a FOLDER that the manifest lists; folders without an entry stay invisible, so nothing
+// joins the API by accident. The map MIRRORS the folder tree — each key is one path segment, a folder
+// directly inside its parent — and **a module's name is the chain of keys read down to it**. That is the
+// invariant the whole section rests on: a sibling entry cannot change a module's name, because the name
+// is the path you literally read, not something inferred from which other entries happen to exist. (A
+// flat map with `/` keys would infer it, so adding an unrelated `"serialization"` entry would silently
+// rename `serialization/json`'s public API.)
+//
+// `"."` is the project root — the files under `source` that are in no module. It is the root's real
+// path rather than a reserved word, so no folder can collide with it and it needs no escape rule.
+enum class ModuleVis {
+    List,        // ["a", "b"] — its own files plus the modules NAMED a and b. At least one entry.
+    Children,    // its own files plus every module nested under it, at any depth
+    Internal,    // its own files plus every module in this project
+    Public,      // all of the above plus dependent projects
+};
+
+struct ModuleNode {
+    std::string key;                        // the folder segment as written ("." for the project root)
+    std::string name;                       // `name` override for this one segment, or "" — never `::`-joined
+    ModuleVis   vis = ModuleVis::Public;
+    std::vector<std::string> visibleTo;     // the `List` form, in file order (empty unless vis == List)
+    std::vector<ModuleNode>  children;      // this node's own `modules`
+
+    // Filled by validateModules, not by the parser: the composed identity. Kept beside the node so every
+    // consumer reads one answer rather than re-deriving the chain and risking a different join.
+    std::string modName;                    // "collections::detail"; "" for the root node
+    std::string relPath;                    // "collections/detail" under `source`; "" for the root node
+
+    // The segment this node contributes to its module name — `name` when overridden, else the key.
+    const std::string& segment() const { return name.empty() ? key : name; }
+    bool isRoot() const { return key == "."; }
+};
+
 // A scoped package `@acme/foo` imports under its BARE last segment (`foo`) — the scope is registry
 // routing only. Two scopes exposing the same bare name collide (a hard error, detected at link time).
 static std::string importNameOf(const std::string& name)
@@ -2046,6 +2082,7 @@ struct ManifestReader {
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
+    std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
     // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
@@ -2157,6 +2194,127 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }
             return fail("expected ',' or '}' in `projects`");
+        }
+        return true;
+    }
+
+    // One module node's `visibility` (§2c.17). Four forms, one widening ladder: a LIST of the modules
+    // that may import this one, then `children` (my subtree), `internal` (this project), `public` (the
+    // world). Each keyword rung exists because it names a set a list cannot track — `children` and
+    // `internal` both grow as modules are added.
+    //
+    // The empty list is refused for a sharper reason than "it is degenerate": a module nobody can import
+    // is unreachable, so it can only be dead code — no call path from `main` enters it. With `[]` gone,
+    // the manifest ALONE proves there is no unreachable module in the project, with no call-graph
+    // analysis. (`"children"` on a leaf is the same argument and is caught in validateModules, which is
+    // the first place that knows whether a node has children.)
+    bool visibilityValue(ModuleNode& n, const std::string& where) {
+        ws();
+        if (i < s.size() && s[i] == '[') {
+            if (!stringArray(n.visibleTo)) return false;
+            if (n.visibleTo.empty())
+                return fail("`visibility` for `" + where + "` is an empty list, so nothing could ever "
+                            "import it — an unimportable module can only be dead code. Name at least one "
+                            "module, or use \"internal\" or \"public\"");
+            n.vis = ModuleVis::List;
+            return true;
+        }
+        std::string v;
+        if (!str(v)) return false;
+        if      (v == "children") n.vis = ModuleVis::Children;
+        else if (v == "internal") n.vis = ModuleVis::Internal;
+        else if (v == "public")   n.vis = ModuleVis::Public;
+        else return fail("`visibility` for `" + where + "` must be \"public\", \"internal\", \"children\", "
+                         "or a list of the modules that may import it, not \"" + v + "\"");
+        return true;
+    }
+
+    // `kama.json`'s nested `modules` map (§2b): { "<segment>": { "visibility": …, "name": …,
+    //                                                            "modules": { … } }, … }
+    //
+    // The FIRST self-recursive reader in this file, and deliberately so: every other nested object here
+    // (`select`, `flags`, `projects`, `log`) has a fixed depth someone wrote out by hand, but a module
+    // tree is as deep as a source tree. `depth` is a backstop against a pathological or hand-edited file
+    // spinning the parser, not a design limit — eight levels is deeper than any real `src/`.
+    //
+    // `where` is the key path read so far, so an error names the node it is about rather than leaving the
+    // reader to count braces. Modelled on wsProjectsObject above: a map of closed-key objects, per-entry
+    // errors that name the entry, and a required field enforced by a `saw` flag.
+    bool modulesObject(std::vector<ModuleNode>& out, const std::string& where, int depth) {
+        if (depth > 8)
+            return fail("`modules` nests more than 8 deep at `" + where + "` — a module tree mirrors a "
+                        "folder tree, so this is almost certainly a malformed manifest");
+        ws(); if (i >= s.size() || s[i] != '{')
+            return fail(where.empty() ? std::string("`modules` must be a JSON object")
+                                      : "`modules` for `" + where + "` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            ModuleNode n;
+            if (!str(n.key)) return false;
+            // The key is one path SEGMENT and becomes a segment of the module's name, so it has to be
+            // spellable in an `import`. A folder named `my-lib` is not an error in itself — that is what
+            // the `name` override is for — so say so rather than just refusing.
+            if (n.key != "." && !kamaIsIdentifier(n.key))
+                return fail("`" + n.key + "` is not a legal kama identifier, so it cannot be a segment of "
+                            "a module name — give that node a `name` that is");
+            const std::string here = where.empty() ? n.key : where + "." + n.key;
+            ws(); if (i >= s.size() || s[i] != ':')
+                return fail("expected ':' after the module key `" + here + "`");
+            ++i; ws();
+            // Every entry is an OBJECT, never a bare value: a shorthand would drop the key that says what
+            // the value MEANS, and the moment a second key is wanted the format would have to support
+            // both spellings forever. The object is the extension point.
+            if (i >= s.size() || s[i] != '{')
+                return fail("the value for the module `" + here + "` must be an object stating "
+                            "\"visibility\"");
+            ++i; ws();
+            bool sawVisibility = false;
+            if (i < s.size() && s[i] == '}') ++i;
+            else while (true) {
+                std::string k; if (!str(k)) return false;
+                ws(); if (i >= s.size() || s[i] != ':')
+                    return fail("expected ':' in the module `" + here + "`");
+                ++i;
+                // Closed, like the top level: an unknown key inside a module entry is a swallowed
+                // visibility decision, which is the whole reason unknown keys became an error in 1a.
+                if (k == "visibility") { if (!visibilityValue(n, here)) return false; sawVisibility = true; }
+                else if (k == "name") {
+                    if (!str(n.name)) return false;
+                    // A `::`-joined `name` would smuggle hierarchy past the nesting — the one thing the
+                    // nested map exists to prevent, since the name would stop being the chain of keys.
+                    if (n.name.find("::") != std::string::npos)
+                        return fail("`name` for the module `" + here + "` is \"" + n.name + "\", but a "
+                                    "`name` overrides ONE segment — nest the map instead of joining with "
+                                    "`::`");
+                    if (!kamaIsIdentifier(n.name))
+                        return fail("`name` for the module `" + here + "` is \"" + n.name + "\", which is "
+                                    "not a legal kama identifier");
+                    // The root's identity IS the project name (§2b.12), so there is nothing here to
+                    // override — and a `name` on it would be a second, hidden spelling of the project.
+                    if (n.key == ".")
+                        return fail("`\".\"` is the project root and takes no `name` — its identity is the "
+                                    "project's own `name`");
+                }
+                else if (k == "modules") { if (!modulesObject(n.children, here, depth + 1)) return false; }
+                else return fail("unknown key `" + k + "` in the module `" + here + "`");
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == '}') { ++i; break; }
+                return fail("expected ',' or '}' in the module `" + here + "`");
+            }
+            // Required on EVERY node, including one whose folder holds no `.kama` files today. Making it
+            // conditional on file presence would mean ADDING A SOURCE FILE INVALIDATES THE MANIFEST —
+            // the wrong coupling entirely. A folder that groups today can hold code tomorrow, and its
+            // answer should already be written down.
+            if (!sawVisibility)
+                return fail("the module `" + here + "` does not state a `visibility` — every module "
+                            "declares its audience, including one whose folder holds no `.kama` files yet");
+            out.push_back(std::move(n));
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail(where.empty() ? std::string("expected ',' or '}' in `modules`")
+                                      : "expected ',' or '}' in `modules` for `" + where + "`");
         }
         return true;
     }
@@ -2513,6 +2671,14 @@ struct ManifestReader {
             if (workspaceFile) {
                 if (key == "projects") { if (!wsProjectsObject()) return false; }
                 else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
+                // `modules` gets its own refusal rather than falling into the generic one below: a
+                // workspace has no `source` and no root namespace, so there is nothing for a module map
+                // to be relative TO — and putting one here would make a project's identity depend on a
+                // file §2a's extractability invariant says it must never read.
+                else if (key == "modules")
+                    return fail("`modules` belongs in a project's kama.json, not in kama_workspace.json — "
+                                "a workspace has no `source` and no root namespace for a module to hang "
+                                "off, and a project must build identically whether or not this file is here");
                 else return fail("`" + key + "` does not belong in kama_workspace.json, which holds only "
                                  "`projects` and `dependencies` — a workspace is not a project");
                 ws();
@@ -2531,6 +2697,14 @@ struct ManifestReader {
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut)) return false; } else if (!skipValue()) return false; }
+            // The module map (§2b). RECOGNIZED unconditionally and parsed even when nothing captures it,
+            // unlike the sink-guarded keys above: its errors are the point. A swallowed `modules` would be
+            // a swallowed visibility decision, which is precisely what unknown-keys-are-an-error exists to
+            // stop, and skipValue() cannot see inside a nested object.
+            else if (key == "modules") {
+                std::vector<ModuleNode> scratch;
+                if (!modulesObject(modulesOut ? *modulesOut : scratch, "", 1)) return false;
+            }
             // Booleans are VALIDATED here rather than only where they are consumed, for the same reason
             // `kind` is: the value set is closed, so `"no-heap": "yes"` must be refused by name rather
             // than read as some truthiness nobody wrote down.
@@ -2574,6 +2748,113 @@ struct ManifestReader {
         return true;
     }
 };
+
+// ---- the module map's cross-cutting checks (§2b) ----------------------------------------------------
+//
+// Separate from the parser because each of these needs the WHOLE map, not one entry: a composed name is
+// only unique against every other composed name, `"children"` is only wrong once you know a node has no
+// children, and a `visibility` list can only be checked against the set of modules that exist. The
+// parser stays local and these run once after it, which is also why they can fill in `modName`/`relPath`
+// — every consumer then reads one answer instead of re-deriving the key chain.
+
+// Walk the tree in file order, composing each node's name and path from the chain of keys read down to
+// it. `out` collects every composed name so the second pass can resolve visibility lists.
+static bool composeModules(std::vector<ModuleNode>& nodes, const std::string& nameSoFar,
+                           const std::string& pathSoFar, const std::string& projectName,
+                           std::map<std::string, ModuleNode*>& byName, std::string& err)
+{
+    for (auto& n : nodes) {
+        if (n.isRoot()) {
+            // `"."` is the project root — the files under `source` in no module — so it contributes no
+            // segment and no path component. It is only meaningful at the top level.
+            if (!nameSoFar.empty()) {
+                err = "`\".\"` names the PROJECT root, so it belongs at the top of `modules`, not inside `"
+                      + nameSoFar + "`";
+                return false;
+            }
+            n.modName.clear();
+            n.relPath.clear();
+        } else {
+            n.modName = nameSoFar.empty() ? n.segment() : nameSoFar + "::" + n.segment();
+            n.relPath = pathSoFar.empty() ? n.key       : pathSoFar + "/" + n.key;
+        }
+
+        // Two paths colliding on one identity. Reachable through a `name` override or a literal duplicate
+        // key, and it has to be caught: two modules answering to one name means an `import` picks one of
+        // them by parse order, which is exactly the class of silent wrong answer §2b exists to remove.
+        const std::string shown = n.modName.empty() ? std::string("\".\"") : "`" + n.modName + "`";
+        auto it = byName.find(n.modName);
+        if (it != byName.end()) {
+            err = "two modules compose to the same name " + shown + " — `" + it->second->relPath
+                + "` and `" + n.relPath + "`. A module's name is the chain of keys read down to it, so "
+                  "give one of them a `name`";
+            return false;
+        }
+        // `global::X` is the floor, always in scope with no import (§2f). A module answering to that name
+        // could never be reached by the spelling it claims.
+        if (n.modName == "global") {
+            err = "a module may not be named `global` — that names the always-in-scope floor, so nothing "
+                  "could ever reach this module by the name it claims";
+            return false;
+        }
+        // `geo::X` would name both the root of project `geo` and its module `geo`, and nothing in the
+        // spelling says which. The root's identity IS the project name (§2b.12), so the module yields.
+        if (!projectName.empty() && n.modName == projectName) {
+            err = "the module `" + n.relPath + "` composes to `" + projectName + "`, which is this "
+                  "project's own name — `" + projectName + "::X` would name both its root and this "
+                  "module. Give it a `name`";
+            return false;
+        }
+        // An empty subtree is an empty audience, so `"children"` on a leaf grants access to nobody —
+        // the same argument that bans the empty list, and the other half of what lets the manifest alone
+        // prove there is no unreachable module.
+        if (n.vis == ModuleVis::Children && n.children.empty()) {
+            err = "`visibility` for the module " + shown + " is \"children\", but it has no nested "
+                  "modules — an empty subtree is an empty audience, so nothing could import it";
+            return false;
+        }
+        byName[n.modName] = &n;
+        if (!composeModules(n.children, n.modName, n.relPath, projectName, byName, err)) return false;
+    }
+    return true;
+}
+
+// Every module named by a `visibility` list must exist. A typo here fails OPEN — the module quietly
+// grants access to nobody it meant to — so silence would be the worst possible outcome.
+static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes,
+                                   const std::map<std::string, ModuleNode*>& byName, std::string& err)
+{
+    for (auto& n : nodes) {
+        const std::string shown = n.modName.empty() ? std::string("\".\"") : "`" + n.modName + "`";
+        for (auto& target : n.visibleTo) {
+            if (byName.count(target)) {
+                // A module's own files always see each other, so the list is ADDITIVE and never names
+                // itself. Saying so anyway is a misunderstanding worth naming rather than ignoring.
+                if (target == n.modName) {
+                    err = "`visibility` for the module " + shown + " names itself — a module's own files "
+                          "always see each other, so the list only names OTHER modules";
+                    return false;
+                }
+                continue;
+            }
+            err = "`visibility` for the module " + shown + " names `" + target + "`, which is not a "
+                  "module in this project — a list may only name modules declared in this `modules` map";
+            return false;
+        }
+        if (!checkVisibilityTargets(n.children, byName, err)) return false;
+    }
+    return true;
+}
+
+// The whole post-parse pass. `projectName` is the manifest's `name`; pass "" only where it is genuinely
+// unknown, which costs the root-collision check and nothing else.
+static bool validateModules(std::vector<ModuleNode>& mods, const std::string& projectName,
+                            std::string& err)
+{
+    std::map<std::string, ModuleNode*> byName;
+    if (!composeModules(mods, "", "", projectName, byName, err)) return false;
+    return checkVisibilityTargets(mods, byName, err);
+}
 
 // Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load.
@@ -2799,6 +3080,31 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
     return true;
 }
 
+// Load a `kama.json` → its module map (§2b), composed and checked. An absent `modules` yields an empty
+// vector and is not an error TODAY: `visibility` is form-checked only until the visibility phase, so a
+// map that decides nothing yet is not worth a corpus-wide edit to require. It becomes required in the
+// same change that deletes the `namespace` declaration, which is when the map turns load-bearing — the
+// only way left to name a module.
+//
+// `name` is read here rather than by the caller because one of the checks is about it (a module may not
+// compose to the project's own name), and reading it separately would mean two parses of one file.
+static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>& out, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    std::string projectName;
+    ManifestReader r(src, declared, defaults);
+    r.modulesOut = &out;
+    r.nameOut    = &projectName;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
+    // A scoped package imports under its bare last segment, so THAT is the root namespace a module could
+    // collide with — `@acme/geo` is imported as `geo`.
+    if (!validateModules(out, importNameOf(projectName), err)) { out.clear(); return false; }
+    return true;
+}
+
 // Load a `kama_workspace.json` — the members this monorepo composes, relative to the file, each a
 // directory holding its own kama.json, and each stating whether it may be absent. A trailing `/*` expands
 // to every immediate subdirectory that has a manifest (`"libs/*"`), so a workspace need not be edited per
@@ -2956,6 +3262,15 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                   "nest. Move it beside \"" + srcRel + "\" rather than under it";
             return false;
         }
+
+        // The module map (§2b). Its LOCAL errors already fire for every command, because ManifestReader
+        // recognizes `modules` unconditionally — but the cross-cutting ones (composed names unique, a
+        // `visibility` list naming a module that exists, `"children"` on a leaf) need the whole map, so
+        // they run here, on the build path, for the same reason `source` is re-checked here: this is the
+        // one place a manifest is validated as THIS project's rather than mined for one key. The
+        // resolution and editor paths stay lenient about a manifest somewhere up the tree.
+        std::vector<ModuleNode> mods;
+        if (!loadManifestModules(manifest, mods, err)) { err = manifest + ": " + err; return false; }
 
         // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one

@@ -359,16 +359,10 @@ Json lspRange(int startLine1, int startCol0, int endLine1, int endCol0) {
     return range;
 }
 // Would this spelling lex as a kama identifier? Guards rename: an editor will happily send `2x`, `my var`
-// or `return` as a new name, and writing any of those produces a file that no longer parses. The keyword
-// half defers to the lexer's own table (kamaIsKeyword) rather than duplicating it here.
-bool validIdentifier(const std::string& s)
-{
-    if (s.empty()) return false;
-    if (!(isalpha((unsigned char)s[0]) || s[0] == '_')) return false;
-    for (char ch : s)
-        if (!(isalnum((unsigned char)ch) || ch == '_')) return false;
-    return !kamaIsKeyword(s.c_str());
-}
+// or `return` as a new name, and writing any of those produces a file that no longer parses. Answered by
+// the LEXER (kamaIsIdentifier, kama.l) rather than here, so this and the manifest reader — which asks the
+// same question of a `modules` key — can never drift from what the compiler actually accepts.
+bool validIdentifier(const std::string& s) { return kamaIsIdentifier(s); }
 
 Json rangeToJson(const Diagnostic& d) { return lspRange(d.line, d.column, d.endLine, d.endColumn); }
 Json srcRangeToJson(const SrcRange& r) { return lspRange(r.line, r.column, r.endLine, r.endColumn); }

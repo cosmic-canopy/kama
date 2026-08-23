@@ -455,5 +455,155 @@ printf '{ "name": "acme", "version": "0.1.0", "kind": "library" }\n' > "$ws/kama
 wsreject 'a workspace root is not a project' "a kama.json beside a kama_workspace.json is refused"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: the module map states a name and an audience for every node"
+
+# design/module-system.md §2b/§2c. The map is NESTED because composition has to be written down rather
+# than inferred: with flat `a/b` keys, adding or deleting an unrelated `"serialization"` entry would
+# silently rename `serialization/json`'s PUBLIC API. So a module's name is the chain of keys read down to
+# it, and nothing a sibling does can change it.
+#
+# None of these check that the folder exists, deliberately: §2b.11 lists a node whose folder holds no
+# `.kama` files today, and requiring the directory would mean adding or moving a folder invalidates the
+# manifest — the same wrong coupling that keeps `visibility` from being conditional on file presence. A
+# listed module with nothing behind it fails at the `import`, where the message can say so.
+
+# The passing twin for the whole section, and it carries the shapes the rejections are about: a nested
+# node, a list, and a NARROW PARENT WITH A PUBLIC CHILD — visibility does not nest in either direction
+# (§2c), so `detail` being reachable only from `net::web` says nothing about `net`'s own children.
+proj modok <<'JSON'
+{ "name": "modok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".":      { "visibility": "internal" },
+               "net":    { "visibility": ["detail"],
+                           "modules": { "web": { "visibility": "public" } } },
+               "detail": { "visibility": ["net::web"] } } }
+JSON
+accept modok "a nested map, a list, and a narrow parent over a public child"
+
+# `visibility` is required on EVERY node, including one whose folder holds no `.kama` files yet. Making
+# it conditional on file presence would mean adding a source file invalidates the manifest.
+proj modnovis <<'JSON'
+{ "name": "modnovis", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { } } }
+JSON
+reject modnovis 'does not state a `visibility`' "a node with no \`visibility\`"
+
+proj modbadvis <<'JSON'
+{ "name": "modbadvis", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "privateish" } } }
+JSON
+reject modbadvis 'must be "public", "internal", "children"' "a visibility word nobody defined"
+
+# An unimportable module can only be dead code — no path from `main` enters it. Banning the empty list is
+# what lets the manifest ALONE prove there is no unreachable module, with no call-graph analysis.
+proj modempty <<'JSON'
+{ "name": "modempty", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": [] } } }
+JSON
+reject modempty 'an unimportable module can only be dead code' "an empty \`visibility\` list"
+
+# Same argument, other half: an empty subtree is an empty audience.
+proj modleaf <<'JSON'
+{ "name": "modleaf", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "children" } } }
+JSON
+reject modleaf 'an empty subtree is an empty audience' "\"children\" on a leaf node"
+
+# The inner key set is closed for the same reason the top level is — here a swallowed key is a swallowed
+# VISIBILITY decision, which is the one this campaign is actually about.
+proj modunk <<'JSON'
+{ "name": "modunk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "public", "visibilty": "public" } } }
+JSON
+reject modunk 'unknown key `visibilty` in the module' "a misspelled key inside a node names itself"
+
+# A key is one path segment AND a segment of the module's name, so it has to be spellable in an `import`.
+# `my-lib` is not an error in itself — that is what `name` is for — so the message says so.
+proj modseg <<'JSON'
+{ "name": "modseg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "my-lib": { "visibility": "public" } } }
+JSON
+reject modseg 'give that node a `name` that is' "a folder whose name is not an identifier"
+
+proj modjoin <<'JSON'
+{ "name": "modjoin", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "net": { "visibility": "public", "name": "a::b" } } }
+JSON
+reject modjoin 'overrides ONE segment' "a \`::\`-joined \`name\` smuggling hierarchy past the nesting"
+
+# The root's identity IS the project name, so there is nothing here to override.
+proj modrootname <<'JSON'
+{ "name": "modrootname", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal", "name": "core" } } }
+JSON
+reject modrootname 'is the project root and takes no `name`' "a \`name\` on \".\""
+
+# Two paths on one identity: an `import` would pick one of them by parse order.
+proj modcollide <<'JSON'
+{ "name": "modcollide", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".":      { "visibility": "internal" },
+               "net":    { "visibility": "public" },
+               "detail": { "visibility": "public", "name": "net" } } }
+JSON
+reject modcollide 'two modules compose to the same name' "two paths composing to one name"
+
+# `modcollide::X` would name both the project root and the module.
+proj modself <<'JSON'
+{ "name": "modself", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "public", "name": "modself" } } }
+JSON
+reject modself "which is this project's own name" "a module composing to its own project's name"
+
+# `global::X` is the always-in-scope floor (§2f), so a module claiming it is unreachable by construction.
+proj modglobal <<'JSON'
+{ "name": "modglobal", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "public", "name": "global" } } }
+JSON
+reject modglobal 'a module may not be named `global`' "a module claiming the floor's name"
+
+# A `visibility` list fails OPEN — a typo grants access to nobody it meant to — so silence is the worst
+# outcome available and the check has to be here rather than at the use site.
+proj modghost <<'JSON'
+{ "name": "modghost", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": ["nosuch"] } } }
+JSON
+reject modghost 'which is not a module in this project' "a list naming a module that does not exist"
+
+# The list is ADDITIVE — a module's own files always see each other — so it never names itself.
+proj modmyself <<'JSON'
+{ "name": "modmyself", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": ["detail"] } } }
+JSON
+reject modmyself 'names itself' "a list naming the module it is on"
+
+# `"."` is the PROJECT root, so it is only meaningful at the top of the map.
+proj modnestroot <<'JSON'
+{ "name": "modnestroot", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" },
+               "net": { "visibility": "public", "modules": { ".": { "visibility": "public" } } } } }
+JSON
+reject modnestroot 'belongs at the top of `modules`' "a nested \".\""
+
+# A backstop against a malformed or hand-generated file spinning the parser — the first self-recursive
+# reader in the manifest, so it is the first one that could.
+{
+  printf '{ "name": "moddeep", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { '
+  i=1; while [ "$i" -le 10 ]; do printf '"m%d": { "visibility": "public", "modules": { ' "$i"; i=$((i+1)); done
+  printf '"leaf": { "visibility": "public" } '
+  i=1; while [ "$i" -le 10 ]; do printf '} } '; i=$((i+1)); done
+  printf '} }\n'
+} > "$tmp/moddeep.json"
+proj moddeep < "$tmp/moddeep.json"
+reject moddeep 'nests more than 8 deep' "a module map nested past the depth backstop"
+
+# A workspace has no `source` and no root namespace, so there is nothing for a module map to be relative
+# to — and §2a's extractability invariant forbids a project's identity depending on this file at all.
+# Its own refusal rather than the generic unknown-key one, because the reason is specific.
+mkws <<'JSON'
+{ "projects": { "libs/*": { "optional": false } },
+  "modules":  { ".": { "visibility": "public" } } }
+JSON
+wsreject 'belongs in a project'"'"'s kama.json' "\`modules\` in a kama_workspace.json"
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-manifest: PASS" || echo "check-manifest: FAIL" >&2
 exit "$fail"
