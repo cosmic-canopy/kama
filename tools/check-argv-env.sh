@@ -76,24 +76,27 @@ fi
 # 4. CROSS-TU — argv is process-global (external linkage), so a prelude floor `args()` call from a NON-entry
 #    TU (a library module) must see the same vector as `main`. A per-TU `static` argv would read empty in the
 #    library TU. Two-file build; the program returns 0 iff the library-side count matches main's (== 3 here).
+#    The library file sits in its OWN FOLDER: a module is a folder (design/module-system.md §2b), and a
+#    loose build names one by its directory below the operand set's common ancestor. Two files sharing one
+#    directory would both land in the loose ROOT, where §2e.27 makes their symbols unimportable.
 libdir="$tmp/xtu"
-mkdir -p "$libdir"
-cat > "$libdir/lib.kama" <<'KAMA'
-namespace Lib;
+mkdir -p "$libdir/lib"
+cat > "$libdir/lib/lib.kama" <<'KAMA'
+namespace lib;
 export { libArgCount };
 fn int32 libArgCount() { return args().count(); }
 KAMA
 cat > "$libdir/main.kama" <<'KAMA'
-import Lib::{libArgCount};
+import lib::{libArgCount};
 fn int32 main() {
     int32 mc = args().count();     // main's TU
-    int32 lc = libArgCount();      // Lib's TU — must see the SAME argv
+    int32 lc = libArgCount();      // lib's TU — must see the SAME argv
     if (mc != lc) { return 3; }    // cross-TU mismatch (the bug)
     if (mc != 3)  { return 4; }    // wrong count entirely
     return 0;
 }
 KAMA
-"$KAMA" build "$libdir/main.kama" "$libdir/lib.kama" -o "$libdir/prog" >/dev/null 2>"$tmp/xtu.err" || {
+"$KAMA" build "$libdir/main.kama" "$libdir/lib/lib.kama" -o "$libdir/prog" >/dev/null 2>"$tmp/xtu.err" || {
     echo "check-argv-env: FAIL — cross-TU build failed" >&2; sed 's/^/  /' "$tmp/xtu.err" >&2; exit 1; }
 set +e
 "$libdir/prog" alpha beta gamma

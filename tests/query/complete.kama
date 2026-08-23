@@ -148,7 +148,7 @@ type value Stat implements Sized {
 fn int32 scopes() {
     int32 viaStatic = Stat::zero();
     int32 viaConst = Stat::LIMIT;
-    int32 viaNs = completeprobe::blend(lo: 1, hi: 2);
+    int32 viaNs = blend(lo: 1, hi: 2);
     Stat made = Stat.of(n: 1);
     return viaStatic + viaConst + viaNs + made.size();
 }
@@ -167,4 +167,13 @@ fn int32 bareNames(int32 seed) {
 fn int32 rootScope() {
     global::println(s: "root scope");                  // a FLOOR symbol, named explicitly
     return global::completeprobe::blend(lo: 1, hi: 2);  // ... and an absolute namespace path
+}
+
+// M4.2 — a MODULE head lists what that module declares, one level deep. The head has to be a module the
+// file can NAME: a file's identity is its FOLDER (design/module-system.md §2b), so a loose single-file
+// fixture like this one has no module of its own to qualify with. An IMPORTED module is the spelling that
+// exists, and `std::collections` is loaded whole by the import at the top.
+fn int32 moduleHead() {
+    std::collections::DynamicArray<Cell> viaMod = DynamicArray.empty();
+    return cast<int32>(viaMod.length());
 }

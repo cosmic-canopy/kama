@@ -683,11 +683,14 @@ expect --complete 102:37 -- "variant	None"
 expect --complete 149:28 -- "method	zero	fn int32 zero()"   # Stat::| — a static method
 expect --complete 149:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (the `::` bridge reaches them)
 expect --complete 149:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
-# A NAMESPACE head lists what that namespace declares, one level deep.
-expect --complete 151:33 -- "type	Cell"
-expect --complete 151:33 -- "contract	Sized"
-expect --complete 151:33 -- "function	blend"
-reject --complete 151:33 -- "DynamicArray"                  # ... never another namespace's symbols
+# A MODULE head lists what that module declares, one level deep. The head is an IMPORTED module, and that
+# is not a weakening of the assertion — it is the only spelling that exists. A file's identity is its
+# FOLDER (design/module-system.md §2b), so a loose single-file fixture like this one has no module of its
+# own to qualify with; `completeprobe::blend` used to work here only because the file DECLARED a namespace.
+expect --complete 177:23 -- "type	DynamicArray"
+expect --complete 177:23 -- "type	View"
+reject --complete 177:23 -- "	Cell	"          # ... never the naming FILE's own symbols
+reject --complete 177:23 -- "	blend	"
 
 # ---------------------------------------------------------------------------------------------------
 # M4.3 — bare names. The flooding guard is the whole milestone: `_classes` and `_funcs` span the entire

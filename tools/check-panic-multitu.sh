@@ -17,18 +17,21 @@ if [ ! -x "$KAMA" ]; then echo "check-panic-multitu: $KAMA not built" >&2; exit 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# lib.kama — a separate module (its own TU). `boom` panics from HERE, not from main's TU.
-cat > "$tmp/lib.kama" <<'KAMA'
-namespace Lib;
+# lib/lib.kama — a separate module (its own TU). `boom` panics from HERE, not from main's TU. It sits in
+# its OWN FOLDER because a module is a folder (design/module-system.md §2b) and a loose build names one by
+# its directory: two files sharing one directory are both in the loose ROOT, which §2e.27 makes unimportable.
+mkdir -p "$tmp/lib"
+cat > "$tmp/lib/lib.kama" <<'KAMA'
+namespace lib;
 export { boom };
 fn void boom() {
     panic(msg: "from-lib-TU");
 }
 KAMA
 
-# main.kama — registers the handler in the ENTRY TU, then triggers a panic that runs in Lib's TU.
+# main.kama — registers the handler in the ENTRY TU, then triggers a panic that runs in lib's TU.
 cat > "$tmp/main.kama" <<'KAMA'
-import Lib::{boom};
+import lib::{boom};
 extern "<unistd.h>";
 extern fn int64 write(int32 fd, UnsafePtr buf, usize n);
 unsafe fn void onPanic() {
@@ -37,12 +40,12 @@ unsafe fn void onPanic() {
 }
 fn int32 main() {
     setPanicHandler(handler: onPanic);
-    boom();          // the panic originates in Lib's TU — the handler must still fire
+    boom();          // the panic originates in lib's TU — the handler must still fire
     return 0;
 }
 KAMA
 
-"$KAMA" build "$tmp/main.kama" "$tmp/lib.kama" -o "$tmp/prog" >/dev/null 2>"$tmp/build.err" || {
+"$KAMA" build "$tmp/main.kama" "$tmp/lib/lib.kama" -o "$tmp/prog" >/dev/null 2>"$tmp/build.err" || {
     echo "check-panic-multitu: FAIL — build failed" >&2; sed 's/^/  /' "$tmp/build.err" >&2; exit 1; }
 
 # The program is EXPECTED to abort (non-zero) — `|| rc=$?` keeps `set -e` from killing the script here.
