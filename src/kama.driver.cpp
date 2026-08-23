@@ -890,13 +890,15 @@ static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
 // manifest reader; the TYPE lives up here because `configureEmitter` hands the answer to the emitter and
 // sits above that reader.
 struct ModuleId {
-    bool        inProject = false;   // false: no kama.json above it — a loose file (§2i)
+    bool        inProject = false;   // false: a LOOSE file — no manifest names it (§2i)
     std::string project;             // the project's IMPORT name (`@acme/geo` imports as `geo`)
     std::string module;              // composed module name; "" means the project root
 
-    // What an `import` writes, and what §2e.25 mangles into the C symbol.
+    // What an `import` writes, and what §2e.25 mangles into the C symbol. A loose file has no project
+    // name to carry, so its folder chain IS its module — and a loose file in the root has no module at
+    // all, which is what makes it unimportable (§2e.27).
     std::string full() const {
-        if (!inProject) return std::string();
+        if (!inProject) return module;
         return module.empty() ? project : project + "::" + module;
     }
 };
@@ -985,6 +987,97 @@ std::string projectDepsView(const std::vector<std::string>& inputs, const char* 
     return dirExists(view) ? view : "";
 }
 
+// ---- the loose ROOT: a module is a folder, manifest or no manifest (§2i) ---------------------------
+//
+// A loose build has no manifest by construction — the operand's basename is the mode (§2g), and mode 1
+// means "just these files". But a module is a FOLDER, so the tree the operands span is what names them:
+// resolve every operand, take the deepest common ancestor of their DIRECTORIES, and a file's module is
+// its own directory relative to that root, `/` written `::`.
+//
+// Order-independent, because it reads a SET and not a sequence — which is the invariant §1b actually
+// wants. It IS set-dependent: adding a file from a sibling tree raises the root and renames modules.
+// That is accepted rather than mitigated (§2i.41) — a different file set is a different program in
+// loose mode, and unrelated trees yielding long module names is the signal that the build wants a
+// `kama.json`.
+//
+// ⚠️ For an OPERAND this overrides a `kama.json` sitting above it, because in loose mode no manifest
+// participates in anything: not the flag universe, not the dependency view, not the `out` root, and so
+// not identity either. A project's files compiled loosely are therefore NOT that project's modules —
+// they carry the folder names their operand set derives, with no project name in front. That is why
+// `kama check src/app.kama src/thing/t.kama` cannot resolve `probe::thing`: the operand set names that
+// file `thing`. The answer is to name the manifest, and the diagnostic says so.
+//
+// ⚠️⚠️ And it overrides it for an OPERAND ONLY — not for everything under the root, which is what this
+// first did and what two guards caught within the hour. A loose build's stdlib may perfectly well sit
+// inside the tree its operands span (`check-runtime-dir` stages a payload at `$tmp/payload/lib/kama` and
+// compiles `$tmp/s.kama`; `check-manifest` vendors a path dep under the project it builds), and those
+// files are a DEPENDENCY, not a source — §2i says so in as many words. Named by the root they would have
+// become `payload::lib::kama::std::collections`. A dependency keeps the identity its own project gives
+// it; what a loose build refuses to read is a manifest over the files it was HANDED.
+static bool        g_looseBuild   = false;   // the CLI named .kama operands (§2g mode 1)
+static std::string g_looseRoot;              // "" — no operands, or no common ancestor at all
+static std::set<std::string> g_looseOperands; // resolved, so a manifest is overridden for these only
+
+void setLooseBuild(bool loose) { g_looseBuild = loose; }
+
+// `b` is `a` itself or sits under it. A path COMPONENT test, never a string prefix: `/a/bc` is not
+// under `/a/b`. (The same trap deepestModuleFor guards against for relative paths.)
+static bool underPath(const std::string& a, const std::string& b)
+{
+    if (a.empty()) return false;
+    if (b == a) return true;
+    if (b.size() <= a.size() || b.compare(0, a.size(), a) != 0) return false;
+    return b[a.size()] == '/' || a == "/";
+}
+
+// Establish the root for ONE program's operand set. Called per program, not per process: `kama check
+// --each` runs N independent programs in one process, and each one's root is its own operands' — which
+// is what makes `--each` mean N loose builds rather than one wide one.
+static void setLooseRoot(const std::vector<std::string>& operands)
+{
+    g_looseRoot.clear();
+    g_looseOperands.clear();
+    std::vector<std::string> dirs;
+    for (const auto& o : operands) {
+        if (o.empty() || o[0] == '<') continue;          // synthetic units have no path to span
+        const std::string abs = absolutePath(o);
+        g_looseOperands.insert(abs);
+        dirs.push_back(dirName(abs));
+    }
+    if (dirs.empty()) return;
+    std::string root = dirs[0];
+    for (size_t i = 1; i < dirs.size() && !root.empty(); ++i) {
+        while (!underPath(root, dirs[i])) {
+            const std::string parent = dirName(root);
+            if (parent == root || parent == ".") { root.clear(); break; }   // no common ancestor at all
+            root = parent;
+        }
+    }
+    g_looseRoot = root;
+}
+
+// The module an OPERAND sits in, derived from the loose root — "" for a file in the root itself (§2e.27
+// makes those unimportable), for anything outside the root, and for a folder whose name is not a legal
+// kama identifier. That last one is not a rejection: nothing could ever write `import my-lib::{ … }`,
+// so such a folder is not a module and its files stay file-private, exactly as they are today.
+static std::string looseModuleFor(const std::string& absPath)
+{
+    if (g_looseRoot.empty()) return std::string();
+    const std::string dir = dirName(absPath);
+    if (!underPath(g_looseRoot, dir) || dir == g_looseRoot) return std::string();
+    const std::string rel = dir.substr(g_looseRoot.size() + 1);
+    std::string mod;
+    for (size_t i = 0, s = 0; ; ++i) {
+        if (i != rel.size() && rel[i] != '/') continue;
+        const std::string seg = rel.substr(s, i - s);
+        if (!kamaIsIdentifier(seg)) return std::string();
+        mod += (mod.empty() ? "" : "::") + seg;
+        if (i == rel.size()) break;
+        s = i + 1;
+    }
+    return mod;
+}
+
 // Defined once DepSpec exists, beside the manifest loaders it wraps.
 const std::set<std::string>& declaredImportNames(const std::string& packageDir);
 std::string storeDir();   // the content-addressed package store (~/.kama/store)
@@ -1036,6 +1129,11 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                       std::vector<Diagnostic>* diagsOut = nullptr,
                       bool prune = true)
 {
+    // The operand set names this program's modules when no manifest does (§2i). Established HERE, per
+    // program rather than per process: `kama check --each` runs N independent programs in one process and
+    // each one's root is its own operands' — which is what makes `--each` mean N loose builds and not one
+    // wide one. It is also why this is not read off `main`'s argv, which knows nothing of `--each`.
+    setLooseRoot(cliInputs);
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
     std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama pkg install`), or ""
@@ -3028,10 +3126,19 @@ static const ModuleNode* deepestModuleFor(const std::vector<ModuleNode>& nodes, 
 }
 
 // The module `absPath` belongs to. `inProject` false means no kama.json above it, or one whose `source`
-// root does not contain it (a vendored project's own files answer to THEIR manifest, not this one).
+// root does not contain it (a vendored project's own files answer to THEIR manifest, not this one), or
+// a LOOSE build, where no manifest participates at all and the operand set names the modules.
 static ModuleId moduleIdForFile(const std::string& absPath)
 {
     ModuleId id;
+    const std::string abs = absolutePath(absPath);
+    // §2i, and the reason it is tested FIRST: for a file this build was HANDED, a `kama.json` above it is
+    // not this build's manifest — it is not any build's manifest, because a loose build has none. An
+    // operand is named by its folder. Everything else (the stdlib, a dependency, a module pulled in to
+    // satisfy an import) is reached rather than named, and keeps the identity its OWN project gives it,
+    // which is what makes `std::collections` still `std::collections` in a loose build.
+    if (g_looseBuild && g_looseOperands.count(abs)) { id.module = looseModuleFor(abs); return id; }
+
     const std::string dir = owningPackageDir(dirName(absPath));
     if (dir.empty()) return id;
     const std::string manifest = dir + "/kama.json";
@@ -3039,7 +3146,6 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     if (srcRel.empty()) return id;                       // unreadable: not a project root as far as we know
 
     const std::string srcRoot = absolutePath(joinPathLexical(dir, srcRel));
-    const std::string abs     = absolutePath(absPath);
     if (abs.size() <= srcRoot.size() || abs.compare(0, srcRoot.size(), srcRoot) != 0
         || abs[srcRoot.size()] != '/')
         return id;                                        // outside `source` — the manifest does not own it
@@ -3055,13 +3161,21 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     return id;
 }
 
-// `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path and its
-// project's `modules` map DERIVE. See g_probeModules for why this ships before the cutover it measures.
+// `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path DERIVES,
+// from its project's `modules` map or, with no manifest in play, from the loose root. See g_probeModules
+// for why this ships before the cutover it measures.
+//
+//     kama-module <path> <declared> <derived> <verdict> <origin>
+//
+// ORIGIN is separate from the verdict on purpose, because the two answer different questions: `project`
+// / `loose` / `synthetic` says WHO named the file, and the verdict says whether that answer agrees with
+// the declaration still in the source. Reading the verdict alone would hide the fact that the same file
+// derives `modbasic::math` when its project is named and `math` when it is handed over loosely — which
+// is not a defect but the whole of §2i, and the instrument has to be able to show it.
 //
 // The buckets that are not verdicts are the point (§7: a measurement hiding its own blind spot is worse
-// than none). `no-project` is a loose file, whose identity §2i takes from the operand set rather than a
-// manifest; `declared-only` is a file with a namespace and no project above it yet — the population 2b
-// migrates. Neither is dropped.
+// than none). `no-module` is a file nothing names — a loose file sitting in the root — and
+// `declared-only` is one that says something no derivation reproduces. Neither is dropped.
 //
 // ⚠️ And the blind spot a bucket CANNOT show: the embedded prelude is not in this population at all. It
 // reaches the emitter through setPrelude/addPreludeModule at setup, never through loadProgramUnits, so
@@ -3079,18 +3193,20 @@ static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
         if (!units[k]) continue;
         const std::string& path     = paths[k];
         const std::string  declared = unitNsKey(units[k]);
-        std::string derived, verdict;
-        if (!path.empty() && path[0] == '<') verdict = "synthetic";   // the embedded prelude
+        std::string derived, verdict, origin;
+        if (!path.empty() && path[0] == '<') { verdict = "synthetic"; origin = "synthetic"; }
         else {
             ModuleId id = moduleIdForFile(path);
             derived = id.full();
-            verdict = !id.inProject       ? (declared.empty() ? "no-project" : "declared-only")
+            origin  = id.inProject ? "project" : "loose";
+            verdict = derived.empty()     ? (declared.empty() ? "no-module" : "declared-only")
                     : declared.empty()    ? "derived-only"
                     : declared == derived ? "match"
                                           : "mismatch";
         }
         const std::string row = "kama-module\t" + path + "\t" + (declared.empty() ? "-" : declared)
-                              + "\t" + (derived.empty() ? "-" : derived) + "\t" + verdict;
+                              + "\t" + (derived.empty() ? "-" : derived) + "\t" + verdict
+                              + "\t" + origin;
         if (seenRow.insert(row).second) printf("%s\n", row.c_str());
     }
     fflush(stdout);
@@ -7658,6 +7774,10 @@ int main(int argc, char** argv)
     // Empty for a loose build and for a workspace (whose members each install their own, per re-exec).
     setCliProjectDir(workspaceMode || manifestOperand.empty() ? std::string()
                                                               : dirName(manifestOperand));
+    // …and whether this is a LOOSE build, which is the same question asked of the other half of §2g: with
+    // no manifest operand, no manifest participates in the compilation at all — including in what names
+    // its modules (§2i). A workspace operand is not loose; it fans out and each member installs its own.
+    setLooseBuild(manifestOperand.empty());
 
     // `--each` reinterprets the input list: N programs rather than one program's N files. Only `check` has
     // a meaning for that — `build --each` would need N outputs, which is a different (unbuilt) feature, and
