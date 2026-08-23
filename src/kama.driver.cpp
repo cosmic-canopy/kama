@@ -609,6 +609,12 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
                                             const std::vector<std::string>& roots,
                                             std::string* matchedRoot = nullptr);
 
+// Why a module did not resolve, said in terms of the rule that refused it. Defined beside the resolver,
+// declared here because loadProgramUnits is where the failure surfaces.
+static void reportUnresolvedModule(const std::string& name, const std::vector<std::string>& segs,
+                                   const std::string& fromFile, const std::string& buildManifestDir,
+                                   const std::string& stdlibDir, bool reserved);
+
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
@@ -1291,10 +1297,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             std::string via;
             auto files = resolveModuleFiles(segs, roots, &via);
             if (files.empty()) {
-                std::string name;
-                for (size_t k = 0; k < segs.size(); ++k) name += (k ? "::" : "") + segs[k];
-                fprintf(stderr, "kama: error: cannot resolve module '%s' (from %s)\n",
-                        name.c_str(), reserved ? stdlibDir.c_str() : here.c_str());
+                reportUnresolvedModule(key, segs, paths[i], buildManifestDir, stdlibDir, reserved);
                 return false;
             }
             // A sub-project must be EXTRACTABLE — liftable out of its monorepo and still buildable — and
@@ -3242,6 +3245,48 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
         }
     }
     return {};
+}
+
+// A module that does not resolve used to be one line — the name, and the directory the search had
+// started from. There is no search now, so "from <dir>" named a place nothing had looked; and the three
+// ways to arrive here want three different answers. §2i's own words, in the order a user meets them.
+static void reportUnresolvedModule(const std::string& name, const std::vector<std::string>& segs,
+                                   const std::string& fromFile, const std::string& buildManifestDir,
+                                   const std::string& stdlibDir, bool reserved)
+{
+    fprintf(stderr, "kama: error: cannot resolve module '%s' (imported by %s)\n",
+            name.c_str(), fromFile.c_str());
+    if (reserved) {
+        fprintf(stderr, "kama: note: `std` and `core` resolve only from the standard library, which this "
+                        "compiler reads at %s — an install ships `kama.json` beside `std/`, and without "
+                        "it nothing there can be imported\n", stdlibDir.c_str());
+        return;
+    }
+    // A project build: the manifest is in hand, so the answer is which of its two lists is missing an
+    // entry. Its own name means a folder nobody listed; anything else means a dependency nobody declared.
+    if (!buildManifestDir.empty()) {
+        const std::string manifest = buildManifestDir + "/kama.json";
+        const ManifestModules& mm = manifestModulesCached(manifest);
+        if (!mm.projectName.empty() && mm.projectName == segs[0])
+            fprintf(stderr, "kama: note: `%s` is this project, but %s lists no module `%s` — a folder is a "
+                            "module only once it is listed under \"modules\"\n",
+                    segs[0].c_str(), manifest.c_str(), name.c_str());
+        else
+            fprintf(stderr, "kama: note: %s declares no dependency named `%s` — add it under "
+                            "\"dependencies\" and run `kama pkg install`\n", manifest.c_str(), segs[0].c_str());
+        return;
+    }
+    // A loose build, where the operands ARE the compilation (§2i). Nothing was looked for, so the useful
+    // thing to say is that — and, when the file turns out to sit in a project, that naming the manifest
+    // is the whole fix. The walk is affordable here because this path ends the build.
+    fprintf(stderr, "kama: note: this build names no `kama.json`, so its modules are the files on the "
+                    "command line and their folders — and none of them is in `%s`. Name that module's "
+                    "sources too, or build a project\n", name.c_str());
+    const std::string owner = owningPackageDir(dirName(fromFile));
+    if (!owner.empty())
+        fprintf(stderr, "kama: note: %s belongs to the project %s/kama.json — `kama build %s/kama.json` "
+                        "compiles it with the modules that manifest declares\n",
+                fromFile.c_str(), owner.c_str(), owner.c_str());
 }
 
 // `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path DERIVES,

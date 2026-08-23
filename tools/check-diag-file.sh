@@ -193,6 +193,53 @@ if printf '%s' "$out5" | grep -q 'instantiator\.kama:'; then
     exit 1
 fi
 
+# ---- 6. a module that does not resolve says which RULE refused it ---------------------------------------
+#
+# Not a file-attribution case like the five above, but the same defect class: the message used to end in
+# "(from <dir>)" — the directory the SEARCH had started from. §2i deleted the search, so that named a
+# place nothing had looked, and the three ways to arrive here want three different answers. Each is
+# asserted on the sentence a user actually has to act on, because a diagnostic nobody checks drifts.
+want() {   # want <output> <substring> <claim>
+    printf '%s' "$1" | grep -qF -- "$2" \
+        && echo "  ok: $3" \
+        || { echo "check-diag-file: FAIL — $3" >&2
+             echo "    expected: $2" >&2
+             printf '%s\n' "$1" | sed 's/^/    /' | head -4 >&2; exit 1; }
+}
+
+# 6a. Loose, with no project anywhere above: the operands ARE the compilation, and this one is not.
+mkdir -p "$tmp/loose"
+printf 'import nowhere::{v};\nfn int32 main() { return v(); }\n' > "$tmp/loose/solo.kama"
+out6=$("$KAMA" check "$tmp/loose/solo.kama" 2>&1 || true)
+want "$out6" "cannot resolve module 'nowhere'" "an unresolved module names itself"
+want "$out6" "modules are the files on the command line" "...and says a loose build compiles only what it was given"
+
+# 6b. Loose, but the file belongs to a project — the case §2i is most likely to surprise someone with,
+# since the very same file builds under its manifest. The fix IS the manifest, so the note names it.
+mkdir -p "$tmp/proj6/src/mod"
+printf '{ "name": "p6", "version": "0.1.0", "kind": "library",\n  "modules": { ".": { "visibility": "internal" }, "mod": { "visibility": "public" } } }\n' \
+    > "$tmp/proj6/kama.json"
+printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/proj6/src/mod/m.kama"
+printf 'import p6::mod::{v};\nfn int32 use() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+out6b=$("$KAMA" check "$tmp/proj6/src/consumer.kama" 2>&1 || true)
+# ⚠️ Matched on the tail, not on "$tmp/...": absolutePath is realpath(), so a mktemp path comes back as
+# /private/var/... on macOS while $tmp says /var/... — the same spelling hazard M3.5 hit in check-lsp.
+want "$out6b" 'proj6/kama.json — `kama build' "...or, when the file sits in a project, names its manifest"
+"$KAMA" check "$tmp/proj6/kama.json" >/dev/null 2>&1 \
+    && echo "  ok: ...which is not idle advice — that manifest does build it" \
+    || { echo "check-diag-file: FAIL — the manifest the note recommends does not build the file" >&2; exit 1; }
+
+# 6c/6d. In a project, the two lists that could be missing an entry, told apart by the first segment.
+printf 'import p6::unlisted::{v};\nfn int32 use2() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+mkdir -p "$tmp/proj6/src/unlisted"
+printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/proj6/src/unlisted/u.kama"
+out6c=$("$KAMA" check "$tmp/proj6/kama.json" 2>&1 || true)
+want "$out6c" 'lists no module `p6::unlisted`' "a folder in this project that nobody listed says so"
+printf 'import geo::{v};\nfn int32 use3() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+out6d=$("$KAMA" check "$tmp/proj6/kama.json" 2>&1 || true)
+want "$out6d" 'declares no dependency named `geo`' "...and a name that is not this project is a missing dependency"
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
-echo "                       in a generic body is reported once, not once per instantiation)"
+echo "                       in a generic body is reported once, not once per instantiation; and an"
+echo "                       unresolved module names the rule that refused it, not a directory)"
