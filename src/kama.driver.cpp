@@ -878,6 +878,11 @@ void timingDump(const char* what, const std::string& subject)
 
 std::string owningPackageDir(const std::string& fromDir);   // defined below, beside the manifest loaders
 
+// `--probe-modules`, defined below beside moduleIdForFile — the derivation it reports on. Declared here
+// because loadProgramUnits is where both of its inputs exist at once.
+static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
+                              const std::vector<std::string>& paths);
+
 // owningPackageDir answers with an ABSOLUTE path, and that answer reaches user-facing output — the `out`
 // root is built from it, so every "kama: built …" line would carry a full path for an ordinary build run
 // from inside its own project. Spell it "." when it IS the current directory, which is what the shallow
@@ -1248,6 +1253,11 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             }
         }
     }
+    // `--probe-modules` (hidden, phase 2): one row per loaded unit, DERIVED module identity beside the
+    // `namespace` the file still declares. Called from here because both inputs are already in hand —
+    // `paths` is what parseFile was given, the unit carries its declaration — so measuring costs no
+    // plumbing through CEmitter at all. Defined down with moduleIdForFile, which it needs.
+    reportModuleProbe(units, paths);
     return !(strictImports && undeclaredImport);   // reported every one above, then fail once
 }
 
@@ -1464,6 +1474,21 @@ static bool g_strictNumeric = false;
 // KEPT rather than deleted — see `setProbeReport` for why: the walk still has a named residual, and reach
 // is the kind of thing that regresses without any fixture noticing.
 static bool g_probeTemplates = false;
+
+// `--probe-modules`: TSV on stdout, one row per compiled unit, comparing the module identity DERIVED
+// from its path and its project's `modules` map against the `namespace` the file still declares. Hidden,
+// for the same reason the two above are, and DELETED when phase 2 closes.
+//
+// It exists because swapping the emitter's source of truth from the declaration to the derivation is the
+// one step in this campaign that cannot be checked by reading: 91 files declare a namespace and the
+// derivation has to reproduce every one of them before anything is deleted. So the derivation ships
+// first as a measurement, `tools/check-modules.sh` reports through the corpus migration, and the same
+// guard turns a mismatch into a failure at the identity cutover.
+//
+// STDOUT, never `warning:` — run_tests.sh fails any fixture whose stderr matches /warning/i, and the
+// build path sends stdout to /dev/null, so the instrument is invisible to the harness and only its own
+// guard reads it.
+static bool g_probeModules = false;
 
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
@@ -2251,12 +2276,6 @@ struct ManifestReader {
         while (true) {
             ModuleNode n;
             if (!str(n.key)) return false;
-            // The key is one path SEGMENT and becomes a segment of the module's name, so it has to be
-            // spellable in an `import`. A folder named `my-lib` is not an error in itself — that is what
-            // the `name` override is for — so say so rather than just refusing.
-            if (n.key != "." && !kamaIsIdentifier(n.key))
-                return fail("`" + n.key + "` is not a legal kama identifier, so it cannot be a segment of "
-                            "a module name — give that node a `name` that is");
             const std::string here = where.empty() ? n.key : where + "." + n.key;
             ws(); if (i >= s.size() || s[i] != ':')
                 return fail("expected ':' after the module key `" + here + "`");
@@ -2286,9 +2305,6 @@ struct ManifestReader {
                         return fail("`name` for the module `" + here + "` is \"" + n.name + "\", but a "
                                     "`name` overrides ONE segment — nest the map instead of joining with "
                                     "`::`");
-                    if (!kamaIsIdentifier(n.name))
-                        return fail("`name` for the module `" + here + "` is \"" + n.name + "\", which is "
-                                    "not a legal kama identifier");
                     // The root's identity IS the project name (§2b.12), so there is nothing here to
                     // override — and a `name` on it would be a second, hidden spelling of the project.
                     if (n.key == ".")
@@ -2309,6 +2325,16 @@ struct ManifestReader {
             if (!sawVisibility)
                 return fail("the module `" + here + "` does not state a `visibility` — every module "
                             "declares its audience, including one whose folder holds no `.kama` files yet");
+            // The SEGMENT — `name` when overridden, else the key — becomes a segment of the module's
+            // name, so it has to be spellable in an `import`. Checked here rather than at the key,
+            // because a folder named `my-lib` is not an error in itself: the `name` override is exactly
+            // the escape for it (§2b.10), and keys may arrive before or after it inside the node.
+            if (!n.isRoot() && !kamaIsIdentifier(n.segment()))
+                return fail(n.name.empty()
+                    ? "`" + n.key + "` is not a legal kama identifier, so it cannot be a segment of a "
+                      "module name — give that node a `name` that is"
+                    : "`name` for the module `" + here + "` is \"" + n.name + "\", which is not a legal "
+                      "kama identifier");
             out.push_back(std::move(n));
             ws();
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
@@ -2854,6 +2880,154 @@ static bool validateModules(std::vector<ModuleNode>& mods, const std::string& pr
     std::map<std::string, ModuleNode*> byName;
     if (!composeModules(mods, "", "", projectName, byName, err)) return false;
     return checkVisibilityTargets(mods, byName, err);
+}
+
+// ---- file -> module identity (§2b/§2e) -------------------------------------------------------------
+//
+// The answer phase 2 replaces the `namespace` declaration WITH: a file's module is derived from where it
+// sits, not from what it says. Read as an instrument first (`--probe-modules`) so the derivation is
+// measured against the declarations still in the tree before anything depends on it.
+struct ModuleId {
+    bool        inProject = false;   // false: no kama.json above it — a loose file (§2i)
+    std::string project;             // the project's IMPORT name (`@acme/geo` imports as `geo`)
+    std::string module;              // composed module name; "" means the project root
+
+    // What an `import` writes, and what §2e.25 mangles into the C symbol.
+    std::string full() const {
+        if (!inProject) return std::string();
+        return module.empty() ? project : project + "::" + module;
+    }
+};
+
+// The parsed module map per manifest. Rides the same lifetime as manifestSourceCache and is cleared by
+// the same eviction: `kama lsp` treats a manifest edit as "the program being analyzed changed", so a map
+// cached anywhere else would serve stale modules across exactly that edit.
+struct ManifestModules {
+    std::string             projectName;   // already run through importNameOf
+    std::vector<ModuleNode> mods;
+    bool                    ok = false;    // false: unreadable or rejected — attribute nothing
+};
+
+static std::map<std::string, ManifestModules>& manifestModulesCache()
+{
+    static std::map<std::string, ManifestModules> cache;
+    return cache;
+}
+
+static const ManifestModules& manifestModulesCached(const std::string& manifest)
+{
+    auto& cache = manifestModulesCache();
+    auto it = cache.find(manifest);
+    if (it != cache.end()) return it->second;
+    ManifestModules m;
+    std::string err, rawName;
+    if (fileExists(manifest)) {
+        std::ifstream in(manifest, std::ios::binary);
+        std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::set<std::string> declared, defaults;
+        ManifestReader r(src, declared, defaults);
+        r.modulesOut = &m.mods;
+        r.nameOut    = &rawName;
+        // A manifest that does not parse is not an error HERE — this runs on the resolution and editor
+        // paths, which stay lenient about a broken manifest somewhere up the tree. resolveBuildConfig is
+        // where a build says so out loud.
+        if (r.parse()) {
+            m.projectName = importNameOf(rawName);
+            m.ok = validateModules(m.mods, m.projectName, err);
+        }
+        if (!m.ok) m.mods.clear();
+    }
+    return cache.emplace(manifest, std::move(m)).first->second;
+}
+
+// The deepest listed node whose folder is an ancestor of (or is) `relDir`, or nullptr for the project
+// root. NEAREST ANCESTOR is the whole rule: a folder with no entry is not a module, but its files are
+// not homeless either — they belong to the closest folder above them that IS one. That is what keeps
+// "list a folder" an API decision rather than a compilation one.
+static const ModuleNode* deepestModuleFor(const std::vector<ModuleNode>& nodes, const std::string& relDir)
+{
+    const ModuleNode* best = nullptr;
+    for (auto& n : nodes) {
+        if (n.isRoot() || n.relPath.empty()) continue;
+        // A path-COMPONENT prefix, never a string prefix: `net` must not claim `network/x.kama`.
+        if (relDir != n.relPath &&
+            !(relDir.size() > n.relPath.size() && relDir.compare(0, n.relPath.size(), n.relPath) == 0
+              && relDir[n.relPath.size()] == '/'))
+            continue;
+        best = &n;
+        if (const ModuleNode* deeper = deepestModuleFor(n.children, relDir)) best = deeper;
+        break;   // siblings are disjoint paths, so at most one can match
+    }
+    return best;
+}
+
+// The module `absPath` belongs to. `inProject` false means no kama.json above it, or one whose `source`
+// root does not contain it (a vendored project's own files answer to THEIR manifest, not this one).
+static ModuleId moduleIdForFile(const std::string& absPath)
+{
+    ModuleId id;
+    const std::string dir = owningPackageDir(dirName(absPath));
+    if (dir.empty()) return id;
+    const std::string manifest = dir + "/kama.json";
+    const std::string& srcRel = manifestSourceCached(manifest);
+    if (srcRel.empty()) return id;                       // unreadable: not a project root as far as we know
+
+    const std::string srcRoot = absolutePath(joinPathLexical(dir, srcRel));
+    const std::string abs     = absolutePath(absPath);
+    if (abs.size() <= srcRoot.size() || abs.compare(0, srcRoot.size(), srcRoot) != 0
+        || abs[srcRoot.size()] != '/')
+        return id;                                        // outside `source` — the manifest does not own it
+
+    const ManifestModules& mm = manifestModulesCached(manifest);
+    id.inProject = true;
+    id.project   = mm.projectName;
+
+    std::string relDir = dirName(abs.substr(srcRoot.size() + 1));
+    if (relDir == "." ) relDir.clear();
+    if (!relDir.empty())
+        if (const ModuleNode* n = deepestModuleFor(mm.mods, relDir)) id.module = n->modName;
+    return id;
+}
+
+// `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path and its
+// project's `modules` map DERIVE. See g_probeModules for why this ships before the cutover it measures.
+//
+// The buckets that are not verdicts are the point (§7: a measurement hiding its own blind spot is worse
+// than none). `no-project` is a loose file, whose identity §2i takes from the operand set rather than a
+// manifest; `declared-only` is a file with a namespace and no project above it yet — the population 2b
+// migrates. Neither is dropped.
+//
+// ⚠️ And the blind spot a bucket CANNOT show: the embedded prelude is not in this population at all. It
+// reaches the emitter through setPrelude/addPreludeModule at setup, never through loadProgramUnits, so
+// no row is ever emitted for `<prelude>` or `<prelude>/std/memory/*`. The `synthetic` arm below is a
+// tripwire that should stay empty forever, not coverage — the prelude's identity is the open question
+// §2f.30 flags, and this probe says nothing about it.
+static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
+                              const std::vector<std::string>& paths)
+{
+    if (!g_probeModules) return;
+    // Full-row dedupe, like `_strictNumericSeen`: `kama check --each` runs many programs in one process
+    // and every one of them re-enters the same stdlib modules.
+    static std::set<std::string> seenRow;
+    for (size_t k = 0; k < units.size() && k < paths.size(); ++k) {
+        if (!units[k]) continue;
+        const std::string& path     = paths[k];
+        const std::string  declared = unitNsKey(units[k]);
+        std::string derived, verdict;
+        if (!path.empty() && path[0] == '<') verdict = "synthetic";   // the embedded prelude
+        else {
+            ModuleId id = moduleIdForFile(path);
+            derived = id.full();
+            verdict = !id.inProject       ? (declared.empty() ? "no-project" : "declared-only")
+                    : declared.empty()    ? "derived-only"
+                    : declared == derived ? "match"
+                                          : "mismatch";
+        }
+        const std::string row = "kama-module\t" + path + "\t" + (declared.empty() ? "-" : declared)
+                              + "\t" + (derived.empty() ? "-" : derived) + "\t" + verdict;
+        if (seenRow.insert(row).second) printf("%s\n", row.c_str());
+    }
+    fflush(stdout);
 }
 
 // Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
@@ -6480,7 +6654,7 @@ std::string lspRealPath(const std::string& path) { return absolutePath(path); }
 // namespace opened at the top, which would give this internal linkage and leave kama.lsp.o with an
 // undefined symbol. The cache accessor stays where it is — an anonymous-namespace name is visible
 // through the rest of the translation unit, so reaching back to it from out here is fine.
-void lspEvictManifestCache() { manifestSourceCache().clear(); }
+void lspEvictManifestCache() { manifestSourceCache().clear(); manifestModulesCache().clear(); }
 
 void lspSetParseCache(bool on) { g_parseCache = on; if (!on) g_parseCacheMap.clear(); }
 
@@ -7329,6 +7503,7 @@ int main(int argc, char** argv)
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--strict-numeric")         g_strictNumeric = true;   // M5a: measure, don't reject (hidden)
         else if (a == "--probe-templates")        g_probeTemplates = true;  // size the template probe (hidden)
+        else if (a == "--probe-modules")          g_probeModules = true;    // derived vs declared module (hidden)
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE

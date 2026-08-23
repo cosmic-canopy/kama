@@ -524,6 +524,24 @@ proj modseg <<'JSON'
 JSON
 reject modseg 'give that node a `name` that is' "a folder whose name is not an identifier"
 
+# ...and the twin that proves the escape it names actually works. This pair exists because the first cut
+# checked the KEY as it was read, which refused `my-lib` before it could ever see the `name` that fixes
+# it — so the rejection above was firing on the one manifest §2b.10 says is correct.
+proj modescape <<'JSON'
+{ "name": "modescape", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" },
+               "my-lib": { "visibility": "public", "name": "mylib" } } }
+JSON
+accept modescape "...and a \`name\` is the escape for exactly that folder"
+
+# The override has to be spellable too, or it just moves the problem.
+proj modbadname <<'JSON'
+{ "name": "modbadname", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" },
+               "my-lib": { "visibility": "public", "name": "still-not" } } }
+JSON
+reject modbadname 'which is not a legal kama identifier' "a \`name\` that is itself not an identifier"
+
 proj modjoin <<'JSON'
 { "name": "modjoin", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "modules": { ".": { "visibility": "internal" }, "net": { "visibility": "public", "name": "a::b" } } }
