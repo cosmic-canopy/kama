@@ -717,10 +717,10 @@ one that has no manifest to name it.
 
 40. **A loose build does no filesystem searching. You pass every source file.** ⚠️ This is a **behavior
     change, not a formalization** — loose mode searches today, and it was measured rather than assumed:
-    `tests/xfail/mod_collision.kama` is handed to the compiler *alone* and pulls `cola/cola.kama` and
-    `colb/colb.kama` off disk, because `here = dirName(paths[i])`
-    ([kama.driver.cpp:1108](../../src/kama.driver.cpp)) is the first entry on the import root list
-    ([:1134](../../src/kama.driver.cpp)). After this phase the operands **are** the compilation.
+    one operand importing `thing::{answer}` pulled `thing/t.kama` off disk, because `here = dirName(paths[i])`
+    was the first entry on the import root list. **DONE in 2d** — that entry is now the project this
+    invocation is for, which for a loose build is nothing at all, and the operands **are** the
+    compilation.
     `std` and `global` still resolve from the stdlib — they are a dependency, not a source — and a name
     no operand provides is an error naming `kama.json`.
 
@@ -935,7 +935,7 @@ legs and bumps `VERSION`:
 | **2a** | the `modules` map parsed + §2b/§2c form checks, plus `--probe-modules` and `tools/check-modules.sh` | **SHIPPED** `0.9.55`–`0.9.58` |
 | **2b** | the corpus migration — `lib/kama.json`, the `std::memory` move, fixtures and guards become projects | **SHIPPED** `0.9.59`–`0.9.62` |
 | **2c** | identity — `ctxOf` derives the scope from path + manifest instead of the declaration | **SHIPPED** `0.9.65` — see below |
-| **2d** | resolution — imports by full module name; loose mode stops searching | C++ only |
+| **2d** | resolution — imports by full module name; loose mode stops searching | **SHIPPED** `0.9.66`–`0.9.69` |
 | **2e** | the deletion — 91 files, the grammar, `modules` becomes required, the five stranded sites | corpus + grammar |
 
 > **The ordering rule that matters: the corpus migration (2b) lands BEFORE the cutovers, not with them.**
@@ -982,129 +982,129 @@ Three things worth carrying into 2d/2e:
   declare `namespace std::memory` and the middle rung catches them. The arm is what carries their identity
   across 2e, which is also when that warning becomes true and when §3's triad assertion can fail.
 
-#### ►► 2d — the ground re-verified for it, 2026-08-23
+#### 2d — resolution. SHIPPED 2026-08-23 (`0.9.66`–`0.9.69`)
 
-Written after 2c because 2c moved both large files, and the last time this was skipped eleven references
-in this doc were stale. **Everything below was run, not recalled.**
+Four commits, each green on all three legs (**1209 / 1192 / 1164**, 40 guards), and the emitted C
+byte-identical across the first three — measured with `--keep-c` + `diff -r` over a loose stdlib-heavy
+build (examples/httpd) and a project build, not asserted.
 
-**The missing piece nobody named: `ModuleId` has no LOOSE arm.** `moduleIdForFile`
-([kama.driver.cpp:3004](../../src/kama.driver.cpp)) answers `inProject = false` for a file with no
-`kama.json` above it, and `full()` is then `""` — so §2i.41's derivation (resolve every operand, take the
-**deepest common ancestor**, a file's module is its directory relative to that root) **does not exist in
-any form**. It is 2d code, and note the shape it needs: the answer depends on the operand SET, which the
-emitter does not have. Compute it once per build in the driver and feed it through the **same
-`setModuleResolver` seam 2c installed** — the seam already takes a unit path and already runs for every
-emitter. ⚠️ This also means `ctxOf`'s `_F<idx>` rung is **not** the final loose answer; after 2d only a
-file in the loose ROOT keeps it (§2e.27).
+| | what landed |
+|---|---|
+| `0.9.66` | **the loose arm.** `ModuleId` had none: §2i.41's derivation did not exist in any form. The deepest common ancestor of the operands' directories is the root, established **per program** in `loadProgramUnits` (so `--each` is N loose builds, each with its own root) and read through the `setModuleResolver` seam 2c installed |
+| `0.9.67` | **the loader keys on the module.** `unitNsKey` answered four questions — what a CLI input provides, which siblings belong with it, what a loaded module contributes, package homogeneity — all four now go through `moduleKeyOf`, whose rungs are `ctxOf`'s own: derived, else the declaration (until 2e) |
+| `0.9.68` | **manifest-driven resolution.** `resolveModuleFiles` is the inverse of `moduleIdForFile`; the file-module arm and the `here` search are deleted |
+| `0.9.69` | **the diagnostic**, three arms — stdlib, project, loose |
 
-**Both premises 2d rests on are still live at HEAD, freshly reproduced:**
+**The rule that took two tries, and the guards that caught it.** A loose build overrides a `kama.json`
+for an **operand only**. Naming everything under the loose root that way is wrong, and wrong in a way
+that is easy to miss by reasoning: `check-runtime-dir` stages a stdlib payload at `$tmp/payload/lib/kama`
+and compiles `$tmp/s.kama`, `check-manifest` vendors a path dep inside the project it builds — both sit
+under the root, and both turned into `payload::lib::kama::std::collections`. A dependency is **reached,
+not named**; §2i says so in as many words ("`std` and `global` still resolve from the stdlib — they are a
+dependency, not a source"). What a loose build refuses to read is a manifest over the files it was handed.
 
-| premise | reproduction | result |
+**⚠️ `check-modules` §2 went vacuous the moment the loose arm landed, and that is the shape of hazard to
+watch for in 2e.** It swept the corpus with `kama check --each`, which is now a *loose* invocation — so it
+measured the loose derivation and would have reported all 52 stdlib files as `declared-only` while
+printing *"every file that declares a namespace derives exactly that namespace"*. It now drives every
+project **by its manifest** and sweeps only the files no project owns, with a per-file assertion that
+maintains itself: for each of the **91** files declaring a `namespace`, if a project owns it the derived
+module must BE that declaration. **80 are owned and verified; 11 are not** — the 2e population, counted
+and never asserted on. Five projects emit no rows (their dependency view is not materialized and
+installing would write into the worktree): **named out loud**, never silently skipped.
+
+**Four more guards were about to pass while testing nothing**, which is most of what 2d's diff is:
+
+| guard | why it stopped meaning anything | what it says now |
 |---|---|---|
-| loose mode SEARCHES (§2i.40) | one operand `app.kama` importing `thing::{answer}`, with `thing/t.kama` only on disk | `OK (2 units analyzed)` — it went and found it |
-| the FILE-module is live (§2b.9, "two lines delete") | `import flat::{two}` with `flat.kama` beside the operand | resolves; [:611](../../src/kama.driver.cpp) tries `<root>/<rel>.kama` **before** the directory |
+| `check-manifest` ×3 | the `source` gate and the broken-manifest fallback were asserted on a LOOSE file importing a sibling directory — every one of which now fails for a reason unrelated to `source` | re-homed onto a project with a path dependency. The broken-manifest case **inverts**: an unparseable manifest costs a package its *name*, so it cannot be imported — while a file that does not import it still checks (the editor-leniency half) |
+| `check-query` M4.7 | completed `module shapes` for a sibling FILE | a **reject**: a file is not a module, and completing a name that cannot resolve is the worst kind of completion |
+| `check-query` M3.5 | *"app.kama is invisible to a query on widget.kama"* — true only because widget declared a namespace and app did not. **A module is a folder**, so they are one module and each sees the other | the fixture gained `src/parts/`, a second module. A member-file query sees its own folder; `--project` reaches the other module |
+| `check-runtime-dir` | asserted a manifest-less payload merely derived no module | it cannot resolve `import std::…` **at all** — the real reason `release.yml` must stage `lib/kama.json` |
 
-⚠️ §2i.40 cites `tests/xfail/mod_collision.kama` for the first of these. **That file no longer exists** —
-2b turned it into `tests/xfail/mod_collision.d/`. Use the reproduction above instead.
+And three that simply moved to the §2i spelling: `check-build-jobs` (sixteen flat `src/wN.kama` reached
+by the file-module rule → one module per directory, every file named), `check-diag-file` (each imported
+module's file passed as an operand), `check-self-import` (the project spelling, plus a loose build that
+names every source).
 
-**The corpus population 2d changes is nearly empty, and that is 2b's doing.** Of the tracked `.kama`
-files importing a non-`std`/`core` module, **every positive one is already inside a project**; the only
-five that are not are all `tests/xfail/`, and the `.d` ones already hand every file to one build
-([run_tests.sh:626](../../run_tests.sh)), which is exactly what §2i asks for:
+**New coverage, because the campaign should not have taken it on trust:** a file importing another
+**module of its own project** analyzes clean in the **server** — measured over real JSON-RPC in
+`check-lsp`, empty diagnostics — while the same file as a loose `kama check` operand cannot resolve it.
+The second half is the negative control; without it the first proves nothing. This is the asymmetry
+§2g.35 designed: the CLI takes the operand at its word, the editor walks.
 
-```
-tests/xfail/mod_collision.d/main.kama · mod_export_private.d/main.kama · mod_missing.kama
-tests/xfail/pkg_undeclared_import.kama · scoped_bound_wrong_contract.d/main.kama
-```
+**What 2e inherits from here** — each measured, none predicted:
 
-**The guards are where the work is, and each one's need is now derived rather than guessed:**
+1. **`kama check <one member file>` still half-works, through the declaration rung.** `a.kama` declaring
+   `namespace my::mod` checks clean alone: the declaration names it and the same-directory sibling scan
+   pulls its module's other files. A file that declares **nothing** already fails today (`cannot resolve
+   module 'my::mod'`), which is what `check-self-import` asserts. 2e is when the first case joins it.
+2. **The sibling scan is the one disk read left in a loose build**, and it was deliberately kept: it is
+   bounded to the operand's own directory and can only pull files that derive the *same* module as
+   something you named, so it cannot change a module's NAME. It is also what `lspAnalyze` (which passes
+   ONE file) rests on. Whether §2i should forbid it is a 2e question, not a 2d one.
+3. **`tests/query` holds five programs in one directory, two of them declaring `main`.** They stay apart
+   today only because each declares its own namespace. After 2e they are one module by definition and
+   have to become five directories. The warning is written beside the sibling scan in the driver.
+4. `check-argv-env` and `check-panic-multitu` are **still** 2e's, unchanged and green: both pass two
+   operands from one directory, so their files are in the loose ROOT and §2e.27 will make them
+   unimportable — `lib.kama` moves into a subdirectory then.
+5. A project's entry file now HAS a module (its root), so an editor session on `src/app.kama` loads its
+   folder's other files. That is what a module means; it is noted because it is a behaviour change nobody
+   asked for and nothing failed on.
 
-| guard | how it invokes | what 2d/2e owes it |
+#### ►► 2e — the ground, re-derived at `0.9.69`
+
+2d added ~150 lines to `kama.driver.cpp`, so every line reference phase 2e is written in terms of has
+moved again. **Re-resolved and re-read at HEAD, not recalled** — this is the fourth time a phase has
+opened on stale numbers, and the third time the table below was the fix.
+
+| what | where |
+|---|---|
+| `moduleKeyOf` — the rung order 2e edits (derived → **declared** → nothing) | [driver:1078](../../src/kama.driver.cpp) |
+| `unitNsKey` — what the declaration rung reads; the probe's other column | [driver:629](../../src/kama.driver.cpp) |
+| `ctxOf`'s declaration rung and its `_F<idx>` arm | [cemit:284](../../src/kama.cemit.cpp), `_F` at [:295](../../src/kama.cemit.cpp) |
+| the sibling scan (same directory, same module) | [driver:1239](../../src/kama.driver.cpp) |
+| the loose root + `looseModuleFor` | [driver:1032](../../src/kama.driver.cpp), [:1059](../../src/kama.driver.cpp) |
+| `moduleIdForFile` · `resolveModuleFiles` · `reportUnresolvedModule` | [driver:3148](../../src/kama.driver.cpp) · [:3232](../../src/kama.driver.cpp) · [:3253](../../src/kama.driver.cpp) |
+| `bail("mixed namespaces")` — **a premise to re-derive, not a string to edit** | [driver:721](../../src/kama.driver.cpp) |
+| the `_N` on generated `.c` filenames — load-bearing until path-derived (phase 4) | [driver:8824](../../src/kama.driver.cpp) |
+| `mangleNs` · `demangleForDisplay` · `packageSourceFiles` | [cemit:256](../../src/kama.cemit.cpp) · [cemit:108](../../src/kama.cemit.cpp) · [driver:476](../../src/kama.driver.cpp) |
+
+⚠️ **`main` escapes scoping in TWO places**, and fixing only the declaration site leaves every CALL
+resolving to the old symbol: `qualify()` [cemit:334](../../src/kama.cemit.cpp) and `resolveFuncImpl`
+[cemit:1934](../../src/kama.cemit.cpp) carry the identical `if (name == "main") return "kama_main";`.
+
+**Deleting `namespace` strands the word wherever the compiler says it out loud** — swept again at HEAD,
+four sites and one premise:
+
+| site | today | after |
 |---|---|---|
-| `check-argv-env` [:96](../../tools/check-argv-env.sh), `check-panic-multitu` [:45](../../tools/check-panic-multitu.sh) | **already passes both operands** — §2i-compatible today | not 2d. **2e**: both files sit in one directory, so the loose root holds them and §2e.27 makes their symbols **unimportable** — `import Lib::{boom}` stops resolving. Move `lib.kama` into a subdirectory so it derives a module name |
-| `check-self-import` [:65](../../tools/check-self-import.sh), [:83](../../tools/check-self-import.sh) | ONE operand, relies on the search | its whole subject is checking one member file standalone. It needs a `kama.json`, or the assertion has to become "and this is why it is invalid" |
-| `check-diag-file` [:57](../../tools/check-diag-file.sh) + four more | ONE operand each, relies on the search | pass every file, or give the tree a manifest |
-| `check-closure-pruning` | drives `--each` and single-file checks | not deferred, but it is the guard that would catch the `homogeneous` premise moving — see the `bail` note above |
+| [cemit:2966](../../src/kama.cemit.cpp) | ``` `::` resolves namespaces and types ``` | *modules* and types |
+| [cemit:17433](../../src/kama.cemit.cpp) | ``` scope resolution (static functions, enum variants, namespaces) ``` | … *modules* |
+| [cemit:5940](../../src/kama.cemit.cpp) | *"name may be declared only once in its namespace"* | **splits in two** — see phase 3 |
+| [query.cpp:103](../../src/kama.query.cpp) | `CompletionKind::Namespace` prints `"namespace"` | `"module"` — which merely makes the two front ends **agree**, since [lsp.cpp:337](../../src/kama.lsp.cpp) already maps that kind to LSP `Module` (9) |
+| [driver:721](../../src/kama.driver.cpp) | `bail("mixed namespaces")` | the closure's premise is that a package is namespace-homogeneous, which this model makes **false by design**: one `source` holds many modules on purpose. Key it on **module** — `ModuleIndex` already computes that key through `moduleKeyOf` |
 
-**Exact counts, re-measured** (an earlier note said "~51 · check-packages 21 · check-lsp 15 ·
-check-manifest 6"; that was counting the **word** *namespace* — 107 occurrences across `tools/` — not
-declarations):
+**The population, re-counted at HEAD:** **91** tracked `.kama` declare a `namespace` — 80 inside a
+project, verified per file by `check-modules` §2, and **11** with no project above them. **All 91 go
+together**, never piecemeal: 2b broke the seed template by deleting one early, and a file with no
+`namespace` is file-private with an INERT `export` until identity replaces it.
 
-- **91** tracked `.kama` files declare a `namespace` — unchanged, and the figure §5 phase 2 uses.
-- **17** declarations live in guard heredocs, across **7** guards: `check-packages` 5 · `check-diag-file`
-  3 · `check-lsp` 3 · `check-self-import` 3 · `check-argv-env` 1 · `check-panic-multitu` 1 ·
-  `check-query` 1. **`check-manifest` has none.**
+⚠️ **And the guard heredocs are `52`, not `17`.** This doc has carried three different figures and the
+correction was itself wrong: "~51" was dismissed on 2026-08-23 as having counted the *word* (107
+occurrences of *namespace* across `tools/`) and replaced with "17 across 7 guards, check-manifest has 0".
+Counting the actual declaration — `grep -oE "namespace [A-Za-z_][A-Za-z0-9_:]*;"` — gives **52 across 9
+guards**, which is what "~51" had been all along:
 
-**Line references corrected against HEAD** (`0.9.65`). The ones phase 2d/2e are written in terms of:
+| | | | | |
+|---|---|---|---|---|
+| `check-packages` **21** | `check-lsp` **15** | `check-manifest` **5** | `check-self-import` **4** | `check-diag-file` **3** |
+| `check-argv-env` **1** | `check-panic-multitu` **1** | `check-query` **1** | `check-seed` **1** | |
 
-| what | was | **now** |
-|---|---|---|
-| `resolveModuleFiles` (the file-module) | :611 | **:603**, file arm at **:611** |
-| `unitNsKey` call sites — the resolution still keyed on the declaration | :692 · :1107 · :1117 · :1257 | :692 · **:1126** · **:1136** · **:1276** |
-| `here = dirName(paths[i])` — the loose search root | :1108 | **:1144**, pushed at **:1170** |
-| `providedWhole` / `std::memory` | :1048 | **:1075**, and 2b already re-derived it |
-| `projectManifestDir` | :934 | **:958** |
-| the `_N` on generated `.c` filenames | :7968 | **:8532** |
-| `ctxOf`'s `_F<idx>` arm | :272 | **:295** |
-| `main` escapes scoping — `qualify` · `resolveFuncImpl` | :311 · :1911 | **:334** · **:1934** |
-| stranded *namespace*: `::` resolves… · "only once in its namespace" | :2943 · :5917 | **:2966** · **:5940** |
-| stranded *namespace*: "scope resolution (… namespaces)" | :17410 | **gone** — reworded already; the live ones are :17363/:17423/:17432 and none says *namespace* |
-
-Unmoved and still exact: `packageSourceFiles` :476 · `unitNsKey` :633 · `bail("mixed namespaces")` :725 ·
-`mangleNs` :256 · `demangleForDisplay` :108 · `query.cpp` `CompletionKind::Namespace` :103.
-
-✅ **Done in 2b, and re-checked here so nobody re-opens it:** `.github/workflows/release.yml` staged the
-stdlib as `cp -R lib/std payload/lib/kama/std` — the directory only, which would have shipped a stdlib no
-`import std::…` could resolve while every local leg stayed green. Both sites now `cp lib/kama.json` first
-([:76](../../.github/workflows/release.yml), [:151](../../.github/workflows/release.yml)).
-
-> **Deleting `namespace` strands the word wherever the compiler says it out loud.** Swept, so the list is
-> not re-derived — five sites, and one of them is not a wording change:
->
-> | site | today | after |
-> |---|---|---|
-> | [cemit:2943](../../src/kama.cemit.cpp) | ``` `::` resolves namespaces and types ``` | *modules* and types |
-> | [cemit:17410](../../src/kama.cemit.cpp) | ``` `::` is scope resolution (static functions, enum variants, namespaces) ``` | … *modules* |
-> | [cemit:5917](../../src/kama.cemit.cpp) | *"only once in its namespace"* | **splits in two** — see phase 3 |
-> | [query.cpp:103](../../src/kama.query.cpp) | `CompletionKind::Namespace` prints `"namespace"` | `"module"` — and this merely makes the two front ends **agree**, since [lsp.cpp:337](../../src/kama.lsp.cpp) already maps that kind to LSP `Module` (9) |
-> | [driver:725](../../src/kama.driver.cpp) | `bail("mixed namespaces")` | **a premise to re-derive, not a string to edit** |
->
-> That last one matters. The closure-pruning path bails when a package's files are not namespace-homogeneous,
-> because *"a package manifest's `sources` can span several directories and namespaces … which breaks the
-> shared-namespace premise the reference closure rests on. No fixture exhibits it today, which is exactly why
-> it would land silently later."* Under this model that premise is simply false by design: one `source` holds
-> many modules on purpose. `source` becoming singular (§2a.4) removes half the hazard it was guarding; what
-> the closure actually needs is to key on **module**, not on a single namespace for the whole package.
-> Re-derive it here rather than renaming the bail.
-
-> ⚠️ **`main` escapes scoping in TWO places, not one.** `qualify()`
-> ([cemit:311](../../src/kama.cemit.cpp)) is the one §1c names; `resolveFuncImpl`
-> ([cemit:1911](../../src/kama.cemit.cpp)) carries the identical `if (name == "main") return "kama_main";`
-> for the CALL side. Found while re-verifying this doc's line references on 2026-08-22 — fixing only the
-> declaration site would leave every call to `main` resolving to the old symbol.
-
-> ⚠️ **A project's files resolve only in PROJECT mode once §2i lands, and the diagnostic has to say so.**
-> Measured 2026-08-23 on a project whose `src/app.kama` imports its own `probe::thing`:
->
-> | invocation | today | after the `namespace` deletion |
-> |---|---|---|
-> | `kama check src/app.kama` | `cannot resolve module` | same |
-> | `kama check src/app.kama src/thing/t.kama` | **OK** — the declaration registers `probe::thing` | **fails**: loose derivation names that file `thing`, not `probe::thing` |
-> | `kama check kama.json` | OK | OK |
->
-> The middle row is the one that changes, and it is **correct by design** rather than a defect: a
-> project's units come from its manifest, a loose build's come from the CLI, and the two never cross
-> (§2i). A project-qualified `import` names a project, and in loose mode there is no project to name. So
-> the rule stays; what must change is the MESSAGE. `cannot resolve module 'probe::thing'` should say that
-> this file sits under project `probe` and name its manifest — the same class of repair as §1c's
-> duplicate-`main` diagnostic, where the behavior was right and only the wording blamed the wrong rule.
->
-> Note an asymmetry that already exists and is fine: `kama lsp` keeps the `projectManifestDir` walk
-> (§5/1c), so an editor finds the project without being told; the CLI takes the operand at its word.
->
-> Four guards turn on this and were left for 2d rather than edited blind against behavior that does not
-> exist yet: `check-self-import.sh` (its whole subject is checking ONE member file standalone),
-> `check-diag-file.sh`, `check-argv-env.sh`, `check-panic-multitu.sh`. All green today.
+That is a third of 2e's real work sitting in the guards, four times the size the last estimate implied.
+The lesson is the house rule pointed at a number: **run the count, print the matches, and read them** —
+both wrong figures came from a regex nobody looked at the output of.
 
 **3 — visibility.** One import block, one export block (single form; `export { }` stays a syntax error),
 and required `visibility` per node — list or keyword — enforced as §2c's composition table. **No `to`
