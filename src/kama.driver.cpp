@@ -8639,6 +8639,17 @@ int main(int argc, char** argv)
         //
         // With EXIT_RUNTIME the main thread calls process.exit() and never enters that teardown path at
         // all: 0/300 against 40/300 for the same program built without it, same load, same session.
+        //
+        // Checked for fallout on the wasm SURFACE, since that is what this could cost: the module's
+        // exports are a strict SUPERSET afterwards (`__funcs_on_exit` and `strerror` arrive with the
+        // atexit machinery, nothing leaves), an `expose`d function is still a real wasm export, and an
+        // embedder that instantiates the .wasm directly never runs `main` so none of this reaches it.
+        //
+        // ⚠️ It DOES constrain one thing that does not exist yet. When kama grows a module/embedding
+        // artifact — the richer wasm exports and scripting-host interface of ROADMAP §7 — a module must
+        // keep its runtime alive after `main`, so this has to become conditional again. Key it on the
+        // artifact KIND (program vs module), which is the honest axis, and not on which library the
+        // program happens to use, which is what it was keyed on before and why it was wrong here.
         if (wasm) cmd << "-sEXIT_RUNTIME=1 ";
         // ---- The command is three pieces, not one: the compile flags above (`cmd`), the INPUTS
         // (`ccInputs`), and the link tail (`link`). A single invocation is exactly
