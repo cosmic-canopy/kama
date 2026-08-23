@@ -6,6 +6,9 @@
 #                 "heap allocation ... is forbidden" diagnostic (the right error, not any failure).
 #   2. CONTROL  — the SAME program builds fine WITHOUT `--no-heap` (so the flag is what rejects it).
 #   3. COMPOSES — `--no-heap` composes with `--target embedded` (independent axes) and still rejects.
+#   4. MANIFEST  — a project says it once as a `no-heap` key instead of remembering the flag every time,
+#      and a target may say "not this one". The key is what makes the rule reliable: the FLAG fails
+#      silently when forgotten — the build simply succeeds with allocation allowed.
 # `@noheap` (the per-region attribute) is exercised by tests/xfail/noheap_* instead. Fails (exit 1) with a
 # diagnostic if any property breaks. Run standalone or from run_tests.sh.
 set -eu
@@ -46,6 +49,44 @@ fi
 if ! grep -qF "heap allocation (new) is forbidden" "$tmp/emb.err"; then
     echo "check-noheap: FAIL — '--no-heap --target embedded' rejected without the no-heap diagnostic:" >&2
     sed 's/^/  /' "$tmp/emb.err" >&2; exit 1
+fi
+
+# 4. THE MANIFEST KEY — the same rejection with no flag on the command line at all.
+proj="$tmp/proj"; mkdir -p "$proj/src"
+cp "$src" "$proj/src/app.kama"
+cat > "$proj/kama.json" <<'JSON'
+{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": true }
+JSON
+if "$KAMA" build "$proj/kama.json" -o "$tmp/m.out" >/dev/null 2>"$tmp/m.err"; then
+    echo "check-noheap: FAIL — the manifest's \`no-heap\` did not reject a 'new'" >&2; exit 1
+fi
+if ! grep -qF "heap allocation (new) is forbidden" "$tmp/m.err"; then
+    echo "check-noheap: FAIL — the manifest key rejected, but not with the no-heap diagnostic:" >&2
+    sed 's/^/  /' "$tmp/m.err" >&2; exit 1
+fi
+
+# 4b. ...and a TARGET overrides it wholesale, which is the per-target exception the key exists to allow:
+#     no heap on the board, a heap on the host that builds the tooling.
+cat > "$proj/kama.json" <<'JSON'
+{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": true,
+  "select": { "TARGET": { "HOST": { "no-heap": false } } } }
+JSON
+if ! "$KAMA" build "$proj/kama.json" -o "$tmp/m2.out" >/dev/null 2>"$tmp/m2.err"; then
+    echo "check-noheap: FAIL — a target's \`no-heap\`: false did not override the project's:" >&2
+    sed 's/^/  /' "$tmp/m2.err" >&2; exit 1
+fi
+
+# 4c. The value set is CLOSED, checked in the reader — a typo must not read as some truthiness nobody
+#     wrote down. This is the same rule `kind` gets, and for the same reason.
+cat > "$proj/kama.json" <<'JSON'
+{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": "yes" }
+JSON
+if "$KAMA" build "$proj/kama.json" -o "$tmp/m3.out" >/dev/null 2>"$tmp/m3.err"; then
+    echo "check-noheap: FAIL — a non-boolean \`no-heap\` was accepted" >&2; exit 1
+fi
+if ! grep -qF 'expected `true` or `false`' "$tmp/m3.err"; then
+    echo "check-noheap: FAIL — a non-boolean \`no-heap\` failed without naming the value problem:" >&2
+    sed 's/^/  /' "$tmp/m3.err" >&2; exit 1
 fi
 
 # 4. STDLIB OPT-OUT — `--no-heap` contributes a `NOHEAP` flag, which the stdlib uses to DROP the
@@ -89,4 +130,4 @@ if ! "$KAMA" build "$badsrc" -o "$tmp/f.out" >/dev/null 2>"$tmp/stc.err"; then
     sed 's/^/  /' "$tmp/stc.err" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort)"
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean)"

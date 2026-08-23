@@ -1503,6 +1503,15 @@ struct TargetSpec {
     // a project needing `-lm` everywhere says it once instead of per target.
     std::vector<std::string> link;
     bool                     linkSet = false;   // this target OVERRODE `link` (vs. inheriting the project's)
+    // Two PROJECT properties a target may override, same shape as `link` and for the same reason: both
+    // are permanent facts about the artifact rather than per-invocation choices, and both have a real
+    // per-target exception — `no-heap` on EMBEDDED but not on HOST is the ordinary case, and a WASM
+    // build gets WebGPU from the browser rather than from the wgpu-native SDK.
+    //
+    // `no-heap` is the one that most needed a home: it fails SILENTLY when forgotten. The build simply
+    // succeeds with allocation allowed, so a bare-metal target quietly gains a heap nobody asked for.
+    bool webgpu = false,  webgpuSet = false;
+    bool noHeap = false,  noHeapSet = false;
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
@@ -1630,6 +1639,7 @@ static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).
 static std::vector<std::string> g_manifestLink;
+static bool g_manifestWebgpu = false, g_manifestNoHeap = false;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
 // own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
@@ -1696,7 +1706,9 @@ static bool resolveTarget(const std::string& selRaw,
         if (!u.runtime.empty()) out.runtime = u.runtime;
         out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
         out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
-        if (u.linkSet) { out.link = u.link; out.linkSet = true; }   // replace, per the note in the reader
+        if (u.linkSet)   { out.link   = u.link;   out.linkSet   = true; }   // replace, per the note in the reader
+        if (u.webgpuSet) { out.webgpu = u.webgpu; out.webgpuSet = true; }
+        if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
         if (out.arch.empty() || out.os.empty()) {
             err = "target '" + sel + "' declares no `triple` and is not a built-in";
             return false;
@@ -2034,6 +2046,8 @@ struct ManifestReader {
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
+    bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
+    bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
     // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
     // rather than a second one. `projects` there is a MAP whose every entry states `optional`, and the
     // only other legal key is `dependencies` — so the mode is a flag, not a sink, because it changes
@@ -2262,6 +2276,8 @@ struct ManifestReader {
                 // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
                 // over; the two have always differed and the difference is deliberate.
                 else if (k == "link")    { if (!stringArray(t.link)) return false; t.linkSet = true; }
+                else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
+                else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
                 // builds for one target declares it once instead of retyping `--target`, and the editor
                 // can then analyze for it too. `--target` still wins.
@@ -2515,6 +2531,11 @@ struct ManifestReader {
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
             else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut)) return false; } else if (!skipValue()) return false; }
+            // Booleans are VALIDATED here rather than only where they are consumed, for the same reason
+            // `kind` is: the value set is closed, so `"no-heap": "yes"` must be refused by name rather
+            // than read as some truthiness nobody wrote down.
+            else if (key == "webgpu")  { bool b = false; if (!boolean(b)) return false; if (webgpuOut) *webgpuOut = b; }
+            else if (key == "no-heap") { bool b = false; if (!boolean(b)) return false; if (noHeapOut) *noHeapOut = b; }
             // Moved out, not dropped. A monorepo root carrying `projects` was a manifest that looked like
             // a project while being an aggregator with no `kind`, no `source`, no namespace and no
             // artifact — the one shape every other rule here needed an exemption for. The workspace is a
@@ -2694,6 +2715,18 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
 
 // Load a `kama.json` manifest's project-level `link` — the native libraries this artifact links, as bare
 // names (`["m"]` -> `-lm`). Left empty if absent. Returns false + `err` on malformed JSON.
+static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap, std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { err = "cannot open '" + path + "'"; return false; }
+    std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::set<std::string> declared, defaults;   // unused here
+    ManifestReader r(src, declared, defaults);
+    r.webgpuOut = &webgpu; r.noHeapOut = &noHeap;
+    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
+    return true;
+}
+
 static bool loadManifestLink(const std::string& path, std::vector<std::string>& out, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
@@ -2869,6 +2902,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_manifestLink.clear();
+    g_manifestWebgpu = false; g_manifestNoHeap = false;
     g_strictFlags = false;
     g_logDefault.clear();
     g_target  = TargetSpec();
@@ -2927,6 +2961,10 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one
         // — the target key exists only to say "not this one" / "something else here".
         if (!loadManifestLink(manifest, g_manifestLink, err)) { err = manifest + ": " + err; return false; }
+        // Same shape and the same place as `link`: project properties a target may then override.
+        if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap, err)) {
+            err = manifest + ": " + err; return false;
+        }
 
         if (!loadManifestFlags(manifest, declared, defaults, err)) { err = manifest + ": " + err; return false; }
         if (!reservedFlagCheck(manifest, declared, err)) return false;
@@ -3023,7 +3061,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // cross build needs no config file.
     if (!resolveTarget(selTarget, g_manifestTargets, g_target, err)) return false;
     // The project's `link` applies to every target that did not override it.
-    if (!g_target.linkSet) g_target.link = g_manifestLink;
+    if (!g_target.linkSet)   g_target.link   = g_manifestLink;
+    if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
+    if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
+    // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
+    // the way to say "not this one". `--no-heap` therefore ORs in rather than overriding.
+    if (g_target.noHeap) g_noHeap = true;
 
     // Build the active `@compileFor` flag set (the "structure" axis — reproducible, from the explicit
     // build invocation, never ambient env). The selected target contributes its NAME plus one flag per
@@ -5564,6 +5607,7 @@ void usage()
         "                  (--target: HOST|MACOS|WINDOWS|LINUX|WASM|EMBEDDED, a kama.json `select.TARGET`\n"
         "                   entry, or a bare <arch>-<os>-<abi> triple such as aarch64-linux-gnu)\n"
         "                             [--no-heap] [--link <lib>]... [--webgpu] [--cc <compiler>] [--no-line] [--keep-c] [--dev]\n"
+        "                              (`no-heap`, `link` and `webgpu` are also kama.json keys, per-target overridable)\n"
         "                             [-j|--jobs <n>]   concurrent C compiles (default: core count)\n"
         "                             [--dynamic-runtime]  link the runtime as a DLL instead of statically.\n"
         "                              Windows only in effect (elsewhere libc IS the system, so there is no\n"
@@ -7114,6 +7158,10 @@ int main(int argc, char** argv)
         if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: %s\n", cerr.c_str()); return 2; }
     }
     release = bcfg.release;
+    // The manifest's `webgpu`, resolved through the same project -> target precedence as `link`.
+    // `g_noHeap` was folded in inside resolveBuildConfig, because the NOHEAP `@compileFor` flag is
+    // installed there and a value applied after that would be invisible to conditional compilation.
+    if (g_target.webgpu) webgpu = true;
 
     // ---- a project operand names the project's OWN source files ------------------------------------
     // AFTER resolveBuildConfig, deliberately: that is where every manifest diagnostic lives — a missing

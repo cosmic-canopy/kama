@@ -275,6 +275,48 @@ printf '%s' "$tail_out" | grep -qE -- '-lm( |$)' \
     || { bad "a silent target lost the project's \`link\`"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: \`webgpu\` is a project property, not a flag to remember"
+
+# The other half of the CLI/manifest gap `link` closed. Both are permanent facts about the artifact
+# rather than per-invocation choices, and `webgpu` is a LINKING decision — the class `link` just gained a
+# key for. (`no-heap`, the third, is asserted in tools/check-noheap.sh beside the flag it mirrors.)
+#
+# Asserted through the SDK-absent error rather than a real WebGPU build: pointing KAMA_WGPU_DIR at
+# nothing makes "the key reached the build" observable on a machine with no wgpu-native drop, which is
+# every machine that has not run tools/fetch-webgpu.sh.
+mkdir -p "$tmp/wg/src"
+printf 'fn int32 main() { return 7; }\n' > "$tmp/wg/src/app.kama"
+cat > "$tmp/wg/kama.json" <<'JSON'
+{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true }
+JSON
+if KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e"; then
+    bad "the manifest's \`webgpu\` did not reach the build"
+elif grep -qF "needs the wgpu-native SDK" "$tmp/e"; then
+    ok "a project's \`webgpu\` reaches the build without the flag"
+else
+    bad "\`webgpu\` failed for some other reason"; head -2 "$tmp/e" >&2
+fi
+
+# The control, and it is the one that matters: without the key the SAME build succeeds, so the assertion
+# above is about `webgpu` and not about KAMA_WGPU_DIR being unset.
+cat > "$tmp/wg/kama.json" <<'JSON'
+{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+JSON
+KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e" \
+    && ok "...and without it the same build is unaffected" \
+    || { bad "the control build failed"; head -2 "$tmp/e" >&2; }
+
+# A target overrides it wholesale, the same as `link` — a WASM build gets WebGPU from the browser and
+# wants no native SDK at all.
+cat > "$tmp/wg/kama.json" <<'JSON'
+{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true,
+  "select": { "TARGET": { "HOST": { "webgpu": false } } } }
+JSON
+KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e" \
+    && ok "a target's \`webgpu\`: false overrides the project's" \
+    || { bad "a target could not turn \`webgpu\` off"; head -2 "$tmp/e" >&2; }
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-manifest: projects do not nest"
 
 proj nest <<'JSON'
