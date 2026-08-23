@@ -594,13 +594,32 @@ done
 # access control, and use-after-move). Optional tests/xfail/<name>.msg holds a substring
 # the compiler's error output must contain, so we assert the RIGHT error, not any failure.
 #
+# A fixture may also be a DIRECTORY, tests/xfail/<name>.d/, whose every .kama is passed to one build and
+# whose message lives in `msg` beside them — the same shape tests/<name>.d/ uses for the positive leg.
+# Some rejections need more than one file to be reachable at all: an import collision needs two modules
+# to collide, and "does not export" needs a module that exists and declines to export the name. Those
+# used to be spelled as one loose file importing sibling DIRECTORIES, which worked only because a loose
+# build searched the filesystem — the behavior design/module-system.md §2i removes. Passing every source
+# is the rule now, so the fixture has to be able to say what its sources are.
+#
 # Fanned out across NCPU like the single-file leg, and for the same reason: each fixture is an independent
 # `kama build` into its own $TMP files. Serial, this leg was ~325 compiler processes run one at a time.
 xfail_one() {
     local src="$1" name out res err rc msg_file
-    name="${src##*/}"; name="${name%.kama}"
+    name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
-    "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+    # One file, or every file of a .d directory. `sort` because the build's unit ORDER is observable
+    # (today through _F<n>, and a diagnostic naming "the first declaration" picks by it), so a fixture
+    # must not depend on whatever order the filesystem hands back.
+    if [ -d "$src" ]; then
+        local srcs; srcs=$(find "$src" -name '*.kama' | sort)
+        msg_file="$src/msg"
+        # shellcheck disable=SC2086
+        "$KAMA" build $srcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+    else
+        msg_file="$TESTS_DIR/xfail/$name.msg"
+        "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+    fi
     if [ "$rc" -eq 0 ]; then
         echo "FAIL xfail/$name (compiled, but must be REJECTED)" >"$out"; echo FAIL >"$res"; return
     fi
@@ -611,7 +630,6 @@ xfail_one() {
         { echo "FAIL xfail/$name (compiler CRASHED, signal $((rc-128)) — a rejection must be clean, not a crash)"
           head -2 "$err"; } >"$out"; echo FAIL >"$res"; return
     fi
-    msg_file="$TESTS_DIR/xfail/$name.msg"
     if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$err"; then
         { echo "FAIL xfail/$name (rejected, but error missing \"$(cat "$msg_file")\")"; head -2 "$err"; } >"$out"
         echo FAIL >"$res"; return
@@ -621,7 +639,7 @@ xfail_one() {
 phase_end
 phase_start "xfail fixtures"
 xfail_pids=()
-for src in "$TESTS_DIR"/xfail/*.kama; do
+for src in "$TESTS_DIR"/xfail/*.kama "$TESTS_DIR"/xfail/*.d; do
     [ -e "$src" ] || continue
     spawn xfail_one "$src"
     xfail_pids+=($!)
@@ -629,9 +647,9 @@ done
 if [ ${#xfail_pids[@]} -gt 0 ]; then wait "${xfail_pids[@]}" 2>/dev/null; fi
 phase_end
 # Tally in fixture order, so output is identical to the serial version regardless of completion order.
-for src in "$TESTS_DIR"/xfail/*.kama; do
+for src in "$TESTS_DIR"/xfail/*.kama "$TESTS_DIR"/xfail/*.d; do
     [ -e "$src" ] || continue
-    name="${src##*/}"; name="${name%.kama}"
+    name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     [ -f "$TMP/xf_$name.out" ] && cat "$TMP/xf_$name.out"
     if [ "$(cat "$TMP/xf_$name.res" 2>/dev/null)" = "PASS" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
@@ -787,6 +805,10 @@ for src in "$TESTS_DIR"/*.kama; do
     ck_pos=$((ck_pos+1))
     echo "$src" >>"$TMP/ck_pos.list"
 done
+# Single-file fixtures only. A tests/xfail/<name>.d/ fixture is one build over SEVERAL files, and this
+# leg checks each file independently — the rejection it asserts (a collision between two modules, a
+# module declining to export) exists only in the combined build, so feeding its files in one at a time
+# would assert nothing and report a confident pass. The .d fixtures are covered by the leg above.
 for src in "$TESTS_DIR"/xfail/*.kama; do
     [ -e "$src" ] || continue
     name="${src##*/}"; name="${name%.kama}"
