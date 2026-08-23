@@ -104,8 +104,11 @@ alines=$(grep -c '' "$ROOT/agents/AGENTS.md")
 # ---------------------------------------------------------------------------------------------------
 echo "check-agents: install"
 
-proj="$tmp/proj"; mkdir -p "$proj"
-"$KAMA" agents install "$proj" --all-tools --skill >/dev/null 2>&1 \
+# `agents install` names the project it writes into — the operand rule reaches every command that acts
+# ON a project, not just the ones that build. So each fixture here is a real project.
+mkproj() { mkdir -p "$1"; printf '{ "name": "%s", "version": "0.1.0", "kind": "library" }\n' "$2" > "$1/kama.json"; }
+proj="$tmp/proj"; mkproj "$proj" agentsproj
+"$KAMA" agents install "$proj/kama.json" --all-tools --skill >/dev/null 2>&1 \
     || bad "\`agents install --all-tools --skill\` failed"
 [ -f "$proj/AGENTS.md" ] && ok "install writes AGENTS.md" || bad "install did not write AGENTS.md"
 # The Claude pointer is a real import, which is the documented way to avoid duplicating the content.
@@ -123,25 +126,25 @@ done
                                             || bad "install --skill wrote no skill"
 
 # Writing into somebody's repository must not clobber.
-if "$KAMA" agents install "$proj" >/dev/null 2>&1; then
+if "$KAMA" agents install "$proj/kama.json" >/dev/null 2>&1; then
     bad "a second install overwrote existing files without --force"
 else
     ok "install refuses to overwrite without --force"
 fi
-"$KAMA" agents install "$proj" --force >/dev/null 2>&1 && ok "--force overwrites" || bad "--force failed"
+"$KAMA" agents install "$proj/kama.json" --force >/dev/null 2>&1 && ok "--force overwrites" || bad "--force failed"
 
 # A bad argument must write NOTHING — a typo used to leave a half-installed tree behind an exit 2.
-fresh="$tmp/fresh"
-"$KAMA" agents install "$fresh" --tool nosuchtool >/dev/null 2>&1 || true
-[ -e "$fresh" ] && bad "an unknown --tool still created $fresh" \
-                || ok "an unknown --tool writes nothing at all"
+fresh="$tmp/fresh"; mkproj "$fresh" freshproj
+"$KAMA" agents install "$fresh/kama.json" --tool nosuchtool >/dev/null 2>&1 || true
+[ -e "$fresh/AGENTS.md" ] && bad "an unknown --tool still wrote AGENTS.md" \
+                          || ok "an unknown --tool writes nothing at all"
 
 # Neither may a COLLISION write anything. The name check above has always been up front, but the file
 # check used to happen per file AS IT WROTE: someone who already had a CLAUDE.md got a brand-new
 # AGENTS.md dropped in their repo and then an exit 1 — a half-install with no bad argument in sight.
-coll="$tmp/collide"; mkdir -p "$coll"
+coll="$tmp/collide"; mkproj "$coll" collide
 printf 'mine\n' > "$coll/CLAUDE.md"
-"$KAMA" agents install "$coll" --claude >/dev/null 2>&1 || true
+"$KAMA" agents install "$coll/kama.json" --claude >/dev/null 2>&1 || true
 [ -f "$coll/AGENTS.md" ] && bad "a colliding install still wrote AGENTS.md" \
                          || ok "a colliding install writes nothing at all"
 [ "$(cat "$coll/CLAUDE.md")" = "mine" ] || bad "a refused install modified the existing file"

@@ -150,7 +150,7 @@ grep -qi "not installed" "$tmp/out" && grep -q "toolchain install" "$tmp/out" \
 # ---- 6. `toolchain pin` writes the manifest; `uninstall` guards the default ---------------------------
 mkdir -p "$tmp/proj"
 printf '{ "name": "proj", "version": "0.1.0", "kind": "executable" }\n' > "$tmp/proj/kama.json"
-run sh -c "cd '$tmp/proj' && '$KAMA' toolchain pin vA"
+run sh -c "cd '$tmp/proj' && '$KAMA' toolchain pin vA kama.json"
 [ "$RC" = 0 ] || fail "toolchain pin errored"
 grep -q '"toolchain": "vA"' "$tmp/proj/kama.json" || fail "toolchain pin did not write the manifest"
 run "$KAMA" toolchain uninstall vB             # vB is the current default → must refuse

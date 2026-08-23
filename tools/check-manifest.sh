@@ -333,7 +333,7 @@ mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from 
 # The workspace must be REFUSED by install, non-zero, with the error naming $1.
 wsreject() {
     want="$1"; what="$2"
-    if "$KAMA" pkg install "$ws/libs/app" >"$tmp/o" 2>"$tmp/e"; then
+    if "$KAMA" pkg install "$ws/libs/app/kama.json" >"$tmp/o" 2>"$tmp/e"; then
         bad "$what — accepted, but must be REJECTED"; return
     fi
     grep -qF "$want" "$tmp/e" \
@@ -344,7 +344,7 @@ wsreject() {
 # Silence is the claim for every `optional: true` rule below, so each has one of these.
 wsaccept() {
     what="$1"
-    "$KAMA" pkg install "$ws/libs/app" >"$tmp/o" 2>"$tmp/e" \
+    "$KAMA" pkg install "$ws/libs/app/kama.json" >"$tmp/o" 2>"$tmp/e" \
         && ok "$what" || { bad "$what — rejected, but must be accepted"; head -3 "$tmp/e" >&2; }
 }
 

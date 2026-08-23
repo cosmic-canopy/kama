@@ -540,7 +540,7 @@ multi_one() {
     if [ -f "$dir/kama.json" ] && grep -q '"dependencies"' "$dir/kama.json"; then
         src="$wd/src"
         cp -R "$dir" "$src"
-        if ! "$KAMA" pkg install "$src" >/dev/null 2>"$TMP/$name.err"; then
+        if ! "$KAMA" pkg install "$src/kama.json" >/dev/null 2>"$TMP/$name.err"; then
             { echo "FAIL $name (pkg install failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
         fi
     fi

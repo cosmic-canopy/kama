@@ -5055,7 +5055,7 @@ void agentsUsage()
 {
     fprintf(stderr,
         "usage:\n"
-        "  kama agents install [<dir>] [--claude] [--tool <name>]... [--all-tools] [--skill] [--force]\n"
+        "  kama agents install <kama.json> [--claude] [--tool <name>]... [--all-tools] [--skill] [--force]\n"
         "                                      write AGENTS.md (+ pointers) into <dir> (default: .)\n"
         "  kama agents print [--skill]         write the guidance to stdout instead\n"
         "  kama agents list                    which tools are covered, and the file each one gets\n");
@@ -5592,21 +5592,23 @@ void usage()
         "  kama seed      [<dir>] [--kind executable|library|monorepo]   turn a directory into a kama project\n"
         "                  ([--name N] [--version V] [--members a,b,c] [--agents|--claude|--all-tools|--skill]\n"
         "                   [--yes] [--force]; interactive when stdin is a terminal, else it takes the defaults)\n"
-        "  kama agents install [<dir>]         write AGENTS.md so an AI agent knows this project + `kama query`\n"
+        "  kama agents install <kama.json>     write AGENTS.md so an AI agent knows this project + `kama query`\n"
         "                  ([--claude] [--tool <name>]... [--all-tools] [--skill] [--force];\n"
         "                   `kama agents list` shows the tools, `kama agents print` writes to stdout)\n"
-        "  kama pkg install [<dir>] [--verify] resolve `kama.json` (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock\n"
+        "  kama pkg install <kama.json|kama_workspace.json> [--verify]\n"
+        "                                    resolve (dev-)dependencies into .kama/{deps,dev-deps} + kama.lock;\n"
+        "                                    a workspace resolves every member, each on its own\n"
         "                                      (--verify: require + check registry-package signatures)\n"
-        "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
+        "  kama pkg add   [--dev] <kama.json> <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
         "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
-        "  kama pkg remove <name>\n"
-        "  kama pkg update [<pkg>]             re-resolve pins (advance a branch pin) and rewrite the lock\n"
-        "  kama publish [<dir>] --registry <dir-or-file-uri> [--key <ssh-key>]   tarball + record (+ sign) in the index\n"
+        "  kama pkg remove <kama.json> <name>\n"
+        "  kama pkg update <kama.json> [<pkg>] re-resolve pins (advance a branch pin) and rewrite the lock\n"
+        "  kama publish <kama.json> --registry <dir-or-file-uri> [--key <ssh-key>]   tarball + record (+ sign) in the index\n"
         "  kama toolchain list                 installed versions (+ the default and what the cwd resolves to)\n"
         "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
         "  kama toolchain uninstall <v>        remove an installed version\n"
         "  kama toolchain default <v>          set the global default version\n"
-        "  kama toolchain pin <v>              pin this project's toolchain in kama.json\n"
+        "  kama toolchain pin <v> <kama.json>  pin that project's toolchain in its kama.json\n"
         "  kama update    [--version vX.Y.Z]   install the latest (or <v>) and make it the default\n"
         "  kama --version\n");
 }
@@ -5615,11 +5617,11 @@ void pkgUsage()
 {
     fprintf(stderr,
         "usage:\n"
-        "  kama pkg install [<dir>] [--verify] resolve dependencies into .kama/{deps,dev-deps} + kama.lock\n"
-        "  kama pkg add   [--dev] <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
+        "  kama pkg install <kama.json|kama_workspace.json> [--verify]   resolve dependencies + write kama.lock\n"
+        "  kama pkg add   [--dev] <kama.json> <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
         "                                --version V [--registry BASE])\n"
-        "  kama pkg remove <name>\n"
-        "  kama pkg update [<pkg>]             re-resolve pins and rewrite the lock\n");
+        "  kama pkg remove <kama.json> <name>\n"
+        "  kama pkg update <kama.json> [<pkg>] re-resolve pins and rewrite the lock\n");
 }
 
 // ---- M1: toolchain version management (selector + `kama toolchain`) ----------------------------------
@@ -5632,7 +5634,7 @@ void toolchainUsage()
         "  kama toolchain install <v>          install version <v> into ~/.kama/versions/<v>\n"
         "  kama toolchain uninstall <v>        remove an installed version\n"
         "  kama toolchain default <v>          set the global default version\n"
-        "  kama toolchain pin <v>              pin this project's toolchain in kama.json\n");
+        "  kama toolchain pin <v> <kama.json>  pin that project's toolchain in its kama.json\n");
 }
 
 // Read a file's contents, trimmed of surrounding whitespace ("" if absent/empty). Used for the one-line
@@ -5806,10 +5808,11 @@ int cmdToolchainDefault(const std::string& v)
 }
 
 // `kama toolchain pin <v>` — write `"toolchain": "<v>"` into ./kama.json (byte-preserving).
-int cmdToolchainPin(const std::string& v)
+// `manifest` is the project to pin, NAMED. It used to be whatever `./kama.json` happened to be, which
+// made the current directory decide which file got rewritten.
+int cmdToolchainPin(const std::string& v, const std::string& manifest)
 {
-    std::string manifest = "./kama.json";
-    if (!fileExists(manifest)) { fprintf(stderr, "kama toolchain pin: no kama.json in the current directory\n"); return 2; }
+    if (!fileExists(manifest)) { fprintf(stderr, "kama toolchain pin: %s does not exist\n", manifest.c_str()); return 2; }
     std::string err;
     if (!manifestSetTopString(manifest, "toolchain", v, err)) { fprintf(stderr, "kama toolchain pin: %s\n", err.c_str()); return 1; }
     printf("pinned this project to kama %s\n", v.c_str());
@@ -5872,6 +5875,42 @@ void maybeReExec(char** argv, const std::string& subcommand)
     fprintf(stderr, "kama: failed to exec %s\n", bin.c_str());
     exit(1);
 #endif
+}
+
+// The project a PROJECT-ACTING command acts on, from its manifest operand (§2g.35). These commands
+// mutate or publish a project — `pkg install/add/remove/update`, `publish`, `agents install`,
+// `toolchain pin` — and every one of them used to default to the current directory. That is the same
+// implicit gesture the operand rule removes from the build commands, and it is worse here: the CWD
+// decided which manifest got REWRITTEN.
+//
+// Returns the project directory, or "" having printed the error. `*workspace` is set when the operand
+// names a workspace; only the commands that can act on all of them at once accept that.
+// `example` spells the whole invocation for the hint, because the manifest is not always the last
+// operand — `toolchain pin` takes a version first.
+static std::string projectOperandDir(const std::string& cmd, const std::string& operand, bool* workspace,
+                                     const std::string& example = "")
+{
+    *workspace = false;
+    const std::string hint = example.empty() ? "kama " + cmd + " kama.json" : example;
+    if (operand.empty()) {
+        fprintf(stderr, "kama %s: name the project to act on — `%s`\n", cmd.c_str(), hint.c_str());
+        return "";
+    }
+    const std::string base = baseName(operand);
+    if (base == kWorkspaceFile) {
+        if (!fileExists(operand)) { fprintf(stderr, "kama %s: %s does not exist\n", cmd.c_str(), operand.c_str()); return ""; }
+        *workspace = true;
+        return dirName(operand);
+    }
+    if (base != "kama.json") {
+        // Naming a DIRECTORY used to be the spelling, so say what to change rather than "unexpected arg".
+        fprintf(stderr, "kama %s: name the project's manifest, not %s — `kama %s %s%skama.json`\n",
+                cmd.c_str(), operand.c_str(), cmd.c_str(), operand.c_str(),
+                operand.empty() || operand.back() == '/' ? "" : "/");
+        return "";
+    }
+    if (!fileExists(operand)) { fprintf(stderr, "kama %s: %s does not exist\n", cmd.c_str(), operand.c_str()); return ""; }
+    return dirName(operand);
 }
 
 // A member's path SPELLED THE WAY THE CALLER SPELLED THE WORKSPACE. expandWorkspace answers with absolute
@@ -6585,13 +6624,38 @@ int main(int argc, char** argv)
             if (argc > 3) { fprintf(stderr, "kama toolchain list: takes no arguments\n"); return 2; }
             return cmdToolchainList();
         }
+        // `pin` is the one verb here that touches a PROJECT rather than the installation, so it is the one
+        // that names a manifest: `kama toolchain pin <version> <kama.json>`. The rest manage ~/.kama.
+        if (verb == "pin") {
+            std::string v, manifest;
+            for (int i = 3; i < argc; ++i) {
+                std::string a = argv[i];
+                if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama toolchain pin: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (v.empty()) v = a;
+                else if (manifest.empty()) manifest = a;
+                else { fprintf(stderr, "kama toolchain pin: unexpected arg '%s'\n", a.c_str()); return 2; }
+            }
+            if (v.empty()) { fprintf(stderr, "kama toolchain pin: missing <version>\n"); return 2; }
+            bool ws = false;
+            std::string dir = projectOperandDir("toolchain pin", manifest, &ws,
+                                                "kama toolchain pin " + v + " kama.json");
+            if (dir.empty()) return 2;
+            if (ws) {
+                // §2a's extractability invariant: a project never reads its workspace file for anything
+                // that affects compilation, and which compiler runs plainly is that. Each member pins
+                // itself, which is also what makes a workspace build re-exec per member.
+                fprintf(stderr, "kama toolchain pin: a workspace carries no `toolchain` — each project "
+                                "pins itself. Name a member's kama.json\n");
+                return 2;
+            }
+            return cmdToolchainPin(v, manifest);
+        }
         std::string v = oneArg(verb.c_str());
         if (v == "\x01") return 2;                     // an option/extra-arg error was already printed
         if (v.empty()) { fprintf(stderr, "kama toolchain %s: missing <version>\n", verb.c_str()); return 2; }
         if (verb == "install")   return cmdToolchainInstall(v);
         if (verb == "uninstall") return cmdToolchainUninstall(v);
         if (verb == "default")   return cmdToolchainDefault(v);
-        if (verb == "pin")       return cmdToolchainPin(v);
         fprintf(stderr, "kama toolchain: unknown command '%s'\n", verb.c_str()); toolchainUsage(); return 2;
     }
 
@@ -6681,7 +6745,17 @@ int main(int argc, char** argv)
             tools.clear();
             for (int i = 0; i < KAMA_AGENT_STUB_COUNT; ++i) tools.push_back(KAMA_AGENT_STUBS[i].name);
         }
-        return cmdAgentsInstall(dir, tools, skill, force);
+        // `install` WRITES into a project (AGENTS.md and the tool stubs beside it), so it names the one
+        // it writes into. `list` and `print` take no project and never reach here. Seeding calls
+        // cmdAgentsInstall directly with the directory it just created, which is not a CWD default.
+        bool agWs = false;
+        std::string agDir = projectOperandDir("agents install", dir, &agWs);
+        if (agDir.empty()) return 2;
+        if (agWs) {
+            fprintf(stderr, "kama agents install: guidance is written per project — name a member's kama.json\n");
+            return 2;
+        }
+        return cmdAgentsInstall(agDir, tools, skill, force);
     }
 
     if (subcommand == "update") {
@@ -6704,7 +6778,22 @@ int main(int argc, char** argv)
             else if (dir.empty()) dir = a;
             else { fprintf(stderr, "kama publish: unexpected arg '%s'\n", a.c_str()); return 2; }
         }
-        return cmdPublish(dir.empty() ? "." : dir, registry, key);
+        bool pubWs = false;
+        std::string pubDir = projectOperandDir("publish", dir, &pubWs);
+        if (pubDir.empty()) return 2;
+        if (pubWs) {
+            // A workspace is not a publishable unit: its members are separate packages with separate
+            // names and versions, and publishing "it" would have to mean publishing N of them in an
+            // order nothing here knows. Name the one, exactly as `run` does.
+            std::set<std::string> members; std::string werr;
+            expandWorkspace(pubDir, members, werr);
+            fprintf(stderr, "kama publish: %s is a workspace of %zu project(s) — publish one at a time:\n",
+                    dir.c_str(), members.size());
+            for (const auto& m : members)
+                fprintf(stderr, "    kama publish %s/kama.json\n", memberAsSpelled(dir, m).c_str());
+            return 2;
+        }
+        return cmdPublish(pubDir, registry, key);
     }
 
     if (subcommand == "pkg") {
@@ -6719,20 +6808,45 @@ int main(int argc, char** argv)
                 else if (dir.empty()) dir = a;
                 else { fprintf(stderr, "kama pkg install: unexpected arg '%s'\n", a.c_str()); return 2; }
             }
-            return cmdInstall(dir);
+            bool insWs = false;
+            std::string insDir = projectOperandDir("pkg install", dir, &insWs);
+            if (insDir.empty()) return 2;
+            if (!insWs) return cmdInstall(insDir);
+            // Fanned out, not merged: every member resolves against ITS OWN manifest and gets its own
+            // lock and its own `.kama/deps`. That is what keeps a member extractable — a shared
+            // resolution would silently make each one depend on the others being present.
+            std::set<std::string> members; std::string werr;
+            if (!expandWorkspace(insDir, members, werr)) { fprintf(stderr, "kama: %s\n", werr.c_str()); return 2; }
+            for (const auto& m : members) {
+                const std::string rel = memberAsSpelled(dir, m);
+                printf("kama pkg install: %s\n", rel.c_str());
+                fflush(stdout);
+                int rc = cmdInstall(rel);
+                if (rc != 0) return rc;
+            }
+            printf("kama pkg install: %zu project(s) in %s\n", members.size(), dir.c_str());
+            return 0;
         }
+        // The MANIFEST comes first and the package name second, for update/add/remove alike: the manifest
+        // is the scope and the name is what is being done to it — the same order `kama query <manifest>
+        // <file>` uses, and the same reason.
         if (verb == "update") {
-            std::string pkg;
+            std::string manifest, pkg;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
                 if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg update: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (manifest.empty()) manifest = a;
                 else if (pkg.empty()) pkg = a;
                 else { fprintf(stderr, "kama pkg update: unexpected arg '%s'\n", a.c_str()); return 2; }
             }
-            return cmdPkgUpdate("", pkg);
+            bool ws = false;
+            std::string dir = projectOperandDir("pkg update", manifest, &ws);
+            if (dir.empty()) return 2;
+            if (ws) { fprintf(stderr, "kama pkg update: rewrites one project's lock — name a member's kama.json\n"); return 2; }
+            return cmdPkgUpdate(dir, pkg);
         }
         if (verb == "add") {
-            bool dev = false; std::string name; DepSpec d; std::string rev, integ, ver, registry;
+            bool dev = false; std::string manifest, name; DepSpec d; std::string rev, integ, ver, registry;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
                 if      (a == "--dev")                     dev = true;
@@ -6744,9 +6858,14 @@ int main(int argc, char** argv)
                 else if (a == "--version" && i + 1 < argc)   ver = argv[++i];
                 else if (a == "--registry" && i + 1 < argc)  registry = argv[++i];
                 else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg add: unknown option '%s'\n", a.c_str()); return 2; }
+                else if (manifest.empty()) manifest = a;
                 else if (name.empty()) name = a;
                 else { fprintf(stderr, "kama pkg add: unexpected arg '%s'\n", a.c_str()); return 2; }
             }
+            bool ws = false;
+            std::string addDir = projectOperandDir("pkg add", manifest, &ws, "kama pkg add kama.json <name> …");
+            if (addDir.empty()) return 2;
+            if (ws) { fprintf(stderr, "kama pkg add: edits one project's manifest — name a member's kama.json\n"); return 2; }
             if (name.empty()) { fprintf(stderr, "kama pkg add: missing <name>\n"); return 2; }
             int nsrc = (!d.git.empty()) + (!d.url.empty()) + (!d.path.empty());
             if (nsrc > 1) { fprintf(stderr, "kama pkg add: at most one of --git/--url/--path\n"); return 2; }
@@ -6760,18 +6879,23 @@ int main(int argc, char** argv)
                 fprintf(stderr, "kama pkg add: --version applies to a git range (--git) or a registry dependency, not --url/--path\n"); return 2;
             }
             d.rev = rev; d.integrity = integ; d.version = ver; d.registry = registry;
-            return cmdPkgAdd(".", name, d, dev);
+            return cmdPkgAdd(addDir, name, d, dev);
         }
         if (verb == "remove") {
-            std::string name;
+            std::string manifest, name;
             for (int i = 3; i < argc; ++i) {
                 std::string a = argv[i];
                 if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg remove: unexpected option '%s'\n", a.c_str()); return 2; }
+                else if (manifest.empty()) manifest = a;
                 else if (name.empty()) name = a;
                 else { fprintf(stderr, "kama pkg remove: unexpected arg '%s'\n", a.c_str()); return 2; }
             }
+            bool ws = false;
+            std::string dir = projectOperandDir("pkg remove", manifest, &ws, "kama pkg remove kama.json <name>");
+            if (dir.empty()) return 2;
+            if (ws) { fprintf(stderr, "kama pkg remove: edits one project's manifest — name a member's kama.json\n"); return 2; }
             if (name.empty()) { fprintf(stderr, "kama pkg remove: missing <name>\n"); return 2; }
-            return cmdPkgRemove(".", name);
+            return cmdPkgRemove(dir, name);
         }
         fprintf(stderr, "kama pkg: unknown command '%s'\n", verb.c_str()); pkgUsage(); return 2;
     }

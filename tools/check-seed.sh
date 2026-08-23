@@ -133,7 +133,7 @@ grep -q '"name"\|"version"\|"kind"\|"entry"' "$w/kama_workspace.json" \
 # the member manifests are right, the `source` default finds engine's files, and the root composes them.
 # Pointing engine's `source` at a directory that is not src/ makes this fail with
 # `cannot resolve module 'engine'` — which is what the default is carrying.
-( cd "$w/server" && "$KAMA" pkg add engine --path ../engine ) >/dev/null 2>&1 \
+( cd "$w/server" && "$KAMA" pkg add kama.json engine --path ../engine ) >/dev/null 2>&1 \
     || bad "pkg add of a sibling failed"
 printf 'import engine::{ answer };\nfn int32 main() { return answer(); }\n' > "$w/server/src/server.kama"
 # PROMOTING a member to an executable is exactly what docs/packages.md says it is: add `entry` and a
