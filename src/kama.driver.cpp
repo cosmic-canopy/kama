@@ -916,8 +916,24 @@ static std::string relativizeToCwd(const std::string& dir)
 // file belongs to. That distinction is the whole of the per-package import check below, and is why
 // owningPackageDir remains a separate entry point rather than being folded in here: it answers
 // "who owns THIS file?" per unit, while this answers "who is driving?" once per invocation.
+// ⚠️ THE CLI NO LONGER WALKS. `main` installs the answer from the operand (§2g.32) before any of this
+// runs, and then this whole walk is dead for a command line: a project operand sets it to that manifest's
+// directory, and a LOOSE build sets it EMPTY on purpose — no manifest, no deps view, no `out` root.
+//
+// A tri-state, and the third state is the point: `set` distinguishes "the CLI says there is no project"
+// from "nobody has said anything yet". Without it a loose build would fall through to the walk and pick
+// up whatever manifest sits above the file, which is exactly the silent behavior the operand rule exists
+// to remove.
+//
+// The walk below therefore survives for ONE caller: `kama lsp`, which is handed a buffer and a rootUri
+// and never a command line, so discovery there is inherent rather than convenient (§2g.35).
+static bool        g_cliProjectSet = false;
+static std::string g_cliProjectDir;
+void setCliProjectDir(const std::string& dir) { g_cliProjectSet = true; g_cliProjectDir = dir; }
+
 std::string projectManifestDir(const std::vector<std::string>& inputs)
 {
+    if (g_cliProjectSet) return g_cliProjectDir;
     // The shallow hit first, so the common in-project case keeps returning the RELATIVE path it always
     // did (owningPackageDir returns an absolute one, and this string reaches user-facing diagnostics).
     std::string start = inputs.empty() ? std::string(".") : dirName(inputs[0]);
@@ -5640,12 +5656,33 @@ static std::string readTrimmedFile(const std::string& path)
 // names a build OUTPUT `.kama`. If nothing matches we return "" and the caller walks up from the CWD,
 // which is exactly what the selector did before it knew about inputs — so the worst case is the old
 // behavior, never a worse one.
-static std::string selectorInputFile(char** argv)
+// The operand the selector should take its pin from. It runs BEFORE argument parsing — it must, since its
+// job is choosing which binary does the parsing — so this is a scan of raw argv rather than a parse.
+//
+// ⚠️ It looks for a MANIFEST, and no longer for a `.kama` file, and that closes a silent bug rather than
+// merely simplifying (§2g.37). The old rule matched "an existing file whose name ends in .kama" and then
+// WALKED UP from it; hand it `kama build ../legacy/kama.json` and nothing matched, so the pin resolved
+// from the current directory and `../legacy` got built by whatever compiler the CWD pins, saying nothing.
+//
+// There is no walk left either. The operand IS the project, so the pin is READ from the named file:
+//
+//     …/kama.json            -> that file's `toolchain` (+ its sibling kama.local.json)
+//     …/kama_workspace.json  -> NONE: run in place, and re-exec per member (see cmdWorkspaceFanOut)
+//     loose files, or none   -> KAMA_VERSION, else the global default
+//
+// A loose build therefore inherits no project's pin, which follows from a loose file not being a project
+// (§2g.33) and is a deliberate behavior change.
+//
+// `wsOut` is set when the operand names a workspace, which is what tells maybeReExec to run in place.
+static std::string selectorManifest(char** argv, bool* wsOut)
 {
+    *wsOut = false;
     for (int i = 2; argv[i]; ++i) {
         std::string a = argv[i];
         if (!a.empty() && a[0] == '-') continue;
-        if (a.size() > 5 && a.compare(a.size() - 5, 5, ".kama") == 0 && fileExists(a)) return a;
+        const std::string base = baseName(a);
+        if (base == kWorkspaceFile && fileExists(a)) { *wsOut = true; return ""; }
+        if (base == "kama.json" && fileExists(a)) return a;
     }
     return "";
 }
@@ -5654,12 +5691,10 @@ static std::string selectorInputFile(char** argv)
 // M5.3) → project pin (nearest kama.json `toolchain`) → `KAMA_VERSION` env → global default
 // (`~/.kama/default`). "" ⇒ no preference (run this binary as-is). The local override is gitignored, so a
 // dev can test against a different toolchain without touching the committed pin.
-static std::string resolvePin(const std::vector<std::string>& inputs = std::vector<std::string>())
+// `manifest` empty means "no project named": fall through to the environment and the global default.
+// (`kama toolchain list` passes nothing and wants the CWD's answer, so it keeps the walk — see its call.)
+static std::string resolvePin(const std::string& manifest)
 {
-    // Same project as the build's dependencies and its `out` root. Before this, the pin walked up from
-    // the CWD while the build walked up from the input file, so `kama build proj/src/app.kama` from
-    // outside proj/ could compile proj's code with a toolchain proj never asked for.
-    std::string manifest = projectManifestPath(inputs);
     if (!manifest.empty()) {
         std::string local = dirName(manifest) + "/kama.local.json";
         if (std::ifstream(local).good()) {
@@ -5719,7 +5754,9 @@ int cmdToolchainList()
     }
     std::sort(versions.begin(), versions.end());
     std::string def = readTrimmedFile(defaultVersionFile());
-    std::string resolved = resolvePin();
+    // The one caller that still WALKS: `kama toolchain list` reports what this DIRECTORY resolves to, and
+    // there is no operand in the question.
+    std::string resolved = resolvePin(projectManifestPath({}));
     if (versions.empty()) {
         printf("no toolchains installed (install one with `kama toolchain install <v>`)\n");
     } else {
@@ -5807,8 +5844,16 @@ void maybeReExec(char** argv, const std::string& subcommand)
     if (getenv("KAMA_NO_SELECT")) return;                              // explicit escape hatch
     if (subcommand == "toolchain" || subcommand == "update") return;  // these manage the install in place
     if (absolutePath(selfExePath(argv[0])) != absolutePath(selectorPath())) return;   // only the selector selects
-    std::string in = selectorInputFile(argv);
-    std::string v = resolvePin(in.empty() ? std::vector<std::string>() : std::vector<std::string>{ in });
+    bool workspace = false;
+    std::string manifest = selectorManifest(argv, &workspace);
+    // ⚠️ RUN IN PLACE FOR A WORKSPACE, and this is load-bearing rather than an optimization. The export
+    // below is the loop-stopper, and a child inherits it — so if this process selected a version for
+    // ITSELF, every member the fan-out spawns would skip selection and be built by that one compiler
+    // instead of its own pin. Never exec'ing here is what lets each member start clean. (A user who
+    // exports KAMA_NO_SELECT themselves is using the documented escape hatch, and it reaching members is
+    // then correct.)
+    if (workspace) return;
+    std::string v = resolvePin(manifest);
     if (v.empty()) return;                                            // no default/pin — run in place
     std::string bin = versionBin(v);
     if (!fileExists(bin)) {
@@ -5827,6 +5872,75 @@ void maybeReExec(char** argv, const std::string& subcommand)
     fprintf(stderr, "kama: failed to exec %s\n", bin.c_str());
     exit(1);
 #endif
+}
+
+// A member's path SPELLED THE WAY THE CALLER SPELLED THE WORKSPACE. expandWorkspace answers with absolute
+// paths, because membership is a set comparison — but these strings go into a command the user is meant to
+// be able to copy, and `kama run /private/tmp/…/apps/cli/kama.json` is not what they typed. So the
+// absolute workspace root is swapped back for the operand's own spelling.
+static std::string memberAsSpelled(const std::string& wsFileAsSpelled, const std::string& memberAbs)
+{
+    const std::string spelledDir = dirName(wsFileAsSpelled);
+    const std::string absDir     = absolutePath(spelledDir);
+    if (memberAbs.size() > absDir.size() + 1 && memberAbs.compare(0, absDir.size(), absDir) == 0
+        && memberAbs[absDir.size()] == '/') {
+        const std::string tail = memberAbs.substr(absDir.size() + 1);
+        return spelledDir == "." ? tail : spelledDir + "/" + tail;
+    }
+    return relativizeToCwd(memberAbs);   // not under the root (a symlink): the absolute path is the honest answer
+}
+
+// `kama build|check kama_workspace.json` — run the same command once per member, each on its own project
+// (§2g.36). A workspace is never one big program: members are separate projects that must each build
+// standalone, and compiling them together would give one artifact where the workspace declares N.
+//
+// Driven as a CHILD PROCESS per member rather than a loop inside this one, and that is load-bearing three
+// times over:
+//   * Every member re-runs the toolchain selector and so gets ITS OWN pin (§2g.38). A loop here would
+//     build every member with whatever compiler this process happens to be.
+//   * Global emitter state (`g_target`, `g_activeFlags`, the flag universe) is installed per invocation
+//     and is not re-entrant; a second member in-process would inherit the first one's configuration.
+//   * A member that fails to build stops the run with its own exit code, unedited.
+// Recursion terminates because a member's operand is always a `kama.json`, never a workspace.
+static int cmdWorkspaceFanOut(char** argv, int argc, const std::string& subcommand,
+                              const std::string& wsFile)
+{
+    const std::string wsDir = dirName(wsFile);
+    std::set<std::string> members;
+    std::string err;
+    if (!expandWorkspace(wsDir, members, err)) { fprintf(stderr, "kama: %s\n", err.c_str()); return 2; }
+    if (members.empty()) {
+        fprintf(stderr, "kama: %s lists no projects\n", wsFile.c_str()); return 2;
+    }
+
+    // Everything the caller passed EXCEPT the operand: flags apply to every member, since they are this
+    // invocation's choices (`--release`, `--target`) rather than any one project's.
+    std::vector<std::string> flags;
+    for (int i = 2; i < argc; ++i)
+        if (argv[i] != wsFile) flags.push_back(argv[i]);
+
+    const std::string self = selfExePath(argv[0]);
+    int n = 0;
+    for (const auto& m : members) {
+        const std::string rel = memberAsSpelled(wsFile, m);
+        printf("kama %s: %s\n", subcommand.c_str(), rel.c_str());
+        fflush(stdout);
+        std::ostringstream cmd;
+        cmd << "\"" << self << "\" " << subcommand << " \"" << rel << "/kama.json\"";
+        for (const auto& f : flags) cmd << " \"" << f << "\"";
+        int rc = runCmd(cmd.str());   // same quoting convention as `kama run`'s child (runCmd handles cmd.exe)
+        // ⚠️ KAMA_NO_SELECT is deliberately NOT set around this. maybeReExec exports it just before it
+        // execs, as its loop-stopper, and a child inherits it — so if this process had selected for
+        // itself, every member would silently skip selection and build with THIS compiler rather than
+        // its own pin. A workspace operand runs in place precisely so that each member starts clean.
+        if (rc != 0) {
+            fprintf(stderr, "kama %s: %s failed\n", subcommand.c_str(), rel.c_str());
+            return rc;
+        }
+        ++n;
+    }
+    printf("kama %s: %d project(s) in %s\n", subcommand.c_str(), n, wsFile.c_str());
+    return 0;
 }
 
 } // namespace
@@ -6491,9 +6605,14 @@ int main(int argc, char** argv)
     if (subcommand == "seed") {
         // An early-return command: it touches no .kama source, so it returns before the shared
         // input/flag handling (same reason as `agents` and `lsp`). Deliberately NOT in maybeReExec's
-        // run-in-place list either: the templates and the manifest shape are version-specific, and
-        // seed runs where there is no manifest YET, so resolvePin walks up — which is what makes a new
-        // member inside an already-pinned monorepo get that monorepo's toolchain.
+        // run-in-place list either: the templates and the manifest shape are version-specific, so a seed
+        // run under a pinned toolchain should produce THAT toolchain's files.
+        //
+        // ⚠️ It names no manifest, so with the selector reading the operand (§2g.37) a seed now resolves
+        // KAMA_VERSION or the global default — never an ancestor's pin. The monorepo case this comment
+        // used to describe went away with the aggregator manifest: a workspace root has no `kama.json`
+        // and may not carry a `toolchain`, because a project never reads its workspace file for anything
+        // affecting compilation. Each project pins itself, which is the whole point.
         SeedOpts o;
         std::string dir;
         for (int i = 2; i < argc; ++i) {
@@ -6673,14 +6792,25 @@ int main(int argc, char** argv)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
     std::vector<std::string> selects;      // --select GROUP=VALUE: pick a single-select group (repeatable)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
-    std::string configPath;                // --config PATH: explicit kama.json (else auto-discovered)
+    // THE OPERAND IS THE MODE (§2g). One rule, checked below before anything else runs: an operand whose
+    // BASENAME is `kama.json` names a project, `kama_workspace.json` a workspace, and anything else is a
+    // loose source file. Operands are N `.kama` files XOR exactly one manifest, so "these files, and also
+    // that project" is not rejected so much as unspellable.
+    //
+    // This replaces DISCOVERY. `kama build src/app.kama` inside a project used to walk up, find the
+    // manifest and silently apply it, so the three modes were mixed by default and there was no spelling
+    // that meant "just these files". `--config` and `--project` are gone with it: the operand IS the
+    // manifest, and the operand IS the scope.
+    std::string manifestOperand;           // the one manifest operand, if any (project or workspace)
+    bool        workspaceMode = false;     // ...and whether its basename was kama_workspace.json
     bool        devBuild   = false;        // --dev: also put .kama/dev-deps on the import path (dev-dependencies)
     bool        eachMode   = false;        // `kama check --each`: every input is its own program, one process
     int         buildJobs  = 0;            // -j/--jobs: concurrent C compiles; 0 => resolve from env/cores
     // Every `kama query` mode, in the order the caller asked. One list rather than a scalar per mode, so
     // a single analysis can answer N questions (see `Question` above).
     std::vector<Question> questions;
-    bool        queryProject = false;      // `kama query --project`: index the whole project, not one closure
+    // `kama query <manifest> <file>`: the manifest widens the unit set from <file>'s import closure to
+    // every file the manifest owns. Set from the operand below — this used to be `--project`.
     bool        jsonOut = false;           // --json: structured output for `query` and `check`
     const bool  runMode    = (subcommand == "run");   // `kama run`: build to a temp binary, exec it, forward exit
     std::vector<std::string> progArgs;     // args after `--`, forwarded to the run child (run-only)
@@ -6721,7 +6851,6 @@ int main(int argc, char** argv)
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE
         else if (a == "--define" && i + 1 < argc)   defines.push_back(argv[++i]);    // `@compileFor` flag on
         else if (a == "--undefine" && i + 1 < argc) undefines.push_back(argv[++i]);  // `@compileFor` flag off
-        else if (a == "--config" && i + 1 < argc)   configPath = argv[++i];          // explicit kama.json
         else if (a == "--dev")                      devBuild = true;                 // also resolve dev-dependencies
         else if (a == "--each")                     eachMode = true;                 // check: one program per input
         // `kama query` modes. Appended in ARGV ORDER, and repeatable: `--def 1:1 --def 9:9` is two
@@ -6735,7 +6864,6 @@ int main(int argc, char** argv)
         else if (a == "--complete" && i + 1 < argc) questions.push_back({QMode::Complete, argv[++i]});
         else if (a == "--sighelp" && i + 1 < argc)  questions.push_back({QMode::SigHelp,  argv[++i]});
         else if (a == "--search" && i + 1 < argc)   questions.push_back({QMode::Search,   argv[++i]});
-        else if (a == "--project")                  queryProject = true;             // `kama query` workspace scope
         else if (a == "--json")                     jsonOut = true;                  // structured output
         else if (!a.empty() && a[0] == '-') {
             fprintf(stderr, "kama: unknown option '%s'\n", a.c_str()); usage(); return 2;
@@ -6748,6 +6876,57 @@ int main(int argc, char** argv)
         fprintf(stderr, "kama: `-- <args>` is only meaningful for `kama run`\n"); usage(); return 2;
     }
 
+    // ---- classify the operands (§2g.32) -------------------------------------------------------------
+    // Naming the file is what matters, not qualifying it: `kama build kama.json` and `kama build
+    // ./libs/core/kama.json` are the same gesture, so this matches on the BASENAME and no `./` is ever
+    // required. `inputs` is left holding exactly the loose `.kama` files.
+    {
+        std::vector<std::string> loose;
+        for (const auto& a : inputs) {
+            const std::string base = baseName(a);
+            if (base != "kama.json" && base != kWorkspaceFile) { loose.push_back(a); continue; }
+            if (!manifestOperand.empty()) {
+                fprintf(stderr, "kama: two manifests named (%s and %s) — one names one compilation\n",
+                        manifestOperand.c_str(), a.c_str());
+                return 2;
+            }
+            manifestOperand = a;
+            workspaceMode   = (base == kWorkspaceFile);
+        }
+        // ⚠️ `query` is the exception, and it is a different SHAPE of command rather than a carve-out
+        // (§2g.35). A unit-set command's operands ARE the compilation, so a manifest and loose files are
+        // two answers to one question. `query` is TARGET-ADDRESSED: the manifest sets the SCOPE to search
+        // and the `.kama` file is what is being asked about, so the two compose — which is how a query
+        // gains something `--project` could never express, a scope wider than the file's own project.
+        if (!manifestOperand.empty() && !loose.empty() && subcommand != "query") {
+            // Deliberately not a rule to remember: there is no argument list that means "these files, and
+            // also that project", because a project's file set is the project's to state.
+            fprintf(stderr, "kama: %s names a whole %s, so it cannot be combined with source files "
+                            "(%s) — name one or the other\n",
+                    manifestOperand.c_str(), workspaceMode ? "workspace" : "project", loose[0].c_str());
+            return 2;
+        }
+        inputs.swap(loose);
+    }
+
+    // A unit-set command needs one form or the other, and says so rather than acting on the current
+    // directory. `kama run` used to mean "read ./kama.json", which is the same implicit gesture the
+    // operand rule removes everywhere else — so it goes too.
+    if (manifestOperand.empty() && inputs.empty()) {
+        fprintf(stderr, "kama %s: name what to %s — one or more .kama files, `kama.json` for a project, "
+                        "or `kama_workspace.json` for every project in a workspace\n",
+                subcommand.c_str(), subcommand.c_str());
+        return 2;
+    }
+    if (!manifestOperand.empty() && !fileExists(manifestOperand)) {
+        fprintf(stderr, "kama: %s does not exist\n", manifestOperand.c_str()); return 2;
+    }
+    // Install the driving project for the whole invocation — the deps view, the `out` root, the build
+    // configuration and the toolchain all read it from here rather than each walking their own way.
+    // Empty for a loose build and for a workspace (whose members each install their own, per re-exec).
+    setCliProjectDir(workspaceMode || manifestOperand.empty() ? std::string()
+                                                              : dirName(manifestOperand));
+
     // `--each` reinterprets the input list: N programs rather than one program's N files. Only `check` has
     // a meaning for that — `build --each` would need N outputs, which is a different (unbuilt) feature, and
     // silently building only the first input is the failure mode worth ruling out.
@@ -6756,31 +6935,28 @@ int main(int argc, char** argv)
                         "program)\n"); usage(); return 2;
     }
 
-    // `kama run` with no file resolves the entry from the manifest `main` field (discovered via --config,
-    // else kama.json in CWD). Explicit files still win. Do this before the empty-input check below.
-    if (runMode && inputs.empty()) {
-        std::string manifest = configPath;
-        if (manifest.empty() && std::ifstream("kama.json").good()) manifest = "kama.json";
-        if (manifest.empty()) {
-            fprintf(stderr, "kama run: no input file and no kama.json in this directory\n"); return 2;
-        }
-        std::string entryRel, merr;
-        // The legacy `main` spelling no longer reaches here: ManifestReader rejects it by name, so the
-        // rename is reported for every command rather than only for this one.
-        if (!loadManifestEntry(manifest, entryRel, merr)) {
-            fprintf(stderr, "kama run: %s: %s\n", manifest.c_str(), merr.c_str()); return 2;
-        }
-        if (entryRel.empty()) {
-            fprintf(stderr, "kama run: %s has no \"entry\" (add \"entry\": \"src/app.kama\") or pass a file\n",
-                    manifest.c_str());
+    // ---- a workspace operand fans out; it never means "one big program" (§2g.36) --------------------
+    // Except for `query`, which is target-addressed rather than unit-set: there the workspace is a SCOPE
+    // to search, answering one question about one file — and it is the scope `--project` could never
+    // reach, since that could only ever widen to the file's own project. Handled further down.
+    if (workspaceMode && subcommand != "query") {
+        if (runMode || subcommand == "transpile") {
+            // Running a workspace would mean supervising N processes — restart policy, log multiplexing,
+            // shutdown order — which is a process supervisor, not a compiler. And running ONE member is
+            // already spellable with no new concept, so the error names them rather than guessing.
+            std::set<std::string> members;
+            std::string werr;
+            expandWorkspace(dirName(manifestOperand), members, werr);
+            fprintf(stderr, "kama %s: %s is a workspace of %zu project(s) — name the one to %s:\n",
+                    subcommand.c_str(), manifestOperand.c_str(), members.size(), subcommand.c_str());
+            for (const auto& m : members)
+                fprintf(stderr, "    kama %s %s/kama.json\n", subcommand.c_str(),
+                        memberAsSpelled(manifestOperand, m).c_str());
             return 2;
         }
-        std::string mdir = dirName(manifest);
-        inputs.push_back(mdir == "." ? entryRel : mdir + "/" + entryRel);
+        return cmdWorkspaceFanOut(argv, argc, subcommand, manifestOperand);
     }
 
-    if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
-    const std::string& input = inputs[0];   // first input drives default output naming
 
     // Resolve the build configuration: the manifest's declared flag universe + `select` groups, the
     // target triple and its derived flags, BUILD_TYPE, and the user `--define` set. All of it lives in
@@ -6789,11 +6965,17 @@ int main(int argc, char** argv)
     // `@compileFor` set (M6 A1). DISCOVERY stays here: the CLI looks next to the input file then in CWD,
     // while the editor walks up from the open buffer bounded by its workspace folder.
     BuildConfigRequest bcReq;
-    bcReq.manifest = configPath;
-    // The build CONFIG and the `out` root come from the same project as the dependency view — one rule,
-    // one function. When these were spelled separately, a build from outside a project could resolve its
-    // dependencies from proj/ and still write the binary beside the source.
-    if (bcReq.manifest.empty()) bcReq.manifest = projectManifestPath({ input });
+    // The operand, and nothing else. A LOOSE build therefore inherits no project's configuration — not
+    // its flag universe, not its target catalog, not its `out` root — which is what makes mode 1 mean
+    // "just these files" (§2g.33) rather than "these files plus whatever manifest happens to be above
+    // them". Discovery is gone from the CLI entirely; the editor still walks up, because an editor is
+    // handed a buffer and a rootUri and never a command line.
+    // A WORKSPACE operand names no project's configuration — it is not a project manifest and reading it
+    // as one would fail on its very first key. Only `query` reaches here with one (build/check fanned out
+    // above, and each member then resolves its OWN config), so this is the workspace-scope query: it
+    // analyzes under permissive host defaults. That members may declare DIFFERENT configurations is a
+    // known limit of any whole-workspace index, recorded at kama.lsp.cpp:436 for the editor's copy.
+    bcReq.manifest = workspaceMode ? std::string() : manifestOperand;
     bcReq.target          = target;
     bcReq.targetExplicit  = targetExplicit;
     bcReq.selects         = selects;
@@ -6808,6 +6990,31 @@ int main(int argc, char** argv)
         if (!resolveBuildConfig(bcReq, bcfg, cerr)) { fprintf(stderr, "kama: %s\n", cerr.c_str()); return 2; }
     }
     release = bcfg.release;
+
+    // ---- a project operand names the project's OWN source files ------------------------------------
+    // AFTER resolveBuildConfig, deliberately: that is where every manifest diagnostic lives — a missing
+    // `kind`, a `source` that is "." or absent, a nested kama.json — and each of them says far more than
+    // "this directory holds no .kama files" would. Validate the manifest, then use it.
+    //
+    // Not the entry's import closure, either: building ONE file of a project already pulls in every file
+    // under its `source` root, because they are one package. So this is the same unit set the old
+    // spelling produced, named by the manifest rather than by whichever file the caller happened to pick.
+    // Not for `query`, whose manifest operand sets the SCOPE while the `.kama` operand stays the thing
+    // being asked about; it widens its own unit set further down.
+    if (!manifestOperand.empty() && subcommand != "query") {
+        std::vector<std::string> srcs;
+        packageSourceFiles(dirName(manifestOperand), srcs);   // false is unreachable: the operand IS the manifest
+        if (srcs.empty()) {
+            fprintf(stderr, "kama: %s: `source` is \"%s\", which holds no .kama files\n",
+                    manifestOperand.c_str(), manifestSourceCached(manifestOperand).c_str());
+            return 2;
+        }
+        inputs = srcs;
+    }
+
+    if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
+    const std::string& input = inputs[0];   // first input drives default output naming
+
     // The CLI wins over the manifest's `runtime`, exactly as --target wins over a `"default": true`.
     // Set after resolveBuildConfig because that is what assigns g_target.
     if (dynamicRuntime) g_target.runtime = "dynamic";
@@ -6853,14 +7060,55 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    // The project's stated kind, once, for the OUTPUT default and the entry checks below. Empty for a
+    // loose build, which has no project and therefore no kind — the reason EXE stays the default there.
+    std::string projectKind;
+    if (!manifestOperand.empty()) { std::string kerr; loadManifestKind(manifestOperand, projectKind, kerr); }
+
     // Resolve the OUTPUT axis. `--shared` is sugar for `--select OUTPUT=SHARED`; the default depends on
-    // the target, since a bare-metal build has no entry point to link and stops at an object.
+    // the target, since a bare-metal build has no entry point to link and stops at an object — and now
+    // also on the KIND, since a library has no `main` to link either. `kama build libs/core/kama.json`
+    // producing an archive is what makes `kama build kama_workspace.json` mean something for a workspace
+    // of libraries and one app: before this it built the app and then failed on the first library.
     std::string outputKind = g_activeFlags.count("SHARED")  ? "SHARED"
                            : g_activeFlags.count("STATIC")  ? "STATIC"
                            : g_activeFlags.count("OBJECT")  ? "OBJECT"
                            : g_activeFlags.count("EXE")     ? "EXE"
-                           : embedded ? "OBJECT" : "EXE";
+                           : embedded                       ? "OBJECT"
+                           : projectKind == "library"       ? "STATIC"
+                           : "EXE";
     if (shared) outputKind = "SHARED";
+    // Asking for an EXECUTABLE of a library cannot work — it has no `main` — and until `kind` existed
+    // nothing could say so: the build ran to completion and the LINKER reported `Undefined symbols: _main`,
+    // naming a C symbol for a kama mistake. Only reachable now by asking for it explicitly, since the
+    // default above already picked STATIC. `entry`'s consumer is the same sentence from the other side:
+    // an executable project states which file holds its entry point, and that is checked before a
+    // compile rather than discovered at the link.
+    //
+    // `check` and `transpile` produce no linked artifact, so the OUTPUT axis says nothing about them and a
+    // library is a perfectly ordinary thing for either to be pointed at.
+    if (!manifestOperand.empty() && outputKind == "EXE" && (subcommand == "build" || runMode)) {
+        if (projectKind == "library") {
+            fprintf(stderr, "kama %s: %s is a library, so it has no entry point to link — drop "
+                            "`OUTPUT=EXE` and it builds as an archive, or name an executable project\n",
+                    subcommand.c_str(), manifestOperand.c_str());
+            return 2;
+        }
+        std::string entryRel, eerr;
+        loadManifestEntry(manifestOperand, entryRel, eerr);
+        if (entryRel.empty()) {
+            fprintf(stderr, "kama %s: %s declares \"kind\": \"executable\" but no \"entry\" — add "
+                            "\"entry\": \"src/app.kama\" naming the file that holds `main`\n",
+                    subcommand.c_str(), manifestOperand.c_str());
+            return 2;
+        }
+        const std::string entryAbs = joinPathLexical(dirName(manifestOperand), entryRel);
+        if (!fileExists(entryAbs)) {
+            fprintf(stderr, "kama %s: %s names \"entry\": \"%s\", but %s does not exist\n",
+                    subcommand.c_str(), manifestOperand.c_str(), entryRel.c_str(), entryAbs.c_str());
+            return 2;
+        }
+    }
     const bool outObject = (outputKind == "OBJECT");
     const bool outStatic = (outputKind == "STATIC");
     const bool outShared = (outputKind == "SHARED");
@@ -7027,21 +7275,28 @@ int main(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         std::vector<std::string> queryInputs = inputs;
+        const bool queryProject = !manifestOperand.empty();
         if (queryProject) {
-            // No editor here to declare a workspace, so lspFindProject falls back to the nearest kama.json
-            // (see its contract) — which is what a CLI user in a package expects.
-            LspProject proj = lspFindProject(input, "");
-            if (proj.root.empty()) {
-                fprintf(stderr, "kama query --project: %s is not inside a kama package (no kama.json found)\n",
-                        input.c_str());
+            // The operand says which scope to search, so there is nothing to discover: a `kama.json`
+            // widens to that project's files, and a `kama_workspace.json` to every member's — the scope
+            // `--project` could never reach, since it could only ever widen to the file's OWN project.
+            if (workspaceMode) {
+                std::set<std::string> members;
+                std::string werr;
+                if (!expandWorkspace(dirName(manifestOperand), members, werr)) {
+                    fprintf(stderr, "kama query: %s\n", werr.c_str()); return 1;
+                }
+                queryInputs.clear();
+                for (const auto& m : members) collectPackageTree(m, queryInputs);
+            } else {
+                queryInputs.clear();
+                packageSourceFiles(dirName(manifestOperand), queryInputs);
+            }
+            if (queryInputs.empty()) {
+                fprintf(stderr, "kama query: %s owns no .kama files\n", manifestOperand.c_str());
                 return 1;
             }
-            if (proj.tooLarge) {
-                fprintf(stderr, "kama query --project: %s holds more than %zu .kama files\n",
-                        proj.root.c_str(), proj.cap);
-                return 1;
-            }
-            queryInputs = proj.files;
+            for (auto& f : queryInputs) f = absolutePath(f);
         }
         if (!loadProgramUnits(queryInputs, argv[0], units, unitPaths, devBuild, /*strictImports*/ false)) return 1;
         // Every query re-picks the unit by an EXACT name match (CEmitter::unitForUri), and the project

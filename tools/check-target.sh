@@ -172,20 +172,20 @@ fi
 #     is flat.)
 rt="$tmp/rt"; mkdir -p "$rt/src"
 cat > "$rt/kama.json" <<'JSON'
-{ "name": "rt-demo", "version": "0.1.0", "kind": "executable",
+{ "name": "rt-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
 JSON
 cp "$THREADED" "$rt/src/app.kama"
-rtline=$("$KAMA" build --release --cc "echo" "$rt/src/app.kama" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
+rtline=$("$KAMA" build --release --cc "echo" "$rt/kama.json" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
 if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
     echo "check-target: FAIL — a target's \"runtime\": \"dynamic\" did not reach the link tail" >&2
     printf '%s\n' "$rtline" | sed 's/^/    /' >&2
     exit 1
 fi
 #     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
-printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0", "kind": "executable",
+printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
-if "$KAMA" build --release --cc "echo" "$rt/src/app.kama" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
+if "$KAMA" build --release --cc "echo" "$rt/kama.json" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
     echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
     exit 1
 fi
@@ -322,13 +322,13 @@ fi
 spec="$tmp/spec"
 mkdir -p "$spec/src"
 cat > "$spec/kama.json" <<'JSON'
-{ "name": "cross-demo", "version": "0.1.0", "kind": "executable",
+{ "name": "cross-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
                                    "sysroot": "/opt/rpi-sysroot",
                                    "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
 JSON
 cp "$FIXTURE" "$spec/src/app.kama"
-specline=$("$KAMA" build "$spec/src/app.kama" --target RPI -o "$spec/app" 2>/dev/null || true)
+specline=$("$KAMA" build "$spec/kama.json" --target RPI -o "$spec/app" 2>/dev/null || true)
 for want in "RPICC:" "--sysroot=" "-mcpu=cortex-a72" "-Wl,--as-needed"; do
     if ! printf '%s' "$specline" | grep -qF -- "$want"; then
         echo "check-target: FAIL — a kama.json target spec did not contribute '$want'" >&2
@@ -337,7 +337,7 @@ for want in "RPICC:" "--sysroot=" "-mcpu=cortex-a72" "-Wl,--as-needed"; do
     fi
 done
 # and its derived flags come from the DECLARED triple, not the host
-if ! "$KAMA" transpile --no-line "$spec/src/app.kama" --target RPI -o "$spec/app.c" >/dev/null 2>&1; then
+if ! "$KAMA" transpile --no-line "$spec/kama.json" --target RPI -o "$spec/app.c" >/dev/null 2>&1; then
     echo "check-target: FAIL — a declared cross target could not be transpiled" >&2
     exit 1
 fi
@@ -350,14 +350,16 @@ fi
 dflt="$tmp/dflt"
 mkdir -p "$dflt/src"
 cat > "$dflt/kama.json" <<'JSON'
-{ "name": "board-only", "version": "0.1.0", "kind": "executable",
+{ "name": "board-only", "version": "0.1.0", "kind": "library",
   "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
 JSON
 cat > "$dflt/src/gated.kama" <<'KAMA'
 @compileFor(OS_NONE)  fn int32 bare() { return 1; }
 @compileFor(!OS_NONE) fn int32 hosted() { return 0; }
 KAMA
-symbols() { "$KAMA" query "$dflt/src/gated.kama" --symbols 2>/dev/null; }
+# The manifest sets the SCOPE (and with it the default target this section is about); the file stays
+# what is being asked about. `query` is target-addressed, so the two compose.
+symbols() { "$KAMA" query "$dflt/kama.json" "$dflt/src/gated.kama" --symbols 2>/dev/null; }
 if ! symbols | grep -q 'function bare'; then
     echo "check-target: FAIL — a kama.json default target did not take effect (expected OS_NONE)" >&2
     symbols | sed 's/^/    /' >&2; exit 1
@@ -428,7 +430,7 @@ od="$tmp/outdir"; mkdir -p "$od/src"
 printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
 printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }\n' > "$od/kama.json"
 
-( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>"$tmp/od1.err" || {
+( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>"$tmp/od1.err" || {
     echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
 HOSTTRIPLE=$(ls "$od/out")
 [ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
@@ -442,18 +444,18 @@ stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
                      echo "$stray" | sed 's/^/  /' >&2; exit 1; }
 
 # debug and release coexist rather than overwrite
-( cd "$od" && "$KAMA" build src/app.kama --release ) >/dev/null 2>&1
+( cd "$od" && "$KAMA" build kama.json --release ) >/dev/null 2>&1
 [ -x "$od/out/$HOSTTRIPLE/release/app" ] && [ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
     echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
 
 # the manifest's `out` key relocates the root
 printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "out": "artifacts" }\n' > "$od/kama.json"
-( cd "$od" && "$KAMA" build src/app.kama ) >/dev/null 2>&1
+( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>&1
 [ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
     echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }
 
 # -o still wins over both
-( cd "$od" && "$KAMA" build src/app.kama -o chosen ) >/dev/null 2>&1
+( cd "$od" && "$KAMA" build kama.json -o chosen ) >/dev/null 2>&1
 [ -x "$od/chosen" ] || { echo "check-target: FAIL — -o no longer wins over the out root" >&2; exit 1; }
 
 # A LOOSE .kama with no manifest is NOT a project and keeps landing beside itself — `kama build hello.kama`

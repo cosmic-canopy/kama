@@ -36,10 +36,34 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # Failures are cached too, deliberately: the output IS the result, exit status was already discarded.
 qcache=$(mktemp -d); trap 'rm -rf "$tmp" "$qcache"' EXIT
 qkey() { printf '%s|%s' "$1" "$2" | cksum | tr -cd '0-9'; }
+
+# The SCOPE operand for a fixture, replacing the deleted `--project` flag. `kama query` is
+# target-addressed: a manifest operand says which scope to search and the .kama file stays the thing
+# being asked about, so the two compose (§2g.35). This walks up for the scope the flag used to infer —
+# a workspace file if one is above (which is what lets the mono assertions reach a SIBLING member, a
+# scope `--project` could never express) else the nearest project manifest.
+#
+# `--project` survives below only as this guard's own shorthand for "ask at project scope"; it is
+# translated here and never reaches the compiler.
+scope_for() {
+    _d=$(dirname "$1"); _s=""
+    while [ "$_d" != "/" ] && [ "$_d" != "." ]; do
+        if [ -f "$_d/kama_workspace.json" ]; then echo "$_d/kama_workspace.json"; return; fi
+        if [ -z "$_s" ] && [ -f "$_d/kama.json" ]; then _s="$_d/kama.json"; fi
+        _d=$(dirname "$_d")
+    done
+    echo "$_s"
+}
+
 runq() {
     _f="$qcache/$(qkey "$FIXTURE" "$1")"
+    _a="$1"; _scope=""
+    # Position-independent: `expect` accumulates args with a leading space, so a prefix match misses.
+    case " $_a " in
+        *" --project "*) _a=$(printf '%s' "$_a" | sed 's/ *--project//'); _scope=$(scope_for "$FIXTURE") ;;
+    esac
     # shellcheck disable=SC2086
-    [ -f "$_f" ] || "$KAMA" query "$FIXTURE" $1 >"$_f" 2>&1 || true
+    [ -f "$_f" ] || "$KAMA" query $_scope "$FIXTURE" $_a >"$_f" 2>&1 || true
     cat "$_f"
 }
 
@@ -116,9 +140,10 @@ preload() {
         [ "$nq" -ge 2 ] || continue                    # one question gains nothing from a batch
         [ -f "$pf" ] || continue
         qargs=$(tail -n +2 "$g" | cut -f2 | tr '\n' ' ')
-        [ "$pp" = 1 ] && qargs="--project $qargs"
+        pscope=""
+        [ "$pp" = 1 ] && pscope=$(scope_for "$pf")
         # shellcheck disable=SC2086
-        "$KAMA" query "$pf" $qargs >"$tmp/plout" 2>&1 || true
+        "$KAMA" query $pscope "$pf" $qargs >"$tmp/plout" 2>&1 || true
 
         # Split on the `## <question>` delimiter lines. Anything BEFORE the first one is stderr the
         # analysis wrote once (a warning); a solo run would have shown it with every answer, so it is
@@ -289,7 +314,7 @@ expect --project --refs 18:9 -- "app.kama:11:23"    # 'defaultSize()' called fro
 # ctor's implicit result type resolves through the class's own decl identifier, so the decl name was
 # recorded as a reference to itself. Rename replaces every range it is handed, so a duplicate meant two
 # identical TextEdits over one range — which the LSP spec forbids within a file.
-count=$("$KAMA" query "$FIXTURE" --project --refs 12:11 2>&1 | grep -c "widget.kama:12:11" || true)
+count=$("$KAMA" query "$(scope_for "$FIXTURE")" "$FIXTURE" --refs 12:11 2>&1 | grep -c "widget.kama:12:11" || true)
 if [ "$count" = 1 ]; then
     echo "  ok: the declaration is reported exactly once (no self-reference duplicate)"
 else
@@ -325,8 +350,8 @@ expect --search Zzzz -- "no symbols"
 reject --project --search string -- "lib/std"
 # An EMPTY needle lists everything in scope — the whole-package outline that --symbols cannot give.
 # (Tested directly: the expect helper word-splits its args, so an empty one cannot survive it.)
-if "$KAMA" query "$FIXTURE" --search "" --project 2>&1 | grep -qF "widget.kama:12:11 value Widget" &&
-   "$KAMA" query "$FIXTURE" --search "" --project 2>&1 | grep -qF "app.kama"; then
+if "$KAMA" query "$(scope_for "$FIXTURE")" "$FIXTURE" --search "" 2>&1 | grep -qF "widget.kama:12:11 value Widget" &&
+   "$KAMA" query "$(scope_for "$FIXTURE")" "$FIXTURE" --search "" 2>&1 | grep -qF "app.kama"; then
     echo "  ok: --search '' lists every symbol in the package"
 else
     echo "  FAIL: --search '' should list the whole package" >&2
@@ -784,7 +809,7 @@ expect --project --refs 15:13 -- "lib.kama:19:42"        # and in a second metho
 expect --project --refs 15:13 -- "use.kama:12:7"         # through Box<int32>
 expect --project --refs 15:13 -- "use.kama:17:7"         # through Box<bool> — the SAME symbol
 # ONE def-site however many instantiations exist: exactly one line names the declaration itself.
-n=$("$KAMA" query "$FIXTURE" --project --refs 15:13 2>&1 | grep -c "lib.kama:15:13")
+n=$("$KAMA" query "$(scope_for "$FIXTURE")" "$FIXTURE" --refs 15:13 2>&1 | grep -c "lib.kama:15:13")
 if [ "$n" = 1 ]; then echo "  ok: two instantiations yield ONE def-site for the field"
 else echo "  FAIL: expected 1 def-site line for the field, got $n" >&2; fail=1; fi
 # A generic type's METHOD, likewise — and these are CALL sites, which is B3a.

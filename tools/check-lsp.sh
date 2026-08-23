@@ -846,7 +846,9 @@ cfgreject "$CFGA" '"severity":1'         "no phantom diagnostic from conditional
 # would otherwise join the symbol set and make this compare two different things.
 cfglsp=$(printf '%s' "$CFGA" | tr '\r' '\n' | tr -d '\n' | sed 's/.*"id":47,"result"://' \
          | tr ',' '\n' | grep -o '"name":"[A-Za-z_]*"' | sed 's/.*:"//; s/"//' | sort | tr '\n' ' ')
-cfgcli=$("$KAMA" query "$CFGDIR/src/app.kama" --symbols 2>/dev/null | awk '{print $NF}' | sort | tr '\n' ' ')
+# Named by its manifest AND its file: `query` is target-addressed, so the manifest sets the scope (and
+# with it the flag universe this whole section is about) while the file stays the thing being asked about.
+cfgcli=$("$KAMA" query "$CFGDIR/kama.json" "$CFGDIR/src/app.kama" --symbols 2>/dev/null | awk '{print $NF}' | sort | tr '\n' ' ')
 if [ "$cfglsp" = "$cfgcli" ]; then
     echo "  ok: the LSP and \`kama query\` agree on the symbol set ($cfgcli)"
 else

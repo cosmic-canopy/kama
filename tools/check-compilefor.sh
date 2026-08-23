@@ -57,13 +57,14 @@ fi
 proj="$tmp/proj"
 mkdir -p "$proj/src"
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "strict-demo", "version": "0.1.0", "kind": "executable", "flags": { "TELEMETRY": {} } }
+{ "name": "strict-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "TELEMETRY": {} } }
 JSON
 cat > "$proj/src/app.kama" <<'KAMA'
 @compileFor(TELMETRY) fn int32 typo() { return 1; }
 fn int32 main() { return 0; }
 KAMA
-if "$KAMA" build "$proj/src/app.kama" -o "$proj/app" >/dev/null 2>"$tmp/strict.err"; then
+if "$KAMA" build "$proj/kama.json" -o "$proj/app" >/dev/null 2>"$tmp/strict.err"; then
     echo "check-compilefor: FAIL — strict manifest accepted an undeclared @compileFor flag (TELMETRY)" >&2
     exit 1
 fi
@@ -80,12 +81,13 @@ fi
 res="$tmp/reserved"
 mkdir -p "$res/src"
 cat > "$res/kama.json" <<'JSON'
-{ "name": "reserved-demo", "version": "0.1.0", "kind": "executable", "flags": { "WINDOWS": {} } }
+{ "name": "reserved-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "WINDOWS": {} } }
 JSON
 cat > "$res/src/app.kama" <<'KAMA'
 fn int32 main() { return 0; }
 KAMA
-if "$KAMA" build "$res/src/app.kama" -o "$res/app" >/dev/null 2>"$tmp/reserved.err"; then
+if "$KAMA" build "$res/kama.json" -o "$res/app" >/dev/null 2>"$tmp/reserved.err"; then
     echo "check-compilefor: FAIL — a manifest declared the built-in target name WINDOWS as a user flag" >&2
     exit 1
 fi
@@ -139,7 +141,7 @@ fi
 sel="$tmp/sel"
 mkdir -p "$sel/src"
 cat > "$sel/kama.json" <<'JSON'
-{ "name": "sel-demo", "version": "0.1.0", "kind": "executable",
+{ "name": "sel-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
               "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } } }
 JSON
@@ -153,28 +155,28 @@ cat > "$sel/src/app.kama" <<'KAMA'
 fn int32 main() { return a() + b() + c(); }
 KAMA
 # default: BUILD_TYPE=DEBUG (built-in), CONSOLE=XBOX (manifest `default: true`) -> 0 + 0 + 100
-"$KAMA" build "$sel/src/app.kama" -o "$sel/dflt" >/dev/null 2>&1
+"$KAMA" build "$sel/kama.json" -o "$sel/dflt" >/dev/null 2>&1
 if "$sel/dflt"; then rc=0; else rc=$?; fi
 if [ "$rc" != 100 ]; then
     echo "check-compilefor: FAIL — select defaults gave $rc, expected 100 (DEBUG + the manifest's XBOX)" >&2
     exit 1
 fi
 # --select overrides the manifest default
-"$KAMA" build --select CONSOLE=PS5 "$sel/src/app.kama" -o "$sel/ps5" >/dev/null 2>&1
+"$KAMA" build --select CONSOLE=PS5 "$sel/kama.json" -o "$sel/ps5" >/dev/null 2>&1
 if "$sel/ps5"; then rc=0; else rc=$?; fi
 if [ "$rc" != 200 ]; then
     echo "check-compilefor: FAIL — --select CONSOLE=PS5 gave $rc, expected 200" >&2
     exit 1
 fi
 # a user BUILD_TYPE inherits its base: FAST is active AND so is RELEASE (and its -O3/strip driver behavior)
-"$KAMA" build --select BUILD_TYPE=FAST "$sel/src/app.kama" -o "$sel/fast" >/dev/null 2>&1
+"$KAMA" build --select BUILD_TYPE=FAST "$sel/kama.json" -o "$sel/fast" >/dev/null 2>&1
 if "$sel/fast"; then rc=0; else rc=$?; fi
 if [ "$rc" != 121 ]; then
     echo "check-compilefor: FAIL — --select BUILD_TYPE=FAST gave $rc, expected 121 (FAST + inherited RELEASE + XBOX)" >&2
     exit 1
 fi
 # single-select really is single
-if "$KAMA" build --select CONSOLE=PS5 --select CONSOLE=XBOX "$sel/src/app.kama" -o "$sel/dup" >/dev/null 2>"$tmp/dup.err"; then
+if "$KAMA" build --select CONSOLE=PS5 --select CONSOLE=XBOX "$sel/kama.json" -o "$sel/dup" >/dev/null 2>"$tmp/dup.err"; then
     echo "check-compilefor: FAIL — a single-select group accepted two values" >&2
     exit 1
 fi
@@ -184,11 +186,11 @@ if ! grep -qF "single-select" "$tmp/dup.err"; then
     exit 1
 fi
 # an undeclared value / group is rejected, not silently ignored
-if "$KAMA" build --select CONSOLE=WII "$sel/src/app.kama" -o "$sel/bad" >/dev/null 2>"$tmp/badval.err"; then
+if "$KAMA" build --select CONSOLE=WII "$sel/kama.json" -o "$sel/bad" >/dev/null 2>"$tmp/badval.err"; then
     echo "check-compilefor: FAIL — --select accepted a value the group does not declare" >&2
     exit 1
 fi
-if "$KAMA" build --select NOSUCHGROUP=X "$sel/src/app.kama" -o "$sel/bad2" >/dev/null 2>"$tmp/badgrp.err"; then
+if "$KAMA" build --select NOSUCHGROUP=X "$sel/kama.json" -o "$sel/bad2" >/dev/null 2>"$tmp/badgrp.err"; then
     echo "check-compilefor: FAIL — --select accepted an undeclared group" >&2
     exit 1
 fi
@@ -212,15 +214,25 @@ fi
 # 6. kama.local.json (M5.2) — a gitignored sibling deep-merges over kama.json: a flag it declares extends the
 #    valid universe (no longer "undeclared"), and one it marks `default:true` is active. Reuse the strict proj:
 #    its kama.json declares only TELEMETRY, so LOCALFLAG is undeclared until the local manifest adds it.
-cat > "$proj/kama.local.json" <<'JSON'
+#
+# ⚠️ Its OWN project directory, not the strict one it copies. A manifest operand names every file under
+# the project's `source` root, so sharing a directory with the strict fixture would compile that
+# fixture's `main` alongside this one's — two entry points in one program.
+loc="$tmp/local"
+mkdir -p "$loc/src"
+cat > "$loc/kama.json" <<'JSON'
+{ "name": "local-demo", "version": "0.1.0", "kind": "executable", "entry": "src/local.kama",
+  "flags": { "TELEMETRY": {} } }
+JSON
+cat > "$loc/kama.local.json" <<'JSON'
 { "flags": { "LOCALFLAG": { "default": true } } }
 JSON
-cat > "$proj/src/local.kama" <<'KAMA'
+cat > "$loc/src/local.kama" <<'KAMA'
 @compileFor(LOCALFLAG) fn int32 gated() { return 42; }
 fn int32 main() { return gated(); }
 KAMA
 localc="$tmp/local.c"
-if ! "$KAMA" transpile --no-line "$proj/src/local.kama" -o "$localc" >/dev/null 2>"$tmp/local.err"; then
+if ! "$KAMA" transpile --no-line "$loc/kama.json" -o "$localc" >/dev/null 2>"$tmp/local.err"; then
     echo "check-compilefor: FAIL — kama.local.json did not declare LOCALFLAG (build rejected it):" >&2
     sed 's/^/  /' "$tmp/local.err" >&2
     exit 1

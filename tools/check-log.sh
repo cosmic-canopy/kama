@@ -85,9 +85,12 @@ fi
 mkdir -p "$tmp/proj/src"
 cp "$tmp/log.kama" "$tmp/proj/src/log.kama"
 cat > "$tmp/proj/kama.json" <<'JSON'
-{ "name": "logtest", "version": "0.1.0", "kind": "executable", "log": { "level": "info", "tags": { "audio": "debug" } } }
+{ "name": "logtest", "version": "0.1.0", "kind": "executable", "entry": "src/log.kama",
+  "log": { "level": "info", "tags": { "audio": "debug" } } }
 JSON
-"$KAMA" build "$tmp/proj/src/log.kama" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
+# Named by its MANIFEST: the baked default is the whole point here, and naming the .kama file instead is
+# a loose build, which reads no manifest and would bake nothing.
+"$KAMA" build "$tmp/proj/kama.json" -o "$tmp/proj/log" >/dev/null 2>"$tmp/proj.build.err" || {
     echo "check-log: FAIL — baked-default build failed" >&2; sed 's/^/  /' "$tmp/proj.build.err" >&2; exit 1; }
 # 6a. bare run: the baked per-tag audio=debug shows an audio debug line; net stays at the baked global info.
 "$tmp/proj/log" >/dev/null 2>"$tmp/e6" || { echo "check-log: FAIL — baked-default run exited nonzero" >&2; exit 1; }
@@ -108,7 +111,11 @@ grep -qF "net-debug" "$tmp/e6c" || { echo "check-log: FAIL — --log=debug did n
 # base: global info + net=trace; local: adds audio=debug and raises the global to warn. The merged filter must
 # (a) keep the base net=trace tag, (b) apply the local audio=debug tag, (c) apply the local global warn — so an
 # untagged (`db`) info line is dropped. A dedicated program makes each of the three observable.
-cat > "$tmp/proj/merge.kama" <<'KAMA'
+# ⚠️ Its OWN project, and its source under `source`. A manifest operand names every file under the
+# project's source root, so sharing 6's directory would put two `main`s in one program — and a file
+# sitting BESIDE src/ belongs to no project at all.
+mkdir -p "$tmp/proj2/src"
+cat > "$tmp/proj2/src/merge.kama" <<'KAMA'
 import std::log::{logInfo, logDebug};
 fn int32 main() {
     logDebug(tag: "net", msg: "net-debug");     // base net=trace  -> shown
@@ -117,13 +124,14 @@ fn int32 main() {
     return 0;
 }
 KAMA
-cat > "$tmp/proj/kama.json" <<'JSON'
-{ "name": "logtest", "version": "0.1.0", "kind": "executable", "log": { "level": "info", "tags": { "net": "trace" } } }
+cat > "$tmp/proj2/kama.json" <<'JSON'
+{ "name": "logmerge", "version": "0.1.0", "kind": "executable", "entry": "src/merge.kama",
+  "log": { "level": "info", "tags": { "net": "trace" } } }
 JSON
-cat > "$tmp/proj/kama.local.json" <<'JSON'
+cat > "$tmp/proj2/kama.local.json" <<'JSON'
 { "log": { "level": "warn", "tags": { "audio": "debug" } } }
 JSON
-"$KAMA" build "$tmp/proj/merge.kama" -o "$tmp/proj/merge" >/dev/null 2>"$tmp/proj2.build.err" || {
+"$KAMA" build "$tmp/proj2/kama.json" -o "$tmp/proj/merge" >/dev/null 2>"$tmp/proj2.build.err" || {
     echo "check-log: FAIL — local-override build failed" >&2; sed 's/^/  /' "$tmp/proj2.build.err" >&2; exit 1; }
 "$tmp/proj/merge" >/dev/null 2>"$tmp/e7" || { echo "check-log: FAIL — local-override run exited nonzero" >&2; exit 1; }
 grep -qF "net-debug" "$tmp/e7" || { echo "check-log: FAIL — base net=trace not preserved through the local merge" >&2; sed 's/^/  /' "$tmp/e7" >&2; exit 1; }

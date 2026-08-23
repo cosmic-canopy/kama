@@ -2,6 +2,7 @@
   "name": "pkg-path-dep-src",
   "version": "0.1.0",
   "kind": "executable",
+  "entry": "src/main.kama",
   "dependencies": {
     "geo": { "path": "./vendor/geo" }
   }

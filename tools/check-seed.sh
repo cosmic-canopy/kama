@@ -74,7 +74,7 @@ grep -q '"source"' "$e/kama.json" && bad "seed emitted a redundant source key" \
                                   || ok "the manifest leans on the \`source\` default"
 
 # The claim the whole template rests on: it runs.
-if ( cd "$e" && "$KAMA" run ) >"$tmp/run.out" 2>&1; then
+if ( cd "$e" && "$KAMA" run kama.json ) >"$tmp/run.out" 2>&1; then
     grep -q 'hello from demoapp' "$tmp/run.out" && ok "the seeded executable runs and greets by name" \
                                                 || bad "ran, but printed: $(head -1 "$tmp/run.out")"
 else
@@ -88,7 +88,7 @@ else ok "no placeholder token survives"; fi
 
 # Artifacts collect under out/, not on top of the sources (see check-target.sh for the full rule). Note
 # this needs an explicit `build`: `kama run` compiles into $TMPDIR and deliberately leaves nothing behind.
-( cd "$e" && "$KAMA" build src/app.kama ) >/dev/null 2>&1 || bad "the seeded project did not build"
+( cd "$e" && "$KAMA" build kama.json ) >/dev/null 2>&1 || bad "the seeded project did not build"
 [ -d "$e/out" ] && ok "build output went to out/" || bad "no out/ after a build"
 [ -z "$(find "$e/src" -type f ! -name '*.kama')" ] && ok "src/ holds only sources" \
                                                    || bad "the build left artifacts in src/"
@@ -107,7 +107,7 @@ grep -q '"source"' "$l/kama.json" && bad "seed emitted a redundant source key" \
 grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok "library declares no entry"
 [ -f "$l/src/demolib.kama" ] && ok "the library source is named for the package" \
                              || bad "expected src/demolib.kama; got: $(ls "$l/src")"
-"$KAMA" check "$l/src/demolib.kama" >/dev/null 2>&1 && ok "the seeded library analyzes clean" \
+"$KAMA" check "$l/kama.json" >/dev/null 2>&1 && ok "the seeded library analyzes clean" \
                                                     || bad "the seeded library does not analyze"
 
 # ---------------------------------------------------------------------------------------------------
@@ -136,11 +136,17 @@ grep -q '"name"\|"version"\|"kind"\|"entry"' "$w/kama_workspace.json" \
 ( cd "$w/server" && "$KAMA" pkg add engine --path ../engine ) >/dev/null 2>&1 \
     || bad "pkg add of a sibling failed"
 printf 'import engine::{ answer };\nfn int32 main() { return answer(); }\n' > "$w/server/src/server.kama"
-# ⚠️ Built from INSIDE the member, not by path from here. projectManifestDir looks only in the input
-# file's own directory and then the CWD — it does not walk up the way owningPackageDir does — so
-# `kama build ws/server/src/server.kama` from out here cannot find ws/server/.kama/deps and fails with
-# `cannot resolve module 'engine'`. Pre-existing, and unrelated to seeding; noted in ROADMAP_DETAIL §10.
-( cd "$w/server" && "$KAMA" build src/server.kama -o "$tmp/srv" ) >"$tmp/ws.out" 2>&1 || {
+# PROMOTING a member to an executable is exactly what docs/packages.md says it is: add `entry` and a
+# `main`. Without the manifest change the member is still a library, and `kind` now picks the OUTPUT
+# default — so the build would quietly produce an ARCHIVE and there would be nothing to run.
+sed 's/"kind": "library"/"kind": "executable",\n  "entry": "src\/server.kama"/' "$w/server/kama.json" > "$tmp/sv.json"
+mv "$tmp/sv.json" "$w/server/kama.json"
+# Built from OUTSIDE the member, by naming its manifest — which the operand rule is what makes possible.
+# This used to be impossible and was noted as a known limit: discovery looked in the input file's own
+# directory and then the CWD, never walking up, so `kama build ws/server/src/server.kama` from out here
+# could not find ws/server/.kama/deps and failed with `cannot resolve module 'engine'`. The operand names
+# the project, so there is nothing left to discover.
+"$KAMA" build "$w/server/kama.json" -o "$tmp/srv" >"$tmp/ws.out" 2>&1 || {
     bad "the composed monorepo did not build:"; sed 's/^/    /' "$tmp/ws.out" >&2; }
 if [ -x "$tmp/srv" ]; then
     if "$tmp/srv"; then rc=0; else rc=$?; fi

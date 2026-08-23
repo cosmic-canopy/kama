@@ -544,10 +544,12 @@ multi_one() {
             { echo "FAIL $name (pkg install failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
         fi
     fi
-    # A fixture WITH a manifest keeps its sources under the `source` root, which defaults to src/; one
-    # without is a bare pile of .kama files and stays flat. Both shapes are legitimate — a manifest-less
-    # fixture is testing the language, not the project model — so the glob follows the layout.
-    if [ -d "$src/src" ]; then set -- "$src"/src/*.kama; else set -- "$src"/*.kama; fi
+    # A fixture WITH a manifest is named BY ITS MANIFEST, because the operand is the mode: naming the
+    # .kama files instead is a LOOSE build, which by design applies no manifest at all — no `flags`
+    # universe, no dependency view, no `out` root. That is what these fixtures are testing, so they have
+    # to be spelled as projects. One without a manifest is a bare pile of .kama files and stays flat; it
+    # is testing the language, not the project model.
+    if [ -f "$src/kama.json" ]; then set -- "$src/kama.json"; else set -- "$src"/*.kama; fi
     if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi

@@ -81,49 +81,68 @@ run sh -c "cd '$tmp/plain' && '$SEL' build x.kama"
 grep -q "TOOLCHAIN vB" "$tmp/out" || fail "toolchain default vB did not switch the unpinned resolution"
 
 # ---- 3. a project pin beats the default (default is now vB) -------------------------------------------
+#         The project is NAMED, because the operand is what the selector reads. It no longer walks up from
+#         an input file or from the CWD — see 4c, which is where that change is stated and asserted.
 mkdir -p "$tmp/pinned"
 printf '{ "name": "p", "kind": "executable", "toolchain": "vA" }\n' > "$tmp/pinned/kama.json"
-run sh -c "cd '$tmp/pinned' && '$SEL' build x.kama"
+run sh -c "cd '$tmp/pinned' && '$SEL' build kama.json"
 grep -q "TOOLCHAIN vA" "$tmp/out" || fail "project pin vA did not beat the default vB"
 
 # ---- 4. KAMA_VERSION beats the default, but NOT a project pin (pin > env > default) -------------------
-run sh -c "cd '$tmp/plain'  && KAMA_VERSION=vA '$SEL' build x.kama"   # default vB, env vA -> vA
+run sh -c "cd '$tmp/plain'  && KAMA_VERSION=vA '$SEL' build x.kama"   # no manifest named, env vA -> vA
 grep -q "TOOLCHAIN vA" "$tmp/out" || fail "KAMA_VERSION did not override the default"
-run sh -c "cd '$tmp/pinned' && KAMA_VERSION=vB '$SEL' build x.kama"   # pin vA, env vB -> vA
+run sh -c "cd '$tmp/pinned' && KAMA_VERSION=vB '$SEL' build kama.json"   # pin vA, env vB -> vA
 grep -q "TOOLCHAIN vA" "$tmp/out" || fail "KAMA_VERSION wrongly overrode a project pin"
 
 # ---- 4b. a kama.local.json toolchain override beats the kama.json pin (M5.3, dev-local) ---------------
 printf '{ "toolchain": "vB" }\n' > "$tmp/pinned/kama.local.json"
-run sh -c "cd '$tmp/pinned' && '$SEL' build x.kama"                   # kama.json pin vA, local vB -> vB
+run sh -c "cd '$tmp/pinned' && '$SEL' build kama.json"                # kama.json pin vA, local vB -> vB
 grep -q "TOOLCHAIN vB" "$tmp/out" || fail "kama.local.json toolchain override did not beat the kama.json pin"
 rm -f "$tmp/pinned/kama.local.json"
 
-# ---- 4c. THE PIN FOLLOWS THE FILE, not the shell. Manifest discovery used to be spelled four different
-#         ways, and this was the last one out of step: the build walked up from the input file to find its
-#         project, while the selector walked up from the CWD. So building a pinned project's source from
-#         outside it compiled that project's code with whatever toolchain the current directory resolved
-#         to — the project's own pin ignored, silently, with a correct-looking build.
+# ---- 4c. THE PIN COMES FROM THE OPERAND, and there is no walk left at all ----------------------------
+#         The selector runs BEFORE argument parsing — it must, since its job is choosing which binary does
+#         the parsing — so it used to scan raw argv for "an existing file ending in .kama" and then walk UP
+#         from it. Hand it `kama build ../legacy/kama.json` and nothing matched, so the pin came from the
+#         CURRENT DIRECTORY and ../legacy was built by whatever the CWD pinned, silently.
 #
-#         `pinned` pins vA; the default is vB. Standing OUTSIDE it and naming its source must give vA.
-#         (The selector cannot parse arguments — it runs before the parse — so it recognizes an input by
-#         "existing file ending in .kama"; hence a real file here, unlike the cases above.)
+#         Now it reads the named manifest. `pinned` pins vA; the default is vB. Standing OUTSIDE it and
+#         naming its manifest must give vA — the case that used to be the silent one.
 printf 'fn int32 main() { return 0; }\n' > "$tmp/pinned/real.kama"
-run sh -c "cd '$tmp' && '$SEL' build pinned/real.kama"
+run sh -c "cd '$tmp' && '$SEL' build pinned/kama.json"
 grep -q "TOOLCHAIN vA" "$tmp/out" \
-    || fail "the pin did not follow the input file: building pinned/real.kama from outside used the CWD's toolchain"
+    || fail "the pin did not follow the named manifest: building pinned/kama.json from outside used the CWD's toolchain"
 
-#         And with no recognizable input it still falls back to walking up from the CWD — the behavior the
-#         selector had before it knew about inputs, which is what keeps `kama seed` in a fresh subdirectory
-#         inheriting the repo's toolchain.
+#         ⚠️ And the deliberate BEHAVIOR CHANGE, asserted so it cannot regress by accident: naming no
+#         manifest inherits NO project's pin, even standing inside one. A loose build is not a project
+#         build (§2g.33), so it takes the env/global default — here vB — rather than the vA it is sitting
+#         in. This is the one place the operand rule takes something away, and it is on purpose.
 mkdir -p "$tmp/pinned/deep/deeper"
 run sh -c "cd '$tmp/pinned/deep/deeper' && '$SEL' build nosuchfile.kama"
-grep -q "TOOLCHAIN vA" "$tmp/out" \
-    || fail "with no resolvable input the selector no longer walks up from the CWD"
+grep -q "TOOLCHAIN vB" "$tmp/out" \
+    || fail "a loose build inside a pinned project no longer takes the global default"
+
+# ---- 4d. A WORKSPACE RUNS IN PLACE AND RE-EXECS PER MEMBER, so each member keeps its own pin ----------
+#         The selector exports KAMA_NO_SELECT immediately before it execs, as its loop-stopper, and a
+#         child inherits it. If a workspace operand made the driver select a version for ITSELF, every
+#         member would then skip selection and be built by that one compiler. Never exec'ing for a
+#         workspace is what lets each member start clean — which is why no `toolchain` key may live in
+#         kama_workspace.json in the first place.
+#
+#         Two members pinned to DIFFERENT versions, so one compiler for the pair would be visible: both
+#         announcements must appear.
+mkdir -p "$tmp/wsp/a" "$tmp/wsp/b"
+printf '{ "projects": { "a": { "optional": false }, "b": { "optional": false } } }\n' > "$tmp/wsp/kama_workspace.json"
+printf '{ "name": "a", "kind": "library", "toolchain": "vA" }\n' > "$tmp/wsp/a/kama.json"
+printf '{ "name": "b", "kind": "library", "toolchain": "vB" }\n' > "$tmp/wsp/b/kama.json"
+run sh -c "cd '$tmp' && '$SEL' build wsp/kama_workspace.json"
+grep -q "TOOLCHAIN vA" "$tmp/out" || fail "the workspace fan-out did not use member a's own pin (vA)"
+grep -q "TOOLCHAIN vB" "$tmp/out" || fail "the workspace fan-out did not use member b's own pin (vB)"
 
 # ---- 5. a pin to a missing version → a clear, actionable error ---------------------------------------
 mkdir -p "$tmp/missing"
 printf '{ "name": "m", "kind": "executable", "toolchain": "v9" }\n' > "$tmp/missing/kama.json"
-run sh -c "cd '$tmp/missing' && '$SEL' build x.kama"
+run sh -c "cd '$tmp/missing' && '$SEL' build kama.json"
 [ "$RC" != 0 ] || fail "a pin to a missing version did not error"
 grep -qi "not installed" "$tmp/out" && grep -q "toolchain install" "$tmp/out" \
     || fail "missing-version error was not clear/actionable"
@@ -140,4 +159,4 @@ run "$KAMA" toolchain uninstall vA             # vA is not the default → remov
 [ "$RC" = 0 ] || fail "uninstall of a non-default version errored"
 [ ! -d "$HOME/.kama/versions/vA" ] || fail "uninstall did not remove the version dir"
 
-echo "check-toolchain: PASS (list; default switch; kama.local.json > pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default; the pin follows the INPUT FILE, falling back to a CWD walk)"
+echo "check-toolchain: PASS (list; default switch; kama.local.json > pin > KAMA_VERSION > default; missing-version error; pin writes manifest; uninstall guards default; the pin is READ from the named manifest, a loose build takes the default, and a workspace re-execs per member)"

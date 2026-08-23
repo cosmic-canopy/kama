@@ -34,11 +34,18 @@ proj() {
     cat > "$d/kama.json"
 }
 
+# Same, for the cases whose manifest is deliberately broken in a way that stops it naming an entry.
+# (An executable project states its `entry`; these are testing what happens before that is reached.)
+
 # The manifest must be REFUSED, non-zero, with no artifact, and the error must contain $2.
+#
+# ⚠️ The project is named BY ITS MANIFEST, not by a file inside it. `kama build <d>/src/app.kama` is a
+# LOOSE build now — it applies no manifest at all — so every assertion here would pass a broken manifest
+# by never reading it. That is the whole operand rule (§2g.32) turned on the guard that tests it.
 reject() {
     d="$tmp/$1"; want="$2"; what="$3"
     rm -f "$d/out.bin"
-    if "$KAMA" build "$d/src/app.kama" -o "$d/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    if "$KAMA" build "$d/kama.json" -o "$d/out.bin" >"$tmp/o" 2>"$tmp/e"; then
         bad "$what — accepted, but must be REJECTED"; return
     fi
     if [ -f "$d/out.bin" ]; then bad "$what — rejected but still wrote an artifact"; return; fi
@@ -50,15 +57,31 @@ reject() {
 
 # The manifest must be ACCEPTED and the program must build and run. Silence is the claim, so every
 # rejection above is paired with one of these — otherwise a rule that rejects EVERYTHING would pass.
+#
+# ⚠️ For an EXECUTABLE project only. A library has no `main`, so `kind` now picks OUTPUT=STATIC for it and
+# the artifact is an archive with nothing to run — use acceptLib for those.
 accept() {
     d="$tmp/$1"; what="$2"
     rm -f "$d/out.bin"
-    if ! "$KAMA" build "$d/src/app.kama" -o "$d/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    if ! "$KAMA" build "$d/kama.json" -o "$d/out.bin" >"$tmp/o" 2>"$tmp/e"; then
         bad "$what — rejected, but must be accepted"; head -3 "$tmp/e" >&2; return
     fi
     # `|| rc=$?`, not `; rc=$?` — the fixture exits 7 on purpose and `set -e` would kill the guard.
     rc=0; "$d/out.bin" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 7 ] || { bad "$what — built but ran with exit $rc, expected 7"; return; }
+    ok "$what"
+}
+
+# A LIBRARY manifest must be accepted, and what it produces is an archive: `kind` picks the OUTPUT
+# default, so `kama build <lib>/kama.json` stops at the archive rather than failing at the linker looking
+# for a `main` a library was never going to have.
+acceptLib() {
+    d="$tmp/$1"; what="$2"
+    rm -f "$d/out.a"
+    if ! "$KAMA" build "$d/kama.json" -o "$d/out.a" >"$tmp/o" 2>"$tmp/e"; then
+        bad "$what — rejected, but must be accepted"; head -3 "$tmp/e" >&2; return
+    fi
+    [ -s "$d/out.a" ] || { bad "$what — accepted but produced no archive"; return; }
     ok "$what"
 }
 
@@ -69,12 +92,12 @@ echo "check-manifest: an unknown key is an error, not a silent skip"
 # exactly like a key that did nothing — and the manifest is about to carry the module map, where a
 # swallowed key would mean a swallowed visibility decision.
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "kind": "executable", "sourses": ["src"] }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sourses": ["src"] }
 JSON
 reject typo 'unknown key `sourses`' "a misspelled key names itself"
 
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "kind": "executable" }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
 JSON
 accept typo "the correctly spelled key builds"
 
@@ -97,7 +120,7 @@ reject legacy '`main` is now `entry`' "the legacy \`main\` key is refused by nam
 
 # Every command, not just `kama run` — which is what moving the check into the reader bought. Before
 # this, `kama build` accepted the manifest silently and only `kama run` mentioned the rename.
-if (cd "$tmp/legacy" && "$KAMA" run >"$tmp/o" 2>"$tmp/e"); then
+if (cd "$tmp/legacy" && "$KAMA" run kama.json >"$tmp/o" 2>"$tmp/e"); then
     bad "\`kama run\` accepted a manifest with the legacy \`main\` key"
 elif grep -qF '`main` is now `entry`' "$tmp/e"; then
     ok "\`kama run\` reports the rename too"
@@ -128,10 +151,10 @@ reject badkind '`kind` must be "library" or "executable"' "a misspelled \`kind\`
 proj badkind <<'JSON'
 { "name": "badkind", "version": "0.1.0", "kind": "library" }
 JSON
-accept badkind "\`kind\`: library builds"
+acceptLib badkind "\`kind\`: library builds, as an archive"
 
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "executable" }
+{ "name": "badkind", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
 JSON
 accept badkind "\`kind\`: executable builds"
 
@@ -143,7 +166,7 @@ echo "check-manifest: \`source\` names one real subdirectory"
 proj dflt <<'JSON'
 { "name": "dflt", "version": "0.1.0", "kind": "library" }
 JSON
-accept dflt "an absent \`source\` defaults to src/"
+acceptLib dflt "an absent \`source\` defaults to src/"
 
 # `.` is refused, and this is the rule that keeps "no kama.json under source" exemption-free: with `.`,
 # the manifest itself, .kama/deps, out/ and any vendored project would all sit INSIDE the source root.
@@ -226,19 +249,19 @@ echo "check-manifest: \`link\` names native libraries once, per project"
 mkdir -p "$tmp/lnk/src"
 printf 'fn int32 main() { return 0; }\n' > "$tmp/lnk/src/app.kama"
 cat > "$tmp/lnk/kama.json" <<'JSON'
-{ "name": "lnk", "version": "0.1.0", "kind": "executable", "link": ["m"] }
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"] }
 JSON
-tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" -o "$tmp/lnk/app" 2>/dev/null || true)
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/kama.json" -o "$tmp/lnk/app" 2>/dev/null || true)
 printf '%s' "$tail_out" | grep -qF -- "-lm" \
     && ok "a project's \`link\` reaches the link tail" \
     || { bad "\`link\` did not reach the link tail"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
 
 # A target OVERRIDES it wholesale rather than adding to it — the only way to say "not on this one".
 cat > "$tmp/lnk/kama.json" <<'JSON'
-{ "name": "lnk", "version": "0.1.0", "kind": "executable", "link": ["m"],
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"],
   "select": { "TARGET": { "WINDOWS": { "link": ["ws2_32"] } } } }
 JSON
-tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" --target WINDOWS -o "$tmp/lnk/app" 2>/dev/null || true)
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/kama.json" --target WINDOWS -o "$tmp/lnk/app" 2>/dev/null || true)
 if printf '%s' "$tail_out" | grep -qF -- "-lws2_32" && ! printf '%s' "$tail_out" | grep -qE -- '-lm( |$)'; then
     ok "a target's \`link\` REPLACES the project's, rather than adding to it"
 else
@@ -246,7 +269,7 @@ else
 fi
 
 # ...and a target that says nothing about `link` still inherits the project's.
-tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/src/app.kama" -o "$tmp/lnk/app" 2>/dev/null || true)
+tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/kama.json" -o "$tmp/lnk/app" 2>/dev/null || true)
 printf '%s' "$tail_out" | grep -qE -- '-lm( |$)' \
     && ok "...while a target that never mentions it inherits" \
     || { bad "a silent target lost the project's \`link\`"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
@@ -255,7 +278,7 @@ printf '%s' "$tail_out" | grep -qE -- '-lm( |$)' \
 echo "check-manifest: projects do not nest"
 
 proj nest <<'JSON'
-{ "name": "nest", "version": "0.1.0", "kind": "executable" }
+{ "name": "nest", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
 JSON
 mkdir -p "$tmp/nest/src/inner"
 printf '{ "name": "inner", "version": "0.1.0", "kind": "library" }\n' > "$tmp/nest/src/inner/kama.json"
@@ -275,7 +298,7 @@ echo "check-manifest: the workspace is its own file, with its own schema"
 # `projects` moved OUT of kama.json, and the rejection names where it went. This is the migration
 # instruction, so it must fire on the ordinary build path, not only where a workspace is read.
 proj oldws <<'JSON'
-{ "name": "oldws", "version": "0.1.0", "kind": "executable", "projects": ["libs/*"] }
+{ "name": "oldws", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "projects": ["libs/*"] }
 JSON
 reject oldws 'now lives in kama_workspace.json' "\`projects\` in a kama.json names the file it moved to"
 
