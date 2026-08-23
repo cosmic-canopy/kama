@@ -251,6 +251,15 @@ static lint, not a correctness rule, and the build already fails clearly for who
 9. **The map is NESTED, mirroring the folder tree.** Each key is **one path segment** — a folder directly
    inside its parent — and a node may carry its own `modules` for the folders inside it.
 
+   ⚠️ **A module is a FOLDER, and the file-module is deleted** (decided 2026-08-22). Today
+   `resolveModuleFiles` ([kama.driver.cpp:611](../../src/kama.driver.cpp)) resolves `<root>/a/b/c.kama`
+   as module `a::b::c` before it tries the directory, so a module has two spellings. A file has no key
+   in a folder-keyed map, so keeping it would need a *second*, unwritten naming rule — basename to
+   module name — which is exactly what this section's invariant forbids. It also re-opens §1a claim 1 in
+   a new place: `src/math.kama` and `src/math/` could both exist and the file would silently win.
+   *"When it comes to modules they span multiple files… part of the design was to keep file changes out
+   of the API."* Two lines delete; `tests/mod_basic.d` gains folders.
+
 ```json
 "modules": {
   ".":           { "visibility": "internal" },          // the project root: src/*.kama
@@ -435,11 +444,11 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     linking the emitted C.
 26. **Generated `.c` filenames become path-derived** — the module-relative path with separators replaced —
     which drops the positional `_N` without reintroducing the basename collision it was guarding (§1b).
-27. **Loose files** — a `.kama` with no `kama.json` — keep building and are the **only** remaining `_F<n>`
-    case: basename-derived, symbols unimportable, and **two loose files sharing a basename in one build is
-    an error naming both**. This is not a small population today (there is no `kama.json` anywhere in this
-    repo outside 16 test fixtures), but it is the one that by definition cannot be imported. **This design
-    shrinks the naming problem enormously; it does not dissolve it.**
+27. **Loose files** — a `.kama` with no `kama.json` — keep building. A file in the loose ROOT (§2i) is the
+    **only** remaining `_F<n>` case: basename-derived, symbols unimportable, and **two such files sharing a
+    basename in one build is an error naming both**. This is not a small population today (there is no
+    `kama.json` anywhere in this repo outside 16 test fixtures), but it is the one that by definition
+    cannot be imported. **This design shrinks the naming problem enormously; it does not dissolve it.**
 28. **C keyword collisions** — rename **only on collision**, every other name emitted exactly as written:
     - **Reserved set:** all 44 C11 keywords + the C23 additions — the full sets, not just the 33 kama
       leaves free, since kama's own reserved list may shrink later and the cost of a wider table is zero
@@ -464,9 +473,26 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     [SPEC:3235](../SPEC.md), `tests/global_alias.kama`, the C# spelling). Today it is held down by nothing
     but a comment and a sentence of prose — it is not even a lexer keyword.
 
-    Give `prelude/` a `kama.json` with `"name": "global"`, and `global::X` stops being a special form: it
-    is a symbol in a project, resolved by the same rule as `myapp::X`. The name is then reserved by the
-    ordinary uniqueness rule (§2a.2) — **no separate reservation machinery, and no third kind of scope**.
+    ⚠️ **CORRECTED 2026-08-22 — an earlier draft of this rule said "give `prelude/` a `kama.json` with
+    `"name": "global"`". That was an analogy, and taking it literally does not work.** The prelude is
+    **embedded**: `preludeUnit()` and `preludeModuleUnits()`
+    ([kama.driver.cpp:1424](../../src/kama.driver.cpp), [:1436](../../src/kama.driver.cpp)) parse it from
+    string literals with the synthetic names `<prelude>` and `<prelude>/std/…`, and it is never resolved
+    from disk — so **nothing would read that manifest**, which is the decorative-key trap §5/1c already
+    hit with `entry`. Worse, `source` must name a real subdirectory (`"."` is rejected, §2a.4), and
+    §2b's own check — *a `name` may not be `global`* — would reject the prelude's own manifest the moment
+    an editor opened a file under it and `owningPackageDir` walked up to it.
+
+    **What actually lands.** `global` joins `std` and `core` in the reserved-project-name set
+    ([kama.driver.cpp:5377](../../src/kama.driver.cpp)), promoted from a seed-time check to one the
+    manifest reader applies. That is §2a.2's uniqueness rule reaching the same conclusion by the same
+    mechanism it already uses for the other two reserved roots — **no separate reservation machinery, and
+    no third kind of scope**, which were the goals of the sentence this replaces. "No third kind of
+    scope" is already true today: the floor is an *empty* scope, and `qualify`
+    ([cemit:312](../../src/kama.cemit.cpp)) and `resolveUserNameImpl`
+    ([:353](../../src/kama.cemit.cpp)) already treat it as the degenerate case of the ordinary one.
+    `prelude/` therefore has **no `kama.json`**, and that is correct: it is compiler source that happens
+    to be written in kama, shipped inside `bin/kama` rather than as a tree.
     The floor's only special property becomes the one that genuinely is special: **it is implicitly
     imported into every file.** No other project can add to it, because claiming the name is just the
     duplicate-project error — which matters, since a dependency injecting unqualified names into every
@@ -492,6 +518,26 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     is preserved for free: embedding is already path-parameterised (`embed_prelude.sh OUT GLOBAL MODULE...`,
     [Makefile:98](../../Makefile)), so this is a `PRELUDE_MODULES` change, not a script or driver change.
     The hard-coded line then **deletes**.
+
+    ⚠️ **Two claims in the paragraph above are UNVERIFIED and both look wrong from reading the code.
+    Probe before writing the commit; do not build on them.**
+
+    - *"The hard-coded line then deletes."* The triad is pushed into **every** compilation
+      unconditionally by `addPreludeModule` ([driver:1788](../../src/kama.driver.cpp),
+      [cemit.h:597](../../src/kama.cemit.h)), and this rule keeps it embedded (that is how `--no-std`
+      survives) **while also** putting it on disk. Delete the line and an explicit `import std::memory`
+      resolves the disk copies *alongside* the embedded ones — `seen` is keyed on absolute path and the
+      embedded units are never in it, so nothing dedupes them. 132 statements in the corpus import
+      `std::memory`. Prediction: the line stays, ideally derived from the embedded units' module
+      identity rather than hard-coded.
+    - *"not a script or driver change."* `tools/embed_prelude.sh:35` builds each synthetic name as
+      `"<prelude>/${m#prelude/}"` — a literal prefix strip that becomes a no-op once `PRELUDE_MODULES`
+      points at `lib/std/memory/`, yielding `<prelude>/lib/std/memory/owned.kama`. And the deeper
+      version: the `<` prefix marks a unit **synthetic**, and `setPackageResolver`
+      ([driver:1783](../../src/kama.driver.cpp)) deliberately returns no manifest for such a unit — so
+      under derived identity (§5 phase 2) the embedded triad would have no project and no module, and
+      `std__memory__Owned` would silently become `_F<i>__Owned`. The embedded units must be handed their
+      identity explicitly.
 
 31. **`main` is the entry point, not a symbol.** It is reached *below* the visibility system: the user's
     `main` emits as `kama_main` ([kama.cemit.cpp:5779](../../src/kama.cemit.cpp)) and the emitter
@@ -658,6 +704,45 @@ verbs) and hidden instruments (`--strict-numeric`, `--probe-templates`) have no 
     `include/kama_log.h`). The manifest's `log` is a baked runtime default, and its overrides are the
     produced binary's own flag and `KAMA_LOG`.
 
+### 2i. Loose mode — the operands are the compilation
+
+Decided 2026-08-22. §2g gave the three build modes; nothing above said how a module gets its *name* in the
+one that has no manifest to name it.
+
+40. **A loose build does no filesystem searching. You pass every source file.** ⚠️ This is a **behavior
+    change, not a formalization** — loose mode searches today, and it was measured rather than assumed:
+    `tests/xfail/mod_collision.kama` is handed to the compiler *alone* and pulls `cola/cola.kama` and
+    `colb/colb.kama` off disk, because `here = dirName(paths[i])`
+    ([kama.driver.cpp:1108](../../src/kama.driver.cpp)) is the first entry on the import root list
+    ([:1134](../../src/kama.driver.cpp)). After this phase the operands **are** the compilation.
+    `std` and `global` still resolve from the stdlib — they are a dependency, not a source — and a name
+    no operand provides is an error naming `kama.json`.
+
+41. **Module names are derived from the RESOLVED operand paths.** Operands may be relative or absolute
+    and may sit anywhere on disk, so: resolve each to an absolute path, take their **deepest common
+    ancestor** as the loose ROOT, and a file's module is its directory relative to that root with `/`
+    replaced by `::`. Files directly in the root are in the root module and are unimportable (§2e.27).
+    No common ancestor — different Windows drives — means no modules at all.
+
+    This is **order-independent**: `kama build a.kama b.kama` and `b.kama a.kama` produce identical
+    symbols, which is the invariant §1b actually wants. It *is* set-dependent — adding a file from a
+    sibling tree raises the root and renames modules — and that is accepted rather than mitigated. A
+    different file set is a different program in loose mode, and unrelated trees yielding long module
+    names is precisely the signal that the build wants a `kama.json`.
+
+42. **Adding a `kama.json` listing those same folders is a NO-OP.** That is the property that makes loose
+    mode a genuine subset of project mode rather than a second dialect, and it is where the deviations
+    become nameable: a folder you do *not* list, a `name` override, a visibility narrower than public, or
+    a `source` root that is not the common ancestor.
+
+> **Why kama can afford Go's answer where Rust and Zig cannot.** kama's `import a::b` is a **name** — not
+> a path the way Zig's `@import("foo.zig")` is, and not preceded by a declaration the way Rust's
+> `mod foo;` is. A path or a declaration can be followed with nothing else to consult; a name cannot. So
+> the choice is between a manifest answering it and an implicit search answering it, and the implicit
+> search is the half §3 rejects. See §3's *"must you list every source"* table: every language that
+> requires listing all sources is a separate-compilation AOT language where the command line already
+> **is** the unit definition — which is exactly `kama build a.kama b.kama -o app`, one `.c` per unit.
+
 ---
 
 ## 3. Prior art
@@ -693,6 +778,37 @@ Two details that decided §2b and §2c:
   `"children"` is the explicit version of it.
 - **Go** gives a subdirectory package **no** relationship to its parent in either direction; the only
   hierarchy-aware rule is `internal/`. That is the answer §2c takes for access.
+
+**Must you list every source? — the survey behind §2i**
+
+Checked 2026-08-22, and it is a different question from "does it search": it asks who decides what is in
+the compilation when there is no manifest.
+
+*Must list every source — no search:*
+
+| | |
+|---|---|
+| **C / C++** | every translation unit on the command line; `#include` reaches headers only, never another TU. **This is kama's own shape** — `kama build a.kama b.kama -o app`, one `.c` per unit |
+| **Swift** | `swiftc a.swift b.swift -module-name M`; every file in a compilation unit is one module, and no file-search mechanism exists |
+| **C#** | `csc a.cs b.cs`; wildcards are a shell convenience, not a search |
+| **Go**, loose | `go build a.go b.go` → the synthetic package `command-line-arguments`; a local package import **fails** without `go.mod` (1.16+) |
+
+*Pass a root and follow imports — each has a path-spelled or declaration-driven import:*
+
+| | |
+|---|---|
+| **Rust** `rustc x.rs` | an explicit `mod foo;` loads `foo.rs` / `foo/mod.rs`. `use` never loads a file, and **`Cargo.toml` does not participate in module resolution at all** |
+| **Zig** `zig build-exe x.zig` | `@import("foo.zig")` spells the path. `build.zig.zon` is for *external* packages only |
+| **TypeScript / Python / Nim** | follow the import graph; Python's is a bare-name search on `sys.path` |
+
+*The directory is the unit:* **Odin** — `odin build <dir>` compiles every `.odin` in it as one package,
+and `-file` is the explicit opt-out meaning "this file alone, with no access to its siblings". The
+instructive near-miss: directory-as-package is kama's *project* mode with `source`, and Odin still needed
+a flag to spell "this one file", a distinction §2g's operand rule already makes structurally.
+
+**kama takes discovery from the first group and the manifest's role from the second** — the operands are
+the compilation, and adding a `kama.json` does not change how modules are named (§2i.42). The half it
+avoids is Python's: a bare name answered by an implicit search.
 
 **C keyword collisions**
 
@@ -799,10 +915,41 @@ names composed from the key chain, never inferred from what other entries exist;
 every node; imports resolved by **full module name**, not a segment walk; nearest-ancestor file→module
 attribution via the existing `projectManifestDir` walk ([kama.driver.cpp:934](../../src/kama.driver.cpp));
 **delete the `namespace` declaration** (91 files). **This is where claims 1, 2 and 4 of §1a become
-unrepresentable** rather than merely checked. §2f lands here too: `prelude/kama.json` named `global`,
-`prelude/std/memory/` → `lib/std/memory/` with `PRELUDE_MODULES` repointed
-([Makefile:98](../../Makefile)), the `providedWhole` line deleted, `global::a::b::X` dropped, and an
-aliasing `import … as N` that collides with a project name rejected.
+unrepresentable** rather than merely checked. §2f lands here too: `global` reserved as a project name
+(§2f.29 as corrected — *not* a `prelude/kama.json`), `prelude/std/memory/` → `lib/std/memory/` with
+`PRELUDE_MODULES` repointed ([Makefile:98](../../Makefile)), `global::a::b::X` dropped, and an aliasing
+`import … as N` that collides with a project name rejected. §2i's loose-mode rule lands here too, and
+§2b.9's file-module deletion.
+
+**Split in five**, planned 2026-08-22 on the same principle 1a/1b/1c used — each lands green on all three
+legs and bumps `VERSION`:
+
+| | | changes |
+|---|---|---|
+| **2a** | the `modules` map parsed + §2b/§2c form checks, plus `--probe-modules` and `tools/check-modules.sh` | C++ only, no behavior change |
+| **2b** | the corpus migration — `lib/kama.json`, the `std::memory` move, fixtures and guards become projects | tree only, **green under today's resolver** |
+| **2c** | identity — `ctxOf` derives the scope from path + manifest instead of the declaration | C++ only; emitted C byte-identical for every `lib/` file |
+| **2d** | resolution — imports by full module name; loose mode stops searching | C++ only |
+| **2e** | the deletion — 91 files, the grammar, `modules` becomes required, the five stranded sites | corpus + grammar |
+
+> **The ordering rule that matters: the corpus migration (2b) lands BEFORE the cutovers, not with them.**
+> It is a pure tree edit that is green under *today's* resolver — a folder that gains a `kama.json` still
+> resolves through `packageSourceFiles` ([:476](../../src/kama.driver.cpp)), and the declared `namespace`
+> is untouched. That keeps 2c and 2d C++-only, so a red suite names which half broke instead of leaving
+> two candidates.
+
+> **2a's key is not decorative, and that is deliberate.** 1c learned that an unconsumed manifest key rots
+> (`entry` drew an unused-function warning the moment `kama run` stopped reading it). `--probe-modules` is
+> the consumer: a hidden instrument on **stdout** — never `warning:`, since
+> [run_tests.sh:443](../../run_tests.sh) fails any fixture whose stderr matches `/warning/i` — emitting
+> one TSV row per unit comparing the **derived** identity against the still-present **declared** one,
+> with `no-module` and `synthetic` buckets so the measurement does not hide its own blind spot (§7).
+> `tools/check-modules.sh` reports through 2a–2b and **fails on any mismatch from 2c**, which is what
+> turns the identity cutover from a leap into a measurement. Both are deleted when phase 2 closes.
+
+⚠️ **`.github/workflows/release.yml:72` and `:142` stage the stdlib as `cp -R lib/std payload/lib/kama/std`
+— the directory only.** `lib/kama.json` must be added to that copy in the same commit that creates it, or
+the shipped tarball has a stdlib no `import std::…` can resolve while every local leg stays green.
 
 > **Deleting `namespace` strands the word wherever the compiler says it out loud.** Swept, so the list is
 > not re-derived — five sites, and one of them is not a wording change:
