@@ -48,7 +48,7 @@ needs no synonym, so `export { }` stays a syntax error. Four claims gain enforce
 being a defect.
 
 Two smaller warts found alongside: **unknown `kama.json` keys are silently skipped**
-([kama.driver.cpp:2314](../../src/kama.driver.cpp)), so `"sourses": ["src"]` is accepted and ignored; and
+([kama.driver.cpp:2568](../../src/kama.driver.cpp)), so `"sourses": ["src"]` is accepted and ignored; and
 several of these diagnostics print `at :1` with an **empty filename**.
 
 ### 1b. The two C symbol defects
@@ -64,7 +64,7 @@ kama build b.kama a.kama c.kama   ->  _F5__Widget   (files a_1.c b_0.c c_2.c)
 
 Not ugliness — **non-reproducibility**. Two builds cannot be diffed, hand-written C beside the output
 cannot depend on a symbol, and a version-controlled `--keep-c` churns for nothing. The generated `.c`
-**filenames** carry the same index ([kama.driver.cpp:7186](../../src/kama.driver.cpp)). Note also that
+**filenames** carry the same index ([kama.driver.cpp:7968](../../src/kama.driver.cpp)). Note also that
 `_F4__` is a leading `_` followed by an uppercase letter — **reserved to the implementation for any use**
 by C11 §7.1.3. Today's output is already in C's reserved namespace.
 
@@ -106,13 +106,13 @@ variant case names · `@generate` bag-ctor parameters** (which derive from field
 ### 1c. Two more holes, found while designing the replacement
 
 **A declared workspace member that is not on disk is silently skipped.** `collectProjectDirs` returns on
-`!fileExists(manifest)` with no diagnostic ([kama.driver.cpp:473](../../src/kama.driver.cpp)), and
+`!fileExists(manifest)` with no diagnostic ([kama.driver.cpp:479](../../src/kama.driver.cpp)), and
 `collectPackageTree` does the same ([:5599](../../src/kama.driver.cpp)). So a **typo'd member path and a
 deliberately-absent one are indistinguishable**. §2a makes absence a declared state.
 
 **Two `main`s are rejected for a reason the diagnostic misstates.** `qualify()` short-circuits on `main`
 *before* any scope prefixing — `if (name == "main") return "kama_main";` precedes the `_nsCtx.scope` check
-([kama.cemit.cpp:309](../../src/kama.cemit.cpp)) — so a `main` declared anywhere becomes `kama_main`
+([kama.cemit.cpp:311](../../src/kama.cemit.cpp)) — so a `main` declared anywhere becomes `kama_main`
 regardless of scope. Two of them therefore collide where two ordinary names would not. **Run, not assumed:**
 
 ```
@@ -160,7 +160,7 @@ The scope ladder is **workspace → project → module → file → declaration*
 
 1. **A project requires a `kama.json`.** It is a **library** or an **executable**, stated by a new `kind`
    key. ⚠️ **Corrected while implementing:** an earlier draft said *"the kind is inferred from whether
-   `entry` is present and never recorded ([kama.driver.cpp:5043](../../src/kama.driver.cpp))"*. That line
+   `entry` is present and never recorded ([kama.driver.cpp:5420](../../src/kama.driver.cpp))"*. That line
    is `seedManifest`, the seed **writer**, and `SeedKind` never leaves `kama seed`. **Nothing infers a
    kind today** — the only interpretation of `entry` anywhere is `kama run`'s hard error when it is
    absent. So `kind` records nothing implicit; it is a genuinely new fact, and is required. *(Shipped.)*
@@ -411,7 +411,7 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     into the output are part of how *this artifact* links. **There is no manifest key for this today**:
     only per-target `select.TARGET.<n>.ldflags` and the CLI `--link`, so a project needing `-lm` on every
     target has nowhere clean to say so. The key mirrors the existing flag name
-    ([kama.driver.cpp:6345](../../src/kama.driver.cpp)) rather than inventing a second word.
+    ([kama.driver.cpp:7004](../../src/kama.driver.cpp)) rather than inventing a second word.
 23. **Build-time executables go in `kama_workspace.json`'s `dependencies`.** They are built for the
     **host**, not the target being cross-compiled to — the axis Cargo cites for `build-dependencies` — and
     that is a tooling/orchestration concern, exactly the layer §2a introduces. **No `build-dependencies`
@@ -419,7 +419,7 @@ one-symbol modules — and that is exactly the signal that would justify the syn
 24. **Only a library can be imported.** Depending on an executable for a surface is an error.
 
 > **Why kama libraries are source-only.** `OUTPUT = EXE | SHARED | STATIC | OBJECT` already ships
-> ([kama.driver.cpp:1530](../../src/kama.driver.cpp)) — but a `SHARED` artifact exports *only* `expose`d
+> ([kama.driver.cpp:1663](../../src/kama.driver.cpp)) — but a `SHARED` artifact exports *only* `expose`d
 > functions ([targets.md:191](../targets.md)), i.e. the C ABI seam, not the kama surface. It cannot be
 > otherwise while **115 of 245 stdlib declarations (47%) are generic**: `Map<MyType, int32>` cannot exist
 > in an archive built before `MyType` was written — the same constraint that keeps C++ templates in
@@ -486,11 +486,11 @@ one-symbol modules — and that is exactly the signal that would justify the syn
 30. **The prelude's `std::memory` claim resolves with it.** Today `prelude/` declares into two roots:
     `global.kama` into the floor and `prelude/std/memory/*.kama` into `std::memory`, while `lib/` is the
     project that owns `std`. There is no `lib/std/memory` on disk, so the driver hard-codes
-    `providedWhole.insert("std::memory")` ([kama.driver.cpp:933](../../src/kama.driver.cpp)) to make
+    `providedWhole.insert("std::memory")` ([kama.driver.cpp:1048](../../src/kama.driver.cpp)) to make
     `import std::memory` a satisfied no-op. Once `prelude/` is the project `global` it cannot also declare
     into `std`, so **move the triad to `lib/std/memory/`** as module `memory` of project `std`. `--no-std`
     is preserved for free: embedding is already path-parameterised (`embed_prelude.sh OUT GLOBAL MODULE...`,
-    [Makefile:104](../../Makefile)), so this is a `PRELUDE_MODULES` change, not a script or driver change.
+    [Makefile:98](../../Makefile)), so this is a `PRELUDE_MODULES` change, not a script or driver change.
     The hard-coded line then **deletes**.
 
 31. **`main` is the entry point, not a symbol.** It is reached *below* the visibility system: the user's
@@ -524,7 +524,7 @@ one-symbol modules — and that is exactly the signal that would justify the syn
 Decided 2026-08-22, after auditing every CLI option against every manifest key (the matrix is §2h). The
 model has three ways to name a compilation: loose files, a project, a workspace. Nothing above says how a
 *command* selects between them, and today it does not — `kama build src/app.kama` inside a project walks up,
-finds the manifest, and silently applies it ([kama.driver.cpp:6629](../../src/kama.driver.cpp)). So the three
+finds the manifest, and silently applies it. So the three
 modes are mixed by default, and there is no spelling that means "just these files".
 
 32. **The operand's BASENAME is the mode.** One rule, checked at argv parse before anything else runs:
@@ -718,20 +718,27 @@ reproducible, deriving from the crate's own identity rather than its position �
 Source-breaking and pre-1.0, so it lands before the tag or waits for 2.0. Re-measured against the working
 tree (the numbers below replace an earlier set that had drifted):
 
+⚠️ **Counted over GIT-TRACKED files.** The file count below read **1,451** until 2026-08-22, which was
+`find`ing the whole worktree — 120 of those were probe files in the gitignored `.scratch/`, which exist on
+one machine. Every other row was already tracked-only and is unchanged.
+
 | | count |
 |---|---|
-| `.kama` files | **1,451** |
+| `.kama` files | **1,331** |
 | declaring a `namespace` | **91** — all deleted |
-| with an `export` block | **79** (so 1,372 have none) |
+| with an `export` block | **79** (so 1,252 have none) |
 | carrying `import` statements | **521** files, **692** statements |
-| `kama.json` | **16**, all inside test fixtures |
+| `kama.json` | **14**, all inside test fixtures, plus **1** `kama_workspace.json` |
 
 It also touches the resolver, the emitter, the LSP, `kama query`, `kama seed`, and the docs.
 
 One encouraging measurement, still true: `lib/` and `prelude/` have **zero** namespace/path mismatches — the
 stdlib is already congruent with the model, so its migration is mechanical. Its whole map is 18 module
 nodes plus `"."`, every module `public`, and **not one `name`**, because every stdlib folder is already its
-API word. Any module that turns out to want something narrower is a finding about the stdlib, not about
+API word. (Re-verified 2026-08-22: **17** directories under `lib/std/` hold `.kama` files, and
+`std/serialization` is the 18th — a pure grouping node holding only `binary/` and `json/`. Counting only
+file-bearing directories gives 17 and is the wrong count for a NESTED map, which needs the intermediate
+node to hang the two children off.) Any module that turns out to want something narrower is a finding about the stdlib, not about
 this design.
 
 ---
@@ -790,11 +797,11 @@ the silent behavior the rule exists to remove. The walk itself survives for one 
 **2 — identity and resolution.** `name` as the root namespace; the nested `modules` map with §2b's checks;
 names composed from the key chain, never inferred from what other entries exist; `visibility` required on
 every node; imports resolved by **full module name**, not a segment walk; nearest-ancestor file→module
-attribution via the existing `projectManifestDir` walk ([kama.driver.cpp:854](../../src/kama.driver.cpp));
+attribution via the existing `projectManifestDir` walk ([kama.driver.cpp:934](../../src/kama.driver.cpp));
 **delete the `namespace` declaration** (91 files). **This is where claims 1, 2 and 4 of §1a become
 unrepresentable** rather than merely checked. §2f lands here too: `prelude/kama.json` named `global`,
 `prelude/std/memory/` → `lib/std/memory/` with `PRELUDE_MODULES` repointed
-([Makefile:104](../../Makefile)), the `providedWhole` line deleted, `global::a::b::X` dropped, and an
+([Makefile:98](../../Makefile)), the `providedWhole` line deleted, `global::a::b::X` dropped, and an
 aliasing `import … as N` that collides with a project name rejected.
 
 > **Deleting `namespace` strands the word wherever the compiler says it out loud.** Swept, so the list is
@@ -806,7 +813,7 @@ aliasing `import … as N` that collides with a project name rejected.
 > | [cemit:17410](../../src/kama.cemit.cpp) | ``` `::` is scope resolution (static functions, enum variants, namespaces) ``` | … *modules* |
 > | [cemit:5917](../../src/kama.cemit.cpp) | *"only once in its namespace"* | **splits in two** — see phase 3 |
 > | [query.cpp:103](../../src/kama.query.cpp) | `CompletionKind::Namespace` prints `"namespace"` | `"module"` — and this merely makes the two front ends **agree**, since [lsp.cpp:337](../../src/kama.lsp.cpp) already maps that kind to LSP `Module` (9) |
-> | [driver:627](../../src/kama.driver.cpp) | `bail("mixed namespaces")` | **a premise to re-derive, not a string to edit** |
+> | [driver:725](../../src/kama.driver.cpp) | `bail("mixed namespaces")` | **a premise to re-derive, not a string to edit** |
 >
 > That last one matters. The closure-pruning path bails when a package's files are not namespace-homogeneous,
 > because *"a package manifest's `sources` can span several directories and namespaces … which breaks the
@@ -815,6 +822,12 @@ aliasing `import … as N` that collides with a project name rejected.
 > many modules on purpose. `source` becoming singular (§2a.4) removes half the hazard it was guarding; what
 > the closure actually needs is to key on **module**, not on a single namespace for the whole package.
 > Re-derive it here rather than renaming the bail.
+
+> ⚠️ **`main` escapes scoping in TWO places, not one.** `qualify()`
+> ([cemit:311](../../src/kama.cemit.cpp)) is the one §1c names; `resolveFuncImpl`
+> ([cemit:1911](../../src/kama.cemit.cpp)) carries the identical `if (name == "main") return "kama_main";`
+> for the CALL side. Found while re-verifying this doc's line references on 2026-08-22 — fixing only the
+> declaration site would leave every call to `main` resolving to the old symbol.
 
 **3 — visibility.** One import block, one export block (single form; `export { }` stays a syntax error),
 and required `visibility` per node — list or keyword — enforced as §2c's composition table. **No `to`
@@ -883,8 +896,11 @@ ROADMAP row and the §10 "C SYMBOL NAMING" entry deleted; the `_F4__` references
   exposure list was wrong in a way that hid two whole families (vtable slots, variant cases); and its
   keyword count was off (25 stated, 27 measured). Compile the snippet; read the emitted C.
 - **Two numbers in an earlier draft of this doc measured nothing.** "81 declarations would need a `to`" was
-  `lib`+`prelude` decl-lines minus export-list entries — and `prelude` has no `export` block at all,
-  contributing 70 of the 81. The real figure is **zero**. A follow-up "1" was a word match on `siftDown`,
+  `lib`+`prelude` decl-lines minus export-list entries — and **`prelude/global.kama`**, the implicit
+  prelude, has no `export` block at all, contributing 70 of the 81. The real figure is **zero**.
+  (Said precisely on 2026-08-22, because "prelude has no export block" invites a re-measure that finds
+  **three**: `prelude/std/memory/{owned,shared,weak}.kama`. Those are the namespaced built-in modules,
+  which do export; the file the arithmetic was about is `global.kama`.) A follow-up "1" was a word match on `siftDown`,
   not a reference. Derive, then check the derivation.
 - **`comm` is locale-sensitive on macOS**, so a keyword-set diff silently reported nonsense until it was
   redone with `grep -Fxv`. Any set comparison in a guard wants `LC_ALL=C` or no `comm` at all.
