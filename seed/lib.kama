@@ -1,5 +1,10 @@
-// The library surface. `namespace` must match this file's path under `sources`, and `export` is what
-// importers can see: `import KAMA_SEED_IDENT::{ answer };`
+// The library surface. This file sits at the top of `source`, so it is in the project's ROOT module —
+// the one `kama.json`'s `name` names — and `export` is what importers can see:
+// `import KAMA_SEED_IDENT::{ answer };`
+//
+// To add a module, make a folder under `source` and list it in `modules`. A folder with no entry is not
+// a module: its files belong to the nearest listed folder above them, so nothing joins your API by
+// accident.
 namespace KAMA_SEED_IDENT;
 
 export { answer };

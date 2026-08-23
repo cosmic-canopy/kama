@@ -5953,6 +5953,14 @@ static std::string seedManifest(SeedKind kind, const std::string& name, const st
         m += ",\n  \"kind\": \"executable\",\n  \"entry\": \"src/app.kama\"";
     else
         m += ",\n  \"kind\": \"library\"";
+    // The module map, with the one node every project has: `"."`, the files directly under `source`.
+    // Seeded rather than left out, even though a one-file project could omit it, because it is the
+    // example — the shape someone copies when they add their first folder, and the place the answer to
+    // "who may import this?" is written. A library's root IS its published surface, so `public`; an
+    // executable has no dependents to distinguish it from `internal`, so it says the narrower thing.
+    m += ",\n  \"modules\": {\n    \".\": { \"visibility\": \"";
+    m += (kind == SeedKind::Library ? "public" : "internal");
+    m += "\" }\n  }";
     return m + "\n}\n";
 }
 

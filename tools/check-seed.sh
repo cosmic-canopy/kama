@@ -68,6 +68,10 @@ done
 ok "executable seed writes the four files"
 grep -q '"kind": "executable"'  "$e/kama.json" && ok "manifest declares its kind" || bad "no kind in the manifest"
 grep -q '"entry": "src/app.kama"' "$e/kama.json" && ok "manifest declares entry" || bad "no entry in the manifest"
+# The module map, with the one node every project has. An executable has no dependents, so `internal`
+# and `public` would mean the same thing for its root — it says the narrower one.
+grep -q '"\.": { "visibility": "internal" }' "$e/kama.json" \
+    && ok "the executable seeds a module map for its root" || bad "no \`modules\` in the executable manifest"
 # `source` is NOT emitted: it defaults to exactly "src", which is the layout seed writes. Asserting its
 # ABSENCE plus a working build is the stronger claim — it proves the default carries the template.
 grep -q '"source"' "$e/kama.json" && bad "seed emitted a redundant source key" \
@@ -102,6 +106,16 @@ echo "check-seed: library"
 l="$tmp/lib"
 "$KAMA" seed "$l" --yes --kind library --name demolib >/dev/null 2>&1 || bad "seeding a library failed"
 grep -q '"kind": "library"' "$l/kama.json" && ok "library declares its kind" || bad "library has no kind"
+# A library's root IS its published surface, which is the one place the two differ.
+grep -q '"\.": { "visibility": "public" }' "$l/kama.json" \
+    && ok "the library seeds a PUBLIC root module" || bad "no public \`modules\` root in the library manifest"
+# The seeded source still declares its namespace, and that is not an oversight. A file with NO namespace
+# is file-private today and its `export` block is inert (design §1a claim 4) — so deleting the line here
+# before identity is derived from the path would seed a library nothing can import. It goes with the
+# other 91 in the deletion phase, not before.
+grep -q '^namespace demolib;' "$l/src/demolib.kama" \
+    && ok "the seeded library declares the namespace its path derives" \
+    || bad "the seeded library's namespace is missing or does not match its project name"
 grep -q '"source"' "$l/kama.json" && bad "seed emitted a redundant source key" \
                                   || ok "the library leans on the \`source\` default"
 grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok "library declares no entry"
