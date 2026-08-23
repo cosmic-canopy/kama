@@ -719,10 +719,15 @@ expect --complete 23:38 -- "method	size	fn int32 size()"
 # M4.7 — import paths. These answer from the module RESOLVER, not the index: a module the file does not
 # import yet is by definition absent from the index. Root order mirrors loadProgramUnits exactly, so what
 # completes is what would actually resolve.
+#
+# ⚠️ Which is why the second line below is a REJECT now and used to be an expect. `shapes.kama` sits
+# beside this file and was offered as a module, because a file WAS one (§2b.9). 2d deleted the
+# file-module and the directory search with it, so offering `shapes` would offer a name that no longer
+# resolves — the worst kind of completion, and the reason this list is now read off manifests.
 echo "check-query: M4.7 import paths"
-expect --complete 15:7  -- "module	std"           # `import |` -> the stdlib root
-expect --complete 15:7  -- "module	shapes"        # ... and sibling file-modules in this directory
-reject --complete 15:7  -- "module	complete"      # ... but never the file itself
+expect --complete 15:7  -- "module	std"           # `import |` -> the stdlib, always resolvable
+reject --complete 15:7  -- "module	shapes"        # ... but NOT a sibling file: a file is not a module
+reject --complete 15:7  -- "module	complete"      # ... and never the file itself
 expect --complete 15:12 -- "module	collections"   # `import std::|` -> the stdlib's modules
 expect --complete 15:12 -- "module	process"
 expect --complete 15:26 -- "type	DynamicArray	std::collections"   # `import …::{|}` -> the export manifest

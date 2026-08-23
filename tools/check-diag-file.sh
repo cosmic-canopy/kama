@@ -39,6 +39,11 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # ---- 1. the imported-module case (the bug) -----------------------------------------------------------
+#
+# ⚠️ EVERY SOURCE IS NAMED on the command line here and in cases 4 and 5 below, which is what §2i asks of
+# a build with no manifest: the operands are the compilation, and a loose build does not go looking for
+# `lib/thing/` on disk. The module is still a genuine IMPORT — a different file, a different module, which
+# is the whole subject of this guard — it is simply handed over rather than found.
 mkdir -p "$tmp/lib/thing"
 cat > "$tmp/lib/thing/broken.kama" <<'EOF'
 namespace lib::thing;
@@ -54,7 +59,7 @@ import lib::thing::{Leaky};
 fn int32 main() { Leaky l = Leaky(); return 0; }
 EOF
 
-out=$("$KAMA" check "$tmp/app.kama" 2>&1 || true)
+out=$("$KAMA" check "$tmp/app.kama" "$tmp/lib/thing/broken.kama" 2>&1 || true)
 
 if ! printf '%s' "$out" | grep -q 'broken\.kama:6'; then
     echo "check-diag-file: FAIL — a diagnostic about an IMPORTED declaration does not name its own file."
@@ -137,7 +142,7 @@ import lib::body::{Deep};
 fn int32 main() { Deep d = Deep.make(); return d.oops(); }
 EOF
 
-out4=$("$KAMA" check "$tmp/consumer.kama" 2>&1 || true)
+out4=$("$KAMA" check "$tmp/consumer.kama" "$tmp/lib/body/deep.kama" 2>&1 || true)
 
 if ! printf '%s' "$out4" | grep -q 'deep\.kama:7'; then
     echo "check-diag-file: FAIL — a diagnostic about an imported module's BODY does not name its own file."
@@ -174,7 +179,7 @@ import lib::tmpl::{Holder};
 fn int32 main() { Holder<int32> h = Holder.make(item: 1); return h.oops(); }
 EOF
 
-out5=$("$KAMA" check "$tmp/instantiator.kama" 2>&1 || true)
+out5=$("$KAMA" check "$tmp/instantiator.kama" "$tmp/lib/tmpl/holder.kama" 2>&1 || true)
 
 if ! printf '%s' "$out5" | grep -q 'holder\.kama:7'; then
     echo "check-diag-file: FAIL — a diagnostic in an imported GENERIC body does not name the template's file."

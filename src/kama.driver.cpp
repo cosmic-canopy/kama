@@ -596,35 +596,18 @@ std::set<std::string> workspaceMembers(const std::string& projectDir, std::strin
     return members;
 }
 
-// Resolve module segments (["std","memory"]) to source file(s) under the first matching
-// root: a file-module (<root>/std/memory.kama) or every *.kama in a directory-module
-// (<root>/std/memory/). A directory that is a PACKAGE root contributes the files its manifest
-// declares, wherever they live under it, rather than the flat listing. Empty result => unresolved.
+// Resolve a module NAME (["std","collections"]) to the files that make it up, searching `roots` in
+// order. A module name is `<project>::<chain>`, so this is the exact inverse of moduleIdForFile and is
+// defined beside it, below, where the manifest's module tree exists. Empty result => unresolved.
+//
+// ⚠️ It no longer LOOKS for anything. Until 2d it tried `<root>/std/collections.kama` (a file-module,
+// §2b.9) and then `<root>/std/collections/` (any directory at all), which is how a loose build reached
+// across the filesystem for a name nobody had passed it — the behavior §2i removes. What resolves now is
+// a module some project DECLARES, and a loose build's own files are not searched for because they are
+// already in hand: the operands are the compilation.
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
                                             const std::vector<std::string>& roots,
-                                            std::string* matchedRoot = nullptr)
-{
-    std::string rel;
-    for (size_t i = 0; i < segs.size(); ++i) rel += (i ? "/" : "") + segs[i];
-    for (auto& root : roots) {
-        if (matchedRoot) *matchedRoot = root;
-        std::string file = root + "/" + rel + ".kama";
-        if (fileExists(file)) return { file };
-        std::string dir = root + "/" + rel;
-        if (dirExists(dir)) {
-            // A package root's `source` is the WHOLE answer — it always has one, so an empty result
-            // means the declared directory is not there, NOT "fall back and guess". Falling back would
-            // silently import a package by a layout it never declared, which is the mirror of the bug
-            // this key exists to prevent. Only a directory with no manifest gets the plain listing, and
-            // that is the ordinary directory-module case.
-            std::vector<std::string> fs;
-            if (!packageSourceFiles(dir, fs)) fs = listKamaFiles(dir);
-            if (!fs.empty()) return fs;
-        }
-    }
-    if (matchedRoot) matchedRoot->clear();
-    return {};
-}
+                                            std::string* matchedRoot = nullptr);
 
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
@@ -1288,7 +1271,15 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             bool reserved = (segs[0] == "std" || segs[0] == "core");
             std::vector<std::string> roots;
             if (!reserved) {
-                roots.push_back(here);
+                // The project this invocation is FOR, and the §2i cutover in one line: it is the file's
+                // own directory that used to sit here, so `import a::b` reached for `<dir>/a/b/` on disk
+                // and a loose build pulled in files nobody had named. A project's modules now come from
+                // the project, which for a loose build is nothing at all — `projectManifestDir` is empty
+                // by the operand rule (§2g.32), and the operands are already the compilation.
+                //
+                // `kama lsp` is the caller that still WALKS to find this, because an editor is handed a
+                // buffer and never a command line; that asymmetry is §2g.35 and it is deliberate.
+                if (!buildManifestDir.empty()) roots.push_back(buildManifestDir);
                 for (auto& r : extraRoots) roots.push_back(r);
                 // Declared package deps resolve via the materialized view — and ONLY via it, so an
                 // undeclared `import` misses the view and hits the missing-module error below (the
@@ -3182,6 +3173,75 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     if (!relDir.empty())
         if (const ModuleNode* n = deepestModuleFor(mm.mods, relDir)) id.module = n->modName;
     return id;
+}
+
+// ---- module name -> files: the inverse of the above (§2b) ------------------------------------------
+
+// The node whose composed name IS `want` ("net::web"), anywhere in the tree.
+static const ModuleNode* nodeByModName(const std::vector<ModuleNode>& nodes, const std::string& want)
+{
+    for (auto& n : nodes) {
+        if (!n.isRoot() && n.modName == want) return &n;
+        if (const ModuleNode* d = nodeByModName(n.children, want)) return d;
+    }
+    return nullptr;
+}
+
+// The files of the module `segs` inside the project rooted at `projDir`, or empty if that project is not
+// the one being named or does not have such a module.
+//
+// The file set is derived rather than listed, by asking moduleIdForFile about every candidate: RECURSIVE
+// under the module's folder, because an unlisted subfolder's files belong to the nearest listed ancestor
+// (deepestModuleFor's rule), and minus anything a deeper LISTED module claims for itself. Reusing the
+// derivation is the point — a second implementation of "which module owns this file?" is exactly the
+// disagreement between two spellings that this campaign exists to remove.
+static std::vector<std::string> moduleFilesInProject(const std::string& projDir,
+                                                     const std::vector<std::string>& segs)
+{
+    const std::string manifest = projDir + "/kama.json";
+    if (!fileExists(manifest)) return {};
+    const ManifestModules& mm = manifestModulesCached(manifest);
+    if (mm.projectName.empty() || mm.projectName != segs[0]) return {};   // a different project's name
+    const std::string& srcRel = manifestSourceCached(manifest);
+    if (srcRel.empty()) return {};
+
+    // LEXICAL, never realpath: this becomes the UNIT NAME, and resolving `.kama/deps/<name>` away would
+    // put go-to-definition in the content-addressed store instead of the view the user can see. Same
+    // reason packageSourceFiles spells it this way.
+    std::string dir = joinPathLexical(projDir, srcRel);
+    std::string want = segs[0];
+    for (size_t i = 1; i < segs.size(); ++i) want += "::" + segs[i];
+    if (segs.size() > 1) {
+        const ModuleNode* n = nodeByModName(mm.mods, want.substr(segs[0].size() + 2));
+        if (!n) return {};                                 // no such module in this project's map
+        dir += "/" + n->relPath;
+    }
+    if (!dirExists(dir)) return {};
+
+    std::vector<std::string> all, out;
+    size_t seen = 0;
+    collectKamaFiles(dir, "", all, seen, (size_t)-1);
+    for (auto& f : all) if (moduleIdForFile(f).full() == want) out.push_back(f);
+    std::sort(out.begin(), out.end());                     // readdir order is not deterministic
+    return out;
+}
+
+std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
+                                            const std::vector<std::string>& roots,
+                                            std::string* matchedRoot)
+{
+    if (matchedRoot) matchedRoot->clear();
+    if (segs.empty()) return {};
+    for (const auto& root : roots) {
+        // A root is either a project itself (the stdlib, or the project being built) or a directory OF
+        // projects (a dependency view, a $KAMA_PATH entry), so both spellings are tried. Which one it was
+        // is not worth distinguishing: a project answers only to its own `name` either way.
+        for (const std::string& p : { root, root + "/" + segs[0] }) {
+            std::vector<std::string> files = moduleFilesInProject(p, segs);
+            if (!files.empty()) { if (matchedRoot) *matchedRoot = root; return files; }
+        }
+    }
+    return {};
 }
 
 // `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path DERIVES,
@@ -7200,17 +7260,31 @@ SignatureHelp lspSignatureHelp(const SharedLspIndex& idx, const std::string& pat
 
 // The import roots visible from `fromPath`, in loadProgramUnits' order. `reserved` mirrors its rule that
 // `std`/`core` resolve ONLY under the stdlib, so a local directory named `std` cannot shadow it.
+//
+// The file's own DIRECTORY is not one of them any more, and its PROJECT is — the same swap §2i made in
+// the loader. The editor is the one caller that still walks to find that project, because it is handed a
+// buffer and never a command line (§2g.35), which is why this reads projectManifestDir rather than being
+// told: for `kama lsp` the CLI tri-state is unset, so the walk happens.
 static std::vector<std::string> lspImportRoots(const std::string& fromPath, bool reserved, const char* argv0)
 {
     std::vector<std::string> roots;
     if (!reserved) {
-        roots.push_back(dirName(absolutePath(fromPath)));
+        std::string proj = projectManifestDir({ fromPath });
+        if (!proj.empty()) roots.push_back(proj);
         for (auto& r : splitSearchPath(getenv("KAMA_PATH"))) roots.push_back(r);
         std::string dv = projectDepsView({ fromPath });
         if (!dv.empty()) roots.push_back(dv);
     }
     roots.push_back(resolveStdlibDir(argv0));
     return roots;
+}
+
+// The module chain below the project: segments 1.. joined, "" when only the project is named.
+static std::string prefixChain(const std::vector<std::string>& segs)
+{
+    std::string c;
+    for (size_t i = 1; i < segs.size(); ++i) c += (i > 1 ? "::" : "") + segs[i];
+    return c;
 }
 
 static std::vector<std::string> lspSplitModulePath(const std::string& path, std::string& rel)
@@ -7228,30 +7302,60 @@ static std::vector<std::string> lspSplitModulePath(const std::string& path, std:
     return segs;
 }
 
+// Every composed module name in a tree, flattened.
+static void collectModNames(const std::vector<ModuleNode>& nodes, std::vector<std::string>& out)
+{
+    for (auto& n : nodes) {
+        if (!n.isRoot()) out.push_back(n.modName);
+        collectModNames(n.children, out);
+    }
+}
+
+// What can follow `import <prefix>` — the next segment, offered from the same MANIFESTS resolution reads.
+//
+// ⚠️ It used to read DIRECTORIES: every subdirectory of every import root, plus every `.kama` file
+// basename, because a file was a module (§2b.9) and a directory-module was whatever happened to be on
+// disk. Both are gone, so a completion offering them would offer names that no longer resolve — the worst
+// kind of completion. A module is something a project DECLARES now, so this asks the projects.
 std::vector<std::string> lspImportModules(const std::string& fromPath, const std::string& prefix,
                                           const char* argv0)
 {
     std::string rel;
     std::vector<std::string> segs = lspSplitModulePath(prefix, rel);
-    std::vector<std::string> roots = lspImportRoots(fromPath, !segs.empty() && (segs[0] == "std" || segs[0] == "core"), argv0);
-    const std::string self = stripExtension(baseName(absolutePath(fromPath)));
     std::set<std::string> out;                       // sorted + deduped across roots
-    for (auto& root : roots) {
-        std::string dir = rel.empty() ? root : root + "/" + rel;
-        if (!dirExists(dir)) continue;
-        DIR* d = opendir(dir.c_str());
-        if (!d) continue;
-        while (struct dirent* e = readdir(d)) {
-            std::string n = e->d_name;
-            if (n.empty() || n[0] == '.' || n == "build") continue;
-            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".kama") == 0) {
-                std::string m = n.substr(0, n.size() - 5);
-                if (!(rel.empty() && m == self)) out.insert(m);   // a file cannot import itself
-            } else if (dirExists(dir + "/" + n)) {
-                out.insert(n);                                    // a directory-module or a deeper level
+
+    // The top level names PROJECTS: the stdlib, the file's own project, and every dependency it declares.
+    if (segs.empty()) {
+        out.insert("std");
+        const std::string proj = projectManifestDir({ fromPath });
+        if (!proj.empty()) {
+            const ManifestModules& mm = manifestModulesCached(proj + "/kama.json");
+            if (!mm.projectName.empty()) out.insert(mm.projectName);
+            for (const auto& d : declaredImportNames(proj)) out.insert(d);
+        }
+        return { out.begin(), out.end() };
+    }
+
+    // Below it, the modules of the project the first segment names.
+    const std::string chain = prefixChain(segs);   // "" when only the project is named
+    for (const auto& root : lspImportRoots(fromPath, segs[0] == "std" || segs[0] == "core", argv0)) {
+        for (const std::string& p : { root, root + "/" + segs[0] }) {
+            const std::string manifest = p + "/kama.json";
+            if (!fileExists(manifest)) continue;
+            const ManifestModules& mm = manifestModulesCached(manifest);
+            if (mm.projectName != segs[0]) continue;
+            std::vector<std::string> names;
+            collectModNames(mm.mods, names);
+            for (const auto& m : names) {
+                if (chain.empty()) {
+                    if (m.find("::") == std::string::npos) out.insert(m);
+                } else if (m.size() > chain.size() + 2 && m.compare(0, chain.size(), chain) == 0
+                           && m.compare(chain.size(), 2, "::") == 0) {
+                    const std::string rest = m.substr(chain.size() + 2);
+                    if (rest.find("::") == std::string::npos) out.insert(rest);
+                }
             }
         }
-        closedir(d);
     }
     return { out.begin(), out.end() };
 }

@@ -219,6 +219,25 @@ depok=0
 # `depproj` fixture above covers (a dependency INSIDE the root that must never be rewritten). Do not
 # re-add the outward case without a `source` that can express it.
 
+# 2d fixture: ONE project, TWO modules, and a cross-module import between them. This is the case §2i
+# leaves to the editor alone: `kama check src/alpha/a.kama` is a LOOSE build — the operand's basename is
+# the mode — so it has no manifest and cannot resolve `twomod::beta`, while the server walks up from the
+# buffer to the project and does. The CLI half is asserted as a NEGATIVE CONTROL below, because "the
+# editor reports no diagnostics" is worth nothing if the import was never the hard part.
+tm="$tmp/twomod"
+mkdir -p "$tm/src/alpha" "$tm/src/beta"
+cat > "$tm/kama.json" <<'JSON'
+{ "name": "twomod", "version": "0.1.0", "kind": "library",
+  "modules": { ".":     { "visibility": "internal" },
+               "alpha": { "visibility": "public" },
+               "beta":  { "visibility": "public" } } }
+JSON
+printf 'export { bval };\nfn int32 bval() { return 41; }\n' > "$tm/src/beta/b.kama"
+TMSRC='import twomod::beta::{bval};\nexport { aval };\nfn int32 aval() { return bval() + 1; }\n'
+printf "$TMSRC" > "$tm/src/alpha/a.kama"
+TMURI=$(furi "$tm/src/alpha/a.kama")
+tmcli=$("$KAMA" check "$tm/src/alpha/a.kama" 2>&1 || true)
+
 # M6 B3c fixture: a project resource implementing a STD contract. `write` here and `Writer.write` in
 # lib/std/io/streams.kama are ONE renameable name, and the contract's half is not ours to rewrite — so
 # rename must refuse outright rather than rewrite the implementation and silently break conformance.
@@ -352,6 +371,8 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":32,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$DURI"'"},"position":{"line":2,"character":4},"newName":"Pt"}}'
 frame '{"jsonrpc":"2.0","id":33,"method":"workspace/symbol","params":{"query":"Point"}}'
 fi
+# --- 2d: a cross-MODULE import inside one project. No id: the assertion is the published diagnostics.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$TMURI"'","languageId":"kama","version":1,"text":"'"$TMSRC"'"}}}'
 # --- M4: completion + signature help, over the M2 decl-rich buffer (`$SHP`, still open).
 #     Line 4 is `fn int32 use() { slot Point p; Point q = mid(a: p); return q.x; }` (LSP line 3):
 #       char 56 = the `x` of `q.x`  -> a Dot trigger on a `Point` local
@@ -577,6 +598,17 @@ if [ "$depok" = 1 ]; then
 else
     echo "  SKIP: installed-dependency checks (kama pkg install failed)"
 fi
+
+echo "check-lsp: a project's own modules resolve for a buffer, not just for a build"
+expect '"uri":"'"$TMURI"'","diagnostics":[]}' \
+       "a file importing ANOTHER MODULE of its own project analyzes clean"
+case "$tmcli" in
+    *"cannot resolve module 'twomod::beta'"*)
+        echo "  ok: ...and the same file as a LOOSE operand cannot, which is what makes that assertion mean something" ;;
+    *)  echo "  FAIL: the negative control did not fire — a loose \`kama check\` of that file said:" >&2
+        printf '%s\n' "$tmcli" | head -2 | sed 's/^/      /' >&2
+        fail=1 ;;
+esac
 
 echo "check-lsp: M6 B2 semantic tokens"
 # The legend's ORDER is the wire format — a token's type is sent as an INDEX into it, so this assertion is

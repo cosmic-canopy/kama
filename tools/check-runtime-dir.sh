@@ -130,11 +130,21 @@ got=$(derived_module "$t/out2.exe" "lib/kama/std/collections/")
     && say_ok "...and the payload's kama.json is what gives the stdlib its module identity" \
     || say_fail "a stdlib file derived \"$got\", expected \"std::collections\" — is lib/kama.json in the payload?"
 
+# ...and with the manifest removed the stdlib does not resolve AT ALL, which is a stronger statement than
+# the one this assertion used to make. It used to check that the file merely derived no module (`-`),
+# because resolution found `lib/kama/std/collections/` by walking the filesystem. §2i deleted that walk:
+# `import std::…` names the module of a PROJECT, and with no `kama.json` there is no project called `std`
+# to name. So a payload staged without it does not ship a nameless stdlib — it ships one nothing can
+# import, and the build says so.
 rm -f "$t/lib/kama/kama.json"
-got=$(derived_module "$t/out3.exe" "lib/kama/std/collections/")
-[ "$got" = "-" ] \
-    && say_ok "...and with the manifest removed it has none, so the check above is not vacuous" \
-    || say_fail "a stdlib file still derived \"$got\" with no kama.json present"
+if ( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$t/out3.exe" >"$t/err3" 2>&1 ); then
+    say_fail "the payload's stdlib still resolved with no kama.json present — what is naming it?"
+elif grep -qF "cannot resolve module 'std::collections'" "$t/err3"; then
+    say_ok "...and with the manifest removed nothing can import it, so the check above is not vacuous"
+else
+    say_fail "the manifest-less payload failed for the wrong reason:"
+    head -3 "$t/err3" | sed 's/^/      /' >&2
+fi
 
 [ "$fail" = 0 ] || { echo "check-runtime-dir: FAILED" >&2; exit 1; }
 echo "check-runtime-dir: PASS (installed, flat, dev root, dev build; no ambient fallback; stdlib payload)"

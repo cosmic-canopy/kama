@@ -48,11 +48,17 @@ bad() { echo "  FAIL: $1" >&2; fail=1; }
 # each time surfacing as a confusing "block order is width-dependent" rather than "your fixture shrank".
 # Sixteen single-symbol modules, each genuinely referenced by main, so no resolution-level pruning can
 # drop one.
+#
+# ⚠️ ONE MODULE PER DIRECTORY, and every file passed on the command line. Both are §2i: a module is a
+# FOLDER, and a loose build resolves nothing off disk — the operands ARE the compilation. These used to be
+# sixteen flat `src/wN.kama` files reached by the file-module rule (`<dir>/w1.kama` for `import w1`),
+# which 2d deletes along with the search that found them.
 NTU=16
 mkdir -p "$tmp/src"
 for i in $(seq 1 $NTU); do
-    printf 'namespace w%d;\nexport { v%d };\n\nfn int32 v%d() { return %d; }\n' "$i" "$i" "$i" "$i" \
-        > "$tmp/src/w$i.kama"
+    mkdir -p "$tmp/src/w$i"
+    printf 'export { v%d };\n\nfn int32 v%d() { return %d; }\n' "$i" "$i" "$i" \
+        > "$tmp/src/w$i/w$i.kama"
 done
 {
     for i in $(seq 1 $NTU); do printf 'import w%d::{v%d};\n' "$i" "$i"; done
@@ -60,25 +66,28 @@ done
     for i in $(seq 1 $NTU); do printf '    t = t + v%d();\n' "$i"; done
     printf '    return t - %d;\n}\n' "$(( NTU * (NTU + 1) / 2 ))"
 } > "$tmp/src/multi.kama"
+# The whole operand set, deliberately UNQUOTED at every use below: one argument per file (mktemp paths
+# carry no spaces). $MULTI was one file back when the other fifteen were found on disk.
 MULTI="$tmp/src/multi.kama"
-units=$("$KAMA" check "$MULTI" 2>&1 | sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p')
+for i in $(seq 1 $NTU); do MULTI="$MULTI $tmp/src/w$i/w$i.kama"; done
+units=$("$KAMA" check $MULTI 2>&1 | sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p')
 if [ -z "$units" ] || [ "$units" -lt 12 ]; then
     echo "check-build-jobs: generated fixture is ${units:-?} units, expected $((NTU + 1)) — too narrow" >&2
-    "$KAMA" check "$MULTI" >&2 2>&1 || true
+    "$KAMA" check $MULTI >&2 2>&1 || true
     exit 1
 fi
 
 # --- 1. objects byte-identical, built at the same paths ---------------------------------------------
 # STATIC is the output kind that produces objects at BOTH widths, which is what makes them comparable.
 mkdir -p "$tmp/w" "$tmp/ref"
-"$KAMA" build "$MULTI" --select OUTPUT=STATIC -o "$tmp/w/libpr.a" -j 1 --keep-c >/dev/null 2>&1 || true
+"$KAMA" build $MULTI --select OUTPUT=STATIC -o "$tmp/w/libpr.a" -j 1 --keep-c >/dev/null 2>&1 || true
 if ! ls "$tmp/w"/*.o >/dev/null 2>&1; then
     bad "OUTPUT=STATIC -j 1 produced no objects at all"
 else
     cp "$tmp/w"/*.o "$tmp/ref/"
     n1=$(ls "$tmp/ref"/*.o | wc -l | tr -d ' ')
     rm -f "$tmp/w"/*.o "$tmp/w"/*.a
-    "$KAMA" build "$MULTI" --select OUTPUT=STATIC -o "$tmp/w/libpr.a" -j 10 --keep-c >/dev/null 2>&1 || true
+    "$KAMA" build $MULTI --select OUTPUT=STATIC -o "$tmp/w/libpr.a" -j 10 --keep-c >/dev/null 2>&1 || true
     n2=$(ls "$tmp/w"/*.o 2>/dev/null | wc -l | tr -d ' ')
     if [ "$n1" != "$n2" ]; then
         bad "STATIC produced $n1 objects at -j 1 but $n2 at -j 10"
@@ -96,10 +105,10 @@ fi
 # `rc=$?` after a bare command would trip `set -e` — and a fixture exiting nonzero is NORMAL here
 # (parse_radix's own program exits 42). Capture through `if`, which is exempt.
 run() { if "$@"; then return 0; else return $?; fi; }
-if run "$KAMA" build "$MULTI" -o "$tmp/a" -j 1  >/dev/null 2>"$tmp/a.builderr"; then ra=0; else ra=$?; fi
-if run "$KAMA" build "$MULTI" -o "$tmp/b" -j 10 >/dev/null 2>"$tmp/b.builderr"; then rb=0; else rb=$?; fi
+if run "$KAMA" build $MULTI -o "$tmp/a" -j 1  >/dev/null 2>"$tmp/a.builderr"; then ra=0; else ra=$?; fi
+if run "$KAMA" build $MULTI -o "$tmp/b" -j 10 >/dev/null 2>"$tmp/b.builderr"; then rb=0; else rb=$?; fi
 if [ "$ra" != 0 ] || [ "$rb" != 0 ]; then
-    bad "building $MULTI failed (rc $ra at -j 1, $rb at -j 10)"
+    bad "building the multi-unit fixture failed (rc $ra at -j 1, $rb at -j 10)"
 else
     if run "$tmp/a" >"$tmp/a.out" 2>"$tmp/a.err"; then xa=0; else xa=$?; fi
     if run "$tmp/b" >"$tmp/b.out" 2>"$tmp/b.err"; then xb=0; else xb=$?; fi
@@ -153,7 +162,7 @@ invocations() {   # invocations <label> <expected> -- <extra kama args...>
     # (see kama_native_path). The shell would otherwise count files in a directory cmd never wrote to.
     rm -rf "$tmp/count.$lab"; mkdir -p "$tmp/count.$lab"
     COUNTDIR="$(kama_native_path "$tmp")/count.$lab"; export COUNTDIR
-    "$KAMA" build "$MULTI" -o "$tmp/c_$lab" --cc "$CCOUNT" "$@" >/dev/null 2>&1 || true
+    "$KAMA" build $MULTI -o "$tmp/c_$lab" --cc "$CCOUNT" "$@" >/dev/null 2>&1 || true
     got=$(ls "$tmp/count.$lab" | wc -l | tr -d ' ')
     unset COUNTDIR
     if [ "$got" = "$want" ]; then ok "$lab: $got compiler invocation(s)"
@@ -201,7 +210,7 @@ esac
 #     -j 1 is excluded on purpose: it is one invocation over all sources, so it has no per-TU
 #     diagnostics to order. That it stays one invocation is check 3's assertion, not this one's.
 for j in 2 3 10; do
-    KAMA_JOBS_NOFAIL=1 "$KAMA" build "$MULTI" -o "$tmp/s_$j" --cc "$CCNOISE" -j "$j" \
+    KAMA_JOBS_NOFAIL=1 "$KAMA" build $MULTI -o "$tmp/s_$j" --cc "$CCNOISE" -j "$j" \
         >"$tmp/s_$j.out" 2>"$tmp/s_$j.err" || true
     # The final link runs the shim too and names the output binary, which differs per width; drop it.
     grep '^NOISE ' "$tmp/s_$j.err" | grep -v "NOISE s_$j " >"$tmp/s_$j.blocks"
@@ -218,7 +227,7 @@ fi
 #     every block that appears is whole, and the blocks are in SOURCE order at every width (so the
 #     narrower run's block list is a prefix of the wider run's).
 for j in 2 10; do
-    "$KAMA" build "$MULTI" -o "$tmp/n_$j" --cc "$CCNOISE" -j "$j" >"$tmp/n_$j.out" 2>"$tmp/n_$j.err" || true
+    "$KAMA" build $MULTI -o "$tmp/n_$j" --cc "$CCNOISE" -j "$j" >"$tmp/n_$j.out" 2>"$tmp/n_$j.err" || true
 done
 torn=0
 for b in $(awk '/^NOISE /{print $2}' "$tmp/n_10.err" | sort -u); do
@@ -240,7 +249,7 @@ fi
 
 # --- 6. a bad -j is rejected by name ------------------------------------------------------------------
 for badj in 0 -1 x 99999; do
-    if "$KAMA" build "$MULTI" -o "$tmp/z" -j "$badj" >/dev/null 2>"$tmp/j.err"; then
+    if "$KAMA" build $MULTI -o "$tmp/z" -j "$badj" >/dev/null 2>"$tmp/j.err"; then
         bad "-j $badj was accepted"
     elif grep -q 'positive job count' "$tmp/j.err"; then
         ok "-j $badj rejected by name"
@@ -252,7 +261,7 @@ done
 # "accepted" is checked without a fifth 24-TU compile.
 rm -rf "$tmp/count.longform"; mkdir -p "$tmp/count.longform"
 COUNTDIR="$(kama_native_path "$tmp")/count.longform"; export COUNTDIR
-if "$KAMA" build "$MULTI" -o "$tmp/z2" --cc "$CCOUNT" --jobs 4 >/dev/null 2>&1 \
+if "$KAMA" build $MULTI -o "$tmp/z2" --cc "$CCOUNT" --jobs 4 >/dev/null 2>&1 \
    || [ "$(ls "$tmp/count.longform" | wc -l | tr -d ' ')" -gt 0 ]; then ok "--jobs is accepted as -j's long form"
 else bad "--jobs 4 was rejected"; fi
 unset COUNTDIR

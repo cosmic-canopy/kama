@@ -192,36 +192,28 @@ proj gone <<'JSON'
 JSON
 reject gone 'does not exist' "a \`source\` naming a missing directory is named"
 
-# A MALFORMED manifest must not stop module resolution. The editor sits above a tree it does not own, and
-# refusing to resolve over a JSON typo somewhere up that tree would strip hover and go-to-definition from
-# code that is itself fine. The build still refuses — that is the split being asserted here.
+# A package is imported as a DEPENDENCY — the whole of §2i's other half — so these three assertions are
+# spelled as one: a project that declares a path dep on `geo`, with `geo`'s layout varied underneath it.
 #
-# `geo/` is FLAT on purpose: with an unparseable manifest it is not a package root at all, so the only
-# thing that can find its sources is the plain directory-module listing. That is precisely the fallback
-# under test — had the sources been under geo/src/, a pass would prove nothing about it.
-mkdir -p "$tmp/broken/geo"
-printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$tmp/broken/geo/geo.kama"
-printf '{ "name": "geo", oops\n' > "$tmp/broken/geo/kama.json"
-printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$tmp/broken/app.kama"
-rm -f "$tmp/broken/out.bin"
-if "$KAMA" build "$tmp/broken/app.kama" -o "$tmp/broken/out.bin" >"$tmp/o" 2>"$tmp/e"; then
-    rc=0; "$tmp/broken/out.bin" >/dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 7 ] && ok "a package with an unparseable manifest still resolves as a directory-module" \
-                    || bad "resolved, but ran with exit $rc"
-else
-    bad "an unparseable manifest on a DEPENDENCY stopped resolution"; head -2 "$tmp/e" >&2
-fi
+# ⚠️ They used to be spelled as a loose `app.kama` importing a sibling DIRECTORY, which worked only
+# because a loose build walked the filesystem for `geo/`. That walk is gone (§2i: the operands are the
+# compilation), and the danger is not that the old spelling fails — it is that it fails for a reason that
+# has nothing to do with `source`, so all three would have gone on "passing" while testing nothing.
+dep="$tmp/dep"
+mkdir -p "$dep/app/src" "$dep/geo/src"
+printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",' \
+              '  "dependencies": { "geo": { "path": "../geo" } } }' > "$dep/app/kama.json"
+printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$dep/app/src/main.kama"
+printf '{ "name": "geo", "version": "1.0.0", "kind": "library" }\n' > "$dep/geo/kama.json"
 
-# A package root's `source` is the WHOLE answer. `geo/` here is a real package whose sources sit BESIDE
-# its source root rather than inside it — that must not resolve. Before the gate the flat listing picked
-# them up, so the package was importable by a layout it had never declared: the mirror of the bug the key
-# exists to prevent, and invisible until a consumer's build changed shape underneath them.
-mkdir -p "$tmp/gate/geo/src"
-printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$tmp/gate/geo/geo.kama"
-printf '{ "name": "geo", "version": "1.0.0", "kind": "library" }\n' > "$tmp/gate/geo/kama.json"
-printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$tmp/gate/app.kama"
-rm -f "$tmp/gate/out.bin"
-if "$KAMA" build "$tmp/gate/app.kama" -o "$tmp/gate/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+# A package root's `source` is the WHOLE answer: `geo.kama` sits BESIDE the source root, not in it, so
+# the package must not resolve. Before the gate a flat listing picked it up, and the package was
+# importable by a layout it had never declared — the mirror of the bug the key exists to prevent, and
+# invisible until a consumer's build changed shape underneath them.
+printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$dep/geo/geo.kama"
+"$KAMA" pkg install "$dep/app/kama.json" >"$tmp/o" 2>"$tmp/e" \
+    || { bad "the path dependency would not install"; head -2 "$tmp/e" >&2; }
+if "$KAMA" build "$dep/app/kama.json" -o "$dep/out.bin" >"$tmp/o" 2>"$tmp/e"; then
     bad "a package resolved by a layout it never declared (the flat fallback is not gated)"
 elif grep -qF "cannot resolve module 'geo'" "$tmp/e"; then
     ok "a package root's \`source\` is the whole answer — no fallback to a flat listing"
@@ -230,15 +222,34 @@ else
 fi
 
 # ...and the same package resolves the moment its sources are where it says they are.
-mv "$tmp/gate/geo/geo.kama" "$tmp/gate/geo/src/geo.kama"
-rm -f "$tmp/gate/out.bin"
-if "$KAMA" build "$tmp/gate/app.kama" -o "$tmp/gate/out.bin" >"$tmp/o" 2>"$tmp/e"; then
-    rc=0; "$tmp/gate/out.bin" >/dev/null 2>&1 || rc=$?
+mv "$dep/geo/geo.kama" "$dep/geo/src/geo.kama"
+if "$KAMA" build "$dep/app/kama.json" -o "$dep/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    rc=0; "$dep/out.bin" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 7 ] && ok "...and it resolves once they are under the source root" \
                     || bad "resolved, but ran with exit $rc"
 else
     bad "the declared layout did not resolve"; head -2 "$tmp/e" >&2
 fi
+
+# A MALFORMED manifest costs that package its NAME, and nothing else. A module name is `<project>::<…>`
+# (§2b), so a package whose manifest does not parse has no name to be imported by — but the failure must
+# be that one import saying so, not the analysis giving up: an editor sits above trees it does not own,
+# and a JSON typo somewhere up one of them must not strip hover and go-to-definition from code that is
+# itself fine.
+cp "$dep/geo/kama.json" "$tmp/geo.json.good"
+printf '{ "name": "geo", oops\n' > "$dep/geo/kama.json"
+if "$KAMA" build "$dep/app/kama.json" -o "$dep/out.bin" >"$tmp/o" 2>"$tmp/e"; then
+    bad "a package with an unparseable manifest still resolved — by what name?"
+elif grep -qF "cannot resolve module 'geo'" "$tmp/e"; then
+    ok "an unparseable manifest costs the package its name, and the import says so"
+else
+    bad "the unparseable-manifest import failed for the wrong reason"; head -2 "$tmp/e" >&2
+fi
+printf 'fn int32 alone() { return 1; }\n' > "$dep/app/src/solo.kama"
+"$KAMA" check "$dep/app/src/solo.kama" >"$tmp/o" 2>"$tmp/e" \
+    && ok "...while a file that does not import it is unaffected by the broken JSON above it" \
+    || { bad "a broken manifest elsewhere in the tree stopped an unrelated file from checking"; head -2 "$tmp/e" >&2; }
+cp "$tmp/geo.json.good" "$dep/geo/kama.json"
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: \`link\` names native libraries once, per project"
