@@ -982,6 +982,29 @@ the shipped tarball has a stdlib no `import std::…` can resolve while every lo
 > for the CALL side. Found while re-verifying this doc's line references on 2026-08-22 — fixing only the
 > declaration site would leave every call to `main` resolving to the old symbol.
 
+> ⚠️ **A project's files resolve only in PROJECT mode once §2i lands, and the diagnostic has to say so.**
+> Measured 2026-08-23 on a project whose `src/app.kama` imports its own `probe::thing`:
+>
+> | invocation | today | after the `namespace` deletion |
+> |---|---|---|
+> | `kama check src/app.kama` | `cannot resolve module` | same |
+> | `kama check src/app.kama src/thing/t.kama` | **OK** — the declaration registers `probe::thing` | **fails**: loose derivation names that file `thing`, not `probe::thing` |
+> | `kama check kama.json` | OK | OK |
+>
+> The middle row is the one that changes, and it is **correct by design** rather than a defect: a
+> project's units come from its manifest, a loose build's come from the CLI, and the two never cross
+> (§2i). A project-qualified `import` names a project, and in loose mode there is no project to name. So
+> the rule stays; what must change is the MESSAGE. `cannot resolve module 'probe::thing'` should say that
+> this file sits under project `probe` and name its manifest — the same class of repair as §1c's
+> duplicate-`main` diagnostic, where the behavior was right and only the wording blamed the wrong rule.
+>
+> Note an asymmetry that already exists and is fine: `kama lsp` keeps the `projectManifestDir` walk
+> (§5/1c), so an editor finds the project without being told; the CLI takes the operand at its word.
+>
+> Four guards turn on this and were left for 2d rather than edited blind against behavior that does not
+> exist yet: `check-self-import.sh` (its whole subject is checking ONE member file standalone),
+> `check-diag-file.sh`, `check-argv-env.sh`, `check-panic-multitu.sh`. All green today.
+
 **3 — visibility.** One import block, one export block (single form; `export { }` stays a syntax error),
 and required `visibility` per node — list or keyword — enforced as §2c's composition table. **No `to`
 grammar**: the `export` rule is unchanged apart from being made singular, so this phase is almost entirely

@@ -455,6 +455,31 @@ printf '{ "name": "acme", "version": "0.1.0", "kind": "library" }\n' > "$ws/kama
 wsreject 'a workspace root is not a project' "a kama.json beside a kama_workspace.json is refused"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-manifest: a project's name is its root namespace"
+
+# §2a.2. `kama seed` has refused a hyphenated name since 1a — `import my-lib::{ … }` is a parse error, so
+# the name is a dead end and refusing it beats shipping one. This is that rule reaching the MANIFEST,
+# which is where a project that was not seeded gets read.
+proj badname <<'JSON'
+{ "name": "my-lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+JSON
+reject badname 'is not a legal kama identifier' "a hyphenated project name is refused"
+reject badname 'Try "my_lib"' "...and the message spells the name that would work"
+
+proj goodname <<'JSON'
+{ "name": "my_lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+JSON
+accept goodname "...while the underscored form builds"
+
+# A SCOPE is registry routing, never a namespace: `@my-org/geo` imports under its bare last segment, so
+# the hyphen there never has to be spelled in an `import`. Exempting it is what importNameOf is for, and
+# without this pair the rule above would quietly outlaw every scoped package with a hyphenated org.
+proj scopedname <<'JSON'
+{ "name": "@my-org/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+JSON
+accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-manifest: the module map states a name and an audience for every node"
 
 # design/module-system.md §2b/§2c. The map is NESTED because composition has to be written down rather

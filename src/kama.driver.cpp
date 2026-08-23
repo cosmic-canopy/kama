@@ -2775,7 +2775,33 @@ struct ManifestReader {
                 return fail("`main` is now `entry` — npm's `main` names a library's entry point for "
                             "importers, kama's names the `kama run` target. Rename the key");
             else if (key == "toolchain") { if (toolchainOut) { if (!str(*toolchainOut)) return false; } else if (!skipValue()) return false; }   // pin (read by the selector)
-            else if (key == "name") { if (nameOut) { if (!str(*nameOut)) return false; } else if (!skipValue()) return false; }
+            // A project's `name` is its ROOT NAMESPACE (§2a.2), so it must be spellable in an `import`.
+            // Validated HERE rather than only where it is consumed, for the reason `kind` and the two
+            // booleans are: the value set is closed, and a caller that does not read `name` would
+            // otherwise let a manifest through that no importer could ever name.
+            //
+            // `kama seed` has refused a hyphenated name since 1a, with the reasoning written out at
+            // seedValidName — `import my-lib::{…}` is a parse error, so the name is a dead end and
+            // refusing it beats shipping one. This is the same rule reaching the manifest, which is
+            // where a project that was not seeded gets read.
+            //
+            // The SCOPE is exempt: `@my-org/geo` imports under its bare last segment, so the hyphen in
+            // an npm-style scope is registry routing and never reaches a namespace. importNameOf is the
+            // same function the dependency view names its directories with.
+            else if (key == "name") {
+                std::string nm;
+                if (!str(nm)) return false;
+                const std::string ident = importNameOf(nm);
+                if (!kamaIsIdentifier(ident)) {
+                    std::string hint = ident;
+                    for (char& c : hint) if (c == '-') c = '_';
+                    return fail("`name` is \"" + nm + "\", but a project's name is its root namespace and `"
+                                + ident + "` is not a legal kama identifier — nothing could write `import "
+                                + ident + "::{ … }`"
+                                + (kamaIsIdentifier(hint) ? ". Try \"" + hint + "\"" : ""));
+                }
+                if (nameOut) *nameOut = nm;
+            }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
             else return fail("unknown key `" + key + "`");
             ws();

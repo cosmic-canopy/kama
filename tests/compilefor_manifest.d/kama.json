@@ -1,5 +1,5 @@
 {
-  "name": "compilefor-demo",
+  "name": "compilefordemo",
   "version": "0.1.0",
   "kind": "executable",
   "entry": "src/app.kama",

@@ -172,7 +172,7 @@ fi
 #     is flat.)
 rt="$tmp/rt"; mkdir -p "$rt/src"
 cat > "$rt/kama.json" <<'JSON'
-{ "name": "rt-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+{ "name": "rtdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
 JSON
 cp "$THREADED" "$rt/src/app.kama"
@@ -183,7 +183,7 @@ if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
     exit 1
 fi
 #     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
-printf '%s\n' '{ "name": "rt-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+printf '%s\n' '{ "name": "rtdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
 if "$KAMA" build --release --cc "echo" "$rt/kama.json" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
     echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
@@ -322,7 +322,7 @@ fi
 spec="$tmp/spec"
 mkdir -p "$spec/src"
 cat > "$spec/kama.json" <<'JSON'
-{ "name": "cross-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+{ "name": "crossdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
                                    "sysroot": "/opt/rpi-sysroot",
                                    "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
@@ -350,7 +350,7 @@ fi
 dflt="$tmp/dflt"
 mkdir -p "$dflt/src"
 cat > "$dflt/kama.json" <<'JSON'
-{ "name": "board-only", "version": "0.1.0", "kind": "library",
+{ "name": "boardonly", "version": "0.1.0", "kind": "library",
   "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
 JSON
 cat > "$dflt/src/gated.kama" <<'KAMA'

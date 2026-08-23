@@ -1,5 +1,5 @@
 {
-  "name": "pkg-path-dep",
+  "name": "pkgpathdep",
   "version": "0.1.0",
   "kind": "executable",
   "entry": "src/main.kama",

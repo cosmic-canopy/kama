@@ -57,7 +57,7 @@ fi
 proj="$tmp/proj"
 mkdir -p "$proj/src"
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "strict-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+{ "name": "strictdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "flags": { "TELEMETRY": {} } }
 JSON
 cat > "$proj/src/app.kama" <<'KAMA'
@@ -81,7 +81,7 @@ fi
 res="$tmp/reserved"
 mkdir -p "$res/src"
 cat > "$res/kama.json" <<'JSON'
-{ "name": "reserved-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+{ "name": "reserveddemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "flags": { "WINDOWS": {} } }
 JSON
 cat > "$res/src/app.kama" <<'KAMA'
@@ -141,7 +141,7 @@ fi
 sel="$tmp/sel"
 mkdir -p "$sel/src"
 cat > "$sel/kama.json" <<'JSON'
-{ "name": "sel-demo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+{ "name": "seldemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
               "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } } }
 JSON
@@ -221,7 +221,7 @@ fi
 loc="$tmp/local"
 mkdir -p "$loc/src"
 cat > "$loc/kama.json" <<'JSON'
-{ "name": "local-demo", "version": "0.1.0", "kind": "executable", "entry": "src/local.kama",
+{ "name": "localdemo", "version": "0.1.0", "kind": "executable", "entry": "src/local.kama",
   "flags": { "TELEMETRY": {} } }
 JSON
 cat > "$loc/kama.local.json" <<'JSON'
