@@ -969,7 +969,7 @@ Three things worth carrying into 2d/2e:
 
 - **`ctxOf` has three rungs, and the middle one is temporary**: derived module → declared `namespace` →
   `_F<idx>`. The declaration is still read for a file with no project above it, because 11 fixtures and
-  ~50 declarations inside guard heredocs live in manifest-less trees and would lose their `export` and
+  **17** declarations inside guard heredocs live in manifest-less trees and would lose their `export` and
   their qualified self-references. All 91 go in 2e together — the rule 2b learned by breaking the seed
   template.
 - **`tools/check-modules.sh` gained a §3**, because §1 and §2 read identically whether or not the emitter
@@ -982,9 +982,81 @@ Three things worth carrying into 2d/2e:
   declare `namespace std::memory` and the middle rung catches them. The arm is what carries their identity
   across 2e, which is also when that warning becomes true and when §3's triad assertion can fail.
 
-⚠️ **`.github/workflows/release.yml:72` and `:142` stage the stdlib as `cp -R lib/std payload/lib/kama/std`
-— the directory only.** `lib/kama.json` must be added to that copy in the same commit that creates it, or
-the shipped tarball has a stdlib no `import std::…` can resolve while every local leg stays green.
+#### ►► 2d — the ground re-verified for it, 2026-08-23
+
+Written after 2c because 2c moved both large files, and the last time this was skipped eleven references
+in this doc were stale. **Everything below was run, not recalled.**
+
+**The missing piece nobody named: `ModuleId` has no LOOSE arm.** `moduleIdForFile`
+([kama.driver.cpp:3004](../../src/kama.driver.cpp)) answers `inProject = false` for a file with no
+`kama.json` above it, and `full()` is then `""` — so §2i.41's derivation (resolve every operand, take the
+**deepest common ancestor**, a file's module is its directory relative to that root) **does not exist in
+any form**. It is 2d code, and note the shape it needs: the answer depends on the operand SET, which the
+emitter does not have. Compute it once per build in the driver and feed it through the **same
+`setModuleResolver` seam 2c installed** — the seam already takes a unit path and already runs for every
+emitter. ⚠️ This also means `ctxOf`'s `_F<idx>` rung is **not** the final loose answer; after 2d only a
+file in the loose ROOT keeps it (§2e.27).
+
+**Both premises 2d rests on are still live at HEAD, freshly reproduced:**
+
+| premise | reproduction | result |
+|---|---|---|
+| loose mode SEARCHES (§2i.40) | one operand `app.kama` importing `thing::{answer}`, with `thing/t.kama` only on disk | `OK (2 units analyzed)` — it went and found it |
+| the FILE-module is live (§2b.9, "two lines delete") | `import flat::{two}` with `flat.kama` beside the operand | resolves; [:611](../../src/kama.driver.cpp) tries `<root>/<rel>.kama` **before** the directory |
+
+⚠️ §2i.40 cites `tests/xfail/mod_collision.kama` for the first of these. **That file no longer exists** —
+2b turned it into `tests/xfail/mod_collision.d/`. Use the reproduction above instead.
+
+**The corpus population 2d changes is nearly empty, and that is 2b's doing.** Of the tracked `.kama`
+files importing a non-`std`/`core` module, **every positive one is already inside a project**; the only
+five that are not are all `tests/xfail/`, and the `.d` ones already hand every file to one build
+([run_tests.sh:626](../../run_tests.sh)), which is exactly what §2i asks for:
+
+```
+tests/xfail/mod_collision.d/main.kama · mod_export_private.d/main.kama · mod_missing.kama
+tests/xfail/pkg_undeclared_import.kama · scoped_bound_wrong_contract.d/main.kama
+```
+
+**The guards are where the work is, and each one's need is now derived rather than guessed:**
+
+| guard | how it invokes | what 2d/2e owes it |
+|---|---|---|
+| `check-argv-env` [:96](../../tools/check-argv-env.sh), `check-panic-multitu` [:45](../../tools/check-panic-multitu.sh) | **already passes both operands** — §2i-compatible today | not 2d. **2e**: both files sit in one directory, so the loose root holds them and §2e.27 makes their symbols **unimportable** — `import Lib::{boom}` stops resolving. Move `lib.kama` into a subdirectory so it derives a module name |
+| `check-self-import` [:65](../../tools/check-self-import.sh), [:83](../../tools/check-self-import.sh) | ONE operand, relies on the search | its whole subject is checking one member file standalone. It needs a `kama.json`, or the assertion has to become "and this is why it is invalid" |
+| `check-diag-file` [:57](../../tools/check-diag-file.sh) + four more | ONE operand each, relies on the search | pass every file, or give the tree a manifest |
+| `check-closure-pruning` | drives `--each` and single-file checks | not deferred, but it is the guard that would catch the `homogeneous` premise moving — see the `bail` note above |
+
+**Exact counts, re-measured** (an earlier note said "~51 · check-packages 21 · check-lsp 15 ·
+check-manifest 6"; that was counting the **word** *namespace* — 107 occurrences across `tools/` — not
+declarations):
+
+- **91** tracked `.kama` files declare a `namespace` — unchanged, and the figure §5 phase 2 uses.
+- **17** declarations live in guard heredocs, across **7** guards: `check-packages` 5 · `check-diag-file`
+  3 · `check-lsp` 3 · `check-self-import` 3 · `check-argv-env` 1 · `check-panic-multitu` 1 ·
+  `check-query` 1. **`check-manifest` has none.**
+
+**Line references corrected against HEAD** (`0.9.65`). The ones phase 2d/2e are written in terms of:
+
+| what | was | **now** |
+|---|---|---|
+| `resolveModuleFiles` (the file-module) | :611 | **:603**, file arm at **:611** |
+| `unitNsKey` call sites — the resolution still keyed on the declaration | :692 · :1107 · :1117 · :1257 | :692 · **:1126** · **:1136** · **:1276** |
+| `here = dirName(paths[i])` — the loose search root | :1108 | **:1144**, pushed at **:1170** |
+| `providedWhole` / `std::memory` | :1048 | **:1075**, and 2b already re-derived it |
+| `projectManifestDir` | :934 | **:958** |
+| the `_N` on generated `.c` filenames | :7968 | **:8532** |
+| `ctxOf`'s `_F<idx>` arm | :272 | **:295** |
+| `main` escapes scoping — `qualify` · `resolveFuncImpl` | :311 · :1911 | **:334** · **:1934** |
+| stranded *namespace*: `::` resolves… · "only once in its namespace" | :2943 · :5917 | **:2966** · **:5940** |
+| stranded *namespace*: "scope resolution (… namespaces)" | :17410 | **gone** — reworded already; the live ones are :17363/:17423/:17432 and none says *namespace* |
+
+Unmoved and still exact: `packageSourceFiles` :476 · `unitNsKey` :633 · `bail("mixed namespaces")` :725 ·
+`mangleNs` :256 · `demangleForDisplay` :108 · `query.cpp` `CompletionKind::Namespace` :103.
+
+✅ **Done in 2b, and re-checked here so nobody re-opens it:** `.github/workflows/release.yml` staged the
+stdlib as `cp -R lib/std payload/lib/kama/std` — the directory only, which would have shipped a stdlib no
+`import std::…` could resolve while every local leg stayed green. Both sites now `cp lib/kama.json` first
+([:76](../../.github/workflows/release.yml), [:151](../../.github/workflows/release.yml)).
 
 > **Deleting `namespace` strands the word wherever the compiler says it out loud.** Swept, so the list is
 > not re-derived — five sites, and one of them is not a wording change:
