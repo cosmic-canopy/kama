@@ -173,7 +173,8 @@ fi
 rt="$tmp/rt"; mkdir -p "$rt/src"
 cat > "$rt/kama.json" <<'JSON'
 { "name": "rtdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
-  "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } } }
+  "select": { "TARGET": { "WINDOWS": { "runtime": "dynamic" } } },
+  "modules": { ".": { "visibility": "internal" } } }
 JSON
 cp "$THREADED" "$rt/src/app.kama"
 rtline=$("$KAMA" build --release --cc "echo" "$rt/kama.json" --target WINDOWS -o "$rt/app" 2>/dev/null || true)
@@ -184,6 +185,7 @@ if printf '%s' "$rtline" | grep -qF -- "-Wl,-Bstatic"; then
 fi
 #     A typo must not read as "not dynamic" and silently hand back the default it was trying to change.
 printf '%s\n' '{ "name": "rtdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
   "select": { "TARGET": { "WINDOWS": { "runtime": "shared" } } } }' > "$rt/kama.json"
 if "$KAMA" build --release --cc "echo" "$rt/kama.json" --target WINDOWS -o "$rt/app" >/dev/null 2>"$rt/err"; then
     echo "check-target: FAIL — an unknown \"runtime\" value was accepted" >&2
@@ -325,7 +327,8 @@ cat > "$spec/kama.json" <<'JSON'
 { "name": "crossdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "echo RPICC:",
                                    "sysroot": "/opt/rpi-sysroot",
-                                   "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } } }
+                                   "cflags": ["-mcpu=cortex-a72"], "ldflags": ["-Wl,--as-needed"] } } },
+  "modules": { ".": { "visibility": "internal" } } }
 JSON
 cp "$FIXTURE" "$spec/src/app.kama"
 specline=$("$KAMA" build "$spec/kama.json" --target RPI -o "$spec/app" 2>/dev/null || true)
@@ -351,7 +354,8 @@ dflt="$tmp/dflt"
 mkdir -p "$dflt/src"
 cat > "$dflt/kama.json" <<'JSON'
 { "name": "boardonly", "version": "0.1.0", "kind": "library",
-  "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } } }
+  "select": { "TARGET": { "BOARD": { "triple": "riscv32-none-elf", "default": true } } },
+  "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dflt/src/gated.kama" <<'KAMA'
 @compileFor(OS_NONE)  fn int32 bare() { return 1; }
@@ -428,7 +432,7 @@ fi
 # get yesterday's binary and no diagnostic. Belongs in this guard because the scoping IS the target axis.
 od="$tmp/outdir"; mkdir -p "$od/src"
 printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
-printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }\n' > "$od/kama.json"
 
 ( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>"$tmp/od1.err" || {
     echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
@@ -449,7 +453,7 @@ stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
     echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
 
 # the manifest's `out` key relocates the root
-printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "out": "artifacts" }\n' > "$od/kama.json"
+printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "out": "artifacts", "modules": { ".": { "visibility": "internal" } } }\n' > "$od/kama.json"
 ( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>&1
 [ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
     echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }

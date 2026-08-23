@@ -1,1 +1,8 @@
-{ "name": "geo", "version": "1.0.0", "kind": "library" }
+{
+  "name": "geo",
+  "version": "1.0.0",
+  "kind": "library",
+  "modules": {
+    ".": { "visibility": "public" }
+  }
+}

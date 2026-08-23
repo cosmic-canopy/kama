@@ -2,5 +2,8 @@
   "name": "cfgprobe",
   "version": "0.1.0",
   "kind": "library",
-  "flags": { "FEATURE_A": { "default": true } }
+  "flags": { "FEATURE_A": { "default": true } },
+  "modules": {
+    ".": { "visibility": "public" }
+  }
 }

@@ -86,7 +86,7 @@ mkdir -p "$tmp/proj/src"
 cp "$tmp/log.kama" "$tmp/proj/src/log.kama"
 cat > "$tmp/proj/kama.json" <<'JSON'
 { "name": "logtest", "version": "0.1.0", "kind": "executable", "entry": "src/log.kama",
-  "log": { "level": "info", "tags": { "audio": "debug" } } }
+  "log": { "level": "info", "tags": { "audio": "debug" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 # Named by its MANIFEST: the baked default is the whole point here, and naming the .kama file instead is
 # a loose build, which reads no manifest and would bake nothing.
@@ -126,7 +126,7 @@ fn int32 main() {
 KAMA
 cat > "$tmp/proj2/kama.json" <<'JSON'
 { "name": "logmerge", "version": "0.1.0", "kind": "executable", "entry": "src/merge.kama",
-  "log": { "level": "info", "tags": { "net": "trace" } } }
+  "log": { "level": "info", "tags": { "net": "trace" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$tmp/proj2/kama.local.json" <<'JSON'
 { "log": { "level": "warn", "tags": { "audio": "debug" } } }

@@ -1,5 +1,8 @@
 {
   "name": "genericprobe",
   "version": "0.1.0",
-  "kind": "executable"
+  "kind": "executable",
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
 }

@@ -55,7 +55,8 @@ fi
 proj="$tmp/proj"; mkdir -p "$proj/src"
 cp "$src" "$proj/src/app.kama"
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": true }
+{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": true,
+  "modules": { ".": { "visibility": "internal" } } }
 JSON
 if "$KAMA" build "$proj/kama.json" -o "$tmp/m.out" >/dev/null 2>"$tmp/m.err"; then
     echo "check-noheap: FAIL — the manifest's \`no-heap\` did not reject a 'new'" >&2; exit 1
@@ -69,7 +70,7 @@ fi
 #     no heap on the board, a heap on the host that builds the tooling.
 cat > "$proj/kama.json" <<'JSON'
 { "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": true,
-  "select": { "TARGET": { "HOST": { "no-heap": false } } } }
+  "select": { "TARGET": { "HOST": { "no-heap": false } } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 if ! "$KAMA" build "$proj/kama.json" -o "$tmp/m2.out" >/dev/null 2>"$tmp/m2.err"; then
     echo "check-noheap: FAIL — a target's \`no-heap\`: false did not override the project's:" >&2
@@ -79,7 +80,8 @@ fi
 # 4c. The value set is CLOSED, checked in the reader — a typo must not read as some truthiness nobody
 #     wrote down. This is the same rule `kind` gets, and for the same reason.
 cat > "$proj/kama.json" <<'JSON'
-{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": "yes" }
+{ "name": "nh", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "no-heap": "yes",
+  "modules": { ".": { "visibility": "internal" } } }
 JSON
 if "$KAMA" build "$proj/kama.json" -o "$tmp/m3.out" >/dev/null 2>"$tmp/m3.err"; then
     echo "check-noheap: FAIL — a non-boolean \`no-heap\` was accepted" >&2; exit 1

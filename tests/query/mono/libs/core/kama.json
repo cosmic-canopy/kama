@@ -1,1 +1,8 @@
-{ "name": "gearcore", "version": "0.1.0", "kind": "library" }
+{
+  "name": "gearcore",
+  "version": "0.1.0",
+  "kind": "library",
+  "modules": {
+    ".": { "visibility": "public" }
+  }
+}

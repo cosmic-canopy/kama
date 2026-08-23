@@ -92,12 +92,12 @@ echo "check-manifest: an unknown key is an error, not a silent skip"
 # exactly like a key that did nothing — and the manifest is about to carry the module map, where a
 # swallowed key would mean a swallowed visibility decision.
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sourses": ["src"] }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "sourses": ["src"], "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject typo 'unknown key `sourses`' "a misspelled key names itself"
 
 proj typo <<'JSON'
-{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "typo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept typo "the correctly spelled key builds"
 
@@ -106,7 +106,7 @@ accept typo "the correctly spelled key builds"
 # same path as a typo — this is the case that would regress if the two were re-fused.
 proj unasked <<'JSON'
 { "name": "unasked", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "toolchain": "v1",
-  "out": "artifacts" }
+  "out": "artifacts", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept unasked "keys this command does not read are still recognized"
 
@@ -114,7 +114,7 @@ accept unasked "keys this command does not read are still recognized"
 echo "check-manifest: the pre-1.0 \`main\` key names its rename"
 
 proj legacy <<'JSON'
-{ "name": "legacy", "version": "0.1.0", "kind": "executable", "main": "src/app.kama" }
+{ "name": "legacy", "version": "0.1.0", "kind": "executable", "main": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject legacy '`main` is now `entry`' "the legacy \`main\` key is refused by name"
 
@@ -129,7 +129,7 @@ else
 fi
 
 proj legacy <<'JSON'
-{ "name": "legacy", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "legacy", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept legacy "the renamed \`entry\` key builds"
 
@@ -137,24 +137,24 @@ accept legacy "the renamed \`entry\` key builds"
 echo "check-manifest: \`kind\` is required, and its value set is closed"
 
 proj nokind <<'JSON'
-{ "name": "nokind", "version": "0.1.0" }
+{ "name": "nokind", "version": "0.1.0", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject nokind 'no `kind`' "a project with no \`kind\` is refused"
 
 # The value set is closed, and it is checked in the READER — so a near-miss is caught even on a command
 # that never reads the key. Without that, `"libary"` would be a well-formed string nobody looked at.
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "libary" }
+{ "name": "badkind", "version": "0.1.0", "kind": "libary", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject badkind '`kind` must be "library" or "executable"' "a misspelled \`kind\` value names the two"
 
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "library" }
+{ "name": "badkind", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 acceptLib badkind "\`kind\`: library builds, as an archive"
 
 proj badkind <<'JSON'
-{ "name": "badkind", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "badkind", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept badkind "\`kind\`: executable builds"
 
@@ -164,31 +164,31 @@ echo "check-manifest: \`source\` names one real subdirectory"
 # The default. Every fixture above already leans on it — this one says so out loud, because the absence
 # of a key is the easiest claim in the file to break without noticing.
 proj dflt <<'JSON'
-{ "name": "dflt", "version": "0.1.0", "kind": "library" }
+{ "name": "dflt", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 acceptLib dflt "an absent \`source\` defaults to src/"
 
 # `.` is refused, and this is the rule that keeps "no kama.json under source" exemption-free: with `.`,
 # the manifest itself, .kama/deps, out/ and any vendored project would all sit INSIDE the source root.
 proj dot <<'JSON'
-{ "name": "dot", "version": "0.1.0", "kind": "library", "source": "." }
+{ "name": "dot", "version": "0.1.0", "kind": "library", "source": ".", "modules": { ".": { "visibility": "public" } } }
 JSON
 reject dot '`source` must name a subdirectory' "\`source\`: \".\" is refused"
 
 proj esc <<'JSON'
-{ "name": "esc", "version": "0.1.0", "kind": "library", "source": "../elsewhere" }
+{ "name": "esc", "version": "0.1.0", "kind": "library", "source": "../elsewhere", "modules": { ".": { "visibility": "public" } } }
 JSON
 reject esc 'may not reach outside the project' "\`source\` may not escape with .."
 
 proj abs <<'JSON'
-{ "name": "abs", "version": "0.1.0", "kind": "library", "source": "/etc" }
+{ "name": "abs", "version": "0.1.0", "kind": "library", "source": "/etc", "modules": { ".": { "visibility": "public" } } }
 JSON
 reject abs 'must be relative to the manifest' "\`source\` may not be absolute"
 
 # A source root that is simply not there. The build says so rather than resolving to nothing, which is
 # the trap `kama seed` exists to prevent: a project that builds for its author and is empty to everyone.
 proj gone <<'JSON'
-{ "name": "gone", "version": "0.1.0", "kind": "library", "source": "lib" }
+{ "name": "gone", "version": "0.1.0", "kind": "library", "source": "lib", "modules": { ".": { "visibility": "public" } } }
 JSON
 reject gone 'does not exist' "a \`source\` naming a missing directory is named"
 
@@ -202,9 +202,10 @@ reject gone 'does not exist' "a \`source\` naming a missing directory is named"
 dep="$tmp/dep"
 mkdir -p "$dep/app/src" "$dep/geo/src"
 printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",' \
+              '  "modules": { ".": { "visibility": "internal" } },' \
               '  "dependencies": { "geo": { "path": "../geo" } } }' > "$dep/app/kama.json"
 printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$dep/app/src/main.kama"
-printf '{ "name": "geo", "version": "1.0.0", "kind": "library" }\n' > "$dep/geo/kama.json"
+printf '{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$dep/geo/kama.json"
 
 # A package root's `source` is the WHOLE answer: `geo.kama` sits BESIDE the source root, not in it, so
 # the package must not resolve. Before the gate a flat listing picked it up, and the package was
@@ -260,7 +261,7 @@ echo "check-manifest: \`link\` names native libraries once, per project"
 mkdir -p "$tmp/lnk/src"
 printf 'fn int32 main() { return 0; }\n' > "$tmp/lnk/src/app.kama"
 cat > "$tmp/lnk/kama.json" <<'JSON'
-{ "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"] }
+{ "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"], "modules": { ".": { "visibility": "internal" } } }
 JSON
 tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/kama.json" -o "$tmp/lnk/app" 2>/dev/null || true)
 printf '%s' "$tail_out" | grep -qF -- "-lm" \
@@ -270,7 +271,7 @@ printf '%s' "$tail_out" | grep -qF -- "-lm" \
 # A target OVERRIDES it wholesale rather than adding to it — the only way to say "not on this one".
 cat > "$tmp/lnk/kama.json" <<'JSON'
 { "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"],
-  "select": { "TARGET": { "WINDOWS": { "link": ["ws2_32"] } } } }
+  "select": { "TARGET": { "WINDOWS": { "link": ["ws2_32"] } } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 tail_out=$("$KAMA" build --cc "echo" "$tmp/lnk/kama.json" --target WINDOWS -o "$tmp/lnk/app" 2>/dev/null || true)
 if printf '%s' "$tail_out" | grep -qF -- "-lws2_32" && ! printf '%s' "$tail_out" | grep -qE -- '-lm( |$)'; then
@@ -298,7 +299,7 @@ echo "check-manifest: \`webgpu\` is a project property, not a flag to remember"
 mkdir -p "$tmp/wg/src"
 printf 'fn int32 main() { return 7; }\n' > "$tmp/wg/src/app.kama"
 cat > "$tmp/wg/kama.json" <<'JSON'
-{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true }
+{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true, "modules": { ".": { "visibility": "internal" } } }
 JSON
 if KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e"; then
     bad "the manifest's \`webgpu\` did not reach the build"
@@ -311,7 +312,7 @@ fi
 # The control, and it is the one that matters: without the key the SAME build succeeds, so the assertion
 # above is about `webgpu` and not about KAMA_WGPU_DIR being unset.
 cat > "$tmp/wg/kama.json" <<'JSON'
-{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e" \
     && ok "...and without it the same build is unaffected" \
@@ -321,7 +322,7 @@ KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/ap
 # wants no native SDK at all.
 cat > "$tmp/wg/kama.json" <<'JSON'
 { "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true,
-  "select": { "TARGET": { "HOST": { "webgpu": false } } } }
+  "select": { "TARGET": { "HOST": { "webgpu": false } } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/app" >"$tmp/o" 2>"$tmp/e" \
     && ok "a target's \`webgpu\`: false overrides the project's" \
@@ -331,17 +332,17 @@ KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/ap
 echo "check-manifest: projects do not nest"
 
 proj nest <<'JSON'
-{ "name": "nest", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "nest", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 mkdir -p "$tmp/nest/src/inner"
-printf '{ "name": "inner", "version": "0.1.0", "kind": "library" }\n' > "$tmp/nest/src/inner/kama.json"
+printf '{ "name": "inner", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$tmp/nest/src/inner/kama.json"
 reject nest 'projects do not nest' "a kama.json inside \`source\` is refused"
 
 # The passing twin, and the whole reason `source` may not be "." — a vendored project BESIDE the source
 # root is a separate project, not a nested one, and needs no exemption to stay legal.
 rm -rf "$tmp/nest/src/inner"
 mkdir -p "$tmp/nest/vendor/inner/src"
-printf '{ "name": "inner", "version": "0.1.0", "kind": "library" }\n' > "$tmp/nest/vendor/inner/kama.json"
+printf '{ "name": "inner", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$tmp/nest/vendor/inner/kama.json"
 printf 'namespace inner;\nexport { w };\nfn int32 w() { return 1; }\n' > "$tmp/nest/vendor/inner/src/inner.kama"
 accept nest "...while one BESIDE it is just another project"
 
@@ -351,7 +352,7 @@ echo "check-manifest: the workspace is its own file, with its own schema"
 # `projects` moved OUT of kama.json, and the rejection names where it went. This is the migration
 # instruction, so it must fire on the ordinary build path, not only where a workspace is read.
 proj oldws <<'JSON'
-{ "name": "oldws", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "projects": ["libs/*"] }
+{ "name": "oldws", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "projects": ["libs/*"], "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject oldws 'now lives in kama_workspace.json' "\`projects\` in a kama.json names the file it moved to"
 
@@ -372,12 +373,14 @@ reject oldws 'now lives in kama_workspace.json' "\`projects\` in a kama.json nam
 ws="$tmp/ws"
 mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from stdin
     rm -rf "$ws"; mkdir -p "$ws/libs/core/src" "$ws/libs/net/src" "$ws/libs/app/src"
-    printf '{ "name": "core", "version": "0.1.0", "kind": "library" }\n' > "$ws/libs/core/kama.json"
+    printf '{ "name": "core", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ws/libs/core/kama.json"
     printf 'namespace core;\nexport { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/core/src/core.kama"
     printf '%s\n' '{ "name": "net", "version": "0.1.0", "kind": "library",' \
+                  '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "core": { "path": "../core" } } }' > "$ws/libs/net/kama.json"
     printf 'namespace net;\nimport core::{ v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
     printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "library",' \
+                  '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "net": { "path": "../net" } } }' > "$ws/libs/app/kama.json"
     printf 'namespace app;\nimport net::{ u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
     cat > "$ws/kama_workspace.json"
@@ -462,7 +465,7 @@ wsaccept "...while \`dependencies\` is legal there"
 mkws <<'JSON'
 { "projects": { "libs/*": { "optional": false } } }
 JSON
-printf '{ "name": "acme", "version": "0.1.0", "kind": "library" }\n' > "$ws/kama.json"
+printf '{ "name": "acme", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ws/kama.json"
 wsreject 'a workspace root is not a project' "a kama.json beside a kama_workspace.json is refused"
 
 # ---------------------------------------------------------------------------------------------------
@@ -472,13 +475,13 @@ echo "check-manifest: a project's name is its root namespace"
 # the name is a dead end and refusing it beats shipping one. This is that rule reaching the MANIFEST,
 # which is where a project that was not seeded gets read.
 proj badname <<'JSON'
-{ "name": "my-lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "my-lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject badname 'is not a legal kama identifier' "a hyphenated project name is refused"
 reject badname 'Try "my_lib"' "...and the message spells the name that would work"
 
 proj goodname <<'JSON'
-{ "name": "my_lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "my_lib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept goodname "...while the underscored form builds"
 
@@ -486,7 +489,7 @@ accept goodname "...while the underscored form builds"
 # the hyphen there never has to be spelled in an `import`. Exempting it is what importNameOf is for, and
 # without this pair the rule above would quietly outlaw every scoped package with a hyphenated org.
 proj scopedname <<'JSON'
-{ "name": "@my-org/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+{ "name": "@my-org/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
 
@@ -514,6 +517,33 @@ proj modok <<'JSON'
                "detail": { "visibility": ["net::web"] } } }
 JSON
 accept modok "a nested map, a list, and a narrow parent over a public child"
+
+# The map itself is REQUIRED, and required NON-EMPTY. It was optional while `visibility` was only
+# form-checked and a file could still name itself with a `namespace` declaration; with the declaration
+# deleted the map is the only way left to name a module, so a project without one has no API to speak of.
+# The smallest legal map is the root — which is what `modok` above and every `accept` in this file carry,
+# so the passing twin for this pair is the whole rest of the section.
+proj modnone <<'JSON'
+{ "name": "modnone", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama" }
+JSON
+reject modnone 'no `modules`' "a project with no module map at all"
+
+# ...and `{}` is not a way to satisfy that. A map listing nothing decides nothing, which is exactly what
+# omitting the key used to mean — accepting it would leave the requirement satisfiable by a decorative
+# key, which is the rot the `entry` key hit in 1c.
+proj modempty <<'JSON'
+{ "name": "modempty", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { } }
+JSON
+reject modempty '`modules` is empty' "an empty module map"
+
+# The same argument one level down: a node whose own `modules` lists nothing.
+proj modemptychild <<'JSON'
+{ "name": "modemptychild", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" },
+               "net": { "visibility": "public", "modules": { } } } }
+JSON
+reject modemptychild 'is empty' "an empty nested module map"
 
 # `visibility` is required on EVERY node, including one whose folder holds no `.kama` files yet. Making
 # it conditional on file presence would mean adding a source file invalidates the manifest.

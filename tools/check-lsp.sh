@@ -187,7 +187,7 @@ LSRC='fn int32 add(int32 lhs, int32 rhs) { return lhs + rhs; }\nfn int32 useIt()
 dep="$tmp/depproj"
 mkdir -p "$dep/geo/src" "$dep/app/src"
 cat > "$dep/geo/kama.json" <<'JSON'
-{ "name": "geo", "version": "1.0.0", "kind": "library" }
+{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dep/geo/src/geo.kama" <<'KAMA'
 namespace geo;
@@ -199,7 +199,7 @@ type value Point {
 KAMA
 cat > "$dep/app/kama.json" <<'JSON'
 { "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
-  "dependencies": { "geo": { "path": "../geo" } } }
+  "dependencies": { "geo": { "path": "../geo" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
 import geo::{Point};
@@ -245,7 +245,7 @@ tmcli=$("$KAMA" check "$tm/src/alpha/a.kama" 2>&1 || true)
 # Layout (LSP 0-based): L4 `    public fn Result<usize, IoError> write(...` -> `write` at 37..42.
 mkdir -p "$tmp/impl/src"
 cat > "$tmp/impl/kama.json" <<'JSON'
-{ "name": "impl", "version": "0.1.0", "kind": "library" }
+{ "name": "impl", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$tmp/impl/src/sink.kama" <<'KAMA'
 namespace sink;
@@ -273,7 +273,7 @@ cat > "$frws/kama_workspace.json" <<'JSON'
 { "projects": { "libs/*": { "optional": false } } }
 JSON
 cat > "$frws/libs/config/kama.json" <<'JSON'
-{ "name": "config", "version": "0.1.0", "kind": "library" }
+{ "name": "config", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$frws/libs/config/src/config.kama" <<'KAMA'
 namespace config;
@@ -287,12 +287,12 @@ printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap()
 # in which the editor must speak up, since the code still resolves and builds where it sits.
 cat > "$frws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "kind": "library",
-  "dependencies": { "config": { "path": "../config" } } }
+  "dependencies": { "config": { "path": "../config" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
 frok=0
 "$KAMA" pkg install "$frws/libs/net" >/dev/null 2>&1 && frok=1
 cat > "$frws/libs/net/kama.json" <<'JSON'
-{ "name": "net", "version": "0.1.0", "kind": "library" }
+{ "name": "net", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 FRURI=$(furi "$frws/libs/net/src/net.kama")
 FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
@@ -892,7 +892,7 @@ fi
 CFGSRC="$tmp/cfgcopy"
 mkdir -p "$CFGSRC/src"
 cp "$CFGDIR/src/app.kama" "$CFGSRC/src/app.kama"
-printf '{"name":"cfgprobe","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}}}' > "$CFGSRC/kama.json"
+printf '{"name":"cfgprobe","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}},"modules":{".":{"visibility":"public"}}}' > "$CFGSRC/kama.json"
 CFGB=$(cfgsession "$tmp/cfgB" "$tmp" "$CFGSRC/src/app.kama")
 cfgexpect "$CFGB" '"name":"onlyWithoutA"' "with the default off, the NEGATED decl is what survives"
 cfgreject "$CFGB" '"name":"onlyWithA"'    "...and the gated one is dropped, as a build would"
@@ -989,7 +989,7 @@ cfgexpect "$CFGA" '"flags":['                   "...plus the resolved @compileFo
 CFGSEL="$tmp/cfgsel"
 mkdir -p "$CFGSEL/src"
 cp "$CFGDIR/src/app.kama" "$CFGSEL/src/app.kama"
-printf '{"name":"cfgsel","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
+printf '{"name":"cfgsel","version":"0.1.0","kind":"library","flags":{"FEATURE_A":{}},"modules":{".":{"visibility":"public"}},"select":{"TARGET":{"RPI":{"triple":"aarch64-linux-gnu"}},"CONSOLE":{"XBOX":{"default":true},"PS5":{}}}}' > "$CFGSEL/kama.json"
 CFGGRP=$(cfgsession "$tmp/cfgI" "$tmp" "$CFGSEL/src/app.kama")
 cfgexpect "$CFGGRP" '"CONSOLE":{"values":["XBOX","PS5"],"selected":"XBOX"}' "a project's own select group reaches the picker, with its default selected"
 cfgexpect "$CFGGRP" '"RPI"'                                                 "...and its own TARGET joins the built-in catalog"

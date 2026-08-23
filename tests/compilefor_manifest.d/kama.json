@@ -6,5 +6,8 @@
   "flags": {
     "TELEMETRY": { "default": true },
     "PROFILING": {}
+  },
+  "modules": {
+    ".": { "visibility": "internal" }
   }
 }

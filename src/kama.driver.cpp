@@ -2442,7 +2442,17 @@ struct ManifestReader {
         ws(); if (i >= s.size() || s[i] != '{')
             return fail(where.empty() ? std::string("`modules` must be a JSON object")
                                       : "`modules` for `" + where + "` must be a JSON object");
-        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        // An EMPTY map is refused, at every depth. A `modules` that lists nothing decides nothing, which
+        // is exactly what omitting the key used to mean — and since the key is required (below, in
+        // resolveBuildConfig), accepting `{}` would leave the requirement satisfiable by a decorative
+        // key. That is the rot 1c hit with `entry`. Same argument as §2c's ban on an empty `visibility`
+        // list: a node that declares no audience and a map that declares no module are both dead text.
+        ++i; ws(); if (i < s.size() && s[i] == '}')
+            return fail(where.empty()
+                ? std::string("`modules` is empty — every project lists at least its root module, `\".\"` "
+                              "(the files directly under `source`)")
+                : "`modules` for `" + where + "` is empty — either drop the key or list the folders inside "
+                  "that module");
         while (true) {
             ModuleNode n;
             if (!str(n.key)) return false;
@@ -3753,8 +3763,23 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // they run here, on the build path, for the same reason `source` is re-checked here: this is the
         // one place a manifest is validated as THIS project's rather than mined for one key. The
         // resolution and editor paths stay lenient about a manifest somewhere up the tree.
+        //
+        // And the map is REQUIRED, for the same reason `kind` is and in the same place. It was optional
+        // through 2a-2d because `visibility` was only form-checked and a file's identity could still come
+        // from a `namespace` it declared. Neither is true any more: the map is the ONLY way left to name a
+        // module, so a project without one is a project whose folders have no API — a thing to say out
+        // loud here rather than leave to be discovered as "cannot resolve module" at the first import.
+        // (An empty map is refused in modulesObject, so `mods.empty()` here means the key is ABSENT.)
+        // Not enforced on a DEPENDENCY's manifest, matching `kind`: the rule that would read one is
+        // visibility's, and that phase has not landed.
         std::vector<ModuleNode> mods;
         if (!loadManifestModules(manifest, mods, err)) { err = manifest + ": " + err; return false; }
+        if (mods.empty()) {
+            err = manifest + ": no `modules` — every project states its module map, and its root module is "
+                  "`\".\"`, the files directly under `source` (add "
+                  "\"modules\": { \".\": { \"visibility\": \"internal\" } })";
+            return false;
+        }
 
         // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one

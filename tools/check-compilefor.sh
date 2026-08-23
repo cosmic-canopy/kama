@@ -58,7 +58,7 @@ proj="$tmp/proj"
 mkdir -p "$proj/src"
 cat > "$proj/kama.json" <<'JSON'
 { "name": "strictdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
-  "flags": { "TELEMETRY": {} } }
+  "flags": { "TELEMETRY": {} }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$proj/src/app.kama" <<'KAMA'
 @compileFor(TELMETRY) fn int32 typo() { return 1; }
@@ -82,7 +82,7 @@ res="$tmp/reserved"
 mkdir -p "$res/src"
 cat > "$res/kama.json" <<'JSON'
 { "name": "reserveddemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
-  "flags": { "WINDOWS": {} } }
+  "flags": { "WINDOWS": {} }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$res/src/app.kama" <<'KAMA'
 fn int32 main() { return 0; }
@@ -143,7 +143,8 @@ mkdir -p "$sel/src"
 cat > "$sel/kama.json" <<'JSON'
 { "name": "seldemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } },
-              "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } } }
+              "CONSOLE":    { "XBOX": { "default": true }, "PS5": {} } },
+  "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$sel/src/app.kama" <<'KAMA'
 @compileFor(FAST)     fn int32 a() { return 1; }
@@ -222,7 +223,7 @@ loc="$tmp/local"
 mkdir -p "$loc/src"
 cat > "$loc/kama.json" <<'JSON'
 { "name": "localdemo", "version": "0.1.0", "kind": "executable", "entry": "src/local.kama",
-  "flags": { "TELEMETRY": {} } }
+  "flags": { "TELEMETRY": {} }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$loc/kama.local.json" <<'JSON'
 { "flags": { "LOCALFLAG": { "default": true } } }
