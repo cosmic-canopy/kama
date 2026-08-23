@@ -1,0 +1,14 @@
+// Two same-named contracts in different namespaces, both conformed to by `int32`. Returns 40.
+import demoscope::demo::marks::{viaMarks};
+import demoscope::demo::signs::{viaSigns};
+
+fn int32 main() {
+    int32 x = 5;
+    int64 y = 5i64;
+    // Each bound dispatches to ITS OWN contract's conformance.
+    if (viaMarks(v: ref x) != 11) { return 1; }
+    if (viaSigns(v: ref x) != 29) { return 2; }
+    // The set form still serves every target, and only the contract that named it.
+    if (viaMarks(v: ref y) != 11) { return 3; }
+    return 40;
+}

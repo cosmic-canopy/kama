@@ -1,0 +1,14 @@
+import std::collections::{View};
+import crgen::crbase::{Parent};
+import crgen::crchild::{Child};
+type resource Impl implements Child, Parent {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 take(View<uint8> bytes) { return this.n + cast<int32>(bytes.length()); }
+    public fn int32 extra() { return this.n + 1; }
+}
+fn int32 main() {
+    Impl i = Impl.make(n: 41);
+    Child c = i;
+    return c.extra();
+}

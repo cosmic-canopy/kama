@@ -1,3 +1,0 @@
-namespace util;
-export { three };
-fn int32 three() { return 3; }

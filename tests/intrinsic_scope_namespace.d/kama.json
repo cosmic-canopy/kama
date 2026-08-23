@@ -1,0 +1,15 @@
+{
+  "name": "demoscope",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+
+  "modules": {
+    ".": { "visibility": "internal" },
+    "demo": { "visibility": "internal",
+        "modules": {
+          "marks": { "visibility": "internal" },
+          "signs": { "visibility": "internal" }
+        } }
+  }
+}

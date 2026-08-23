@@ -1,0 +1,3 @@
+import modalias::geo;              // bare: qualified-only access, geo::area
+import modalias::util as u;        // module alias: u::three
+fn int32 main() { return modalias::geo::area() + u::three(); }   // 7 + 3 = 10

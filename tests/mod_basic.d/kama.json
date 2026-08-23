@@ -1,0 +1,12 @@
+{
+  "name": "modbasic",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+
+  "modules": {
+    ".":      { "visibility": "internal" },
+    "math":   { "visibility": "internal" },
+    "shapes": { "visibility": "internal" }
+  }
+}

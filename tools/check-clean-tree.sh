@@ -116,8 +116,19 @@ fi
 
 # 5. Multi-unit: per-module .c and the shared .gen.h are named off the OUTPUT, and must land in the
 #    output directory rather than beside whichever module they came from.
+#
+#    The sources are written HERE rather than copied from a fixture. This used to `cp
+#    tests/mod_basic.d/*.kama` and broke the moment that fixture grew a src/ tree — which says the
+#    dependency was wrong, not the migration: what this case is about is where intermediates land, and
+#    that needs three units and nothing else. Borrowing a fixture's layout coupled it to a shape it
+#    never cared about.
 mkdir -p "$tmp/c5/src" "$tmp/c5/dest"
-cp "$ROOT"/tests/mod_basic.d/*.kama "$tmp/c5/src/"
+#    The three units are INDEPENDENT — no cross-file calls — which is deliberate twice over: a file with
+#    no `namespace` is file-private today, so a call across them would not resolve at all; and this case
+#    wants three translation units, not a dependency graph.
+printf 'fn int32 twice(int32 v) { return v * 2; }\n'  > "$tmp/c5/src/math.kama"
+printf 'fn int32 area(int32 w) { return w * w; }\n'   > "$tmp/c5/src/shapes.kama"
+printf 'fn int32 main() { return 0; }\n'              > "$tmp/c5/src/main.kama"
 if ( cd "$tmp/c5" && "$KAMA" build src/*.kama -o dest/app >/dev/null 2>&1 ); then
     expect_listing "$tmp/c5/src" "main.kama math.kama shapes.kama " \
         "case 5: a multi-unit build wrote intermediates next to the modules"

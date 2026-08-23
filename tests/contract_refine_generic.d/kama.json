@@ -1,0 +1,12 @@
+{
+  "name": "crgen",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+
+  "modules": {
+    ".":       { "visibility": "internal" },
+    "crbase":  { "visibility": "internal" },
+    "crchild": { "visibility": "internal" }
+  }
+}

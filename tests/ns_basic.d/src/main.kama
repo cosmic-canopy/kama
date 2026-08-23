@@ -1,0 +1,9 @@
+import nsbasic::graphics::{Texture};       // Texture unqualified; the module's `scale` stays qualified-accessible
+import nsbasic::physics;                   // dependency; its `Texture` used qualified
+fn int32 main()
+{
+    Texture g = Texture.make(id: 10);             // graphics::Texture (imported)
+    nsbasic::physics::Texture p = nsbasic::physics::Texture.make(m: 7);  // qualified, distinct type
+    int32 s = nsbasic::graphics::scale(x: 3);              // qualified namespaced call -> 6
+    return g.get() + p.get() + s;                 // 10 + 7 + 6 = 23
+}

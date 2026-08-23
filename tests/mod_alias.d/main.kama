@@ -1,3 +1,0 @@
-import geo;              // bare: qualified-only access, geo::area
-import util as u;        // module alias: u::three
-fn int32 main() { return geo::area() + u::three(); }   // 7 + 3 = 10
