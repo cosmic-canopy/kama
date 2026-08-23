@@ -568,6 +568,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error by design.
 - **Full `expose` (2.0).** The minimal `expose fn` free-function C-ABI boundary ships today (SPEC + §8
   hot-reload); the **full `expose`** — richer wasm module exports + the scripting host interface — stays 2.0 (§7).
+
+  What is actually missing on the wasm half, measured 2026-08-23 rather than assumed. An `expose`d
+  function **is** a real wasm export (`WebAssembly.Module.exports()` lists it), so an embedder that
+  instantiates the `.wasm` directly can already call it — and never runs `main`. What does **not** work is
+  reaching it off the generated JS as `Module._add`: that needs `-sEXPORTED_FUNCTIONS`/`-sMODULARIZE`,
+  and kama emits a PROGRAM (shebang, runs `main`, exits), not a library. `tests/expose_basic.kama` claimed
+  the `Module._add` form worked; it never did, and its comment now says so.
+
+  ⚠️ **This row owns a constraint from `0.9.63`.** Every wasm build now sets `-sEXIT_RUNTIME=1`, because
+  without it node's graceful teardown deadlocks against V8's background threads (see the comment at the
+  flag in `kama.driver.cpp`, and `run_tests.sh`'s watchdog history). A *module* artifact must keep its
+  runtime alive after `main`, so shipping this work means making that flag conditional again — on the
+  artifact **kind** (program vs module), never on which library the program happens to use, which is the
+  keying that was wrong before.
 - **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
   open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
   `@generate(Format)` draws — all of them now error rather than half-deriving; `Serialize`/`Deserialize`
