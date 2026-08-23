@@ -519,17 +519,23 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     [Makefile:98](../../Makefile)), so this is a `PRELUDE_MODULES` change, not a script or driver change.
     The hard-coded line then **deletes**.
 
-    ⚠️ **Two claims in the paragraph above are UNVERIFIED and both look wrong from reading the code.
-    Probe before writing the commit; do not build on them.**
+    ⚠️ **PROBED 2026-08-22. One claim above survived; one did not.**
 
-    - *"The hard-coded line then deletes."* The triad is pushed into **every** compilation
-      unconditionally by `addPreludeModule` ([driver:1788](../../src/kama.driver.cpp),
-      [cemit.h:597](../../src/kama.cemit.h)), and this rule keeps it embedded (that is how `--no-std`
-      survives) **while also** putting it on disk. Delete the line and an explicit `import std::memory`
-      resolves the disk copies *alongside* the embedded ones — `seen` is keyed on absolute path and the
-      embedded units are never in it, so nothing dedupes them. 132 statements in the corpus import
-      `std::memory`. Prediction: the line stays, ideally derived from the embedded units' module
-      identity rather than hard-coded.
+    - *"The hard-coded line then deletes."* **Run, and the prediction against it was WRONG.** Built a
+      compiler with the line removed, staged an installed payload with `lib/std/memory/` on disk beside
+      the still-embedded triad, and compiled `import std::memory::{Owned}` through it: it **builds,
+      links and runs correctly**. The reason the two copies do not collide is that the embedded ones are
+      **collect-only** — `analyze()` excludes them from `_units` and `checkDeclaredTypes` treats them as
+      compiler-owned ([cemit.cpp:1714](../../src/kama.cemit.cpp)) — while `Owned<T>` is **generic**, so
+      its code is emitted at each instantiation rather than at its declaration. The disk copy's
+      translation unit comes out **three lines long and empty**.
+
+      So the line *can* go. It should still not simply vanish, for a reason the original never gave:
+      deleting it makes every build that names `import std::memory` parse a module the compiler already
+      has embedded and hand the C compiler an empty translation unit. **Re-derive it rather than delete
+      or keep it** — the rule is not "`std::memory` is special" but *"a module already embedded in the
+      compiler is already provided"*, which reads off `preludeModuleUnits()` and names no module at all.
+      That removes the hard-coded exception, which is what this campaign objected to.
     - *"not a script or driver change."* `tools/embed_prelude.sh:35` builds each synthetic name as
       `"<prelude>/${m#prelude/}"` — a literal prefix strip that becomes a no-op once `PRELUDE_MODULES`
       points at `lib/std/memory/`, yielding `<prelude>/lib/std/memory/owned.kama`. And the deeper

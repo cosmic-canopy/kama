@@ -92,10 +92,15 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.agents.gen.o \
             kama.seed.gen.o)
 
-# The built-in kama sources embedded into the binary (prelude core + the always-in-scope smart-ptr
-# triad). tools/embed_prelude.sh wraps them in raw-string literals -> out/<platform>/kama.prelude.gen.cpp.
+# The built-in kama sources embedded into the binary: the floor, plus the always-in-scope smart-pointer
+# triad. tools/embed_prelude.sh wraps them in raw-string literals -> out/<platform>/kama.prelude.gen.cpp.
+#
+# The triad lives under lib/std/memory/ because it IS a stdlib module — `std::memory`, resolvable on disk
+# like every other one — and is embedded as WELL so that a --no-std install, which ships only bin/kama,
+# still has it. Keep this list at three files: ctxOf indexes `[prelude] + preludeModules + userUnits`
+# positionally, so changing the COUNT shifts every loose file's `_F<n>` symbol.
 PRELUDE_GLOBAL  = prelude/global.kama
-PRELUDE_MODULES = prelude/std/memory/owned.kama prelude/std/memory/shared.kama prelude/std/memory/weak.kama
+PRELUDE_MODULES = lib/std/memory/owned.kama lib/std/memory/shared.kama lib/std/memory/weak.kama
 
 $(BUILD):
 	mkdir -p $(BUILD)

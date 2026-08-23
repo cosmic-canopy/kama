@@ -4,9 +4,10 @@
 #
 #   usage: embed_prelude.sh OUT GLOBAL MODULE...
 #
-# GLOBAL is the empty-namespace prelude (prelude/global.kama); each MODULE is a namespaced built-in
-# unit (prelude/std/memory/*.kama). Each source is wrapped in a C++11 raw string literal with the
-# KAMASRC delimiter — kama source never contains `)KAMASRC"`, so no escaping is needed.
+# GLOBAL is the floor (prelude/global.kama, no module of its own); each MODULE is a file belonging to a
+# real stdlib module that must survive a `--no-std` install (lib/std/memory/*.kama, the smart-pointer
+# triad). Each source is wrapped in a C++11 raw string literal with the KAMASRC delimiter — kama source
+# never contains `)KAMASRC"`, so no escaping is needed.
 set -eu
 
 out=$1; shift
@@ -29,11 +30,20 @@ global=$1; shift
     printf '  { R"KAMASRC(\n'
     cat "$m"
     printf ')KAMASRC",\n'
+    # These files live under the stdlib tree (lib/std/memory/…) because they ARE stdlib modules; they
+    # are embedded as well so a --no-std install still has them. Strip the `lib/` so the name reads as
+    # the module path it belongs to rather than as a repository layout detail.
+    rel=${m#lib/}
     # What a diagnostic raised inside this module's body names. The leading `<` is load-bearing, not
     # decoration: setPackageResolver (kama.driver.cpp) treats a `<`-prefixed unit as synthetic and skips
-    # the filesystem walk. A bare `prelude/std/...` would send it climbing from the working directory and
+    # the filesystem walk. A bare `std/...` would send it climbing from the working directory and
     # attribute the prelude's conformances to whatever project happens to be there.
-    printf '    "<prelude>/%s" },\n' "${m#prelude/}"
+    printf '    "<prelude>/%s",\n' "$rel"
+    # The MODULE these declarations belong to, stated rather than derived — a synthetic unit has no path
+    # for the file→module rule to work from, and without this the triad would land in a file-private
+    # scope and `std__memory__Owned` would silently become `_F<n>__Owned`. Derived from the file's
+    # directory under lib/, which is exactly how the same module is named for the copy on disk.
+    printf '    "%s" },\n' "$(dirname "$rel" | tr '/' '@' | sed 's/@/::/g')"
     n=$((n + 1))
   done
   printf '};\n'

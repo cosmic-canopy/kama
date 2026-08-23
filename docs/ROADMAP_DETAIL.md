@@ -166,7 +166,7 @@ Two cases, and they want different answers:
   read-only virtual document of the second shape above. Whatever is chosen, it is the same machinery the
   built-ins want, which is why the two belong in one piece of work.
 - **⚠️ The kama compiler's OWN repository, which wants special-casing and is the ask that prompted this.**
-  Here `prelude/global.kama` and `prelude/std/memory/*.kama` ARE in the worktree, and they are files
+  Here `prelude/global.kama` and `lib/std/memory/*.kama` ARE in the worktree, and they are files
   someone edits — so the right answer is not a doc stub or a virtual document but the real path: while
   working in this repo the LSP should resolve a prelude symbol to the file on disk, and a rename or a
   find-references over it should behave like any other source. It does not today, and the effect is that

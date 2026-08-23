@@ -4,7 +4,7 @@
 // kama reference-count control-block ops — the seam behind `Shared<T>`/`Weak<T>` (M6.2).
 //
 // A `Shared`/`Weak` handle refers to a heap `kama_ctrl { size_t strong; size_t weak; }` (kama_runtime.h).
-// The library (concrete-element) `Shared`/`Weak` in prelude/std/memory/{shared,weak}.kama route EVERY
+// The library (concrete-element) `Shared`/`Weak` in lib/std/memory/{shared,weak}.kama route EVERY
 // strong/weak count mutation through the functions here instead of poking the counter inline, so the two
 // refcount FLAVORS live in one audited place:
 //

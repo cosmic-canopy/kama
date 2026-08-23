@@ -1045,12 +1045,24 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // `std::net::{SocketAddr, RecvFrom}` from INSIDE namespace std::net.
     std::set<std::string> providedWhole;
     std::map<std::string, std::set<std::string>> provided;
-    // The smart-pointer triad is now a built-in module (embedded, always in scope — see preludeModuleUnits),
-    // so an explicit `import std::memory` is a satisfied no-op: skip the disk lookup rather than re-parse it
-    // (which would double-define the triad, and would fail outright in a `--no-std` install with no lib/).
-    // WHOLE, necessarily: there is no lib/std/memory on disk, so a partial entry would send an unsatisfied
-    // symbol to the resolver and turn a satisfied no-op into `cannot resolve module 'std::memory'`.
-    providedWhole.insert("std::memory");
+    // A module the COMPILER already carries is already provided, so an explicit `import` of it is a
+    // satisfied no-op. Read off the embedded set rather than naming a module, which is the difference
+    // between a rule and an exception: this says nothing about `std::memory` in particular, and a second
+    // embedded module would need no edit here.
+    //
+    // WHOLE, necessarily — a partial entry would send an unsatisfied symbol back to the resolver, and in
+    // a `--no-std` install (bin/kama only, no lib/ at all) there is nothing on disk to satisfy it.
+    //
+    // ⚠️ This used to read `providedWhole.insert("std::memory")` and was justified by "there is no
+    // lib/std/memory on disk". That is now false — the triad lives at lib/std/memory/ and is embedded as
+    // well — so the justification was re-derived rather than the string edited. PROBED before rewriting
+    // it: with this skip removed entirely the build still succeeds, because the embedded units are
+    // collect-only and `Owned<T>` is generic, so it emits at each instantiation and the disk copy's
+    // translation unit comes out three lines long and empty. The skip is kept because handing the C
+    // compiler an empty file for a module we already have is work with no result, not because dropping
+    // it breaks.
+    for (int pi = 0; pi < KAMA_PRELUDE_MODULE_COUNT; ++pi)
+        if (const char* m = KAMA_PRELUDE_MODULES[pi].module) if (*m) providedWhole.insert(m);
     // A CLI input is loaded entire — but it is one FILE, and its namespace may have other files. So it
     // contributes PARTIAL, exactly like a pruned module below: the names it actually declares. Marking it
     // `whole` claimed the whole module was present, and a file that imports a SIBLING from inside its own

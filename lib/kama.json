@@ -14,6 +14,7 @@
     "io":            { "visibility": "public" },
     "log":           { "visibility": "public" },
     "math":          { "visibility": "public" },
+    "memory":        { "visibility": "public" },
     "net":           { "visibility": "public",
                        "modules": {
                          "web":    { "visibility": "public" }
