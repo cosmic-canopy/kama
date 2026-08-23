@@ -100,6 +100,33 @@ to say *"not that one, here"*. This is deliberately the opposite of `cflags`/`ld
 onto the built-in target they merge over. A target that never mentions `link` inherits the project's
 list unchanged. The CLI `--link` is unaffected and still appends, after both.
 
+### `no-heap` and `webgpu` — the same shape, for the same reason
+
+Two more project properties a target may override, spelled exactly like `link`:
+
+```json
+{
+  "kind": "executable",
+  "no-heap": true,
+  "select": { "TARGET": { "HOST": { "no-heap": false } } }
+}
+```
+
+**`no-heap`** forbids heap allocation program-wide, the same rule `--no-heap` applies. It wants a
+manifest key more than either of the others do, because the FLAG fails **silently** when forgotten: the
+build simply succeeds with allocation allowed, and a bare-metal target quietly gains a heap nobody asked
+for. Saying it once in the manifest makes it a property of the project instead of something every
+invocation has to remember.
+
+**`webgpu`** is the `--webgpu` flag as a project property. It is also a *linking* decision, which is the
+class `link` exists for.
+
+The per-target override is the ordinary case for both, not an exotic one: no heap on the board and a
+heap on the host that builds your tooling; WebGPU from the browser on wasm and from the wgpu-native SDK
+natively. Both values are checked when the manifest is read, so `"no-heap": "yes"` is refused by name
+rather than read as some truthiness nobody wrote down. `--no-heap` and `--webgpu` can only turn a
+setting **on**, so they OR in with the manifest; a target is how you say *"not this one"*.
+
 `runtime` is `"static"` or `"dynamic"` and says how the *language's own* runtime is linked — see
 [Runtime linkage](#runtime-linkage) below. Every key is optional; omitting one takes the target's
 default.

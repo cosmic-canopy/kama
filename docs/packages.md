@@ -51,26 +51,56 @@ fn int32 main() {
 }
 ```
 
-**`entry`, not `main`** — the key names the file `kama run` builds when you don't name one, which is
+**`entry`, not `main`** — the key names the file holding the project's `main`, which is
 Cargo's `[[bin]] path`. npm's `main` means the opposite thing: the entry point *importers* get. kama
 expresses that with `source` and `export` instead, so the two never share a name. Spelling it `main`
 is an error that says so.
 
 There is no `source` key here because it defaults to `"src"`, which is where the seed put the files.
 
-Build and run it in one step — `kama run` uses the manifest's `"entry"` when you don't pass a
-file:
+Build and run it in one step. **Name the project** — the operand is what picks what gets built:
 
 ```sh
 cd myapp
-kama run                 # builds src/app.kama and runs it; the program's exit code is forwarded
-kama run src/app.kama    # explicit file — same thing
+kama run kama.json       # builds the project and runs it; the program's exit code is forwarded
 ```
 
 `kama run` is a thin wrapper over `kama build`: it compiles a native executable to a temp
 location, runs it, forwards the exit code, and cleans up. It's **native-only** (wasm needs a
 browser/node, a bare-metal target emits a freestanding object) — for those, use `kama build --target …`;
 see [targets.md](targets.md).
+
+### Naming what to build — the operand is the mode
+
+There are three ways to name a compilation, and **the operand's basename picks between them**:
+
+| you write | you get |
+|---|---|
+| `kama build a.kama src/b.kama` | **loose** — just those files. No manifest is read at all. |
+| `kama build kama.json` · `kama build libs/core/kama.json` | **project** — its `source` files, its dependencies, its flag universe, its `out/` root |
+| `kama build kama_workspace.json` | **workspace** — every member, each built on its own |
+
+Operands are either N `.kama` files **or** exactly one manifest, so "these files, and also that
+project" is not so much rejected as unspellable. No `./` is needed anywhere: naming the file is what
+matters, not qualifying it.
+
+The rule that matters most is the first one. A loose build applies **no** manifest — not the one in the
+directory above it, not the one in your shell's working directory. Before this, `kama build src/app.kama`
+inside a project walked up, found the manifest and silently applied it, so there was no way to say "just
+these files" and no way to tell which of the three you were getting. Commands that act *on* a project —
+`pkg install`, `publish`, `toolchain pin`, `agents install` — name one for the same reason: the current
+directory should not decide which manifest gets rewritten.
+
+The one exception is `kama query`, and it is a different shape of command rather than a carve-out. A
+query is *target-addressed*: it asks one question about one file, and the manifest says how far to look.
+
+```sh
+kama query kama.json src/app.kama --refs 12:11             # every use in this project
+kama query kama_workspace.json libs/core/src/a.kama --refs 12:11   # ...and across every member
+```
+
+`kama lsp` is the other place discovery survives, and inherently: an editor hands the server a buffer
+and a folder, never a command line.
 
 ### The two kinds, and the workspace above them
 
@@ -280,7 +310,7 @@ own directory, with no ancestor manifest in play.
 
 ```sh
 for m in libs/config libs/net apps/server; do
-    (cd "$m" && kama pkg install && kama check *.kama) || exit 1
+    kama pkg install "$m/kama.json" && kama check "$m/kama.json" || exit 1
 done
 ```
 
@@ -294,9 +324,9 @@ Dependencies come from a local path, a git repo, or a tarball URL. Add one with 
 add` (which edits `kama.json` and installs), or write it into the manifest by hand:
 
 ```sh
-kama pkg add geo --git https://example.com/geo.git --rev v1.0.0
-kama pkg add mathx --url https://example.com/mathx-1.2.0.tar.gz
-kama pkg add utils --path ../utils        # a sibling checkout
+kama pkg add kama.json geo --git https://example.com/geo.git --rev v1.0.0
+kama pkg add kama.json mathx --url https://example.com/mathx-1.2.0.tar.gz
+kama pkg add kama.json utils --path ../utils        # a sibling checkout
 ```
 
 ```json
@@ -323,11 +353,11 @@ import geo::{area};
 Install resolves the whole dependency graph (transitively) and writes the lockfile:
 
 ```sh
-kama pkg install         # materializes .kama/deps + kama.lock
-kama run                 # build + run against the resolved view
+kama pkg install kama.json   # materializes .kama/deps + kama.lock
+kama run kama.json           # build + run against the resolved view
 ```
 
-Other manifest surgery: `kama pkg remove <name>` drops a dependency; `kama pkg update
+Other manifest surgery: `kama pkg remove kama.json <name>` drops a dependency; `kama pkg update kama.json
 [<pkg>]` re-resolves pins (e.g. advances a branch) and rewrites the lock without touching
 the manifest.
 
@@ -352,7 +382,7 @@ tags (e.g. `v1.3.0-rc1`) are ignored.
 
 The lock pins the **concrete** version and commit the range resolved to, so builds stay
 reproducible and offline — re-installing an unchanged project reuses the locked version without
-contacting the remote. `kama pkg update` re-resolves and can advance to a newer satisfying tag. A
+contacting the remote. `kama pkg update kama.json` re-resolves and can advance to a newer satisfying tag. A
 git dependency takes **either** `rev` (exact) **or** `version` (a range), never both. When two
 packages request the same dependency with different ranges, the resolver intersects them and picks
 the one highest version satisfying both; if no version satisfies all requestors, it's a hard error
@@ -375,7 +405,7 @@ A **registry dependency** names just a `version` range — no `git`/`url`/`path`
 Install fetches the registry's index for `geo`, runs the same range engine as git-tag ranges over the
 listed versions, picks the **highest satisfying** one, and fetches its tarball into the content-addressed
 store — so a registry dep behaves exactly like a url dep once resolved, and the lock pins the concrete
-version + integrity. `kama pkg add geo --version ^1.2.0 --registry <base>` writes one for you.
+version + integrity. `kama pkg add kama.json geo --version ^1.2.0 --registry <base>` writes one for you.
 
 A registry base is transport-agnostic — `file://` (self-host / air-gap / offline testing) or `https://`.
 
@@ -411,7 +441,7 @@ refuses to overwrite it. That is the lockfile-drift and dependency-confusion gua
 `kama publish` packages the current project and records it in a registry:
 
 ```sh
-kama publish --registry file:///srv/kama-registry
+kama publish kama.json --registry file:///srv/kama-registry
 ```
 
 It tarballs the sources (excluding `.git/`, `.kama/`, `out/`, and `kama.lock`), hashes them, and adds a
@@ -468,12 +498,12 @@ the guarantee you should rely on.
 
 ### Signing (optional, and not yet an identity check)
 
-`kama publish --key <ssh-key>` signs the tarball with an SSH key (via `ssh-keygen -Y`, the same SSHSIG
+`kama publish kama.json --key <ssh-key>` signs the tarball with an SSH key (via `ssh-keygen -Y`, the same SSHSIG
 mechanism `git commit -S` uses) and records the signature + signer public key in the index:
 
 ```sh
-kama pkg install            # warn-only: a bad signature warns, the install proceeds
-kama pkg install --verify   # a signature must be present and cryptographically valid, else it fails
+kama pkg install kama.json            # warn-only: a bad signature warns, the install proceeds
+kama pkg install kama.json --verify   # a signature must be present and cryptographically valid, else it fails
 ```
 
 **Be precise about what this proves.** Verification runs `ssh-keygen -Y check-novalidate`, so it confirms
@@ -503,9 +533,9 @@ under `--dev`:
 ```
 
 ```sh
-kama pkg add --dev testkit --git https://example.com/testkit.git --rev v1.0.0
-kama pkg install         # also materializes .kama/dev-deps
-kama run --dev           # dev-dependencies on the import path
+kama pkg add --dev kama.json testkit --git https://example.com/testkit.git --rev v1.0.0
+kama pkg install kama.json   # also materializes .kama/dev-deps
+kama run kama.json --dev     # dev-dependencies on the import path
 kama build src/app.kama --dev
 ```
 
@@ -619,16 +649,16 @@ run `kama toolchain install <v>` — it never silently falls back to another ver
 | Command | What it does |
 |---|---|
 | `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--force`. |
-| `kama run [<file>] [-- <args>]` | Build the entry (explicit file, else manifest `"entry"`) and run it; native-only. |
-| `kama build <file>… [--dev]` | Build a native/wasm/embedded artifact. |
-| `kama pkg install [<dir>] [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
-| `kama pkg add [--dev] <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
-| `kama pkg remove <name>` | Drop a dependency and install. |
-| `kama pkg update [<pkg>]` | Re-resolve pins and rewrite the lock. |
-| `kama publish [<dir>] --registry <base> [--key <ssh-key>]` | Tarball the project + record (and optionally sign) it in the registry index. |
+| `kama run <kama.json> [-- <args>]` | Build the project and run it; native-only. A workspace errors and names its members. |
+| `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
+| `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
+| `kama pkg add [--dev] <kama.json> <name> (--git U [--rev R \| --version V] \| --url U [--integrity H] \| --path P \| --version V [--registry BASE])` | Add a dependency and install (bare `--version` = a registry dep). |
+| `kama pkg remove <kama.json> <name>` | Drop a dependency and install. |
+| `kama pkg update <kama.json> [<pkg>]` | Re-resolve pins and rewrite the lock. |
+| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Tarball the project + record (and optionally sign) it in the registry index. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
 | `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |
 | `kama toolchain default <v>` | Set the global default version. |
-| `kama toolchain pin <v>` | Pin this project's toolchain in `kama.json`. |
+| `kama toolchain pin <v> <kama.json>` | Pin that project's toolchain in its `kama.json`. |
 | `kama update [--version <v>]` | Install the latest (or `<v>`) and make it the default. |

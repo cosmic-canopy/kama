@@ -761,12 +761,31 @@ not also be a project**. The twelve workspace rejections and their passing twins
 `tools/check-manifest.sh`; the errors surface from `kama pkg install`, never from a build, since **no
 build path reads the file** — verified by diffing the emitted C of a member with and without it.
 
-**1c — the CLI contract (§2g).** The three-mode operand rule; `--config` and `--project` deleted; the
-selector rewritten to READ the named manifest rather than search for one, with a guard that can actually
-reach it (§2g.38's second warning); workspace fan-out for `build`/`check`/`pkg install` and a
-member-listing error for `run`/`publish`; per-member re-exec with `KAMA_NO_SELECT` cleared; `--webgpu` and
-`--no-heap` gaining manifest keys (§2h.39). Migration is ~68 call sites across five guards plus
-`run_tests.sh`'s `.d` leg, all of them "build a `.kama` that happens to sit in a project".
+**1c — the CLI contract (§2g). SHIPPED 2026-08-22** (`0.9.52`–`0.9.54`, three commits): the three-mode
+operand rule; `--config` and `--project` deleted; the selector reading the named manifest; workspace
+fan-out for `build`/`check`/`pkg install` with a member-listing error for `run`/`publish`/`transpile`;
+per-member re-exec, asserted in `check-toolchain.sh` with two members pinned to different stub versions;
+`--webgpu` and `--no-heap` gaining manifest keys (§2h.39). Migration was ~40 call sites across 9 guards
+plus `run_tests.sh`'s `.d` leg.
+
+Four things fell out that §2g did not name, each recorded here because the next reader will wonder:
+
+- **A bare `kama run` is now an error.** It meant "read ./kama.json", which is the same implicit gesture
+  the rule removes everywhere else. §2g.35's "one form is required" is read strictly.
+- **The project-acting group takes the manifest FIRST**, then its own operand: `kama pkg add kama.json
+  geo --path ../geo`, `kama toolchain pin 0.9.54 kama.json`. Same order as `query <manifest> <file>`.
+- **A library's default OUTPUT is STATIC.** Without it `kama build kama_workspace.json` built the app and
+  then failed on the first library, which is not what "build every member" can mean. `kind` picking the
+  default is the first consumer of that key on the build path; `entry` gets the second, checked before
+  the compile instead of discovered at the link as `Undefined symbols: _main`.
+- **A project operand's unit set is every file under `source`**, which is not a change: building ONE file
+  of a project already pulled in every file of that package, because they are one package. Probed before
+  it was written down.
+
+⚠️ **`projectManifestDir`'s walk is now a THREE-state.** `main` installs the answer from the operand, and
+"the CLI says there is no project" has to be distinguishable from "nobody has said anything yet" — with a
+two-state, a loose build falls through to the walk and picks up the manifest above it, which is exactly
+the silent behavior the rule exists to remove. The walk itself survives for one caller: `kama lsp`.
 
 **2 — identity and resolution.** `name` as the root namespace; the nested `modules` map with §2b's checks;
 names composed from the key chain, never inferred from what other entries exist; `visibility` required on
