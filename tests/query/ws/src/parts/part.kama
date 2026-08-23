@@ -1,0 +1,9 @@
+// LSP M3.5 workspace-indexing fixture — the THIRD half, and the one that keeps `--project` meaningful.
+//
+// widget.kama and app.kama share a folder, so they are ONE module (design/module-system.md §2b: a module
+// is a folder, not a declaration) and a query on either already sees the other. What a member-file query
+// cannot see is a DIFFERENT module of the same project — this file, listed as `parts` in kama.json — and
+// widening to every module under the nearest kama.json is exactly what `--project` is for.
+import wsproj::{Widget};
+
+fn int32 partSize(Widget w) { return w.size; }

@@ -629,6 +629,13 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
+// The name an `import` must write to reach this unit: the module its PATH puts it in, or — until 2e
+// deletes the declaration — the `namespace` it says. Same two rungs as CEmitter::ctxOf and in the same
+// order, because the resolver and the emitter answering differently is precisely the defect §1a found:
+// a file would be COMPILED into one scope and IMPORTED as another. Empty means nothing can name it.
+// Defined below, where the derivation it calls exists.
+static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string& path);
+
 // A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
 std::string unitNsKey(const SharedCompilationUnit& u)
 {
@@ -689,7 +696,7 @@ const ModuleIndex& moduleIndexFor(const std::vector<std::string>& files, ModuleI
         SharedCompilationUnit u = parseFile(files[i]);
         ix.units.push_back(u);
         if (!u) { ix.complete = false; break; }
-        std::string k = unitNsKey(u);
+        std::string k = moduleKeyOf(u, files[i]);
         if (i == 0) ns = k; else if (k != ns) ix.homogeneous = false;
         for (auto& n : u->topLevelNames) ix.byName[n].push_back(i);
     }
@@ -1078,6 +1085,16 @@ static std::string looseModuleFor(const std::string& absPath)
     return mod;
 }
 
+// Declared up beside unitNsKey, which is the rung it falls back to.
+static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string& path)
+{
+    if (!path.empty() && path[0] != '<') {          // synthetic units have no path to derive from
+        const std::string derived = moduleIdForFile(path).full();
+        if (!derived.empty()) return derived;
+    }
+    return unitNsKey(u);                             // TEMPORARY — the rung 2e deletes
+}
+
 // Defined once DepSpec exists, beside the manifest loaders it wraps.
 const std::set<std::string>& declaredImportNames(const std::string& packageDir);
 std::string storeDir();   // the content-addressed package store (~/.kama/store)
@@ -1203,16 +1220,22 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // the module resolves as a foreign import and loads whole — so what this fixes is every command whose
     // INPUT is a member file: `kama check`, and therefore the language server.
     //
-    // SAME DIRECTORY AND SAME NAMESPACE, which is narrower than it looks and deliberately so. Directory,
-    // because that is what a module is; the repo has four namespace NAMES living in more than one
-    // directory (`shapes`, `geo`, `Graphics`, `lib` — unrelated fixture modules that merely share a name)
-    // and merging those would be wrong. Namespace, because a directory may hold files that are not one
-    // module: tests/query holds five programs in one directory, each with its OWN namespace and two of
-    // them declaring `main`, and pulling those together would be a duplicate-`main` error.
+    // SAME DIRECTORY AND SAME MODULE, which is narrower than it looks and deliberately so. Directory,
+    // because that is what a module is; the repo has four module NAMES living in more than one directory
+    // (`shapes`, `geo`, `Graphics`, `lib` — unrelated fixture modules that merely share a name) and
+    // merging those would be wrong. Module, because a directory may today hold files that are not one:
+    // tests/query holds five programs in one directory, each with its own `namespace` and two of them
+    // declaring `main`, and pulling those together would be a duplicate-`main` error.
     //
-    // Cost is bounded and paid only where it buys something: the scan runs only for an input that declares
-    // a namespace — a program entry does not, including the one `kama seed` generates, so an ordinary build
-    // pays nothing. Worst case in this repo is std::collections' 14 files, measured at ~10 ms, one-time.
+    // ⚠️ That second reason is a rung 2e removes. Once the declaration is gone, five programs in one
+    // directory ARE one module by definition, and those fixtures have to be five directories — a corpus
+    // problem this comment is the earliest warning of, not a reason to keep the declaration.
+    //
+    // The key moved from `unitNsKey` to `moduleKeyOf` with 2d, which widened this in one visible way: a
+    // project's entry file now HAS a module (its root), where a file declaring no namespace used to have
+    // none and skip the scan entirely. So an editor session on `src/app.kama` now loads its folder's other
+    // files, which is what a module means. Cost is bounded and paid only where it buys something — worst
+    // case in this repo is std::collections' 14 files, measured at ~10 ms, one-time.
     // `kama lsp` pays it once per session rather than per keystroke: the M5.2 parse cache is keyed on
     // path+mtime+size, and a sibling does not change while you type in another file.
     for (size_t ci = 0; ci < cliInputs.size(); ++ci) {
@@ -1221,8 +1244,8 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
         SharedCompilationUnit u = parseFile(cliInputs[ci]);
         if (!u) return false;
         units.push_back(u); paths.push_back(abs);
-        std::string k = unitNsKey(u);
-        if (k.empty()) continue;                 // no namespace: file-private, it IS its own module
+        std::string k = moduleKeyOf(u, abs);
+        if (k.empty()) continue;                 // in no module: file-private, it IS its own module
         providedWhole.insert(k);
         for (auto& sib : listKamaFiles(dirName(cliInputs[ci]))) {
             std::string sabs = absolutePath(sib);
@@ -1231,7 +1254,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // to this module (a different namespace), and failing the analysis of the file the user DID
             // ask about, because of a file they did not, would trade one broken command for two.
             SharedCompilationUnit su = parseFile(sib);
-            if (!su || unitNsKey(su) != k) continue;
+            if (!su || moduleKeyOf(su, sabs) != k) continue;
             seen.insert(sabs);
             units.push_back(su); paths.push_back(sabs);
         }
@@ -1371,7 +1394,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
                 if (!mu) return false;
                 if (fresh) { units.push_back(mu); paths.push_back(abs); }
-                std::string mk = unitNsKey(mu);
+                std::string mk = moduleKeyOf(mu, abs);
                 if (mk.empty()) continue;
                 // What this module now provides. A pruned module contributes only the names it actually
                 // declares, so a later import asking for one that is absent re-resolves and the closure

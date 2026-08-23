@@ -1,5 +1,10 @@
 {
   "name": "wsproj",
   "version": "0.1.0",
-  "kind": "executable"
+  "kind": "executable",
+
+  "modules": {
+    ".":     { "visibility": "internal" },
+    "parts": { "visibility": "internal" }
+  }
 }
