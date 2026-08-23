@@ -260,12 +260,35 @@ std::string CEmitter::mangleNs(const std::string& ns)
     return r;
 }
 
-// Build a file's namespace context: public (mangled `namespace X;`) or private
-// (`_F<idx>`); collect its `using`s and aliases.
+// A module name is written `a::b`; every manglable path in this file is dotted before `mangleNs` folds it
+// to `a__b` (see the import paths below, and `qualifiedName` above). One spelling in, one mangler.
+static std::string dottedModule(const std::string& mod)
+{
+    std::string r = mod;
+    for (size_t p; (p = r.find("::")) != std::string::npos; ) r.replace(p, 2, ".");
+    return r;
+}
+
+// Build a file's namespace context: the module its PATH puts it in, or private (`_F<idx>`); collect its
+// `using`s and aliases.
+//
+// A file's identity is where it sits — its path under its project's `source` root, resolved against the
+// `modules` map in that project's `kama.json` (design/module-system.md §2b). The driver answers that
+// through `_moduleResolver`, because it is filesystem work. A loose file — nothing with a `kama.json`
+// above it — has no module to be in, and keeps the file-private `_F<idx>` scope until §2e.27 replaces it.
+//
+// ⚠️ The middle rung is TEMPORARY. Until phase 2e deletes `namespace` from the language, a file may still
+// declare one, and 11 fixtures plus ~50 declarations inside guard heredocs live in trees that have no
+// manifest at all — they would silently become file-private (their `export` inert, their qualified
+// self-references unresolvable) the moment this arm goes. It goes with all 91 of them at once, not before.
 NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
 {
     NsCtx ctx;
-    if (unit->nameSpace && unit->nameSpace->name) {
+    const std::string module = (_moduleResolver && unit->name) ? _moduleResolver(*unit->name) : std::string();
+    if (!module.empty()) {
+        ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
+        ctx.isPublic = true;
+    } else if (unit->nameSpace && unit->nameSpace->name) {    // TEMPORARY — deleted with `namespace` in 2e
         ctx.scope = mangleNs(qualifiedName(unit->nameSpace->name));
         ctx.isPublic = true;
     } else {

@@ -590,6 +590,12 @@ public:
     // for the synthetic prelude units). Supplied by the driver — resolving it is filesystem work, and it
     // is consulted only when a diagnostic has to say which package a conformance came from.
     void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
+    // Maps a unit's source path to the MODULE that owns it — `std::collections`, or a bare project name
+    // for a file in the project root module, and "" for a loose file with no `kama.json` above it. This is
+    // where a file's identity comes from (design/module-system.md §2b): the path plus the project's
+    // `modules` map, never the `namespace` line the file happens to declare. Supplied by the driver
+    // because the answer is filesystem work — walking to the owning manifest and reading its module tree.
+    void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
 
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
@@ -995,6 +1001,7 @@ private:
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
     std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
+    std::function<std::string(const std::string&)> _moduleResolver;    // unit path -> owning module, from the driver
     // Pre-scanned conformances: target `primKey` -> the contracts a `type intrinsic` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods

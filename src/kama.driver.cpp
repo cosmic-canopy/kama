@@ -883,6 +883,25 @@ std::string owningPackageDir(const std::string& fromDir);   // defined below, be
 static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
                               const std::vector<std::string>& paths);
 
+// ---- file -> module identity (§2b/§2e) -------------------------------------------------------------
+//
+// What phase 2 replaces the `namespace` declaration WITH: a file's module is derived from where it sits,
+// not from what it says. The derivation itself is `moduleIdForFile`, defined below because it needs the
+// manifest reader; the TYPE lives up here because `configureEmitter` hands the answer to the emitter and
+// sits above that reader.
+struct ModuleId {
+    bool        inProject = false;   // false: no kama.json above it — a loose file (§2i)
+    std::string project;             // the project's IMPORT name (`@acme/geo` imports as `geo`)
+    std::string module;              // composed module name; "" means the project root
+
+    // What an `import` writes, and what §2e.25 mangles into the C symbol.
+    std::string full() const {
+        if (!inProject) return std::string();
+        return module.empty() ? project : project + "::" + module;
+    }
+};
+static ModuleId moduleIdForFile(const std::string& absPath);
+
 // owningPackageDir answers with an ABSOLUTE path, and that answer reaches user-facing output — the `out`
 // root is built from it, so every "kama: built …" line would carry a full path for an ordinary build run
 // from inside its own project. Spell it "." when it IS the current directory, which is what the shallow
@@ -1821,6 +1840,30 @@ static void configureEmitter(CEmitter& e)
         if (unitPath.empty() || unitPath[0] == '<') return std::string();
         std::string dir = owningPackageDir(dirName(unitPath));
         return dir.empty() ? std::string() : dir + "/kama.json";
+    });
+    // Which MODULE owns a given source file — the file's identity, and what the emitter mangles its
+    // declarations with (design/module-system.md §2b). Same callback shape and the same reason: walking to
+    // the owning manifest and reading its module tree is filesystem work, cached driver-side.
+    //
+    // ⚠️ The synthetic arm is not a "return nothing" guard the way setPackageResolver's is. The
+    // smart-pointer triad reaches the emitter as `<prelude>/std/memory/*.kama` — units with no path at all,
+    // which no path→module derivation can reach — and it DOES go through ctxOf. Its module is therefore
+    // stated rather than derived, in KamaPreludeModule::module (src/kama.prelude.h).
+    //
+    // What that header warns of — drop this and `std__memory__Owned` becomes `_F<n>__Owned` — is a
+    // prediction about phase 2e, NOT true today, and it was tested rather than reasoned about: build a
+    // compiler with this arm returning "" and everything stays green, because lib/std/memory/*.kama still
+    // declare `namespace std::memory` and ctxOf's declaration rung catches them. This arm is what carries
+    // their identity across the moment that line is deleted with the other 90.
+    e.setModuleResolver([](const std::string& unitPath) -> std::string {
+        if (unitPath.empty()) return std::string();
+        if (unitPath[0] == '<') {
+            for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i)
+                if (KAMA_PRELUDE_MODULES[i].name && unitPath == KAMA_PRELUDE_MODULES[i].name)
+                    return KAMA_PRELUDE_MODULES[i].module ? KAMA_PRELUDE_MODULES[i].module : "";
+            return std::string();          // `<prelude>` itself: the floor, scoped by collectProgram
+        }
+        return moduleIdForFile(unitPath).full();      // "" for a loose file — no kama.json above it
     });
     for (auto& m : preludeModuleUnits()) e.addPreludeModule(m);       // the always-in-scope triad
 }
@@ -2920,23 +2963,8 @@ static bool validateModules(std::vector<ModuleNode>& mods, const std::string& pr
     return checkVisibilityTargets(mods, byName, err);
 }
 
-// ---- file -> module identity (§2b/§2e) -------------------------------------------------------------
+// ---- file -> module identity (§2b/§2e), continued from the ModuleId declaration above --------------
 //
-// The answer phase 2 replaces the `namespace` declaration WITH: a file's module is derived from where it
-// sits, not from what it says. Read as an instrument first (`--probe-modules`) so the derivation is
-// measured against the declarations still in the tree before anything depends on it.
-struct ModuleId {
-    bool        inProject = false;   // false: no kama.json above it — a loose file (§2i)
-    std::string project;             // the project's IMPORT name (`@acme/geo` imports as `geo`)
-    std::string module;              // composed module name; "" means the project root
-
-    // What an `import` writes, and what §2e.25 mangles into the C symbol.
-    std::string full() const {
-        if (!inProject) return std::string();
-        return module.empty() ? project : project + "::" + module;
-    }
-};
-
 // The parsed module map per manifest. Rides the same lifetime as manifestSourceCache and is cleared by
 // the same eviction: `kama lsp` treats a manifest edit as "the program being analyzed changed", so a map
 // cached anywhere else would serve stale modules across exactly that edit.
