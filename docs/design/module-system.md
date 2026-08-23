@@ -932,9 +932,9 @@ legs and bumps `VERSION`:
 
 | | | changes |
 |---|---|---|
-| **2a** | the `modules` map parsed + §2b/§2c form checks, plus `--probe-modules` and `tools/check-modules.sh` | C++ only, no behavior change |
-| **2b** | the corpus migration — `lib/kama.json`, the `std::memory` move, fixtures and guards become projects | tree only, **green under today's resolver** |
-| **2c** | identity — `ctxOf` derives the scope from path + manifest instead of the declaration | C++ only; emitted C byte-identical for every `lib/` file |
+| **2a** | the `modules` map parsed + §2b/§2c form checks, plus `--probe-modules` and `tools/check-modules.sh` | **SHIPPED** `0.9.55`–`0.9.58` |
+| **2b** | the corpus migration — `lib/kama.json`, the `std::memory` move, fixtures and guards become projects | **SHIPPED** `0.9.59`–`0.9.62` |
+| **2c** | identity — `ctxOf` derives the scope from path + manifest instead of the declaration | **SHIPPED** `0.9.65` — see below |
 | **2d** | resolution — imports by full module name; loose mode stops searching | C++ only |
 | **2e** | the deletion — 91 files, the grammar, `modules` becomes required, the five stranded sites | corpus + grammar |
 
@@ -952,6 +952,35 @@ legs and bumps `VERSION`:
 > with `no-module` and `synthetic` buckets so the measurement does not hide its own blind spot (§7).
 > `tools/check-modules.sh` reports through 2a–2b and **fails on any mismatch from 2c**, which is what
 > turns the identity cutover from a leap into a measurement. Both are deleted when phase 2 closes.
+>
+> ⚠️ **What that instrument cannot see, learned in 2c:** a probe row exists only for a unit that *loads*,
+> so a project's `src/main.kama` — which cannot resolve its own imports when handed to the compiler alone —
+> emits no row under the `--each` corpus sweep. The 12 files the cutover actually moved were invisible to
+> it. Drive each project **by its manifest** (`kama check <dir>/kama.json --probe-modules`) to see them.
+
+**2c — identity. SHIPPED 2026-08-23** (`0.9.65`): `setModuleResolver` on the emitter, mirroring
+`setPackageResolver` and installed in the same `configureEmitter` so all six emitters get it; `ctxOf`
+([kama.cemit.cpp:265](../../src/kama.cemit.cpp)) scopes a file by the module its PATH puts it in.
+**The emitted C for all 49 `lib/` files is byte-identical across the commit** — the property 2b existed to
+create, measured rather than asserted. What moves is the **12** files that sit in a project and declare
+nothing (`tests/mod_basic.d/src/main.kama`: `_F7__` → `modbasic__`), which is the cutover working.
+
+Three things worth carrying into 2d/2e:
+
+- **`ctxOf` has three rungs, and the middle one is temporary**: derived module → declared `namespace` →
+  `_F<idx>`. The declaration is still read for a file with no project above it, because 11 fixtures and
+  ~50 declarations inside guard heredocs live in manifest-less trees and would lose their `export` and
+  their qualified self-references. All 91 go in 2e together — the rule 2b learned by breaking the seed
+  template.
+- **`tools/check-modules.sh` gained a §3**, because §1 and §2 read identically whether or not the emitter
+  consumes the derivation — which is exactly what they did through 2a and 2b. §3 reads the derived module
+  back out of the emitted C. Verified to fail: a compiler built without the derivation reports eight
+  failures and names the files still carrying `_F<n>`.
+- ⚠️ **A claim in [kama.prelude.h:29](../../src/kama.prelude.h) is a prediction about 2e, not a fact
+  today.** It warns that without the triad's stated `module`, `std__memory__Owned` becomes `_F<n>__Owned`.
+  Built a compiler with that arm disabled: **entirely green**, because `lib/std/memory/*.kama` still
+  declare `namespace std::memory` and the middle rung catches them. The arm is what carries their identity
+  across 2e, which is also when that warning becomes true and when §3's triad assertion can fail.
 
 ⚠️ **`.github/workflows/release.yml:72` and `:142` stage the stdlib as `cp -R lib/std payload/lib/kama/std`
 — the directory only.** `lib/kama.json` must be added to that copy in the same commit that creates it, or
