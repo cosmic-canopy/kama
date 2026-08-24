@@ -6,7 +6,7 @@
 // agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
 // Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
 
-import std::io::{IoError};
+import { IoError };
 import std::collections::{DynamicArray, FixedArray, View};
 
 export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump, readAll };

@@ -46,7 +46,7 @@
 ; so tree-sitter never emits a bare anonymous token for it and naming one is a query ERROR, not a no-op.
 ; They are captured as nodes below.
 [
-  "namespace" "import" "export" "as" "type" "enum" "extends" "implements" "for"
+  "import" "export" "as" "type" "enum" "extends" "implements" "for"
   "friend" "operator" "ctor" "fn" "fnptr" "extern" "comptime" "when"
   "in" "unsafe" "asm" "static" "const" "default" "slot"
 ] @keyword

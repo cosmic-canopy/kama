@@ -1,7 +1,7 @@
 
 import std::io::{IoError, lastError, Reader, Writer};
 import std::collections::{View};
-import std::net::{ReliableStream};
+import { ReliableStream };
 
 export { TcpListener, TcpStream };
 

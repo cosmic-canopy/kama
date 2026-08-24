@@ -7,18 +7,6 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "namespace_declaration"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
           "type": "REPEAT",
           "content": {
             "type": "SYMBOL",
@@ -43,27 +31,6 @@
             "type": "SYMBOL",
             "name": "_top_level_declaration"
           }
-        }
-      ]
-    },
-    "namespace_declaration": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "namespace"
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_qualified_name"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": ";"
         }
       ]
     },

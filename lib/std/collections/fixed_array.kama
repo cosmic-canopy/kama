@@ -1,4 +1,4 @@
-import std::collections::{View};
+import { View };
 export { FixedArray, FixedArrayIter, FixedArrayIterMut };
 
 extern "<string.h>";

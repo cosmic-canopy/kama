@@ -5119,26 +5119,6 @@
     }
   },
   {
-    "type": "namespace_declaration",
-    "named": true,
-    "fields": {
-      "name": {
-        "multiple": true,
-        "required": true,
-        "types": [
-          {
-            "type": "::",
-            "named": false
-          },
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
     "type": "object_creation_expression",
     "named": true,
     "fields": {
@@ -5895,10 +5875,6 @@
         },
         {
           "type": "module_variable_declaration",
-          "named": true
-        },
-        {
-          "type": "namespace_declaration",
           "named": true
         },
         {
@@ -8576,10 +8552,6 @@
   },
   {
     "type": "match",
-    "named": false
-  },
-  {
-    "type": "namespace",
     "named": false
   },
   {

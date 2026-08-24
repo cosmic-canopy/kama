@@ -126,14 +126,11 @@ module.exports = grammar({
     // whole-corpus oracle have teeth.
     source_file: ($) =>
       seq(
-        optional($.namespace_declaration),
         repeat($.import_declaration),
         optional($.export_manifest),
         repeat($._top_level_declaration),
       ),
 
-    namespace_declaration: ($) =>
-      seq('namespace', field('name', $._qualified_name), ';'),
 
     // `import a::b;` / `import a::b as m;` / `import a::b::{X, Y as Z};`. The path gets its own rule (and
     // its own declared conflict) because deciding whether a `::` continues the path or opens the symbol

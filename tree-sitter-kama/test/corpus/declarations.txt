@@ -116,13 +116,13 @@ fn void main()
           (integer_literal))))))
 
 ================================================================================
-The header order is namespace then imports then export
+The header order is imports then export, and all four import forms
 ================================================================================
 
-namespace a::b;
 import c::d;
 import e::f as g;
 import h::i::{J, K as L};
+import { N, O as P };
 export { M };
 
 fn void main() { }
@@ -130,9 +130,6 @@ fn void main() { }
 --------------------------------------------------------------------------------
 
 (source_file
-  (namespace_declaration
-    (identifier)
-    (identifier))
   (import_declaration
     (import_path
       (identifier)
@@ -146,6 +143,12 @@ fn void main() { }
     (import_path
       (identifier)
       (identifier))
+    (import_symbol
+      (identifier))
+    (import_symbol
+      (identifier)
+      (identifier)))
+  (import_declaration
     (import_symbol
       (identifier))
     (import_symbol

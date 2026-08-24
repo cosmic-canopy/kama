@@ -1,4 +1,4 @@
-import std::collections::{SortedMap, DynamicArray};
+import { SortedMap, DynamicArray };
 export { SortedSet };
 
 // An ordered set over `K: Comparable` — a thin wrapper on `SortedMap<K, Unit>` (the value is the zero-size

@@ -1,5 +1,5 @@
 import std::ptr::{relocate};
-import std::collections::{View};
+import { View };
 export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
 
 // A by-value iterator (the `foreach (T x in list)` protocol): yields each element by value. It keeps a

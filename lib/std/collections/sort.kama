@@ -1,4 +1,4 @@
-import std::collections::{View, DynamicArray};
+import { View, DynamicArray };
 export { Order, sort, sortUnstable, sortWith, sortUnstableWith,
          binarySearch, binarySearchWith, lowerBound, lowerBoundWith, isSorted, isSortedWith };
 
