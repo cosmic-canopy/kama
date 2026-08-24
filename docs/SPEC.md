@@ -3170,24 +3170,41 @@ could then disagree, so a file could be *compiled* into one scope and *imported*
 outright — `namespace` is not a keyword and writing one is a syntax error.
 
 **Four import forms:** `import a::b;` (load; qualified-only `a::b::X`) · `import a::b as m;` (whole-module
-alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare scope; `as` renames). There is no
-glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
+alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare scope; `as` renames) · `import
+{ X, Y as Z };` (the **same-module** form — no path, because a file's own module is the only candidate).
+There is no glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
 imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
 a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 
-**Visibility — a top-of-file `export { … };` manifest, module-private by default.** A module lists its public
-surface in one block at the top; a top-level `type`/`fn` is invisible to other modules unless named there
-(C#'s `internal`/`public` model), and a per-symbol import of a non-exported symbol is rejected. **A qualified
-spelling reaches no further than an `import` would** — `a::b::X` naming a non-exported `X` is the same error,
-in every position that names a type (field, parameter, return type, local declaration). A listed name
-must be a top-level declaration in that same file — so a directory-module's files each state their own
-surface. Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
+**Visibility is per FILE. A file may name only what it DECLARES or IMPORTS** — `export { … };` is the
+outbound half and `import` the inbound one, and the symmetry is the rule. A top-level `type`/`fn` leaves its
+file only by being named in that file's one `export` block; a listed name must be a top-level declaration of
+that same file, so a directory-module's files each state their own surface. **A qualified spelling reaches no
+further than an `import` would** — `a::b::X` naming a non-exported `X` is the same error, in **every**
+position: a call, a construction, a static call, a field, a parameter, a return type, a local declaration.
+
+**A sibling in the same module is imported like anything else**, and needs no path to do it, because there
+is exactly one candidate: `import { DynamicArray };`, then the bare name at every use. A module's files
+share a name space but not a scope, so `export` offers a name and `import` accepts it — which is what lets a
+reader name the source of every symbol in a file without leaving it. This is the rung **Go** does not have
+(any file of a package reaches any unexported identifier in it) and the reason **Java** needed sealed JARs
+and then JPMS. What `visibility` in `kama.json` governs is reach **beyond the module** ([the module system
+design](design/module-system.md) §2c) — it says nothing about files.
+
+**An exported symbol may not name an unexported type of its own file.** A project's API is derived, never
+written down — the `public` modules of `kama.json` crossed with its files' `export` blocks — and that
+enumeration is only usable if every name in it can be spelled by whoever reads it. Rust calls the family it
+rules out `private_interfaces`. Publicly reachable positions only: a `private` field's type is not part of
+what the export offers.
+
+Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
 reads as the mirror of `import`. Member access (`public`/`protected`/`private`) is a separate axis; the
-kama→host/WASM boundary (`expose`) is a third. A file in **no** module — a loose file the build was handed
-directly, sitting in the operand set's own root — keeps its symbols file-private, so single-file scripts need
-no boilerplate and cannot be imported.
+kama→host/WASM boundary (`expose`) is a third. **The prelude floor and the built-in `std::memory` triad are
+intrinsics** — always in scope, never imported, outside the rung entirely. A file in **no** module — a loose
+file the build was handed directly, sitting in the operand set's own root — keeps its symbols file-private,
+so single-file scripts need no boilerplate and cannot be imported.
 
 **Resolution.** `import a::b::c` names project `a`'s module `b::c`, and the answer comes from a manifest,
 never from a search: the project being built, then its declared dependencies, then the **stdlib bundled with
@@ -3203,11 +3220,13 @@ compiler).
 
 **A module import compiles only what it needs.** `import a::b::{X, Y}` resolves to the files of that module
 which *declare* `X` and `Y`, plus their transitive closure within it — not to every file of the module. The
-closure follows references, not `import` edges: the files of one module share a scope, so a sibling is
-reachable unqualified with no `import` at all (`priority_queue.kama` imports
-nothing and declares `DynamicArray<T, A> data;`), and an import-edge closure would under-compute. A name a
-file declares itself is satisfied there and pulls in no sibling, which is what keeps a repeated
-`extern fn memset` from tying three files together.
+closure follows **references**, not `import` edges. That was once forced: a sibling was reachable with no
+`import` at all, so an import-edge closure would have under-computed. It no longer is — every sibling
+reference now carries an `import { … };` — but reference-following is kept because it is a **superset** of
+the import graph and cannot under-compute even when the two disagree. A name a file declares itself is
+satisfied there and pulls in no sibling, which is what keeps a repeated `extern fn memset` from tying three
+files together — and is why an `extern` name, which keeps its literal C spelling and so is never
+scope-prefixed, sits outside the file rung.
 
 Anything the resolver does not fully understand loads the **whole** module, so the diagnostics are
 unchanged: a bare `import a::b;` (nothing pins a file — and a type reached only through inference is never
