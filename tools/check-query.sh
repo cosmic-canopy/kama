@@ -292,25 +292,30 @@ reject --refs 43:14 -- "scopes.kama:40:20"
 # tests/query/ws/ is a three-file package in TWO modules: `src/` holds app.kama and widget.kama, and
 # `src/parts/` holds part.kama, which the manifest lists as its own module.
 #
-# ⚠️ The asymmetry this pins MOVED with the module cutover, and pretending otherwise would have left a
-# guard that passes without testing anything. It used to be "app.kama imports widget.kama and widget.kama
-# imports nothing, so widget's unit set is JUST ITSELF" — true when a file's module was the `namespace` it
-# declared and app.kama declared none. A module is a FOLDER now (§2b), so those two files are one module
-# and a query on either already sees the other. What a member-file query still cannot see is another
-# MODULE of the same project, and widening past the file's own module to every .kama under the nearest
-# kama.json is what --project is for. Same milestone, stated in the vocabulary that is now true.
+# ⚠️ The asymmetry this pins has MOVED TWICE, and pretending otherwise would each time have left a guard
+# that passes without testing anything. It began as "app.kama imports widget.kama and widget.kama imports
+# nothing, so widget's unit set is JUST ITSELF" — true when a file's module was the `namespace` it
+# declared and app.kama declared none. 2d made a module a FOLDER (§2b), so the two became one module and
+# a bare query on either saw the other, through the same-directory sibling scan.
+#
+# §2i.40 has now closed that scan for a loose build, and a bare `kama query <file>` IS one: no manifest
+# operand, so no manifest participates — including in deciding what else to load. So the unit set is the
+# file again, and this time for the reason the model states rather than for a declaration's sake. The
+# scope operand is how you ask the other question, and that is §2g.35's asymmetry exactly: the CLI takes
+# its operand at its word, the EDITOR walks (check-lsp measures the editor half over real JSON-RPC).
 FIXTURE="$ROOT/tests/query/ws/src/widget.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo "check-query: M3.5 workspace indexing"
-# Without --project: the file's own MODULE — which is its folder, so widget.kama and app.kama both.
+# Without --project: the operand, and nothing the operand did not name.
 # (`--refs` prints absolute paths under --project and the given path without it, so match on the
 # basename+position, which both forms carry.)
 expect --refs 12:11 -- "widget.kama:12:11"          # the declaration itself
 expect --refs 12:11 -- "widget.kama:22:3"           # 'fn Widget defaultWidget()' return type
 expect --refs 12:11 -- "widget.kama:22:35"          # ... and the 'Widget.of(...)' call in its body
-expect --refs 12:11 -- "app.kama:5:3"               # ... and its FOLDER-SIBLING, which is one module with it
-reject --refs 12:11 -- "part.kama"                  # ... but not another module (the M3.3 blind spot)
+reject --refs 12:11 -- "app.kama"                   # ... but NOT its folder-sibling: nothing sneaks into
+                                                    # a loose build that the operand list did not name
+reject --refs 12:11 -- "part.kama"                  # ... and still not another module (the M3.3 blind spot)
 # With --project: the same query reaches every module in the package.
 expect --project --refs 12:11 -- "part.kama:9:18"   # 'fn int32 partSize(Widget w)' in the `parts` module
 expect --project --refs 12:11 -- "app.kama:5:3"     # 'fn Widget make(...)' return type

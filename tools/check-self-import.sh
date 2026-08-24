@@ -144,13 +144,37 @@ fi
 
 # 4. The reported case: no stdlib file may report it. Eight did (net/net, net/udp, io/streams, and five
 # in collections) — every one of them a file that imports a sibling from inside its own namespace.
+#
+# ⚠️ DRIVEN THROUGH THE PROJECT, and that is the whole point of the sweep rather than an implementation
+# detail. This used to be a bare `kama check <file>`, which reached the sibling files through the
+# same-directory scan — the last place a build read a file it was not handed. §2i.40 forbids that for a
+# loose build, so a bare check of one member file is now a one-file program that cannot resolve its own
+# module, by design (§2g.35: the CLI takes its operand at its word).
+#
+# What the original bug was actually about is the EDITOR — opening `lib/std/math/mat.kama` and getting 202
+# unknown-type errors — and the editor is not a loose build: it walks to the project. So the sweep asks
+# the question the way the editor does, `<manifest> <file>`, which is the one spelling that reaches a
+# member file through the map that owns it. The negative control is immediately below; without it this
+# would pass on a compiler that had stopped analysing anything at all.
 bad=0
 for f in $(find "$ROOT/lib/std" -name '*.kama'); do
-    if "$KAMA" check "$f" 2>&1 | grep -q "does not export"; then
-        echo "check-self-import: FAIL — ${f#$ROOT/} reports 'does not export' when checked alone" >&2
+    if "$KAMA" query "$ROOT/lib/kama.json" "$f" --diagnostics 2>&1 | grep -q "does not export"; then
+        echo "check-self-import: FAIL — ${f#$ROOT/} reports 'does not export' when opened in its project" >&2
         bad=1
     fi
 done
 [ "$bad" -eq 0 ] || exit 1
 
-echo "check-self-import: OK (a module's files load together through its project and through a loose build that names them all; one file alone is refused by name; stdlib clean)"
+# 4b. The control: the SAME file handed over as a loose operand cannot resolve its own module. A file that
+# reaches a sibling with no `import` at all (§4's shape) has nothing to hang resolution off, so what it
+# reports is unknown types rather than an unresolved module — either way it must NOT check clean, or §4
+# above is measuring a project scope that does nothing.
+rc=0
+"$KAMA" check "$ROOT/lib/std/collections/sort.kama" > "$tmp/loose-member.out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || {
+    echo "check-self-import: FAIL — one file of the stdlib checked clean as a loose program, so the" >&2
+    echo "                          project scope in the sweep above is not what made it resolve" >&2
+    exit 1
+}
+
+echo "check-self-import: OK (a module's files load together through its project and through a loose build that names them all; one file alone is refused by name; stdlib clean through its manifest, and not without it)"

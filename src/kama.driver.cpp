@@ -1216,10 +1216,6 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // tests/query holds five programs in one directory, each with its own `namespace` and two of them
     // declaring `main`, and pulling those together would be a duplicate-`main` error.
     //
-    // ⚠️ That second reason is a rung 2e removes. Once the declaration is gone, five programs in one
-    // directory ARE one module by definition, and those fixtures have to be five directories — a corpus
-    // problem this comment is the earliest warning of, not a reason to keep the declaration.
-    //
     // The key moved from `unitNsKey` to `moduleKeyOf` with 2d, which widened this in one visible way: a
     // project's entry file now HAS a module (its root), where a file declaring no namespace used to have
     // none and skip the scan entirely. So an editor session on `src/app.kama` now loads its folder's other
@@ -1227,6 +1223,20 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // case in this repo is std::collections' 14 files, measured at ~10 ms, one-time.
     // `kama lsp` pays it once per session rather than per keystroke: the M5.2 parse cache is keyed on
     // path+mtime+size, and a sibling does not change while you type in another file.
+    //
+    // ⚠️ AND IT DOES NOT RUN FOR A LOOSE BUILD (§2i.40). "A loose build does no filesystem searching — you
+    // pass every source file" is the rule, and this scan was the last place it was not true: a file
+    // sharing a directory with an operand was compiled into the program without ever being named. 2d
+    // deleted the `here` import search on that argument and left this one for 2e to decide; the decision
+    // is that nothing sneaks in. A build that wants more than it names has a `kama.json` for saying so —
+    // and that is not a workaround, it is the model: §2i.42 makes listing those same folders a NO-OP, so
+    // the manifest is what turns an operand list into a project rather than a second way to compile.
+    //
+    // `kama lsp` is NOT a loose build and keeps the scan: `setLooseBuild` is called once, on the
+    // build/check/run operand path, and the server never goes through it. So an open buffer inside a
+    // project still analyses against its module's other files, which is the asymmetry §2g.35 designed —
+    // the CLI takes its operand at its word, the editor walks. An open file with no `kama.json` above it
+    // degrades to single-file, which is what a file with no module has always got.
     for (size_t ci = 0; ci < cliInputs.size(); ++ci) {
         std::string abs = absolutePath(cliInputs[ci]);
         if (!seen.insert(abs).second) continue;
@@ -1236,6 +1246,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
         std::string k = moduleKeyOf(u, abs);
         if (k.empty()) continue;                 // in no module: file-private, it IS its own module
         providedWhole.insert(k);
+        if (g_looseBuild) continue;              // §2i.40 — the operands ARE the compilation
         for (auto& sib : listKamaFiles(dirName(cliInputs[ci]))) {
             std::string sabs = absolutePath(sib);
             if (seen.count(sabs)) continue;      // the input itself, or another input, or already loaded
