@@ -24,6 +24,7 @@ tests/xfail/brace_while_bare.kama
 tests/xfail/enum_bare_spelling.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/float_bare_dot.kama
+tests/xfail/import_empty_braces.kama
 tests/xfail/interp_hole_operator.kama
 tests/xfail/lex_char_bad_utf8.kama
 tests/xfail/lex_comment_unterminated.kama

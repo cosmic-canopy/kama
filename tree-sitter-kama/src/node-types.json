@@ -4281,7 +4281,7 @@
       },
       "path": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "import_path",

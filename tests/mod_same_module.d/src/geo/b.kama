@@ -1,0 +1,7 @@
+// `import { … };` — the SAME-MODULE form. No path, because there is exactly one candidate: the module
+// this file already sits in. Rust needs `use crate::…`/`use super::…` only because a path is mandatory
+// there; here the absence of one IS the meaning, and it survives a rename of the module or the project.
+import { area, Shape as Sq };
+export { viaSibling };
+
+fn int32 viaSibling() { return area() + Sq.make(side: 3).side; }

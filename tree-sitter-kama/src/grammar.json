@@ -75,82 +75,130 @@
           "value": "import"
         },
         {
-          "type": "FIELD",
-          "name": "path",
-          "content": {
-            "type": "SYMBOL",
-            "name": "import_path"
-          }
-        },
-        {
           "type": "CHOICE",
           "members": [
             {
-              "type": "CHOICE",
+              "type": "SEQ",
               "members": [
                 {
-                  "type": "SEQ",
-                  "members": [
-                    {
-                      "type": "STRING",
-                      "value": "as"
-                    },
-                    {
-                      "type": "FIELD",
-                      "name": "alias",
-                      "content": {
-                        "type": "SYMBOL",
-                        "name": "identifier"
-                      }
-                    }
-                  ]
+                  "type": "FIELD",
+                  "name": "path",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "import_path"
+                  }
                 },
                 {
-                  "type": "SEQ",
+                  "type": "CHOICE",
                   "members": [
                     {
-                      "type": "STRING",
-                      "value": "::"
-                    },
-                    {
-                      "type": "STRING",
-                      "value": "{"
-                    },
-                    {
-                      "type": "SEQ",
+                      "type": "CHOICE",
                       "members": [
                         {
-                          "type": "SYMBOL",
-                          "name": "import_symbol"
+                          "type": "SEQ",
+                          "members": [
+                            {
+                              "type": "STRING",
+                              "value": "as"
+                            },
+                            {
+                              "type": "FIELD",
+                              "name": "alias",
+                              "content": {
+                                "type": "SYMBOL",
+                                "name": "identifier"
+                              }
+                            }
+                          ]
                         },
                         {
-                          "type": "REPEAT",
-                          "content": {
-                            "type": "SEQ",
-                            "members": [
-                              {
-                                "type": "STRING",
-                                "value": ","
-                              },
-                              {
-                                "type": "SYMBOL",
-                                "name": "import_symbol"
-                              }
-                            ]
-                          }
+                          "type": "SEQ",
+                          "members": [
+                            {
+                              "type": "STRING",
+                              "value": "::"
+                            },
+                            {
+                              "type": "STRING",
+                              "value": "{"
+                            },
+                            {
+                              "type": "SEQ",
+                              "members": [
+                                {
+                                  "type": "SYMBOL",
+                                  "name": "import_symbol"
+                                },
+                                {
+                                  "type": "REPEAT",
+                                  "content": {
+                                    "type": "SEQ",
+                                    "members": [
+                                      {
+                                        "type": "STRING",
+                                        "value": ","
+                                      },
+                                      {
+                                        "type": "SYMBOL",
+                                        "name": "import_symbol"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "type": "STRING",
+                              "value": "}"
+                            }
+                          ]
                         }
                       ]
                     },
                     {
-                      "type": "STRING",
-                      "value": "}"
+                      "type": "BLANK"
                     }
                   ]
                 }
               ]
             },
             {
-              "type": "BLANK"
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "{"
+                },
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "import_symbol"
+                    },
+                    {
+                      "type": "REPEAT",
+                      "content": {
+                        "type": "SEQ",
+                        "members": [
+                          {
+                            "type": "STRING",
+                            "value": ","
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "import_symbol"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "STRING",
+                  "value": "}"
+                }
+              ]
             }
           ]
         },

@@ -57,11 +57,14 @@ export { Bee, Cee };
 type value Bee { public int32 y; public ctor of(int32 y) { this.y = y; } }
 type value Cee { public int32 z; public ctor of(int32 z) { this.z = z; } }
 EOF
-# The other half, and the one with no import to hang resolution off: SPEC says the files of one module
-# reach each other unqualified, with no `import` at all. `c.kama` uses `Cee` that way. It is the shape
-# lib/std/math/mat.kama has — which reported 202 unknown-type errors when checked alone, purely because
-# nothing pinned its siblings.
+# The other half. ⚠️ THIS ASSERTION FLIPPED IN PHASE 3b AND THE SUBJECT DID NOT. It used to say a member
+# naming a sibling with NO import at all still resolves — "there is no import edge for resolution to hang
+# off, so only 'load the module' can answer it". Visibility is per FILE now, so that shape is an ERROR and
+# the pathless `import { Cee };` is how it is spelled. What the guard is really protecting is unchanged and
+# is why the flip had to keep a self-import rather than delete the case: the LOADER must still pull a
+# module's other files in from one member. `2d` below is the new half that keeps the two apart.
 cat > "$tmp/proj/src/mod/c.kama" <<'EOF'
+import { Cee };
 export { useCee };
 fn int32 useCee() { Cee c = Cee.of(z: 5); return c.z; }
 EOF
@@ -79,11 +82,38 @@ if grep -q "does not export" "$tmp/check.out"; then
     exit 1
 fi
 if grep -q "unknown type" "$tmp/check.out"; then
-    echo "check-self-import: FAIL — a member naming a sibling WITHOUT an import lost it" >&2
-    echo "  (SPEC: the files of one module reach each other unqualified)" >&2
+    echo "check-self-import: FAIL — a member naming a sibling through `import { … };` lost it" >&2
+    echo "  (the loader must still pull a module's other files in from one member)" >&2
     cat "$tmp/check.out" >&2
     exit 1
 fi
+
+# 2d. THE DISTINCTION THIS GUARD EXISTS FOR, now that the no-import shape is refused. Two very different
+# failures both stop that file compiling, and only one of them is the rule working:
+#   "does not import it"  -> the sibling WAS loaded and the file rung refused an unwritten name. Correct.
+#   "unknown type `Cee`"  -> the sibling was never loaded at all. That is the original defect, wearing
+#                            the new rule's clothes, and it would be invisible without this check.
+sed '/^import { Cee };$/d' "$tmp/proj/src/mod/c.kama" > "$tmp/proj/src/mod/c.noimp"
+mv "$tmp/proj/src/mod/c.noimp" "$tmp/proj/src/mod/c.kama"
+rc=0
+"$KAMA" check "$tmp/proj/kama.json" > "$tmp/noimp.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+    echo "check-self-import: FAIL — a sibling named with NO import was accepted; visibility is per FILE" >&2
+    exit 1
+fi
+if grep -q "unknown type" "$tmp/noimp.out"; then
+    echo "check-self-import: FAIL — rejected with 'unknown type': the sibling was never LOADED." >&2
+    echo "  That is the original defect, not the import rule. The two must not be confused." >&2
+    cat "$tmp/noimp.out" >&2
+    exit 1
+fi
+if ! grep -q "does not import it" "$tmp/noimp.out"; then
+    echo "check-self-import: FAIL — rejected, but not by the file rung; the reason must name the import" >&2
+    cat "$tmp/noimp.out" >&2
+    exit 1
+fi
+printf 'import { Cee };\nexport { useCee };\nfn int32 useCee() { Cee c = Cee.of(z: 5); return c.z; }\n' \
+    > "$tmp/proj/src/mod/c.kama"
 
 # 2b. The same module reached the way an EDITOR reaches it: one file, and the project found by walking.
 # `kama query <manifest> <file>` is the CLI spelling of the scope the language server computes for itself,

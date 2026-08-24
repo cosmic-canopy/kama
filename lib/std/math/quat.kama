@@ -1,6 +1,7 @@
 
 // Float32 unit quaternion (x,y,z vector part, w scalar). Rotations for the engine: compose with `*`
 // (Hamilton), rotate a Vec3 with `rotate`, interpolate with slerp/nlerp, convert to a rotation matrix.
+import { Mat3, Mat4, Vec3, Vec4 };
 export { Quat };
 
 @generate(of)

@@ -1,3 +1,4 @@
+import { DynamicArray };
 export { PriorityQueue };
 
 // A binary-heap priority queue over a growable array (= C++ `std::priority_queue` / Rust `BinaryHeap` /

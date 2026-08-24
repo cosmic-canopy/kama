@@ -447,6 +447,16 @@ import_directive
       { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), $4); TAKE_SEGS($$->modulePathPos, $2); }
   | IMPORT import_path COLONCOLON LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
       { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $5, SharedString()); TAKE_SEGS($$->modulePathPos, $2); }
+  /* `import { X, Y as Z };` — a SAME-MODULE import, carrying no module path because there is only one
+     candidate: the module this file already sits in. Visibility is per file, so a sibling's `export` is
+     an offer and this is the acceptance; the names bind bare, exactly as a foreign per-symbol import
+     does. Nothing else spells it this way — Rust needs `use crate::…`/`use super::…` because a path is
+     mandatory there, OCaml needs the sibling module's name because siblings stay distinct modules — and
+     the payoff is that an intra-module import survives a rename of the module OR the project untouched.
+     An EMPTY modulePath is the encoding, the mirror of the bare form's empty `symbols`; `import { }` is
+     a syntax error for the same reason `export { }` is, since `import_symbols` cannot be empty. */
+  | IMPORT LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
+      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<StringList>(), $3, SharedString()); }
   ;
 import_path
   : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }

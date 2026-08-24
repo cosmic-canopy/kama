@@ -1,0 +1,7 @@
+// A module's files share a NAME SPACE but not a SCOPE. `export` offers a name and `import` accepts it,
+// so every name a file uses is written down at its top — the property Go's package-wide sharing gives up.
+export { area, Shape };
+
+type value Shape { public int32 side; public ctor make(int32 side) { this.side = side; } }
+
+fn int32 area() { return 6; }

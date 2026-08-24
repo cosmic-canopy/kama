@@ -1,3 +1,5 @@
+import { circ };
 export { sq };
-// same namespace as circle.kama (a directory-module) -> calls circ() with no import
+// same module as circle.kama, and a sibling`s `export` is an OFFER — this `import` is the
+// acceptance. Visibility is per file, so the name is written down here even though it needs no path.
 fn int32 sq() { return circ() + 3; }

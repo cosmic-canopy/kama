@@ -1,0 +1,4 @@
+// `helper` IS exported — the offer was made. The sibling still has to accept it.
+export { helper };
+
+fn int32 helper() { return 4; }

@@ -320,10 +320,14 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
 
     if (unit->importDeclarationList)
         for (auto& imp : *unit->importDeclarationList) {
-            if (!imp || !imp->modulePath || imp->modulePath->empty()) continue;
+            if (!imp || !imp->modulePath) continue;
             std::string path;                                  // dotted, for mangleNs
             for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
-            std::string mod = mangleNs(path);                  // "a__b"
+            // `import { X };` — an EMPTY modulePath is the SAME-MODULE form, not a malformed one. It
+            // needs no path because there is exactly one candidate, so it targets this file's own scope
+            // and the symbols bind bare, just as a foreign per-symbol import does. (A file in no module
+            // has scope `_F<idx>` and no siblings, so the form is inert rather than special-cased.)
+            std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(path);
             if (imp->moduleAlias && !imp->moduleAlias->empty()) {
                 if (projectRoots.count(*imp->moduleAlias))
                     unsupported(("`import … as " + *imp->moduleAlias + "` claims `" + *imp->moduleAlias
@@ -381,7 +385,8 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
     // `!synthesized` mirrors recordRef's gate, for the same reason: a substituted or emitter-built node
     // names no source text, so it cannot be attributed to a file — and a per-FILE rule must not judge it.
     // It is how `DynamicArray<Rec>` stops blaming the template's file for the caller's type argument.
-    if (site && !site->synthesized) checkReach(key, value, "this reference", site->line, refFilePath());
+    if (site && !site->synthesized)
+        checkReach(key, value, "this reference", site->line, refFilePath(), qualifier && !qualifier->empty());
     recordRef(key, site);
     return key;
 }
@@ -1770,17 +1775,33 @@ std::string CEmitter::declFileOf(const std::string& key) const
 //   * before `_exported` is populated it cannot answer, so `_exportedReady` gates it. Collection
 //     resolves names too, and judging them against an empty export set would reject everything.
 void CEmitter::checkReach(const std::string& key, const std::string& spelled, const char* what,
-                          int line, const std::string& refFile)
+                          int line, const std::string& refFile, bool qualified)
 {
     if (!_exportedReady || refFile.empty()) return;
     const std::string declFile = declFileOf(key);
     if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
     if (declFile == refFile) return;                         // its own file — always
-    if (_exported.count(key)) return;                        // exported, so it may leave its file
-    unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
-                 + " cannot name it — visibility is per FILE, and a name leaves its file only through "
-                   "that file's `export { … };`. Add it there if it is meant to be reachable").c_str(),
-                line);
+    if (!_exported.count(key)) {                             // OUTBOUND: it never left its file
+        unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
+                     + " cannot name it — visibility is per FILE, and a name leaves its file only through "
+                       "that file's `export { … };`. Add it there if it is meant to be reachable").c_str(),
+                    line);
+        return;
+    }
+    // INBOUND: a file names only what it declares or imports, so an `export` is an offer and an `import`
+    // is the acceptance. Restricted to UNQUALIFIED spellings on purpose: a qualified `geo::area()` names
+    // its module at the use site, so the provenance this rung protects is already written down — it is
+    // the bare name whose origin was ambient. (A bare `import a::b;` records nothing in NsCtx, so a
+    // qualified foreign reference could not be judged here anyway without a second channel.)
+    //
+    // `_nsCtx` is the file whose imports we are about to consult, and it is NOT always the file being
+    // judged — generic instantiation installs the template's context. Only decide when the two agree.
+    if (qualified || _nsCtx.unitPath != refFile) return;
+    for (auto& sa : _nsCtx.symbolAliases) if (sa.second == key) return;   // per-symbol import (either form)
+    unsupported(("`" + spelled + "` is declared in `" + declFile + "` and this file does not import it — "
+                 "add `import { " + spelled + " };`. A module's files share a name space but not a scope: "
+                 "`export` offers a name and `import` accepts it, so every name a file uses is written "
+                 "down at its top").c_str(), line);
 }
 
 // The file a reference is being written in, for `checkReach`. Empty outside a body walk.
@@ -1799,7 +1820,8 @@ std::string CEmitter::refFilePath() const
 void CEmitter::checkQualifiedExport(const SharedIdentifier& t, const char* what)
 {
     if (!t || !t->value) return;
-    checkReach(resolveUserNameImpl(*t->value, t->qualifier), *t->value, what, t->line, _nsCtx.unitPath);
+    checkReach(resolveUserNameImpl(*t->value, t->qualifier), *t->value, what, t->line, _nsCtx.unitPath,
+               t->qualifier && !t->qualifier->empty());
 }
 
 // The same check as `checkTypeResolves`, applied to every type a DECLARATION spells: parameter types,
@@ -2077,7 +2099,7 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
     if (rejectRootedPath(qualifier, site)) return name;
     std::string key = resolveFuncImpl(name, qualifier);
     if (site && !site->synthesized)                                        // chokepoint: see resolveUserName
-        checkReach(key, name, "a call", site->line, refFilePath());
+        checkReach(key, name, "a call", site->line, refFilePath(), qualifier && !qualifier->empty());
     recordRef(key, site);
     return key;
 }
@@ -17323,7 +17345,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     // reported for a fixture's own `T`. The instantiation site already judged that
                     // argument, where it was written. Same reason the wrappers skip a synthesized node.
                     if (!_typeSubst.count(spelled))
-                        checkReach(dotType, spelled, "a construction", call->line, refFilePath());
+                        checkReach(dotType, spelled, "a construction", call->line, refFilePath(),
+                                   rid && rid->qualifier && !rid->qualifier->empty());
                     return emitDotOnTypeCtorCall(call, ma, dotType);
                 }
                 return emitMethodCall(call, ma);
@@ -17555,7 +17578,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // their HEAD with no site node, so the wrappers' gate never sees it. And the same exclusion:
         // a bound type parameter's substitution belongs to the instantiation site, not to this file.
         if (!_typeSubst.count(*qual->back()))
-            checkReach(typeName, *qual->back(), "a static call", call->line, refFilePath());
+            checkReach(typeName, *qual->back(), "a static call", call->line, refFilePath(),
+                       qual->size() > 1);
         // `Box::<int32>::tag()` — an EXPLICIT turbofish on the qualifier names the monomorph directly.
         // Mirrors what emitDotOnTypeCtorCall does for the ctor form, and takes precedence over the
         // inference below: the user said which instance, so there is nothing to infer.
@@ -22149,15 +22173,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         }
     }
 
-    // Enforce module privacy: a per-symbol `import a::b::{X}` may bind only an `export`ed X
-    // (an unmarked or missing symbol is not importable — "does not export").
+    // Enforce the file rung at the IMPORT: a per-symbol `import a::b::{X}` may bind only an `export`ed X
+    // (an unmarked or missing symbol is not importable — "does not export"). The same-module form
+    // `import { X };` is checked here too, against this file's own scope — a sibling's `export` is an
+    // offer and the import is the acceptance, so importing what a sibling kept private is the same
+    // mistake spelled a shorter way.
     for (auto& u : units) {
         if (!u || !u->importDeclarationList) continue;
         for (auto& imp : *u->importDeclarationList) {
-            if (!imp || !imp->symbols || !imp->modulePath || imp->modulePath->empty()) continue;
+            if (!imp || !imp->symbols || !imp->modulePath) continue;
             std::string path;
             for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
-            std::string mod = mangleNs(path);
+            const bool sameModule = imp->modulePath->empty();
+            _nsCtx = _unitCtx[u.get()];
+            std::string mod = sameModule ? _nsCtx.scope : mangleNs(path);
             // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
             // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no
             // longer exists, which is the B3a failure again, across files. `_refUnit` is null throughout
@@ -22175,7 +22204,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
                 else if (!_exported.count(q))
-                    unsupported(("module `" + path + "` does not export `" + *sym->identifier->value + "`").c_str(), imp->line);
+                    unsupported((sameModule
+                                 ? "no file in this module exports `" + *sym->identifier->value
+                                   + "` — visibility is per file, so a sibling must `export` a name "
+                                     "before this file can import it"
+                                 : "module `" + path + "` does not export `" + *sym->identifier->value + "`")
+                                    .c_str(), imp->line);
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
                 // `identifier` holds.

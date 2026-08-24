@@ -141,12 +141,20 @@ module.exports = grammar({
     import_declaration: ($) =>
       seq(
         'import',
-        field('path', $.import_path),
-        optional(
-          choice(
-            seq('as', field('alias', $.identifier)),
-            seq('::', '{', commaSep1($.import_symbol), '}'),
+        choice(
+          seq(
+            field('path', $.import_path),
+            optional(
+              choice(
+                seq('as', field('alias', $.identifier)),
+                seq('::', '{', commaSep1($.import_symbol), '}'),
+              ),
+            ),
           ),
+          // `import { X, Y as Z };` — the SAME-MODULE form, with no path because there is exactly one
+          // candidate: the module this file sits in. Visibility is per file, so a sibling's `export` is
+          // an offer and this is the acceptance. Unambiguous after `import`: a `{` cannot start a path.
+          seq('{', commaSep1($.import_symbol), '}'),
         ),
         ';',
       ),

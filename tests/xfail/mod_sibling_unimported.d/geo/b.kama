@@ -1,0 +1,5 @@
+// No `import { helper };`, so this bare name has no written origin. That is the whole rung: a reader of
+// this file can name every symbol's source without leaving it.
+export { viaSibling };
+
+fn int32 viaSibling() { return helper(); }

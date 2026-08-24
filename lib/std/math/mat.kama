@@ -1,3 +1,4 @@
+import { Vec2, Vec3, Vec4 };
 
 // Float32 matrices — column-major (GPU/WebGPU-native), column-vector convention (result = M * v). Storage is
 // `InlineArray<Vec4,4>` columns: `cols[c]` is column c, `cols[c].x/.y/.z/.w` its rows. One `operator*` (matrix

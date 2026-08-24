@@ -1,0 +1,5 @@
+// `import { }` is a syntax error for the same reason `export { }` is: there is one spelling for
+// importing nothing, and it is writing no import at all.
+import { };
+
+fn int32 main() { return 0; }

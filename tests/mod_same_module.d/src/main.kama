@@ -1,0 +1,3 @@
+import samemod::geo::{viaSibling};
+
+fn int32 main() { return viaSibling(); }
