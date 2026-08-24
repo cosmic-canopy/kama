@@ -1,4 +1,3 @@
-namespace std::serialization::binary;
 
 // KBIN — the binary backend for the serialization framework, a drop-in twin of the JSON backend over the
 // SAME format-agnostic `Serializer`/`Deserializer` token model (no compiler changes). Self-describing and

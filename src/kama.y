@@ -186,7 +186,6 @@ struct kamayystype {
   SharedExpression expression;
   SharedStatement statement;
   SharedIdentifier identifier;
-  SharedNamespaceDeclaration namespacedeclaration;
   SharedModifier modifier;
   SharedUsingDeclaration usingdeclaration;
   SharedBorrowBinding borrowbinding;
@@ -271,7 +270,6 @@ struct kamayystype {
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
 %token <string> MATCH
-%token <string> NAMESPACE
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
 %token <string> REF RETURN SLOT STATIC STRING
@@ -345,7 +343,6 @@ struct kamayystype {
 %type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
-%type <namespacedeclaration> namespace_opt
 %type <usingdeclaration> import_symbol
 %type <usingdeclarationlist> import_symbols
 %type <importdeclaration> import_directive
@@ -407,7 +404,7 @@ struct kamayystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3);
+  : import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $2);
       /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
          and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
       harvestUnitFacts(yyget_extra(scanner)->compilationUnit);
@@ -429,11 +426,6 @@ export_manifest_opt
 export_name_list
   : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
   | export_name_list COMMA IDENTIFIER   { $1->push_back($3); $$ = $1; STAMP_SEG($$, @3); }
-  ;
-
-namespace_opt
-  : /* Nothing */  { $$ = SharedNamespaceDeclaration(); }
-  | NAMESPACE qualified_identifier_no_generic SEMICOLON  { $$ = std::make_shared<NamespaceDeclarationNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
 
 /* Module imports (`::`-path resolved to a source file by the driver). Four forms:

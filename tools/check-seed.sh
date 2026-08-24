@@ -109,13 +109,15 @@ grep -q '"kind": "library"' "$l/kama.json" && ok "library declares its kind" || 
 # A library's root IS its published surface, which is the one place the two differ.
 grep -q '"\.": { "visibility": "public" }' "$l/kama.json" \
     && ok "the library seeds a PUBLIC root module" || bad "no public \`modules\` root in the library manifest"
-# The seeded source still declares its namespace, and that is not an oversight. A file with NO namespace
-# is file-private today and its `export` block is inert (design §1a claim 4) — so deleting the line here
-# before identity is derived from the path would seed a library nothing can import. It goes with the
-# other 91 in the deletion phase, not before.
-grep -q '^namespace demolib;' "$l/src/demolib.kama" \
-    && ok "the seeded library declares the namespace its path derives" \
-    || bad "the seeded library's namespace is missing or does not match its project name"
+# The seeded source declares NOTHING about where it lives, and that is the whole model: a file's module
+# is its folder, read off `modules` above. This assertion used to be the reverse — the template carried
+# `namespace demolib;` and the guard held it down, because a file with no declaration was file-private
+# with an inert `export` (design §1a claim 4), so seeding a library without one seeded a library nothing
+# could import. Deleting the declaration is exactly what phase 2e did; the assertion inverts with it, and
+# the one below (`the seeded library analyzes clean`) is what proves the export still reaches an importer.
+grep -q '^namespace' "$l/src/demolib.kama" \
+    && bad "the seeded library still declares a namespace — the keyword no longer exists" \
+    || ok "the seeded library states no namespace: its module is its folder, named by \`modules\`"
 grep -q '"source"' "$l/kama.json" && bad "seed emitted a redundant source key" \
                                   || ok "the library leans on the \`source\` default"
 grep -q '"entry"'   "$l/kama.json" && bad "a library should have no entry" || ok "library declares no entry"
@@ -225,8 +227,8 @@ reject "--name on a monorepo"    --kind monorepo --members a,b --name acme
 reject "--version on a monorepo" --kind monorepo --members a,b --version 2.0.0
 
 # The rejection has to teach, not just refuse.
-grep -q 'root namespace' "$tmp/rej1.out" && ok "the name error explains why (root namespace)" \
-                                         || bad "the name error does not mention the root namespace"
+grep -q 'root module' "$tmp/rej1.out" && ok "the name error explains why (it is the root module)" \
+                                      || bad "the name error does not mention the root module"
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-seed: agent guidance is opt-in"

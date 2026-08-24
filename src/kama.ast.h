@@ -75,7 +75,6 @@ public:
 class CompilationUnit : public StatementNode {
 public:
     SharedString name;
-    SharedNamespaceDeclaration nameSpace;
     SharedImportDeclarationList importDeclarationList;
     SharedStringList exportList;              // the module's public surface (`export { … };`)
     std::vector<SrcRange> exportListPos;      // one span per exportList entry (M6 B3f), or empty
@@ -100,8 +99,8 @@ public:
     // already lost every `@compileFor`-gated name, which would silently shrink the index and make a
     // program's unit set depend on its position in a batch. Written once, before any emitter exists.
     std::set<std::string> topLevelNames;   // every top-level DECLARED name — not just the `export` list,
-                                           // because same-namespace siblings reach each other's
-                                           // unexported names through the shared namespace scope.
+                                           // because the files of one MODULE reach each other's
+                                           // unexported names through the scope they share.
     std::set<std::string> identTokens;     // every identifier-token spelling in this file, straight from
                                            // the lexer: a sound SUPERSET of the names it references.
                                            // Over-pulling costs pruning; under-pulling would emit calls
@@ -110,26 +109,18 @@ public:
                                            // reference it by, so no closure can reach it. See
                                            // harvestUnitFacts for the two kinds and why each is one.
     CompilationUnit(CodeGenContext& context, SharedString name,
-                    SharedNamespaceDeclaration nameSpace,
                     SharedImportDeclarationList importDeclarationList,
                     SharedStringList exportList,
                     SharedStatementList codeDeclarationList)
         : ASTNode(context)
         , StatementNode(context)
         , name(name)
-        , nameSpace(nameSpace)
         , importDeclarationList(importDeclarationList)
         , exportList(exportList)
         , codeDeclarationList(codeDeclarationList)
         { }
 };
 
-class NamespaceDeclarationNode : public StatementNode {
-public:
-    SharedIdentifier name;
-    NamespaceDeclarationNode(CodeGenContext& context, SharedIdentifier name)
-        : ASTNode(context),  StatementNode(context), name(name) { }
-};
 
 // `extern "<header.h>";` — emit a C `#include` for FFI.
 class IncludeNode : public StatementNode {

@@ -5,7 +5,6 @@
 // To add a module, make a folder under `source` and list it in `modules`. A folder with no entry is not
 // a module: its files belong to the nearest listed folder above them, so nothing joins your API by
 // accident.
-namespace KAMA_SEED_IDENT;
 
 export { answer };
 

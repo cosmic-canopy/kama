@@ -22,7 +22,6 @@ trap 'rm -rf "$tmp"' EXIT
 # its directory: two files sharing one directory are both in the loose ROOT, which §2e.27 makes unimportable.
 mkdir -p "$tmp/lib"
 cat > "$tmp/lib/lib.kama" <<'KAMA'
-namespace lib;
 export { boom };
 fn void boom() {
     panic(msg: "from-lib-TU");

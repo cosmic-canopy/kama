@@ -1,4 +1,3 @@
-namespace std::ptr;
 
 // Raw pointer operations — the unsafe half of memory handling, kept apart from `std::memory`, which is the
 // OWNING half (`Owned`/`Shared`/`Weak`). An `UnsafePtr<T>` names storage nobody owns and nothing tracks, so

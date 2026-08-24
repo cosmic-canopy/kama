@@ -560,7 +560,6 @@ cat > "$dep/geo/kama.json" <<'JSON'
 { "name": "geo", "version": "1.0.0", "kind": "library" }
 JSON
 cat > "$dep/geo/src/geo.kama" <<'KAMA'
-namespace geo;
 export { Point };
 type value Point {
     public int32 x;
@@ -883,11 +882,10 @@ reject --refs 14:10 -- "spellings.kama:59:21"    # `Green` belongs to the enum M
 # ---------------------------------------------------------------------------------------------------
 # M6 B3f — a MODULE path is a navigation target, never a rename target.
 #
-# In kama the namespace IS the module path IS the directory path (SPEC § Modules / namespaces:
-# `import a::b::c` resolves to a/b/c.kama or a/b/c/), so renaming a namespace is a file-and-directory
-# move rather than a symbol rename. `module:` keys therefore name NO def-site — which is what makes
-# rename and find-references skip them with no extra flag — while go-to-definition opens the module,
-# the same gesture clangd gives `#include` and gopls gives an import path.
+# In kama a module IS a folder (design/module-system.md §2b), so renaming one is a directory move rather
+# than a symbol rename. `module:` keys therefore name NO def-site — which is what makes rename and
+# find-references skip them with no extra flag — while go-to-definition opens the module, the same
+# gesture clangd gives `#include` and gopls gives an import path.
 FIXTURE="$ROOT/tests/query/imports.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
@@ -896,8 +894,10 @@ expect --def 6:12 -- "/lib/std/collections/"     # `collections` opens the modul
 expect --type 6:12 -- "module std::collections"
 expect --type 6:7  -- "module std"               # a path PREFIX no file declares...
 expect --def 6:7   -- "no definition"            # ...has nothing to open, as clangd answers a partial include
-expect --type 4:11 -- "module importsprobe"      # the file's own `namespace` declaration
-expect --def 4:11  -- "imports.kama:4:10"
+# There used to be two assertions here for the file naming its OWN module — `--type`/`--def` on its
+# `namespace importsprobe;` declaration. Phase 2e deleted the keyword: a file's module is its folder, so
+# there is no token in the source to hover or jump from, and the feature is gone rather than moved. What
+# survives is above — a module path in an `import`, which is a real token and still navigates.
 # The imported SYMBOL is a real symbol and keeps its own def-site (B3g) — the module key must not
 # swallow it.
 expect --type 6:32 -- "generic-type DynamicArray"

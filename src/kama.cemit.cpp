@@ -288,9 +288,6 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
     if (!module.empty()) {
         ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
         ctx.isPublic = true;
-    } else if (unit->nameSpace && unit->nameSpace->name) {    // TEMPORARY — deleted with `namespace` in 2e
-        ctx.scope = mangleNs(qualifiedName(unit->nameSpace->name));
-        ctx.isPublic = true;
     } else {
         ctx.scope = "_F" + std::to_string(fileIndex);
         ctx.isPublic = false;
@@ -2952,18 +2949,18 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                     return tc->second.cName;
                 }
             }
-            // `::` resolves NAMESPACES and TYPES; `.` is instance/value access (SPEC "Scope resolution
+            // `::` resolves MODULES and TYPES; `.` is instance/value access (SPEC "Scope resolution
             // uses `::`"). So a `::` head that is a local, a parameter or a field is a spelling error for
             // `.`, not a second way to reach a member — accepting it would give the language two ways to
-            // write field access, one of them undocumented. Every static form keeps a TYPE or NAMESPACE
-            // head (`Vec2::dot`, `Type::NAME`, `Color::Blue`, `ns::counter`) and is resolved above, so
+            // write field access, one of them undocumented. Every static form keeps a TYPE or MODULE
+            // head (`Vec2::dot`, `Type::NAME`, `Color::Blue`, `mod::counter`) and is resolved above, so
             // this rejects only the value-headed spelling.
             const std::string& head = *(*v->qualifier)[0];
             if (_localTypes.count(head) || (_currentClass && findFieldOwner(_currentClass, head))) {
                 std::string dotted = head;   // the whole path respelled, not just the two ends
                 for (size_t i = 1; i < v->qualifier->size(); ++i) dotted += "." + *(*v->qualifier)[i];
                 unsupported(("`" + head + "` is a value — reach its members with `.` (`" + dotted + "."
-                             + nm + "`); `::` resolves namespaces and types").c_str(), v->line);
+                             + nm + "`); `::` resolves modules and types").c_str(), v->line);
             }
         }
         // A const generic parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
@@ -5937,7 +5934,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                                         ? " (first declared at line " + std::to_string(first->name->line) + ")"
                                         : std::string();
                 unsupported(("duplicate function '" + *fn->name->value + "' — kama has no overloading, so a "
-                             "name may be declared only once in its namespace" + where).c_str(),
+                             "name may be declared only once in its module" + where).c_str(),
                             fn->name->line);
             }
         }
@@ -17430,7 +17427,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 const std::string& disp = *qual->back();
                 unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
                              "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
-                             "(static functions, enum variants, namespaces)").c_str(), call->line);
+                             "(static functions, enum variants, modules)").c_str(), call->line);
                 return "0";
             }
             if (mi && mi->isStatic) {
@@ -21964,9 +21961,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             std::string q = qualify(*name);
             bool exists = _classes.count(q) || _enums.count(q) || _interfaces.count(q) || _funcs.count(q)
                        || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
-            if (!exists && !_prunedNames.count(*name))
+            if (!exists && !_prunedNames.count(*name)) {
+                // The location used to be the `namespace` declaration's line, which is gone. The export
+                // list's own span is the better answer anyway: it points at the block being validated.
+                size_t which = (size_t)(&name - &(*u->exportList)[0]);
                 unsupported(("export list names `" + *name + "` but there is no such top-level declaration in this module").c_str(),
-                            u->nameSpace && u->nameSpace->name ? u->nameSpace->name->line : 0);
+                            which < u->exportListPos.size() ? u->exportListPos[which].line : 0);
+            }
         }
     }
 

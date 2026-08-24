@@ -10,7 +10,7 @@
 // declared in each of Block / If / Else / While / DoWhile / For / ForEach / Unsafe / Scope / match arm),
 // inheritance + visibility, a smart-pointer receiver, a generic-instance receiver, a generic type-param
 // receiver, chained and call/index receivers, and the literal/comment suppression cases.
-namespace completeprobe;
+// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
 
 import std::collections::{DynamicArray};
 
@@ -166,7 +166,7 @@ fn int32 bareNames(int32 seed) {
 // even where a local declaration shadows it. Its completion payoff is why the alias waited for an LSP.
 fn int32 rootScope() {
     global::println(s: "root scope");                  // a FLOOR symbol, named explicitly
-    return global::completeprobe::blend(lo: 1, hi: 2);  // ... and an absolute namespace path
+    return blend(lo: 1, hi: 2);                        // ... beside the file's own, which needs no prefix
 }
 
 // M4.2 — a MODULE head lists what that module declares, one level deep. The head has to be a module the

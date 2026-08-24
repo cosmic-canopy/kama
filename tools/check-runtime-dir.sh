@@ -113,22 +113,22 @@ else
     head -5 "$t/err" | sed 's/^/      /' >&2
 fi
 
-# A build SUCCEEDING is not enough on its own: the stdlib resolves by path today, so it would go on
-# working with the manifest missing and this section would pass while shipping a tarball whose `std` has
-# no identity. So assert what the manifest is FOR — read the module a stdlib file derives, which is the
-# probe's fourth column, and require it present with the file and absent without it.
+# A build SUCCEEDING is not enough on its own to say the manifest was READ, so assert what the manifest
+# is FOR: the module the stdlib's files are compiled into. Read it out of the EMITTED C, where a symbol
+# is `project · module · name` — nothing else in the payload can produce `std__collections__`.
 #
-# ⚠️ Column-precise on purpose. The first cut grepped the whole line for `std::collections`, which
-# matched the DECLARED column (the `namespace` those files still carry) and reported the manifest as
-# read when it had been deleted — a passing assertion that tested nothing.
-derived_module() {   # derived_module <path-fragment> -> the DERIVED module, or "-"
-    ( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$1" --probe-modules 2>/dev/null ) \
-        | awk -F'\t' -v f="$2" '$1=="kama-module" && index($2,f) { print $4; exit }'
-}
-got=$(derived_module "$t/out2.exe" "lib/kama/std/collections/")
-[ "$got" = "std::collections" ] \
-    && say_ok "...and the payload's kama.json is what gives the stdlib its module identity" \
-    || say_fail "a stdlib file derived \"$got\", expected \"std::collections\" — is lib/kama.json in the payload?"
+# ⚠️ This used to read `--probe-modules`, deleted with phase 2e along with the `namespace` declaration it
+# existed to measure against. The symbol is the better instrument anyway, and for the reason the probe
+# version had already been bitten by once: its first cut grepped the whole probe row for
+# `std::collections` and matched the DECLARED column, reporting the manifest as read when it had been
+# deleted. A C symbol has no second column to match by accident.
+mkdir -p "$t/c"
+( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$t/c/out2.exe" --keep-c >/dev/null 2>&1 )
+if grep -rqE '\bstd__collections__' "$t/c" 2>/dev/null; then
+    say_ok "...and the payload's kama.json is what gives the stdlib its module identity"
+else
+    say_fail "no \`std__collections__\` symbol in the payload's emitted C — is lib/kama.json in the payload?"
+fi
 
 # ...and with the manifest removed the stdlib does not resolve AT ALL, which is a stronger statement than
 # the one this assertion used to make. It used to check that the file merely derived no module (`-`),

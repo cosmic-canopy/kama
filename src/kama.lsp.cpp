@@ -334,7 +334,6 @@ int completionKindToLsp(CompletionKind k) {
         case CompletionKind::Label:      return 10;   // Property — an argument label reads as one
         case CompletionKind::Keyword:    return 14;   // Keyword
         case CompletionKind::Module:     return 9;    // Module
-        case CompletionKind::Namespace:  return 9;    // Module
         case CompletionKind::Constant:   return 21;   // Constant
     }
     return 6;

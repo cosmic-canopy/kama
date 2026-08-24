@@ -1,7 +1,7 @@
 // LSP query-index fixture (M0 T4/T5) — exercised by tools/check-query.sh, NOT the main run_tests loop
 // (that scans tests/*.kama, tests/*.d, tests/xfail only). Positions below are asserted by the harness, so
 // keep the layout stable: line/column changes here mean updating check-query.sh.
-namespace shapes;
+// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
 
 type value Point {
     public int32 x;

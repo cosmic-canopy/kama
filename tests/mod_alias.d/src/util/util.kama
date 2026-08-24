@@ -1,3 +1,2 @@
-namespace modalias::util;
 export { three };
 fn int32 three() { return 3; }

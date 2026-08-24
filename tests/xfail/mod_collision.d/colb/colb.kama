@@ -1,3 +1,2 @@
-namespace colb;
 export { val };
 fn int32 val() { return 2; }

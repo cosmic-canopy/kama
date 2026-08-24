@@ -1,4 +1,3 @@
-namespace weights;
 export { Weighable, heaviness };
 
 // A DEPENDENCY conforms `int32` to a contract it owns. Nothing about that is local to this package —

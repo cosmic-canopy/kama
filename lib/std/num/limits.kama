@@ -1,4 +1,3 @@
-namespace std::num;
 
 // Numeric type limits, as zero-arg functions (no module-level-const feature needed; clang inlines them).
 // Signed minimums are `-max - 1` since the positive `2^(n-1)` doesn't fit the type. Unsigned minimum is 0.

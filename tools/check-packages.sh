@@ -40,7 +40,6 @@ cat > "$geo/kama.json" <<'JSON'
 { "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$geo/src/geo.kama" <<'KAMA'
-namespace geo;
 export { area };
 fn int32 area() { return 30; }
 KAMA
@@ -112,7 +111,6 @@ fi
 pkgsrc="$tmp/geo2"
 mkdir -p "$pkgsrc"
 cat > "$pkgsrc/geo2.kama" <<'KAMA'
-namespace geo2;
 export { area2 };
 fn int32 area2() { return 42; }
 KAMA
@@ -160,7 +158,7 @@ run() { if "$@"; then RC=0; else RC=$?; fi; }   # capture a program's exit code 
 # a dev-only helper package, and a middle package that deps on geo (prod) + testkit (DEV).
 tk="$tmp/testkit"; mkdir -p "$tk/src"
 printf '{ "name": "testkit", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$tk/kama.json"
-printf 'namespace testkit;\nexport { helper };\nfn int32 helper() { return 7; }\n' > "$tk/src/testkit.kama"
+printf 'export { helper };\nfn int32 helper() { return 7; }\n' > "$tk/src/testkit.kama"
 git -C "$tk" init -q; git -C "$tk" add -A; git -C "$tk" commit -qm init; git -C "$tk" tag v1.0.0
 
 mid="$tmp/mid"; mkdir -p "$mid/src"
@@ -169,7 +167,7 @@ cat > "$mid/kama.json" <<J
   "dependencies":     { "geo":     { "git": "file://$geo", "rev": "v1.0.0" } },
   "dev-dependencies": { "testkit": { "git": "file://$tk",  "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'namespace mid;\nimport geo::{area};\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/src/mid.kama"
+printf 'import geo::{area};\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/src/mid.kama"
 git -C "$mid" init -q; git -C "$mid" add -A; git -C "$mid" commit -qm init; git -C "$mid" tag v1.0.0
 
 # 5. transitive: consumer -> mid -> geo. mid's OWN dev-dep (testkit) must NOT propagate.
@@ -344,7 +342,7 @@ gv="$tmp/gv-src"; mkdir -p "$gv/src"
 printf '{ "name": "gv", "version": "0.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$gv/kama.json"
 git -C "$gv" init -q
 gvtag() {   # $1 = return value baked into area(); $2 = tag name
-    printf 'namespace gv;\nexport { area };\nfn int32 area() { return %s; }\n' "$1" > "$gv/src/gv.kama"
+    printf 'export { area };\nfn int32 area() { return %s; }\n' "$1" > "$gv/src/gv.kama"
     git -C "$gv" add -A; git -C "$gv" commit -qm "$2"; git -C "$gv" tag "$2"
 }
 gvtag 100 v1.0.0
@@ -384,7 +382,7 @@ midv="$tmp/midv"; mkdir -p "$midv/src"
 cat > "$midv/kama.json" <<J
 { "name": "midv", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'namespace midv;\nimport gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/src/midv.kama"
+printf 'import gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/src/midv.kama"
 git -C "$midv" init -q; git -C "$midv" add -A; git -C "$midv" commit -qm init; git -C "$midv" tag v1.0.0
 t16="$tmp/t16"; mkdir -p "$t16/src"
 cat > "$t16/kama.json" <<J
@@ -407,7 +405,7 @@ midlo="$tmp/midlo"; mkdir -p "$midlo/src"
 cat > "$midlo/kama.json" <<J
 { "name": "midlo", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "<=1.1.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'namespace midlo;\nimport gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/src/midlo.kama"
+printf 'import gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/src/midlo.kama"
 git -C "$midlo" init -q; git -C "$midlo" add -A; git -C "$midlo" commit -qm init; git -C "$midlo" tag v1.0.0
 t16b="$tmp/t16b"; mkdir -p "$t16b/src"
 cat > "$t16b/kama.json" <<J
@@ -475,7 +473,7 @@ reg="$(kama_native_path "$tmp")/reg"; mkdir -p "$reg"
 pub_rg() {   # pub_rg <version> <area-return>
     d="$tmp/rg-src-$1"; mkdir -p "$d/src"
     printf '{ "name": "rg", "version": "%s", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' "$1" > "$d/kama.json"
-    printf 'namespace rg;\nexport { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/src/rg.kama"
+    printf 'export { area };\nfn int32 area() { return %s; }\n' "$2" > "$d/src/rg.kama"
     ( cd "$d" && "$KAMA" publish kama.json --registry "file://$reg" )
 }
 # 19. publish → index + tarball + integrity; a second publish of the same version FAILS (immutability).
@@ -516,7 +514,7 @@ cat > "$hi/kama.json" <<JSON
 { "name": "hi", "version": "1.0.0", "kind": "library",
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'namespace hi;\nimport rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
+printf 'import rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
 if ! ( cd "$hi" && "$KAMA" publish kama.json --registry "file://$reg" ) >"$tmp/hipub.out" 2>&1; then echo "check-packages: FAIL — publish hi errored:" >&2; sed 's/^/  /' "$tmp/hipub.out" >&2; exit 1; fi
 rc2="$tmp/rc2"; mkdir -p "$rc2/src"
 cat > "$rc2/kama.json" <<JSON
@@ -550,7 +548,7 @@ mv "$reg.hidden" "$reg"
 areg="$(kama_native_path "$tmp")/areg"; mkdir -p "$areg"
 sc="$tmp/sc-src"; mkdir -p "$sc/src"
 printf '{ "name": "@acme/sc", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$sc/kama.json"
-printf 'namespace sc;\nexport { val };\nfn int32 val() { return 7; }\n' > "$sc/src/sc.kama"
+printf 'export { val };\nfn int32 val() { return 7; }\n' > "$sc/src/sc.kama"
 if ! ( cd "$sc" && "$KAMA" publish kama.json --registry "file://$areg" ) >"$tmp/scpub.out" 2>&1; then echo "check-packages: FAIL — publish @acme/sc errored:" >&2; sed 's/^/  /' "$tmp/scpub.out" >&2; exit 1; fi
 [ -f "$areg/@acme/sc/index.json" ] || { echo "check-packages: FAIL — scoped publish path wrong (no @acme/sc/index.json)" >&2; find "$areg" >&2; exit 1; }
 scp="$tmp/scp"; mkdir -p "$scp/src"
@@ -581,7 +579,7 @@ grep -qi "no registry configured" "$tmp/opo.out" || { echo "check-packages: FAIL
 # Native-spelled: these three are REGISTRIES (see the note at `reg=` above), not git repos.
 ntmp=$(kama_native_path "$tmp")
 ra="$ntmp/cf-a"; rb="$ntmp/cf-b"; rc_="$ntmp/cf-c"; mkdir -p "$ra" "$rb" "$rc_"
-mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d/src"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'namespace cf;\nexport { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/src/cf.kama"; echo "$d"; }
+mkcf() { d="$tmp/cf-src-$1"; mkdir -p "$d/src"; printf '{ "name": "cf", "version": "1.0.0", "kind": "library" }\n' > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return %s; }\n' "$2" > "$d/src/cf.kama"; echo "$d"; }
 csame=$(mkcf same 3); cdiff=$(mkcf diff 4)
 ( cd "$csame" && "$KAMA" publish kama.json --registry "file://$ra" ) >/dev/null 2>&1
 ( cd "$csame" && "$KAMA" publish kama.json --registry "file://$rb" ) >/dev/null 2>&1
@@ -604,7 +602,7 @@ grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusio
 
 # 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
 creg="$(kama_native_path "$tmp")/creg"; mkdir -p "$creg"
-for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'namespace cn;\nexport { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; ( cd "$d" && "$KAMA" publish kama.json --registry "file://$creg" ) >/dev/null 2>&1; done
+for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; ( cd "$d" && "$KAMA" publish kama.json --registry "file://$creg" ) >/dev/null 2>&1; done
 colp="$tmp/colp"; mkdir -p "$colp"
 cat > "$colp/kama.json" <<JSON
 { "name": "colp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
@@ -622,7 +620,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
     ssh-keygen -t ed25519 -f "$tmp/pubkey" -N "" -q
     sg="$tmp/sg-src"; mkdir -p "$sg/src"
     printf '{ "name": "sg", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$sg/kama.json"
-    printf 'namespace sg;\nexport { val };\nfn int32 val() { return 5; }\n' > "$sg/src/sg.kama"
+    printf 'export { val };\nfn int32 val() { return 5; }\n' > "$sg/src/sg.kama"
     if ! ( cd "$sg" && "$KAMA" publish kama.json --registry "file://$sreg" --key "$tmp/pubkey" ) >"$tmp/sgpub.out" 2>&1; then
         echo "check-packages: FAIL — signed publish errored:" >&2; sed 's/^/  /' "$tmp/sgpub.out" >&2; exit 1; fi
     grep -q '"signature"' "$sreg/sg/index.json" && grep -q '"key"' "$sreg/sg/index.json" \
@@ -661,7 +659,7 @@ fi
 #     to the local dir, and the build compiles the local code (77) rather than the published one (30).
 ogeo="$tmp/ogeo-src"; mkdir -p "$ogeo/src"
 printf '{ "name": "ogeo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ogeo/kama.json"
-printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 30; }\n' > "$ogeo/src/ogeo.kama"
+printf 'export { area };\nfn int32 area() { return 30; }\n' > "$ogeo/src/ogeo.kama"
 git -C "$ogeo" init -q
 git -C "$ogeo" -c user.email=t@t -c user.name=t add -A
 git -C "$ogeo" -c user.email=t@t -c user.name=t commit -qm init
@@ -677,7 +675,7 @@ if ! "$KAMA" pkg install "$ovp/kama.json" >"$tmp/ov1.out" 2>&1; then
 cp "$ovp/kama.lock" "$tmp/ov.lock.canon"
 oloc="$tmp/ogeo-local"; mkdir -p "$oloc/src"
 printf '{ "name": "ogeo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$oloc/kama.json"
-printf 'namespace ogeo;\nexport { area };\nfn int32 area() { return 77; }\n' > "$oloc/src/ogeo.kama"
+printf 'export { area };\nfn int32 area() { return 77; }\n' > "$oloc/src/ogeo.kama"
 cat > "$ovp/kama.local.json" <<JSON
 { "overrides": { "ogeo": { "path": "../ogeo-local" } } }
 JSON
@@ -736,7 +734,6 @@ cat > "$ws/libs/config/kama.json" <<'JSON'
 { "name": "config", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$ws/libs/config/src/config.kama" <<'KAMA'
-namespace config;
 export { Config };
 
 type value Config {
@@ -749,7 +746,6 @@ cat > "$ws/libs/net/kama.json" <<'JSON'
   "dependencies": { "config": { "path": "../config" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$ws/libs/net/src/net.kama" <<'KAMA'
-namespace net;
 import config::{Config};
 export { listenPort };
 
@@ -794,7 +790,7 @@ mkdir -p "$tmp/stray/lib/src"
 cat > "$tmp/stray/lib/kama.json" <<'JSON'
 { "name": "stray", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'namespace stray;\nexport { v };\nfn int32 v() { return 1; }\n' > "$tmp/stray/lib/src/stray.kama"
+printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/stray/lib/src/stray.kama"
 cp "$ws/libs/net/kama.json" "$tmp/net-manifest.bak"
 cat > "$ws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "kind": "library",
@@ -861,11 +857,11 @@ fr="$tmp/frdep"; mkdir -p "$fr/geosrc/src" "$fr/mathx/src" "$fr/app/src"
 cat > "$fr/mathx/kama.json" <<'JSON'
 { "name": "mathx", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'namespace mathx;\nexport { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/src/mathx.kama"
+printf 'export { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/src/mathx.kama"
 cat > "$fr/geosrc/kama.json" <<'JSON'
 { "name": "geodep", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'namespace geodep;\nimport mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/src/geodep.kama"
+printf 'import mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/src/geodep.kama"
 ( cd "$fr/geosrc" && git init -q . && git add -A \
   && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
 cat > "$fr/app/kama.json" <<JSON
@@ -907,7 +903,6 @@ cat > "$dc/lib/kama.json" <<'JSON'
 { "name": "marklib", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dc/lib/src/marklib.kama" <<'EOF'
-namespace marklib;
 export { Marker, viaMarker };
 type contract Marker for value { fn int32 mark(); }
 type intrinsic <int32> implements Marker { public fn int32 mark() { return 1; } }

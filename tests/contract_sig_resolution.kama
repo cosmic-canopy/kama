@@ -12,7 +12,6 @@
 //   * a contract-declared OPERATOR, whose signature hangs off a declarator rather than a method node.
 //
 // The negative direction lives in tests/xfail/contract_*_mismatch*.
-namespace M;
 
 type value Wrapped { public int32 v; public ctor of(int32 v) { this.v = v; } }
 

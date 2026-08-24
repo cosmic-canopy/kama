@@ -122,7 +122,7 @@ struct SourceIdent { int line = 0, column = 0; std::string name; };   // line 1-
 std::vector<SourceIdent> sourceIdentifiers(const std::string& text);
 
 enum class CompletionKind { Field, Method, Ctor, Variant, EnumMember, Type, Contract,
-                            Function, Local, Param, Label, Keyword, Module, Namespace, Constant };
+                            Function, Local, Param, Label, Keyword, Module, Constant };
 const char* completionKindName(CompletionKind k);   // stable lowercase tag, mirrors symKindName
 
 struct CompletionItem {

@@ -25,9 +25,11 @@ extern const char* KAMA_PRELUDE_SRC;
 //
 // `module` is the module these declarations belong to (`std::memory`), stated rather than derived, and
 // that is load-bearing in two directions. A synthetic unit has NO path, so the file→module derivation
-// that replaces the `namespace` declaration (design/module-system.md §2b) cannot reach it — without
-// this it would fall through to the file-private scope and `std__memory__Owned` would silently become
-// `_F<n>__Owned`. And the driver needs it to know this module is ALREADY in every compilation, so an
+// that replaced the `namespace` declaration (design/module-system.md §2b) cannot reach it — without this
+// it falls through to the file-private scope and `std__memory__Owned` becomes `_F<n>__Owned`. That was a
+// prediction until phase 2e and is now measured: build a compiler with the driver's synthetic arm
+// returning "" and a one-line `new int32()` program stops compiling, because `Owned` no longer satisfies
+// the bounds written against it. And the driver needs it to know this module is ALREADY in every compilation, so an
 // explicit `import std::memory` skips the disk copy rather than parsing a second one.
 struct KamaPreludeModule { const char* src; const char* name; const char* module; };
 extern const KamaPreludeModule KAMA_PRELUDE_MODULES[];

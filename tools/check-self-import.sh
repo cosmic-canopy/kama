@@ -47,14 +47,12 @@ cat > "$tmp/proj/kama.json" <<'JSON'
 }
 JSON
 cat > "$tmp/proj/src/mod/a.kama" <<'EOF'
-namespace my::mod;
 import my::mod::{Bee};
 export { Aye, useBee };
 type value Aye { public int32 x; public ctor of(int32 x) { this.x = x; } }
 fn int32 useBee() { Bee b = Bee.of(y: 2); return b.y; }
 EOF
 cat > "$tmp/proj/src/mod/b.kama" <<'EOF'
-namespace my::mod;
 export { Bee, Cee };
 type value Bee { public int32 y; public ctor of(int32 y) { this.y = y; } }
 type value Cee { public int32 z; public ctor of(int32 z) { this.z = z; } }
@@ -64,7 +62,6 @@ EOF
 # lib/std/math/mat.kama has — which reported 202 unknown-type errors when checked alone, purely because
 # nothing pinned its siblings.
 cat > "$tmp/proj/src/mod/c.kama" <<'EOF'
-namespace my::mod;
 export { useCee };
 fn int32 useCee() { Cee c = Cee.of(z: 5); return c.z; }
 EOF
@@ -98,26 +95,28 @@ if ! "$KAMA" query "$tmp/proj/kama.json" "$tmp/proj/src/mod/c.kama" --symbols > 
     exit 1
 fi
 
-# 2c. ...and the spelling §2i makes INVALID says so rather than half-working. `consumer.kama` declares no
-# namespace — the shape every file has after 2e — so handed over ALONE it is a loose one-file program that
-# does not carry `my::mod`, and nothing may go looking for it.
+# 2c. ...and the spelling §2i makes INVALID says so rather than half-working: handed over ALONE, one file
+# of a project is a loose one-file program that does not carry `my::mod`, and nothing may go looking for it.
 #
-# ⚠️ Precisely what was MEASURED, because the neighbouring claim is not true yet: `a.kama` handed over
-# alone still checks clean today, through ctxOf's temporary declaration rung (`namespace my::mod;` names
-# it, and the same-directory sibling scan then pulls b and c). That spelling stops working in 2e with the
-# other 90 declarations, and asserting it here now would be asserting a prediction.
+# ⚠️ BOTH files, and the second one is the whole point of the pair. This used to assert only
+# `consumer.kama`, which declares nothing — because `a.kama` still checked clean through ctxOf's
+# declaration rung (`namespace my::mod;` named it, and the sibling scan then pulled b and c), and
+# asserting otherwise would have been asserting a prediction. Phase 2e deleted the rung and the
+# declaration, so the two spellings have converged and the guard says so.
 printf 'import my::mod::{Aye};\nfn int32 use() { return Aye.of(x: 1).x; }\n' > "$tmp/proj/src/consumer.kama"
-rc=0
-"$KAMA" check "$tmp/proj/src/consumer.kama" > "$tmp/alone.out" 2>&1 || rc=$?
-if [ "$rc" -eq 0 ]; then
-    echo "check-self-import: FAIL — one file of a project was accepted as a whole program" >&2
-    exit 1
-fi
-grep -q "cannot resolve module 'my::mod'" "$tmp/alone.out" || {
-    echo "check-self-import: FAIL — naming one member file failed for the wrong reason:" >&2
-    head -3 "$tmp/alone.out" >&2
-    exit 1
-}
+for one in "$tmp/proj/src/consumer.kama" "$tmp/proj/src/mod/a.kama"; do
+    rc=0
+    "$KAMA" check "$one" > "$tmp/alone.out" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "check-self-import: FAIL — ${one##*/} was accepted as a whole program, but it is one file of a project" >&2
+        exit 1
+    fi
+    grep -q "cannot resolve module 'my::mod'" "$tmp/alone.out" || {
+        echo "check-self-import: FAIL — naming ${one##*/} alone failed for the wrong reason:" >&2
+        head -3 "$tmp/alone.out" >&2
+        exit 1
+    }
+done
 
 # 3. The consumer path — a foreign import of the same module — still builds and runs. Loose, with EVERY
 # source named, which is what §2i asks of a build with no manifest: `useBee()` returns 2 and `a.x` is 1,
@@ -165,15 +164,27 @@ for f in $(find "$ROOT/lib/std" -name '*.kama'); do
 done
 [ "$bad" -eq 0 ] || exit 1
 
-# 4b. The control: the SAME file handed over as a loose operand cannot resolve its own module. A file that
-# reaches a sibling with no `import` at all (§4's shape) has nothing to hang resolution off, so what it
-# reports is unknown types rather than an unresolved module — either way it must NOT check clean, or §4
-# above is measuring a project scope that does nothing.
+# 4b. The control, and it has to be chosen carefully — MEASURED, not assumed, because the deletion of the
+# `namespace` declaration moved which stdlib files a loose build can still manage:
+#
+#   * a file whose sibling reference IS an `import` (net/net.kama, io/streams.kama, the five in
+#     collections) now checks CLEAN alone, and that is the self-import defect DISSOLVING rather than
+#     hiding. The bug was that a CLI input registered its own declared namespace as already provided, so
+#     `import std::net::{ReliableStream}` from inside `namespace std::net` was skipped and the sibling
+#     never loaded. A loose file has no module to claim now, so the same line is an ordinary FOREIGN
+#     import, resolves `std::net` from the stdlib, and loads the module whole — the path that always
+#     worked.
+#   * a file that names a sibling with NO import at all (math/mat.kama, §4's second shape) still cannot:
+#     there is no edge for resolution to follow and nothing else to pin its siblings.
+#
+# So the control is mat.kama. It must NOT check clean, or §4's project scope is not what made the sweep
+# resolve and the sweep is measuring nothing.
 rc=0
-"$KAMA" check "$ROOT/lib/std/collections/sort.kama" > "$tmp/loose-member.out" 2>&1 || rc=$?
+"$KAMA" check "$ROOT/lib/std/math/mat.kama" > "$tmp/loose-member.out" 2>&1 || rc=$?
 [ "$rc" -ne 0 ] || {
-    echo "check-self-import: FAIL — one file of the stdlib checked clean as a loose program, so the" >&2
-    echo "                          project scope in the sweep above is not what made it resolve" >&2
+    echo "check-self-import: FAIL — lib/std/math/mat.kama checked clean as a loose one-file program, but" >&2
+    echo "                          it names siblings with no import: the project scope in the sweep" >&2
+    echo "                          above is not what made those files resolve" >&2
     exit 1
 }
 

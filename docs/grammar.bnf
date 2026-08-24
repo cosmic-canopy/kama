@@ -12,7 +12,7 @@
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : namespace_opt import_directives_opt export_manifest_opt code_opt
+  : import_directives_opt export_manifest_opt code_opt
 
   ;
 
@@ -26,11 +26,6 @@ export_manifest_opt
 export_name_list
   : IDENTIFIER
   | export_name_list COMMA IDENTIFIER
-  ;
-
-namespace_opt
-  : /* Nothing */
-  | NAMESPACE qualified_identifier_no_generic SEMICOLON
   ;
 
 /* Module imports (`::`-path resolved to a source file by the driver). Four forms:

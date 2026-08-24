@@ -1,32 +1,23 @@
 #!/bin/sh
-# check-modules.sh — the file→module derivation, measured against the declarations still in the tree.
+# check-modules.sh — a file's module is WHERE IT SITS, and that is what reaches the C symbol.
 #
-# TEMPORARY, and deliberately so: this guard exists for the length of the module-system campaign
-# (docs/design/module-system.md phase 2) and is DELETED with `--probe-modules` when it closes.
+# design/module-system.md §2b/§2i. A file's identity used to be the `namespace` it declared; phase 2
+# replaced it with the module its path puts it in, read against its project's `modules` map — or, with
+# no manifest in play, against the operand set's own root. This guard holds both halves down.
 #
-# Why it exists. Phase 2 swaps the emitter's source of truth for a file's identity from the `namespace`
-# it declares to the module its path and its project's `modules` map derive. That is the one step in the
-# campaign that cannot be checked by reading: 91 files declare a namespace today, and the derivation has
-# to reproduce every one of them before any of them is deleted. So the derivation ships FIRST as a
-# measurement — `--probe-modules`, a hidden TSV on stdout — and this guard reads it.
+# Two sections, and they are deliberately end-to-end rather than a reading of an internal value:
 #
-# Three sections, and the second is the one that changes as the campaign runs:
+#   §1  a PROJECT, whose answers are known by construction, checked through the emitted C. Seven shapes:
+#       the source root, a listed folder, a nested one, a `name` override, a folder that is a string
+#       prefix of another, an UNLISTED folder, and one nested deep below an unlisted one.
+#   §2  a LOOSE build, where no manifest names anything and the operand set does it instead — folders
+#       become modules, the root does not, and the operand ORDER cannot reach the symbols.
 #
-#   §1  the derivation itself, against a purpose-built tree whose answers are known by construction.
-#       These are ordinary assertions and they hold forever.
-#   §2  the CORPUS sweep. Every file whose declared namespace disagrees with its derived module is a
-#       migration item, so they were listed by name below and anything NOT on that list failed. The list
-#       is now EMPTY: every file in the corpus that declares a namespace derives exactly that namespace.
-#       That is the fact the identity cutover rests on — swapping ctxOf from the declaration to the
-#       derivation cannot move a symbol, because the two already agree everywhere.
-#   §3  the CONSUMPTION, added with the 2c cutover. §1 and §2 would read exactly the same with the
-#       emitter still scoping files by their `namespace` declaration — which is what it did through 2a
-#       and 2b. §3 reads the derived module back out of the emitted C, so the cutover has a guard.
-#
-# The blind spot is reported rather than hidden (design §7: a measurement that hides its own blind spot
-# is worse than no measurement). `no-project` is a loose file, whose identity §2i derives from the
-# operand set rather than a manifest; `synthetic` is the embedded prelude, which has no path at all.
-# Neither can this probe speak to, and the counts say how much that is.
+# ⚠️ It reads the emitted C, never a probe. Through phases 2a-2b this guard drove a hidden
+# `--probe-modules` TSV and compared the DERIVED module against the DECLARED one, because until the
+# emitter consumed the derivation the two could not be told apart by any other means. 2c made the emitter
+# consume it and 2e deleted the declaration, so both the comparison and the flag are gone: the symbol in
+# the `.c` is the derivation, arrived at the only place it matters.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -41,7 +32,7 @@ ok()  { echo "  ok: $1"; }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail+1)); }
 
 # ---------------------------------------------------------------------------------------------------
-echo "check-modules: a file's module is the nearest LISTED folder above it"
+echo "check-modules: a file's module is the nearest LISTED folder above it, and the symbol says so"
 
 # One project, and every shape the derivation has to get right. `network/` is not an oversight: `net` is
 # listed, and a string-prefix test would hand it `network/`'s files.
@@ -81,144 +72,14 @@ cat > "$p/kama.json" <<'JSON'
 }
 JSON
 
-"$KAMA" check "$p/kama.json" --probe-modules > "$tmp/deriv.tsv" 2>"$tmp/deriv.err" \
-    || { echo "check-modules: the derivation fixture does not check" >&2; head -3 "$tmp/deriv.err" >&2; exit 1; }
-
-# derived <file-basename> <expected-module-name> <claim>
-derived() {
-    got=$(awk -F'\t' -v f="/$1" '$1=="kama-module" && index($2, f) == length($2) - length(f) + 1 { print $4 }' \
-          "$tmp/deriv.tsv" | head -1)
-    [ "$got" = "$2" ] && ok "$3" || bad "$3 — derived \"$got\", expected \"$2\""
-}
-
-derived app.kama    deriv                  "a file at the source root is in the project root module"
-derived net.kama    deriv::net             "a file in a listed folder takes that folder's name"
-derived web.kama    deriv::net::web        "a nested listed folder composes both segments"
-derived k.kama      deriv::network         "\`network\` is its own module, not a prefix match on \`net\`"
-derived o.kama      deriv::tidy            "a \`name\` override replaces the folder's segment"
-# The rule that keeps "list a folder" an API decision rather than a compilation one: an unlisted folder
-# is not a module, but its files are not homeless — they belong to the closest folder above that is one.
-derived d.kama      deriv::net             "an UNLISTED folder's files belong to the nearest listed ancestor"
-derived v.kama      deriv::vendored        "...at any depth below it"
-
-# ---------------------------------------------------------------------------------------------------
-echo "check-modules: the corpus agrees, or says exactly where it does not"
-
-# ⚠️ DRIVEN BY MANIFEST, ONE PROCESS PER PROJECT — and that is not a performance choice, it is the only
-# way this section measures anything at all. Two blind spots make it so, and both were found by being
-# bitten:
+# Build it, and read the answers back out of the emitted C. Asserting the derivation any other way would
+# be asserting an internal value: what has to be true is that the module reaches the SYMBOL, since that is
+# what an importer links against and what §2e.25 defines as `project · module · name`.
 #
-#   * a probe row exists only for a unit that LOADS, so a project's `src/main.kama` handed over ALONE
-#     emits none — it cannot resolve its own imports (2c: the 12 files that cutover moved were invisible
-#     to the instrument measuring it);
-#   * and since §2i, a `.kama` operand IS a loose build, where no manifest participates in anything —
-#     including identity. So `kama check --each <every file>` measures the LOOSE derivation, and would
-#     report all 52 stdlib files as `declared-only` while asserting a clean sweep. That is precisely how
-#     this section went vacuous the day the loose arm landed.
-#
-# So: every project, named by its `kama.json`; then everything no project owns, as the loose programs
-# they are. A project that emits NO rows is named out loud rather than silently skipped.
-cd "$ROOT"
-: > "$tmp/all.tsv"
-: > "$tmp/silent"
-for m in $(git ls-files '*kama.json' | grep -v 'kama_workspace.json'); do
-    rows=$("$KAMA" check "$m" --probe-modules 2>"$tmp/one.err" | grep '^kama-module' || true)
-    if [ -z "$rows" ]; then
-        echo "$m ($(head -1 "$tmp/one.err"))" >> "$tmp/silent"
-    else
-        printf '%s\n' "$rows" >> "$tmp/all.tsv"
-    fi
-done
-
-# The remainder: tracked files no `kama.json` owns. `--each` is right for exactly these — they ARE loose
-# single-file programs — and it is where the loose derivation gets swept. xfail fixtures are excluded
-# because they are MEANT not to compile; a probe row from one says nothing.
-owned() {   # is any kama.json at or above this file's directory?
-    d=${1%/*}
-    while [ -n "$d" ] && [ "$d" != "." ]; do
-        [ -f "$d/kama.json" ] && return 0
-        case "$d" in */*) d=${d%/*} ;; *) d="." ;; esac
-    done
-    [ -f "kama.json" ]
-}
-: > "$tmp/loose"
-for f in $(git ls-files '*.kama' | grep -v '^tests/xfail/'); do
-    owned "$f" || echo "$f" >> "$tmp/loose"
-done
-"$KAMA" check --each $(cat "$tmp/loose") --probe-modules 2>/dev/null | grep '^kama-module' >> "$tmp/all.tsv" || true
-
-[ -s "$tmp/all.tsv" ] || { echo "check-modules: the corpus sweep produced no rows" >&2; exit 1; }
-
-# THE assertion, and it maintains itself rather than resting on a list that rots: for every file that
-# declares a `namespace`, if a project owns it then its derived module must BE that declaration. That is
-# the fact the whole cutover rests on — the derivation reproduces every declaration before any of them is
-# deleted — and it is stated per file, so a new fixture whose layout does not support the namespace it
-# claims lands here by construction.
-#
-# A file no project owns is the 2e population: nothing derives a module for it (it is a loose file in its
-# own root), so the derivation has nothing to be wrong about. Counted below, never asserted on.
-git grep -l '^namespace ' -- '*.kama' | sort > "$tmp/declaring"
-: > "$tmp/wrong"
-: > "$tmp/unmeasured"
-while read -r f; do
-    owned "$f" || continue
-    want=$(sed -n 's/^namespace  *\([A-Za-z_][A-Za-z0-9_:]*\) *;.*/\1/p' "$f" | head -1)
-    got=$(awk -F'\t' -v want="$ROOT/$f" '$2 == want { print $4; exit }' "$tmp/all.tsv")
-    if   [ -z "$got" ];        then echo "  $f (declares \`$want\`, but no probe row reached it)" >> "$tmp/unmeasured"
-    elif [ "$got" != "$want" ]; then echo "  $f: declares \`$want\`, derives \`$got\`" >> "$tmp/wrong"
-    fi
-done < "$tmp/declaring"
-
-decl_total=$(wc -l < "$tmp/declaring" | tr -d ' ')
-if [ -s "$tmp/wrong" ]; then
-    bad "a file's derived module disagrees with the namespace it declares:"
-    cat "$tmp/wrong" >&2
-elif [ -s "$tmp/unmeasured" ]; then
-    bad "a file in a project declares a namespace no probe row reached — the sweep is not measuring it:"
-    cat "$tmp/unmeasured" >&2
-else
-    ok "every declaring file a project owns derives exactly the namespace it declares ($decl_total declare one in all)"
-fi
-
-# A mismatch anywhere else — a file with no declaration to compare, or one in the loose sweep — would be
-# the derivation contradicting itself, so it is a failure independent of the per-file walk above.
-mm=$(awk -F'\t' '$5=="mismatch" { print "  " $2 " (declared " $3 ", derived " $4 ")" }' "$tmp/all.tsv")
-[ -z "$mm" ] && ok "no other declared/derived disagreement anywhere in the sweep" \
-             || { bad "a declared/derived disagreement outside the declaring set:"; printf '%s\n' "$mm" >&2; }
-
-# The blind spot, stated out loud. These are not failures and not passes — they are the measure of what
-# this probe cannot answer, and they only shrink when the corpus gains manifests (or, for the last
-# column, when phase 2e deletes the declarations outright).
-#
-# ⚠️ And the part a count cannot show: THE EMBEDDED PRELUDE IS NOT IN THIS POPULATION AT ALL. It reaches
-# the emitter through setPrelude/addPreludeModule at setup, never through loadProgramUnits, so no probe
-# row is ever emitted for it — `<prelude>` and `<prelude>/std/memory/*` are unmeasured here, and their
-# identity is the open question §2f.30 flags. `synthetic` below is a TRIPWIRE, not coverage: it should
-# read 0 forever, and a non-zero would mean the population moved under this guard.
-echo "  blind spot: $(awk -F'\t' '$6=="loose"{n++} END{print n+0}' "$tmp/all.tsv") loose rows, \
-$(awk -F'\t' '$5=="declared-only"{n++} END{print n+0}' "$tmp/all.tsv") declaring a namespace nothing derives; \
-the embedded prelude is outside this probe entirely (synthetic tripwire: \
-$(awk -F'\t' '$5=="synthetic"{n++} END{print n+0}' "$tmp/all.tsv"))"
-
-# A project the sweep could not enter is not a failure — three fixtures declare `dependencies` whose view
-# only `kama pkg install` materializes, and installing would write into the worktree (check-clean-tree
-# forbids it) — but it MUST be named, or the sweep silently shrinks as the corpus grows.
-if [ -s "$tmp/silent" ]; then
-    echo "  note: $(wc -l < "$tmp/silent" | tr -d ' ') project(s) emitted no rows, so nothing in them was measured:"
-    sed 's/^/        /' "$tmp/silent"
-fi
-
-# ---------------------------------------------------------------------------------------------------
-echo "check-modules: the derived module is what the C symbol is built from"
-
-# §1 and §2 measure the DERIVATION. Nothing above them says the emitter USES it — `--probe-modules` would
-# report the same rows with ctxOf still reading the `namespace` declaration, which is exactly what it did
-# through 2a and 2b. So build the §1 fixture, whose answers are known by construction, and read the
-# symbols back out of the emitted C. This is the assertion that phase 2c actually happened.
-#
-# Note what `deriv__rootHelper` pins: app.kama declares NO namespace and never could have been public
-# before, because a file's identity came from a declaration it does not carry. It is `deriv`'s root module
-# now because of where it sits. (`main` is exempt from scoping in both directions — it is `kama_main`.)
+# Note what `deriv__rootHelper` pins: app.kama says nothing about where it lives and could not have been
+# public at all before phase 2, because a file's identity came from a declaration it does not carry. It is
+# `deriv`'s root module now because of where it SITS. (`main` is exempt from scoping in both directions —
+# it is `kama_main`.)
 mkdir -p "$tmp/c"
 if ! "$KAMA" build "$p/kama.json" -o "$tmp/c/app" --keep-c > "$tmp/build.log" 2>&1; then
     echo "check-modules: FAIL — the derivation fixture does not build:" >&2
@@ -238,16 +99,15 @@ emitted deriv__tidy__o      "a \`name\` override reaches the symbol, not the fol
 emitted deriv__net__d       "an unlisted folder's file carries its nearest listed ancestor's scope"
 emitted deriv__vendored__v  "...at any depth"
 
-# The blind spot §2 reports but cannot enter: the smart-pointer triad reaches the emitter as
-# `<prelude>/std/memory/*.kama` — synthetic units with NO PATH, so no path→module derivation can reach
-# them and their module is stated instead, in KamaPreludeModule::module.
+# The one file set no path→module derivation can reach: the smart-pointer triad arrives as
+# `<prelude>/std/memory/*.kama`, synthetic units with NO PATH, so their module is STATED instead, in
+# KamaPreludeModule::module.
 #
-# ⚠️ Be precise about what this assertion is worth TODAY, because it is easy to over-claim and I did:
-# breaking the driver's synthetic arm does NOT fail this, since lib/std/memory/*.kama still declare
-# `namespace std::memory` and ctxOf's declaration rung catches them. (Measured — a compiler was built
-# with that arm returning "" and the whole guard stayed green.) What this pins is the SYMBOL: the triad
-# emits under its module and not under a file-private scope. It becomes the guard on the stated module
-# in 2e, when the declaration rung is deleted and nothing else can produce this name.
+# ⚠️ This assertion only became load-bearing in 2e, and the difference was measured both times. Through
+# 2c/2d, breaking the driver's synthetic arm did NOT fail it: lib/std/memory/*.kama still declared
+# `namespace std::memory` and ctxOf's declaration rung caught them, so a compiler built with that arm
+# returning "" stayed green. With the declaration deleted, nothing else can produce this name — a
+# compiler built that way now fails to build a one-line `new int32()` program at all.
 if printf '%s\n' "$syms" | grep -qE '^_F[0-9]+__(Owned|Shared|Weak)'; then
     bad "the embedded triad lost its module and fell back to a file-private scope"
 elif grep -qE '\bstd__memory__Owned' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null; then

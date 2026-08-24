@@ -425,7 +425,6 @@ static struct name_value keywords [] = {
     {"int64",       INT64},
     {"int8",        INT8},
     {"match",       MATCH},
-    {"namespace",   NAMESPACE},
     {"new",         NEW},
     {"null",        NULL_LITERAL},
     {"operator",    OPERATOR},

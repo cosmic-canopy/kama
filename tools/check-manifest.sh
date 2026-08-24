@@ -211,7 +211,7 @@ printf '{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { "."
 # the package must not resolve. Before the gate a flat listing picked it up, and the package was
 # importable by a layout it had never declared — the mirror of the bug the key exists to prevent, and
 # invisible until a consumer's build changed shape underneath them.
-printf 'namespace geo;\nexport { v };\nfn int32 v() { return 7; }\n' > "$dep/geo/geo.kama"
+printf 'export { v };\nfn int32 v() { return 7; }\n' > "$dep/geo/geo.kama"
 "$KAMA" pkg install "$dep/app/kama.json" >"$tmp/o" 2>"$tmp/e" \
     || { bad "the path dependency would not install"; head -2 "$tmp/e" >&2; }
 if "$KAMA" build "$dep/app/kama.json" -o "$dep/out.bin" >"$tmp/o" 2>"$tmp/e"; then
@@ -343,7 +343,7 @@ reject nest 'projects do not nest' "a kama.json inside \`source\` is refused"
 rm -rf "$tmp/nest/src/inner"
 mkdir -p "$tmp/nest/vendor/inner/src"
 printf '{ "name": "inner", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$tmp/nest/vendor/inner/kama.json"
-printf 'namespace inner;\nexport { w };\nfn int32 w() { return 1; }\n' > "$tmp/nest/vendor/inner/src/inner.kama"
+printf 'export { w };\nfn int32 w() { return 1; }\n' > "$tmp/nest/vendor/inner/src/inner.kama"
 accept nest "...while one BESIDE it is just another project"
 
 # ---------------------------------------------------------------------------------------------------
@@ -374,15 +374,15 @@ ws="$tmp/ws"
 mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from stdin
     rm -rf "$ws"; mkdir -p "$ws/libs/core/src" "$ws/libs/net/src" "$ws/libs/app/src"
     printf '{ "name": "core", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ws/libs/core/kama.json"
-    printf 'namespace core;\nexport { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/core/src/core.kama"
+    printf 'export { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/core/src/core.kama"
     printf '%s\n' '{ "name": "net", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "core": { "path": "../core" } } }' > "$ws/libs/net/kama.json"
-    printf 'namespace net;\nimport core::{ v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
+    printf 'import core::{ v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
     printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "net": { "path": "../net" } } }' > "$ws/libs/app/kama.json"
-    printf 'namespace app;\nimport net::{ u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
+    printf 'import net::{ u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
     cat > "$ws/kama_workspace.json"
 }
 
@@ -469,7 +469,7 @@ printf '{ "name": "acme", "version": "0.1.0", "kind": "library", "modules": { ".
 wsreject 'a workspace root is not a project' "a kama.json beside a kama_workspace.json is refused"
 
 # ---------------------------------------------------------------------------------------------------
-echo "check-manifest: a project's name is its root namespace"
+echo "check-manifest: a project's name is its root module"
 
 # §2a.2. `kama seed` has refused a hyphenated name since 1a — `import my-lib::{ … }` is a parse error, so
 # the name is a dead end and refusing it beats shipping one. This is that rule reaching the MANIFEST,
@@ -679,7 +679,7 @@ reject modnestroot 'belongs at the top of `modules`' "a nested \".\""
 proj moddeep < "$tmp/moddeep.json"
 reject moddeep 'nests more than 8 deep' "a module map nested past the depth backstop"
 
-# A workspace has no `source` and no root namespace, so there is nothing for a module map to be relative
+# A workspace has no `source` and no root module, so there is nothing for a module map to be relative
 # to — and §2a's extractability invariant forbids a project's identity depending on this file at all.
 # Its own refusal rather than the generic unknown-key one, because the reason is specific.
 mkws <<'JSON'

@@ -41,14 +41,14 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 # M4.6 fixture: a buffer that has NEVER parsed — `p.` on line 5 is a syntax error, so there is no
 # last-good index at all. This is the state a NEW file is in the first time completion is wanted.
 NURI="file:///new.kama"
-NEWB='namespace nb;\ntype value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn int32 main() {\n    P p;\n    p.\n    return 0;\n}\n'
+NEWB='type value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn int32 main() {\n    P p;\n    p.\n    return 0;\n}\n'
 
 # M4.9 fixture: the campaign-exit STAMP_LOC checklist. A generic type's decl name and a named ctor's
 # name are both built mid-action from a raw IDENTIFIER, so without an explicit stamp they inherit their
 # whole production's span. That is a DATA-LOSS bug, not cosmetics: rename REPLACES the range it is handed,
 # so renaming `Box` would have overwritten `Box<T>` and deleted the type-parameter list.
 SPURI="file:///span.kama"
-SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntype resource R { public ctor make() { } ~R() { } }\n'
+SPAN='type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }\ntype resource R { public ctor make() { } ~R() { } }\n'
 
 # Contract-model M4 fixture: `type intrinsic <…> implements C`. The enclosing type of a method here has no
 # ClassDeclarationNode at all — the shape the retroactive block used to have, and `enclosingCallable` had an arm for
@@ -61,7 +61,7 @@ SPAN='namespace sp;\ntype value Box<T> { public T v; public ctor of(T v) { this.
 # The names are deliberately unique across the whole session, because `expect` matches the transcript as
 # one string and cannot scope a substring to the response that produced it.
 IIURI="file:///intrinsic.kama"
-IIB='namespace ib;\ntype contract Weighable { fn int32 weight(ref This wpeer); }\ntype intrinsic <int8, int16> implements Weighable {\n    public fn int32 weight(ref This wpeer) { int32 wshared = 1; return wshared + cast<int32>(wp); }\n}\ntype intrinsic <float32, float64> implements Weighable {\n    <float32> { public fn int32 weight(ref This wpeer) { int32 wsection = 2; return wsection + cast<int32>(wp); } }\n    <float64> { public fn int32 weight(ref This wpeer) { return 4; } }\n}\n'
+IIB='type contract Weighable { fn int32 weight(ref This wpeer); }\ntype intrinsic <int8, int16> implements Weighable {\n    public fn int32 weight(ref This wpeer) { int32 wshared = 1; return wshared + cast<int32>(wp); }\n}\ntype intrinsic <float32, float64> implements Weighable {\n    <float32> { public fn int32 weight(ref This wpeer) { int32 wsection = 2; return wsection + cast<int32>(wp); } }\n    <float64> { public fn int32 weight(ref This wpeer) { return 4; } }\n}\n'
 
 # M5.3/M5.4 fixture: THREE independent syntax errors at three grains — a malformed class member (LSP
 # line 2), and a missing semicolon in each of two DIFFERENT functions (LSP lines 6 and 10). Before error
@@ -127,7 +127,7 @@ TOKGURI="file:///semtokgen.kama"
 TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
 
 QURI="file:///shapes.kama"
-SHP='namespace t;\ntype value Point { public int32 x;   public ctor zero() { this.x = 0; } }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p = Point.zero(); Point q = mid(a: p); return q.x; }\n'
+SHP='type value Point { public int32 x;   public ctor zero() { this.x = 0; } }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p = Point.zero(); Point q = mid(a: p); return q.x; }\n'
 
 # A `file://` URI the SERVER can resolve back to a real file. The in-memory buffers above use invented
 # paths and never get opened, but the two below are read off disk, so their URI has to name the file the
@@ -146,13 +146,13 @@ furi() {
 # the imported DynamicArray resolves (no false "does not export"), and cross-module go-to-def into the std
 # source. URI must be the real path so imports resolve relative to it + the stdlib.
 IURI=$(furi "$ROOT/tests/query/imports.kama")
-IMP='namespace importsprobe;\nimport std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
+IMP='import std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
 # M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
 # is just itself. Opening it and renaming `Widget` is exactly the case M3.3 had to refuse.
 WWURI=$(furi "$ROOT/tests/query/ws/src/widget.kama")
-WW='namespace wsproj;\nexport { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
+WW='export { Widget, defaultSize };\ntype value Widget {\n    public int32 size;\n    public ctor of(int32 size) { this.size = size; }\n}\nfn int32 defaultSize() { return 7; }\n'
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 SURI="file:///sem.kama"
@@ -169,7 +169,7 @@ SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 #   L7 `    int32 seeded = 7;`                         -> `seeded` 10..16 (NOT 10..20)
 #   L8 `    Code c = Code::Ok;`                        -> `Ok` 19..21 (NOT 13..21, which eats `Code::`)
 MURI="file:///bindings.kama"
-M34='namespace m34;\ntype enum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
+M34='type enum Code { Ok, Bad = 2 }\ntype value Cfg {\n    public int32 scale = 3;\n    public fn int32 twice(int32 bias) { return this.scale * bias; }\n}\nfn int32 run() {\n    int32 seeded = 7;\n    Code c = Code::Ok;\n    return seeded + cast<int32>(c);\n}\n'
 
 # M6 A2 fixture: a named-argument LABEL, single-file so it is renameable under the open-file rule. The
 # span is the whole point — rename REPLACES the range it is handed, so a span running past the label would
@@ -190,7 +190,6 @@ cat > "$dep/geo/kama.json" <<'JSON'
 { "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$dep/geo/src/geo.kama" <<'KAMA'
-namespace geo;
 export { Point };
 type value Point {
     public int32 x;
@@ -248,7 +247,6 @@ cat > "$tmp/impl/kama.json" <<'JSON'
 { "name": "impl", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$tmp/impl/src/sink.kama" <<'KAMA'
-namespace sink;
 import std::io::{Writer, IoError};
 type resource Sink implements Writer {
     int32 n;
@@ -257,7 +255,7 @@ type resource Sink implements Writer {
 }
 KAMA
 CIURI=$(furi "$tmp/impl/src/sink.kama")
-CISRC='namespace sink;\nimport std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
+CISRC='import std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
 DURI=$(furi "$dep/app/src/app.kama")
 DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
@@ -276,11 +274,10 @@ cat > "$frws/libs/config/kama.json" <<'JSON'
 { "name": "config", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$frws/libs/config/src/config.kama" <<'KAMA'
-namespace config;
 export { limit };
 fn int32 limit() { return 5; }
 KAMA
-printf 'namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/src/net.kama"
+printf 'import config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/src/net.kama"
 # Two steps, because the check only fires for an import that RESOLVES through a dependency view: declare
 # `config` and install (which materializes net/.kama/deps), then remove the declaration while the view
 # remains. That is a real editing state — someone dropped the line from the manifest — and it is the state
@@ -295,8 +292,8 @@ cat > "$frws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 FRURI=$(furi "$frws/libs/net/src/net.kama")
-FRSRC='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
-FRSRC2='namespace net;\nimport config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
+FRSRC='import config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
+FRSRC2='import config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
 
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$ROOT"'/tests/query","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
@@ -305,11 +302,11 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocumen
 # --- M2: open the decl-rich buffer, then query it ---
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$QURI"'","languageId":"kama","version":1,"text":"'"$SHP"'"}}}'
 frame '{"jsonrpc":"2.0","id":3,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"'"$QURI"'"}}}'
-frame '{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":3}}}'
-frame '{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":3}}}'
+frame '{"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":13}}}'
 # A body use-site ("a" in `return a`, kama 3:31 -> LSP 2:31) resolves to null BY DESIGN (M0 indexes decls +
 # signature type refs only; body use-sites are the M3 find-references walk).
-frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
+frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":31}}}'
 # --- M3: find-references + rename over the same buffer ---
 # 8:  references on the Point DECL name (LSP 1:11), includeDeclaration -> decl + both signature refs + both body refs.
 # 9:  the same query with includeDeclaration:false -> the decl's own range must be absent.
@@ -319,22 +316,22 @@ frame '{"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocu
 # 13: prepareRename on the local `a` (LSP 2:31) -> null (locals are M3.4).
 # 14: rename Point -> Pnt: a WorkspaceEdit with one TextEdit per reference, all in this file.
 # 15: rename to a KEYWORD must be refused (the lexer's own table decides, via kamaIsKeyword).
-frame '{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":false}}}'
-frame '{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":17},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":51},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":12,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11}}}'
-frame '{"jsonrpc":"2.0","id":13,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":31}}}'
-frame '{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"newName":"Pnt"}}'
-frame '{"jsonrpc":"2.0","id":15,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":11},"newName":"return"}}'
+frame '{"jsonrpc":"2.0","id":8,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":0,"character":11},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":9,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":0,"character":11},"context":{"includeDeclaration":false}}}'
+frame '{"jsonrpc":"2.0","id":10,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":17},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":11,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":51},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":12,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":0,"character":11}}}'
+frame '{"jsonrpc":"2.0","id":13,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":1,"character":31}}}'
+frame '{"jsonrpc":"2.0","id":14,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":0,"character":11},"newName":"Pnt"}}'
+frame '{"jsonrpc":"2.0","id":15,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":0,"character":11},"newName":"return"}}'
 # --- module loading: open the import-using file; its imports resolve, so diagnostics are empty and
 #     go-to-def on DynamicArray (kama 3:15 -> LSP 2:15) jumps into the std::collections source ---
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IURI"'","languageId":"kama","version":1,"text":"'"$IMP"'"}}}'
-frame '{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+frame '{"jsonrpc":"2.0","id":7,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":15}}}'
 # 16: the M3.3 SAFETY GUARD. DynamicArray is declared in std and used across several std files, so a rename
 #     here would rewrite files the user can't see — and the loaded-unit set still isn't every user of the
 #     symbol. Rename must REFUSE rather than half-rewrite. (Lifted by workspace indexing in M3.5.)
-frame '{"jsonrpc":"2.0","id":16,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15},"newName":"Foo"}}'
+frame '{"jsonrpc":"2.0","id":16,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":15},"newName":"Foo"}}'
 # --- SEMANTIC diagnostics: an undeclared type in a BODY. Everything above asserts on a PARSE error,
 #     because semantic diagnostics used to be too incomplete to test — an unknown body type resolved to
 #     nothing and was emitted verbatim, so `kama check` said OK and the editor showed a clean file that
@@ -345,14 +342,14 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 # 25:    references on the field `scale` -> its `this.scale` use, proving the member-access span is the
 #        name and not the receiver. 26: a full rename of a local. 27: hover reports the binding kind.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$MURI"'","languageId":"kama","version":1,"text":"'"$M34"'"}}}'
-frame '{"jsonrpc":"2.0","id":20,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12}}}'
-frame '{"jsonrpc":"2.0","id":21,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":4,"character":33}}}'
-frame '{"jsonrpc":"2.0","id":22,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18}}}'
-frame '{"jsonrpc":"2.0","id":23,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":1,"character":22}}}'
-frame '{"jsonrpc":"2.0","id":24,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":8,"character":20}}}'
-frame '{"jsonrpc":"2.0","id":25,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":18},"context":{"includeDeclaration":false}}}'
-frame '{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":12},"newName":"total"}}'
-frame '{"jsonrpc":"2.0","id":27,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":9,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":20,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":6,"character":12}}}'
+frame '{"jsonrpc":"2.0","id":21,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":3,"character":33}}}'
+frame '{"jsonrpc":"2.0","id":22,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":2,"character":18}}}'
+frame '{"jsonrpc":"2.0","id":23,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":0,"character":22}}}'
+frame '{"jsonrpc":"2.0","id":24,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":7,"character":20}}}'
+frame '{"jsonrpc":"2.0","id":25,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":2,"character":18},"context":{"includeDeclaration":false}}}'
+frame '{"jsonrpc":"2.0","id":26,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":6,"character":12},"newName":"total"}}'
+frame '{"jsonrpc":"2.0","id":27,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$MURI"'"},"position":{"line":8,"character":13}}}'
 # --- M3.5: workspace indexing. Open widget.kama (a REAL on-disk file inside tests/query/ws, which holds
 #     a kama.json) and rename `Widget`. rootUri is tests/query and the nearest manifest below it is ws/,
 #     so the project is exactly those two files — and the rewrite must reach app.kama, which widget.kama
@@ -360,8 +357,8 @@ frame '{"jsonrpc":"2.0","id":27,"method":"textDocument/hover","params":{"textDoc
 #     symbol search. 31: didChangeWatchedFiles is accepted (a notification, so silence == success; the
 #     assertion is that it does not come back as "method not found").
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$WWURI"'","languageId":"kama","version":1,"text":"'"$WW"'"}}}'
-frame '{"jsonrpc":"2.0","id":28,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":2,"character":11},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":29,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":2,"character":11},"newName":"Gadget"}}'
+frame '{"jsonrpc":"2.0","id":28,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":1,"character":11},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":29,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$WWURI"'"},"position":{"line":1,"character":11},"newName":"Gadget"}}'
 frame '{"jsonrpc":"2.0","id":30,"method":"workspace/symbol","params":{"query":"efaultSi"}}'
 frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$WWURI"'","type":2}]}}'
 # --- M3.5: an installed DEPENDENCY. 32: rename on a type declared in .kama/deps must REFUSE (it is not
@@ -380,26 +377,26 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 #       char 17 = the `P` of the first `Point` -> a bare position
 #     17: member completion.  18: argument-LABEL completion.  19: signature help, active parameter 0.
 #     35: bare completion.    36: signature help outside any call -> null.
-frame '{"jsonrpc":"2.0","id":17,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":71}}}'
-frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":55}}}'
-frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":55}}}'
-frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":73}}}'
-frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":3,"character":73}}}' 
+frame '{"jsonrpc":"2.0","id":17,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":71}}}'
+frame '{"jsonrpc":"2.0","id":18,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":55}}}'
+frame '{"jsonrpc":"2.0","id":19,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":55}}}'
+frame '{"jsonrpc":"2.0","id":35,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":73}}}'
+frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"'"$QURI"'"},"position":{"line":2,"character":73}}}' 
 # --- M4.6: a buffer that never parsed. Completion repairs by blanking the CURSOR'S LINE and
 #     re-analyzing — the lexical context still comes from the untouched text, so `p.` is not lost.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$NURI"'","languageId":"kama","version":1,"text":"'"$NEWB"'"}}}'
-frame '{"jsonrpc":"2.0","id":37,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":6}}}'
-frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":4,"character":4}}}' 
+frame '{"jsonrpc":"2.0","id":37,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":3,"character":6}}}'
+frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":3,"character":4}}}' 
 # --- M4.7: import paths, over the real on-disk imports.kama buffer. Line 2 is
 #     `import std::collections::{DynamicArray};` (LSP line 1): char 12 is after `std::`, char 26 is
 #     inside the symbol list.
-frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":12}}}'
-frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":26}}}' 
+frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":12}}}'
+frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":26}}}' 
 # --- M4.9: the stamped spans. 41: a GENERIC type's decl name must stop before `<T>`. 42: a named ctor's
 #     name spans just the name, not the declarator.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SPURI"'","languageId":"kama","version":1,"text":"'"$SPAN"'"}}}'
-frame '{"jsonrpc":"2.0","id":41,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":1,"character":11}}}'
-frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":2,"character":32}}}'
+frame '{"jsonrpc":"2.0","id":41,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":0,"character":11}}}'
+frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$SPURI"'"},"position":{"line":1,"character":32}}}'
 # --- M5.2: the parse cache must be INVISIBLE. Every request above already ran against a warm cache
 #     (the server enables it for its whole life), so 43/44 pin the two ways it could go wrong and not
 #     be noticed: a stale entry surviving an eviction, and a served unit carrying the WRONG PATH
@@ -408,9 +405,9 @@ frame '{"jsonrpc":"2.0","id":42,"method":"textDocument/prepareRename","params":{
 #     reachable by two spellings starts answering with the other's name, silently rewriting every
 #     go-to-def URI. Both requests repeat id 7's query, so the expected Location is identical.
 frame '{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{"changes":[{"uri":"'"$IURI"'","type":2}]}}'
-frame '{"jsonrpc":"2.0","id":43,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+frame '{"jsonrpc":"2.0","id":43,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":15}}}'
 frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":2},"contentChanges":[{"text":"'"$IMP"'"}]}}'
-frame '{"jsonrpc":"2.0","id":44,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":15}}}'
+frame '{"jsonrpc":"2.0","id":44,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":15}}}'
 # --- M5.3/M5.4: error recovery reaches the editor. 45: the outline off a PARTIAL parse. 46: hover on a
 #     type whose own body contained the error, proving the index is live rather than a stale last-good.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$RURI"'","languageId":"kama","version":1,"text":"'"$RECOV"'"}}}'
@@ -453,23 +450,23 @@ frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDoc
 # --- M6 B3f: a module PATH segment. `$IURI` was opened above with the COMPACT $IMP buffer (three lines),
 #     not the ten-line file on disk — take the coordinates from $IMP:
 #     L1 `import std::collections::{DynamicArray};` -> `std` at 7, `collections` at 12.
-frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
-frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
-frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
 # --- M6 B3c: a project type implementing a STD contract. F2 on its `write` must REFUSE — the contract's
 #     own declaration lives in lib/std and is not ours to rewrite, and renaming only our half would leave
 #     the type no longer satisfying Writer. 66: prepareRename still OFFERS (it is a real symbol here).
 #     67: the rename itself is refused, by the group-wide ownership check.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CIURI"'","languageId":"kama","version":1,"text":"'"$CISRC"'"}}}'
-frame '{"jsonrpc":"2.0","id":66,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"context":{"includeDeclaration":true}}}'
-frame '{"jsonrpc":"2.0","id":67,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":4,"character":37},"newName":"emit"}}'
+frame '{"jsonrpc":"2.0","id":66,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":3,"character":37},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":67,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CIURI"'"},"position":{"line":3,"character":37},"newName":"emit"}}'
 # --- contract model M4: completion inside a `type intrinsic` body, in BOTH member lists. Character
 #     positions are the cursor sitting just after the `pe` in `cast<int32>(pe` on each line.
 #     69: the shared body -> its param `wpeer` and its local `wshared`.  70: the `<float32>` SECTION ->
 #     `wsection`, which exists in no other body, so it can only come from the section's own member list.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IIURI"'","languageId":"kama","version":1,"text":"'"$IIB"'"}}}'
-frame '{"jsonrpc":"2.0","id":69,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":3,"character":95}}}'
-frame '{"jsonrpc":"2.0","id":70,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":6,"character":109}}}'
+frame '{"jsonrpc":"2.0","id":69,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":2,"character":95}}}'
+frame '{"jsonrpc":"2.0","id":70,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":5,"character":109}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -504,7 +501,7 @@ expect '"diagnostics":[]'                            "didChange to a valid buffe
 
 echo "check-lsp: M2 interactive features (hover / go-to-definition / document symbols)"
 expect '"id":3,"result":[{"name":"Point","kind":5'            "documentSymbol: Point value -> SymbolKind.Class(5)"
-expect '"selectionRange":{"start":{"line":1,"character":11}'  "documentSymbol: Point name range at LSP 1:11"
+expect '"selectionRange":{"start":{"line":0,"character":11}'  "documentSymbol: Point name range at LSP 1:11"
 expect '"name":"mid","kind":12'                               "documentSymbol: mid -> SymbolKind.Function(12)"
 expect '"id":4,"result":{"uri":"file:///shapes.kama"'         "definition: type ref -> file:// Location"
 expect '"range":{"start":{"line":1,"character":11}'           "definition: lands on the Point decl name (LSP 1:11)"
@@ -513,15 +510,15 @@ expect '"id":6,"result":{"contents":{"kind":"plaintext","value":"param a"}}'    
 
 echo "check-lsp: M3 find-references"
 expect '"id":8,"result":[{"uri":"file:///shapes.kama"'        "references: returns Locations in this file"
-expect '"start":{"line":3,"character":17}'                    "references: BODY use-site 'Point p' (LSP 3:17) is indexed"
-expect '"start":{"line":3,"character":41}'                    "references: BODY use-site 'Point q' (LSP 3:41) is indexed"
-expect '"id":11,"result":[{"uri":"file:///shapes.kama","range":{"start":{"line":2,"character":9}' \
+expect '"start":{"line":2,"character":17}'                    "references: BODY use-site 'Point p' (LSP 2:17) is indexed"
+expect '"start":{"line":2,"character":41}'                    "references: BODY use-site 'Point q' (LSP 2:41) is indexed"
+expect '"id":11,"result":[{"uri":"file:///shapes.kama","range":{"start":{"line":1,"character":9}' \
                                                               "references: a CALL resolves to the fn decl (resolveFunc hook)"
-expect '"start":{"line":3,"character":51}'                    "references: the call site itself (LSP 3:51) is indexed"
+expect '"start":{"line":2,"character":51}'                    "references: the call site itself (LSP 2:51) is indexed"
 
 echo "check-lsp: M3 rename"
-expect '"id":12,"result":{"start":{"line":1,"character":11}'  "prepareRename: the Point identifier range"
-expect '"id":13,"result":{"start":{"line":2,"character":31},"end":{"line":2,"character":32}}' \
+expect '"id":12,"result":{"start":{"line":0,"character":11}'  "prepareRename: the Point identifier range"
+expect '"id":13,"result":{"start":{"line":1,"character":31},"end":{"line":1,"character":32}}' \
                                                               "prepareRename: a parameter use is renameable and spans just the name (M3.4)"
 expect '"id":14,"result":{"changes":{"file:///shapes.kama":[' "rename: a WorkspaceEdit keyed by this file's URI"
 expect '"newText":"Pnt"'                                      "rename: each edit carries the new name"
@@ -536,17 +533,17 @@ expect 'this name is also declared outside the project'   "...and now says WHY: 
 echo "check-lsp: M3.4 bindings (locals / params / fields / enum members)"
 # Each of these asserts the FULL range. An `end` past the name is the data-loss bug the M3.4 grammar
 # pass fixed — rename replaces this range verbatim, so a wrong end silently eats the initializer/value.
-expect '"id":20,"result":{"start":{"line":7,"character":10},"end":{"line":7,"character":16}}' \
+expect '"id":20,"result":{"start":{"line":6,"character":10},"end":{"line":6,"character":16}}' \
                                           "prepareRename: local 'seeded' spans the NAME, not 'seeded = 7'"
-expect '"id":21,"result":{"start":{"line":4,"character":32},"end":{"line":4,"character":36}}' \
+expect '"id":21,"result":{"start":{"line":3,"character":32},"end":{"line":3,"character":36}}' \
                                           "prepareRename: param 'bias' starts at the name, not at its type"
-expect '"id":22,"result":{"start":{"line":3,"character":17},"end":{"line":3,"character":22}}' \
+expect '"id":22,"result":{"start":{"line":2,"character":17},"end":{"line":2,"character":22}}' \
                                           "prepareRename: field 'scale' spans the NAME, not 'scale = 3'"
-expect '"id":23,"result":{"start":{"line":1,"character":21},"end":{"line":1,"character":24}}' \
+expect '"id":23,"result":{"start":{"line":0,"character":21},"end":{"line":0,"character":24}}' \
                                           "prepareRename: enum member 'Bad' spans the NAME, not 'Bad = 2'"
-expect '"id":24,"result":{"start":{"line":8,"character":19},"end":{"line":8,"character":21}}' \
+expect '"id":24,"result":{"start":{"line":7,"character":19},"end":{"line":7,"character":21}}' \
                                           "prepareRename: a 'Code::Ok' use spans 'Ok', not the qualifier too"
-expect '"id":25,"result":[{"uri":"file:///bindings.kama","range":{"start":{"line":4,"character":52}' \
+expect '"id":25,"result":[{"uri":"file:///bindings.kama","range":{"start":{"line":3,"character":52}' \
                                           "references: 'this.scale' is a field use at the NAME, not the receiver"
 expect '"id":26,"result":{"changes":{"file:///bindings.kama":['  "rename: a local produces a WorkspaceEdit"
 expect '"newText":"total"'                                       "rename: the local's edits carry the new name"
@@ -573,9 +570,9 @@ expect '"id":29,"result":{"changes":{"'"$(furi "$ROOT/tests/query/ws/src/app.kam
 # the declaration. Until the grammar carried per-segment positions the export manifest was not a reference
 # at all, so this rename left the module exporting a name that no longer existed — it broke a file it had
 # just edited, the same class of silent under-apply as B3a.
-expect '/tests/query/ws/src/widget.kama":[{"range":{"start":{"line":1,"character":9},"end":{"line":1,"character":15}},"newText":"Gadget"}' \
+expect '/tests/query/ws/src/widget.kama":[{"range":{"start":{"line":0,"character":9},"end":{"line":0,"character":15}},"newText":"Gadget"}' \
                                                         "rename: ... and the export manifest of the declaring file (B3f)"
-expect '{"range":{"start":{"line":2,"character":11},"end":{"line":2,"character":17}},"newText":"Gadget"}' \
+expect '{"range":{"start":{"line":1,"character":11},"end":{"line":1,"character":17}},"newText":"Gadget"}' \
                                                         "rename: ... and the declaration itself, keyed separately"
 expect '"newText":"Gadget"'                             "rename: the cross-file edits carry the new name"
 expect '"id":30,"result":[{"name":"defaultSize","kind":12' \
@@ -689,9 +686,9 @@ expect '"id":65,"result":null'                           "prepareRename REFUSES 
 echo "check-lsp: M6 B3c contract methods are one name with their implementations"
 # find-references from the implementation reaches the CONTRACT's declaration in the stdlib, and the other
 # implementation of it — that is the group, and it is why the rename below has to refuse.
-expect '/lib/std/io/streams.kama","range":{"start":{"line":20,"character":30}' \
+expect '/lib/std/io/streams.kama","range":{"start":{"line":19,"character":30}' \
        "references from an impl reach the std contract's own declaration"
-expect '/lib/std/io/streams.kama","range":{"start":{"line":89,"character":37}' \
+expect '/lib/std/io/streams.kama","range":{"start":{"line":88,"character":37}' \
        "...and StringWriter, the stdlib's other implementation of it"
 expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
 expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"
@@ -732,9 +729,9 @@ expect '{"label":"DynamicArray","kind":7,"detail":"std::collections"}' "... nami
 echo "check-lsp: M4.9 stamped declaration spans"
 # Without the type_decl_head stamp this range ended at character 17 — i.e. it covered `Box<T>`, and a
 # rename would have replaced the whole thing, deleting `<T>`.
-expect '"id":41,"result":{"start":{"line":1,"character":11},"end":{"line":1,"character":14}}' \
+expect '"id":41,"result":{"start":{"line":0,"character":11},"end":{"line":0,"character":14}}' \
        "a generic type decl name spans the NAME, not Name<T>"
-expect '"id":42,"result":{"start":{"line":2,"character":30},"end":{"line":2,"character":34}}' \
+expect '"id":42,"result":{"start":{"line":1,"character":30},"end":{"line":1,"character":34}}' \
        "a named ctor spans its name, not the declarator"
 
 echo "check-lsp: M5.2 the parse cache is invisible"
@@ -923,7 +920,7 @@ rm -f "$CFGSRC/kama.local.json"
 
 # F. Strict validation reaches the editor: the same typo the BUILD rejects must squiggle here. Editor and
 #    build now agree about what is a valid flag name, not just about which decls survive.
-printf 'namespace cfgtypo;\n@compileFor(TELMETRY)\nfn int32 oops() { return 1; }\n' > "$CFGSRC/typo.kama"
+printf '@compileFor(TELMETRY)\nfn int32 oops() { return 1; }\n' > "$CFGSRC/typo.kama"
 CFGTYPO=$(cfgsession "$tmp/cfgF" "$tmp" "$CFGSRC/typo.kama")
 cfgexpect "$CFGTYPO" 'undeclared flag' "a typo'd @compileFor flag is a diagnostic, as it is for a build"
 

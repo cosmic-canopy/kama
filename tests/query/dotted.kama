@@ -1,4 +1,4 @@
-namespace dotted;
+// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
 
 type value Inner {
     public int32 deep;

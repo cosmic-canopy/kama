@@ -1,3 +1,2 @@
-namespace cola;
 export { val };
 fn int32 val() { return 1; }

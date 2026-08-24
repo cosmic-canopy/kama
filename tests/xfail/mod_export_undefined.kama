@@ -1,3 +1,2 @@
-namespace foo;
 export { ghost };                // no such declaration -> compile error
 fn int32 main() { return 0; }

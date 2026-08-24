@@ -1,3 +1,2 @@
-namespace modalias::geo;
 export { area };
 fn int32 area() { return 7; }

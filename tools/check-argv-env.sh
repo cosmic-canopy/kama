@@ -82,7 +82,6 @@ fi
 libdir="$tmp/xtu"
 mkdir -p "$libdir/lib"
 cat > "$libdir/lib/lib.kama" <<'KAMA'
-namespace lib;
 export { libArgCount };
 fn int32 libArgCount() { return args().count(); }
 KAMA

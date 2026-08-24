@@ -6,7 +6,7 @@
 // still passes a one-file, one-instantiation test — which is why this fixture is neither.
 //
 // Its own kama.json (with `sources`) keeps it a declared project, so it is never widened by inference.
-namespace genericprobe;
+// Its module is this file's FOLDER, read off the project's `modules` map (design/module-system.md §2b).
 
 export { Box, firstOr };
 

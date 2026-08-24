@@ -100,7 +100,6 @@ const char* completionKindName(CompletionKind k)
         case CompletionKind::Label:      return "label";
         case CompletionKind::Keyword:    return "keyword";
         case CompletionKind::Module:     return "module";
-        case CompletionKind::Namespace:  return "namespace";
         case CompletionKind::Constant:   return "constant";
     }
     return "symbol";
@@ -819,17 +818,25 @@ void CEmitter::buildPositions()
     _refIndex.clear();
     _modules.clear();
 
-    // (0) Which unit does a module PATH open? A file's own `namespace a::b;` declaration answers it, so
-    // no import-resolution state has to be threaded in from the driver. A DIRECTORY module is several
-    // units under one namespace — pick by lowest path spelling, never by map iteration order, or
-    // go-to-definition on the same import would land in a different file run to run.
+    // (0) Which unit does a module PATH open? The unit's own SCOPE answers it — the module its path put
+    // it in, which `_unitCtx` already holds in mangled form, so no import-resolution state has to be
+    // threaded in from the driver. (It used to be read off a `namespace a::b;` declaration; phase 2e
+    // deleted the keyword, and a file's identity is its folder.) A module is several units, so pick by
+    // lowest path spelling, never by map iteration order, or go-to-definition on the same import would
+    // land in a different file run to run.
+    //
+    // The RANGE is the start of the file. There is no declaration to point at any more, and that is the
+    // honest answer rather than a loss: what a module path names is a folder, and the file whose path
+    // sorts first is the nearest thing to a place to open.
     for (auto& u : _units) {
-        if (!u || !u->nameSpace || !u->nameSpace->name || !u->name) continue;
-        std::string key = "module:" + mangleNs(qualifiedName(u->nameSpace->name));
+        if (!u || !u->name) continue;
+        auto ctx = _unitCtx.find(u.get());
+        if (ctx == _unitCtx.end() || !ctx->second.isPublic || ctx->second.scope.empty()) continue;
+        std::string key = "module:" + ctx->second.scope;
         ModuleSite& ms = _modules[key];
         if (ms.unit && !(*u->name < *ms.unit->name)) continue;
         ms.unit  = u.get();
-        ms.range = rangeOfId(u->nameSpace->name);
+        ms.range = SrcRange{ 1, 1, 1, 1 };
     }
 
     // (1) Declaration names — one entry per user-unit DefSite (prelude/std have unit==nullptr, skipped).
@@ -996,20 +1003,8 @@ void CEmitter::buildPositions()
             if (u->importDeclarationList)
                 for (const auto& imp : *u->importDeclarationList)
                     if (imp && imp->modulePath) addModulePath(*imp->modulePath, imp->modulePathPos);
-            // `namespace a::b;` — the qualifier segments plus the name itself, which is the only one of
-            // these lists whose last element is a real identifier NODE rather than a bare string.
-            if (u->nameSpace && u->nameSpace->name && u->nameSpace->name->value) {
-                const IdentifierNode* n = u->nameSpace->name.get();
-                StringList names;
-                std::vector<SrcRange> pos;
-                if (n->qualifier && n->qualifierPos.size() == n->qualifier->size()) {
-                    names = *n->qualifier;
-                    pos   = n->qualifierPos;
-                }
-                names.push_back(n->value);
-                pos.push_back(SrcRange{ n->line, n->column, n->endLine, n->endColumn });
-                addModulePath(names, pos);
-            }
+            // A file used to name its own module here, with a `namespace a::b;` declaration. Phase 2e
+            // deleted it: a file's module is its folder, so there is no token in the source to index.
             // An export manifest. The key is `qualify(name)` — the same key the export-validation loop
             // builds, and deliberately NOT a scope search: SPEC requires a listed name to be a top-level
             // declaration in this very file.
@@ -2040,10 +2035,10 @@ void CEmitter::addNamespaceSymbols(const std::string& path, const QueryCtx& qc,
     for (auto& kv : _interfaces)        { if (!kv.second.isGenericInst) add(kv.first, CompletionKind::Contract, ""); }
     for (auto& kv : _genericContracts)  add(kv.first, CompletionKind::Contract, "");
     for (auto& kv : _funcs)             add(kv.first, CompletionKind::Function, "");
-    for (auto& n : _namespaces) {                    // nested namespaces (`std::` -> `collections`)
+    for (auto& n : _namespaces) {                    // nested modules (`std::` -> `collections`)
         std::string name;
         if (!leaf(n, name) || !seen.insert(name).second) continue;
-        out.push_back(CompletionItem{ name, CompletionKind::Namespace, "", dotted });
+        out.push_back(CompletionItem{ name, CompletionKind::Module, "", dotted });
     }
 }
 

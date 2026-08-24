@@ -46,10 +46,9 @@ trap 'rm -rf "$tmp"' EXIT
 # is the whole subject of this guard — it is simply handed over rather than found.
 mkdir -p "$tmp/lib/thing"
 cat > "$tmp/lib/thing/broken.kama" <<'EOF'
-namespace lib::thing;
 export { Leaky };
 // This signature names a raw pointer and carries no `unsafe`, so it is rejected. The declaration lives
-// HERE, on line 6 of THIS file — which is what the diagnostic has to say.
+// HERE, on line 5 of THIS file — which is what the diagnostic has to say.
 type value Leaky {
     public fn int32 peek(UnsafePtr<int32> p) { return 0; }
 }
@@ -61,13 +60,13 @@ EOF
 
 out=$("$KAMA" check "$tmp/app.kama" "$tmp/lib/thing/broken.kama" 2>&1 || true)
 
-if ! printf '%s' "$out" | grep -q 'broken\.kama:6'; then
+if ! printf '%s' "$out" | grep -q 'broken\.kama:5'; then
     echo "check-diag-file: FAIL — a diagnostic about an IMPORTED declaration does not name its own file."
-    echo "  expected a mention of broken.kama:6; got:"
+    echo "  expected a mention of broken.kama:5; got:"
     printf '%s\n' "$out" | sed 's/^/    /' | head -6
     exit 1
 fi
-if printf '%s' "$out" | grep -q 'app\.kama:6'; then
+if printf '%s' "$out" | grep -q 'app\.kama:5'; then
     echo "check-diag-file: FAIL — the declaration in broken.kama is reported against app.kama."
     echo "  line right, file wrong — the exact shape this guard exists for:"
     printf '%s\n' "$out" | sed 's/^/    /' | head -6
@@ -128,11 +127,10 @@ fi
 # `--strict-numeric` rows named a line past the end of the file they named.
 mkdir -p "$tmp/lib/body"
 cat > "$tmp/lib/body/deep.kama" <<'EOF'
-namespace lib::body;
 export { Deep };
 type value Deep {
     public ctor make() { }
-    // The bad initializer is on line 7 of THIS file, inside a BODY — nothing about it is visible to the
+    // The bad initializer is on line 6 of THIS file, inside a BODY — nothing about it is visible to the
     // collect pass, so only the emit walk can report it, and only this file owns it.
     public fn int32 oops() { int32 x = "not an int"; return 0; }
 }
@@ -144,9 +142,9 @@ EOF
 
 out4=$("$KAMA" check "$tmp/consumer.kama" "$tmp/lib/body/deep.kama" 2>&1 || true)
 
-if ! printf '%s' "$out4" | grep -q 'deep\.kama:7'; then
+if ! printf '%s' "$out4" | grep -q 'deep\.kama:6'; then
     echo "check-diag-file: FAIL — a diagnostic about an imported module's BODY does not name its own file."
-    echo "  expected a mention of deep.kama:7; got:"
+    echo "  expected a mention of deep.kama:6; got:"
     printf '%s\n' "$out4" | sed 's/^/    /' | head -6
     exit 1
 fi
@@ -165,12 +163,11 @@ fi
 # instantiates `Shared<T>` gets the prelude's line numbers stamped with the user's filename.
 mkdir -p "$tmp/lib/tmpl"
 cat > "$tmp/lib/tmpl/holder.kama" <<'EOF'
-namespace lib::tmpl;
 export { Holder };
 type value Holder<T> {
     public T item;
     public ctor make(T item) { this.item = item; }
-    // line 7, in a TEMPLATE body — re-walked once per instantiation, from the header pass
+    // line 6, in a TEMPLATE body — re-walked once per instantiation, from the header pass
     public fn int32 oops() { int32 x = "not an int"; return 0; }
 }
 EOF
@@ -181,9 +178,9 @@ EOF
 
 out5=$("$KAMA" check "$tmp/instantiator.kama" "$tmp/lib/tmpl/holder.kama" 2>&1 || true)
 
-if ! printf '%s' "$out5" | grep -q 'holder\.kama:7'; then
+if ! printf '%s' "$out5" | grep -q 'holder\.kama:6'; then
     echo "check-diag-file: FAIL — a diagnostic in an imported GENERIC body does not name the template's file."
-    echo "  expected a mention of holder.kama:7; got:"
+    echo "  expected a mention of holder.kama:6; got:"
     printf '%s\n' "$out5" | sed 's/^/    /' | head -6
     exit 1
 fi

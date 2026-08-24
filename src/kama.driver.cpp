@@ -618,22 +618,12 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
 
-// The name an `import` must write to reach this unit: the module its PATH puts it in, or — until 2e
-// deletes the declaration — the `namespace` it says. Same two rungs as CEmitter::ctxOf and in the same
-// order, because the resolver and the emitter answering differently is precisely the defect §1a found:
-// a file would be COMPILED into one scope and IMPORTED as another. Empty means nothing can name it.
-// Defined below, where the derivation it calls exists.
+// The name an `import` must write to reach this unit: the module its PATH puts it in, and nothing else.
+// A file used to be able to answer this with a `namespace` declaration, which is precisely the defect
+// §1a found — the resolver and the emitter could disagree, so a file was COMPILED into one scope and
+// IMPORTED as another. There is one source of truth now and CEmitter::ctxOf reads the same one. Empty
+// means nothing can name it. Defined below, where the derivation it calls exists.
 static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string& path);
-
-// A unit's namespace as an `a::b` key (empty for a private/no-namespace file).
-std::string unitNsKey(const SharedCompilationUnit& u)
-{
-    if (!u || !u->nameSpace || !u->nameSpace->name) return "";
-    std::string s; auto id = u->nameSpace->name;
-    if (id->qualifier) for (auto& seg : *id->qualifier) s += *seg + "::";
-    if (id->value) s += *id->value;
-    return s;
-}
 
 // ---- closure pruning: a directory import should not compile the directory ---------------------------
 // `import std::collections::{DynamicArray};` resolves to EVERY .kama in lib/std/collections/ — the `{…}`
@@ -657,7 +647,6 @@ struct ModuleIndex {
     std::vector<std::string>                    files;   // as resolved — the SPELLING parseFile was handed
     std::vector<SharedCompilationUnit>          units;   // parallel to files
     std::map<std::string, std::vector<size_t>>  byName;  // top-level name -> the files declaring it
-    bool homogeneous = true;   // every file declares the same namespace (the closure's premise)
     bool complete    = false;  // false if a file failed to parse: fall back, let the load path report it
 };
 
@@ -677,7 +666,6 @@ const ModuleIndex& moduleIndexFor(const std::vector<std::string>& files, ModuleI
     ModuleIndex ix;
     ix.files = files;
     ix.complete = true;
-    std::string ns;
     for (size_t i = 0; i < files.size(); ++i) {
         // Parsed in resolution order, and STOPPING at the first failure — the load path below re-reads
         // these same units rather than calling parseFile again, so a broken file is reported exactly
@@ -685,8 +673,6 @@ const ModuleIndex& moduleIndexFor(const std::vector<std::string>& files, ModuleI
         SharedCompilationUnit u = parseFile(files[i]);
         ix.units.push_back(u);
         if (!u) { ix.complete = false; break; }
-        std::string k = moduleKeyOf(u, files[i]);
-        if (i == 0) ns = k; else if (k != ns) ix.homogeneous = false;
         for (auto& n : u->topLevelNames) ix.byName[n].push_back(i);
     }
     return cache.emplace(key, std::move(ix)).first->second;
@@ -713,12 +699,13 @@ std::vector<std::string> closureOfModule(const std::vector<std::string>& files,
 
     const ModuleIndex& ix = moduleIndexFor(files, cache);
     if (!ix.complete)    return bail("parse failed");
-    // A package's `source` root is walked RECURSIVELY, so one package still spans several namespaces —
-    // which breaks the shared-namespace premise the reference closure rests on. `source` becoming
-    // singular removed the "several roots" half of the hazard, not this one. No fixture exhibits it
-    // today, which is exactly why it would land silently later. (The real repair is to key the closure on
-    // MODULE rather than on one namespace per package; that belongs with module identity, not here.)
-    if (!ix.homogeneous) return bail("mixed namespaces");
+    // There used to be a `mixed namespaces` bail here, on the premise that the reference closure needs
+    // every file in `files` to share one scope — true, and it was a real hazard while a package's `source`
+    // root was walked recursively and a file's scope came from a declaration it could put anything in.
+    // Neither holds now: `files` comes from resolveModuleFiles, which builds the set by asking
+    // moduleIdForFile about each candidate and keeping the ones whose module IS the one being imported.
+    // The premise is guaranteed by construction, so the check was dead code — MEASURED, not reasoned:
+    // built with a tripwire on that branch and ran the whole matrix on all three legs, and it never fired.
 
     std::vector<size_t>      work;
     std::vector<bool>        keep(ix.files.size(), false);
@@ -873,11 +860,6 @@ void timingDump(const char* what, const std::string& subject)
 }
 
 std::string owningPackageDir(const std::string& fromDir);   // defined below, beside the manifest loaders
-
-// `--probe-modules`, defined below beside moduleIdForFile — the derivation it reports on. Declared here
-// because loadProgramUnits is where both of its inputs exist at once.
-static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
-                              const std::vector<std::string>& paths);
 
 // ---- file -> module identity (§2b/§2e) -------------------------------------------------------------
 //
@@ -1074,14 +1056,13 @@ static std::string looseModuleFor(const std::string& absPath)
     return mod;
 }
 
-// Declared up beside unitNsKey, which is the rung it falls back to.
-static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string& path)
+// Declared up beside loadProgramUnits, which is what needs it first. The unit itself says nothing about
+// where it lives, so it is unused — kept in the signature because every call site has one in hand and a
+// future rung (a synthetic unit's stated module, §2f.30) would read it.
+static std::string moduleKeyOf(const SharedCompilationUnit&, const std::string& path)
 {
-    if (!path.empty() && path[0] != '<') {          // synthetic units have no path to derive from
-        const std::string derived = moduleIdForFile(path).full();
-        if (!derived.empty()) return derived;
-    }
-    return unitNsKey(u);                             // TEMPORARY — the rung 2e deletes
+    if (path.empty() || path[0] == '<') return std::string();   // synthetic: no path to derive from
+    return moduleIdForFile(path).full();
 }
 
 // Defined once DepSpec exists, beside the manifest loaders it wraps.
@@ -1159,7 +1140,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     ModuleIndexCache moduleIndex;    // per call, so it can never serve a unit staler than this analysis
     std::set<std::string> seen;      // resolved absolute paths already parsed
     // Namespaces already in the compilation, satisfying an import without a disk lookup. TWO states,
-    // because once a module can be loaded in PART, "is this namespace here?" stops being the question:
+    // because once a module can be loaded in PART, "is this module here?" stops being the question:
     //   whole   — every file of it is loaded; satisfies any symbol list, and a bare import.
     //   partial — only the files some earlier import needed. Satisfies a symbol list only if it declares
     //             every name asked for; otherwise the import is re-resolved and the closure pulls more.
@@ -1212,14 +1193,13 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // SAME DIRECTORY AND SAME MODULE, which is narrower than it looks and deliberately so. Directory,
     // because that is what a module is; the repo has four module NAMES living in more than one directory
     // (`shapes`, `geo`, `Graphics`, `lib` — unrelated fixture modules that merely share a name) and
-    // merging those would be wrong. Module, because a directory may today hold files that are not one:
-    // tests/query holds five programs in one directory, each with its own `namespace` and two of them
-    // declaring `main`, and pulling those together would be a duplicate-`main` error.
+    // merging those would be wrong. Module, because a directory need not be one: a file the derivation
+    // gives no module (a loose operand in the build's own root) is its own compilation, so nothing is
+    // pulled in beside it.
     //
-    // The key moved from `unitNsKey` to `moduleKeyOf` with 2d, which widened this in one visible way: a
-    // project's entry file now HAS a module (its root), where a file declaring no namespace used to have
-    // none and skip the scan entirely. So an editor session on `src/app.kama` now loads its folder's other
-    // files, which is what a module means. Cost is bounded and paid only where it buys something — worst
+    // 2d widened this in one visible way: a project's entry file now HAS a module (its root), where a
+    // file declaring no namespace used to have none and skip the scan entirely. So an editor session on
+    // `src/app.kama` now loads its folder's other files, which is what a module means. Cost is bounded and paid only where it buys something — worst
     // case in this repo is std::collections' 14 files, measured at ~10 ms, one-time.
     // `kama lsp` pays it once per session rather than per keystroke: the M5.2 parse cache is keyed on
     // path+mtime+size, and a sibling does not change while you type in another file.
@@ -1410,11 +1390,6 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             }
         }
     }
-    // `--probe-modules` (hidden, phase 2): one row per loaded unit, DERIVED module identity beside the
-    // `namespace` the file still declares. Called from here because both inputs are already in hand —
-    // `paths` is what parseFile was given, the unit carries its declaration — so measuring costs no
-    // plumbing through CEmitter at all. Defined down with moduleIdForFile, which it needs.
-    reportModuleProbe(units, paths);
     return !(strictImports && undeclaredImport);   // reported every one above, then fail once
 }
 
@@ -1631,21 +1606,6 @@ static bool g_strictNumeric = false;
 // KEPT rather than deleted — see `setProbeReport` for why: the walk still has a named residual, and reach
 // is the kind of thing that regresses without any fixture noticing.
 static bool g_probeTemplates = false;
-
-// `--probe-modules`: TSV on stdout, one row per compiled unit, comparing the module identity DERIVED
-// from its path and its project's `modules` map against the `namespace` the file still declares. Hidden,
-// for the same reason the two above are, and DELETED when phase 2 closes.
-//
-// It exists because swapping the emitter's source of truth from the declaration to the derivation is the
-// one step in this campaign that cannot be checked by reading: 91 files declare a namespace and the
-// derivation has to reproduce every one of them before anything is deleted. So the derivation ships
-// first as a measurement, `tools/check-modules.sh` reports through the corpus migration, and the same
-// guard turns a mismatch into a failure at the identity cutover.
-//
-// STDOUT, never `warning:` — run_tests.sh fails any fixture whose stderr matches /warning/i, and the
-// build path sends stdout to /dev/null, so the instrument is invisible to the harness and only its own
-// guard reads it.
-static bool g_probeModules = false;
 
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
@@ -1976,11 +1936,13 @@ static void configureEmitter(CEmitter& e)
     // which no path→module derivation can reach — and it DOES go through ctxOf. Its module is therefore
     // stated rather than derived, in KamaPreludeModule::module (src/kama.prelude.h).
     //
-    // What that header warns of — drop this and `std__memory__Owned` becomes `_F<n>__Owned` — is a
-    // prediction about phase 2e, NOT true today, and it was tested rather than reasoned about: build a
-    // compiler with this arm returning "" and everything stays green, because lib/std/memory/*.kama still
-    // declare `namespace std::memory` and ctxOf's declaration rung catches them. This arm is what carries
-    // their identity across the moment that line is deleted with the other 90.
+    // What that header warns of — drop this and `std__memory__Owned` becomes `_F<n>__Owned` — was a
+    // PREDICTION about phase 2e through 2c and 2d, and false at the time: a compiler built with this arm
+    // returning "" stayed entirely green, because lib/std/memory/*.kama still declared `namespace
+    // std::memory` and ctxOf's declaration rung caught them. 2e deleted both, so it is now TRUE, and
+    // measured again rather than assumed: with this arm returning "" the triad loses its identity and a
+    // one-line `new int32()` program no longer builds — `Owned` stops satisfying its own bounds. This is
+    // the ONLY thing naming the embedded modules now.
     e.setModuleResolver([](const std::string& unitPath) -> std::string {
         if (unitPath.empty()) return std::string();
         if (unitPath[0] == '<') {
@@ -2889,12 +2851,12 @@ struct ManifestReader {
                 if (key == "projects") { if (!wsProjectsObject()) return false; }
                 else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
                 // `modules` gets its own refusal rather than falling into the generic one below: a
-                // workspace has no `source` and no root namespace, so there is nothing for a module map
+                // workspace has no `source` and no root module, so there is nothing for a module map
                 // to be relative TO — and putting one here would make a project's identity depend on a
                 // file §2a's extractability invariant says it must never read.
                 else if (key == "modules")
                     return fail("`modules` belongs in a project's kama.json, not in kama_workspace.json — "
-                                "a workspace has no `source` and no root namespace for a module to hang "
+                                "a workspace has no `source` and no root module for a module to hang "
                                 "off, and a project must build identically whether or not this file is here");
                 else return fail("`" + key + "` does not belong in kama_workspace.json, which holds only "
                                  "`projects` and `dependencies` — a workspace is not a project");
@@ -2974,7 +2936,7 @@ struct ManifestReader {
                 if (!kamaIsIdentifier(ident)) {
                     std::string hint = ident;
                     for (char& c : hint) if (c == '-') c = '_';
-                    return fail("`name` is \"" + nm + "\", but a project's name is its root namespace and `"
+                    return fail("`name` is \"" + nm + "\", but a project's name is its root module and `"
                                 + ident + "` is not a legal kama identifier — nothing could write `import "
                                 + ident + "::{ … }`"
                                 + (kamaIsIdentifier(hint) ? ". Try \"" + hint + "\"" : ""));
@@ -3310,57 +3272,6 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
                 fromFile.c_str(), owner.c_str(), owner.c_str());
 }
 
-// `--probe-modules`: one TSV row per loaded unit — what the file DECLARES beside what its path DERIVES,
-// from its project's `modules` map or, with no manifest in play, from the loose root. See g_probeModules
-// for why this ships before the cutover it measures.
-//
-//     kama-module <path> <declared> <derived> <verdict> <origin>
-//
-// ORIGIN is separate from the verdict on purpose, because the two answer different questions: `project`
-// / `loose` / `synthetic` says WHO named the file, and the verdict says whether that answer agrees with
-// the declaration still in the source. Reading the verdict alone would hide the fact that the same file
-// derives `modbasic::math` when its project is named and `math` when it is handed over loosely — which
-// is not a defect but the whole of §2i, and the instrument has to be able to show it.
-//
-// The buckets that are not verdicts are the point (§7: a measurement hiding its own blind spot is worse
-// than none). `no-module` is a file nothing names — a loose file sitting in the root — and
-// `declared-only` is one that says something no derivation reproduces. Neither is dropped.
-//
-// ⚠️ And the blind spot a bucket CANNOT show: the embedded prelude is not in this population at all. It
-// reaches the emitter through setPrelude/addPreludeModule at setup, never through loadProgramUnits, so
-// no row is ever emitted for `<prelude>` or `<prelude>/std/memory/*`. The `synthetic` arm below is a
-// tripwire that should stay empty forever, not coverage — the prelude's identity is the open question
-// §2f.30 flags, and this probe says nothing about it.
-static void reportModuleProbe(const std::vector<SharedCompilationUnit>& units,
-                              const std::vector<std::string>& paths)
-{
-    if (!g_probeModules) return;
-    // Full-row dedupe, like `_strictNumericSeen`: `kama check --each` runs many programs in one process
-    // and every one of them re-enters the same stdlib modules.
-    static std::set<std::string> seenRow;
-    for (size_t k = 0; k < units.size() && k < paths.size(); ++k) {
-        if (!units[k]) continue;
-        const std::string& path     = paths[k];
-        const std::string  declared = unitNsKey(units[k]);
-        std::string derived, verdict, origin;
-        if (!path.empty() && path[0] == '<') { verdict = "synthetic"; origin = "synthetic"; }
-        else {
-            ModuleId id = moduleIdForFile(path);
-            derived = id.full();
-            origin  = id.inProject ? "project" : "loose";
-            verdict = derived.empty()     ? (declared.empty() ? "no-module" : "declared-only")
-                    : declared.empty()    ? "derived-only"
-                    : declared == derived ? "match"
-                                          : "mismatch";
-        }
-        const std::string row = "kama-module\t" + path + "\t" + (declared.empty() ? "-" : declared)
-                              + "\t" + (derived.empty() ? "-" : derived) + "\t" + verdict
-                              + "\t" + origin;
-        if (seenRow.insert(row).second) printf("%s\n", row.c_str());
-    }
-    fflush(stdout);
-}
-
 // Load a `kama.json` manifest → the `select.TARGET` catalog. Reuses ManifestReader (unknown keys
 // tolerated), so this is orthogonal to the flag load.
 static bool loadManifestTargets(const std::string& path, std::map<std::string, TargetSpec>& out,
@@ -3604,7 +3515,7 @@ static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>
     r.modulesOut = &out;
     r.nameOut    = &projectName;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
-    // A scoped package imports under its bare last segment, so THAT is the root namespace a module could
+    // A scoped package imports under its bare last segment, so THAT is the root module a module could
     // collide with — `@acme/geo` is imported as `geo`.
     if (!validateModules(out, importNameOf(projectName), err)) { out.clear(); return false; }
     return true;
@@ -6201,12 +6112,12 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
     if (ident.find('-') != std::string::npos) {
         std::string suggest = ident;
         for (char& c : suggest) if (c == '-') c = '_';
-        err = "a project's name is its root namespace, and '" + ident + "' is not a legal kama identifier "
+        err = "a project's name is its root module, and '" + ident + "' is not a legal kama identifier "
               "— try '" + suggest + "'";
         return false;
     }
     if (kamaIsKeyword(ident.c_str())) {
-        err = "'" + ident + "' is a kama keyword, so it cannot be a project's root namespace";
+        err = "'" + ident + "' is a kama keyword, so it cannot be a project's root module";
         return false;
     }
     if (ident == "std" || ident == "core") {
@@ -7901,7 +7812,6 @@ int main(int argc, char** argv)
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--strict-numeric")         g_strictNumeric = true;   // M5a: measure, don't reject (hidden)
         else if (a == "--probe-templates")        g_probeTemplates = true;  // size the template probe (hidden)
-        else if (a == "--probe-modules")          g_probeModules = true;    // derived vs declared module (hidden)
         else if (a == "--release")              { release = true;  releaseExplicit = true; }
         else if (a == "--debug")                { release = false; releaseExplicit = true; }
         else if (a == "--select" && i + 1 < argc)   selects.push_back(argv[++i]);    // GROUP=VALUE
