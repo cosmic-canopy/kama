@@ -296,6 +296,20 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
     //   import a::b;            -- nothing (qualified-only, a::b::X)
     //   import a::b as m;       -- module alias  -> aliases[m] = a__b, so m::X resolves
     //   import a::b::{X,Y as Z} -- per-symbol    -> symbolAliases[X]=a__b__X, [Z]=a__b__Y (unqualified)
+    //
+    // An `as` alias may NOT claim a PROJECT root reachable from this file (§2f.29). It used to be able
+    // to, and `global::a::b::X` was the escape hatch — name a module absolutely, past the file's own
+    // aliases. That escape is gone with the `namespace` declaration, so the shadowing it worked around is
+    // refused where it is written instead. The set is exactly what this file can name: the three reserved
+    // roots, its own project, and the root of every module it imports — which is the right scope, because
+    // an alias binds in one file and nowhere else.
+    std::set<std::string> projectRoots = { "std", "core", "global" };
+    if (!module.empty()) projectRoots.insert(module.substr(0, module.find("::")));
+    if (unit->importDeclarationList)
+        for (auto& imp : *unit->importDeclarationList)
+            if (imp && imp->modulePath && !imp->modulePath->empty())
+                projectRoots.insert(*(*imp->modulePath)[0]);
+
     if (unit->importDeclarationList)
         for (auto& imp : *unit->importDeclarationList) {
             if (!imp || !imp->modulePath || imp->modulePath->empty()) continue;
@@ -303,6 +317,11 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
             for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
             std::string mod = mangleNs(path);                  // "a__b"
             if (imp->moduleAlias && !imp->moduleAlias->empty()) {
+                if (projectRoots.count(*imp->moduleAlias))
+                    unsupported(("`import … as " + *imp->moduleAlias + "` claims `" + *imp->moduleAlias
+                                 + "`, which already names a project this file can reach — the alias "
+                                   "would shadow it with no way left to spell the original. Pick "
+                                   "another name").c_str(), imp->line);
                 ctx.aliases[*imp->moduleAlias] = mod;
             } else if (imp->symbols) {
                 for (auto& sym : *imp->symbols) {
@@ -345,6 +364,7 @@ bool CEmitter::isNamespace(const std::string& name) const
 std::string CEmitter::resolveUserName(const std::string& value, SharedStringList qualifier,
                                       const IdentifierNode* site)
 {
+    if (rejectRootedPath(qualifier, site)) return value;
     std::string key = resolveUserNameImpl(value, qualifier);
     recordRef(key, site);
     return key;
@@ -364,11 +384,11 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
         auto sa = _nsCtx.symbolAliases.find(value);
         if (sa != _nsCtx.symbolAliases.end() && known(sa->second)) return sa->second;
     }
-    // `global::…` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases.
-    // `global::assert` is the same symbol as bare `assert`, nameable even where a local declaration
-    // shadows the spelling; `global::a::b::X` names a namespace absolutely. `global` is therefore reserved
-    // as a namespace root. (docs/SPEC.md § Modules — deferred until an LSP existed to give it a
-    // completion payoff; precedent is C#'s `global::`.)
+    // `global::X` — resolve from the ROOT, ignoring the file's own scope, its `using`s and its aliases:
+    // the same symbol as bare `X`, nameable even where a local declaration shadows the spelling. `global`
+    // is therefore a reserved PROJECT name (§2f.29). A longer path under it is refused by
+    // rejectRootedPath before this runs, so `q` is empty here whenever `rooted`. (docs/SPEC.md § Modules —
+    // deferred until an LSP existed to give it a completion payoff; precedent is C#'s `global::`.)
     SharedStringList q = qualifier;
     bool rooted = q && !q->empty() && *(*q)[0] == "global";
     if (rooted) {
@@ -1917,10 +1937,33 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     _nsCtx = saved;
 }
 
+// `global::` has ONE job now: reach the floor past a local declaration that shadows the spelling
+// (`global::envOr`). It used to have a second — `global::a::b::X`, naming a namespace absolutely, through
+// neither the file's `using`s nor its aliases — and design/module-system.md §2f.29 removes it, because
+// `global` is an ordinary reserved PROJECT name in this model and `global::a::b::X` would have to mean
+// module `a/b` OF a project called `global`. Two spellings for one path is exactly what this campaign
+// exists to remove.
+//
+// The job it did is real, and it is fixed at the source instead: the only way a module path needed an
+// absolute escape was an `import … as N` alias shadowing a project name, and that alias is now refused
+// where it is written (`kama.driver.cpp`, the import-alias check).
+bool CEmitter::rejectRootedPath(SharedStringList qualifier, const IdentifierNode* site)
+{
+    if (!qualifier || qualifier->size() < 2 || *(*qualifier)[0] != "global") return false;
+    std::string rest;
+    for (size_t i = 1; i < qualifier->size(); ++i) rest += (rest.empty() ? "" : "::") + *(*qualifier)[i];
+    unsupported(("`global::" + rest + "::…` names a module absolutely, which `global::` no longer does — "
+                 "it reaches the always-in-scope floor and nothing else. Write `" + rest + "::…`, and if "
+                 "an `import … as` alias is shadowing that name, rename the alias").c_str(),
+                site ? site->line : 0);
+    return true;
+}
+
 // Resolve a function reference to its mangled cName (same search as types).
 std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qualifier,
                                   const IdentifierNode* site)
 {
+    if (rejectRootedPath(qualifier, site)) return name;
     std::string key = resolveFuncImpl(name, qualifier);
     recordRef(key, site);
     return key;

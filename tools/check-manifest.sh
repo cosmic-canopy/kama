@@ -493,6 +493,25 @@ proj scopedname <<'JSON'
 JSON
 accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
 
+# `global` names the always-in-scope FLOOR (§2f.29), and it is reserved by exactly this rule rather than
+# by separate machinery — that is the whole point of the correction that section carries: `global` is not
+# a third kind of scope, it is a project name nobody else may claim. A project taking it would put its
+# symbols where every file's unqualified names already resolve.
+proj globalname <<'JSON'
+{ "name": "global", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject globalname 'which is reserved: `global` names the' "a project claiming the floor's name"
+
+# ⚠️ Its two companions in the reserved set, `std` and `core`, are deliberately NOT refused on this rung,
+# and the twin below is what stops someone "fixing" that: `lib/kama.json`'s own `name` IS "std", so a
+# reader that refused it would refuse the standard library and nothing anywhere would resolve. (Measured:
+# adding them here broke every stdlib import in one build.) `kama seed` refuses all three, which is where
+# "am I creating a new project?" is the question actually being asked.
+proj stdname <<'JSON'
+{ "name": "std", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept stdname "...while \`std\` is NOT refused here — the stdlib's own manifest is named that"
+
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: the module map states a name and an audience for every node"
 

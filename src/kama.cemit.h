@@ -1234,6 +1234,7 @@ private:
     // call sites that have no identifier in hand (or don't want the use recorded) are unaffected.
     std::string resolveUserName(const std::string& value, SharedStringList qualifier,
                                 const IdentifierNode* site = nullptr);                  // class/enum/iface ref
+    bool rejectRootedPath(SharedStringList qualifier, const IdentifierNode* site);
     std::string resolveFunc(const std::string& name, SharedStringList qualifier,
                             const IdentifierNode* site = nullptr);                      // function ref
     std::string resolveUserNameImpl(const std::string& value, SharedStringList qualifier);  // the search itself

@@ -2941,6 +2941,21 @@ struct ManifestReader {
                                 + ident + "::{ … }`"
                                 + (kamaIsIdentifier(hint) ? ". Try \"" + hint + "\"" : ""));
                 }
+                // `global` is the always-in-scope floor (§2f.29), reserved by exactly this rule rather
+                // than by separate machinery — which is the point: there is no third kind of scope, only
+                // a project name nobody else may claim. Refused HERE, not only at `kama seed`, because a
+                // project that was not seeded is read here and nowhere else.
+                //
+                // ⚠️ `std` and `core` are reserved too, and they are NOT refused here — measured, not
+                // reasoned: adding them refuses `lib/kama.json`, whose `name` IS "std", and the whole
+                // standard library stops resolving. Nothing legitimate is ever named `global` (the
+                // prelude is embedded and has no manifest at all, §2f.29 as corrected), which is exactly
+                // what makes it the one of the three this rung can hold down. seedValidName refuses all
+                // three, where "am I creating a new project?" is the question being asked.
+                if (ident == "global")
+                    return fail("`name` is \"" + nm + "\", which is reserved: `global` names the "
+                                "always-in-scope floor, whose symbols are visible unqualified in every "
+                                "file, so a project claiming it would collide with all of them");
                 if (nameOut) *nameOut = nm;
             }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
@@ -6123,6 +6138,14 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
     if (ident == "std" || ident == "core") {
         err = "'" + ident + "' is reserved — an import rooted there resolves to the standard library, so "
               "nothing could ever import this package";
+        return false;
+    }
+    // The floor (§2f.29). Reserved by the ordinary project-name uniqueness rule rather than by separate
+    // machinery, which is what keeps `global` from being a third kind of scope: it is a name, taken.
+    if (ident == "global") {
+        err = "'global' is reserved — it names the always-in-scope floor, whose symbols are visible "
+              "unqualified in every file, so a project claiming it could not be imported without "
+              "colliding with all of them";
         return false;
     }
     return true;

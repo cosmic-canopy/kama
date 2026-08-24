@@ -1,0 +1,5 @@
+// `global` names the always-in-scope floor, so no project may claim it (§2f.29). A file cannot
+// declare a project name, so the rejection this pins is the ALIAS form of the same rule.
+import std::collections as global;
+
+fn int32 main() { return 0; }
