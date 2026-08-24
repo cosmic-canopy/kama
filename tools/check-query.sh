@@ -644,9 +644,9 @@ expect --complete 116:10 -- "method	pop	fn Optional<Cell> pop()"      # ... incl
 # Inside a method, `this.` sees what THAT type may see — private included, inherited protected included,
 # a base class's privates never.
 expect --complete 23:44  -- "field	secret	int32"                     # own private field, from inside
-expect --complete 36:42  -- "method	baseOnly	fn int32 baseOnly()"   # inherited PROTECTED method, from a subclass
-reject --complete 36:42  -- "hidden"                                  # ... but not the base's privates
-reject --complete 36:42  -- "shared"
+expect --complete 36:59  -- "method	baseOnly	fn int32 baseOnly()"   # inherited PROTECTED method, from a subclass
+reject --complete 36:59  -- "hidden"                                  # ... but not the base's privates
+reject --complete 36:59  -- "shared"
 
 echo "check-query: M4.1 collectBindings covers every block-bearing statement"
 # Each probe reads a local declared inside one statement kind. A miss is silent everywhere else — it just

@@ -18,17 +18,17 @@ type enum Shape { Circle(int32 r), Empty }
 type contract Area for value { fn int32 area(); }
 
 type virtual(maxDepth: 1) resource Base {
-    int32 tag;
-    public ctor make() { this.tag = 1; }
-    protected virtual fn int32 kind() { return 1; }
-    public fn int32 tagIs() { return this.tag; }        // implicit `this.` field read
+    int32 tag;   protected virtual fn int32 viaThisHook() { return this.kind(); }
+    public ctor make() { this.tag = 1; }   public fn int32 viaBase() { return this.viaBaseHook(); }
+    protected virtual fn int32 kind() { return 1; }   public fn int32 viaThis() { return this.viaThisHook(); }
+    public fn int32 tagIs() { return this.tag; }   protected virtual fn int32 viaBaseHook() { return this.kind(); }   // implicit `this.` field read
 }
 
 type final resource Derived extends Base {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 kind() { return 2; }
-    public fn int32 viaBase() { return base.kind(); }   // the non-virtual base call
-    public fn int32 viaThis() { return this.kind(); }
+    protected override fn int32 viaBaseHook() { return base.kind(); }   // the non-virtual base call
+    protected override fn int32 viaThisHook() { return this.kind(); }
 }
 
 type value Point implements Area {

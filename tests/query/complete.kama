@@ -25,15 +25,15 @@ type value Cell implements Sized {
 
 type virtual(maxDepth: 1) resource Base {
     int32 shared = 0;
-    int32 hidden = 0;
-    public ctor make() { }
+    int32 hidden = 0;   protected virtual fn int32 totalHook() { return this.shared; }
+    public ctor make() { }   public fn int32 total() { return this.totalHook(); }
     protected virtual fn int32 baseOnly() { return this.shared; }
 }
 
 type final resource Derived extends Base {
     int32 own = 0;
     public ctor make() { this.base = Base.make(); }
-    public fn int32 total() { return this.own + this.baseOnly(); }
+    protected override fn int32 totalHook() { return this.own + this.baseOnly(); }
 }
 
 type value Holder {
