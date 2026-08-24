@@ -1,0 +1,17 @@
+// THE PASSING TWIN of `xfail/export_leak_field.kama`, and the reason the no-leak rule is about the
+// SURFACE rather than about mentioning a private type at all: `Box2` is exported and its field is
+// private, so a consumer can never reach `Hidden2` through it. Nothing leaks, so nothing is rejected.
+//
+// It also pins the other half of the file rung: `Hidden2` and `Box2` are in ONE file, and a declaration
+// always reaches what its own file declares — `export` governs leaving the file, not naming within it.
+export { Box2 };
+
+type value Hidden2 { public int32 n; public ctor make(int32 n) { this.n = n; } }
+
+type resource Box2 {
+    Hidden2 h;
+    public ctor make() { this.h = Hidden2.make(n: 7); }
+    public fn int32 get() { return this.h.n; }
+}
+
+fn int32 main() { Box2 b = Box2.make(); return b.get(); }

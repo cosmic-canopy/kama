@@ -1,6 +1,6 @@
-// A module's `export { … };` manifest is its public surface, and SPEC calls a non-exported top-level
-// declaration "invisible to other modules". The `import` form always enforced that; a QUALIFIED spelling
-// did not, so the same symbol was reachable by naming it the long way:
+// A file's `export { … };` manifest is its surface, and a name leaves its file only through it. The
+// `import` form always enforced that; a QUALIFIED spelling did not, so the same symbol was reachable by
+// naming it the long way:
 //
 //     import std::collections::{BTreeNode};                  // error: does not export `BTreeNode`
 //     std::collections::BTreeNode<int32, int32> n;           // ACCEPTED, before this rule
@@ -8,8 +8,9 @@
 // `lib/std/collections/sorted_map.kama` says `export { SortedMap };` — the B-tree node is the map's
 // internal structure, and this is the loophole that let one be stored outside the module that owns it.
 //
-// Same-module references are unaffected: a directory module's files share one namespace and name each
-// other directly, which is the idiomatic spelling, not a workaround.
+// Visibility is per FILE, not per module: a sibling in the same directory module is judged by the same
+// rule, because `export` is what a name leaves its file through. What `visibility` in `kama.json` governs
+// is reach BEYOND the module — see design/module-system.md §2c.
 import std::collections::{SortedMap};
 
 type resource Keeper {

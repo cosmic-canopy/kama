@@ -99,6 +99,13 @@ struct FuncSig {
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
     bool                   isUnsafe = false;       // `unsafe fn …` — the body may touch raw memory
     FunctionDeclarationNode* node = nullptr;  // decl site (LSP def-site table; unused by emission)
+    // The unit that DECLARED it. `node` carries a line but no file, so without this a diagnostic about
+    // two declarations can only name one of them — which is what made "first declared at line 2" useless
+    // once the two `main`s moved into different directories. Same record `ClassInfo::declFile` keeps for
+    // a type and `_genericDeclFile` for a generic; filled from `_collectingUnitPath` at the same point.
+    // It is also the file rung's key: visibility is per FILE, so "may this name reach here" is answered
+    // by comparing this against the referencing unit (see `checkReach`).
+    std::string            declFile;
 };
 
 // A function-pointer signature type: a bodiless `fn ret Name(params);`.
@@ -107,6 +114,7 @@ struct SigInfo {
     std::string            cName;       // typedef name (namespace-mangled)
     std::string            retCType;    // resolved C return type (for the typedef)
     std::vector<ParamSig>  params;      // names (named-arg invoke) + C types (className)
+    std::string            declFile;    // the unit that declared it — the file rung's key (see `checkReach`)
 };
 
 // ---- Class model ----------------------------------------------------------
@@ -205,6 +213,13 @@ enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed };
 // private symbols (private-by-default).
 struct NsCtx {
     std::string scope;        // mangle prefix: "Graphics" or "_F3"
+    // The file this context belongs to. Visibility is per FILE, not per module, so "may this reference
+    // reach that declaration" is answered by comparing this against the symbol's `declFile`. It travels
+    // in NsCtx rather than being read from `diagFile()` because every pass already installs the right
+    // NsCtx per unit — including generic instantiation, which restores the TEMPLATE's context so the
+    // template body's references are judged from the file that wrote them, not the one that used them.
+    // Empty for the prelude, which is compiler-owned and exempt.
+    std::string unitPath;
     bool        isPublic = false;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
     std::map<std::string, std::string> aliases;       // alias -> mangled namespace (module alias / `using X = Y`)
@@ -524,6 +539,7 @@ struct EnumInfo   {
     std::string scope;
     std::vector<std::string> usings;
     std::string underlyingCType;                // `enum E : IntType` -> fixed-width int C type; "" = plain `enum`
+    std::string declFile;                       // the unit that declared it — the file rung's key (see `checkReach`)
 };
 
 // True for a name the BUILD CONFIGURATION owns (DEBUG/RELEASE/HOSTED and the OS_/ARCH_/ABI_ namespaces
@@ -1929,8 +1945,17 @@ private:
     void checkUninstantiatedTypeTemplates();
     SharedIdentifier probeConstArg();   // the placeholder a probe puts in a `const N: int32` slot
     long _probeTypesWalked = 0;    // generic types given a probe instance
-    // A qualified type spelling reaches no further than an `import` would: reject one naming a symbol its
-    // module does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
+    // THE FILE RUNG, one predicate for every position: a reference to a symbol declared in ANOTHER file
+    // requires that file to have `export`ed it. See the definition for the three deliberate blind spots.
+    void checkReach(const std::string& key, const std::string& spelled, const char* what, int line,
+                    const std::string& refFile);
+    std::string declFileOf(const std::string& key) const;   // declaring unit of a resolved symbol, or ""
+    std::string refFilePath() const;                        // the file a reference is written in, or ""
+    // False until `_exported` is filled. Collection resolves names too, and the rung cannot be answered
+    // against an empty export set — every reference would be rejected.
+    bool _exportedReady = false;
+    // A type spelling reaches no further than an `import` would: reject one naming a symbol its declaring
+    // file does not `export`. Split out of `checkDeclaredTypes` because a LOCAL declaration gets this
     // clause alone, without the resolution half. Caller owns `_nsCtx`.
     void checkQualifiedExport(const SharedIdentifier& t, const char* what);
     // `null` into a slot whose declared type is a safe kama type — rejected. The sibling of the `== null`

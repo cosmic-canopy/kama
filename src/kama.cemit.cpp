@@ -193,6 +193,13 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
 // is emitted from the HEADER pass, before any module's path is current, so `_sourcePath` there is whatever
 // the emitter was constructed with — the entry file. It names the TEMPLATE's file, which is what owns the
 // line. Ordered under `_collectingUnitPath` and over `_sourcePath` for the same reason: most specific wins.
+// Set a string member for a dynamic extent and restore it on exit (survives early returns and `continue`).
+// Defined here, beside `diagFile()`, because that comment is about it and because `checkDeclaredTypes`
+// — far above its old home — needs it to name the unit its diagnostics are about.
+namespace { struct ScopedStr { std::string& s; std::string prev;
+    ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
+    ~ScopedStr() { s = prev; } }; }
+
 const std::string& CEmitter::diagFile() const
 {
     if (!_collectingUnitPath.empty()) return _collectingUnitPath;
@@ -284,6 +291,7 @@ static std::string dottedModule(const std::string& mod)
 NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
 {
     NsCtx ctx;
+    ctx.unitPath = unit->name ? *unit->name : std::string();
     const std::string module = (_moduleResolver && unit->name) ? _moduleResolver(*unit->name) : std::string();
     if (!module.empty()) {
         ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
@@ -366,6 +374,14 @@ std::string CEmitter::resolveUserName(const std::string& value, SharedStringList
 {
     if (rejectRootedPath(qualifier, site)) return value;
     std::string key = resolveUserNameImpl(value, qualifier);
+    // THE CHOKEPOINT. Every qualified/unqualified type spelling in expression position resolves through
+    // here — a static call's receiver, a variant construction's union, a dot-on-type ctor — so the file
+    // rung is enforced once instead of at each emission site. The `…Impl` above stays pure, which is what
+    // keeps completion from diagnosing a half-typed `secret::`.
+    // `!synthesized` mirrors recordRef's gate, for the same reason: a substituted or emitter-built node
+    // names no source text, so it cannot be attributed to a file — and a per-FILE rule must not judge it.
+    // It is how `DynamicArray<Rec>` stops blaming the template's file for the caller's type argument.
+    if (site && !site->synthesized) checkReach(key, value, "this reference", site->line, refFilePath());
     recordRef(key, site);
     return key;
 }
@@ -1703,17 +1719,79 @@ void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationN
                  "with no exit)").c_str(), body->line);
 }
 
-// Module privacy for a QUALIFIED type reference. The `import a::b::{X}` form is enforced at the import
-// (see collectProgram), but the qualified spelling reached the same symbol unchecked — so
-// `std::collections::ViewIter<int32>` could name a type its module deliberately does not export, which is
-// how a borrowed iterator became storable outside the module that owns it. SPEC calls a non-exported
-// top-level declaration "invisible to other modules"; this is the half that was missing from making that
-// true.
+// The file that DECLARED a resolved symbol, or "" when the key names nothing this emitter collected.
+// "" is the safe answer in both directions: an unresolved name is someone else's diagnostic, and a
+// synthesized key (a generic INSTANCE, an FFI spelling) has no source file to be judged against.
+// ⚠️ An FFI name is deliberately "" — and it is not a nicety, it is required. An `extern fn` / `extern
+// class` keeps its LITERAL C spelling, so it is never scope-prefixed and every file that declares one
+// collapses onto a single table entry whose `declFile` is whichever file happened to be collected last.
+// Repeating `extern fn memset` in three files is the idiom SPEC prescribes ("a name a file declares
+// itself is satisfied there and pulls in no sibling"), so judging that entry by file would reject the
+// two losers of a race. An external C symbol is not a module symbol and has no export to check.
+std::string CEmitter::declFileOf(const std::string& key) const
+{
+    auto c  = _classes.find(key);
+    if (c  != _classes.end())           return c->second.isExternStruct ? std::string() : c->second.declFile;
+    auto e  = _enums.find(key);             if (e  != _enums.end())             return e->second.declFile;
+    auto i  = _interfaces.find(key);        if (i  != _interfaces.end())        return i->second.declFile;
+    auto gt = _genericTypes.find(key);      if (gt != _genericTypes.end())      return gt->second.declFile;
+    auto gc = _genericContracts.find(key);  if (gc != _genericContracts.end())  return gc->second.declFile;
+    auto s  = _sigs.find(key);              if (s  != _sigs.end())              return s->second.declFile;
+    auto f  = _funcs.find(key);
+    if (f  != _funcs.end())             return isExtern(f->second.node) ? std::string() : f->second.declFile;
+    return std::string();
+}
+
+// THE FILE RUNG. A file may name only what it declares or imports; `export { … };` is the outbound half.
+// So a reference from file R to a symbol declared in file D != R requires that D exported it — in EVERY
+// position, which is what this being one predicate rather than a list of emission-site checks buys.
 //
-// Same-module references are untouched: a directory module's files share one namespace and refer to each
-// other by design (a bare sibling name is the idiomatic spelling). Only a resolved USER declaration is
-// checked — an unresolved name is someone else's diagnostic, and an FFI/extern name is a literal C
-// spelling, not a module symbol.
+// This replaces a per-MODULE rule. Privacy used to stop at the module: a directory module's files shared
+// one namespace and saw each other's private names, so `export` gated only the way out of the module.
+// Under the decided model (design/module-system.md §2c) the file is the unit of privacy — which is the
+// rung Go never had and the reason a large Go package becomes a soup where any file reaches any
+// unexported identifier. The `visibility` key governs reach BEYOND the module and nothing else.
+//
+// ⚠️ `refFile` is THE FILE THE REFERENCE IS WRITTEN IN, and it is not always the file whose NsCtx is
+// installed. Generic instantiation restores the TEMPLATE's context to resolve the template body, while
+// the type ARGUMENTS being substituted were written at the instantiation site — so judging by `_nsCtx`
+// rejected `View<Transform>` in a single-file fixture, blaming that fixture for not exporting its own
+// type. Expression positions therefore pass `_refUnit` (the recorder's notion, already save/restored
+// around nested generic emission), and the declaration walk passes `_nsCtx.unitPath`, which is right
+// there because that loop installs one unit's context at a time.
+//
+// Deliberately blind in four directions, each load-bearing:
+//   * only a resolved USER declaration (`declFileOf` non-empty) — an unresolved name and an `extern`
+//     C spelling are not module symbols;
+//   * a declaring file starting with `<` is compiler-owned (the prelude floor, the embedded
+//     `std::memory` triad). Those are built-in intrinsics: always in scope, never imported, exempt;
+//   * an EMPTY `refFile` means nobody could say where the reference was written (a header pass, a
+//     synthesized node). Silence beats a wrong file in a diagnostic that names one;
+//   * before `_exported` is populated it cannot answer, so `_exportedReady` gates it. Collection
+//     resolves names too, and judging them against an empty export set would reject everything.
+void CEmitter::checkReach(const std::string& key, const std::string& spelled, const char* what,
+                          int line, const std::string& refFile)
+{
+    if (!_exportedReady || refFile.empty()) return;
+    const std::string declFile = declFileOf(key);
+    if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
+    if (declFile == refFile) return;                         // its own file — always
+    if (_exported.count(key)) return;                        // exported, so it may leave its file
+    unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
+                 + " cannot name it — visibility is per FILE, and a name leaves its file only through "
+                   "that file's `export { … };`. Add it there if it is meant to be reachable").c_str(),
+                line);
+}
+
+// The file a reference is being written in, for `checkReach`. Empty outside a body walk.
+std::string CEmitter::refFilePath() const
+{
+    return (_refUnit && _refUnit->name) ? *_refUnit->name : std::string();
+}
+
+// The DECLARATION-walk entry point: a type spelled in a signature, a field, a variant payload or a local.
+// It reaches names the emitter never emits — an uninstantiated generic's parameter types — so it stays a
+// separate caller of the same predicate rather than folding into the resolve wrappers.
 //
 // Its own member rather than a lambda because two callers need it at different strengths: a DECLARED type
 // gets it as one clause of the full `check`, and a LOCAL declaration gets it alone (see `checkBodyLocals`).
@@ -1721,18 +1799,7 @@ void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationN
 void CEmitter::checkQualifiedExport(const SharedIdentifier& t, const char* what)
 {
     if (!t || !t->value) return;
-    if (!t->qualifier || t->qualifier->empty()) return;
-    const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
-    const size_t cut = key.rfind("__");
-    const std::string mod = cut == std::string::npos ? std::string() : key.substr(0, cut);
-    const bool isUserDecl = _classes.count(key) || _enums.count(key) || _interfaces.count(key)
-                         || _genericTypes.count(key) || _genericContracts.count(key)
-                         || _sigs.count(key);
-    if (isUserDecl && !mod.empty() && mod != _nsCtx.scope && !_exported.count(key))
-        unsupported(("`" + *t->value + "` is not exported by its module, so " + what
-                     + " cannot name it — a qualified spelling reaches no further than an "
-                     "`import`, which would report the same thing. Add it to that module's "
-                     "`export { … };` if it is meant to be public").c_str(), t->line);
+    checkReach(resolveUserNameImpl(*t->value, t->qualifier), *t->value, what, t->line, _nsCtx.unitPath);
 }
 
 // The same check as `checkTypeResolves`, applied to every type a DECLARATION spells: parameter types,
@@ -1773,6 +1840,29 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // declaration, which is the answer kama already gives for every other shadowing (`emitDeclarator`)
     // and which makes the precedence question moot.
     std::set<std::string> cp;
+    // NO SIGNATURE LEAK. A project's API is DERIVED, never written down: it is the `public` modules of
+    // `kama.json` crossed with the `export` blocks of their files. That derivation is only coherent if an
+    // exported symbol cannot name an unexported type of its own file — otherwise the enumeration lists a
+    // `makeThing` whose result a consumer can hold and cannot spell. Rust calls this family
+    // `private_interfaces`; it is NOT what `checkQualifiedExport` covers, which judges the REFERENCING
+    // file rather than a declaration leaking its own file's private type.
+    //
+    // Same file only. A type from ANOTHER file already had to be exported to be named here at all, so the
+    // file rung has answered for it — this is exclusively about the surface a file offers.
+    //
+    // `ownerExported` is set per top-level declaration and applies to publicly reachable positions only:
+    // a `private` member's type is not part of what the export offers, so it leaks nothing.
+    bool ownerExported = false;
+    auto checkNoLeak = [&](const SharedIdentifier& t, const char* what) {
+        if (!ownerExported || !t || !t->value) return;
+        const std::string key = resolveUserNameImpl(*t->value, t->qualifier);
+        if (declFileOf(key) != _nsCtx.unitPath || _nsCtx.unitPath.empty()) return;
+        if (_exported.count(key)) return;
+        unsupported(("`" + *t->value + "` is not exported by this file, but " + what
+                     + " of an exported declaration names it — a consumer could reach the declaration and "
+                       "not the type. Export it too, or take it out of the exported surface").c_str(),
+                    t->line);
+    };
     auto constParamShadow = [&](const char* kind, const SharedIdentifier& id) {
         if (!id || !id->value || !cp.count(*id->value)) return;
         unsupported((std::string(kind) + " `" + *id->value + "` shadows the const generic parameter of "
@@ -1797,6 +1887,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         }
         if (tp.count(*t->value)) return;
         checkQualifiedExport(t, what);
+        checkNoLeak(t, what);
         checkTypeResolves(t, cType(t), what, t->line);
         rejectMintProtocolValue(t, what, t->line);
     };
@@ -1865,6 +1956,10 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList || builtIn.count(u.get())) continue;
         _nsCtx = _unitCtx[u.get()];
+        // Every diagnostic this walk raises is ABOUT a declaration in `u`, and this runs from the tail of
+        // collectProgram where `_collectingUnitPath` has already been unwound and `_sourcePath` is still ""
+        // in a multi-file build — so without this the whole pass reported `at :17`, naming no file at all.
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 // An `extern fn` signature names C types owned by the `extern "header.h"` it binds — a
@@ -1872,6 +1967,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // passes such a name through verbatim as the literal C spelling. That is the FFI seam
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
                 if (isExtern(fn)) continue;
+                ownerExported = fn->name && fn->name->value && _exported.count(qualify(*fn->name->value));
                 bindTypeParams(fn->typeParams, fn->constParams,
                                fn->name ? fn->name->line : fn->line, "a function");
                 check(fn->returnType, "a return type");
@@ -1879,10 +1975,18 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 checkReturns(fn, nullptr, "function");
                 checkBodyLocals(fn->block);
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                const bool typeExported =
+                    cd->name && cd->name->value && _exported.count(qualify(*cd->name->value));
+                ownerExported = false;
                 bindTypeParams(cd->typeParams, cd->constParams,
                                cd->name ? cd->name->line : cd->line, "a type");
                 if (cd->members) for (auto& m : *cd->members) {
                     if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
+                        // A `private` field's type is not part of what the export offers, so it is not a
+                        // leak. `fieldVisibility` owns the rule, including `value` forcing Public.
+                        auto ciIt = _classes.find(qualify(*cd->name->value));
+                        ownerExported = typeExported && ciIt != _classes.end()
+                            && fieldVisibility(ciIt->second, fld->modifiers, fld->line) == Visibility::Public;
                         check(fld->type, "a field");
                         // A field of the const param's name would make `exprClass`'s bare-field path and
                         // the const arm in `emitExpression` disagree about what `F` means.
@@ -1891,12 +1995,16 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                                      rejectNullInit(fld->type, d->initializer, "a field", fld->line);
                                      rejectInitKindMismatch(fld->type, d->initializer, "a field", fld->line); }
                     } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        ownerExported = typeExported
+                            && visibilityOf(md->modifiers, Visibility::Private, md->line) == Visibility::Public;
                         check(md->returnType, "a return type");
                         checkParams(md->params, "a parameter");
                         checkNoSelfParam(md->params);
                         checkReturns(nullptr, md, "method");
                         checkBodyLocals(md->body);
                     } else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
+                        // A ctor IS the construction API of an exported type, so its parameters are surface.
+                        ownerExported = typeExported;
                         if (ct->declarator) { checkParams(ct->declarator->params, "a parameter");
                                               checkNoSelfParam(ct->declarator->params); }
                         checkBodyLocals(ct->body);
@@ -1912,11 +2020,14 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     }
                 }
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                ownerExported = ed->identifier && ed->identifier->value
+                             && _exported.count(qualify(*ed->identifier->value));
                 bindTypeParams(ed->typeParams, ed->constParams,
                                ed->identifier ? ed->identifier->line : ed->line, "an enum");
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
             } else if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) {
+                ownerExported = false;    // a conformance block exports nothing of its own
                 tp.clear(); cp.clear();   // a `type intrinsic` block declares no type params of its own
                 if (ii->members) for (auto& m : *ii->members)
                     if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
@@ -1965,6 +2076,8 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
 {
     if (rejectRootedPath(qualifier, site)) return name;
     std::string key = resolveFuncImpl(name, qualifier);
+    if (site && !site->synthesized)                                        // chokepoint: see resolveUserName
+        checkReach(key, name, "a call", site->line, refFilePath());
     recordRef(key, site);
     return key;
 }
@@ -5939,6 +6052,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             si.cName    = qualify(*fn->name->value);
             si.retCType = cType(fn->returnType);
             si.params   = paramSigsOf(fn->parameters);
+            si.declFile = _collectingUnitPath;
             _sigs[si.cName] = si;
             continue;
         }
@@ -5990,6 +6104,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             checkSignatureRawPtr(fn->isUnsafe, fn->returnType, fn->parameters,
                                  *fn->name->value, fn->name->line);
 
+        sig.declFile = _collectingUnitPath;   // the file rung's key, and the duplicate diagnostic's
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -6358,6 +6473,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             for (auto& m : *ed->body)
                 if (m->identifier && m->identifier->value)
                     ei.members.push_back({*m->identifier->value, m->constantExpression});
+        ei.declFile = _collectingUnitPath;
         _enums[ei.name] = ei;
     }
 }
@@ -6391,9 +6507,7 @@ void CEmitter::emitEnum(EnumInfo& ei)
 
 // bind `_thisType` (what `This` resolves to) for a scope, restoring on exit (survives early
 // returns / loop `continue`s). Used across signature collection and class/interface emission.
-namespace { struct ScopedStr { std::string& s; std::string prev;
-    ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
-    ~ScopedStr() { s = prev; } };
+namespace {
 // Bind `This` as an ordinary entry in `_typeSubst` for a scope. That is the whole claim this campaign
 // rests on: `This` IS a type parameter, so binding it where a conformance is resolved makes every existing
 // substitution path — cType, mangleElem, deepSubstType — resolve it with no new special case. Needed
@@ -17195,8 +17309,23 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 // the receiver is a bare type name with no live binding. Distinct from `Type::staticFn()`
                 // (a static fn stays `::`); the strict-ctor gate inside points a static-fn dot at `::`.
                 std::string dotType;
-                if (isTypeReceiver(ma, dotType))
+                if (isTypeReceiver(ma, dotType)) {
+                    // The file rung, for the CONSTRUCTION position. It does not arrive through the
+                    // resolve wrappers' gate because `isTypeReceiver` resolves with no site node, and a
+                    // node cannot be invented here — recording a reference to the TYPE at the ctor's
+                    // position would file the wrong entry in the index. So the predicate is called
+                    // directly, which is also the honest shape: this is a distinct source position.
+                    auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get());
+                    const std::string spelled = rid && rid->value ? *rid->value : dotType;
+                    // ⚠️ A BOUND TYPE PARAMETER is not a reference to anything in this file. `T.make(...)`
+                    // inside a generic resolves `T` to the CALLER's concrete type, so judging it here
+                    // blamed the template's file for the instantiation site's type — `json.kama` was
+                    // reported for a fixture's own `T`. The instantiation site already judged that
+                    // argument, where it was written. Same reason the wrappers skip a synthesized node.
+                    if (!_typeSubst.count(spelled))
+                        checkReach(dotType, spelled, "a construction", call->line, refFilePath());
                     return emitDotOnTypeCtorCall(call, ma, dotType);
+                }
                 return emitMethodCall(call, ma);
             }
 #if KAMA_INHERITANCE
@@ -17422,6 +17551,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // `Type::method(args)` — a static method (no implicit `self`). The qualifier head
         // resolves to a class; the named method must be `static`.
         std::string typeName = resolveUserName(*qual->back(), tq);
+        // Same as the construction position above: `Type::staticFn()` and `Union::Variant(...)` resolve
+        // their HEAD with no site node, so the wrappers' gate never sees it. And the same exclusion:
+        // a bound type parameter's substitution belongs to the instantiation site, not to this file.
+        if (!_typeSubst.count(*qual->back()))
+            checkReach(typeName, *qual->back(), "a static call", call->line, refFilePath());
         // `Box::<int32>::tag()` — an EXPLICIT turbofish on the qualifier names the monomorph directly.
         // Mirrors what emitDotOnTypeCtorCall does for the ctor form, and takes precedence over the
         // inference below: the user said which instance, so there is nothing to infer.
@@ -21755,6 +21889,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         for (auto& name : *u->exportList)
             if (name) _exported.insert(qualify(*name));
     }
+    _exportedReady = true;   // the file rung can be answered from here on — see `checkReach`
     // Pre-register every type's mangled NAME so references resolve regardless of
     // file/declaration order (a class method param may reference a type declared
     // later, or in another file). The full collect below overwrites these.

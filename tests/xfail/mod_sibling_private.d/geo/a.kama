@@ -1,0 +1,7 @@
+// VISIBILITY IS PER FILE. `helper` is not on this file's surface, so a sibling in the SAME module cannot
+// name it either — privacy used to stop at the module, which is the rung Go never had and the reason a
+// large package becomes a soup where any file reaches any unexported identifier.
+export { area };
+
+fn int32 helper() { return 4; }
+fn int32 area()   { return 40; }

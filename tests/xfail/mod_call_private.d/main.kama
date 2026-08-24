@@ -1,0 +1,4 @@
+// A qualified spelling reaches no further than an `import` would. Calling was the position that let it:
+// `export { … };` was enforced where a type is NAMED and not where a function is CALLED, so this built,
+// linked and ran. There is no `import` here at all, which is the point — the call was its own back door.
+fn int32 main() { return secret::hidden(); }

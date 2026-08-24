@@ -1,0 +1,10 @@
+// The same leak through a PUBLIC field rather than a return type. `export_private_ok.kama` is the twin:
+// make the field private and it is accepted, because a private member's type is not part of what the
+// export offers.
+export { Box };
+
+type value Hidden { public int32 n; public ctor make(int32 n) { this.n = n; } }
+
+type value Box { public Hidden h; public ctor make(Hidden h) { this.h = h; } }
+
+fn int32 main() { return Box.make(h: Hidden.make(n: 0)).h.n; }

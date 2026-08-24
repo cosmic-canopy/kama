@@ -1,0 +1,3 @@
+export { viaSibling };
+
+fn int32 viaSibling() { return helper(); }

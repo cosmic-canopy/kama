@@ -1,0 +1,14 @@
+// A project's API is DERIVED, never written: the `public` modules of `kama.json` crossed with the
+// `export` blocks of their files. That derivation is only coherent if an exported symbol cannot name an
+// unexported type of its own file — otherwise the enumeration lists a `makeThing` whose result a consumer
+// can hold and cannot spell. Rust calls this family `private_interfaces`.
+//
+// Distinct from `export_qualified_ref.kama`, which judges the REFERENCING file. This is a declaration
+// leaking its OWN file's private type, which nothing checked.
+export { makeThing };
+
+type value Thing { public int32 n; public ctor make(int32 n) { this.n = n; } }
+
+fn Thing makeThing(int32 n) { return Thing.make(n: n); }
+
+fn int32 main() { return makeThing(n: 0).n; }
