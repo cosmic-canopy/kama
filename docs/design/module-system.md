@@ -1149,30 +1149,95 @@ stale-binary trap in a generated-file disguise: `out/<plat>/kama.lexer.cpp` is a
 that restores `src/kama.l` with an unchanged mtime leaves it stale. `./dev rebuild`, then assert the thing
 itself — `namespace foo;` is a syntax error.
 
-**3 — visibility.** One import block, one export block (single form; `export { }` stays a syntax error),
-and required `visibility` per node — list or keyword — enforced as §2c's composition table. **No `to`
-grammar**: the `export` rule is unchanged apart from being made singular, so this phase is almost entirely
-resolver work. Closes claim 3 — the hole where `geo::secretFn()` bypasses the manifest. §2f.31 lands here:
-`main` uncallable, unexportable, unique-per-project — which means **splitting the one duplicate-function
-diagnostic in two** ([kama.cemit.cpp:5917](../../src/kama.cemit.cpp)): an entry-point message scoped to the
-**project**, and a generic one re-worded from *namespace* to **module**, since `namespace` no longer exists
-after phase 2. Both gain the missing filename on the "first declared at" location.
+**3 — visibility.** `visibility` is parsed and form-checked; it is **enforced nowhere**. Closes claim 3.
+§2f.31 lands here too: `main` uncallable, unexportable, unique-per-project.
+
+#### ►► 3 — the ground, derived at `0.9.74`
+
+⚠️ **The grammar half of this phase is ALREADY TRUE — do not re-plan it.** Earlier drafts said "one import
+block, one export block (single form; `export { }` stays a syntax error) … the `export` rule is unchanged
+apart from being made singular". Measured at HEAD, all four are already the case, and `compilation_unit`
+is why: `import_directives_opt export_manifest_opt code_opt`, in that order, each once.
+
+| claim | measured |
+|---|---|
+| one import block, before any code | `import` after a declaration → `Parse error: unexpected IMPORT` |
+| one export block, after the imports | `export` after a declaration → `Parse error: unexpected EXPORT` |
+| the `export` rule is singular | `export_manifest_opt` is not a list — it is `/* nothing */ | EXPORT …` |
+| `export { }` is a syntax error | `Parse error: syntax error, unexpected }, expecting IDENTIFIER` |
+| the corpus already complies | **79** files carry an `export` block; **0** carry more than one |
+
+**So phase 3 is ENTIRELY resolver work.** No grammar change, no corpus migration.
+
+**The two holes, reproduced at `0.9.74`** — a project with `secret` whose `visibility` is `["other"]`:
+
+| | spelling | today |
+|---|---|---|
+| **a** | the root module calls `vis::secret::hidden()`, which `secret` does **not** `export` | **builds** |
+| **b** | the root module writes `import vis::secret::{shown}`, and `secret` does not list the root | **builds** |
+
+(a) is §1a claim 3 — a qualified spelling reaching past the `export` block. (b) is §2c's composition table,
+which nothing consults. Both need the same thing: a check where an importer's module is known and the
+target module's node is in hand.
+
+| what | where |
+|---|---|
+| `ModuleNode` (carries `visibility`) · `visibilityValue` · `validateModules` | [driver:2049](../../src/kama.driver.cpp) · [:2379](../../src/kama.driver.cpp) · [:3071](../../src/kama.driver.cpp) |
+| the per-symbol import check — where "does not export" fires today | [cemit:22018](../../src/kama.cemit.cpp) |
+| the `export` list validation loop | [cemit:22011](../../src/kama.cemit.cpp) |
+| the duplicate-function diagnostic to SPLIT (§2f.31) | [cemit:5980](../../src/kama.cemit.cpp) |
+| ⚠️ `main`'s TWO escapes — fix only one and every CALL still resolves to the old symbol | `qualify()` [cemit:350](../../src/kama.cemit.cpp) · `resolveFuncImpl` [cemit:1974](../../src/kama.cemit.cpp) |
+
+⚠️ **Re-resolve these before use.** This table has been re-derived five times and was stale three of them;
+2e alone moved `cemit` by ~40 lines and `driver` by several hundred.
+
+The diagnostic split: an entry-point message scoped to the **project** (a project has one entry point, and
+`main` is scoped by nothing — the reason two collide where `a::helper` and `b::helper` do not), and a
+generic one, already re-worded from *namespace* to **module** in 2e. Both still owe the missing filename on
+the "first declared at" location.
 
 **4 — the C symbol.** §2e: identity-derived symbols; path-derived `.c` filenames; the `k_` escape interned
 once where each name enters the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`,
 `VSlot::name`, variant records); the loose-file rule.
+
+**Both defects reproduced at `0.9.74`**, so the phase opens on measurement rather than recall. One loose
+program, three files, two of them sharing the basename `x.kama`, built twice with the operands in
+different orders:
+
+```
+order 1:  main_0.c  x_1.c  x_2.c      _F4__helper
+order 2:  x_0.c     x_1.c  main_2.c   _F6__helper
+```
+
+Both the generated **filenames** and the file-private **scope** are positional, so `--keep-c` is not
+reproducible — which is what the README's "drops into an existing C codebase" rests on. Note what phase 2
+already fixed and what it deliberately did not: every symbol with a MODULE is stable now (measured across
+the 2e deletion — identical symbol sets, 451 loose / 237 project), and `_F<n>` survives only for a file in
+the loose ROOT, which §2e.27 says is the one case that cannot be imported anyway. The `_N` on filenames is
+**load-bearing until something path-derived replaces it**: the two `x.kama` above are exactly the basename
+collision it guards.
+
+And the keyword half, same build:
+
+```kama
+type value Cfg { public int32 switch; ... }   ->  clang: 1 warning and 6 errors
+```
 
 **5 — corpus and docs.** ⚠️ **Partly done in 2e's close-out, because a doc that contradicts a shipped
 compiler is the exact failure this repo's house rule is about**: SPEC's *Modules* section is rewritten
 (file-modules, the search, the declaration and `global::a::b::X` all described things that no longer
 exist), `docs/packages.md` gained the `modules` section and its seeded manifests now match what `kama
 seed` writes, and **`agents/AGENTS.md` — which SHIPS inside the binary — stopped telling users to write a
-`namespace`**. What remains here: `docs/packages.md`'s monorepo walkthrough and command table;
-`docs/targets.md` for `link`;
-[FLOOR.md](../FLOOR.md)'s "the empty namespace" / "no browsable namespace" wording replaced by §2f.29; the
-ROADMAP row and the §10 "C SYMBOL NAMING" entry deleted; the `_F4__` references updated in
-`tools/check-ecs-zero-dispatch.sh` (4 lines), the comment in `tools/check-slot.sh`,
-`docs/ENGINE_READINESS.md`, and seven fixtures.
+`namespace`**. FLOOR.md's `global::a::b::X`
+paragraph went with it (§2f.29), and its "no browsable namespace" wording with that.
+
+**What remains, re-counted at `0.9.74`:** `docs/packages.md`'s monorepo walkthrough and command table ·
+`docs/targets.md` for `link` · the ROADMAP row and ROADMAP_DETAIL's §10 *C symbol naming* pointer, both
+deleted when the campaign closes (phase 6) · and the **12 files that still spell `_F<n>`**, which cannot be
+touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`, `tools/check-slot.sh`,
+`docs/ENGINE_READINESS.md`, `docs/ROADMAP_DETAIL.md`, this file, and **7 fixtures**
+(`tests/ctor_generic.kama`, `poly_in_collection`, `enum_payload_unconstructed`, `constgen_value_widths`,
+`xfail/diag_no_mangled_name`, `xfail/generate_serialize_generic`, `xfail/dup_fn`).
 
 **6 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
 
@@ -1188,10 +1253,18 @@ ROADMAP row and the §10 "C SYMBOL NAMING" entry deleted; the `_F4__` references
   the emitted C. Shape follows `tools/check-ecs-zero-dispatch.sh`.
 - **`tools/check-module-visibility.sh`** — assert every rung of §2c, including the **call and
   construction** positions the current model lets through.
-- **`xfail` fixtures**, each `.msg` matching the rule's own wording:
-  - §1a claims 1, 3 and 4; the `k_*` escape clash; a C keyword on an `expose`d name; a `kama.json` under
-    `source`; an unknown manifest key; a non-exported symbol reached in call position; duplicate loose
-    basenames.
+- **`xfail` fixtures**, each `.msg` matching the rule's own wording. ⚠️ **Audited at `0.9.74` — some of
+  this list is DONE and some of it was never an xfail's job:**
+  - **Shipped:** §1a claims 1 and 4 became unrepresentable in phase 2 rather than checked, so there is
+    nothing to reject; §2f's three are in (`global_absolute_path`, `import_alias_shadows_project`,
+    `import_alias_claims_global`), and `mod_collision.d` / `mod_export_private.d` /
+    `mod_export_undefined` predate them.
+  - **Not xfail's:** every *manifest* rejection lives in `tools/check-manifest.sh` (44 assertions now) —
+    that leg builds one `.kama` file and a manifest error needs a directory tree. That covers the
+    `kama.json`-under-`source`, unknown-key, workspace and `modules`/`visibility` rows below.
+  - **Still owed, and each blocked on the phase that creates its rule:** §1a claim 3 and a non-exported
+    symbol in call position (**phase 3**); the `k_*` escape clash, a C keyword on an `expose`d name, and
+    duplicate loose basenames (**phase 4**).
   - **Workspace**: a missing mandatory project; a `projects` entry with no `optional`; a glob matching
     nothing where `optional` is `false` — each with its optional twin as a **passing** fixture, since
     silence is the claim.
