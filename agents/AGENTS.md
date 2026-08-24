@@ -112,11 +112,14 @@ feature.
 - **`@generate` requires every field to be marked** `@field` or `@skip`. An unmarked field is an
   error, so adding one can never silently start serializing it.
 - **Integer overflow traps** in debug rather than wrapping; `std::num`'s `wrapping*` are the opt-in.
-- **A namespace must match the file's path** under the source root: `namespace acme::geo;` lives in
-  `<src>/acme/geo.kama` or `<src>/acme/geo/`. Get this wrong and the import fails with
-  `cannot resolve module`, which reads like a missing dependency and is not one.
+- **A module is a FOLDER, and a file says nothing about which one it is in.** There is no `namespace`
+  declaration — a file's module is its directory under the source root, and `kama.json`'s `modules` map
+  is what gives that directory a name. A folder with no entry there is not a module: its files belong to
+  the nearest listed folder above them, so nothing joins your API by accident. Import a module by its
+  full name, `import <project>::<module>::{ … }`; if it fails with `cannot resolve module`, the usual
+  cause is a folder nobody listed, not a missing dependency.
 - **`export { A, B };` is its own declaration**, near the top of the file — not a modifier you put in
-  front of `type`. Without it a namespaced type is invisible to importers even though it compiles.
+  front of `type`. Without it the type is invisible to importers even though it compiles.
 - **One way to do a thing.** Before adding a helper, `--search` for an existing one.
 
 ## Conventions

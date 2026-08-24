@@ -754,9 +754,9 @@ std::string CEmitter::contractMethodKey(const std::string& contractKey, const st
 // The index key for a MODULE/NAMESPACE path, given its dotted source spelling — or "" if the path names
 // no namespace in this program (M6 B3f).
 //
-// `module:` keys are deliberately NOT def-site keys. In kama the namespace IS the module path IS the
-// directory path (SPEC § Modules / namespaces: `import a::b::c` resolves to `a/b/c.kama` or `a/b/c/`),
-// so renaming a namespace is a file-and-directory move, not a symbol rename. Every mature server draws
+// `module:` keys are deliberately NOT def-site keys. In kama a module IS a folder (SPEC § Modules:
+// `import a::b::c` names project `a`'s module `b::c`, which its manifest maps to a directory), so
+// renaming one is a directory move plus a manifest edit, not a symbol rename. Every mature server draws
 // the same line — clangd's `#include`, TypeScript's module specifier and gopls' import path are all
 // go-to-definition targets that rename never touches. Because nothing registers a DefSite under this
 // key, `_refIndex`, rename and semantic tokens never learn it, and that refusal costs no new flag.
@@ -985,7 +985,7 @@ void CEmitter::buildPositions()
                     segs.push_back(PosEntry{ r, nullptr, false, k });
                 }
             }
-            // An import PATH, and the file's own `namespace` declaration — both name modules end to end.
+            // An import PATH — every segment of it names a module, end to end.
             auto addModulePath = [&](const StringList& names, const std::vector<SrcRange>& pos) {
                 if (pos.size() != names.size()) return;
                 std::string dotted;

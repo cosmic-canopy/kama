@@ -1140,8 +1140,8 @@ rather than here, so there is one number to keep current. Forward work:
      what the closure drops elsewhere: the answer is **10**.
   2. ~~"the intra-directory import graph is sparse, so `import` edges suffice"~~ — the *import* graph is
      sparse but it is not the closure. `priority_queue.kama` has **no `import` at all** and declares
-     `DynamicArray<T, A> data;`: an unqualified name resolves against the file's own namespace
-     program-wide, so same-namespace siblings reference each other implicitly. The closure follows every
+     `DynamicArray<T, A> data;`: an unqualified name resolves against the file's own module scope
+     program-wide, so the files of one module reference each other implicitly. The closure follows every
      identifier spelling instead, which is a superset of the references and cannot under-compute.
   3. ~~"parsing is the cheap part, so indexing the directory is free"~~ — at `-O0` parse was 54 % of the
      front end and the objection was real; lever 7 dissolved it. Indexing by **full parse** was the right

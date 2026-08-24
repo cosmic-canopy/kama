@@ -2982,7 +2982,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   and C++, and silent in both. kama rejects it and says so, because the failure otherwise surfaces as a
   C-compiler error about the substituted type. Visibility is the declaration's own: a type it declares,
   imports, aliases or gets from the prelude all count (`tests/xfail/type_param_shadows_type`).
-- **A name is declared once per namespace** — kama has no overloading, so a second `fn` of the same name
+- **A name is declared once per module** — kama has no overloading, so a second `fn` of the same name
   is an error naming both declaration sites, for a plain function and a generic template alike. `extern`
   is exempt on both sides: re-declaring a C entry point in each module that calls it is what an `extern`
   is for (`tests/xfail/dup_fn`, `tests/xfail/dup_generic_fn`).
@@ -3127,15 +3127,27 @@ int32 idx = match (find(xs: list, target: 7)) {
 `Weak<T>.tryUpgrade()` returns `Optional<Shared<T>>`; a fallible `static fn` factory returns `Result<T, E>`
 (see Fallible construction above).
 
-## Modules / namespaces ✅
+## Modules ✅
 
-A **module** is a namespaced source unit — a single file *or* a directory of files that all declare the same
-`namespace`. `import` names a module by its `::`-path; the compiler finds the source, compiles it, and scopes
-its public symbols. There is one keyword for depending on another module — `import` (it replaced `using`).
+A **module is a FOLDER**, and a file's identity is **where it sits** — never anything it declares. A
+project's `kama.json` lists its modules in a nested `modules` map mirroring the source tree, and a module's
+name is the chain of keys read down to it, rooted at the project's `name`
+([design/module-system.md](design/module-system.md) §2b). `import` names a module by that full name; the
+compiler resolves it through the manifest, compiles the module's files, and scopes their public symbols.
+There is one keyword for depending on another module — `import` (it replaced `using`).
+
+```jsonc
+// geometry/kama.json
+{ "name": "geometry", "version": "0.1.0", "kind": "library",
+  "modules": {
+    ".":         { "visibility": "public" },   // src/*.kama          — module `geometry`
+    "graphics":  { "visibility": "public" },   // src/graphics/*.kama — module `geometry::graphics`
+    "internals": { "visibility": ["graphics"] }
+  } }
+```
 
 ```kama
-// lib/graphics.kama          — module `graphics`
-namespace graphics;
+// geometry/src/graphics/texture.kama   — in module `geometry::graphics`, because of WHERE IT IS
 export { Texture, scale };             // the public surface, at a glance — mirrors `import`
 
 type resource Texture { ... }          // declarations carry NO visibility modifier
@@ -3143,9 +3155,9 @@ fn int32 scale(int32 x) { ... }
 type resource GpuHandle { ... }        // unlisted → module-private
 
 // main.kama
-import graphics::{Texture, scale};     // per-symbol, unqualified
-import physics as phys;                 // whole-module alias → phys::Body
-import audio;                           // load only; qualified-only access audio::Mixer
+import geometry::graphics::{Texture, scale};   // per-symbol, unqualified
+import physics as phys;                        // whole-module alias → phys::Body
+import audio;                                  // load only; qualified-only access audio::Mixer
 fn int main() {
     Texture t = ...;                    // imported, bare
     phys::Body b = ...;                 // alias-qualified
@@ -3153,11 +3165,17 @@ fn int main() {
 }
 ```
 
+**There is no `namespace` declaration.** A file used to name its own scope; the declaration and the path
+could then disagree, so a file could be *compiled* into one scope and *imported* as another. Deleted
+outright — `namespace` is not a keyword and writing one is a syntax error.
+
 **Four import forms:** `import a::b;` (load; qualified-only `a::b::X`) · `import a::b as m;` (whole-module
-alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare namespace; `as` renames). There is no
+alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare scope; `as` renames). There is no
 glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
 imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
-a compile error — disambiguate with `as`.
+a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project
+this file can reach, which would leave the original unspellable
+(`tests/xfail/import_alias_shadows_project.kama`).
 
 **Visibility — a top-of-file `export { … };` manifest, module-private by default.** A module lists its public
 surface in one block at the top; a top-level `type`/`fn` is invisible to other modules unless named there
@@ -3167,23 +3185,26 @@ in every position that names a type (field, parameter, return type, local declar
 must be a top-level declaration in that same file — so a directory-module's files each state their own
 surface. Declarations carry **no** visibility keyword, keeping `type`/`fn` syntax uniform, and the manifest
 reads as the mirror of `import`. Member access (`public`/`protected`/`private`) is a separate axis; the
-kama→host/WASM boundary (`expose`) is a third. A file with **no** `namespace` keeps its symbols file-private
-(single-file scripts need no boilerplate).
+kama→host/WASM boundary (`expose`) is a third. A file in **no** module — a loose file the build was handed
+directly, sitting in the operand set's own root — keeps its symbols file-private, so single-file scripts need
+no boilerplate and cannot be imported.
 
-**Resolution.** `import a::b::c` maps to `a/b/c.kama` (file-module) or `a/b/c/` (directory-module: every
-`*.kama` in it shares `namespace a::b::c`), searched under (1) the importing file's dir, (2) `$KAMA_PATH`,
-(3) the **stdlib bundled with the compiler** (located relative to the binary like the runtime header, so
-`std::*` resolves on any install regardless of cwd). `std`/`core` are reserved roots (stdlib only). Loading is
-transitive and deduped by path, so import cycles load once. A namespace already in the compilation (e.g. a
-file also on the command line) satisfies an import without a disk lookup. The stdlib is **optional on disk**:
+**Resolution.** `import a::b::c` names project `a`'s module `b::c`, and the answer comes from a manifest,
+never from a search: the project being built, then its declared dependencies, then the **stdlib bundled with
+the compiler** (located relative to the binary like the runtime header, so `std::*` resolves on any install
+regardless of cwd). `std`, `core` and `global` are reserved roots. A module already in the compilation
+satisfies an import without a disk lookup. **A build with no `kama.json` does no searching at all** — you
+pass every source file, and each one's module is its directory below the operand set's deepest common
+ancestor, which makes `kama build a.kama b.kama` a genuine subset of a project build rather than a second
+dialect. Loading is transitive and deduped by path, so import cycles load once. The stdlib is **optional on disk**:
 no `import std::…` means the resolver never touches it, and nothing is auto-linked — a `no_std`-like floor
 (only `kama_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
 compiler).
 
-**A directory-module import compiles only what it needs.** `import a::b::{X, Y}` resolves to the files of
-`a/b/` that *declare* `X` and `Y`, plus their transitive closure within that directory — not to every
-`*.kama` in it. The closure follows references, not `import` edges: files of one directory share a
-namespace, so a sibling is reachable unqualified with no `import` at all (`priority_queue.kama` imports
+**A module import compiles only what it needs.** `import a::b::{X, Y}` resolves to the files of that module
+which *declare* `X` and `Y`, plus their transitive closure within it — not to every file of the module. The
+closure follows references, not `import` edges: the files of one module share a scope, so a sibling is
+reachable unqualified with no `import` at all (`priority_queue.kama` imports
 nothing and declares `DynamicArray<T, A> data;`), and an import-edge closure would under-compute. A name a
 file declares itself is satisfied there and pulls in no sibling, which is what keeps a repeated
 `extern fn memset` from tying three files together.
@@ -3191,7 +3212,7 @@ file declares itself is satisfied there and pulls in no sibling, which is what k
 Anything the resolver does not fully understand loads the **whole** module, so the diagnostics are
 unchanged: a bare `import a::b;` (nothing pins a file — and a type reached only through inference is never
 spelled, so the importing file's own text cannot be used to seed one), a symbol the directory does not
-declare, a package whose manifest `sources` span several namespaces, and a file whose declarations are
+declare, and a file whose declarations are
 nameless but program-wide — a `type intrinsic` conformance on a primitive, or the `extern` seam that
 `spawn`/`parallel_for` require.
 
@@ -3203,9 +3224,9 @@ import's decision and `=2` names the reference that retained each file.
 Passing several files to one build still works (`kama build a.kama b.kama -o app`); the compiler emits a
 shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resolved module files to that set.
 
-**Scope resolution uses `::`** (namespaces, qualified types, enum variants: `Color::Blue`); `.` is
+**Scope resolution uses `::`** (modules, qualified types, enum variants: `Color::Blue`); `.` is
 **instance/value access only** (`obj.field`, `obj.method()`). The two are *syntactically* distinct, so
-there's no namespace-vs-object precedence rule — a `::` head is always a type/namespace, a `.` head always a
+there's no module-vs-object precedence rule — a `::` head is always a type/module, a `.` head always a
 value. This is **enforced**, not merely conventional: a `::` whose head is a local, a parameter or a field
 is rejected with a message naming the `.` spelling, so field access has exactly one spelling
 (`tests/xfail/scope_op_on_value.kama`). The one deliberate crossover is **dot-on-type for constructors** —
@@ -3233,10 +3254,11 @@ constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the e
 `Result<This, E>`, declare it a `ctor`. `main` is the global entry point (unmangled).
 
 **`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
-`X` — the always-in-scope [floor](FLOOR.md) — and `global::a::b::X` names a namespace absolutely, through
-neither the file's imports nor its aliases. It exists for the case where a local declaration shadows the
-spelling you want: a module that defines its own `envOr` still reaches the floor's with
-`global::envOr(name: …, dflt: …)` (`tests/global_alias.kama`).
+`X` — the always-in-scope [floor](FLOOR.md). It exists for the case where a local declaration shadows the
+spelling you want: a file that defines its own `envOr` still reaches the floor's with
+`global::envOr(name: …, dflt: …)` (`tests/global_alias.kama`). It names **only** the floor: `global` is a
+reserved project name, not a path prefix, so `global::a::b::X` is an error
+(`tests/xfail/global_absolute_path.kama`).
 
 ## Concurrency ✅
 

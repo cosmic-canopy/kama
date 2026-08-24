@@ -40,7 +40,10 @@ myapp/
   "name": "myapp",
   "version": "0.1.0",
   "kind": "executable",
-  "entry": "src/app.kama"
+  "entry": "src/app.kama",
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
 }
 ```
 
@@ -106,13 +109,13 @@ and a folder, never a command line.
 
 A project **states its kind** in the manifest — it is a library or an executable, and nothing infers
 that from the other keys. A monorepo root is **not a project at all**: it aggregates members and has no
-sources, namespace or artifact of its own, so it has no `kama.json`, and its own file is a different
+sources, module tree or artifact of its own, so it has no `kama.json`, and its own file is a different
 one.
 
 | `--kind` | writes | on disk |
 |---|---|---|
 | `executable` | `kama.json` with `kind` + `entry` | `src/app.kama` with `fn int32 main()` |
-| `library` | `kama.json` with `kind` | `src/<name>.kama` with `namespace <name>;` and an `export { … };` |
+| `library` | `kama.json` with `kind` + a `modules` map | `src/<name>.kama` with an `export { … };` |
 | `monorepo` | `kama_workspace.json` | one seeded library per `--members` name |
 
 A monorepo takes the member names from you rather than inventing a directory convention:
@@ -139,7 +142,7 @@ executable is adding `entry` and a `main`. A member that imports a sibling still
 dependency — see [Members are self-contained](#members-are-self-contained--declare-what-you-import).
 
 A **project's name has to be a legal kama identifier**, of either kind, because the name is the
-project's root namespace. `kama seed --kind library --name my-lib` is refused and says to use
+project's root module. `kama seed --kind library --name my-lib` is refused and says to use
 `my_lib`: `import my-lib::{ … }` does not parse, so that package could never be imported by anyone —
 and an executable is not the softer case it looks like, since its own symbols are qualified by the
 same name. A monorepo directory may be called anything: it has no name in any file.
@@ -177,7 +180,8 @@ searched recursively. It defaults to `"src"`, so most projects never write it:
   "name": "myapp",
   "version": "0.1.0",
   "kind": "executable",
-  "entry": "src/app.kama"
+  "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } }
 }
 ```
 
@@ -195,6 +199,42 @@ module with nothing in the model able to say which of them a name came from. It 
 any vendored dependency *inside* the source root — and a project may not contain another project's
 `kama.json` under its `source`. Keeping the source root one level down makes all of those structurally
 outside it, with no exceptions to remember.
+
+## Naming what you publish — `modules`
+
+**Required, and non-empty.** A module is a **folder**, and `modules` is what gives a folder a name: a
+nested map mirroring the tree under `source`, where a module's name is the chain of keys read down to it,
+rooted at the project's `name`. Nothing in a source file says which module it is in — the file's location
+does, and this map is where that location becomes an API.
+
+```json
+"modules": {
+  ".":             { "visibility": "internal" },   // src/*.kama          -> `myapp`
+  "collections":   { "visibility": "public",       // src/collections/   -> `myapp::collections`
+                     "modules": {
+                       "detail": { "visibility": ["collections"] }   // -> `myapp::collections::detail`
+                     } },
+  "oddly-named":   { "visibility": "public", "name": "tidy" }        // -> `myapp::tidy`
+}
+```
+
+- **`"."` is the project root** — the files directly under `source`. A project whose sources are all at
+  the root still writes it, and that is the smallest legal map.
+- **A folder with no entry is not a module**, and its files are not homeless either: they belong to the
+  nearest listed folder above them. So nothing joins your API by accident, and adding a subdirectory is
+  not automatically a published name.
+- **The map is NESTED, never flat with `a/b` keys.** In a flat map, composition would be *inferred* from
+  which other entries happen to exist — adding an unrelated `"collections"` entry would silently rename
+  `collections/detail`'s public API. Nesting writes composition down instead.
+- **`name` overrides one segment**, which is the escape for a folder whose name is not a legal kama
+  identifier (`my-lib`) or simply is not the API word you want. A `::`-joined `name` is an error: that
+  would smuggle hierarchy past the nesting.
+- **`visibility` is required on every node**, including one whose folder holds no `.kama` files yet —
+  making it conditional on file presence would mean *adding a source file invalidates the manifest*. The
+  four forms are a list of modules, `"children"`, `"internal"`, or `"public"`.
+
+`kama seed` writes the root entry for you, so most projects start from a working example rather than a
+blank key.
 
 ## Composing projects — `kama_workspace.json`
 

@@ -17,7 +17,7 @@ kama build app.kama -j 4                         # cap concurrent C compiles (de
 
 **Build parallelism.** A program that imports from `std` compiles several translation units — an import
 brings in the files defining the names it asks for, plus their closure (see
-[SPEC.md](SPEC.md#modules--namespaces-); `examples/httpd` is 10) — and `kama build` compiles them
+[SPEC.md](SPEC.md#modules-); `examples/httpd` is 10) — and `kama build` compiles them
 concurrently, `-j`/`--jobs` wide, defaulting to your core count. `$KAMA_BUILD_JOBS` sets the default;
 `-j` on the command line beats it. It is purely a scheduling knob: the objects a build produces are
 byte-identical at every width, which [`tools/check-build-jobs.sh`](../tools/check-build-jobs.sh) asserts.

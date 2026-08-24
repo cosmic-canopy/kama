@@ -3,14 +3,18 @@
 The **floor** is everything usable with **no `import`** and available even under **`--no-std`**: the core
 contracts/types the language itself leans on, the construction helpers, plus the diagnostics, console-I/O and
 args/env capabilities that a program cannot reimplement (they bind runtime globals set before `main`). It has
-no browsable namespace, so this page *is* its documentary namespace — grouped by concern, kept current as the
+no module to browse, so this page *is* where it is written down — grouped by concern, kept current as the
 floor grows. Bare is the everyday style (importing to call `assert`/`println` would be terrible).
 
 **`global::` names the floor explicitly** (shipped with the language server, LSP M4.8). `global::assert` is
-the *same symbol* as bare `assert` — the qualifier resolves from the root, ignoring the file's own namespace,
-its `using`s and its aliases, so it still reaches the floor where a local declaration shadows the spelling.
-The longer form `global::a::b::X` names a namespace absolutely, through none of those. Precedent: C#'s
-`global::`. `global` is therefore reserved as a namespace root. Typing `global::` in an editor lists this
+the *same symbol* as bare `assert` — the qualifier resolves from the root, ignoring the file's own scope, its
+imports and its aliases, so it still reaches the floor where a local declaration shadows the spelling.
+Precedent: C#'s `global::`. `global` is therefore a **reserved project name**, and that is the whole of its
+specialness — it is not a third kind of scope, just a name nobody else may claim. It names ONLY the floor: a
+longer `global::a::b::X` used to name a module absolutely and was deleted with the `namespace` declaration
+(design/module-system.md §2f.29), because `global` being a project name would make it mean module `a/b` OF a
+project called `global`. The job it did — reach a name past an `import … as` alias shadowing it — is done at
+the source now: such an alias is refused where it is written. Typing `global::` in an editor lists this
 whole surface — which is why the qualifier waited for a language server: without completion it would have
 been a spelling with no discovery payoff.
 
@@ -115,5 +119,5 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
   `alignof(T)`, `bitcast<T>(x)`, `drop(value:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc
-  adapter). The smart-pointer triad (`Owned`/`Shared`/`Weak`, namespaced `std::memory` but always in scope)
+  adapter). The smart-pointer triad (`Owned`/`Shared`/`Weak`, in module `std::memory` but always in scope)
   is a built-in module, not bare floor.

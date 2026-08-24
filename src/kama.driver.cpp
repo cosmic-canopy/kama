@@ -1180,7 +1180,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // A CLI input is loaded entire, so it contributes `whole` — and when the input is one FILE of a
     // multi-file module, the loop below MAKES that true by loading the module's other files. It has to:
     // "files of one directory share a namespace, so a sibling is reachable unqualified with no `import`
-    // at all" (SPEC, Modules / namespaces). Those references are not import edges, so nothing pins the
+    // at all" (SPEC, Modules). Those references are not import edges, so nothing pins the
     // siblings and there is no import for resolution to hang off — which is exactly the case SPEC answers
     // with "anything the resolver does not fully understand loads the WHOLE module".
     //
