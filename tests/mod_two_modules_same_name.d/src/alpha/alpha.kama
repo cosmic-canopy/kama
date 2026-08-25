@@ -1,0 +1,7 @@
+// THE CONTROL BEHIND THE ENTRY-POINT DIAGNOSTIC. That message claims two `main`s collide "where
+// `a::helper` and `b::helper` would not" — this is the fixture that makes the claim true rather than
+// merely plausible. Same shape as `xfail/dup_main.d`: two modules, one name declared in each. An
+// ordinary name is scoped by its module, so the two are distinct symbols and this BUILDS.
+export { helper };
+
+fn int32 helper() { return 7; }

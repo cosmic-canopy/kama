@@ -2116,6 +2116,14 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
 {
     if (rejectRootedPath(qualifier, site)) return name;
     std::string key = resolveFuncImpl(name, qualifier);
+    // §2f.31: `main` is the ENTRY POINT, not a symbol. C++ forbids calling it; Rust and Go make it
+    // uncallable. Here it is reached BELOW the visibility system — `qualify` maps it to `kama_main` before
+    // any scope prefix, and the emitter synthesizes a real C `main` that calls it directly — so no
+    // `export`, no `import` and no `visibility` could ever gate it. Say it where it is written instead.
+    if (site && !site->synthesized && name == "main")
+        unsupported("`main` is the program's entry point, not a callable function — the runtime calls it "
+                    "once. Move the body you want to share into a function of its own and call that",
+                    site->line);
     if (site && !site->synthesized)                                        // chokepoint: see resolveUserName
         checkReach(key, name, "a call", site->line, refFilePath(), qualifier && !qualifier->empty());
     recordRef(key, site);
@@ -6127,12 +6135,33 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             auto prev = _funcs.find(sig.cName);
             if (prev != _funcs.end() && !(prev->second.node && isExtern(prev->second.node))) {
                 FunctionDeclarationNode* first = prev->second.node;
-                std::string where = (first && first->name)
-                                        ? " (first declared at line " + std::to_string(first->name->line) + ")"
-                                        : std::string();
-                unsupported(("duplicate function '" + *fn->name->value + "' — kama has no overloading, so a "
-                             "name may be declared only once in its module" + where).c_str(),
-                            fn->name->line);
+                // The first declaration's location, WITH ITS FILE. It read "(first declared at line 2)"
+                // and named no file, which was merely unhelpful while both were in one file and is wrong
+                // now that a module spans a directory and `main` is scoped by nothing at all — the two
+                // sites are routinely in different folders. `FuncSig::declFile` carries it.
+                std::string where;
+                if (first && first->name) {
+                    where = " (first declared at ";
+                    if (!prev->second.declFile.empty()) where += prev->second.declFile + ":";
+                    where += std::to_string(first->name->line) + ")";
+                }
+                // ⚠️ TWO RULES, TWO MESSAGES. `main` is not scoped — `qualify` maps every one of them to
+                // `kama_main` before any scope prefix — so two `main`s collide where `a::helper` and
+                // `b::helper` do not. The generic message cannot describe both, and describing the wrong
+                // one is worse than terse: it sent the reader looking for a module clash that is not there.
+                //
+                // ⚠️ The generic arm must keep the literal prefix `duplicate function '<name>'` —
+                // tests/xfail/dup_fn.msg and dup_generic_fn.msg assert exactly that substring.
+                if (sig.cName == "kama_main")
+                    unsupported(("a project has ONE entry point, and this is the second `main`" + where
+                                 + ". `main` is scoped by nothing — it is not in any module's surface and "
+                                   "every one of them emits as the same C symbol — so two collide where "
+                                   "`a::helper` and `b::helper` would not").c_str(),
+                                fn->name->line);
+                else
+                    unsupported(("duplicate function '" + *fn->name->value + "' — kama has no overloading, "
+                                 "so a name may be declared only once in its module" + where).c_str(),
+                                fn->name->line);
             }
         }
 
@@ -21929,8 +21958,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || u == _preludeUnit || !u->exportList) continue;
         _nsCtx = _unitCtx[u.get()];
-        for (auto& name : *u->exportList)
-            if (name) _exported.insert(qualify(*name));
+        for (auto& name : *u->exportList) {
+            if (!name) continue;
+            // ⚠️ BEFORE `qualify`, which maps `main` to `kama_main` — an export list naming `main` was
+            // accepted silently and then validated fine, because `kama_main` really is in `_funcs`. The
+            // import side builds `m__main`, which is in no export set, so the only symptom was a consumer
+            // being told the module "does not export `main`" when the module plainly listed it.
+            if (*name == "main") {
+                const size_t which = (size_t)(&name - &(*u->exportList)[0]);
+                unsupported("`main` may not be exported — it is the program's entry point, not part of any "
+                            "module's surface, and no importer could name it",
+                            which < u->exportListPos.size() ? u->exportListPos[which].line : 0);
+            }
+            _exported.insert(qualify(*name));
+        }
     }
     _exportedReady = true;   // the file rung can be answered from here on — see `checkReach`
     // Pre-register every type's mangled NAME so references resolve regardless of

@@ -1,0 +1,5 @@
+// TWO `main`s IN ONE PROGRAM, in DIFFERENT modules — and it is the entry-point rule that refuses them,
+// not the duplicate-name rule. `dup_module_fn.d` is the twin: the same shape with an ordinary name
+// BUILDS, because `alpha::helper` and `beta::helper` are distinct symbols while both `main`s are
+// `kama_main`. The pair is what makes the split legible.
+fn int32 main() { return 0; }

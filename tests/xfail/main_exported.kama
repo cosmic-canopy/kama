@@ -1,0 +1,8 @@
+// `main` is not part of any module's surface, so it may not be listed. This was accepted SILENTLY: the
+// export loop runs the name through `qualify`, which maps `main` to `kama_main`, and `kama_main` really
+// is a declared function — so validation passed. The import side builds `m__main`, which is in no export
+// set, so the only symptom was a consumer being told the module "does not export `main`" when the module
+// plainly listed it. The check therefore has to run BEFORE `qualify`.
+export { main };
+
+fn int32 main() { return 0; }

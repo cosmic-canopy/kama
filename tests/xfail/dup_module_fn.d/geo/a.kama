@@ -1,0 +1,6 @@
+// Two declarations of one name in ONE module, across two files of it. This is the GENERIC message, and it
+// must say **module** — it said *namespace* until 2e deleted the declaration that word named, and this
+// fixture is the guard that the deletion did not leave the word behind in a diagnostic.
+export { helper };
+
+fn int32 helper() { return 7; }

@@ -1,0 +1,5 @@
+// Both imported into one file, so the collision is a NAMING one and `as` resolves it — which is the
+// other half of the point: nothing about the two declarations is in conflict.
+import { twomodname::alpha::helper, twomodname::beta::helper as bhelper };
+
+fn int32 main() { return helper() + bhelper(); }   // 7 + 9 = 16

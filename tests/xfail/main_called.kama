@@ -1,0 +1,8 @@
+// §2f.31: `main` is the entry point, not a symbol. It is reached BELOW the visibility system — `qualify`
+// maps it to `kama_main` before any scope prefix, and the emitter synthesizes a real C `main` that calls
+// it directly — so no `export`, no `import` and no `visibility` could gate it. Leaving the question to
+// the root module's visibility would be incoherent, so the rule is stated where it is written instead.
+// C++ forbids calling `main` outright; Rust and Go make it uncallable.
+fn int32 helper() { return main(); }
+
+fn int32 main() { return helper(); }
