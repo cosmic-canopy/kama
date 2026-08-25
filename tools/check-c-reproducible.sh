@@ -20,15 +20,24 @@
 #
 #   1. the two builds emit the SAME SET OF FILENAMES
 #        — REAL. With the positional suffix restored this fails immediately and prints both listings.
-#   2. no generated name carries a positional suffix
+#   2. no generated name carries a positional form — not a `_<index>.c` filename, not an `_F<digits>`
+#      symbol
 #        — REAL, and it is the assertion that survives a partial revert: a build could round-trip to the
 #          same names while still being positional if the permutation happened to be an identity, which
 #          (1) alone would not catch. This one reads the FORM, so it cannot be satisfied by luck.
 #   3. every generated file is BYTE-IDENTICAL across the two orders
-#        — NOT YET ASSERTED, and named here rather than left silent because a guard that stops at
-#          filenames reads as if it proved more than it did. Two things still move: the file-private
-#          scope is `_F<index>`, and the shared header declares each unit in the order the units were
-#          loaded. Both land in phase 4b, and this assertion turns on with them.
+#        — REAL for the emission ORDER, which was the second half of the defect: the shared header
+#          declared each unit in LOAD order, so one program's three declarations came out in two different
+#          sequences. ⚠️ It is NOT a test of the file-private scope, and believing it was is a mistake this
+#          guard made for one revision. Units are sorted canonically before emission, so a POSITIONAL
+#          scope is handed out in canonical order too and comes out identical either way. Measured, by
+#          restoring the positional scope: (3) passed.
+#   4. adding a file to a program does not move the symbols of the files already in it
+#        — REAL, and it is what actually pins the scope. Positional numbering is stable only within a
+#          FIXED unit set: insert one file near the front and every later file's private symbols shift,
+#          so a diff of yesterday's generated C against today's is noise in files nobody edited. Sorting
+#          cannot fix that and a name-derived scope does. This is the assertion (3) was wrongly credited
+#          with.
 #
 # The fixture is deliberately the hard case: three loose files, TWO OF THEM SHARING THE BASENAME `x.kama`,
 # which is exactly the collision the positional suffix existed to absorb.
@@ -87,7 +96,7 @@ if ! cmp -s "$tmp/names.one" "$tmp/names.two"; then
     exit 1
 fi
 
-# ---- 2. no positional suffix survives -----------------------------------------------------------------
+# ---- 2. no positional FORM survives, in a filename or in a symbol -------------------------------------
 if LC_ALL=C grep -E '_[0-9]+\.c$' "$tmp/names.one" > "$tmp/positional" 2>/dev/null; then
     echo "check-c-reproducible: FAIL — a generated file still carries a positional suffix:" >&2
     sed 's/^/  /' "$tmp/positional" >&2
@@ -95,6 +104,104 @@ if LC_ALL=C grep -E '_[0-9]+\.c$' "$tmp/names.one" > "$tmp/positional" 2>/dev/nu
     exit 1
 fi
 
-# ---- 3. byte-identical contents — PHASE 4b, see the header ---------------------------------------------
+# A file-private scope is `_F<file>`, never `_F<digits>`. `main.kama` is in the loose root, so it has no
+# module and `priv` is exactly this population.
+if LC_ALL=C grep -ohE '_F[0-9]+__[A-Za-z_]+' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
+        | sort -u > "$tmp/numbered" && [ -s "$tmp/numbered" ]; then
+    echo "check-c-reproducible: FAIL — a file-private scope is still numbered by load position:" >&2
+    head -5 "$tmp/numbered" | sed 's/^/  /' >&2
+    exit 1
+fi
+if ! LC_ALL=C grep -q '_Fmain__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null; then
+    echo "check-c-reproducible: FAIL — the loose-root file's private scope is not named after it." >&2
+    echo "  Expected '_Fmain__priv' from main.kama; found:" >&2
+    LC_ALL=C grep -ohE '_F[A-Za-z0-9_]*__priv' "$tmp/one"/*.c "$tmp/one"/*.h 2>/dev/null \
+        | sort -u | head -3 | sed 's/^/    /' >&2
+    exit 1
+fi
 
-echo "check-c-reproducible: OK — generated filenames are identical across operand orders"
+# ---- 3. byte-identical contents -----------------------------------------------------------------------
+# `#line` directives name the SOURCE, which is the same file in both builds, so there is nothing to
+# normalize away — a difference here is a real difference in the emitted C.
+while read -r f; do
+    if ! cmp -s "$tmp/one/$f" "$tmp/two/$f"; then
+        echo "check-c-reproducible: FAIL — '$f' differs between the two operand orders:" >&2
+        diff "$tmp/one/$f" "$tmp/two/$f" | head -12 | sed 's/^/  /' >&2
+        echo "  A file-private scope is derived from the unit's name, and units are emitted in a" >&2
+        echo "  canonical order — neither may depend on the position of an operand." >&2
+        exit 1
+    fi
+done < "$tmp/names.one"
+
+# ---- 4. adding a file does not move the symbols of the files already there -----------------------------
+# The property a positional scope violates even when nothing is permuted. `aaa/` sorts BEFORE everything
+# already in the program, so under load-order numbering it takes an index the other units used to hold and
+# pushes each of them along — every private symbol in files nobody edited moves.
+mkdir -p "$tmp/src/aaa" "$tmp/three"
+cat > "$tmp/src/aaa/extra.kama" <<'EOF'
+export { extra };
+fn int32 extra() { return 0; }
+EOF
+build_into "$tmp/three" "$tmp/src/main.kama" "$tmp/src/a/x.kama" "$tmp/src/b/x.kama" "$tmp/src/aaa/extra.kama"
+
+# Into files, not process substitution: this is `#!/bin/sh`. `grep -Fxv -f` rather than `comm`, which is
+# locale-broken on macOS and silently reports nonsense.
+syms_of() { LC_ALL=C grep -ohE '\b_F[A-Za-z0-9_]+__[A-Za-z_]+' "$1"/*.c "$1"/*.h 2>/dev/null | sort -u; }
+syms_of "$tmp/one"   > "$tmp/syms.before"
+syms_of "$tmp/three" > "$tmp/syms.after"
+if [ ! -s "$tmp/syms.before" ]; then
+    echo "check-c-reproducible: FAIL — no file-private symbol found; the fixture stopped testing this." >&2
+    exit 1
+fi
+missing=$(LC_ALL=C grep -Fxv -f "$tmp/syms.after" "$tmp/syms.before" || true)
+if [ -n "$missing" ]; then
+    echo "check-c-reproducible: FAIL — adding one file renamed symbols in the files already present:" >&2
+    printf '%s\n' "$missing" | head -5 | sed 's/^/  was: /' >&2
+    head -5 "$tmp/syms.after" | sed 's/^/  now: /' >&2
+    echo "  A file-private scope is named after its FILE, so an unrelated file cannot move it." >&2
+    exit 1
+fi
+
+# ---- 5. the collision the positional suffix used to absorb ---------------------------------------------
+# Deriving a name from identity only works while identity is unique, and for a module-less file identity is
+# just its NAME. Two rules cover that, and they are NOT the same rule — different populations, different
+# consequences, different commands:
+#
+#   build: two units, one generated `.c` filename. Reachable between units that DO have modules, too
+#          (`b__c.kama` in module `a` collides with `c.kama` in `a::b`), so it cannot be folded into the
+#          scope rule below.
+#   check: two module-less units, one file-private scope — their private symbols would collide in the
+#          emitted C with nothing to notice, since neither is importable.
+#
+# Both are asserted here rather than as an `xfail` fixture because the xfail leg only ever runs `kama
+# build`, where the filename rule fires first — so the scope rule could not be reached from there at all,
+# and an xfail for it would pass while testing the other rule's message.
+#
+# `my-prog` and `my_prog` are the reachable shape: two files CAN live in one directory under those names,
+# and a `-` is not legal in a C identifier, so both fold to the same stem.
+mkdir -p "$tmp/clash"
+printf 'fn int32 main() { return 0; }\n'   > "$tmp/clash/my-prog.kama"
+printf 'fn int32 helper() { return 2; }\n' > "$tmp/clash/my_prog.kama"
+
+if "$KAMA" build "$tmp/clash/my-prog.kama" "$tmp/clash/my_prog.kama" -o "$tmp/clash/app" \
+        > "$tmp/clash.log" 2>&1; then
+    echo "check-c-reproducible: FAIL — two units that fold onto one generated filename built clean." >&2
+    exit 1
+fi
+if ! grep -qF "would both generate 'my_prog.c'" "$tmp/clash.log"; then
+    echo "check-c-reproducible: FAIL — the filename collision is not reported by name:" >&2
+    head -4 "$tmp/clash.log" | sed 's/^/  /' >&2
+    exit 1
+fi
+
+if "$KAMA" check "$tmp/clash/my-prog.kama" "$tmp/clash/my_prog.kama" > "$tmp/clash2.log" 2>&1; then
+    echo "check-c-reproducible: FAIL — two units sharing a file-private scope checked clean." >&2
+    exit 1
+fi
+if ! grep -qF "the same file-private scope" "$tmp/clash2.log"; then
+    echo "check-c-reproducible: FAIL — the scope collision is not reported as one:" >&2
+    head -4 "$tmp/clash2.log" | sed 's/^/  /' >&2
+    exit 1
+fi
+
+echo "check-c-reproducible: OK — filenames and emitted C identical across operand orders; no positional form; adding a file moves nothing; both identity collisions reported"

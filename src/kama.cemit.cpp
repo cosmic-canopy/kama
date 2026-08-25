@@ -94,11 +94,11 @@ void CEmitter::line(int srcLine)
 
 // Render an INTERNAL mangled name the way the user spelled it. Declarations are scope-prefixed by
 // `qualify()` as `<scope>__<name>`, where the scope is a namespace (`std__collections`) or, for a
-// file-private type, `_F<fileIndex>` — so a diagnostic that interpolates a resolved name leaks
-// `_F4__Plain` or `std__collections__Map` at the user. Applied once here, at the single point where a
+// file-private type, `_F<file>` — so a diagnostic that interpolates a resolved name leaks
+// `_FplainMod__Plain` or `std__collections__Map` at the user. Applied once here, at the single point where a
 // message becomes visible, rather than at the ~30 call sites that interpolate a name (and every future one).
 //
-// Per identifier token: an INTERIOR `__` becomes `::`, then a leading `_F<digits>::` is dropped. A LEADING
+// Per identifier token: a REGISTERED file-private scope is stripped, then an INTERIOR `__` becomes `::`. A LEADING
 // `__` is left alone — the emitter's own reserved identifiers (`__base`, `__vptr`, `__ret_N`, `__match0`;
 // SPEC § Reserved/runtime) must render verbatim.
 // A monomorphized instance is additionally mangled as `Tmpl_<arg>_<arg>` — rendered back to the source
@@ -157,18 +157,24 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
             continue;
         }
 
+        // A FILE-PRIVATE scope names no namespace a user could write, so it is stripped rather than
+        // rendered. Since §2e.26 the spelling is derived from the file's name (`_Fmain`) instead of its
+        // position (`_F4`), so there is no pattern to match on — the registry the emitter filled while
+        // assigning contexts is the only thing that knows. Longest match wins, because a file whose name
+        // itself contains `__` mints a scope that does too (`b__c.kama` -> `_Fb__c`).
+        const std::string* priv = nullptr;
+        for (const auto& s : _privateScopes)
+            if (tok.size() > s.size() + 2 && tok.compare(0, s.size(), s) == 0
+                && tok.compare(s.size(), 2, "__") == 0 && (!priv || s.size() > priv->size()))
+                priv = &s;
+        if (priv) { out += demangleForDisplay(tok.substr(priv->size() + 2), depth + 1); continue; }
+
         // Leading underscores are reserved-identifier territory — measure the token's real start.
         size_t lead = tok.find_first_not_of('_');
         if (lead == std::string::npos) { out += tok; continue; }
         std::string body = tok.substr(lead);
         for (size_t p = body.find("__"); p != std::string::npos; p = body.find("__", p + 2))
             body.replace(p, 2, "::");
-        // `_F<digits>::` is a private FILE scope — it names no namespace a user could write.
-        if (lead == 1 && body.size() > 1 && body[0] == 'F') {
-            size_t d = 1;
-            while (d < body.size() && std::isdigit((unsigned char)body[d])) ++d;
-            if (d > 1 && body.compare(d, 2, "::") == 0) { out += body.substr(d + 2); continue; }
-        }
         out += tok.substr(0, lead) + body;
     }
     return out;
@@ -276,19 +282,39 @@ static std::string dottedModule(const std::string& mod)
     return r;
 }
 
-// Build a file's namespace context: the module its PATH puts it in, or private (`_F<idx>`); collect its
+// The file-private scope for a unit no module owns, derived from the unit's NAME rather than its position
+// in the compilation (§2e.26). It used to be `_F<index>`, which made every file-private symbol move when
+// the operands were permuted: the same program emitted `_F4__priv` one way and `_F6__priv` the other, so
+// `--keep-c` was not reproducible. The index also counted prelude units, so it moved for reasons that had
+// nothing to do with the user's own file list.
+//
+// `_F` is kept as the marker (leading `_` + uppercase is reserved to the implementation by C11 §7.1.3, and
+// that is what these are), but it is no longer followed by digits — so `demangleForDisplay` can no longer
+// recognise one by PATTERN and reads a registry of minted scopes instead.
+static std::string privateScopeFor(const std::string& unitPath)
+{
+    size_t slash = unitPath.find_last_of("/\\");
+    std::string stem = (slash == std::string::npos) ? unitPath : unitPath.substr(slash + 1);
+    size_t dot = stem.find_last_of('.');
+    if (dot != std::string::npos) stem.erase(dot);
+    std::string r = "_F";
+    for (char c : stem) r += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
+    return r;
+}
+
+// Build a file's namespace context: the module its PATH puts it in, or private (`_F<file>`); collect its
 // `using`s and aliases.
 //
 // A file's identity is where it sits — its path under its project's `source` root, resolved against the
 // `modules` map in that project's `kama.json` (design/module-system.md §2b). The driver answers that
 // through `_moduleResolver`, because it is filesystem work. A loose file — nothing with a `kama.json`
-// above it — has no module to be in, and keeps the file-private `_F<idx>` scope until §2e.27 replaces it.
+// above it — has no module to be in, and takes the file-private scope above; §2e.27 is what makes its
+// symbols unimportable, which is why deriving that scope from the file's own name is enough.
 //
-// ⚠️ The middle rung is TEMPORARY. Until phase 2e deletes `namespace` from the language, a file may still
-// declare one, and 11 fixtures plus ~50 declarations inside guard heredocs live in trees that have no
-// manifest at all — they would silently become file-private (their `export` inert, their qualified
-// self-references unresolvable) the moment this arm goes. It goes with all 91 of them at once, not before.
-NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
+// There are TWO rungs, not three. A middle one read the file's own `namespace` declaration; phase 2e
+// deleted that declaration from the language along with all 91 of its uses, so a file's identity now comes
+// from where it sits or from nowhere at all.
+NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
 {
     NsCtx ctx;
     ctx.unitPath = unit->name ? *unit->name : std::string();
@@ -298,7 +324,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
         ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
         ctx.isPublic = true;
     } else {
-        ctx.scope = "_F" + std::to_string(fileIndex);
+        ctx.scope = privateScopeFor(ctx.unitPath);
         ctx.isPublic = false;
     }
     // Imports (`::`-path already resolved to source by the driver). Populate scope bindings:
@@ -327,7 +353,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
             // `import { X };` — an EMPTY modulePath is the SAME-MODULE form, not a malformed one. It
             // needs no path because there is exactly one candidate, so it targets this file's own scope
             // and the symbols bind bare, just as a foreign per-symbol import does. (A file in no module
-            // has scope `_F<idx>` and no siblings, so the form is inert rather than special-cased.)
+            // has scope `_F<file>` and no siblings, so the form is inert rather than special-cased.)
             std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(path);
             if (imp->symbols)
                 for (auto& sym : *imp->symbols) {
@@ -6924,10 +6950,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                                  "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
                             } else if (cd->typeParams && !cd->typeParams->empty()) {
                                 // infallible ctor on a GENERIC type: the return type must carry the type
-                                // parameters (`Pair<T>`, not the bare template `_F4__Pair`) so per-instance
+                                // parameters (`Pair<T>`, not the bare template `_F<file>__Pair`) so per-instance
                                 // emission substitutes them — exactly as a `static fn Pair<T> make` return type
                                 // would. Without this the ctor's return type + return-slot stay unspecialized
-                                // (clang: `unknown type name '_F4__Pair'`). #M7-E1
+                                // (clang: `unknown type name '_F<file>__Pair'`). #M7-E1
                                 if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic-ctor>"));
                                 auto rt = synthClone(*cd->name);   // copy name + qualifier
                                 rt->genericArgs = std::make_shared<IdentifierList>();
@@ -7316,7 +7342,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         } else if (ci.genSerialize || ci.genDeserialize) {
             // The only two kinds that had NO arm here, so they were accepted in silence: the type read as
             // conforming, nothing synthesized the conformance, and the first `encode(v: b)` died in the C
-            // compiler on a missing `_F4__Box_int32__as_Serialize` vtable. Its four siblings above all say so.
+            // compiler on a missing `_F<file>__Box_int32__as_Serialize` vtable. Its four siblings above all say so.
             unsupported("`@generate(Serialize, Deserialize)` applies only to a plain (non-generic, non-variant) "
                         "type — write `implements Serialize`/`Deserialize` by hand for a generic or variant", cd->line);
         }
@@ -7903,7 +7929,7 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
     // this instantiation (`Fixed<T,N>` with N=4) mangles to the integer itself (`_4`), symmetric to
     // a type arg's name. Consulted before the type-param path since a const arg has no `value`.
     // A NEGATIVE value spells its sign as `n`: `-` is not a C identifier character, so `f::<(-1)>()`
-    // otherwise mangled to `_F4__neg8__-1` and died in the C compiler with no kama diagnostic.
+    // otherwise mangled to `_F<file>__neg8__-1` and died in the C compiler with no kama diagnostic.
     { int64_t v; if (constArgN(elem, v))
         return v < 0 ? "n" + std::to_string(-(uint64_t)v) : std::to_string(v); }
     // substitute a bound type-param before mangling (mirrors cType).
@@ -9281,7 +9307,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // A tagged enum's variant PAYLOAD is a declared type just like a class field, and until this
             // arm existed nothing scanned it: a payload type reached registration only if some OTHER part
             // of the program happened to name it. So `enum E { A, B(Shared<Probe>) }` whose `B` is never
-            // constructed emitted a C union naming `std__memory__Shared__F4__Probe_GlobalAllocator`, a type
+            // constructed emitted a C union naming `std__memory__Shared__F<file>__Probe_GlobalAllocator`, a type
             // that was never declared. The union has storage for every variant whether or not one is built,
             // so the payload must register unconditionally.
             //
@@ -9404,7 +9430,7 @@ SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
     // The template shape carries the mint's declared return type; the concrete class does too, when the
     // host is not generic (a user's `Buf.span()`).
     // `resolveUserName`, not `qualify` — the host is usually an IMPORTED type, and `qualify` answers with
-    // this file's private mangle (`_F4__DynamicArray`), which matches nothing.
+    // this file's private mangle (`_F<file>__DynamicArray`), which matches nothing.
     const std::string base = resolveUserName(*recvTy->value, recvTy->qualifier, nullptr);
     ClassInfo* shape = nullptr;
     const std::vector<std::string>* tps = nullptr;
@@ -12834,7 +12860,7 @@ void CEmitter::checkViewContractCtors()
                         if (paramCanCarryBorrow(mp.get(), selfParam)) { borrowable = true; break; }
                 if (borrowable) continue;
 
-                // Name the TEMPLATE, not the mangled instance — `FromWide`, not `FromWide_F4_Span`, which
+                // Name the TEMPLATE, not the mangled instance — `FromWide`, not `FromWide_F<file>_Span`, which
                 // is what the author wrote and is stable across instantiations.
                 unsupported(("a `view` (`" + ci.name + "`) borrows memory it is handed, but contract `"
                              + ii.templateKey + "` requires `ctor " + m.name + "` to construct one from parameters "
@@ -17671,7 +17697,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             // rule, no exceptions — which is the only way `grep '\.make('` finds every construction site.
             if (mi && mi->isCtor) {
                 // Diagnose with the SOURCE spelling the user wrote, not the mangled/monomorphized key
-                // `typeName` may have become above (`Point`, not `_F4__Point`; `Pair`, not `Pair_int32`).
+                // `typeName` may have become above (`Point`, not `_F<file>__Point`; `Pair`, not `Pair_int32`).
                 const std::string& disp = *qual->back();
                 unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
                              "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
@@ -19025,7 +19051,7 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
 void CEmitter::emitFormatDefinition(ClassInfo& ci)
 {
     int line = ci.node ? ci.node->line : 0;
-    // The dump uses the SOURCE type name (`Stat`), not the mangled C name (`_F4__Stat`).
+    // The dump uses the SOURCE type name (`Stat`), not the mangled C name (`_F<file>__Stat`).
     std::string disp = (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
           << "__format(" << ci.name << "* self, Formatter* f)\n{\n";
@@ -19283,7 +19309,7 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
     return e;
 }
 
-// The wire `__type` tag for a graph node: the SOURCE type name (`Node`), not the mangled C name (`_F4__Node`).
+// The wire `__type` tag for a graph node: the SOURCE type name (`Node`), not the mangled C name (`_F<file>__Node`).
 // Both the writer (beginTableEntry) and the reader (dispatch) must agree, so they share this.
 std::string CEmitter::graphWireName(const ClassInfo& ci)
 {
@@ -21941,16 +21967,31 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // analysis-only, so a build pays nothing.
     if (_analysis) buildDeclUnits();
 
-    // Assign each file its namespace context (public namespace or _F<idx> private)
+    // Assign each file its namespace context (public module scope, or a `_F<file>` file-private one)
     // and register public namespaces, before any name resolution.
+    std::map<std::string, std::string> privateScopeOwner;   // scope -> the unit that minted it
     for (size_t i = 0; i < units.size(); ++i) {
         if (!units[i]) continue;
         NsCtx ctx;
         if (units[i] == _preludeUnit) { ctx.isPublic = true; }   // empty scope = global (bare names)
-        else                          ctx = ctxOf(units[i], (int)i);
+        else                          ctx = ctxOf(units[i]);
         _unitCtx[units[i].get()] = ctx;
         if (ctx.isPublic && !ctx.scope.empty()) _namespaces.insert(ctx.scope);
         if (!ctx.scope.empty() && !ctx.module.empty()) _moduleNames[ctx.scope] = ctx.module;
+        // A file-private scope is derived from the file's NAME (§2e.26), so two units can only share one by
+        // sharing a name — and then their file-private symbols would collide in the emitted C, silently,
+        // since neither is importable and nothing else would notice. Two files in one directory cannot have
+        // the same name, but two module-less files reached from different directories can, and a name that
+        // is not a legal C identifier folds (`my-prog` and `my_prog` both give `_Fmy_prog`).
+        if (!ctx.isPublic && !ctx.scope.empty()) {
+            auto claimed = privateScopeOwner.emplace(ctx.scope, ctx.unitPath);
+            if (!claimed.second && claimed.first->second != ctx.unitPath)
+                unsupported(("'" + claimed.first->second + "' and '" + ctx.unitPath + "' are both in no "
+                             "module, and their names give them the same file-private scope — their "
+                             "private symbols would collide in the emitted C. Rename one, or move it into "
+                             "a subdirectory, which makes it a module").c_str(), 0);
+            _privateScopes.insert(ctx.scope);
+        }
     }
     // Record each module's PUBLIC SURFACE from its top-of-file `export { … };` manifest. Everything
     // unlisted is module-private and cannot be pulled in by another module's per-symbol `import`
@@ -22187,7 +22228,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         for (auto& base : ci.interfaces) {
             unsigned allowed = implKindsOf(base);
             if (!allowed || (allowed & k)) continue;   // 0 = a base class, unresolved, or already diagnosed
-            // Name the TEMPLATE, not the mangled instance (`Windowed`, not `Windowed_F4_Span`): it is
+            // Name the TEMPLATE, not the mangled instance (`Windowed`, not `Windowed_F<file>_Span`): it is
             // what the author wrote and it is stable across instantiations. checkViewContractCtors made
             // the same call for the same reason.
             auto bi = _interfaces.find(base);

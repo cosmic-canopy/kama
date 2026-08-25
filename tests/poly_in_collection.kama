@@ -2,8 +2,8 @@
 //
 // This used to fail at the C level, never at the kama level:
 //
-//   error: use of undeclared identifier '_F4__DerivedTick__vtable'
-//     x.__base.__vptr = &_F4__DerivedTick__vtable;
+//   error: use of undeclared identifier '_F<file>__DerivedTick__vtable'
+//     x.__base.__vptr = &_F<file>__DerivedTick__vtable;
 //
 // `DynamicArray<DerivedTick>`'s `_FUNCS` body lives in the SHARED HEADER and stores `&C__vtable` when it
 // moves an element by value, while the vtable instance is defined later, per-module. It was `static

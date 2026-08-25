@@ -87,7 +87,7 @@ if ! "$KAMA" build "$p/kama.json" -o "$tmp/c/app" --keep-c > "$tmp/build.log" 2>
     exit 1
 fi
 
-syms=$(grep -ohE '\b(deriv[A-Za-z_]*|_F[0-9]+)__[A-Za-z_]+' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null | sort -u)
+syms=$(grep -ohE '\b(deriv[A-Za-z_]*|_F[A-Za-z0-9_]+)__[A-Za-z_]+' "$tmp/c"/*.c "$tmp/c"/*.h 2>/dev/null | sort -u)
 emitted() {
     printf '%s\n' "$syms" | grep -Fxq "$1" && ok "$2" || bad "$2 — no \`$1\` in the emitted C"
 }
@@ -116,13 +116,15 @@ else
     bad "the embedded triad emitted no \`std__memory__Owned\` — did app.kama stop instantiating it?"
 fi
 
-# The positional file scope is what identity REPLACES. It survives only for a loose file (§2e.27) — a
-# project's files must never land in it, and a stray `_F<n>` here means a unit missed the derivation.
-if printf '%s\n' "$syms" | grep -q '^_F[0-9]'; then
-    bad "a file in a project still carries the positional \`_F<n>\` scope:"
-    printf '%s\n' "$syms" | grep '^_F[0-9]' | head -5 | sed 's/^/        /' >&2
+# The file-private scope is what identity REPLACES. It survives only for a loose file (§2e.27) — a
+# project's files must never land in it, and a stray `_F<file>` here means a unit missed the derivation.
+# The test is the PREFIX, not its old numbered form: since §2e.26 a private scope is named after its file
+# (`_Fapp`), so a check for `_F[0-9]` would now pass on every miss it was written to catch.
+if printf '%s\n' "$syms" | grep -q '^_F'; then
+    bad "a file in a project still carries a file-private \`_F<file>\` scope:"
+    printf '%s\n' "$syms" | grep '^_F' | head -5 | sed 's/^/        /' >&2
 else
-    ok "no positional \`_F<n>\` scope survives anywhere in a project build"
+    ok "no file-private scope survives anywhere in a project build"
 fi
 
 # ---------------------------------------------------------------------------------------------------
@@ -132,7 +134,7 @@ echo "check-modules: with no manifest, a module is still a folder"
 # ancestor of the operands' directories is the root, and a file's module is its own directory below it.
 # NOT ONE FILE HERE DECLARES A NAMESPACE, which is the whole point: this is the shape the corpus takes
 # after 2e, and until the loose arm existed a program like it could not be built at all. (Run it against
-# a compiler without that arm: `area` emits as `_F<n>__area` while `app.kama`'s import resolves the CALL
+# a compiler without that arm: `area` emits as `_F<file>__area` while `app.kama`'s import resolves the CALL
 # to `geo__area`, so the C compiler is handed a call to a function nobody defined.)
 l="$tmp/loose-prog"
 mkdir -p "$l/geo/deep" "$l/oddly-named" "$tmp/lc"
@@ -153,16 +155,16 @@ if ! "$KAMA" build "$l/app.kama" "$l/geo/area.kama" "$l/geo/deep/nested.kama" "$
     bad "a loose program whose modules are folders does not build:"
     head -5 "$tmp/loose.log" >&2
 else
-    lsyms=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[0-9]+__[A-Za-z_]+)' "$tmp/lc"/*.c "$tmp/lc"/*.h 2>/dev/null | sort -u)
+    lsyms=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c "$tmp/lc"/*.h 2>/dev/null | sort -u)
     lemitted() { printf '%s\n' "$lsyms" | grep -Fxq "$1" && ok "$2" || bad "$2 — no \`$1\` in the emitted C"; }
     lemitted geo__area        "a loose file's folder is its module, with no manifest and no declaration"
     lemitted geo__deep__nested "...composing every folder down from the root"
     # §2e.27, and the one rung the loose derivation deliberately does NOT reach: a file in the root
     # itself has no folder below the root to be named by, so it stays file-private. That is what makes it
     # unimportable, which is the rule 2e turns into a diagnostic.
-    printf '%s\n' "$lsyms" | grep -qE '^_F[0-9]+__helper' \
+    printf '%s\n' "$lsyms" | grep -Fxq '_Fapp__helper' \
         && ok "a file in the loose ROOT has no module, so it keeps the file-private scope (§2e.27)" \
-        || bad "a file in the loose root gained a module — the root is not a folder below itself"
+        || bad "a file in the loose root gained a module, or its private scope is not named after it"
     # A folder whose name is not a legal kama identifier is not a module: nothing could write
     # `import oddly-named::{ … }`. It must not become one ANYWAY and put a hyphen in a C symbol.
     grep -qE '[A-Za-z0-9_]-[A-Za-z0-9_]*__' "$tmp/lc"/*.c "$tmp/lc"/*.h 2>/dev/null \
@@ -173,16 +175,19 @@ else
 fi
 
 # The invariant that makes the derivation an IDENTITY and not a position (§1b): it reads a SET, so the
-# order the operands are written in cannot reach the emitted C. `_F<n>` still numbers by load order —
-# that is exactly what phase 4 replaces — so compare only the module-scoped symbols.
+# order the operands are written in cannot reach the emitted C. This used to compare only the
+# module-scoped symbols, because the file-private scope was `_F<load index>` and moved on purpose; since
+# §2e.26 named it after its file, the comparison covers EVERY symbol — which is the whole claim, and it
+# was previously being made about a subset. (`tools/check-c-reproducible.sh` makes the stronger version of
+# this same claim about the generated filenames and the emitted bytes.)
 mkdir -p "$tmp/lc2"
 if "$KAMA" build "$l/oddly-named/x.kama" "$l/geo/deep/nested.kama" "$l/geo/area.kama" "$l/app.kama" \
         -o "$tmp/lc2/app" --keep-c > "$tmp/loose2.log" 2>&1; then
-    a=$(grep -ohE '\bgeo__[A-Za-z_]+' "$tmp/lc"/*.c  "$tmp/lc"/*.h  2>/dev/null | sort -u)
-    b=$(grep -ohE '\bgeo__[A-Za-z_]+' "$tmp/lc2"/*.c "$tmp/lc2"/*.h 2>/dev/null | sort -u)
+    a=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc"/*.c  "$tmp/lc"/*.h  2>/dev/null | sort -u)
+    b=$(grep -ohE '\b(geo__[A-Za-z_]+|_F[A-Za-z0-9_]+__[A-Za-z_]+)' "$tmp/lc2"/*.c "$tmp/lc2"/*.h 2>/dev/null | sort -u)
     [ -n "$a" ] && [ "$a" = "$b" ] \
         && ok "the operand ORDER does not reach the symbols — the derivation reads a set" \
-        || bad "reordering the operands changed the module symbols"
+        || bad "reordering the operands changed the emitted symbols"
 else
     bad "the same program does not build with its operands in another order"
 fi

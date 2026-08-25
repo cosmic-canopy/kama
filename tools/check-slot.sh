@@ -30,7 +30,7 @@ OUT="$TMP/slot_drop_elided.c"
     || { echo "check-slot: transpile failed" >&2; exit 1; }
 
 # The body of run(), where the slot lives, without the #line directives.
-# Emitted names carry a per-file prefix (`_F4__run`), so match the suffix rather than the whole name.
+# Emitted names carry a per-file prefix (`_F<file>__run`), so match the suffix rather than the whole name.
 BODY=$(awk '/^int32_t .*run\(bool early\)$/,/^}/' "$OUT" | grep -v '^#line')
 # Everything up to and including the `out` fill — i.e. the region where the slot is provably still empty.
 PRE=$(printf '%s\n' "$BODY" | sed -n '1,/makeInto/p')

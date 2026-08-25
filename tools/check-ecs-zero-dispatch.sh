@@ -12,13 +12,23 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 [ "${KAMA_SAN:-0}" = 0 ] && [ "${KAMA_WASM:-0}" = 0 ] || { echo "SKIP check-ecs (native only)"; exit 0; }
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-"$KAMA" transpile tests/ecs_pattern.kama -o "$tmp/ecs.c" >/dev/null
+SRC=tests/ecs_pattern.kama
+"$KAMA" transpile "$SRC" -o "$tmp/ecs.c" >/dev/null
+
+# The fixture is a loose file in no module, so its symbols carry the file-private scope — which since
+# §2e.26 is named after the FILE (`_Fecs_pattern`) rather than numbered by load position (`_F4`). Derived
+# from the source name here rather than written out, because the old spelling WAS written out: a prefix
+# that stops matching makes this guard report "tickAll was not monomorphized", which reads as a codegen
+# regression when it is really a stale guard. Deriving it means a renamed fixture cannot cause that.
+# NB the `\n` in the preserved set: `tr -c` complements it, and basename's trailing newline is part of
+# tr's input, so leaving it out appends a `_` and the prefix silently matches nothing.
+P="_F$(basename "$SRC" .kama | tr -c 'A-Za-z0-9_\n' '_')"
 
 fail=0
 # 1. the contract-bounded generic monomorphized, and calls Timer__tick DIRECTLY
-if grep -q '_F4__tickAll___F4__Timer' "$tmp/ecs.c"; then
-    body=$(sed -n '/^static int32_t _F4__tickAll___F4__Timer/,/^}/p' "$tmp/ecs.c")
-    if echo "$body" | grep -q '_F4__Timer__tick('; then
+if grep -q "${P}__tickAll__${P}__Timer" "$tmp/ecs.c"; then
+    body=$(sed -n "/^static int32_t ${P}__tickAll__${P}__Timer/,/^}/p" "$tmp/ecs.c")
+    if echo "$body" | grep -q "${P}__Timer__tick("; then
         echo "  ok: contract bound monomorphized to a DIRECT call (Timer__tick)"
     else
         echo "  FAIL: tickAll<T: Tickable> no longer calls Timer__tick directly"; fail=1
@@ -33,8 +43,8 @@ else
 fi
 
 # 2. the plain system writes through a concrete Transform* with no dispatch
-body=$(sed -n '/^void _F4__integrate(std/,/^}/p' "$tmp/ecs.c")
-if echo "$body" | grep -q '_F4__Transform\* t'; then
+body=$(sed -n "/^void ${P}__integrate(std/,/^}/p" "$tmp/ecs.c")
+if echo "$body" | grep -q "${P}__Transform\* t"; then
     echo "  ok: the system loop walks a concrete Transform*"
 else
     echo "  FAIL: the system loop no longer binds a concrete Transform*"; fail=1

@@ -635,9 +635,11 @@ xfail_one() {
     local src="$1" name out res err rc msg_file
     name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
-    # One file, or every file of a .d directory. `sort` because the build's unit ORDER is observable
-    # (today through _F<n>, and a diagnostic naming "the first declaration" picks by it), so a fixture
-    # must not depend on whatever order the filesystem hands back.
+    # One file, or every file of a .d directory. `sort` because the ORDER the operands are written in used
+    # to be observable in the output, so a fixture must not depend on whatever order the filesystem hands
+    # back. Less of that is true since §2e.26 — a build now sorts its units canonically and derives every
+    # generated name from identity — but a diagnostic naming "the first declaration" still picks by unit
+    # order, and `kama check` does not sort. Sorting here costs nothing and keeps the input stable too.
     if [ -d "$src" ]; then
         msg_file="$src/msg"
         if [ -f "$src/kama.json" ]; then

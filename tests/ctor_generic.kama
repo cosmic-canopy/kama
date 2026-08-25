@@ -1,6 +1,6 @@
 // Construction-model M7 (emitter enablers E1/E2/E3): a NAMED `ctor` on a GENERIC type.
 //   E1: the ctor body is specialized PER-INSTANCE — the bare local `Pair<T> p` and the return slot emit the
-//       specialized C type (`_F4__Pair_int32`), not the raw template `_F4__Pair` (which fails to compile).
+//       specialized C type (`_F<file>__Pair_int32`), not the raw template `_F<file>__Pair` (which fails to compile).
 //   E2: dot-on-type call with args INFERRED from the LHS annotation (`Pair<int32> q = Pair.make(...)`).
 //   E3: dot-on-type call with an EXPLICIT turbofish (`Pair::<int32>.make(...)`) — the type's args ride the
 //       TYPE (`::<…>` on the receiver), the canonical one-way generic-constructor spelling.

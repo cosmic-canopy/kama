@@ -41,7 +41,7 @@ global=$1; shift
     printf '    "<prelude>/%s",\n' "$rel"
     # The MODULE these declarations belong to, stated rather than derived — a synthetic unit has no path
     # for the file→module rule to work from, and without this the triad would land in a file-private
-    # scope and `std__memory__Owned` would silently become `_F<n>__Owned`. Derived from the file's
+    # scope and `std__memory__Owned` would silently become `_F<file>__Owned`. Derived from the file's
     # directory under lib/, which is exactly how the same module is named for the copy on disk.
     printf '    "%s" },\n' "$(dirname "$rel" | tr '/' '@' | sed 's/@/::/g')"
     n=$((n + 1))

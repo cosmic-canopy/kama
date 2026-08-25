@@ -8,7 +8,7 @@
 // the author wrote, which makes it act like a real local of that type under every promotion rule.
 //
 // The negative case is also the guard for the mangling: `-` is not a C identifier character, so
-// `neg8::<(-1)>()` used to mangle to `_F4__neg8__-1` and die in the C compiler with no kama
+// `neg8::<(-1)>()` used to mangle to `_F<file>__neg8__-1` and die in the C compiler with no kama
 // diagnostic. A negative value now spells its sign as `n`.
 fn int32  neg8  <const F: int8>()   { return cast<int32>(F); }
 fn int32  small <const F: int16>()  { return cast<int32>(F); }

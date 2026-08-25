@@ -208,11 +208,11 @@ struct MethodInfo {
 enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed };
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
-// = mangled X); a file without one is private (scope = "_F<idx>"). Bare names
+// = mangled X); a file without one is private (scope = "_F<file>"). Bare names
 // resolve to the file's own scope, then its `using`s — never another file's
 // private symbols (private-by-default).
 struct NsCtx {
-    std::string scope;        // mangle prefix: "Graphics" or "_F3"
+    std::string scope;        // mangle prefix: "Graphics" or "_F<file>"
     // The file this context belongs to. Visibility is per FILE, not per module, so "may this reference
     // reach that declaration" is answered by comparing this against the symbol's `declFile`. It travels
     // in NsCtx rather than being read from `diagFile()` because every pass already installs the right
@@ -221,7 +221,7 @@ struct NsCtx {
     // Empty for the prelude, which is compiler-owned and exempt.
     std::string unitPath;
     // The module this file is in, UNMANGLED (`std::collections`), as the driver names it. `scope` holds the
-    // mangled form and cannot be turned back: a kama identifier may contain `__` (`_Hidden` -> `_F4___Hidden`),
+    // mangled form and cannot be turned back: a kama identifier may contain `__` (`_Hidden` -> `_F<file>___Hidden`),
     // so the join is not injective. Empty for a file in no module.
     std::string module;
     bool        isPublic = false;
@@ -1250,11 +1250,16 @@ private:
     // mangled prefix and §2c is asked in real module names. Complete by construction — every module in the
     // compilation has at least one unit, and this is filled from the same loop that builds `_unitCtx`.
     std::map<std::string, std::string> _moduleNames;   // registered public namespaces (mangled)
+    // The file-private scopes this compilation minted (`_F<file>`, one per unit no module owns). A private
+    // scope names nothing a user could write, so `demangleForDisplay` strips it from a message — and since
+    // §2e.26 made the spelling name-derived rather than `_F<digits>`, there is no PATTERN left to recognise
+    // one by. This registry is what it consults instead. Filled from the same loop that builds `_unitCtx`.
+    std::set<std::string> _privateScopes;
     std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
-    NsCtx ctxOf(SharedCompilationUnit unit, int fileIndex);      // build a file's NsCtx
+    NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
     static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
     std::string qualify(const std::string& name) const;          // scope-prefix a declared name
@@ -2379,7 +2384,7 @@ private:
     std::string addrOfOperand(SharedExpression e, const std::string& cls, int line);
 
     // Both render their message through demangleForDisplay first, so an internal mangled name
-    // (`_F4__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
+    // (`_F<file>__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
     const std::string& diagFile() const;   // the file a diagnostic belongs to — see the definition
     void unsupported(const char* rawWhat, int srcLine);
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).

@@ -2,7 +2,7 @@
 // union with storage for every arm, so the C struct names every payload type whether or not one is built —
 // but payload types used to reach registration only if some OTHER part of the program happened to name
 // them. `Boxed` is never constructed here, so before the fix the emitted C referenced an undeclared
-// `std__memory__Shared__F4__Probe_GlobalAllocator`. (`Shared<T>` specifically, because a smart-pointer
+// `std__memory__Shared__F<file>__Probe_GlobalAllocator`. (`Shared<T>` specifically, because a smart-pointer
 // instance is monomorphized on demand rather than being a plain named struct.)
 type resource Probe {
     int32 v;

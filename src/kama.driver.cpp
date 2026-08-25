@@ -1945,7 +1945,7 @@ static void configureEmitter(CEmitter& e)
     // which no path→module derivation can reach — and it DOES go through ctxOf. Its module is therefore
     // stated rather than derived, in KamaPreludeModule::module (src/kama.prelude.h).
     //
-    // What that header warns of — drop this and `std__memory__Owned` becomes `_F<n>__Owned` — was a
+    // What that header warns of — drop this and `std__memory__Owned` becomes `_F<file>__Owned` — was a
     // PREDICTION about phase 2e through 2c and 2d, and false at the time: a compiler built with this arm
     // returning "" stayed entirely green, because lib/std/memory/*.kama still declared `namespace
     // std::memory` and ctxOf's declaration rung caught them. 2e deleted both, so it is now TRUE, and
@@ -8876,6 +8876,34 @@ int main(int argc, char** argv)
         std::vector<SharedCompilationUnit> units;
         std::vector<std::string> unitPaths;
         if (!loadProgramUnits(inputs, argv[0], units, unitPaths, devBuild)) return 1;
+
+        // Emit in a CANONICAL order, not the order the units happened to load in. `loadProgramUnits` walks
+        // the import closure breadth-first from the operands, so permuting the argument list permutes the
+        // vector — and the shared header declares each unit in that order, which put the same three
+        // declarations in two different sequences across two builds of one program. Naming the generated
+        // files by module (§2e.26) fixed WHAT is emitted; this is what fixes the order it is emitted in,
+        // and both are needed before `--keep-c` output can be diffed at all.
+        //
+        // Sorted by the same stem the `.c` filenames use, so the file list and the header agree. Ordering
+        // is free to be anything stable: the emitter pre-registers every type's mangled name before
+        // resolution precisely so nothing depends on file order. It does have one visible consequence —
+        // a diagnostic that names "the first declaration" of a duplicate now picks the same one every
+        // time, where before it picked whichever unit loaded first.
+        //
+        // Before the branch below, not inside it, because the unity release path folds every unit into ONE
+        // translation unit and so is order-dependent in exactly the same way.
+        if (units.size() > 1) {
+            std::vector<size_t> order(units.size());
+            for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+            std::vector<std::string> stems(units.size());
+            for (size_t i = 0; i < units.size(); ++i) stems[i] = cStemForUnit(unitPaths[i]);
+            std::stable_sort(order.begin(), order.end(),
+                             [&](size_t a, size_t b) { return stems[a] < stems[b]; });
+            std::vector<SharedCompilationUnit> su; su.reserve(units.size());
+            std::vector<std::string> sp; sp.reserve(unitPaths.size());
+            for (size_t i : order) { su.push_back(units[i]); sp.push_back(unitPaths[i]); }
+            units.swap(su); unitPaths.swap(sp);
+        }
 
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
