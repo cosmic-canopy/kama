@@ -562,9 +562,21 @@ multi_one() {
     # A fixture WITH a manifest is named BY ITS MANIFEST, because the operand is the mode: naming the
     # .kama files instead is a LOOSE build, which by design applies no manifest at all — no `flags`
     # universe, no dependency view, no `out` root. That is what these fixtures are testing, so they have
-    # to be spelled as projects. One without a manifest is a bare pile of .kama files and stays flat; it
-    # is testing the language, not the project model.
-    if [ -f "$src/kama.json" ]; then set -- "$src/kama.json"; else set -- "$src"/*.kama; fi
+    # to be spelled as projects. One without a manifest is a bare pile of .kama files — but "bare pile"
+    # means EVERY .kama under it, found recursively and sorted, exactly as the xfail leg has always done.
+    #
+    # ⚠️ This used to glob `"$src"/*.kama`, top level only, so a subfolder was SILENTLY NOT COMPILED. No
+    # manifest-less fixture has one today, which is what made it invisible: the defect was latent, and the
+    # first fixture to add a subfolder would have had it half-built with the suite green. Same class as the
+    # four-glob reach defect `tools/check-fixture-reach.sh` exists for. `sort` for the same reason the
+    # xfail leg gives: unit ORDER is observable, so a fixture must not depend on what the filesystem
+    # happens to hand back.
+    if [ -f "$src/kama.json" ]; then
+        set -- "$src/kama.json"
+    else
+        # shellcheck disable=SC2046
+        set -- $(find "$src" -name '*.kama' | sort)
+    fi
     if ! build_one "$exe" "$@" >/dev/null 2>"$TMP/$name.err"; then
         { echo "FAIL $name (build failed)"; cat "$TMP/$name.err"; } >"$out"; echo FAIL >"$res"; return
     fi
