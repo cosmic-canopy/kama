@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // Returning a copy-only Shared FIELD is a bare hand-off that RETAINS (copy-only default): the caller
 // gets its own handle and the field stays valid, with no double-decrement. (Under the old model this
 // needed an explicit `give`/`copy` marker; copy-only ownership makes the bare retain unambiguous.)

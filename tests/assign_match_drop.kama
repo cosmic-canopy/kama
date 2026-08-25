@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 type resource Probe { int32 id; public ctor make(int32 id){ this.id=id; } ~Probe(){} public fn int32 val(){return this.id;} }
 // A `Shared` factory — `new` heap-places into a local owner, which moves out to the caller as a
 // fresh rvalue (so it needs no hand-off marker at the call site).

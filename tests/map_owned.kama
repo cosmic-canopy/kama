@@ -2,7 +2,7 @@
 // must stay leak/double-free-free under ASan: storing owned keys+values, OVERWRITE (drop the old key +
 // value, install the new), deep-copy `get` (hand back an independent DynamicArray), `remove` (moves the value
 // OUT as Optional; here the reclaimed DynamicArray + old key drop), and end-of-scope drop of everything live.
-import std::collections::{Map, DynamicArray};
+import { std::collections::Map, std::collections::DynamicArray };
 
 fn DynamicArray<string> mk(string a, string b) {
     DynamicArray<string> xs = DynamicArray.empty();

@@ -1,7 +1,7 @@
 // M10 custom allocator — the GlobalAllocator default path. `DynamicArray<int32>` (A filled from the
 // M8 default) and `DynamicArray<int32, GlobalAllocator>` are the SAME monomorph; a bare `Map<int32,int32>`
 // likewise defaults H and A. Exercises the default-fill under ASan (the plain malloc/free path).
-import std::collections::{DynamicArray, Map};
+import { std::collections::DynamicArray, std::collections::Map };
 
 fn int32 main() {
     int32 r = 0;

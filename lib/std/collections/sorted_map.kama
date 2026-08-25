@@ -1,5 +1,4 @@
-import std::memory::{Owned};
-import { DynamicArray };
+import { std::memory::Owned, DynamicArray };
 export { SortedMap };
 
 // An ordered map over `K: Comparable` -> `V`, backed by a B-tree (peer: Rust `BTreeMap`, C++ `std::map`).

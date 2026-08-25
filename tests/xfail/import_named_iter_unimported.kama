@@ -1,6 +1,6 @@
 // Session E (hardening) work item 2 — explicitly NAMING an iterator type without importing it is a clean,
 // kama-level diagnostic (not a leaked C 'undeclared identifier'). Iterating needs no import; naming does.
-import std::collections::{BitSet};
+import { std::collections::BitSet };
 fn int32 main() {
     BitSet bs = BitSet.empty();
     BitSetIter it = bs.iterator();   // named but not imported -> clean error

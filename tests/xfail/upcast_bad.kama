@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // A cross-element hand-off that isn't a valid upcast: Sq does not implement Draw. Must be a
 // clean diagnostic, not a raw C type error or the misleading "collection hand-off" message.
 type contract Draw for resource { fn int32 v(); }

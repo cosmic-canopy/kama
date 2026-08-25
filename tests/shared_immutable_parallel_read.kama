@@ -3,7 +3,7 @@
 // a `Shared<Asset>` lets several isolates read it ZERO-COPY: one heap payload, no per-isolate duplication,
 // with the atomic refcount keeping concurrent handle clones/drops race-free. Three isolates each scan the
 // shared asset repeatedly. Deterministic result + TSan-clean. Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type immutable value Vec3 {
     public int32 a; public int32 b; public int32 c;

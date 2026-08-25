@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 // A `view` borrows; storing one as a collection ELEMENT would outlive the buffer it borrows.
 fn int32 use(DynamicArray<View<int32>> xs) { return 0; }
 fn int32 main() { return 0; }

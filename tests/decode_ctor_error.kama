@@ -1,7 +1,7 @@
 // P4: `decode` is a fallible ctor returning `Result<This, Owned<Error>>`. A malformed input surfaces as
 // `Err` (never a half-built object); the concrete error is recovered with `err.as<DeError>()`. A good
 // input round-trips to `Ok`. Mirrors the boundary guarantee "Ok(complete) or Err(nothing)".
-import std::serialization::json::{encode, decode};
+import { std::serialization::json::encode, std::serialization::json::decode };
 @generate(Serialize, Deserialize)
 type value Point {
     @field int32 x;

@@ -3,7 +3,7 @@
 // continuation byte. Before this trap the call returned a 2-byte string ending in a lone C3 lead byte,
 // from valid input, in the safe surface, with no `unsafe` and no error.
 // The offset is built from an opaque source so it is not constant-folded (as in substring_oob).
-import std::num::{int32Max};
+import { std::num::int32Max };
 fn int32 main() {
     string s = "AéZ";
     isize mid = cast<isize>(int32Max() - int32Max() + 2);         // 2, opaque; splits the é

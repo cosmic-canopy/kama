@@ -6,7 +6,7 @@
 // The consequence, which the docs state plainly: this form fails at BUILD, not at `kama check`. The LSP
 // cannot see it. That is why this fixture is enrolled in run_tests.sh's `analysis_skip` — every other
 // xfail is cross-checked for `check`/`build` agreement, and this one legitimately cannot agree.
-import std::math::{Vec4};
+import { std::math::Vec4 };
 
 comptime assert(cond: sizeof(Vec4) == 15, msg: "Vec4 is not 15 bytes");
 

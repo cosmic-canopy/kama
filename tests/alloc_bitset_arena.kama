@@ -1,7 +1,7 @@
 // M10b custom allocator — BitSet backed by a caller-owned Arena. BitSet went non-generic -> generic
 // (`BitSet<A = GlobalAllocator>`); this exercises the arena path across several word-buffer grows
 // (set bits at 3/100/250 force calloc-equivalent grows, memset-zeroed through the allocator).
-import std::collections::{BitSet, Arena, BumpAllocator};
+import { std::collections::BitSet, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
     int32 r = 0;

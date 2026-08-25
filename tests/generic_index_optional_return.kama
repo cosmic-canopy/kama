@@ -5,7 +5,7 @@
 // variant's, which bound only `Optional<T>`'s `T`), leaving `DynamicArray<T,A>`'s `A` unbound; now it
 // resolves under the field's OWNER instance (`cTypeInInstance`). SortedMap used to work around it by
 // binding the cloned value to a local first.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 type resource Store<V> {
     DynamicArray<V> d;

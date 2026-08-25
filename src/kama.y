@@ -137,6 +137,20 @@ static void rejectFnTypeParamDefault(const SharedIdentifierList& params, YYLTYPE
 #define TAKE_SEGS(dst, listExpr)  do { auto _sl = (listExpr);                              \
     (dst) = (SCANNER_CODEGENCONTEXT).takeSegs(_sl.get()); } while (0)
 
+/* Split an import entry's spans: all but the last onto `modulePathPos` (which must stay the same length as
+ * `modulePath`), and the last onto the synthesized IdentifierNode of the symbol it names. */
+#define IMPORT_SPANS(nodeExpr, listExpr)  do {                                             \
+    auto _n = (nodeExpr); TAKE_SEGS(_n->modulePathPos, listExpr);                          \
+    if (!_n->modulePathPos.empty()) {                                                      \
+        SrcRange _last = _n->modulePathPos.back(); _n->modulePathPos.pop_back();            \
+        if (_n->symbols && !_n->symbols->empty() && (*_n->symbols)[0]                       \
+            && (*_n->symbols)[0]->identifier) {                                            \
+            auto _id = (*_n->symbols)[0]->identifier;                                      \
+            _id->line = _last.line; _id->column = _last.column;                            \
+            _id->endLine = _last.endLine; _id->endColumn = _last.endColumn;                \
+        }                                                                                  \
+    } } while (0)
+
 %}
 
 %code requires {
@@ -345,8 +359,8 @@ struct kamayystype {
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
 %type <usingdeclaration> import_symbol
 %type <usingdeclarationlist> import_symbols
-%type <importdeclaration> import_directive
-%type <importdeclarationlist> import_directives_opt import_directives
+%type <importdeclaration> import_entry
+%type <importdeclarationlist> import_directives_opt import_entries
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg generic_turbofish_name
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
@@ -421,7 +435,7 @@ compilation_unit
    no visibility modifier (so `type`/`fn` syntax stays uniform). Mirrors `import a::b::{A, B}`. */
 export_manifest_opt
   : /* Nothing */   { $$ = std::make_shared<StringList>(); }
-  | EXPORT LEFT_BRACE export_name_list RIGHT_BRACE SEMICOLON   { $$ = $3; }
+  | EXPORT LEFT_BRACE export_name_list trailing_comma_opt RIGHT_BRACE SEMICOLON   { $$ = $3; }
   ;
 export_name_list
   : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
@@ -432,31 +446,30 @@ export_name_list
      import a::b;                 -- load; qualified-only access (a::b::X)
      import a::b as m;            -- load + module alias (m::X)
      import a::b::{X, Y as Z};    -- load + per-symbol, unqualified (Y bound as Z)                       */
+/* ONE import block per file, exactly as there is one export block. The block is the section: every name
+   the file brings in is written in one place, so a reader finds them all without scanning. */
 import_directives_opt
   : /* Nothing */   { $$ = std::make_shared<ImportDeclarationList>(); }
-  | import_directives
+  | IMPORT LEFT_BRACE import_entries trailing_comma_opt RIGHT_BRACE SEMICOLON   { $$ = $3; }
   ;
-import_directives
-  : import_directive   { $$ = std::make_shared<ImportDeclarationList>(); $$->push_back($1); }
-  | import_directives import_directive   { $1->push_back($2); $$ = $1; }
+/* A trailing comma is allowed in both blocks. They are the two multi-line lists in the language, and a
+   list you append to line-by-line should not make the previous line part of the diff. */
+trailing_comma_opt
+  : /* Nothing */
+  | COMMA
   ;
-import_directive
-  : IMPORT import_path SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), SharedString()); TAKE_SEGS($$->modulePathPos, $2); }
-  | IMPORT import_path AS IDENTIFIER SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, std::make_shared<UsingDeclarationList>(), $4); TAKE_SEGS($$->modulePathPos, $2); }
-  | IMPORT import_path COLONCOLON LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $5, SharedString()); TAKE_SEGS($$->modulePathPos, $2); }
-  /* `import { X, Y as Z };` — a SAME-MODULE import, carrying no module path because there is only one
-     candidate: the module this file already sits in. Visibility is per file, so a sibling's `export` is
-     an offer and this is the acceptance; the names bind bare, exactly as a foreign per-symbol import
-     does. Nothing else spells it this way — Rust needs `use crate::…`/`use super::…` because a path is
-     mandatory there, OCaml needs the sibling module's name because siblings stay distinct modules — and
-     the payoff is that an intra-module import survives a rename of the module OR the project untouched.
-     An EMPTY modulePath is the encoding, the mirror of the bare form's empty `symbols`; `import { }` is
-     a syntax error for the same reason `export { }` is, since `import_symbols` cannot be empty. */
-  | IMPORT LEFT_BRACE import_symbols RIGHT_BRACE SEMICOLON
-      { $$ = std::make_shared<ImportDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<StringList>(), $3, SharedString()); }
+import_entries
+  : import_entry   { $$ = std::make_shared<ImportDeclarationList>(); $$->push_back($1); }
+  | import_entries COMMA import_entry   { $1->push_back($3); $$ = $1; }
+  ;
+/* ⚠️ The spans need SPLITTING, because the path does. `modulePath` is every segment but the last, so
+   `modulePathPos` must be too — buildPositions bails when the two disagree, which silently un-indexes every
+   module segment (hover and prepareRename on `std::` stop answering). The LAST span belongs to the symbol,
+   whose IdentifierNode is synthesized by makeImportEntry and would otherwise carry no source position at
+   all, breaking go-to-definition and rename on an imported NAME. */
+import_entry
+  : import_path   { $$ = makeImportEntry(SCANNER_CODEGENCONTEXT, $1, SharedString()); IMPORT_SPANS($$, $1); }
+  | import_path AS IDENTIFIER   { $$ = makeImportEntry(SCANNER_CODEGENCONTEXT, $1, $3); IMPORT_SPANS($$, $1); }
   ;
 import_path
   : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }

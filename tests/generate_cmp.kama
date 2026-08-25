@@ -2,7 +2,7 @@
 // hand-writing an FNV loop (Rust's `#[derive(PartialEq, Hash)]`). Because comparison is contract-driven,
 // deriving `Equatable` is also what gives the type its `==`/`!=`. Structural equality stays OPT-IN: the
 // attribute is where you ask for it, and a type without it cannot be compared at all.
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 @generate(of, Equatable, Hashable)
 type value Rgb {

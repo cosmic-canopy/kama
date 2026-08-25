@@ -5,7 +5,7 @@
 //
 // Not hypothetical: `tests/generic_uninst_ok.kama` carried exactly this call, in the fixture built to
 // assert that valid generic code is left alone, and nothing saw it until this pass existed.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn void neverCalled<T>(ref DynamicArray<T> src) {
     T item = src.get(index: 0);          // ERROR: `DynamicArray` has no `get`

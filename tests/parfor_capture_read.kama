@@ -3,8 +3,7 @@
 // read-only capture is shared across workers race-free (M6.2: immutable reads don't race). This fixture
 // is the self-check for the free-variable capture walker: if capture analysis broke, `dt` would not be
 // threaded in and the generated C would fail to compile.
-import std::concurrent;
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
 
 fn int32 main() {
     int32 dt = 3;                                    // captured, read-only, by every worker

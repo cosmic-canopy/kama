@@ -1,8 +1,7 @@
 // M11c: placement `new(allocator: a)` into a `Shared<T, A>` in ARGUMENT and RETURN position (the
 // hoisted-new path) — the allocator must be threaded there too, or the ctrl+pointee leak. ASan-clean
 // over one arena.
-import std::memory::{Shared};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
 
 type value Node {
     int32 v;

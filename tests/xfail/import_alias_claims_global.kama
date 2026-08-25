@@ -1,5 +1,8 @@
-// `global` names the always-in-scope floor, so no project may claim it (§2f.29). A file cannot
-// declare a project name, so the rejection this pins is the ALIAS form of the same rule.
-import std::collections as global;
+// `global` names the always-in-scope floor, so no project may claim it (§2f.29). A file cannot declare a
+// project name, so the rejection this pins is the ALIAS form of the same rule.
+//
+// The alias moved from the module to the SYMBOL when the whole-module import was dropped — there is no
+// other alias left — and the rule had to move with it or retire silently along with the form.
+import { std::collections::Map as global };
 
 fn int32 main() { return 0; }

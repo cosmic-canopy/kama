@@ -5,8 +5,13 @@
 // box is returned intact via `SendResult::Undelivered(item)`, we read 42 through it, and it frees
 // exactly once at the match arm's end. ASan-clean under KAMA_SAN=1 (no leak, no double-free, no
 // use-of-zeroed-garbage).
-import std::concurrent::{Channel, Sender, Receiver, SendResult};
-import std::memory::{Owned};
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::SendResult,
+    std::memory::Owned,
+};
 
 type value Box {
     int32 v;

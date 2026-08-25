@@ -1,5 +1,5 @@
 // Field-level attributes: `@field(name: "…")` renames the wire key; `@skip` omits a field entirely.
-import std::serialization::json::{encode};
+import { std::serialization::json::encode };
 @generate(Serialize)
 type value Config {
     @field(name: "max_retries") int32 maxRetries;

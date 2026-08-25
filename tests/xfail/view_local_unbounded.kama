@@ -1,7 +1,7 @@
 // Finding ⑤, and the shape every one of ④⑤⑥ rode. `d` is a container you can still name, so the very
 // next statement may grow it — and the view is left pointing at the freed buffer. Nothing about the
 // declaration says how long it is meant to be valid, which is precisely what a window says.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);

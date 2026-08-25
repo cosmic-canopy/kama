@@ -2,7 +2,7 @@
 // drop = join. main does its own work while the isolate runs, then joins and reads the result. `join()` is
 // a happens-before barrier, so the read is race-free (KAMA_TSAN-clean) — the concurrently-observable proof
 // that the fused form (spawn+join in one statement) can't show.
-import std::concurrent::{Isolate};
+import { std::concurrent::Isolate };
 
 type resource Payload {
     UnsafePtr<int32> dst;

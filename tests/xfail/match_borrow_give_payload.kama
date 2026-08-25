@@ -1,7 +1,7 @@
 // SOUNDNESS (1.0 blocker): the same borrowing-`match` give double-free with a CONCRETE owning payload (a
 // heap collection). `give`ing the borrowed `xs` out of `match (o)` transfers the buffer while the subject
 // still owns it -> double free. The compiler must REJECT it; use the consuming `match (give o)` instead.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn Optional<DynamicArray<int32>> passthrough(Optional<DynamicArray<int32>> o) {
     match (o) {                                                    // BORROWING — `xs` aliases o's buffer
         case Some(value: xs): { return Optional::Some(value: give xs); }  // give the aliased buffer out

@@ -1,5 +1,5 @@
 // Quat: 90° rotation, identity, inverse round-trip, slerp endpoints, toMat3. Exact / +0.5-round checksums.
-import std::math::{Vec3, Mat3, Quat, halfPi};
+import { std::math::Vec3, std::math::Mat3, std::math::Quat, std::math::halfPi };
 fn int32 main() {
     // 90° about Z rotates unitX -> ~unitY
     Quat qz = Quat.fromAxisAngle(axis: Vec3.unitZ(), rad: halfPi());

@@ -6,7 +6,7 @@
 // A contract is a SCOPE: its methods are not part of the primitive's own API, so `(42i32).wide()` is an
 // error and every call below goes through a BOUND. `narrow`/`saturate` need explicit instantiation
 // because `B` appears only in the return type — the same shape as `parse::<int32>` over `FromStr`.
-import std::num::{FixedBacking};
+import { std::num::FixedBacking };
 
 fn int64 widen<B: FixedBacking<B>>(B b)      { return b.wide(); }
 fn B narrow<B: FixedBacking<B>>(int64 v)     { return B.fromWide(v: v); }

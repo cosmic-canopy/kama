@@ -2,7 +2,7 @@
 // multi-level tree), read them back, borrow-in-place with getRef, delete a scrambled half (forcing borrows,
 // merges, predecessor/successor swaps, and root shrink), then exercise the ordered queries (first/last/
 // floor/ceil/range), sorted iteration, clear, and deep copy. Exit code sums the asserts.
-import std::collections::{SortedMap, DynamicArray};
+import { std::collections::SortedMap, std::collections::DynamicArray };
 
 fn int32 main() {
     int32 r = 0;

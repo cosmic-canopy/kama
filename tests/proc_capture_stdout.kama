@@ -1,8 +1,6 @@
 // std::process — capture a child's stdout bytes via run(). The cross-platform helper's `echo hello` ->
 // "hello\n" (6 bytes), stderr empty.
-import std::process::{Command, Output};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import { std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

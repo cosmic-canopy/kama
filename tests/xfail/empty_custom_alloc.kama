@@ -2,7 +2,7 @@
 // exist for a custom `A: BumpAllocator` (which has no `default` ctor), else it would build a zero-allocator,
 // incomplete map. `withAllocator` is the correct path for a custom `A`. Calling `.empty()` on the custom-`A`
 // type is a clean "no such ctor" compile error (re-earns the protection `Map::withCapacity` had as a static fn).
-import std::collections::{Map, Arena, BumpAllocator};
+import { std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
     Arena arena = Arena.make(capacity: 1 << 16);

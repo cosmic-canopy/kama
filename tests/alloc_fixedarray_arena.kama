@@ -1,7 +1,7 @@
 // M10b custom allocator — FixedArray backed by a caller-owned Arena. FixedArray allocates EAGERLY, so
 // `withAllocator(allocator, size)` sets the handle first (via a no-op bare ctor) then allocates through it;
 // the buffer is memset-zeroed (preserving the zero-init semantics). `copy` carries the allocator over.
-import std::collections::{FixedArray, Arena, BumpAllocator};
+import { std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
     int32 r = 0;

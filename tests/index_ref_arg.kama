@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // `ref a[i]` borrows the element in place (bounds-checked) — the callee mutates the real element.
 fn void addTo(ref int32 dst, int32 by) { dst = dst + by; }
 fn int32 main() {

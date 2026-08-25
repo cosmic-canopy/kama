@@ -2,8 +2,7 @@
 // platform (a documented divergence): on POSIX the child's execvp fails post-fork so it _exit(127)s (the
 // shell "command not found" convention) and run() returns Ok with empty output + code 127; on Windows
 // CreateProcess fails in the PARENT (no fork), so start()/run() return Err. Both are accepted as success.
-import std::process::{Command, Output};
-import std::io::{IoError};
+import { std::process::Command, std::process::Output, std::io::IoError };
 
 fn int32 main() {
     Command c = Command.make(program: "this_binary_does_not_exist_xyzzy");

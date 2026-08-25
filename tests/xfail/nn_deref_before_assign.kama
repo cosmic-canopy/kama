@@ -1,7 +1,7 @@
 // Reading an `Owned` field before it is assigned in a constructor — never-null violation.
 // A named `ctor` factory builds a bare local; the definite-assignment pass flags a read of its
 // owning field before it is assigned (the same rule the legacy in-ctor path had).
-import std::memory::{Owned};
+import { std::memory::Owned };
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 type resource Bad {
     Owned<Box> a;

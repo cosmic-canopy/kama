@@ -2,7 +2,7 @@
 // both. Each isolate writes only through the raw slot inside its own moved bundle — no memory is shared —
 // so a correct isolate seam is TSan-clean. Also exercises trampoline dedup: both spawns share one worker,
 // so exactly one `__kama_iso_*` trampoline is emitted.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Payload {
     UnsafePtr<int32> dst;

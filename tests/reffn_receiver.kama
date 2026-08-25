@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // A2 (C×E soundness) — a place-returning FREE fn used as a method receiver. `pick()` returns `ref Widget`
 // (a borrow of `x`); its result must go through addrOfOperand and NOT be materialized+dropped, else the
 // borrowed Widget's buffer would be freed twice (double-free with `x`'s own drop). ASan-clean == no dup free.

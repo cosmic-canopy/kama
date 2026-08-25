@@ -1,6 +1,6 @@
 // M2a: floats go through `strtod` — the seam reports WHICH failure, so the overflow/malformed split
 // survives at both widths (unlike the lenient reader the JSON path uses, which folds everything to 0.0).
-import std::fmt::{parse, ParseError};
+import { std::fmt::parse, std::fmt::ParseError };
 
 fn int32 main() {
     string a = "3.5";

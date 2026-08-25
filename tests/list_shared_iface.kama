@@ -1,5 +1,4 @@
-import std::collections::{DynamicArray};
-import std::memory::{Shared};
+import { std::collections::DynamicArray, std::memory::Shared };
 // M27 — a `DynamicArray<Shared<Shape>>` drops each stored smart pointer (ref-count decrement) at teardown
 // and dispatches polymorphically through the borrowed element in `foreach`. Exercises the nested
 // collection-element registration fixed in this slice: `elemClass`/`elemDestructible` now resolve

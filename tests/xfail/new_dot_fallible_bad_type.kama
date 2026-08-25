@@ -1,7 +1,7 @@
 // Construction-model M4b: fallible `new Type.name(...)` yields `Result<Owned<T>, E>` — declaring the result
 // as a bare `Owned<T>` (dropping the fallibility) is a compile error. The diagnostic points at the correct
 // `Result<Owned<T>, E>` shape.
-import std::memory::{Owned};
+import { std::memory::Owned };
 type enum BoxErr implements Error {
     Negative;
 

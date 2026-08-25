@@ -2,7 +2,7 @@
 // same time, to one owned by this package. Two packages that have never heard of each other can each
 // decorate a primitive, as long as they claim different (type, contract) pairs — the duplicate case, where
 // they claim the SAME pair, is rejected with a message naming both (tools/check-packages.sh).
-import weights::{heaviness};
+import { weights::heaviness };
 
 type contract Tagged for value, intrinsic { fn int32 tag(); }
 

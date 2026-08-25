@@ -9,7 +9,7 @@
 //   3. a derive off a `borrow` ALIAS — the same, one step from the window itself.
 //   4. a free function's result, when every view handed to it was bounded — the view-return rule already
 //      guarantees the result roots at one of those arguments.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 

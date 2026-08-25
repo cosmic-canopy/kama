@@ -5,7 +5,7 @@
 // Restricted to fresh by-value rvalues (operator / bare ctor / free-fn call), never a place/borrow, so it
 // cannot double-free. Also pins the sound case: a fresh owned rvalue passed by value to an owning param is
 // a move (the callee frees it once) — not a leak. Whole fixture is ASan/UBSan-clean.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 type resource R {
     DynamicArray<int32> xs;

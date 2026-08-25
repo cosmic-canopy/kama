@@ -93,7 +93,7 @@ fi
 # 3. WORKS — contracts, generics and a collection all survive, and the program produces the right answer.
 #    Compiling is not enough: the gate sits next to the contract vtable machinery, which must be untouched.
 cat > "$tmp/ok.kama" <<'EOF'
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 type contract Shape for value { fn int32 area(); }
 type value Sq implements Shape { public int32 s;
     public ctor make(int32 s) { this.s = s; }

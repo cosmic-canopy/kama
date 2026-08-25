@@ -1,7 +1,11 @@
 
-import std::io::{IoError};
-import std::collections::{View};
-import std::net::{DatagramSocket, SocketAddr, RecvFrom};
+import {
+    std::io::IoError,
+    std::collections::View,
+    std::net::DatagramSocket,
+    std::net::SocketAddr,
+    std::net::RecvFrom,
+};
 
 export { WtConnection, WtState };
 

@@ -1,7 +1,6 @@
 // M11a: placement `new(allocator: a)` in ARGUMENT and RETURN position (the hoisted-new path) — the
 // allocator must be threaded there too, or the block leaks. ASan-clean over one arena.
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 
 type value Node {
     int32 v;

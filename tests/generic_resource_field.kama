@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M27 — a generic RESOURCE whose destructibility comes from an OWNING FIELD, not an explicit ~dtor:
 // `type resource Wrap<T>` holds a `DynamicArray<T>`, so each `Wrap<int32>` is move-only and gets a SYNTHESIZED
 // dtor that drops the list. Exercises computeDestructible under type substitution (the T-field's

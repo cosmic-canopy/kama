@@ -2,9 +2,7 @@
 // read-stdout-then-stderr would deadlock when the child blocks filling the second pipe. run() drains both
 // concurrently (kama_capture2), so both are captured in full. The helper's `spew 8000` = 8000 lines * 20
 // bytes = 160000 each (19 'A'+\n to stdout, 19 'B'+\n to stderr).
-import std::process::{Command, Output};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import { std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

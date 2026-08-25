@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // `foreach (ref T e in coll)` binds each element by place, so mutating `e` persists to the collection;
 // plain `foreach` still binds a copy (no persist).
 @generate(of)

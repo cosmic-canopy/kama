@@ -2,9 +2,14 @@
 // them), so the GENERIC free helpers drive it with zero net-specific code: the client sends its whole payload
 // through `writeAll(Writer, View)`, the server drains to EOF through `readAll(Reader) -> string`. Single
 // process, client-first (buffered send + FIN on drop), then accept. Verifies the round-tripped bytes. Returns 55.
-import std::net::{TcpListener, TcpStream};
-import std::io::{IoError, writeAll, readAll};
-import std::collections::{DynamicArray};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::io::IoError,
+    std::io::writeAll,
+    std::io::readAll,
+    std::collections::DynamicArray,
+};
 
 fn DynamicArray<uint8> payload() {
     string msg = "hello streams";

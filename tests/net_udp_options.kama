@@ -1,9 +1,13 @@
 // std::net UDP options + non-blocking — on a bound ephemeral socket: setTtl/setBroadcast/setNonBlocking all
 // succeed, localAddr() reports the OS-assigned ephemeral port (nonzero), and a non-blocking recvFrom on an
 // idle socket returns Err(WouldBlock) instead of stalling. Returns 55.
-import std::net::{UdpSocket, SocketAddr, RecvFrom};
-import std::io::{IoError};
-import std::collections::{FixedArray};
+import {
+    std::net::UdpSocket,
+    std::net::SocketAddr,
+    std::net::RecvFrom,
+    std::io::IoError,
+    std::collections::FixedArray,
+};
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }

@@ -2,7 +2,7 @@
 // which puts the mint on the wrong side of the window: the callee names the storage, the caller names
 // the lifetime, and neither can see the other. Return a view instead — the return rule already checks
 // that it borrows `this` or a parameter.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn void fill(out View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
 

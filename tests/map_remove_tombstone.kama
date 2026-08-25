@@ -1,7 +1,7 @@
 // Tombstones: removing an entry must NOT break the probe run of other keys that collided into the same
 // chain, and a later insert should be able to reuse the tombstoned slot. Build a batch, remove every
 // even key (leaving tombstones), verify the odds still resolve, then re-insert to reclaim tombstones.
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn string keyN(int32 n) {
     string s = "k";

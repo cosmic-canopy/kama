@@ -1,5 +1,4 @@
-import std::memory::{Shared};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
 type value Node { int32 v; public Node(int32 v){ this.v=v; } public fn int32 get(){ return this.v; } }
 fn int32 main() {
     Arena arena = Arena.make(capacity: 1 << 10);

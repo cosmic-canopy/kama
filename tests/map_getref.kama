@@ -1,7 +1,7 @@
 // Map.getRef: borrow a non-Copyable (move-only `resource`) value IN PLACE and mutate it — the accessor that
 // makes a Map of move-only values first-class instead of write-only (a bare `get` needs a Copyable value and
 // hands back a copy). No copy/move happens, so it stays ASan-clean; the map keeps owning each value.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type resource Counter {
     int32 n;

@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // An indexed element is a PLACE (lvalue), so nested subscripts read AND write: m[i][j], m[i][j] = v.
 fn int32 main() {
     InlineArray<InlineArray<int32, 2>, 2> m = [[1, 2], [3, 4]];

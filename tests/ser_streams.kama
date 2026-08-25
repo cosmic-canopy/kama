@@ -5,8 +5,16 @@
 //       (encodeTo shares JsonWriter's exact byte path with encode, verified byte-exact by (a).)
 //   (c) `decodeFrom` over a SliceReader round-trips through readAll + pump + JsonReader.
 // A free fn takes a `Serialize` as a second-class borrow, so `r` stays usable across calls. Returns 0.
-import std::serialization::json::{encode, decodeFrom, JsonWriter};
-import std::io::{Writer, Reader, StringWriter, SliceReader, BufWriter};
+import {
+    std::serialization::json::encode,
+    std::serialization::json::decodeFrom,
+    std::serialization::json::JsonWriter,
+    std::io::Writer,
+    std::io::Reader,
+    std::io::StringWriter,
+    std::io::SliceReader,
+    std::io::BufWriter,
+};
 
 @generate(Serialize, Deserialize)
 type resource Rec {

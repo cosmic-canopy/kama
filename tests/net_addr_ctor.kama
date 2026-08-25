@@ -1,7 +1,7 @@
 // Construction-model M7.1: the net VALUE types (SocketAddr, RecvFrom, Ready) gained `@generate(of)`
 // memberwise ctors and `SocketAddr.fromHostIp` became a `ctor` (dot-on-type). No sockets — pure value
 // construction (the nameless `SocketAddr(...)` primary was removed at M8d.2).
-import std::net::{SocketAddr, RecvFrom, IpAddr};
+import { std::net::SocketAddr, std::net::RecvFrom, std::net::IpAddr };
 fn int32 main() {
     // 127.0.0.1:8080 built from the host-order packed IPv4 via the `fromHostIp` ctor (dot-on-type).
     SocketAddr a = SocketAddr.fromHostIp(ip: 2130706433ui32, port: 8080ui16);   // 127.0.0.1

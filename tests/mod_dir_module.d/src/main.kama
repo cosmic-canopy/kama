@@ -1,2 +1,2 @@
-import moddir::shapes::{sq};
+import { moddir::shapes::sq };
 fn int32 main() { return sq(); }   // 5 + 3 = 8

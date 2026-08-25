@@ -1,5 +1,4 @@
-import std::ptr::{relocate};
-import { DynamicArray };
+import { std::ptr::relocate, DynamicArray };
 export { Deque, DequeIter, DequeIterMut };
 
 // A by-value iterator (the `foreach (T x in deque)` protocol): yields each element by value, front to back.

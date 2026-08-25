@@ -3,8 +3,7 @@
 // through the `ref int32 e` binding. Because the slices are disjoint and joined at the closing brace, no
 // two workers ever touch the same cell — race-free by construction, deterministic regardless of K. Run
 // under KAMA_TSAN=1 (0 data races) and KAMA_SAN=1.
-import std::concurrent;
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();

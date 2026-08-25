@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // DynamicArray<T>: growable. add() past the doubling threshold (cap 0->4->8->16),
 // then sum via [] indexing and length().
 fn int32 main()

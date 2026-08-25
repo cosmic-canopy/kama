@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Construction-model M3: a named ctor (static factory) that returns a bare, zero-inited local whose `Owned`
 // field was never set would leak a null owning pointer past construction — rejected by complete-init
 // enforcement (the factory-path generalization of the never-null seal).

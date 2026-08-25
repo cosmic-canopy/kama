@@ -22,7 +22,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 src="$tmp/has_new.kama"
 cat > "$src" <<'EOF'
-import std::memory::{Owned};
+import { std::memory::Owned };
 type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 fn int32 main() { Owned<Box> b = new Box.make(v: 3); return b.get(); }
 EOF
@@ -97,7 +97,7 @@ fi
 #    `sortUnstable` must still be there: sorting a fixed buffer with no heap is the MCU/audio case.
 sortsrc="$tmp/nhsort.kama"
 cat > "$sortsrc" <<'EOF'
-import std::collections::{FixedArray, View, sortUnstable};
+import { std::collections::FixedArray, std::collections::View, std::collections::sortUnstable };
 fn int32 main() {
     FixedArray<int32> fa = FixedArray::<int32>.make(size: 3);
     fa[0] = 3; fa[1] = 1; fa[2] = 2;

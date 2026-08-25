@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // A smart pointer (like any safe value) is never null — `== null` is a compile error.
 type value Box { int32 v; public ctor make(int32 v){ this.v = v; } }
 fn int32 main() { Owned<Box> p = new Box.make(v: 1); if (p == null) { return 1; } return 0; }

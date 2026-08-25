@@ -2,7 +2,7 @@
 // can never orphan the thread (this is the seed of the M4 structured-concurrency scope). The handle lives
 // in an inner block; at its close `~Isolate()` joins, so the isolate's write is visible when main reads
 // `shared` afterward. KAMA_TSAN-clean (the drop-join is a happens-before barrier).
-import std::concurrent::{Isolate};
+import { std::concurrent::Isolate };
 
 type resource Payload {
     UnsafePtr<int32> dst;

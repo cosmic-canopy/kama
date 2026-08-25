@@ -12,7 +12,7 @@
 // The `modsp` modification counter is NOT what catches this — it is a pointer into the same dead frame,
 // so reading it *is* the use-after-free. It happened to fail fast here; after the storage is reused it
 // reads back a matching count and the program proceeds on freed memory.
-import std::collections::{Map, MapValueIter};
+import { std::collections::Map, std::collections::MapValueIter };
 
 type value Keeper {
     public MapValueIter<int32> it;

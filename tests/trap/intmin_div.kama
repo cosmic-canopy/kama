@@ -1,6 +1,6 @@
 // int32Min / -1 overflows the result, so it traps even though ordinary +/-/* wrap in release — the one
 // pathological division that stays a trap. int32Min() is a runtime call, so the quotient isn't folded.
-import std::num::{int32Min};
+import { std::num::int32Min };
 fn int32 main() {
     int32 neg1 = 0 - 1;
     return int32Min() / neg1;                 // INT_MIN / -1 traps

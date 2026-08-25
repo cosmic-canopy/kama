@@ -7,7 +7,7 @@
 //
 // A tag is nothing more than a function `fn R name(ref Template t)` in scope — user code can define its own.
 
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 export { stripIndent, html, sql, SqlQuery };
 

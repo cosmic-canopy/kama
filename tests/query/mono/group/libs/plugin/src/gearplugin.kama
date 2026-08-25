@@ -1,6 +1,6 @@
 // A package one level DEEPER: reached only because `projects` is recursive — the root composes `group`,
 // which composes its own `packages/*`. Nested monorepos are the point of this file.
-import gearcore::{Gear};
+import { gearcore::Gear };
 
 fn int32 pluginGear() {
     Gear g = Gear.of(teeth: 24);

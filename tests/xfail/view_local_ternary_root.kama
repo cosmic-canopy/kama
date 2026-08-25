@@ -1,6 +1,6 @@
 // A ternary yields one of two views, so it is bounded only if BOTH arms are. Here neither is: whichever
 // branch runs, the local ends up viewing a container that is still nameable and still growable.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);

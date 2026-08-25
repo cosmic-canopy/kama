@@ -18,8 +18,12 @@
 //
 // ⚠️ Components must be `type value`. A polymorphic class stored by value in a collection does not build
 // today — see tests/pending/virtual_class_in_collection.kama.
-import std::concurrent;
-import std::collections::{DynamicArray, SlotMap, View};
+import {
+    std::concurrent::Isolate,
+    std::collections::DynamicArray,
+    std::collections::SlotMap,
+    std::collections::View,
+};
 
 // ── components: plain data ───────────────────────────────────────────────────────────────────
 type value Transform {

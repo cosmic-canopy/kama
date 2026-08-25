@@ -8,7 +8,7 @@
 // cannot share a fixture with anything after it. What is here is everything the rule must NOT break plus
 // both escapes — and every operand goes through a LOCAL, since a constant that does not fit is a compile
 // error instead (xfail/cast_const_oob) and a constant that does fits needs no check at all.
-import std::num::{int32Max};
+import { std::num::int32Max };
 fn int32 main() {
     int32 r = 0;
 

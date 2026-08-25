@@ -6,7 +6,7 @@
 // This is a general hole in inference — it had nothing to do with contracts, and reproduced on the
 // prelude's own generic. It surfaced while rewriting a fixture for the contract-scope rule, which is the
 // only reason anyone noticed. Returns 42.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
 fn T echoOf<T>(ref T x) { return copy x; }          // an unbounded generic — no contract involved

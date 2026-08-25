@@ -1,7 +1,13 @@
 // M2a: searching a sorted range. Rust folds found/insertion-point into `Result<usize, usize>`; kama's
 // `Result<T, E>` constrains `E` to `Error`, so that spelling does not exist here — `binarySearch` answers
 // "where is it" as an `Optional`, and `lowerBound` answers "where would it go" as a total `int32`.
-import std::collections::{DynamicArray, View, sort, binarySearch, lowerBound};
+import {
+    std::collections::DynamicArray,
+    std::collections::View,
+    std::collections::sort,
+    std::collections::binarySearch,
+    std::collections::lowerBound,
+};
 
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();

@@ -1,7 +1,7 @@
 // Tagged strings — `stripIndent"…"`: the literal template is dedented (the COMMON leading-space indentation is
 // removed from every line, and one leading newline is dropped) while interpolated hole values are emitted
 // VERBATIM — even when a value contains its own leading spaces. Exit code is a bitset of the checks (7 = all).
-import std::fmt::{stripIndent};
+import { std::fmt::stripIndent };
 
 fn int32 main() {
     string name = "Bob";

@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Regression: a bare local of a DESTRUCTIBLE resource (an `Owned` field) with no default ctor must be
 // zero-inited, so the first field assignment's "release the old handle" is a safe no-op (not a wild free)
 // and the scope-exit dtor is safe. Before the fix this double-freed / aborted. The bug is in bare-local

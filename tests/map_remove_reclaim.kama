@@ -1,6 +1,6 @@
 // Map.remove now moves the value OUT as `Optional<V>`: RECLAIM it (match Some, take ownership) or DISCARD to
 // just delete (the returned Optional drops the value cleanly). Both paths ASan-clean with a move-only value.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type resource Counter {
     int32 n;

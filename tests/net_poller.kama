@@ -1,7 +1,13 @@
 // std::net Poller — watch a non-blocking listener for readability: wait() times out to 0 with nothing
 // pending, then reports the listener readable once a client connects, and accept() succeeds. Returns 55.
-import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
-import std::io::{IoError};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::Poller,
+    std::net::Interest,
+    std::net::Ready,
+    std::io::IoError,
+};
 
 fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 

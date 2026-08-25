@@ -1,6 +1,5 @@
 // Set<K> serializes as a JSON array of its members.
-import std::serialization::json::{encode, decode};
-import std::collections::{Set};
+import { std::serialization::json::encode, std::serialization::json::decode, std::collections::Set };
 fn int32 main() {
     Set<int32> s = Set.empty(); s.add(key: 10); s.add(key: 20);
     Result<string, Owned<Error>> j_r = encode(v: s);

@@ -1,6 +1,6 @@
 // Map growth + rehash: fill well past the 0.75 load factor (several doublings), then confirm EVERY key
 // still resolves to its value after the buffers were reallocated and entries re-homed.
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn string keyN(int32 n) {
     string s = "k";

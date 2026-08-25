@@ -1,7 +1,7 @@
 // Integer divide-by-zero is a clean trap (a defined abort), not undefined behavior. The divisor is a
 // runtime-opaque zero (a std::num call minus itself) so it isn't constant-folded and the division
 // really happens at runtime.
-import std::num::{int32Min};
+import { std::num::int32Min };
 fn int32 main() {
     int32 zero = int32Min() - int32Min();   // 0, opaque to constant folding
     int32 a = 10;

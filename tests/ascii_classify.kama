@@ -1,8 +1,21 @@
 // M2a: `std::ascii` — character classification, ASCII-only and named so (Zig's `std.ascii` line). Free
 // functions rather than methods on `char`, because `char` and `uint32` share one C type and the
 // conformance registry cannot hold a separate entry for `char`.
-import std::ascii::{isDigit, isHexDigit, isAlpha, isAlnum, isSpace, isUpper, isLower, isPunct,
-                    isControl, isAscii, toLower, toUpper, digitValue};
+import {
+    std::ascii::isDigit,
+    std::ascii::isHexDigit,
+    std::ascii::isAlpha,
+    std::ascii::isAlnum,
+    std::ascii::isSpace,
+    std::ascii::isUpper,
+    std::ascii::isLower,
+    std::ascii::isPunct,
+    std::ascii::isControl,
+    std::ascii::isAscii,
+    std::ascii::toLower,
+    std::ascii::toUpper,
+    std::ascii::digitValue,
+};
 
 fn int32 main() {
     char a  = 'a';

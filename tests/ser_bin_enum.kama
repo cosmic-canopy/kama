@@ -1,8 +1,11 @@
 // KBIN round-trip of an externally-tagged enum (payload variant) nested in a value type. Exercises the
 // beginObject/fieldName/writeString(tag)/nested-object token path + the enum deserialize close-via-moreFields.
 // Returns 23 (id 3 + w*h 4*5).
-import std::serialization::binary::{encode, decode};
-import std::collections::{DynamicArray};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+};
 
 @generate(Serialize, Deserialize)
 type enum Geo { Circle(int32 r), Rect(int32 w, int32 h), Empty }

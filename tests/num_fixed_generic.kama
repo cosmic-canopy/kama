@@ -5,7 +5,7 @@
 // Three instantiations, three different scales, two different backings — and Q8.8 in an int16 is the case
 // that matters most: it is a 16-bit type, so any accumulator that stayed int32-shaped would be visible
 // here and nowhere else.
-import std::num::{Fixed};
+import { std::num::Fixed };
 fn int32 main() {
     int32 r = 0;
 

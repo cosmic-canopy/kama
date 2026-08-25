@@ -2,8 +2,7 @@
 // cell. Each worker reduces its disjoint slice into the same atomic via `fetchAdd`; atomicity makes the
 // cross-worker accumulation race-free (this is the write-through-capture EXEMPTION — a non-atomic capture
 // would be rejected, see xfail/parfor_write_capture). Deterministic total regardless of K. Run under TSan.
-import std::concurrent::{Atomic};
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Atomic, std::collections::DynamicArray, std::collections::View };
 
 fn int32 main() {
     Atomic<int32> total = Atomic.make(value: 0i32);

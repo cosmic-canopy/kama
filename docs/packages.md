@@ -387,7 +387,7 @@ Import a dependency by its package name; the build only lets you import what the
 declares (an undeclared import is a hard error — no phantom dependencies):
 
 ```kama
-import geo::{area};
+import { geo::area };
 ```
 
 Install resolves the whole dependency graph (transitively) and writes the lockfile:

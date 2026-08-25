@@ -1,6 +1,6 @@
 // Tagged strings — `html"…"`: hole values are HTML-escaped, literal template parts are NOT (XSS-safe by
 // construction — only interpolated, untrusted values are escaped). Exit code is a bitset of the checks (7 = all).
-import std::fmt::{html};
+import { std::fmt::html };
 
 fn int32 main() {
     string name = "Alice";

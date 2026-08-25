@@ -2,8 +2,7 @@
 // through it. Each concrete node is written via its own `@generate` machinery — so a nominal implementor
 // that is NOT `@generate` has no node writer and would be SILENTLY dropped from the wire. The compiler
 // must reject it at the edge field. Here `Tri implements Shape` but omits `@generate` → compile error.
-import std::serialization::json::{encode};
-import std::memory::{Shared};
+import { std::serialization::json::encode, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 

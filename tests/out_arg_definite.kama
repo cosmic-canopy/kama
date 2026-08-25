@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // The caller's half of the contract: passing a local as an `out` argument makes it definitely ASSIGNED,
 // because the callee is separately proven to fill it. Without the required marker there is nothing at the
 // call site to key that off — which is why `out` had to stop being an alias for `ref`.

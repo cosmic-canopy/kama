@@ -18,8 +18,16 @@
 //   0x14 graph-begin (+u64 root, then the table obj-begin)   0x15 entry-key (+u64 id)
 //   0x16 ref (+u64 id)                            0x17 graph-end
 
-import std::collections::{DynamicArray, FixedArray, View};
-import std::io::{Writer, Reader, StringWriter, pump, IoError};
+import {
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+    std::io::Writer,
+    std::io::Reader,
+    std::io::StringWriter,
+    std::io::pump,
+    std::io::IoError,
+};
 
 export { BinaryWriter, BinaryReader, encode, decode, decodeFrom };
 

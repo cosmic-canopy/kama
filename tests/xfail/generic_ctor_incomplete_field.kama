@@ -3,7 +3,7 @@
 // custom `A: BumpAllocator` (no `default`), that builds a garbage-allocator object — the gate must reject it.
 // (Before M8d.1 the gate was INERT for generics: the monomorph-name mismatch + missing `give` unwrap made it
 // silently skip every generic factory, so this compiled with a garbage `alloc`.)
-import std::collections::{Arena, BumpAllocator};
+import { std::collections::Arena, std::collections::BumpAllocator };
 
 type resource Widget<A: Allocator = GlobalAllocator> {
     A alloc;

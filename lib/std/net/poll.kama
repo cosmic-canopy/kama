@@ -1,5 +1,5 @@
 
-import std::io::{IoError, lastError};
+import { std::io::IoError, std::io::lastError };
 
 export { Poller, Interest, Ready };
 

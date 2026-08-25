@@ -1,5 +1,4 @@
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 type contract Shape for resource { fn int32 area(); }
 type resource Circle implements Shape { int32 r; public Circle(int32 r){ this.r=r; } public fn int32 area(){ return this.r * this.r; } }
 fn int32 main() {

@@ -3,9 +3,7 @@
 // the execvp argv vector is passed untouched; on Windows it proves kama__win_cmdline's MSVCRT quoting and
 // the child CRT's CommandLineToArgv parsing round-trip byte-for-byte (the classic Windows footgun). The arg
 // is `a b"c\d` (7 bytes) -> stdout "a b\"c\\d\n" (8 bytes).
-import std::process::{Command, Output};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import { std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

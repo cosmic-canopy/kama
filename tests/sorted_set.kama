@@ -1,7 +1,7 @@
 // SortedSet<K: Comparable> — an ordered set over SortedMap<K, Unit>. Members iterate ascending; add is
 // idempotent; remove reports presence; and it answers the same ordered queries (first/last/floor/ceil/range)
 // as the map. Exercised with int members (forcing splits/merges) and a copy for independence.
-import std::collections::{SortedSet, DynamicArray};
+import { std::collections::SortedSet, std::collections::DynamicArray };
 
 fn int32 main() {
     int32 r = 0;

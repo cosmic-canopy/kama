@@ -1,6 +1,6 @@
 // `copy m` deep-copies a Map (present only when BOTH key and value are Copyable, via multi-`when`): the
 // clone is fully independent of the original — for int keys AND owning string keys.
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn int32 main() {
     Map<int32, int32> m = Map.empty();

@@ -204,7 +204,7 @@ mkdir -p "$dep/app/src" "$dep/geo/src"
 printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",' \
               '  "modules": { ".": { "visibility": "internal" } },' \
               '  "dependencies": { "geo": { "path": "../geo" } } }' > "$dep/app/kama.json"
-printf 'import geo::{v};\nfn int32 main() { return v(); }\n' > "$dep/app/src/main.kama"
+printf 'import { geo::v };\nfn int32 main() { return v(); }\n' > "$dep/app/src/main.kama"
 printf '{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$dep/geo/kama.json"
 
 # A package root's `source` is the WHOLE answer: `geo.kama` sits BESIDE the source root, not in it, so
@@ -378,11 +378,11 @@ mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from 
     printf '%s\n' '{ "name": "net", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "core": { "path": "../core" } } }' > "$ws/libs/net/kama.json"
-    printf 'import core::{ v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
+    printf 'import { core::v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
     printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "net": { "path": "../net" } } }' > "$ws/libs/app/kama.json"
-    printf 'import net::{ u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
+    printf 'import { net::u };\nexport { w };\nfn int32 w() { return u(); }\n' > "$ws/libs/app/src/app.kama"
     cat > "$ws/kama_workspace.json"
 }
 

@@ -1,6 +1,10 @@
 // KBIN round-trip of a Map<K,V> (an array of key/value pair objects). Returns 22.
-import std::serialization::binary::{encode, decode};
-import std::collections::{Map, DynamicArray};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::Map,
+    std::collections::DynamicArray,
+};
 fn int32 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1); m.put(key: "b", value: 2);

@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // A `contract` refining a `contract` (`implements`): the refining contract's vtable / dispatch / conformance
 // include the parent's slots. Drawable <- Animated. Call a refined (Drawable) method + an own method through
 // both a borrowed contract value and an owning Shared<Animated> handle.

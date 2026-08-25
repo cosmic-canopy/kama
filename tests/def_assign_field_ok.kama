@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // An owning field of a resource local, once the local is definitely assigned, may then be read (inside
 // the owner's own method, where the private field is visible).
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }

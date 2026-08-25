@@ -1,5 +1,5 @@
 // Set<K> = a thin wrapper over Map<K, Unit>: add (idempotent) / contains / remove / length, string keys.
-import std::collections::{Set};
+import { std::collections::Set };
 
 fn int32 main() {
     Set<string> s = Set.empty();

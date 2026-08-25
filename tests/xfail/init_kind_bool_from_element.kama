@@ -1,7 +1,7 @@
 // An ELEMENT of a container of primitives. `DynamicArray` indexes through a user `operator[]`, whose
 // resolved `ref T` was being filtered through `isClass` — so a container of `int32` answered "unknown"
 // and this crossed silently. `indexElemTypeRaw` is that resolver with the filter removed.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();

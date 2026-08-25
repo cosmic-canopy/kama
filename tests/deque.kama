@@ -1,8 +1,12 @@
 // M2 — Deque<T>, a growable ring buffer with O(1) push/pop at both ends. Verifies FIFO + LIFO ordering,
 // wraparound (pop-then-push past the physical end), logical indexing, growth relinearization, deep copy,
 // mid-iteration invalidation, RAII drop of an OWNED element (ASan gate), and a serialize round-trip.
-import std::collections::{Deque, DynamicArray};
-import std::serialization::json::{encode, decode};
+import {
+    std::collections::Deque,
+    std::collections::DynamicArray,
+    std::serialization::json::encode,
+    std::serialization::json::decode,
+};
 
 fn int32 unwrap(Optional<int32> o) { return match (o) { case Some(value: x): x; case None: 0 - 1; }; }
 

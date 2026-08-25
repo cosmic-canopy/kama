@@ -1,7 +1,7 @@
 // A window bounds the life of a BORROW. A `@viewable` contract may carry members that are not mints —
 // `Counted` here grants `counter()` (a view) alongside `size()` (an `int32`) — so being granted is not
 // on its own enough. An `int32` owns itself and outlives nothing, so there is no borrow to bound.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 @viewable type contract Counted for resource { fn Iterator<int32> counter(); fn int32 size(); }
 

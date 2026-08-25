@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // M22 RAII: the bound object's destructor fires EXACTLY ONCE when the bindable
 // drops. The moved-from Owned must NOT also drop it (trace fold a*31+code: one
 // drop -> 9, a double drop -> 288).

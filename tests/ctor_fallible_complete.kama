@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Construction-model M3: complete-init is enforced on FALLIBLE ctors too. `make` returns `Result<Holder,E>`:
 // `Err` before the object exists (no completeness obligation), or `Ok(value: h)` where `h` must be fully
 // built — the checker unwraps the `Ok` and verifies the wrapped object's owning fields are all set.

@@ -1,6 +1,13 @@
 // M2a: `sort` over a `View<T>` — one free function serving every container. The natural order comes
 // from `Comparable`, and `T` is inferred from the view, so no turbofish is needed.
-import std::collections::{DynamicArray, FixedArray, View, sort, sortUnstable, isSorted};
+import {
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+    std::collections::sort,
+    std::collections::sortUnstable,
+    std::collections::isSorted,
+};
 
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();

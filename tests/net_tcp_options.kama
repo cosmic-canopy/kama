@@ -1,8 +1,6 @@
 // std::net TCP options + non-blocking read — a client connects (loopback backlog), sets TCP_NODELAY and
 // non-blocking, then a read with no data pending returns Err(WouldBlock) instead of stalling. Returns 55.
-import std::net::{TcpListener, TcpStream};
-import std::io::{IoError};
-import std::collections::{FixedArray};
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::collections::FixedArray };
 
 fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }

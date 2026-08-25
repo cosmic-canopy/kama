@@ -3,8 +3,7 @@
 // releases through the SAME allocator (a no-op for a bump arena — the Arena bulk-frees its buffer).
 // ASan-clean: exactly ONE malloc (the arena buffer) + ONE free (the Arena dtor); the box dealloc is a
 // no-op, and the Node lives inside the arena region.
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 
 type value Node {
     int32 v;

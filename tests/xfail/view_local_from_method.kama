@@ -2,7 +2,7 @@
 // `this`, which the view-return rule allows — but the RESULT is still a view of storage the caller can
 // name and grow. A view roots through its receiver, so `b.peek()` roots at `b` exactly as `b.buf.view()`
 // would, and neither is bounded.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 type resource Box {
     DynamicArray<int32> buf;

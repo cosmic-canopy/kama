@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M26f-2 — a `resource` (destructible) VALUE is move-only. `give` transfers ownership into
 // the callee (which drops it at fn-end); the source's dtor is suppressed, so the pointee is
 // dropped exactly once. kama_trace folds each drop (acc*31+code); a single drop of 5 -> 5.

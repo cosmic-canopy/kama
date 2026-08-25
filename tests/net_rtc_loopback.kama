@@ -3,7 +3,7 @@
 // unreliable+unordered DataChannel (the UDP-equivalent), send a 4-byte datagram A->B, verify, exit 55.
 // WebRTC is browser-only, so this runs under the Playwright harness. std::app's loop lets ICE gathering + the
 // async handshake complete. Raw glue on int32 handles; both peers closed before quit.
-import std::app::{run, TickFn, quit};
+import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";

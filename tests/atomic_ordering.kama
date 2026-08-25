@@ -2,7 +2,7 @@
 // function, mirroring C11's atomic_load / atomic_load_explicit. Four isolates increment a shared counter
 // with a RELAXED-ordered fetchAdd (ordering is irrelevant to a pure count, and the RMW is still atomic →
 // no lost updates, TSan-clean). Then main exercises the store/swap/CAS explicit variants single-threaded.
-import std::concurrent::{Atomic, MemoryOrder};
+import { std::concurrent::Atomic, std::concurrent::MemoryOrder };
 
 fn void bumpRelaxed(ref Atomic<int32> c) {
     int32 i = 0;

@@ -6,7 +6,7 @@
 //   * an ELEMENT write through the `ref` binding — the entire point of `foreach (ref …)`
 //   * a mutation of a DISJOINT container
 //   * a disjoint SIBLING FIELD written while iterating another field of the same object
-import std::collections::{DynamicArray, Map};
+import { std::collections::DynamicArray, std::collections::Map };
 
 type resource Box {
     DynamicArray<int32> buf;

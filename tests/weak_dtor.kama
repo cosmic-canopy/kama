@@ -1,4 +1,4 @@
-import std::memory::{Shared, Weak};
+import { std::memory::Shared, std::memory::Weak };
 // Weak<T> RAII: a weak doesn't keep the pointee alive and doesn't double-free or
 // leak the control block. One construction, one destruction despite the weak ref.
 extern fn void kama_trace(int32 code);

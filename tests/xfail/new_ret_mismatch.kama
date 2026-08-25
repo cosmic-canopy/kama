@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 type value C { int32 n; public ctor make(int32 n){ this.n=n; } }
 type value D { int32 m; public ctor make(int32 m){ this.m=m; } }
 fn Owned<C> make(){ return new D.make(m: 1); }   // ERROR: Owned<C> owns C, got new D

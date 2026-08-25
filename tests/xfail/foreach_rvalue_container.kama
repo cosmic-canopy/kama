@@ -1,7 +1,7 @@
 // The general form of the same defect: `foreach` calls `iterator()` on its operand, which takes the
 // operand's ADDRESS, and a temporary has none. Bind it to a local and iterate that. An operand that IS
 // its own iterator (`"ab".chars()`, `m.valuesMut()`) is copied by value and stays legal.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn DynamicArray<int32> make() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);

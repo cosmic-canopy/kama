@@ -5,7 +5,7 @@
 // bridged at the edge) — it is the correct idiom, not a missing feature. kama can
 // spell `const T*` since M24e; for a const-pointer C API that needs NO cast, see
 // tests/const_ffi.d.
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 extern "<stdlib.h>";
 extern "cb.h";
 fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);   // a function-pointer type

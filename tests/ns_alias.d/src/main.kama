@@ -1,6 +1,9 @@
-import nsalias::graphics as Gfx;                          // module alias
+// A renamed symbol import used in both TYPE and CALL position — the coverage this fixture has always
+// carried, now through the one alias form that survives.
+import { nsalias::graphics::Texture as Tex, nsalias::graphics::scale as gscale };
+
 fn int32 main()
 {
-    Gfx::Texture t = Gfx::Texture.make(id: 20);  // alias-qualified type
-    return t.get() + Gfx::scale(x: 11);          // 20 + 22 = 42
+    Tex t = Tex.make(id: 20);            // alias in type + ctor position
+    return t.get() + gscale(x: 11);      // 20 + 22 = 42
 }

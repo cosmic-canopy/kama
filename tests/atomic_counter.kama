@@ -3,7 +3,7 @@
 // of interleaving, so the total is exactly 4*25 = 100 every run — and TSan-clean (the whole point: an
 // `Atomic` is race-free shared mutation). This is the case the M4.2 same-root borrow check REJECTS for an
 // ordinary local; `Atomic` is exempt. Run under KAMA_TSAN=1.
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 fn void bump(ref Atomic<int32> c) {
     int32 i = 0;

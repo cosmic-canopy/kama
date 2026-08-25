@@ -1,4 +1,4 @@
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 // M26d — smart pointers passed BY VALUE. The callee owns the param and drops it
 // at fn-end; `give` moves an Owned in, a bare Shared copies (retains), and a fresh
 // factory rvalue is moved in with no marker.

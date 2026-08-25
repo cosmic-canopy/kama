@@ -15,7 +15,7 @@
 // Both shapes are exercised deliberately: (A) the plain `value` type an ECS component should be, and
 // (B) the OOP virtual/final pair. Keep both — the bug lived only in (B), and only in a collection.
 
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 // (A) plain value type — the ECS shape
 type value PlainTick { public int32 n;

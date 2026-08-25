@@ -1,6 +1,14 @@
 // Mat4 identity/scale/translate/compose/transpose (exact), general inverse (dyadic), ortho, 90° rotation;
 // Mat2/Mat3 inverse round-trips. All exact-value / +0.5-round checksums.
-import std::math::{Vec2, Vec3, Vec4, Mat2, Mat3, Mat4, radians};
+import {
+    std::math::Vec2,
+    std::math::Vec3,
+    std::math::Vec4,
+    std::math::Mat2,
+    std::math::Mat3,
+    std::math::Mat4,
+    std::math::radians,
+};
 fn int32 main() {
     Mat4 I = Mat4.identity();
     Vec4 iv = I.transform(v: Vec4.of(x: 2.0f32, y: 3.0f32, z: 4.0f32, w: 1.0f32));

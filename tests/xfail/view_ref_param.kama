@@ -2,7 +2,7 @@
 // RESEAT the caller's view — to point it at storage the caller never named. That is finding ④: the
 // callee aims the view at a container that dies at the end of its own block, and the caller reads it.
 // Pass a view by value; it is two words and copying it borrows nothing new.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn void reseat(ref View<int32> v, ref DynamicArray<int32> src) { v = src.view(); }
 

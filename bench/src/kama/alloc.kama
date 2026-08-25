@@ -1,6 +1,6 @@
 // Allocation/RAII stress: build, fill, sum, and drop a growable DynamicArray 2000 times
 // (~2M appends + 2000 deterministic frees). Stresses GC churn vs kama's RAII.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn int32 main()
 {
     uint64 total = 0;

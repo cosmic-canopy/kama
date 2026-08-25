@@ -1,5 +1,4 @@
-import std::memory::{Shared, Owned};
-import std::collections::{DynamicArray};
+import { std::memory::Shared, std::memory::Owned, std::collections::DynamicArray };
 // Cross-element smart-ptr UPCAST: hold a concrete-element handle in a contract-element
 // handle (Liskov "is a"). `Shared<Sq> a` widens to `Shared<Shape> s` (retain — one shared
 // control block, contract dispatch through the fat handle), and `Owned<Sq>` widens to

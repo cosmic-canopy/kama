@@ -1,7 +1,7 @@
 // Construction-model M6: `@generate(of)` synthesizes a memberwise ctor `V.of(f: …)` on a transparent value
 // (a data bag — all fields public). Exercises direct construction, public-field read-back, and `new V.of(...)`
 // composing with the synthesized ctor to box into `Owned<V>` (field access forwarded through `Deref`).
-import std::memory::{Owned};
+import { std::memory::Owned };
 
 @generate(of)
 type value Point {

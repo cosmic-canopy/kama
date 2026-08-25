@@ -8,7 +8,7 @@
 // Both shapes a marked contract can take are exercised: a member returning a `type view` directly, and one
 // returning a CONTRACT a view implements — the latter is what `Iterable<T>.iterator()` is, and is why the
 // grant cannot be inferred from signatures alone.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 @viewable type contract Spanned<S> for resource { fn S span(); }
 @viewable type contract Counted for resource { fn Iterator<int32> counter(); fn int32 size(); }

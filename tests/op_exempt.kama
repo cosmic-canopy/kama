@@ -4,8 +4,7 @@
 // Positive on purpose. The rejections live in `tests/xfail/op_*`, and an xfail never links, so it never
 // reaches ASan or the wasm leg. What a rejection rule most needs guarded is the code it must NOT touch,
 // and that has to be run.
-import std::num::{int32Min};
-import std::collections::{DynamicArray};
+import { std::num::int32Min, std::collections::DynamicArray };
 
 type enum Colour { Red, Green }
 

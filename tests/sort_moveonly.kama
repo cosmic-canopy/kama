@@ -6,7 +6,13 @@
 // Note the element is a bare `resource`, not an `Owned<Tag>`: a `ref` parameter may not name a smart
 // pointer (borrow the object, not the handle), so `Order<Owned<T>>` is not a instantiable — sort a
 // container of the resources themselves.
-import std::collections::{DynamicArray, View, sortUnstableWith, isSortedWith, Order};
+import {
+    std::collections::DynamicArray,
+    std::collections::View,
+    std::collections::sortUnstableWith,
+    std::collections::isSortedWith,
+    std::collections::Order,
+};
 
 type resource Tag {
     int32 n;

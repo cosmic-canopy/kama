@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M26h — the `type` marker + the ownership vocabulary. `type value` owns nothing and COPIES;
 // `type resource` owns/moves and is RAII-dropped; `type contract` is a public guarantee (dispatch
 // through a borrow). Crucially, `value`/`resource`/`contract` are NOT reserved — the `type` marker

@@ -2,7 +2,7 @@
 // ends, contains/indexOf present/absent, clear, reserve-then-fill. Uses `string` elements for the equality
 // ops (universally `Equatable`); a `DynamicArray<int32>.contains` currently also needs `int32`'s Equatable in scope
 // (import Map) — a tracked DX wart. FixedArray index bounds use int32 (no equality needed).
-import std::collections::{DynamicArray, FixedArray};
+import { std::collections::DynamicArray, std::collections::FixedArray };
 fn int32 main() {
     int32 r = 0;
     DynamicArray<string> xs = DynamicArray.empty();

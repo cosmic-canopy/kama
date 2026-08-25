@@ -1,4 +1,4 @@
 // A destructible resource at module scope is rejected in v1 (no static-teardown seam).
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 static DynamicArray<int32> log = DynamicArray::<int32>.make();
 fn int32 main() { return 0; }

@@ -3,7 +3,7 @@
 // Every kama argument is named, so these labels are most of the call syntax rather than a niche gesture.
 // Before A2 they were absent from the reference index entirely: renaming a parameter rewrote its
 // declaration and its body uses, and silently left every call site spelling the old label.
-import labelprobe::{scaleBy, Box};
+import { labelprobe::scaleBy, labelprobe::Box };
 
 fn int32 useThem() {
     // L10: col 22 = the `factor` LABEL -> lib.kama's parameter, ACROSS units

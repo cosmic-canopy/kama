@@ -2,9 +2,15 @@
 // count, checksum, AND that recvFrom reports the correct sender port (proving the address round-trip).
 // Single process, blocking, deadlock-free (the datagram is kernel-buffered before the matching recv).
 // Returns 55.
-import std::net::{UdpSocket, SocketAddr, IpAddr, RecvFrom};
-import std::io::{IoError};
-import std::collections::{DynamicArray, FixedArray};
+import {
+    std::net::UdpSocket,
+    std::net::SocketAddr,
+    std::net::IpAddr,
+    std::net::RecvFrom,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
 
 fn DynamicArray<uint8> pattern(int32 n) {
     DynamicArray<uint8> data = DynamicArray.empty();

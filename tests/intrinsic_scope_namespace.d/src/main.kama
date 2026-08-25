@@ -1,6 +1,5 @@
 // Two same-named contracts in different namespaces, both conformed to by `int32`. Returns 40.
-import demoscope::demo::marks::{viaMarks};
-import demoscope::demo::signs::{viaSigns};
+import { demoscope::demo::marks::viaMarks, demoscope::demo::signs::viaSigns };
 
 fn int32 main() {
     int32 x = 5;

@@ -1,6 +1,6 @@
 // Map/Set key iteration: `foreach (K k in map)` / `foreach (K k in set)` yields each key by value (a
 // by-value iterator, present for a Copyable key) and guards against mid-iteration structural change.
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 fn int32 main() {
     Map<int32, int32> m = Map.empty();

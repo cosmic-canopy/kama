@@ -1,7 +1,22 @@
 // std::num numeric type limits. Signed min = `-max - 1` (the positive 2^(n-1) doesn't fit); each is a
 // zero-arg fn (clang inlines it). Verifies each round-trips to its exact boundary.
-import std::num::{int8Max, int8Min, int16Max, int16Min, int32Max, int32Min, int64Max, int64Min,
-                  uint8Max, uint16Max, uint32Max, uint64Max, float32Max, float32MinNormal, float32Epsilon};
+import {
+    std::num::int8Max,
+    std::num::int8Min,
+    std::num::int16Max,
+    std::num::int16Min,
+    std::num::int32Max,
+    std::num::int32Min,
+    std::num::int64Max,
+    std::num::int64Min,
+    std::num::uint8Max,
+    std::num::uint16Max,
+    std::num::uint32Max,
+    std::num::uint64Max,
+    std::num::float32Max,
+    std::num::float32MinNormal,
+    std::num::float32Epsilon,
+};
 
 fn int32 main() {
     int32 r = 0;

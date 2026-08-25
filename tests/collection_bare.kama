@@ -1,4 +1,4 @@
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 // A bare hand-off of a Copyable collection follows its `bare:` default — no ambiguity. `FixedArray`'s
 // default is `give`, so `b = a` RELOCATES the buffer (a move); `a` is then moved-from and using it
 // would be a compile-time use-after-move error. (This is the case the old `collection_bare` xfail

@@ -59,7 +59,12 @@ fi
 # the unit count, which legitimately differs. Restricted to fixtures that import a directory module,
 # because those are the only ones pruning can touch.
 set +e
-grep -l '^import [a-z_]*::[a-z_]*::{' "$ROOT"/tests/*.kama 2>/dev/null | head -120 >"$tmp/corpus"
+# ⚠️ The selector follows the IMPORT SYNTAX. It used to be `^import a::b::{`, which stopped matching the
+# day the scope moved inside the braces — and an empty selection is silent, which is why the emptiness
+# check below exists. Both spellings of an entry naming a nested module are matched: the one-line block
+# and an indented entry inside a multi-line one.
+grep -lE 'import \{ *[a-z_][a-z_]*::[a-z_][a-z_]*::|^[[:space:]]+[a-z_][a-z_]*::[a-z_][a-z_]*::[A-Za-z_]' \
+    "$ROOT"/tests/*.kama 2>/dev/null | head -120 >"$tmp/corpus"
 set -e
 if [ ! -s "$tmp/corpus" ]; then
     bad "found no fixture importing a directory module — the corpus check is not running"
@@ -81,7 +86,7 @@ fi
 # off that would make a program's unit count depend on what was checked before it. The facts the closure
 # reads are harvested at parse time precisely so this cannot happen; this is what proves it.
 cat >"$tmp/gated.kama" <<'EOF'
-import std::collections::{sort};
+import { std::collections::sort };
 
 fn int32 main() { return 0; }
 EOF
@@ -98,7 +103,7 @@ fi
 # message still fires. Two that matter: a symbol that does not exist, and one @compileFor dropped (which
 # must still say "not available in this build configuration", never "cannot resolve module").
 cat >"$tmp/nosuch.kama" <<'EOF'
-import std::collections::{NoSuchThingAtAll};
+import { std::collections::NoSuchThingAtAll };
 
 fn int32 main() { return 0; }
 EOF
@@ -125,7 +130,7 @@ fi
 # because the whole directory loads at once; under pruning `provided` has to be per-symbol or the file
 # defining the symbol is never loaded.
 cat >"$tmp/selfimp.kama" <<'EOF'
-import std::net::{TcpListener};
+import { std::net::TcpListener };
 
 fn int32 main() { return 0; }
 EOF
@@ -141,8 +146,10 @@ fi
 # which TUs exist, so a duplicate or a missing definition is the failure mode — and both are LINK
 # errors, which is what makes this assertion cheap: if it links and runs, there is exactly one of each.
 cat >"$tmp/single.kama" <<'EOF'
-import std::collections::{DynamicArray};
-import std::log::{logInfo};
+import {
+    std::collections::DynamicArray,
+    std::log::logInfo,
+};
 
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.empty();
@@ -181,7 +188,7 @@ fi
 #   `extern "kama_isolate.h";`                  — the seam `spawn`/`parallel_for` require while naming
 #                                                 nothing in the file that provides it.
 cat >"$tmp/nameless.kama" <<'EOF'
-import std::fmt::{parse, ParseError};
+import { std::fmt::parse, std::fmt::ParseError };
 
 fn int32 main() {
     Result<int32, ParseError> r = parse::<int32>(s: "7");
@@ -198,7 +205,7 @@ else
 fi
 
 cat >"$tmp/seam.kama" <<'EOF'
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 fn void bump(ref Atomic<int32> c) { c.fetchAdd(delta: 1i32); }
 
@@ -219,7 +226,7 @@ fi
 # `html"…"` is an unqualified reference to a sibling top-level fn, lexed by its own rule that bypasses
 # getToken. If that rule stops recording the identifier, this is what breaks.
 cat >"$tmp/tagged.kama" <<'EOF'
-import std::fmt::{html};
+import { std::fmt::html };
 
 fn int32 main() {
     string name = "x";

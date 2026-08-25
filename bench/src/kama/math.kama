@@ -4,7 +4,7 @@
 // the result is therefore bit-identical across float32 (kama/C/C++/Rust/Go) and float64 (JS/Lua/Python)
 // backends, so the fairness-gate checksum agrees everywhere. This is a pure codegen/throughput number:
 // the exact-value math fixtures already prove correctness; here we watch whether the ops vectorize.
-import std::math::{Vec4, Mat4, Quat};
+import { std::math::Vec4, std::math::Mat4, std::math::Quat };
 
 fn int32 main()
 {

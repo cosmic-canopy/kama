@@ -1,7 +1,7 @@
 // M6.1: `Atomic<T>` requires a lock-free machine word (integer primitive / `usize`/`isize` / `UnsafePtr`).
 // A `resource`/`value`/struct element is a compile error — atomicity is a hardware property of one word,
 // so a multi-field type can't be a single atomic cell. Must fail to build.
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 type resource Thing {
     int32 x;

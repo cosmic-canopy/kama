@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 type contract Shape for value { fn int32 area(); }
 type value Square { int32 s; public ctor make(int32 s){ this.s=s; } }   // does NOT implement Shape
 fn int32 take(Owned<Shape> c){ return c.area(); }

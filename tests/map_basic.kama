@@ -1,7 +1,7 @@
 // Map<string, V> core: put / get (-> Optional) / contains / remove (-> Optional, moved out) / overwrite / length, string keys.
 // Keys are hashed + compared by content (the prelude `Hashable`/`Equatable` contracts; `hash` from std's
 // pure-kama `implements Hashable for string`, `equals` structural), so a lookup key built any way hits.
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn int32 main() {
     Map<string, int32> m = Map.empty();

@@ -9,7 +9,7 @@
 //
 // What this does NOT close is `DynamicArray.view()` returning a truthful pointer with a false length; see
 // GOALS §3c. The trusted set is now the types that own the memory, which is the honest claim.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 unsafe fn View<int32> forge(ref DynamicArray<int32> a) {
     return View::<int32>.over(at: a.dataPtr(), count: 999999);

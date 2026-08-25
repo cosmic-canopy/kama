@@ -8,7 +8,7 @@
 // keeps that an intentional rule rather than a clang error about a missing struct.
 //
 // `Iterable` stays perfectly usable where a contract belongs — an `implements` clause, or a generic bound.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();

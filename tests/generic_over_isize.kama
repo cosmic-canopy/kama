@@ -8,7 +8,7 @@
 //   * `mangleElem` fell to the user-type arm, which does not answer for a primitive.
 //
 // So `DynamicArray<isize>` never compiled, latent until the size type became the stdlib's own. Returns 55.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<isize> a = DynamicArray::<isize>.empty();

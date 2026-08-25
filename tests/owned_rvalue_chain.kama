@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // A2 — an owned rvalue receiver reached through a METHOD CHAIN (`b.make().area()`). `make()` returns a
 // fresh owned Widget (heap DynamicArray) used as the receiver of `.area()`; it must be materialized into a
 // scope-dtor'd temp and dropped exactly once. ASan/LeakSanitizer-clean == the chain receiver was freed.

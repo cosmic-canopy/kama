@@ -2,9 +2,16 @@
 // with no whole-file string buffering. Write a record's JSON directly to an fd via JsonWriter::<File>, close,
 // reopen, and decode it back straight from the File (as a Reader). Each phase is scoped in a helper so the
 // owning JsonWriter/File drops (closes the fd) before the next phase. Returns 42 on full round-trip success.
-import std::fs::{File, OpenMode, remove};
-import std::io::{Reader, Writer, IoError};
-import std::serialization::json::{JsonWriter, decodeFrom};
+import {
+    std::fs::File,
+    std::fs::OpenMode,
+    std::fs::remove,
+    std::io::Reader,
+    std::io::Writer,
+    std::io::IoError,
+    std::serialization::json::JsonWriter,
+    std::serialization::json::decodeFrom,
+};
 
 @generate(Serialize, Deserialize)
 type resource Rec {

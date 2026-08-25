@@ -1,7 +1,7 @@
 // A parameter naming a type that EXISTS but was not imported. A per-symbol `import a::b::{X}` binds only
 // X, so a sibling type from the very same module stays unbound — the commonest real-world spelling of
 // this mistake. The diagnostic must name the namespace to import rather than say "unknown type".
-import std::fs::{Metadata};
+import { std::fs::Metadata };
 
 fn void inspect(File handle)
 {

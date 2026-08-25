@@ -1,6 +1,6 @@
 // Like pkg_path_dep, but `geo` uses the `src/` layout docs/packages.md teaches for applications:
 // its package root holds only kama.json, the sources one level down. Resolution therefore CANNOT
 // find them by listing the package directory — it has to consult the package's declared `sources`.
-import geo::{area};
+import { geo::area };
 
 fn int32 main() { return area(); }   // 42

@@ -1,2 +1,2 @@
-import epriv::{hidden};
+import { epriv::hidden };
 fn int32 main() { return hidden(); }

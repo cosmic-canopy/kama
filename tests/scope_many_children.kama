@@ -2,7 +2,7 @@
 // power-of-two into a distinct cell through a moved bundle; after the barrier main sums them. Exercises a
 // task scope holding several child handles (the join list), all joined before the sum is read. TSan-clean
 // (disjoint cells). Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Slot {
     UnsafePtr<int32> cell;

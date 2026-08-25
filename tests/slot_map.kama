@@ -1,7 +1,7 @@
 // SlotMap<V> — stable handles with generation-checked stale detection (the ECS/asset-registry structure).
 // insert hands back a Handle; get/contains/remove reject a handle whose slot was removed or reused; values()
 // iterates live entries; a move-only value rides through insert/getRef/remove with ownership intact (ASan).
-import std::collections::{SlotMap, Handle};
+import { std::collections::SlotMap, std::collections::Handle };
 
 type resource Counter {
     int32 n;

@@ -1,4 +1,4 @@
-import std::memory::{Shared, Weak};
+import { std::memory::Shared, std::memory::Weak };
 // You can't borrow the object through a Weak (it may be dead) — tryUpgrade to a Shared first.
 type value Counter { int32 n; public Counter(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
 fn int32 read(ref Counter c) { return c.get(); }

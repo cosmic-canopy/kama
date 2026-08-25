@@ -8508,6 +8508,13 @@ int main(int argc, char** argv)
                         for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
                             rows.push_back({"module", m, ""});
                     } else if (cc.trigger == CompletionTrigger::ImportSymbol) {
+                        // Modules first, then symbols — the same answer the language server gives, and
+                        // for the same reason: inside an import block `std::|` may be growing into a
+                        // deeper module or already naming the one whose symbols are wanted, and the text
+                        // cannot say which. Keep the two emitters in step; this one is what check-query
+                        // asserts against and the LSP one is what an editor sees.
+                        for (const auto& m : lspImportModules(input, cc.receiver, argv[0]))
+                            rows.push_back({"module", m, ""});
                         for (const auto& sym : lspImportSymbols(input, cc.receiver, argv[0]))
                             rows.push_back({"type", sym, cc.receiver});
                     } else {

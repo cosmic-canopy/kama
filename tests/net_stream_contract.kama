@@ -1,9 +1,15 @@
 // std::net — exercise the `ReliableStream` CONTRACT with dynamic dispatch (fat-pointer + vtbl), not the
 // concrete TcpStream. A client sends 4 bytes through writeAll-via-contract; the server reads to EOF through
 // read-via-contract and checks count + sum. Single process, client-first (buffered + FIN). Returns 55.
-import std::net::{TcpListener, TcpStream, ReliableStream};
-import std::io::{IoError};
-import std::collections::{DynamicArray, FixedArray, View};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::ReliableStream,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+};
 
 // Drive the ReliableStream's Writer primitive to completion through the erased contract (dynamic dispatch on
 // `write`). ReliableStream refines Reader+Writer, so `write`/`read` dispatch through the same fat pointer.

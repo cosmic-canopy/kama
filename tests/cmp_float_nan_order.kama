@@ -3,7 +3,7 @@
 // silently collapses distinct keys in the B-tree containers. NaN now sorts after every number and equals
 // itself (Rust's `f64::total_cmp`). Raw `a < b` on two floats is untouched: an all-primitive comparison
 // keeps the built-in C operator, so IEEE semantics (every NaN comparison false) are exactly preserved.
-import std::collections::{SortedSet};
+import { std::collections::SortedSet };
 
 fn int32 main() {
     isize r = 0;

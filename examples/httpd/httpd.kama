@@ -12,10 +12,15 @@
 // the request is read in a single recv (fine for GETs), no keep-alive, no directory listings, no
 // query-string handling. Path traversal ("..") is rejected. Numeric host only.
 
-import std::net::{TcpListener, TcpStream};
-import std::fs::{readFile};
-import std::io::{IoError, writeAll};
-import std::collections::{DynamicArray, FixedArray};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::fs::readFile,
+    std::io::IoError,
+    std::io::writeAll,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
 
 extern "<stdio.h>";
 extern fn int32 puts(UnsafePtr<int8> s);

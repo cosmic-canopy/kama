@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // M22: a Shared `obj:` is RETAINED (refcount), not moved — the object stays usable
 // independently of the bindable, and its destructor fires exactly once when BOTH
 // the bindable and the Shared handle drop. (use() returns 43 iff both call paths

@@ -1,5 +1,5 @@
 // FixedArray<T>: fixed buffer, indexed assignment, foreach iteration, RAII free.
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 fn int32 main()
 {
     FixedArray<int32> a = FixedArray.make(size: 5);

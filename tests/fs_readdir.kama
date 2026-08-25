@@ -1,7 +1,5 @@
 // std::fs — readDir returns real entries and filters "." / "..".
-import std::fs::{readDir};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import { std::fs::readDir, std::io::IoError, std::collections::DynamicArray };
 
 fn int32 checkNames(ref DynamicArray<string> names) {
     isize n = names.length();

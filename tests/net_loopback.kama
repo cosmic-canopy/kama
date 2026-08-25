@@ -1,9 +1,14 @@
 // std::net loopback — client connects + sends a patterned buffer + closes; server accepts and reads
 // to EOF in a loop, verifying length + checksum. Single-threaded and deadlock-free: the client runs to
 // completion (backlog-queued connect, buffered send, FIN) before the server accepts. Returns 55.
-import std::net::{TcpListener, TcpStream};
-import std::io::{IoError, writeAll};
-import std::collections::{DynamicArray, FixedArray};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::io::IoError,
+    std::io::writeAll,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
 
 fn int32 sendBytes(ref TcpStream s, int32 n) {
     DynamicArray<uint8> data = DynamicArray.empty();

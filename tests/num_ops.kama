@@ -1,5 +1,16 @@
 // std::num integer min/max/clamp/abs/sign (int32 + int64), parallel to std::math's float32 helpers.
-import std::num::{minI32, maxI32, clampI32, absI32, signI32, minI64, maxI64, clampI64, absI64, signI64};
+import {
+    std::num::minI32,
+    std::num::maxI32,
+    std::num::clampI32,
+    std::num::absI32,
+    std::num::signI32,
+    std::num::minI64,
+    std::num::maxI64,
+    std::num::clampI64,
+    std::num::absI64,
+    std::num::signI64,
+};
 fn int32 main() {
     int32 r = 0;
     if (minI32(a: 3, b: 7) == 3)               { r = r + 4; }

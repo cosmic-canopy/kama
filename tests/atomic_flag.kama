@@ -1,7 +1,7 @@
 // M6.1: store / load / swap across an isolate boundary. A child stores 1 into a shared flag; after the
 // scope barrier main loads it (1), then atomically swaps in 5 (returning the prior 1) and loads again (5).
 // Covers the non-arithmetic ops (store, load, swap) that also apply to an `UnsafePtr` cell. 1 + 1 + 5 = 7.
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 fn void setter(ref Atomic<int32> f) { f.store(value: 1i32); }
 

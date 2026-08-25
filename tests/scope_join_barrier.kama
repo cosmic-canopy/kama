@@ -2,7 +2,7 @@
 // through a MOVED pointer bundle into a distinct cell main owns. At the closing brace the scope JOINS both
 // children BEFORE control continues, so both writes are visible when main reads them right after — and the
 // cells are disjoint, so this is TSan-clean (join happens-before the read). Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Slot {
     UnsafePtr<int32> cell;

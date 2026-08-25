@@ -46,7 +46,7 @@ trap 'rm -rf "$tmp"' EXIT
 # A program with BOTH shapes the walk probes: a generic function and a generic type, neither instantiated,
 # each reaching through its parameter so the opaque is actually exercised rather than merely minted.
 cat > "$tmp/app.kama" <<'EOF'
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 fn isize neverCalledFn<T>(ref DynamicArray<T> d) {
     isize n = d.length();
@@ -90,7 +90,7 @@ fi
 # The message must name the parameter the user wrote. `DynamicArray` has no `get`, so this rejects — and
 # what it says about the receiver's type is the whole point.
 cat > "$tmp/bad.kama" <<'EOF'
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn void neverCalled<T>(ref DynamicArray<T> src) {
     T item = src.get(index: 0);
 }

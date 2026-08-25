@@ -1,8 +1,20 @@
 // std::io — the streaming byte substrate (M1). Exercises the Writer/Reader contracts, the in-memory
 // StringWriter/SliceReader, buffering wrappers (BufWriter/BufReader), and the writeAll/copy free helpers.
 // Round-trips a payload and checks EOF + byte fidelity. Returns 55.
-import std::io::{Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, writeAll, pump, IoError};
-import std::collections::{DynamicArray, FixedArray, View};
+import {
+    std::io::Writer,
+    std::io::Reader,
+    std::io::StringWriter,
+    std::io::SliceReader,
+    std::io::BufWriter,
+    std::io::BufReader,
+    std::io::writeAll,
+    std::io::pump,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+};
 
 // Build a DynamicArray<uint8> holding the bytes 1..=n, view it, and write it all into a StringWriter.
 fn string makePayload(int32 n) {

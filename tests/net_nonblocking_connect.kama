@@ -9,8 +9,14 @@
 // loopback connect to an unbound port is refused only after ~1-5s (Linux/macOS refuse in microseconds), so
 // a one-shot 1s poll would time out while the handshake is still pending and mis-read SO_ERROR 0 as
 // "connected". Linux/macOS resolve on the first wait, so they return at once.
-import std::net::{TcpListener, TcpStream, Poller, Interest, Ready};
-import std::io::{IoError};
+import {
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::Poller,
+    std::net::Interest,
+    std::net::Ready,
+    std::io::IoError,
+};
 
 fn bool okUnit(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn bool isRefused(IoError e) { return match (e) { case ConnectionRefused: true; case _: false; }; }

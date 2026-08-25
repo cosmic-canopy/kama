@@ -6,7 +6,7 @@
 //
 // This is a *runtime* check (sizeof on an aggregate stays a C sizeof — kama does not model struct layout,
 // the C compiler does). It runs on native, ASan and wasm, so it pins the claim on three ABIs.
-import std::math::{Vec2, Vec3, Vec4, Mat4};
+import { std::math::Vec2, std::math::Vec3, std::math::Vec4, std::math::Mat4 };
 
 fn int32 main() {
     // the contiguous-layout claim: no padding, so each vector is exactly its float32 count

@@ -1,7 +1,7 @@
 // The window exists to bound a view's life, so the storage it views may not move under it. `a.add()`
 // can realloc, and `v` would be left pointing at the freed buffer — this is finding ⑤ spelled inside
 // the very construct meant to prevent it. Mutate `a` after the window closes, or narrow the window.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 

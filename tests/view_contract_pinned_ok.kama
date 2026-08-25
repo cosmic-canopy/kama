@@ -13,7 +13,7 @@
 // holds the storage and `Buf.span()` is the single place the raw `addr(of:)` lives. `main` never sees a
 // raw pointer, which is why it needs no `unsafe` — and `main` may not be `unsafe` in any case, since it
 // encloses the whole program.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 type contract Windowed<S is This> for value, view {
     fn int32 length();

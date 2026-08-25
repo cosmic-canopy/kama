@@ -5,7 +5,7 @@
 //
 // This is what "the whole rule set now applies inside a template body" has to mean to be worth anything:
 // not just type errors, but every rule, including the ones written years apart from this pass.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 fn isize neverCalled<T>(ref DynamicArray<T> d) {
     View<T> v = d.view();                // ERROR: nothing bounds the storage `v` views

@@ -1,7 +1,7 @@
 // Tagged strings — `sql"…"`: each hole becomes a `?` placeholder in the query TEXT, and the hole VALUE goes
 // out-of-band into a separate params array. Values never enter the text, so injection is impossible by design.
 // Exit code is a bitset of the checks (7 = all three, including the injection-safety assertion).
-import std::fmt::{sql, SqlQuery};
+import { std::fmt::sql, std::fmt::SqlQuery };
 
 fn int32 main() {
     int32 id = 42;

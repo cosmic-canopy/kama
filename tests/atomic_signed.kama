@@ -9,7 +9,7 @@
 // that is also what leaves no `cast<T>` in `Atomic`, so an uninstantiated `Atomic<T>` is fully analyzable.
 //
 // Returns 55.
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 fn int32 main() {
     // int8, negative prior

@@ -4,8 +4,13 @@
 // (routed through the arena allocator now) while `a`'s own last-strong drop still needs it. Each node
 // owns a heap `DynamicArray` (Global) so the pointee dtor is non-trivial. The Arena outlives both nodes.
 // ASan-clean: no UAF, no double-free of the arena-backed ctrl. Returns a.val() = 10.
-import std::memory::{Shared, Weak};
-import std::collections::{DynamicArray, Arena, BumpAllocator};
+import {
+    std::memory::Shared,
+    std::memory::Weak,
+    std::collections::DynamicArray,
+    std::collections::Arena,
+    std::collections::BumpAllocator,
+};
 
 type resource Node {
     DynamicArray<int32> data;                              // owns heap → a real pointee dtor runs on teardown

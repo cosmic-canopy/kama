@@ -1,6 +1,6 @@
 // Never-null: `Owned`/`Shared` fields set in the constructor; a later method REASSIGNS (releases the old,
 // installs the new — the field is never null). Enforcement is ctor-only, so the reassignment is fine.
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 type value Box {
     int32 v;
     public ctor make(int32 v) { this.v = v; }

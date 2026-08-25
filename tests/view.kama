@@ -1,6 +1,6 @@
 // M7 — `View<T>` slice/span: construct from a container, index, mutate-through, iterate, pass down,
 // const read-only, sub-slice. A view borrows; it is never stored or returned past its buffer.
-import std::collections::{DynamicArray, FixedArray, View};
+import { std::collections::DynamicArray, std::collections::FixedArray, std::collections::View };
 
 // A view flows DOWN the call stack as a by-value parameter (zero copy).
 fn int32 sumView(View<int32> v) {

@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){return this.items[0];} }
 type enum Wrap { Has(Res r), Empty }
 fn int32 main()

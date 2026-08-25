@@ -1,4 +1,4 @@
-import std::memory::{Shared, Weak};
+import { std::memory::Shared, std::memory::Weak };
 // Weak<T> does NOT keep the pointee alive: after the last Shared drops, tryUpgrade() returns
 // None (the type makes the absence unforgettable — no sentinel to remember to check).
 type value Counter

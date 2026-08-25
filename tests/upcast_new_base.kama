@@ -1,5 +1,4 @@
-import std::memory::{Shared, Owned};
-import std::collections::{DynamicArray};
+import { std::memory::Shared, std::memory::Owned, std::collections::DynamicArray };
 // Inline `new Derived` into a Shared<Base>/Owned<Base>: build the derived, adopt its base
 // subobject; polymorphism via Template Method, destroyed through the base handle (virtual dtor).
 type virtual(maxDepth: 1) resource Shape {

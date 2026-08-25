@@ -116,13 +116,14 @@ fn void main()
           (integer_literal))))))
 
 ================================================================================
-The header order is imports then export, and all four import forms
+The header order is imports then export, and every entry names a symbol
 ================================================================================
 
-import c::d;
-import e::f as g;
-import h::i::{J, K as L};
-import { N, O as P };
+import {
+    c::d::E,
+    f::G as H,
+    I,
+};
 export { M };
 
 fn void main() { }
@@ -131,29 +132,19 @@ fn void main() { }
 
 (source_file
   (import_declaration
-    (import_path
-      (identifier)
-      (identifier)))
-  (import_declaration
-    (import_path
-      (identifier)
+    (import_entry
+      (import_path
+        (identifier)
+        (identifier)
+        (identifier)))
+    (import_entry
+      (import_path
+        (identifier)
+        (identifier))
       (identifier))
-    (identifier))
-  (import_declaration
-    (import_path
-      (identifier)
-      (identifier))
-    (import_symbol
-      (identifier))
-    (import_symbol
-      (identifier)
-      (identifier)))
-  (import_declaration
-    (import_symbol
-      (identifier))
-    (import_symbol
-      (identifier)
-      (identifier)))
+    (import_entry
+      (import_path
+        (identifier))))
   (export_manifest
     (identifier))
   (function_declaration

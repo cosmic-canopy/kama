@@ -13,7 +13,7 @@
 // a `get` that `DynamicArray` does not have. Both are wrong at EVERY instantiation — the concrete
 // spelling of case 1 has been rejected since the view-window campaign shipped. That is the whole point of
 // the pass, found in the one fixture built to prove it was not needed.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 // 1. a method call on a `T`-parameterized receiver — `DynamicArray<T>` resolves through the opaque
 //    parameter, so the view-window rule applies here exactly as it does to `DynamicArray<int32>`: a view

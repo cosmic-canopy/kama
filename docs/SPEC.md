@@ -415,7 +415,7 @@ and provides the two methods. Bounds are **nominal**: the `implements` is requir
 is not enough), the same rule as `foreach`.
 
 ```kama
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 Map<string, int32> counts = Map.empty();
 counts.put(key: "a", value: 1);
@@ -520,7 +520,7 @@ a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `al
 `std::collections`:
 
 ```kama
-import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
+import { std::collections::DynamicArray, std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
 Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
 DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
@@ -922,7 +922,7 @@ shared-nothing isolate model means `Atomic<T>` is the one shared-mutable seam (s
 
 ### Parsing (`std::fmt`) ✅
 
-`import std::fmt::{parse, parseRadix, ParseError};` — the exact inverse of this module's `intStr`/`f64Str`
+`import { std::fmt::parse, std::fmt::parseRadix, std::fmt::ParseError };` — the exact inverse of this module's `intStr`/`f64Str`
 side (`std.fmt.parseInt` is Zig's placement too).
 
 ```kama
@@ -1095,7 +1095,7 @@ Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dep
 the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.
 
 ```kama
-import std::math::{Vec3, Mat4};
+import { std::math::Vec3, std::math::Mat4 };
 fn int main() {
     Mat4 vp = Mat4.perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
             * Mat4.lookAt(eye: Vec3.of(x: 0.0f32, y: 2.0f32, z: 5.0f32),
@@ -1142,7 +1142,7 @@ in bounded memory. (Datagram endpoints — `UdpSocket`, WebTransport — are mes
 they take `View<uint8>` buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
-import std::fs::{readFile, writeFile};
+import { std::fs::readFile, std::fs::writeFile };
 fn int main() {
     match writeFile(path: "out.txt", data: "hi") {
         case Ok: {}
@@ -1242,7 +1242,7 @@ surface**. The floor gives `print`/`eprint` (raw console output) and `assert`/`p
 log level, never an abort). Import it — the module is the discovery unit; it is not scattered as floor globals.
 
 ```kama
-import std::log::{logInfo, logWarn, logError, logDebug, logTrace, logEnabled, setLogSink, LogLevel};
+import { std::log::logInfo, std::log::logWarn, std::log::logError, std::log::logDebug, std::log::logTrace, std::log::logEnabled, std::log::setLogSink, std::log::LogLevel };
 
 fn int main() {
     logInfo(tag: "boot", msg: "starting ${version()}");   // tag may be "" (untagged)
@@ -3155,9 +3155,11 @@ fn int32 scale(int32 x) { ... }
 type resource GpuHandle { ... }        // unlisted → module-private
 
 // main.kama
-import geometry::graphics::{Texture, scale};   // per-symbol, unqualified
-import physics as phys;                        // whole-module alias → phys::Body
-import audio;                                  // load only; qualified-only access audio::Mixer
+import {
+    geometry::graphics::Texture,      // -> bare `Texture`
+    geometry::graphics::scale,
+    physics::Body as PhysBody,        // `as` renames
+};
 fn int main() {
     Texture t = ...;                    // imported, bare
     phys::Body b = ...;                 // alias-qualified
@@ -3169,10 +3171,11 @@ fn int main() {
 could then disagree, so a file could be *compiled* into one scope and *imported* as another. Deleted
 outright — `namespace` is not a keyword and writing one is a syntax error.
 
-**Four import forms:** `import a::b;` (load; qualified-only `a::b::X`) · `import a::b as m;` (whole-module
-alias → `m::X`) · `import a::b::{X, Y as Z};` (per-symbol into the bare scope; `as` renames) · `import
-{ X, Y as Z };` (the **same-module** form — no path, because a file's own module is the only candidate).
-There is no glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
+**One `import { … };` block per file, and every entry names a SYMBOL.** `a::b::X` is symbol `X` of module
+`a::b`, always — there is no whole-module import, so the entry is never ambiguous. `as` renames
+(`a::b::X as Y`), and an entry with **no scope** (`X`) names a symbol of this file's own module, because
+there the scope is the only candidate. Importing any symbol of a module loads that module, so a qualified
+`a::b::Y` stays available afterwards. There is no glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
 imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
 a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project
 this file can reach, which would leave the original unspellable
@@ -3206,7 +3209,7 @@ intrinsics** — always in scope, never imported, outside the rung entirely. A f
 file the build was handed directly, sitting in the operand set's own root — keeps its symbols file-private,
 so single-file scripts need no boilerplate and cannot be imported.
 
-**Resolution.** `import a::b::c` names project `a`'s module `b::c`, and the answer comes from a manifest,
+**Resolution.** `import { a::b::c::X }` names symbol `X` of project `a`'s module `b::c`, and the answer comes from a manifest,
 never from a search: the project being built, then its declared dependencies, then the **stdlib bundled with
 the compiler** (located relative to the binary like the runtime header, so `std::*` resolves on any install
 regardless of cwd). `std`, `core` and `global` are reserved roots. A module already in the compilation
@@ -3218,7 +3221,7 @@ no `import std::…` means the resolver never touches it, and nothing is auto-li
 (only `kama_runtime.h` is mandatory; the prelude `Optional`/`Result`/`Deref`/`HeapOwner` is baked into the
 compiler).
 
-**A module import compiles only what it needs.** `import a::b::{X, Y}` resolves to the files of that module
+**A module import compiles only what it needs.** `import { a::b::X, a::b::Y }` resolves to the files of that module
 which *declare* `X` and `Y`, plus their transitive closure within it — not to every file of the module. The
 closure follows **references**, not `import` edges. That was once forced: a sibling was reachable with no
 `import` at all, so an import-edge closure would have under-computed. It no longer is — every sibling
@@ -3297,7 +3300,7 @@ wasm. It has its own stack, heap and module statics, and communicates only throu
 long-lived service isolates — which is what makes it honest for one to block.
 
 ```kama
-import std::concurrent::{Isolate};
+import { std::concurrent::Isolate };
 
 Isolate h = spawn worker(p: give payload);   // starts now; the handle is an owned resource
 h.join();                                    // explicit join …
@@ -3315,7 +3318,7 @@ is a rendezvous channel. `sender()` and `receiver()` hand out owned endpoints yo
 needs them.
 
 ```kama
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
 
 Channel<int32> ch = Channel.bounded(capacity: 4);
 Sender<int32>   tx = ch.sender();
@@ -3383,7 +3386,7 @@ by another isolate and therefore cannot race.** To share mutable state you must 
 ### `Atomic<T>` ✅
 
 ```kama
-import std::concurrent::{Atomic, MemoryOrder};
+import { std::concurrent::Atomic, std::concurrent::MemoryOrder };
 
 Atomic<int32> counter = Atomic.make(value: 0);
 counter.fetchAdd(delta: 1);
@@ -3493,7 +3496,7 @@ The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no
 core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 
 ```kama
-import std::serialization::json::{encode, decode};   // wire backend (library); the triad needs no import
+import { std::serialization::json::encode, std::serialization::json::decode };   // wire backend (library); the triad needs no import
 
 // by-value (tree): a pointer-free resource round-trips on the stack
 @generate(Serialize, Deserialize)

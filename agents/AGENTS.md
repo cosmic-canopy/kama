@@ -116,10 +116,18 @@ feature.
   declaration — a file's module is its directory under the source root, and `kama.json`'s `modules` map
   is what gives that directory a name. A folder with no entry there is not a module: its files belong to
   the nearest listed folder above them, so nothing joins your API by accident. Import a module by its
-  full name, `import <project>::<module>::{ … }`; if it fails with `cannot resolve module`, the usual
-  cause is a folder nobody listed, not a missing dependency.
+  full name: `import { <project>::<module>::Thing };`. If that fails with `cannot resolve module`, the
+  usual cause is a folder nobody listed, not a missing dependency.
+- **One `import { … };` block and one `export { … };` block per file, both at the top.** A second
+  `import` is a parse error, not a second directive. Every import entry names a SYMBOL —
+  `import { std::collections::Map, other::Thing as T, Sibling };` — so there is no whole-module import
+  and no glob. `as` renames.
+- **VISIBILITY IS PER FILE, and it is symmetric.** `export { A, B };` is what lets a name LEAVE its file;
+  an `import` entry is what lets one ENTER. That holds for a sibling in your own module too — it is the
+  scope-less entry (`Sibling` above), which needs no path because your own module is the only candidate.
+  A name you neither declare nor import is not in scope, even if the file next door is in the same folder.
 - **`export { A, B };` is its own declaration**, near the top of the file — not a modifier you put in
-  front of `type`. Without it the type is invisible to importers even though it compiles.
+  front of `type`. Without it the type is invisible outside this file even though it compiles.
 - **One way to do a thing.** Before adding a helper, `--search` for an existing one.
 
 ## Conventions

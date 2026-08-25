@@ -1,8 +1,7 @@
 // std::net non-blocking accept — a non-blocking listener with nothing pending returns Err(WouldBlock); after
 // a client connects (loopback handshake completes into the backlog), accept() returns the connection.
 // Single process, deadlock-free. Returns 55.
-import std::net::{TcpListener, TcpStream};
-import std::io::{IoError};
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError };
 
 fn bool isWouldBlock(IoError e) { return match (e) { case WouldBlock: true; case _: false; }; }
 

@@ -3,8 +3,7 @@
 // cross-isolate copy would race it. `Bad` has a `Shared<Leaf>` field, so `Channel<Bad>` is rejected with
 // a field-naming error (the compiler computes sendability structurally, like the escape check). Using
 // `Owned<Leaf>` (unique) or sending `Leaf` by value would be fine.
-import std::concurrent::{Channel, Sender, Receiver};
-import std::memory::{Shared};
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::memory::Shared };
 
 type value Leaf { int32 v; }
 

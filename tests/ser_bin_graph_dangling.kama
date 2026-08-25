@@ -2,10 +2,14 @@
 // entry (id 1, a Pair) references id 2 for both fields, but id 2 is never defined — so the two-pass wire can't
 // resolve it and `decode` returns `DeError::UnresolvedReference` (the specific code, via failWith), not a crash
 // or the generic Malformed. This is the binary analog of the JSON string-edit dangling test. Returns 0.
-import std::serialization::binary::{encode, decode, BinaryWriter};
-import std::collections::{DynamicArray};
-import std::io::{StringWriter};
-import std::memory::{Shared};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::serialization::binary::BinaryWriter,
+    std::collections::DynamicArray,
+    std::io::StringWriter,
+    std::memory::Shared,
+};
 
 @generate(Serialize, Deserialize)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

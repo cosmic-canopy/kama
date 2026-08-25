@@ -1,4 +1,4 @@
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 // give/copy markers in ASSIGNMENT position (uniform with init/arg/return). A bare reassignment
 // uses the kind default: a move-only Owned MOVES (`give` is the explicit form); a copy-only Shared
 // RETAINS (releasing the target's old handle first).

@@ -1,7 +1,6 @@
 // std::net::web WebSocket build/link smoke — connect() reaches the JS glue and returns a handle (proving
 // the --js-library wiring + handle table). The async connection outcome is irrelevant here; we exit at once.
-import std::net::web::{WsConnection, WsState};
-import std::io::{IoError};
+import { std::net::web::WsConnection, std::net::web::WsState, std::io::IoError };
 
 fn int32 main() {
     string url = "ws://127.0.0.1:47670";

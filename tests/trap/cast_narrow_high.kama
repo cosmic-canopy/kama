@@ -2,7 +2,7 @@
 // 300 into an `int8` is not a conversion but a different number — it used to bind 44, in silence, in both
 // --debug and --release. The CONSTANT form is a compile error instead (xfail/cast_const_oob).
 // The operand is runtime-opaque so nothing folds it.
-import std::num::{int32Max};
+import { std::num::int32Max };
 fn int32 main() {
     int32 big = int32Max() - int32Max() + 300;   // 300, opaque
     int8 a = cast<int8>(big);                     // out of range -> narrowing trap

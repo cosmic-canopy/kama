@@ -12,7 +12,7 @@
 // receiver, chained and call/index receivers, and the literal/comment suppression cases.
 // A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
 
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 type contract Sized for value { fn int32 size(); }
 

@@ -2,7 +2,7 @@
 // returning `T` by value, so `new` allocates then MOVES the factory result into the heap slot. Exercises all
 // three heap paths: the intrinsic concrete `Owned<T>`, the intrinsic `Shared<T>`, and the type-erased
 // interface-element `Owned<Contract>` (the concrete is built via its named ctor, then boxed behind the vtable).
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);

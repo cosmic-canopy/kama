@@ -1,6 +1,6 @@
 // Phantom-dependency guard: importing a package that is NOT a declared dependency (no kama.json
 // dep, no resolved view) must be REJECTED. Only declared deps are importable — the view is the
 // sole package root, so an undeclared import finds nothing and fails to resolve.
-import geo::{area};
+import { geo::area };
 
 fn int32 main() { return area(); }

@@ -3,7 +3,12 @@
 // uses the NAMED type-arg override `A: BumpAllocator` to skip the defaulted hasher `H`. ASan-clean =
 // exactly one malloc (the Arena buffer) + one free (its dtor); every container `deallocate` is a
 // no-op, so no leak and no double-free. `arena` is declared FIRST so it drops LAST (outlives them).
-import std::collections::{DynamicArray, Map, Arena, BumpAllocator};
+import {
+    std::collections::DynamicArray,
+    std::collections::Map,
+    std::collections::Arena,
+    std::collections::BumpAllocator,
+};
 
 fn int32 main() {
     int32 r = 0;

@@ -1,5 +1,5 @@
 // A byte index past the end of a string traps (bounds-checked), not undefined behavior. Opaque index.
-import std::num::{int32Max};
+import { std::num::int32Max };
 fn int32 main() {
     string s = "abc";
     int32 i = int32Max() - int32Max() + 10;   // 10, opaque; past length 3

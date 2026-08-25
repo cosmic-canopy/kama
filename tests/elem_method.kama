@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray, FixedArray};
+import { std::collections::DynamicArray, std::collections::FixedArray };
 // M26i — method call on a collection element access: `list[i].m()` / `a[i].m()`.
 // The element is borrowed IN PLACE (bounds-checked `__at`), so a const method reads the
 // stored element and a mutating method mutates it (uniform with every other `x.m()`).

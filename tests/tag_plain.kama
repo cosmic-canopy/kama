@@ -1,6 +1,6 @@
 // A tag applies to a plain string literal too — a tagged string with NO holes. The tag still runs; literal
 // parts are passed through untouched (html does NOT escape literals — only holes). Exit bitset (3 = both).
-import std::fmt::{html, stripIndent};
+import { std::fmt::html, std::fmt::stripIndent };
 
 fn int32 main() {
     int32 r = 0;

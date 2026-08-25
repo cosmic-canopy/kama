@@ -6,7 +6,7 @@
 // The rejection is not a rule the compiler knows about this type. It is one `comptime assert` in the
 // type's own body, reading `sizeof(B)` — two general language features composing, which is why a user's
 // own generic can state its own invariants the same way, and why nothing in the compiler mentions `Fixed`.
-import std::num::{Fixed};
+import { std::num::Fixed };
 
 fn int32 main() {
     Fixed<int32, 16> ok  = Fixed::<int32, 16>.one();   // 16 fractional bits in 32 — fine

@@ -7,7 +7,7 @@
 // `growTo` where the relocation happens, but that is depth — this rule is what makes the mistake
 // unnameable rather than merely trapped.
 // The `SlotMap` arm — `reserve` relocates values, generations and the free list together.
-import std::collections::{SlotMap};
+import { std::collections::SlotMap };
 
 fn int32 main() {
     SlotMap<int32> s = SlotMap.withCapacity(capacity: 4);

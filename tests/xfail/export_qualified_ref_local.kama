@@ -9,7 +9,7 @@
 // reason to close it is that a half-enforced rule is worse to inherit than an unenforced one. What is
 // still NOT checked is an expression that never names the type, which is not a declaration at all and
 // belongs to expression type checking.
-import std::collections::{SortedMap};
+import { std::collections::SortedMap };
 
 fn int32 depth() {
     slot std::collections::BTreeNode<int32, int32> n;

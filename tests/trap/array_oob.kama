@@ -1,7 +1,6 @@
 // A dynamic (non-constant) FixedArray index out of range traps at runtime. (A constant out-of-range index is
 // instead a compile error — see xfail/constgen_oob.) The index is runtime-opaque so it isn't folded.
-import std::collections::{FixedArray};
-import std::num::{int32Max};
+import { std::collections::FixedArray, std::num::int32Max };
 fn int32 main() {
     FixedArray<int32> a = FixedArray.make(size: 3);
     int32 i = int32Max() - int32Max() + 9;   // 9, opaque; past size 3

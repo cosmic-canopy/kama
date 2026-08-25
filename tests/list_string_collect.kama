@@ -1,6 +1,6 @@
 // The ergonomic the lazy `split` enables: collect its owned pieces into a `DynamicArray<string>`
 // (`add(item: give p)`), then iterate by value. All owned, all freed once — ASan-clean.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn int32 main() {
     string path = "usr/local/bin";
     DynamicArray<string> parts = DynamicArray.empty();

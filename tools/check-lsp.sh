@@ -146,7 +146,7 @@ furi() {
 # the imported DynamicArray resolves (no false "does not export"), and cross-module go-to-def into the std
 # source. URI must be the real path so imports resolve relative to it + the stdlib.
 IURI=$(furi "$ROOT/tests/query/imports.kama")
-IMP='import std::collections::{DynamicArray};\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
+IMP='import { std::collections::DynamicArray };\nfn int32 useit(DynamicArray<int32> a) { return 0; }\n'
 
 # M3.5 workspace fixture: the DECLARING half of the tests/query/ws package. app.kama (on disk, never
 # opened here) imports it and uses `Widget` three times; widget.kama imports nothing, so its own closure
@@ -201,7 +201,7 @@ cat > "$dep/app/kama.json" <<'JSON'
   "dependencies": { "geo": { "path": "../geo" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
-import geo::{Point};
+import { geo::Point };
 fn int32 main() {
     Point p = Point.of(x: 7);
     return p.x;
@@ -232,7 +232,7 @@ cat > "$tm/kama.json" <<'JSON'
                "beta":  { "visibility": "public" } } }
 JSON
 printf 'export { bval };\nfn int32 bval() { return 41; }\n' > "$tm/src/beta/b.kama"
-TMSRC='import twomod::beta::{bval};\nexport { aval };\nfn int32 aval() { return bval() + 1; }\n'
+TMSRC='import { twomod::beta::bval };\nexport { aval };\nfn int32 aval() { return bval() + 1; }\n'
 printf "$TMSRC" > "$tm/src/alpha/a.kama"
 TMURI=$(furi "$tm/src/alpha/a.kama")
 tmcli=$("$KAMA" check "$tm/src/alpha/a.kama" 2>&1 || true)
@@ -247,7 +247,7 @@ cat > "$tmp/impl/kama.json" <<'JSON'
 { "name": "impl", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$tmp/impl/src/sink.kama" <<'KAMA'
-import std::io::{Writer, IoError};
+import { std::io::Writer, std::io::IoError };
 type resource Sink implements Writer {
     int32 n;
     public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }
@@ -255,10 +255,10 @@ type resource Sink implements Writer {
 }
 KAMA
 CIURI=$(furi "$tmp/impl/src/sink.kama")
-CISRC='import std::io::{Writer, IoError};\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
+CISRC='import { std::io::Writer, std::io::IoError };\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(View<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
 DURI=$(furi "$dep/app/src/app.kama")
-DSRC='import geo::{Point};\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
+DSRC='import { geo::Point };\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
 # M6 A3 fixture: a FREE-RIDING workspace member. `libs/net` imports `config` without declaring it — so
 # net builds where it sits and nowhere else, and nothing in an editor said so. A build
@@ -277,7 +277,7 @@ cat > "$frws/libs/config/src/config.kama" <<'KAMA'
 export { limit };
 fn int32 limit() { return 5; }
 KAMA
-printf 'import config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/src/net.kama"
+printf 'import { config::limit };\nexport { cap };\nfn int32 cap() { return limit(); }\n' > "$frws/libs/net/src/net.kama"
 # Two steps, because the check only fires for an import that RESOLVES through a dependency view: declare
 # `config` and install (which materializes net/.kama/deps), then remove the declaration while the view
 # remains. That is a real editing state — someone dropped the line from the manifest — and it is the state
@@ -292,8 +292,8 @@ cat > "$frws/libs/net/kama.json" <<'JSON'
 { "name": "net", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 FRURI=$(furi "$frws/libs/net/src/net.kama")
-FRSRC='import config::{limit};\nexport { cap };\nfn int32 cap() { return limit(); }\n'
-FRSRC2='import config::{limit};\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
+FRSRC='import { config::limit };\nexport { cap };\nfn int32 cap() { return limit(); }\n'
+FRSRC2='import { config::limit };\nexport { cap };\nfn int32 cap() { return limit() + 0; }\n'
 
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file://'"$ROOT"'/tests/query","capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
@@ -387,11 +387,12 @@ frame '{"jsonrpc":"2.0","id":36,"method":"textDocument/signatureHelp","params":{
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$NURI"'","languageId":"kama","version":1,"text":"'"$NEWB"'"}}}'
 frame '{"jsonrpc":"2.0","id":37,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":3,"character":6}}}'
 frame '{"jsonrpc":"2.0","id":38,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$NURI"'"},"position":{"line":3,"character":4}}}' 
-# --- M4.7: import paths, over the real on-disk imports.kama buffer. Line 2 is
-#     `import std::collections::{DynamicArray};` (LSP line 1): char 12 is after `std::`, char 26 is
-#     inside the symbol list.
-frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":12}}}'
-frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":26}}}' 
+# --- M4.7: import paths, over the imports.kama buffer, whose line 0 is
+#     `import { std::collections::DynamicArray };`. ⚠️ The columns MOVED when the scope went inside the
+#     braces: `import { ` is nine characters where `import ` was seven. char 14 is after `std::` (a module
+#     position), char 31 is inside the symbol.
+frame '{"jsonrpc":"2.0","id":39,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":14}}}'
+frame '{"jsonrpc":"2.0","id":40,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":31}}}' 
 # --- M4.9: the stamped spans. 41: a GENERIC type's decl name must stop before `<T>`. 42: a named ctor's
 #     name spans just the name, not the declarator.
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$SPURI"'","languageId":"kama","version":1,"text":"'"$SPAN"'"}}}'
@@ -449,10 +450,10 @@ frame '{"jsonrpc":"2.0","id":61,"method":"textDocument/definition","params":{"te
 frame '{"jsonrpc":"2.0","id":62,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$QRURI"'"},"position":{"line":1,"character":30}}}'
 # --- M6 B3f: a module PATH segment. `$IURI` was opened above with the COMPACT $IMP buffer (three lines),
 #     not the ten-line file on disk — take the coordinates from $IMP:
-#     L1 `import std::collections::{DynamicArray};` -> `std` at 7, `collections` at 12.
-frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
-frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
-frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":13}}}'
+#     L1 `import { std::collections::DynamicArray };` -> `std` at 7, `collections` at 12.
+frame '{"jsonrpc":"2.0","id":63,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":19}}}'
+frame '{"jsonrpc":"2.0","id":64,"method":"textDocument/hover","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":19}}}'
+frame '{"jsonrpc":"2.0","id":65,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":19}}}'
 # --- M6 B3c: a project type implementing a STD contract. F2 on its `write` must REFUSE — the contract's
 #     own declaration lives in lib/std and is not ours to rewrite, and renaming only our half would leave
 #     the type no longer satisfying Writer. 66: prepareRename still OFFERS (it is a real symbol here).
@@ -686,9 +687,9 @@ expect '"id":65,"result":null'                           "prepareRename REFUSES 
 echo "check-lsp: M6 B3c contract methods are one name with their implementations"
 # find-references from the implementation reaches the CONTRACT's declaration in the stdlib, and the other
 # implementation of it — that is the group, and it is why the rename below has to refuse.
-expect '/lib/std/io/streams.kama","range":{"start":{"line":19,"character":30}' \
+expect '/lib/std/io/streams.kama","range":{"start":{"line":18,"character":30}' \
        "references from an impl reach the std contract's own declaration"
-expect '/lib/std/io/streams.kama","range":{"start":{"line":88,"character":37}' \
+expect '/lib/std/io/streams.kama","range":{"start":{"line":87,"character":37}' \
        "...and StringWriter, the stdlib's other implementation of it"
 expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
 expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"

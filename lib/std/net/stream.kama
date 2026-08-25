@@ -1,6 +1,5 @@
 
-import std::io::{IoError, Reader, Writer};
-import std::collections::{View};   // the refined Reader/Writer slots carry View<uint8> params — must resolve here
+import { std::io::IoError, std::io::Reader, std::io::Writer, std::collections::View };
 
 export { ReliableStream };
 

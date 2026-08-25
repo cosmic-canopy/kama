@@ -91,7 +91,7 @@ fi
 # So: stage a payload the way .github/workflows/release.yml does, and compile something that needs the
 # stdlib through it.
 cat > "$tmp/s.kama" <<'KAMA'
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 7);

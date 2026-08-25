@@ -2,7 +2,7 @@
 // scope itself or an outer scope. Here `tmp` is declared in an INNER block nested in the scope, so it is
 // destroyed at the inner block's close, BEFORE the scope joins the child — the borrowed pointer would
 // dangle. The structural root-trace rejects it (no lifetime inference). This must fail to compile.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type value Acc {
     int32 total;

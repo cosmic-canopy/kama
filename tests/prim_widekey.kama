@@ -1,7 +1,7 @@
 // Milestone A — every integer width is now a universal Map/Set key (splitmix64 hash + scalar equals in
 // the prelude, no import), and floats are Equatable (exact ==) for `contains` / `<T: Equatable>` bounds
 // though intentionally NOT hashable. Exercises the newly-added int64 / uint32 / float32 conformances.
-import std::collections::{Map, Set, DynamicArray};
+import { std::collections::Map, std::collections::Set, std::collections::DynamicArray };
 
 fn int32 main() {
     int32 r = 0;

@@ -3,8 +3,25 @@
 // bare `1.0` literal in kama is a float64, so a float32-only module made `sin(x: 1.0)` a type error for
 // the most obvious thing to write; and kama has no overloading, so C's `sqrt`/`sqrtf` split would have
 // been the alternative.
-import std::math::{sqrt, pow, floor, ceil, round, trunc, abs, exp, log, log2, log10,
-                   sin, cos, atan2, hypot, fmod, cbrt};
+import {
+    std::math::sqrt,
+    std::math::pow,
+    std::math::floor,
+    std::math::ceil,
+    std::math::round,
+    std::math::trunc,
+    std::math::abs,
+    std::math::exp,
+    std::math::log,
+    std::math::log2,
+    std::math::log10,
+    std::math::sin,
+    std::math::cos,
+    std::math::atan2,
+    std::math::hypot,
+    std::math::fmod,
+    std::math::cbrt,
+};
 
 fn int32 main() {
     int32 t = 0;

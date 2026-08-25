@@ -1,6 +1,6 @@
 // std::app run loop — target-agnostic. tick() increments a counter through the state pointer; at 5 it
 // quit()s with 55. Native: a plain while loop. Web (wasm/node): emscripten's main loop. Both exit 55.
-import std::app::{run, TickFn, quit};
+import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 

@@ -3,7 +3,7 @@
 // DISJOINT moved bundles each hammer THEIR OWN copy of `box` 1000x; `main`'s copy is never touched, so the
 // result is a deterministic 7 with no shared access to race on (TSan-clean). Were a `static` shared, the
 // three threads would race on one `box` and the result would drift.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Bundle { int32 pad; public ctor make() { this.pad = 0; } }
 

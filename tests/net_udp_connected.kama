@@ -1,8 +1,13 @@
 // std::net UDP connected mode — socket A `connect`s a default peer (B) and uses send/recv (no address);
 // B receives via recvFrom. Verifies the connected send/recv path and payload. Returns 55.
-import std::net::{UdpSocket, SocketAddr, RecvFrom};
-import std::io::{IoError};
-import std::collections::{DynamicArray, FixedArray};
+import {
+    std::net::UdpSocket,
+    std::net::SocketAddr,
+    std::net::RecvFrom,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
 
 fn int32 run(ref UdpSocket a, ref UdpSocket b, int32 bport) {
     string host = "127.0.0.1";

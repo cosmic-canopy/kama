@@ -311,10 +311,20 @@ CompletionContext completionContextAt(const std::string& text, int line, int col
     if (open != kNpos && openKind == '(' && scanPathBack(code, open, ctx.callee))
         scanArgList(code, open, cursor, ctx.activeParam, ctx.filled, slotHasColon);
 
-    // (5) imports first: `import std::coll` would otherwise read as a Scope trigger on a type named `std`.
+    // (5) imports first: `import { std::coll` would otherwise read as a Scope trigger on a type named `std`.
+    //
+    // ⚠️ The receiver is scanned back from THE CURSOR'S OWN TOKEN, not from the `{`. It used to come from
+    // the brace because the scope sat outside it (`import a::b::{X}`), so one import named one module.
+    // The scope is inside now, so every entry carries its own path and the brace says nothing about which
+    // module the cursor is in. Scanning from the brace made `receiver` empty for every position in the
+    // block, and both M4.7 assertions went dark at once.
+    //
+    // One consequence, and it is an improvement rather than a workaround: after `std::` the user may want
+    // a deeper MODULE (`collections`) or a SYMBOL of `std`, and nothing in the text says which. The
+    // completer offers both — see handleCompletion.
     if (open != kNpos && openKind == '{' && lineOpensImport(code, lineStartOf(code, open))) {
         ctx.trigger = CompletionTrigger::ImportSymbol;
-        size_t q = skipWsBack(code, open);
+        size_t q = skipWsBack(code, pstart);
         if (q >= 2 && code[q - 1] == ':' && code[q - 2] == ':') scanPathBack(code, q - 2, ctx.receiver);
         ctx.filled.clear();
         for (size_t i = open + 1, b = i; i <= cursor; ++i) {         // the symbols already listed

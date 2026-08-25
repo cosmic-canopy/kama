@@ -2,8 +2,13 @@
 // array's {ptr,len,cap,alloc} struct by bitwise relocation — the sender's source is zeroed (its drop is a
 // no-op) and the receiver's `recv` produces the sole owner, which frees the heap exactly once when the
 // match arm ends. No double-free / no leak (proven under KAMA_SAN=1); TSan-clean under KAMA_TSAN=1.
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
-import std::collections::{DynamicArray};
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::Isolate,
+    std::collections::DynamicArray,
+};
 
 fn void producer(Sender<DynamicArray<int32>> tx) {
     DynamicArray<int32> a = DynamicArray.empty();

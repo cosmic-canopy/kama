@@ -2,7 +2,7 @@
 // with no copy) ride through the B-tree's splits, borrows, merges, and predecessor/successor swaps with their
 // ownership intact — the ASan gate. A move-only value is borrowed + mutated in place via getRef, reclaimed on
 // remove, and the rest drop when the map goes out of scope (no leak, no double-free).
-import std::collections::{SortedMap, DynamicArray};
+import { std::collections::SortedMap, std::collections::DynamicArray };
 
 // A move-only value (no `Copyable`): proves the tree never copies or drops a value it shouldn't.
 type resource Counter {

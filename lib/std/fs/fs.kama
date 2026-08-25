@@ -1,6 +1,13 @@
 
-import std::io::{IoError, lastError, Reader, Writer};
-import std::collections::{DynamicArray, FixedArray, View};
+import {
+    std::io::IoError,
+    std::io::lastError,
+    std::io::Reader,
+    std::io::Writer,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+};
 
 export { File, OpenMode, Metadata, readFile, writeFile, stat, readDir, remove };
 

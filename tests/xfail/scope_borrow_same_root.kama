@@ -2,7 +2,7 @@
 // the SAME root local — they would race on that cell. M4 guarantees LIFETIME (join-before-drop), not
 // EXCLUSIVITY, so the compiler forbids the overlap outright rather than trusting the programmer. Distinct
 // locals are fine (see scope_borrow_disjoint); splitting one buffer by index is M6's `splitAt`. Must fail.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type value Acc {
     public int32 total;

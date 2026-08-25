@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 
 extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();

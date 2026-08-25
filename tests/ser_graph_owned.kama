@@ -3,8 +3,12 @@
 // its id; deserialize rebuilds into a `Shared<Parent>`, transferring the child by GIVE-ONCE (the reconstructed
 // child is moved out of its shell into the `Owned` field — no refcount) — proven by a re-encode that
 // reproduces the exact wire, and ASan proves the single-owner path frees the child exactly once.
-import std::serialization::json::{encode, decode};
-import std::memory::{Shared, Owned};
+import {
+    std::serialization::json::encode,
+    std::serialization::json::decode,
+    std::memory::Shared,
+    std::memory::Owned,
+};
 
 @generate(Serialize, Deserialize)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }

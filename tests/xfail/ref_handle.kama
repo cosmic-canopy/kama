@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // A `ref` parameter may not name a smart pointer — borrow the object (`ref T`), or
 // transfer ownership by value. Borrowing the handle never makes sense.
 type value Counter { int32 n; public ctor make(int32 n){ this.n = n; } }

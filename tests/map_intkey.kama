@@ -1,7 +1,7 @@
 // Integer keys: Map<int32, V> / Set<int32> work out of the box via std's pure-kama intrinsic
 // `implements Hashable/Equatable for int32` — a conformance on a PRIMITIVE (`this` is the scalar
 // itself). Same generic `<K: Hashable + Equatable>` path as string/user keys; the entity-ID case.
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 fn int32 main() {
     Map<int32, int32> sq = Map.empty();

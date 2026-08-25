@@ -2,8 +2,7 @@
 // its dynamic K-way fan-out); the sibling `spawn` is a deferred-join child of the scope, joined at the
 // scope's closing brace. Both borrow enclosing locals soundly — the join-before-drop ordering holds for
 // each. Deterministic; TSan-clean.
-import std::concurrent;
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
 
 fn void bump(ref int32 x) { x = x + 100; }
 

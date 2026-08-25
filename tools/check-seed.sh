@@ -151,7 +151,7 @@ grep -q '"name"\|"version"\|"kind"\|"entry"' "$w/kama_workspace.json" \
 # `cannot resolve module 'engine'` — which is what the default is carrying.
 ( cd "$w/server" && "$KAMA" pkg add kama.json engine --path ../engine ) >/dev/null 2>&1 \
     || bad "pkg add of a sibling failed"
-printf 'import engine::{ answer };\nfn int32 main() { return answer(); }\n' > "$w/server/src/server.kama"
+printf 'import { engine::answer };\nfn int32 main() { return answer(); }\n' > "$w/server/src/server.kama"
 # PROMOTING a member to an executable is exactly what docs/packages.md says it is: add `entry` and a
 # `main`. Without the manifest change the member is still a library, and `kind` now picks the OUTPUT
 # default — so the build would quietly produce an ARCHIVE and there would be nothing to run.

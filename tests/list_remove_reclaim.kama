@@ -1,7 +1,7 @@
 // DynamicArray.remove now RETURNS the removed element (moved out, tail shifted); pop() returns the last as
 // Optional<T> (None when empty). Reclaim by binding the return, or discard to drop. Move-only `resource`
 // elements stay ASan-clean through the move-out.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 type resource Box {
     int32 v;

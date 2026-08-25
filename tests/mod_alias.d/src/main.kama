@@ -1,3 +1,7 @@
-import modalias::geo;              // bare: qualified-only access, geo::area
-import modalias::util as u;        // module alias: u::three
-fn int32 main() { return modalias::geo::area() + u::three(); }   // 7 + 3 = 10
+// `as` renames an imported SYMBOL. It is the only alias kama has: the whole-module alias went with the
+// whole-module import, because `u::anything` is a qualified glob and GOALS.md already rejects globs for
+// the unqualified case. The qualified access this fixture used to get from a bare `import modalias::geo;`
+// survives with a name attached — importing any symbol of a module loads it.
+import { modalias::geo::area, modalias::util::three as t };
+
+fn int32 main() { return modalias::geo::area() + t(); }   // 7 + 3 = 10

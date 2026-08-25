@@ -4,7 +4,7 @@
 //
 // Falling off the end RETURNS that value, exactly as a `void` function need spell no return. The explicit
 // `return give this;` is the EARLY-return form, not a second way to say the same thing.
-import std::memory::{Owned};
+import { std::memory::Owned };
 
 type enum E implements Error {
     Bad;

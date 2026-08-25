@@ -54,7 +54,7 @@ type value Leaky {
 }
 EOF
 cat > "$tmp/app.kama" <<'EOF'
-import lib::thing::{Leaky};
+import { lib::thing::Leaky };
 fn int32 main() { Leaky l = Leaky(); return 0; }
 EOF
 
@@ -136,7 +136,7 @@ type value Deep {
 }
 EOF
 cat > "$tmp/consumer.kama" <<'EOF'
-import lib::body::{Deep};
+import { lib::body::Deep };
 fn int32 main() { Deep d = Deep.make(); return d.oops(); }
 EOF
 
@@ -172,7 +172,7 @@ type value Holder<T> {
 }
 EOF
 cat > "$tmp/instantiator.kama" <<'EOF'
-import lib::tmpl::{Holder};
+import { lib::tmpl::Holder };
 fn int32 main() { Holder<int32> h = Holder.make(item: 1); return h.oops(); }
 EOF
 
@@ -206,7 +206,7 @@ want() {   # want <output> <substring> <claim>
 
 # 6a. Loose, with no project anywhere above: the operands ARE the compilation, and this one is not.
 mkdir -p "$tmp/loose"
-printf 'import nowhere::{v};\nfn int32 main() { return v(); }\n' > "$tmp/loose/solo.kama"
+printf 'import { nowhere::v };\nfn int32 main() { return v(); }\n' > "$tmp/loose/solo.kama"
 out6=$("$KAMA" check "$tmp/loose/solo.kama" 2>&1 || true)
 want "$out6" "cannot resolve module 'nowhere'" "an unresolved module names itself"
 want "$out6" "modules are the files on the command line" "...and says a loose build compiles only what it was given"
@@ -217,7 +217,7 @@ mkdir -p "$tmp/proj6/src/mod"
 printf '{ "name": "p6", "version": "0.1.0", "kind": "library",\n  "modules": { ".": { "visibility": "internal" }, "mod": { "visibility": "public" } } }\n' \
     > "$tmp/proj6/kama.json"
 printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/proj6/src/mod/m.kama"
-printf 'import p6::mod::{v};\nfn int32 use() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+printf 'import { p6::mod::v };\nfn int32 use() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
 out6b=$("$KAMA" check "$tmp/proj6/src/consumer.kama" 2>&1 || true)
 # ⚠️ Matched on the tail, not on "$tmp/...": absolutePath is realpath(), so a mktemp path comes back as
 # /private/var/... on macOS while $tmp says /var/... — the same spelling hazard M3.5 hit in check-lsp.
@@ -227,12 +227,12 @@ want "$out6b" 'proj6/kama.json — `kama build' "...or, when the file sits in a 
     || { echo "check-diag-file: FAIL — the manifest the note recommends does not build the file" >&2; exit 1; }
 
 # 6c/6d. In a project, the two lists that could be missing an entry, told apart by the first segment.
-printf 'import p6::unlisted::{v};\nfn int32 use2() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+printf 'import { p6::unlisted::v };\nfn int32 use2() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
 mkdir -p "$tmp/proj6/src/unlisted"
 printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/proj6/src/unlisted/u.kama"
 out6c=$("$KAMA" check "$tmp/proj6/kama.json" 2>&1 || true)
 want "$out6c" 'lists no module `p6::unlisted`' "a folder in this project that nobody listed says so"
-printf 'import geo::{v};\nfn int32 use3() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
+printf 'import { geo::v };\nfn int32 use3() { return v(); }\n' > "$tmp/proj6/src/consumer.kama"
 out6d=$("$KAMA" check "$tmp/proj6/kama.json" 2>&1 || true)
 want "$out6d" 'declares no dependency named `geo`' "...and a name that is not this project is a missing dependency"
 

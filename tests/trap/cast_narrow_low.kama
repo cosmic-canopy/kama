@@ -1,6 +1,6 @@
 // The other end of the same rule: BELOW the target's floor traps too. Both bounds are tested, and the
 // message carries the offending value, so a failure names the number that broke it.
-import std::num::{int32Max};
+import { std::num::int32Max };
 fn int32 main() {
     int32 neg = int32Max() - int32Max() - 300;   // -300, opaque
     int16 a = cast<int16>(neg);

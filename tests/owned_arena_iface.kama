@@ -2,8 +2,7 @@
 // drawn from a caller-owned arena via `new(allocator: a) Circle(...)`. The fat handle {obj, vtbl, alloc,
 // objsize} frees `obj` through the arena's BumpAllocator (a no-op — the Arena bulk-frees its one buffer).
 // Polymorphic `.area()` dispatch through the vtbl. ASan-clean: ONE malloc (arena buffer) + ONE free.
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 
 type contract Shape for value { fn int32 area(); }
 

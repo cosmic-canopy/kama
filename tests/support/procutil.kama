@@ -12,9 +12,7 @@
 //   printenv <k>     if env k is set: print its value + newline, exit 0; else exit 1
 //   spew <n>         emit n lines of 19 'A'+newline to stdout AND 19 'B'+newline to stderr (20 bytes each)
 //   hasfile <name>   exit 0 if a file <name> can be opened (relative to cwd), else 1   (proves cwd())
-import std::fs::{File, OpenMode};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import { std::fs::File, std::fs::OpenMode, std::io::IoError, std::collections::DynamicArray };
 
 extern "kama_os.h";
 extern fn void kama_sleep_ms(int32 ms);

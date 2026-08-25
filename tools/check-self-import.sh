@@ -47,7 +47,7 @@ cat > "$tmp/proj/kama.json" <<'JSON'
 }
 JSON
 cat > "$tmp/proj/src/mod/a.kama" <<'EOF'
-import my::mod::{Bee};
+import { my::mod::Bee };
 export { Aye, useBee };
 type value Aye { public int32 x; public ctor of(int32 x) { this.x = x; } }
 fn int32 useBee() { Bee b = Bee.of(y: 2); return b.y; }
@@ -133,7 +133,7 @@ fi
 # declaration rung (`namespace my::mod;` named it, and the sibling scan then pulled b and c), and
 # asserting otherwise would have been asserting a prediction. Phase 2e deleted the rung and the
 # declaration, so the two spellings have converged and the guard says so.
-printf 'import my::mod::{Aye};\nfn int32 use() { return Aye.of(x: 1).x; }\n' > "$tmp/proj/src/consumer.kama"
+printf 'import { my::mod::Aye };\nfn int32 use() { return Aye.of(x: 1).x; }\n' > "$tmp/proj/src/consumer.kama"
 for one in "$tmp/proj/src/consumer.kama" "$tmp/proj/src/mod/a.kama"; do
     rc=0
     "$KAMA" check "$one" > "$tmp/alone.out" 2>&1 || rc=$?
@@ -154,7 +154,7 @@ done
 mkdir -p "$tmp/app/my/mod"
 cp "$tmp/proj/src/mod/"*.kama "$tmp/app/my/mod/"
 cat > "$tmp/app/app.kama" <<'EOF'
-import my::mod::{Aye, useBee};
+import { my::mod::Aye, my::mod::useBee };
 fn int32 main() { Aye a = Aye.of(x: 1); return a.x + useBee(); }
 EOF
 if ! "$KAMA" build "$tmp/app/app.kama" "$tmp/app/my/mod/a.kama" "$tmp/app/my/mod/b.kama" \

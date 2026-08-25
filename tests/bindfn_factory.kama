@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // M22: a bindable returned from a factory MOVES out to the caller (the local must
 // not also drop the object it just transferred).
 fnptr int32 Get(int32 d);

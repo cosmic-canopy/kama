@@ -1,7 +1,7 @@
 // B4 ASan gate — a DESTRUCTIBLE resource boxed via inline `new` in a call-arg, consumed by value: the
 // callee owns it and its param-drop frees the heap buffer. LeakSanitizer/ASan-clean == exactly one free
 // (the box was moved into the callee, not also dropped by the caller).
-import std::memory::{Owned};
+import { std::memory::Owned };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);

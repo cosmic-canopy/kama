@@ -6,7 +6,7 @@
 // became harmful once `unsafe` covered the whole function: `xs[0] = give s` on a real collection skipped
 // the release, and the `give` then fell through to the generic "bare sub-expression" reject. This fixture
 // is the guard that it stays fixed — both halves in one function, which is exactly what makes it a test.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 unsafe fn int32 churn() {
     DynamicArray<string> xs = DynamicArray.empty();

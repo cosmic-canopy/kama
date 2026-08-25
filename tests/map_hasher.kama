@@ -3,7 +3,7 @@
 // type param. The finalizer changes only WHICH slot a key lands in, never lookup correctness, so both
 // hashers must round-trip identically across grows. The two choices produce DISTINCT monomorphs
 // (`Map_int32_int32_DefaultHasher` vs `Map_int32_int32_FastHasher`) — proof `H` is threaded + selected.
-import std::collections::{Map, Set, FastHasher};
+import { std::collections::Map, std::collections::Set, std::collections::FastHasher };
 
 fn int32 main() {
     int32 r = 0;

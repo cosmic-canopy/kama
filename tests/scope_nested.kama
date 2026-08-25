@@ -2,7 +2,7 @@
 // brace; the outer scope's child at the OUTER brace. A bare `spawn` registers into the INNERMOST enclosing
 // scope, so the two scopes keep separate join lists. Both writes are visible after the outer brace.
 // TSan-clean (disjoint cells). Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Slot {
     UnsafePtr<int32> cell;

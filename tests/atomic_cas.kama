@@ -2,7 +2,7 @@
 // retry loop on one shared `Atomic<int32>`; `compareExchange` writes the observed value back through the
 // `ref expected` cell on failure, so the loop retries against the fresh value. The result is exactly 100
 // (no lost updates) — TSan-clean. Exercises the CAS write-back contract under real contention.
-import std::concurrent::{Atomic};
+import { std::concurrent::Atomic };
 
 fn void casInc(ref Atomic<int32> c) {
     int32 n = 0;

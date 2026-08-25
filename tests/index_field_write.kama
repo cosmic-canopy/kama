@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // Writing a field through a subscript is now valid: arr[i].field = v (a place, not an rvalue copy).
 @generate(of)
 type value P { public int32 x; public int32 y; }

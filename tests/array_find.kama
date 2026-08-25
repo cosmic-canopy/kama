@@ -1,7 +1,7 @@
 // FixedArray completion: contains / indexOf over an Equatable element. Uses a user `value` element (Tag) — its
 // `equals` routes the same generic `when T: Equatable` path as `string`; a value element also sidesteps the
 // still-open owning-element place-store (`FixedArray<string>` `a[i] = <owned>`, ROADMAP_DETAIL §1).
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 
 type value Tag implements Equatable<This> {
     int32 id;

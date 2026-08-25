@@ -3,8 +3,7 @@
 // nothing. Exercises BOTH axes: a concrete `Owned<Gauge, BumpAllocator>` (library HeapOwner, `adoptIn`) AND
 // the cross-product interface `Owned<Shape, BumpAllocator>` (fat handle drawn from the arena). SAN/arena
 // leak-clean on both paths.
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 
 type enum OpenErr implements Error {
     Negative;

@@ -1,6 +1,6 @@
 // std::fmt (P1) coverage: char UTF-8 encoding, float, the empty buffer, and the migrated `SocketAddr`
 // rendering through the `Format` contract via `${…}`. Exit code 15 = all four checks passed.
-import std::net::{SocketAddr};
+import { std::net::SocketAddr };
 
 fn int32 main() {
     int32 r = 0;

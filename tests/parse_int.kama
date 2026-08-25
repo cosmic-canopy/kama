@@ -1,6 +1,6 @@
 // M2a: `parse::<T>` — one generic spelling for every numeric primitive, no `parseI32`/`parseI64` ladder.
 // The turbofish is required because nothing in the arguments mentions `T`.
-import std::fmt::{parse, ParseError};
+import { std::fmt::parse, std::fmt::ParseError };
 
 fn int32 main() {
     string a = "41";

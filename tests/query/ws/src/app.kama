@@ -1,6 +1,6 @@
 // LSP M3.5 workspace-indexing fixture — the CONSUMING half (see widget.kama for why the pair exists).
 // Three uses of `Widget` and one of `defaultSize`, none of them reachable from widget.kama.
-import wsproj::{Widget, defaultSize};
+import { wsproj::Widget, wsproj::defaultSize };
 
 fn Widget make(int32 n) {
     Widget w = Widget.of(size: n);

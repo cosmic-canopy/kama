@@ -15,7 +15,7 @@
 //   * checkDefiniteAssignment — a `borrow` block always runs, so an `out` fill inside it is DEFINITE
 //   * alwaysExits             — a body whose every path returns must satisfy the return check
 // so each one is exercised below rather than assumed.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn T firstOr<T>(View<T> xs, T dflt) { foreach (T x in xs) { return x; } return dflt; }
 fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }

@@ -20,7 +20,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 # A program that logs one line at every level, with tags, so the filter's effect is observable on stderr.
 cat > "$tmp/log.kama" <<'KAMA'
-import std::log::{logError, logWarn, logInfo, logDebug, logTrace};
+import { std::log::logError, std::log::logWarn, std::log::logInfo, std::log::logDebug, std::log::logTrace };
 fn int32 main() {
     logError(tag: "net", msg: "err-line");
     logWarn(tag: "", msg: "warn-line");
@@ -64,7 +64,7 @@ fi
 
 # --- 4. custom sink reroutes records; the default console sink goes silent -----
 cat > "$tmp/sink.kama" <<'KAMA'
-import std::log::{setLogSink, logInfo};
+import { std::log::setLogSink, std::log::logInfo };
 fn void mySink(int32 level, string tag, string msg) { println(s: "SINK:${level}:${msg}"); }
 fn int32 main() {
     setLogSink(s: mySink);
@@ -116,7 +116,7 @@ grep -qF "net-debug" "$tmp/e6c" || { echo "check-log: FAIL — --log=debug did n
 # sitting BESIDE src/ belongs to no project at all.
 mkdir -p "$tmp/proj2/src"
 cat > "$tmp/proj2/src/merge.kama" <<'KAMA'
-import std::log::{logInfo, logDebug};
+import { std::log::logInfo, std::log::logDebug };
 fn int32 main() {
     logDebug(tag: "net", msg: "net-debug");     // base net=trace  -> shown
     logDebug(tag: "audio", msg: "audio-debug"); // local audio=debug -> shown
@@ -145,7 +145,7 @@ rm -f "$tmp/proj/kama.local.json"
 # 8a/8b: the message is a function call with an OBSERVABLE side effect (prints a marker to stdout). The v2
 # lowering builds the message INSIDE the runtime guard, so a filtered-out call never runs it.
 cat > "$tmp/v2.kama" <<'KAMA'
-import std::log::{logInfo, logDebug};
+import { std::log::logInfo, std::log::logDebug };
 fn string expensive() { println(s: "BUILT"); return "payload"; }
 fn int32 main() {
     logInfo(tag: "x", msg: "info-line");
@@ -170,7 +170,7 @@ grep -qF "[DEBUG] net: payload" "$tmp/v8b.err" || { echo "check-log: FAIL — v2
 # 8c: --release physically strips Debug/Trace call sites (keep Error/Warn/Info). Distinctive message literals
 # appear ONLY in each level's interpolation, so a transpile-grep proves presence/absence unambiguously.
 cat > "$tmp/strip.kama" <<'KAMA'
-import std::log::{logInfo, logDebug, logTrace};
+import { std::log::logInfo, std::log::logDebug, std::log::logTrace };
 fn int32 main() {
     int32 n = 1;
     logInfo(tag: "x", msg: "KEEPME ${n}");

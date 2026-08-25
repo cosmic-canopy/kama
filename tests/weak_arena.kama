@@ -3,8 +3,7 @@
 // (tryUpgrade → None), then the Weak itself drops LAST among the handles and frees the ctrl through ITS
 // OWN allocator copy (a no-op — the Arena bulk-frees). The Arena (in main) outlives the returned Weak.
 // ASan-clean: one arena buffer malloc + one Arena-dtor free; every box deallocate is a no-op.
-import std::memory::{Shared, Weak};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Shared, std::memory::Weak, std::collections::Arena, std::collections::BumpAllocator };
 
 type value Counter {
     int32 value;

@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // A bare owning local becomes definitely assigned once an `out` argument has filled it.
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 fn void adopt(Owned<Box> t, out Owned<Box> dst) { dst = give t; }

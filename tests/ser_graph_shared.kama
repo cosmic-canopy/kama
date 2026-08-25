@@ -2,8 +2,7 @@
 // table (deduped by identity), both pointer fields referencing the same id; deserialize rebuilds the graph
 // into a `Shared<Pair>` — the two-pass build re-shares the single leaf (`a` and `b` resolve to the same id),
 // proven by a re-encode that reproduces the exact wire (and ASan proves the refcounts balance).
-import std::serialization::json::{encode, decode};
-import std::memory::{Shared};
+import { std::serialization::json::encode, std::serialization::json::decode, std::memory::Shared };
 
 @generate(Serialize, Deserialize)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

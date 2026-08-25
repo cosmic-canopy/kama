@@ -4,8 +4,7 @@
 //
 // This path never reaches `checkConstWrite`, where every other `ref` argument is caught: `spawn` validates
 // its borrow itself (scope-escape, move-state, same-root disjointness) and had no freeze arm.
-import std::concurrent;
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
 
 fn int32 sum(View<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 fn void grow(ref DynamicArray<int32> d) { int32 i = 0; while (i < 4096) { d.add(item: 7); i = i + 1; } }

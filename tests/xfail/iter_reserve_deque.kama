@@ -7,7 +7,7 @@
 // `growTo` where the relocation happens, but that is depth — this rule is what makes the mistake
 // unnameable rather than merely trapped.
 // The `Deque` arm of the same defect — `reserve` -> `growTo` relocates the ring buffer.
-import std::collections::{Deque};
+import { std::collections::Deque };
 
 fn int32 main() {
     Deque<int32> q = Deque.withCapacity(capacity: 2);

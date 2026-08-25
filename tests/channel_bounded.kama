@@ -3,7 +3,12 @@
 // The handle form of `isolate` keeps the producer running concurrently (the fused form would join
 // immediately and deadlock, since the capacity-4 ring fills before main can drain). All channel access
 // is mutex-guarded in C, so this is TSan-clean (run under KAMA_TSAN=1).
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::Isolate,
+};
 
 fn void producer(Sender<int32> tx) {
     int32 i = 1;

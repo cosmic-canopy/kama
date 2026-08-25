@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 type abstract(maxDepth: 1) resource Shape { protected abstract fn int32 area(); }
 fn Owned<Shape> make(){ return new Shape(); }   // ERROR: cannot instantiate abstract class in return position
 fn int32 main(){ Owned<Shape> a = make(); return 0; }

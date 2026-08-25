@@ -1,7 +1,7 @@
 // M10b custom allocator — PriorityQueue backed by a caller-owned Arena. PriorityQueue owns no buffer of
 // its own; all allocation rides its embedded `DynamicArray<T, A>`. `withAllocator(allocator, maxOrder)`
 // threads the arena to that inner array and chooses direction. Both a min- and a max-heap share the arena.
-import std::collections::{PriorityQueue, Arena, BumpAllocator};
+import { std::collections::PriorityQueue, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
     int32 r = 0;

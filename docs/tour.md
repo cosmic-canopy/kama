@@ -307,7 +307,7 @@ coincidentally-matching method is not enough: `fn uint64 hashOf<K: Hashable>(K k
 all are RAII, and all take an optional custom allocator as their last type parameter.
 
 ```kama
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main()
 {
@@ -343,7 +343,7 @@ Workers on the web — and they communicate over typed **channels** rather than 
 cannot touch it afterwards.
 
 ```kama
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
 
 fn void producer(Sender<int32> tx)
 {

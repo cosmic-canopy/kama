@@ -1,5 +1,5 @@
 // @generate(Serialize) on a value type -> exact JSON for scalar fields (ints, float, bool).
-import std::serialization::json::{encode};
+import { std::serialization::json::encode };
 @generate(Serialize)
 type value Vitals {
     @field int32 hp;

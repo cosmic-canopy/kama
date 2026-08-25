@@ -2,8 +2,7 @@
 // caller-owned arena. BOTH the pointee AND the shared `kama_ctrl` block live inside the arena; a bare-`=`
 // copy (2nd strong handle) struct-copies the same allocator, so whichever handle drops last frees the ctrl
 // through the arena (a no-op — the Arena bulk-frees its one buffer). ASan-clean: ONE malloc + ONE free.
-import std::memory::{Shared};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
 
 type contract Shape for value { fn int32 area(); }
 

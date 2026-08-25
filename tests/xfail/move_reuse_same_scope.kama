@@ -1,6 +1,6 @@
 // Session A guardrail — the scope-exit move-state erase must NOT over-clear a still-live local.
 // `a` is `give`n and then re-used in the SAME scope (no new binding) — still a use-after-move.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 type resource Res { DynamicArray<int32> items; public Res(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 take(Res r) { return r.head(); }
 fn int32 main() {

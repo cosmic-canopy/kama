@@ -4,8 +4,7 @@
 // free. Here we buffer three items into a bounded channel and drop BOTH endpoints without ever calling
 // recv. Each item bumps a shared tally in its destructor, so the native exit code proves all three ran
 // (3, not 0); under KAMA_SAN=1 LeakSanitizer additionally proves each heap box freed exactly once.
-import std::concurrent::{Channel, Sender, Receiver};
-import std::memory::{Owned};
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::memory::Owned };
 
 extern "<stdlib.h>";
 extern fn UnsafePtr  malloc(usize n);

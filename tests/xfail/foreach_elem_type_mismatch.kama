@@ -4,7 +4,7 @@
 //
 // Two emit paths need the rule and both have it: the intrinsic-collection loop (`string`) and the
 // iterator protocol (every std::collections container, which iterates via `iterator()`/`next()`).
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 
 fn int32 main() {
     FixedArray<int32> a = FixedArray::<int32>.make(size: 2);

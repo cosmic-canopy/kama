@@ -3,7 +3,7 @@
 // the local-decl form (`Owned` + `Shared`) and the return position; the boxed handle is used then dropped
 // (SAN leak-clean on BOTH the Ok path — the box is freed by the `Result`'s dtor — and the Err path, where
 // nothing is allocated).
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 
 type enum GaugeErr implements Error {
     Negative;

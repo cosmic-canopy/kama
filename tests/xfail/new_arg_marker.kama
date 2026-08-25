@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 type value C { int32 n; public C(int32 n){ this.n=n; } public fn int32 get(){ return this.n; } }
 fn int32 sink(Owned<C> c){ return c.get(); }
 fn int32 main(){ return sink(c: give new C(n: 1)); }   // ERROR: a fresh `new` needs no give/copy marker

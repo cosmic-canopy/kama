@@ -1,7 +1,5 @@
 
-import std::io::{IoError, lastError};
-import std::collections::{View};
-import { SocketAddr, RecvFrom };
+import { std::io::IoError, std::io::lastError, std::collections::View, SocketAddr, RecvFrom };
 
 export { UdpSocket, DatagramSocket };
 

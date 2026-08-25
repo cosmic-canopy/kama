@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // M24a: a `const` local is immutable (deep) but fully usable as a value — read it,
 // call read-only methods on it, deref a const smart pointer. Reassigning it, writing
 // through it (c.field = …, c[i] = …), or ++/-- on it are compile-time errors

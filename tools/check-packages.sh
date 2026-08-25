@@ -62,7 +62,7 @@ cat > "$proj/kama.json" <<JSON
 }
 JSON
 cat > "$proj/src/main.kama" <<'KAMA'
-import geo::{area};
+import { geo::area };
 fn int32 main() { return area(); }   // 30
 KAMA
 
@@ -122,7 +122,7 @@ cat > "$proj2/kama.json" <<JSON
 { "name": "c2", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "geo2": { "url": "file://$tmp/geo2.tgz" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$proj2/src/main.kama" <<'KAMA'
-import geo2::{area2};
+import { geo2::area2 };
 fn int32 main() { return area2(); }   // 42
 KAMA
 # 3. no integrity in the manifest -> TOFU: install succeeds and records the computed hash.
@@ -167,7 +167,7 @@ cat > "$mid/kama.json" <<J
   "dependencies":     { "geo":     { "git": "file://$geo", "rev": "v1.0.0" } },
   "dev-dependencies": { "testkit": { "git": "file://$tk",  "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'import geo::{area};\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/src/mid.kama"
+printf 'import { geo::area };\nexport { boxed };\nfn int32 boxed() { return area() + 5; }\n' > "$mid/src/mid.kama"
 git -C "$mid" init -q; git -C "$mid" add -A; git -C "$mid" commit -qm init; git -C "$mid" tag v1.0.0
 
 # 5. transitive: consumer -> mid -> geo. mid's OWN dev-dep (testkit) must NOT propagate.
@@ -175,7 +175,7 @@ t5="$tmp/t5"; mkdir -p "$t5/src"
 cat > "$t5/kama.json" <<J
 { "name": "t5", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "mid": { "git": "file://$mid", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import mid::{boxed};\nfn int32 main() { return boxed(); }\n' > "$t5/src/main.kama"   # 35
+printf 'import { mid::boxed };\nfn int32 main() { return boxed(); }\n' > "$t5/src/main.kama"   # 35
 if ! "$KAMA" pkg install "$t5/kama.json" >"$tmp/t5.out" 2>&1; then
     echo "check-packages: FAIL — transitive install errored:" >&2; sed 's/^/  /' "$tmp/t5.out" >&2; exit 1; fi
 if ! grep -q '"mid"' "$t5/kama.lock" || ! grep -q '"geo"' "$t5/kama.lock" \
@@ -214,7 +214,7 @@ t8="$tmp/t8"; mkdir -p "$t8/src"
 cat > "$t8/kama.json" <<J
 { "name": "t8", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dev-dependencies": { "testkit": { "git": "file://$tk", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t8/src/main.kama"   # 7
+printf 'import { testkit::helper };\nfn int32 main() { return helper(); }\n' > "$t8/src/main.kama"   # 7
 if ! "$KAMA" pkg install "$t8/kama.json" >"$tmp/t8.out" 2>&1; then
     echo "check-packages: FAIL — dev-dep install errored:" >&2; sed 's/^/  /' "$tmp/t8.out" >&2; exit 1; fi
 [ -e "$t8/.kama/dev-deps/testkit" ] || { echo "check-packages: FAIL — dev-dep not linked into .kama/dev-deps" >&2; exit 1; }
@@ -279,7 +279,7 @@ cat > "$t11/kama.json" <<J
 { "name": "t11", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "dependencies": { "geo": { "git": "file://$geo", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import geo::{area};\nfn int32 main() { return area(); }\n' > "$t11/src/app.kama"   # 30
+printf 'import { geo::area };\nfn int32 main() { return area(); }\n' > "$t11/src/app.kama"   # 30
 if ! "$KAMA" pkg install "$t11/kama.json" >"$tmp/t11.out" 2>&1; then
     echo "check-packages: FAIL — run project install errored:" >&2; sed 's/^/  /' "$tmp/t11.out" >&2; exit 1; fi
 if ( cd "$t11" && "$KAMA" run kama.json ) >"$tmp/r11.out" 2>&1; then RC=0; else RC=$?; fi
@@ -299,7 +299,7 @@ cat > "$t12/kama.json" <<J
 { "name": "t12", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "dev-dependencies": { "testkit": { "git": "file://$tk", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import testkit::{helper};\nfn int32 main() { return helper(); }\n' > "$t12/src/app.kama"   # 7
+printf 'import { testkit::helper };\nfn int32 main() { return helper(); }\n' > "$t12/src/app.kama"   # 7
 if ! "$KAMA" pkg install "$t12/kama.json" >"$tmp/t12.out" 2>&1; then
     echo "check-packages: FAIL — run --dev install errored:" >&2; sed 's/^/  /' "$tmp/t12.out" >&2; exit 1; fi
 if ( cd "$t12" && "$KAMA" run kama.json --dev ) >"$tmp/r12.out" 2>&1; then RC=0; else RC=$?; fi
@@ -358,7 +358,7 @@ check_range() {   # $1 = range, $2 = expected exit code, $3 = unique suffix
     cat > "$d/kama.json" <<J
 { "name": "cr$3", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "gv": { "git": "file://$gv", "version": "$1" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-    printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$d/src/main.kama"
+    printf 'import { gv::area };\nfn int32 main() { return area(); }\n' > "$d/src/main.kama"
     if ! "$KAMA" pkg install "$d/kama.json" >"$tmp/cr$3.out" 2>&1; then
         echo "check-packages: FAIL — range '$1' install errored:" >&2; sed 's/^/  /' "$tmp/cr$3.out" >&2; exit 1; fi
     if "$KAMA" build "$d/kama.json" -o "$tmp/crapp$3" >"$tmp/crb$3.out" 2>&1; then run "$tmp/crapp$3"
@@ -382,7 +382,7 @@ midv="$tmp/midv"; mkdir -p "$midv/src"
 cat > "$midv/kama.json" <<J
 { "name": "midv", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'import gv::{area};\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/src/midv.kama"
+printf 'import { gv::area };\nexport { mv };\nfn int32 mv() { return area(); }\n' > "$midv/src/midv.kama"
 git -C "$midv" init -q; git -C "$midv" add -A; git -C "$midv" commit -qm init; git -C "$midv" tag v1.0.0
 t16="$tmp/t16"; mkdir -p "$t16/src"
 cat > "$t16/kama.json" <<J
@@ -390,7 +390,7 @@ cat > "$t16/kama.json" <<J
     "gv":   { "git": "file://$gv",   "version": ">=1.1.0" },
     "midv": { "git": "file://$midv", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import gv::{area};\nimport midv::{mv};\nfn int32 main() { return area() + mv()*0; }\n' > "$t16/src/main.kama"
+printf 'import { gv::area, midv::mv };\nfn int32 main() { return area() + mv()*0; }\n' > "$t16/src/main.kama"
 if ! "$KAMA" pkg install "$t16/kama.json" >"$tmp/t16.out" 2>&1; then
     echo "check-packages: FAIL — intersection install errored:" >&2; sed 's/^/  /' "$tmp/t16.out" >&2; exit 1; fi
 grep -q '"version": "1.2.0"' "$t16/kama.lock" \
@@ -405,7 +405,7 @@ midlo="$tmp/midlo"; mkdir -p "$midlo/src"
 cat > "$midlo/kama.json" <<J
 { "name": "midlo", "kind": "library", "dependencies": { "gv": { "git": "file://$gv", "version": "<=1.1.0" } }, "modules": { ".": { "visibility": "public" } } }
 J
-printf 'import gv::{area};\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/src/midlo.kama"
+printf 'import { gv::area };\nexport { ml };\nfn int32 ml() { return area(); }\n' > "$midlo/src/midlo.kama"
 git -C "$midlo" init -q; git -C "$midlo" add -A; git -C "$midlo" commit -qm init; git -C "$midlo" tag v1.0.0
 t16b="$tmp/t16b"; mkdir -p "$t16b/src"
 cat > "$t16b/kama.json" <<J
@@ -413,7 +413,7 @@ cat > "$t16b/kama.json" <<J
     "gv":    { "git": "file://$gv",    "version": "<=1.2.0" },
     "midlo": { "git": "file://$midlo", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import gv::{area};\nimport midlo::{ml};\nfn int32 main() { return area() + ml()*0; }\n' > "$t16b/src/main.kama"
+printf 'import { gv::area, midlo::ml };\nfn int32 main() { return area() + ml()*0; }\n' > "$t16b/src/main.kama"
 if ! "$KAMA" pkg install "$t16b/kama.json" >"$tmp/t16b.out" 2>&1; then
     echo "check-packages: FAIL — downgrade install errored:" >&2; sed 's/^/  /' "$tmp/t16b.out" >&2; exit 1; fi
 grep -q '"version": "1.1.0"' "$t16b/kama.lock" \
@@ -428,7 +428,7 @@ for m in midhi:'>=1.2.0' midlo2:'<1.2.0'; do
     cat > "$d/kama.json" <<J
 { "name": "$name", "kind": "executable", "entry": "src/main.kama", "dependencies": { "gv": { "git": "file://$gv", "version": "$rng" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-    printf 'namespace %s;\nimport gv::{area};\nexport { v };\nfn int32 v() { return area(); }\n' "$name" > "$d/src/$name.kama"
+    printf 'namespace %s;\nimport { gv::area };\nexport { v };\nfn int32 v() { return area(); }\n' "$name" > "$d/src/$name.kama"
     git -C "$d" init -q; git -C "$d" add -A; git -C "$d" commit -qm init; git -C "$d" tag v1.0.0
 done
 t17="$tmp/t17"; mkdir -p "$t17"
@@ -448,7 +448,7 @@ off="$tmp/off"; mkdir -p "$off/src"
 cat > "$off/kama.json" <<J
 { "name": "off", "kind": "executable", "entry": "src/main.kama", "dependencies": { "gv": { "git": "file://$gv", "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 J
-printf 'import gv::{area};\nfn int32 main() { return area(); }\n' > "$off/src/main.kama"
+printf 'import { gv::area };\nfn int32 main() { return area(); }\n' > "$off/src/main.kama"
 if ! "$KAMA" pkg install "$off/kama.json" >"$tmp/off.out" 2>&1; then
     echo "check-packages: FAIL — range offline setup install errored:" >&2; sed 's/^/  /' "$tmp/off.out" >&2; exit 1; fi
 cp "$off/kama.lock" "$tmp/off.lock"
@@ -493,7 +493,7 @@ cat > "$rc1/kama.json" <<JSON
 { "name": "rc1", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rc1/src/main.kama"
+printf 'import { rg::area };\nfn int32 main() { return area(); }\n' > "$rc1/src/main.kama"
 if ! "$KAMA" pkg install "$rc1/kama.json" >"$tmp/rc1.out" 2>&1; then echo "check-packages: FAIL — registry install errored:" >&2; sed 's/^/  /' "$tmp/rc1.out" >&2; exit 1; fi
 lock="$rc1/kama.lock"
 grep -q '"source": "registry"' "$lock" && grep -q '"version": "1.2.0"' "$lock" && grep -q '"integrity": "sha256-' "$lock" \
@@ -514,14 +514,14 @@ cat > "$hi/kama.json" <<JSON
 { "name": "hi", "version": "1.0.0", "kind": "library",
   "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'import rg::{area};\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
+printf 'import { rg::area };\nexport { total };\nfn int32 total() { return area() + 8; }\n' > "$hi/src/hi.kama"
 if ! ( cd "$hi" && "$KAMA" publish kama.json --registry "file://$reg" ) >"$tmp/hipub.out" 2>&1; then echo "check-packages: FAIL — publish hi errored:" >&2; sed 's/^/  /' "$tmp/hipub.out" >&2; exit 1; fi
 rc2="$tmp/rc2"; mkdir -p "$rc2/src"
 cat > "$rc2/kama.json" <<JSON
 { "name": "rc2", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "hi": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import hi::{total};\nfn int32 main() { return total(); }\n' > "$rc2/src/main.kama"
+printf 'import { hi::total };\nfn int32 main() { return total(); }\n' > "$rc2/src/main.kama"
 if ! "$KAMA" pkg install "$rc2/kama.json" >"$tmp/rc2.out" 2>&1; then echo "check-packages: FAIL — transitive registry install errored:" >&2; sed 's/^/  /' "$tmp/rc2.out" >&2; exit 1; fi
 grep -q '"hi"' "$rc2/kama.lock" && grep -q '"rg"' "$rc2/kama.lock" \
     || { echo "check-packages: FAIL — transitive registry install did not resolve both hi and rg:" >&2; sed 's/^/  /' "$rc2/kama.lock" >&2; exit 1; }
@@ -557,7 +557,7 @@ cat > "$scp/kama.json" <<JSON
   "registries": { "default": false, "@acme": "file://$areg" },
   "dependencies": { "@acme/sc": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import sc::{val};\nfn int32 main() { return val(); }\n' > "$scp/src/main.kama"
+printf 'import { sc::val };\nfn int32 main() { return val(); }\n' > "$scp/src/main.kama"
 if ! "$KAMA" pkg install "$scp/kama.json" >"$tmp/scp.out" 2>&1; then echo "check-packages: FAIL — scoped install errored:" >&2; sed 's/^/  /' "$tmp/scp.out" >&2; exit 1; fi
 [ -L "$scp/.kama/deps/sc" ] || { echo "check-packages: FAIL — scoped dep did not import under its bare name (.kama/deps/sc)" >&2; ls "$scp/.kama/deps" >&2; exit 1; }
 if "$KAMA" build "$scp/kama.json" -o "$tmp/scapp" >"$tmp/scb.out" 2>&1; then
@@ -630,7 +630,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
 { "name": "sgp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "sg": { "version": "^1.0.0", "registry": "file://$sreg" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-    printf 'import sg::{val};\nfn int32 main() { return val(); }\n' > "$sgp/src/main.kama"
+    printf 'import { sg::val };\nfn int32 main() { return val(); }\n' > "$sgp/src/main.kama"
     # 25a. --verify install of a signed package passes.
     if ! "$KAMA" pkg install "$sgp/kama.json" --verify >"$tmp/sv.out" 2>&1; then
         echo "check-packages: FAIL — --verify install of a signed package errored:" >&2; sed 's/^/  /' "$tmp/sv.out" >&2; exit 1; fi
@@ -669,7 +669,7 @@ cat > "$ovp/kama.json" <<JSON
 { "name": "ovc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "ogeo": { "git": "file://$ogeo", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import ogeo::{area};\nfn int32 main() { return area(); }\n' > "$ovp/src/main.kama"
+printf 'import { ogeo::area };\nfn int32 main() { return area(); }\n' > "$ovp/src/main.kama"
 if ! "$KAMA" pkg install "$ovp/kama.json" >"$tmp/ov1.out" 2>&1; then
     echo "check-packages: FAIL — override base install errored:" >&2; sed 's/^/  /' "$tmp/ov1.out" >&2; exit 1; fi
 cp "$ovp/kama.lock" "$tmp/ov.lock.canon"
@@ -710,7 +710,7 @@ cat > "$rp/kama.json" <<JSON
 { "name": "rpc", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "rg": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import rg::{area};\nfn int32 main() { return area(); }\n' > "$rp/src/main.kama"
+printf 'import { rg::area };\nfn int32 main() { return area(); }\n' > "$rp/src/main.kama"
 if "$KAMA" pkg install "$rp/kama.json" >"$tmp/rp0.out" 2>&1; then
     echo "check-packages: FAIL — registry dep resolved with no registry configured" >&2; exit 1; fi
 cat > "$rp/kama.local.json" <<JSON
@@ -746,7 +746,7 @@ cat > "$ws/libs/net/kama.json" <<'JSON'
   "dependencies": { "config": { "path": "../config" } }, "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$ws/libs/net/src/net.kama" <<'KAMA'
-import config::{Config};
+import { config::Config };
 export { listenPort };
 
 fn int32 listenPort() { Config c = Config.of(port: 8); return c.port; }
@@ -757,7 +757,7 @@ cat > "$ws/apps/server/kama.json" <<'JSON'
 { "name": "server", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "dependencies": { "net": { "path": "../../libs/net" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import net::{listenPort};\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/src/main.kama"
+printf 'import { net::listenPort };\nfn int32 main() { return listenPort(); }\n' > "$ws/apps/server/src/main.kama"
 
 # 28. a workspace member may declare the sibling it imports, and that path dep resolves transitively.
 if ! "$KAMA" pkg install "$ws/apps/server/kama.json" >"$tmp/ws0.out" 2>&1; then
@@ -861,7 +861,7 @@ printf 'export { two };\nfn int32 two() { return 2; }\n' > "$fr/mathx/src/mathx.
 cat > "$fr/geosrc/kama.json" <<'JSON'
 { "name": "geodep", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
-printf 'import mathx::{two};\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/src/geodep.kama"
+printf 'import { mathx::two };\nexport { area };\nfn int32 area() { return two(); }\n' > "$fr/geosrc/src/geodep.kama"
 ( cd "$fr/geosrc" && git init -q . && git add -A \
   && git -c user.email=t@t -c user.name=t commit -qm x && git tag v1.0.0 ) >/dev/null 2>&1
 cat > "$fr/app/kama.json" <<JSON
@@ -869,7 +869,7 @@ cat > "$fr/app/kama.json" <<JSON
   "dependencies": { "geodep": { "git": "file://$fr/geosrc", "rev": "v1.0.0" },
                     "mathx":  { "path": "../mathx" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
-printf 'import geodep::{area};\nfn int32 main() { return area(); }\n' > "$fr/app/src/main.kama"
+printf 'import { geodep::area };\nfn int32 main() { return area(); }\n' > "$fr/app/src/main.kama"
 if ! "$KAMA" pkg install "$fr/app/kama.json" >"$tmp/fr0.out" 2>&1; then
     echo "check-packages: FAIL — fetched free-rider fixture did not install:" >&2; sed 's/^/  /' "$tmp/fr0.out" >&2; exit 1; fi
 "$KAMA" run "$fr/app/kama.json" >"$tmp/fr1.out" 2>&1 && frdrc=0 || frdrc=$?
@@ -913,7 +913,7 @@ cat > "$dc/app/kama.json" <<JSON
   "dependencies": { "marklib": { "path": "../lib" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$dc/app/src/main.kama" <<'EOF'
-import marklib::{Marker, viaMarker};
+import { marklib::Marker, marklib::viaMarker };
 type intrinsic <int32> implements Marker { public fn int32 mark() { return 2; } }
 fn int32 main() { int32 x = 5; return viaMarker(v: ref x); }
 EOF
@@ -968,7 +968,7 @@ cat > "$out/app/kama.json" <<'JSON'
   "dependencies": { "dep": { "path": "../dep" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$out/app/src/app.kama" <<'EOF'
-import dep::{ answer };
+import { dep::answer };
 fn int32 main() { return answer(); }
 EOF
 "$KAMA" pkg install "$out/app/kama.json" >"$tmp/out.out" 2>&1 \

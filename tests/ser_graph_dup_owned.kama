@@ -1,8 +1,7 @@
 // Graph deserialize enforces GIVE-ONCE for `Owned` edges: a hand-crafted wire aliases one uniquely-owned
 // object (id 2) from TWO `Owned` fields. The first claim transfers it; the second finds the id already
 // claimed and `decode` returns `DeError::DuplicateId` (an owned object can have exactly one owner).
-import std::serialization::json::{decode};
-import std::memory::{Shared, Owned};
+import { std::serialization::json::decode, std::memory::Shared, std::memory::Owned };
 
 @generate(Serialize, Deserialize)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }

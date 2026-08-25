@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // A Copyable collection (`DynamicArray<int32>` — its element is Copyable) deep-copies into a variant field:
 // `copy xs` clones the buffer and the clone is moved into the union (dropped by the tag dtor). Both
 // the original `xs` and the variant's copy free their own buffer -> ASan-clean is the proof.

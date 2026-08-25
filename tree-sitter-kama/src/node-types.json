@@ -4268,6 +4268,21 @@
   {
     "type": "import_declaration",
     "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "import_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_entry",
+    "named": true,
     "fields": {
       "alias": {
         "multiple": false,
@@ -4281,7 +4296,7 @@
       },
       "path": {
         "multiple": false,
-        "required": false,
+        "required": true,
         "types": [
           {
             "type": "import_path",
@@ -4289,16 +4304,6 @@
           }
         ]
       }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "import_symbol",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -4314,32 +4319,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "import_symbol",
-    "named": true,
-    "fields": {
-      "alias": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {

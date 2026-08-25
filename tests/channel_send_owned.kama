@@ -2,8 +2,13 @@
 // an `Owned` is a UNIQUE heap pointer — no shared refcount to race — so the move transfers it whole across
 // the channel. The producer sends an `Owned<Box>`; main relocates it out via `recv` and reads through it,
 // freeing the heap box exactly once at the match arm's end (ASan-clean under KAMA_SAN=1; TSan-clean).
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
-import std::memory::{Owned};
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::Isolate,
+    std::memory::Owned,
+};
 
 type value Box {
     int32 v;

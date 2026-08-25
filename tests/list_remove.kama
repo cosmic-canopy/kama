@@ -1,6 +1,6 @@
 // DynamicArray completion: reserve / remove(index) (drops + shifts) / clear / contains / indexOf, over an OWNING
 // element (DynamicArray<string>) so ASan covers the element drops on remove + clear.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<string> xs = DynamicArray.empty();

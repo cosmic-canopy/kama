@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // Operator overloading combined with collections: sum a DynamicArray of `value` vectors via `+` in a foreach.
 @generate(of)
 type value Vec2

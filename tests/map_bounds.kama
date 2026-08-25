@@ -1,6 +1,6 @@
 // Map intrinsics at the bounds we expect: empty get -> None, absent remove/contains, single entry,
 // overwrite doesn't grow length, remove-to-empty.
-import std::collections::{Map};
+import { std::collections::Map };
 fn int32 main() {
     int32 r = 0;
     Map<int32, int32> m = Map.empty();

@@ -1,6 +1,6 @@
 // Hash-map throughput: insert N int keys, then look every key up PASSES times in a scrambled
 // (bijective LCG-strided) order. Deterministic checksum -> exit code (cross-language cross-check).
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn int32 main()
 {

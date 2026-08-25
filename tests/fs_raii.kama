@@ -1,8 +1,13 @@
 // std::fs RAII — File closes its fd on drop. Open the same file 5000x, each dropped at arm end;
 // if the descriptor leaked we would exhaust the fd table (~1024) and an open would fail. Returns 0.
-import std::fs::{writeFile, remove, File, OpenMode};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import {
+    std::fs::writeFile,
+    std::fs::remove,
+    std::fs::File,
+    std::fs::OpenMode,
+    std::io::IoError,
+    std::collections::DynamicArray,
+};
 
 fn int32 main() {
     string self = "_fs_raii.tmp";

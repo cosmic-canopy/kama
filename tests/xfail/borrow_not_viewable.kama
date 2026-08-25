@@ -5,7 +5,7 @@
 //
 // The fix is one clause: `implements Viewable<View<int32>>`. Resolution stays structural either way — the
 // contract is a gate, never a dispatch — so nothing about the emitted call changes.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 type resource Wrapper {
     DynamicArray<int32> inner;

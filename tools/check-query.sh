@@ -571,7 +571,7 @@ cat > "$dep/app/kama.json" <<'JSON'
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
-import geo::{Point};
+import { geo::Point };
 fn int32 main() {
     Point p = Point.of(x: 7);
     return p.x;
@@ -614,8 +614,12 @@ expect --complete 134:24 -- "trigger=scope recv=Level "              # Level::|H
 expect --complete 134:24 -- "active=-1"                              # `(a == b)` is a GROUPING paren, not a call
 expect --complete 122:27 -- "trigger=arg-label recv= callee=blend prefix= active=0 filled="   # blend(|lo: …)
 expect --complete 122:34 -- "trigger=arg-label recv= callee=blend prefix= active=1 filled=lo" # …, |hi: 4)
-expect --complete 15:12  -- "trigger=import-path recv=std "          # import std::|collections
-expect --complete 15:26  -- "trigger=import-symbol recv=std::collections "   # import …::{|DynamicArray}
+# ⚠️ BOTH POSITIONS ARE `import-symbol` NOW, and that is the syntax change rather than a weakening. With
+# the scope inside the braces every position in the block is inside them, so the trigger no longer
+# distinguishes "naming a module" from "naming a symbol" — the RECEIVER does, and it is what the completer
+# keys on (it offers sub-modules and symbols of `recv` together, since `std::|` could want either).
+expect --complete 15:14  -- "trigger=import-symbol recv=std "                # import { std::|collections
+expect --complete 15:31  -- "trigger=import-symbol recv=std::collections "   # import { std::collections::|Dyn
 # Literals and comments hold no code — and an interpolation HOLE does, so it must still complete.
 expect --complete 123:21 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a string body
 expect --complete 125:17 -- "trigger=bare recv= callee= prefix= active=-1 filled="   # inside a // comment
@@ -735,10 +739,10 @@ echo "check-query: M4.7 import paths"
 expect --complete 15:7  -- "module	std"           # `import |` -> the stdlib, always resolvable
 reject --complete 15:7  -- "module	shapes"        # ... but NOT a sibling file: a file is not a module
 reject --complete 15:7  -- "module	complete"      # ... and never the file itself
-expect --complete 15:12 -- "module	collections"   # `import std::|` -> the stdlib's modules
-expect --complete 15:12 -- "module	process"
-expect --complete 15:26 -- "type	DynamicArray	std::collections"   # `import …::{|}` -> the export manifest
-expect --complete 15:26 -- "type	Deque	std::collections"
+expect --complete 15:14 -- "module	collections"   # `import { std::|` -> the stdlib's modules
+expect --complete 15:14 -- "module	process"
+expect --complete 15:31 -- "type	DynamicArray	std::collections"   # `…::collections::|` -> its export manifest
+expect --complete 15:31 -- "type	Deque	std::collections"
 
 # ---------------------------------------------------------------------------------------------------
 # M4.8 — `global::` names the ROOT scope. Its completion payoff is why the alias waited for an LSP: the
@@ -852,7 +856,7 @@ FIXTURE="$ROOT/tests/query/generics/src/lib.kama"
 # M6 B3g: an `import`'s symbol list is a REFERENCE. Renaming `Box` used to rewrite its declaration and its
 # uses and leave `import genericprobe::{Box, …}` spelling the old name — the module then imports a symbol that no
 # longer exists, so the rename breaks a file it did edit. Same class as B3a, across units.
-expect --project --refs 13:11 -- "use.kama:7:22"
+expect --project --refs 13:11 -- "use.kama:7:23"
 # M6 B3f: and the matching `export { Box, … };`, which was the other half of that same rename. This line
 # was a `reject` from B3g until the grammar carried per-segment positions for the `::`-separated name
 # lists — it was pinned as a FACT precisely so that closing the gap could not be silent.
@@ -889,11 +893,13 @@ reject --refs 14:10 -- "spellings.kama:59:21"    # `Green` belongs to the enum M
 FIXTURE="$ROOT/tests/query/imports.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
+# ⚠️ The COLUMNS moved with the syntax, though the lines did not: `import { ` is nine characters where
+# `import ` was seven, so every position inside an import shifted right by two.
 echo 'check-query: M6 B3f module paths'
-expect --def 6:12 -- "/lib/std/collections/"     # `collections` opens the module it names
-expect --type 6:12 -- "module std::collections"
-expect --type 6:7  -- "module std"               # a path PREFIX no file declares...
-expect --def 6:7   -- "no definition"            # ...has nothing to open, as clangd answers a partial include
+expect --def 6:14 -- "/lib/std/collections/"     # `collections` opens the module it names
+expect --type 6:14 -- "module std::collections"
+expect --type 6:9  -- "module std"               # a path PREFIX no file declares...
+expect --def 6:9   -- "no definition"            # ...has nothing to open, as clangd answers a partial include
 # There used to be two assertions here for the file naming its OWN module — `--type`/`--def` on its
 # `namespace importsprobe;` declaration. Phase 2e deleted the keyword: a file's module is its folder, so
 # there is no token in the source to hover or jump from, and the feature is gone rather than moved. What

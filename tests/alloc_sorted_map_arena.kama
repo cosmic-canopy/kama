@@ -5,7 +5,13 @@
 // `reset()` reclaims them. Enough keys are inserted to force splits AND a root growth (height increase),
 // exercising every arena-backed new-site. ASan verifies no leak / double-free (arena declared first →
 // outlives the map, so its buffer is freed last).
-import std::collections::{SortedMap, SortedSet, DynamicArray, Arena, BumpAllocator};
+import {
+    std::collections::SortedMap,
+    std::collections::SortedSet,
+    std::collections::DynamicArray,
+    std::collections::Arena,
+    std::collections::BumpAllocator,
+};
 
 fn int32 main() {
     int32 r = 0;

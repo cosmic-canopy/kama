@@ -1,7 +1,7 @@
 // M10b custom allocator — Deque backed by a caller-owned Arena. Force several ring-buffer grows
 // (4->8->...->128) all in-arena. ASan-clean = one malloc (the Arena buffer) + one free (its dtor);
 // every container `deallocate` is a no-op. `arena` is declared FIRST so it drops LAST (outlives the deque).
-import std::collections::{Deque, Arena, BumpAllocator};
+import { std::collections::Deque, std::collections::Arena, std::collections::BumpAllocator };
 
 fn int32 main() {
     int32 r = 0;

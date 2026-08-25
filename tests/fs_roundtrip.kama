@@ -1,8 +1,14 @@
 // std::fs — write a >64 KiB buffer, stat it, read it back, verify byte-for-byte, delete it.
 // Exercises write-to-completion + read-loop + stat + remove. Returns 42 on full success.
-import std::fs::{writeFile, readFile, stat, remove, Metadata};
-import std::io::{IoError};
-import std::collections::{DynamicArray};
+import {
+    std::fs::writeFile,
+    std::fs::readFile,
+    std::fs::stat,
+    std::fs::remove,
+    std::fs::Metadata,
+    std::io::IoError,
+    std::collections::DynamicArray,
+};
 
 // Checksum a read-back buffer against the expected length + rolling sum (0 = match).
 fn int32 verifyBuf(ref DynamicArray<uint8> got, int32 n, int32 want) {

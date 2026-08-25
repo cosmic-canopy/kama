@@ -2,9 +2,12 @@
 // pointer fields reference one id); decode rebuilds a `Shared<Pair>` re-sharing the single leaf. Proven by a
 // decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
 // refcounts balance. Returns 55.
-import std::serialization::binary::{encode, decode};
-import std::collections::{DynamicArray};
-import std::memory::{Shared};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+};
 
 @generate(Serialize, Deserialize)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }

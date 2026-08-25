@@ -1,6 +1,11 @@
 // M10b custom allocator — SlotMap backed by a caller-owned Arena. Three parallel buffers all drawn from
 // the arena; force grows (doubling from 8) then get/remove by handle to prove the arena round-trip.
-import std::collections::{SlotMap, Handle, Arena, BumpAllocator};
+import {
+    std::collections::SlotMap,
+    std::collections::Handle,
+    std::collections::Arena,
+    std::collections::BumpAllocator,
+};
 
 fn int32 main() {
     int32 r = 0;

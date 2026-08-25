@@ -3,8 +3,7 @@
 // the box's `deallocate` is a no-op (the Arena bulk-frees its one buffer). A `copy()` (second strong
 // handle) carries the SAME allocator, so whichever handle drops last frees the ctrl through the arena.
 // ASan-clean: exactly ONE malloc (the arena buffer) + ONE free (the Arena dtor).
-import std::memory::{Shared};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Shared, std::collections::Arena, std::collections::BumpAllocator };
 
 type value Counter {
     int32 value;

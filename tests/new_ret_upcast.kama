@@ -1,5 +1,4 @@
-import std::memory::{Owned};
-import std::collections::{DynamicArray};
+import { std::memory::Owned, std::collections::DynamicArray };
 // B4 — inline `new Derived` returned as an Owned<Base>: adopt the offset-0 base subobject; drop stays
 // virtual (no slicing). Derived owns a heap DynamicArray, so a slice would leak — ASan proves the virtual dtor ran.
 type virtual(maxDepth: 1) resource Shape {

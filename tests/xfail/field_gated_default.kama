@@ -3,7 +3,7 @@
 // Map is NOT default-fillable — a field of that type left unassigned is a hard error (it would zero-init to a
 // garbage-allocator map). `make()` forgets to assign `m`, so it must be rejected. (Before M8d.1,
 // `isDefaultFillable` scanned `ctors` — which retains the gated entry — and wrongly deemed it fillable.)
-import std::collections::{Map, Arena, BumpAllocator};
+import { std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
 type resource Holder {
     Map<int32, int32, A: BumpAllocator> m;

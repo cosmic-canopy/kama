@@ -14,8 +14,7 @@
 // index into an array — recovers its key from the C type, and `uint32_t` answers `uint32`. That is why
 // nothing here reaches a char through a container.
 
-import std::serialization::binary::{encode};
-import std::collections::{DynamicArray};
+import { std::serialization::binary::encode, std::collections::DynamicArray };
 
 // A user contract over both types proves the mechanism independently of the prelude: one body per target,
 // visibly different results, dispatched through a bound.

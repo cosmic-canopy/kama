@@ -5,7 +5,7 @@
 // reading the (immutable) payload; the scope joins them before `a` drops. TSan-clean is the whole point:
 // were the refcount the plain non-atomic `Rc`, the concurrent strong++/strong-- would be a data race.
 // Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type immutable value Leaf {
     public int32 x; public int32 y;

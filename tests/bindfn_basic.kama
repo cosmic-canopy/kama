@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // M22: BindableFunctionPtr<Sig> — bind an object+method (Owned moves in) and invoke
 // through the captured receiver; a free function promotes into the same type
 // (null object, no capture). Receiver is HIDDEN in the signature.

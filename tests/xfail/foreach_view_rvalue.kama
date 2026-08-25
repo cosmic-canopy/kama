@@ -2,7 +2,7 @@
 // buffer still, and `d` is free to realloc inside the body. It also produced a CLANG error rather than a
 // kama one — `&(rvalue)` is not valid C — which meant `kama check` called the file clean while
 // `kama build` rejected it, the one disagreement the analysis-agreement leg exists to catch.
-import std::collections::{DynamicArray, View};
+import { std::collections::DynamicArray, std::collections::View };
 
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);

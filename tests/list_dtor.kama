@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // DynamicArray<T> RAII + element-dtor chaining over the LIVE length (len=3, cap=4):
 // the list's dtor must destroy exactly its 3 live elements, not its capacity.
 //

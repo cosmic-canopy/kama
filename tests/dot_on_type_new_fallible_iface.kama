@@ -3,7 +3,7 @@
 // behind the `Shape` fat handle {obj, vtbl[, ctrl]} ONLY on `Ok`; the `Err` path allocates nothing.
 // Polymorphic `.area()` dispatches through the vtbl. SAN leak-clean on both paths (Ok box freed by the
 // `Result`'s dtor; Err allocates nothing).
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 
 type enum ShapeErr implements Error {
     Negative;

@@ -1,7 +1,7 @@
 // M2/M4: the moved bundle is consumed by the spawn — reusing it afterward MUST be rejected. `spawn
 // worker(p: give p)` moves `p` into the new isolate (shared-nothing), so the post-scope `p.get()` is a
 // use-after-move, caught by the same move seam that guards every other `give`. This must fail to compile.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Payload {
     int32 value;

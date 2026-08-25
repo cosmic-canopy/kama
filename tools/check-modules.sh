@@ -137,8 +137,10 @@ echo "check-modules: with no manifest, a module is still a folder"
 l="$tmp/loose-prog"
 mkdir -p "$l/geo/deep" "$l/oddly-named" "$tmp/lc"
 cat > "$l/app.kama" <<'KAMA'
-import geo::{area};
-import geo::deep::{nested};
+import {
+    geo::area,
+    geo::deep::nested,
+};
 fn int32 helper() { return 1; }
 fn int32 main() { return area() + nested() + helper(); }
 KAMA

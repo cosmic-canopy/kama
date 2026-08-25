@@ -1,6 +1,5 @@
 // The allocator-aware form — `new(allocator: a) Empty()` routes through the same ban, before the boxing.
-import std::memory::{Owned};
-import std::collections::{Arena, BumpAllocator};
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 type value Empty { public int32 v; }
 fn int32 main() {
     Arena a = Arena.make(capacity: 1024);

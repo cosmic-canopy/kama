@@ -6,7 +6,7 @@
 // the repeated constructions are bound to locals because the generic spelling is long. Still returning 42
 // is what says the generic re-derives exactly what the hand-rolled one did. The generic's OWN behaviour —
 // a second backing, a second F, the bad-pairing rejection — is tests/num_fixed_generic.kama.
-import std::num::{Fixed};
+import { std::num::Fixed };
 fn int32 main() {
     Fixed<int32, 16> one  = Fixed::<int32, 16>.one();
     Fixed<int32, 16> f1   = Fixed::<int32, 16>.fromInt(n: 1);

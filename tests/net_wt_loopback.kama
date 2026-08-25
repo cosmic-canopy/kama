@@ -3,7 +3,7 @@
 // browser-only (no node), so this runs under the Playwright harness (tests/support/browser_run.js) with the
 // server's self-signed cert hash injected. Same shape as net_ws_loopback: std::app's run loop lets the async
 // session + datagram round-trip complete, raw glue on an int32 handle, close before quit.
-import std::app::{run, TickFn, quit};
+import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";

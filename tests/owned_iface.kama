@@ -1,5 +1,4 @@
-import std::collections::{DynamicArray};
-import std::memory::{Owned};
+import { std::collections::DynamicArray, std::memory::Owned };
 // M26g-1 — `Owned<Shape>`: a UNIQUE-owning smart pointer over an INTERFACE. `new Rect(...)` boxes a
 // concrete class implementing the interface into a fat handle {obj, vtbl}; `s.area()` dispatches
 // polymorphically through the vtable; dropping the handle destroys the concrete object via the

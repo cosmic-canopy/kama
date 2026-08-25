@@ -328,25 +328,26 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
             // and the symbols bind bare, just as a foreign per-symbol import does. (A file in no module
             // has scope `_F<idx>` and no siblings, so the form is inert rather than special-cased.)
             std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(path);
-            if (imp->moduleAlias && !imp->moduleAlias->empty()) {
-                if (projectRoots.count(*imp->moduleAlias))
-                    unsupported(("`import … as " + *imp->moduleAlias + "` claims `" + *imp->moduleAlias
-                                 + "`, which already names a project this file can reach — the alias "
-                                   "would shadow it with no way left to spell the original. Pick "
-                                   "another name").c_str(), imp->line);
-                ctx.aliases[*imp->moduleAlias] = mod;
-            } else if (imp->symbols) {
+            if (imp->symbols)
                 for (auto& sym : *imp->symbols) {
                     if (!sym || !sym->identifier || !sym->identifier->value) continue;
                     std::string local = (sym->alias && sym->alias->value) ? *sym->alias->value
                                                                           : *sym->identifier->value;
+                    // ⚠️ §2f.29 NOW RIDES ON THE SYMBOL ALIAS, because that is the only alias left. The
+                    // rule is unchanged — an `as` may not claim a name that already roots a project this
+                    // file can reach — but it used to be checked on the MODULE alias, and dropping the
+                    // whole-module import would have retired the rule silently along with the form.
+                    // The harm is the same either way: `… as std` leaves `std::…` unspellable in this file.
+                    if (sym->alias && sym->alias->value && projectRoots.count(local))
+                        unsupported(("`as " + local + "` claims `" + local + "`, which already names a "
+                                     "project this file can reach — the alias would shadow it with no way "
+                                     "left to spell the original. Pick another name").c_str(), imp->line);
                     std::string target = mod + "__" + *sym->identifier->value;
                     auto it = ctx.symbolAliases.find(local);
                     if (it != ctx.symbolAliases.end() && it->second != target)
                         unsupported(("import of `" + local + "` collides with another import — disambiguate with `as`").c_str(), imp->line);
                     ctx.symbolAliases[local] = target;
                 }
-            }
         }
     // The smart-pointer triad is a built-in module (std::memory), always in scope — add an implicit
     // `using` so bare `Owned`/`Shared`/`Weak` resolve everywhere with no `import std::memory`. Consulted

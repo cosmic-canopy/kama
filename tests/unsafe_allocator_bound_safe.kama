@@ -1,6 +1,6 @@
 // The POSITIVE case the conduit argument rests on: naming `Allocator` as a BOUND is perfectly safe.
 // No `UnsafePtr` value exists here — the contract member is never invoked — so nothing needs a marker.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 type resource Holder<A: Allocator = GlobalAllocator> {
     int32 n;

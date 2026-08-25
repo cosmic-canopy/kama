@@ -1,9 +1,13 @@
 // KBIN object-graph round-trip with a UNIQUELY-OWNED child: a Parent owns a Child via `Owned<Child>`. Decode
 // rebuilds into a Shared<Parent>, transferring the child by GIVE-ONCE (no refcount) — proven by a byte-identical
 // re-encode; ASan proves the single-owner child frees exactly once. Returns 55.
-import std::serialization::binary::{encode, decode};
-import std::collections::{DynamicArray};
-import std::memory::{Shared, Owned};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+    std::memory::Shared,
+    std::memory::Owned,
+};
 
 @generate(Serialize, Deserialize)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }

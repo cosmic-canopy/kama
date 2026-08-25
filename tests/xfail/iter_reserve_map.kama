@@ -7,7 +7,7 @@
 // `growTo` where the relocation happens, but that is depth — this rule is what makes the mistake
 // unnameable rather than merely trapped.
 // The `Map` arm — `reserve` rehashes into fresh key/value/state buffers and frees the old ones.
-import std::collections::{Map};
+import { std::collections::Map };
 
 fn int32 main() {
     Map<int32, int32> m = Map.withCapacity(capacity: 8);

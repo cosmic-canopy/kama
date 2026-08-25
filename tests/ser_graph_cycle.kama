@@ -4,8 +4,12 @@
 // `Shared` and the `Weak` back-edge (re-`downgrade`d onto the reconstructed owner) — proven by a re-encode
 // that reproduces the exact wire; ASan proves the rebuilt cycle is still leak-free. A never-null Shared can't
 // bootstrap a cycle, so the edges are nullable (Optional); `0` = absent/expired.
-import std::serialization::json::{encode, decode};
-import std::memory::{Shared, Weak};
+import {
+    std::serialization::json::encode,
+    std::serialization::json::decode,
+    std::memory::Shared,
+    std::memory::Weak,
+};
 
 @generate(Serialize, Deserialize)
 type resource Node {

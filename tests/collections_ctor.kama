@@ -4,7 +4,16 @@
 // `static fn`), callable dot-on-type (generic receiver, args inferred from the LHS) or via the `::` bridge.
 // PriorityQueue's capacity rides its backing array via `minHeap/maxHeapWithCapacity`. All exercised below so
 // each generic ctor is actually instantiated + checked.
-import std::collections::{DynamicArray, Map, Set, Deque, SlotMap, Handle, BitSet, PriorityQueue};
+import {
+    std::collections::DynamicArray,
+    std::collections::Map,
+    std::collections::Set,
+    std::collections::Deque,
+    std::collections::SlotMap,
+    std::collections::Handle,
+    std::collections::BitSet,
+    std::collections::PriorityQueue,
+};
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();          // default-marked empty ctor
     a.add(item: 10); a.add(item: 20);                      // 10+20 = 30

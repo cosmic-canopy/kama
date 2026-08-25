@@ -1,4 +1,4 @@
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 // give/copy markers on smart pointers. `give` MOVES a move-only Owned; a Shared is copy-only,
 // so a bare hand-off retains and `copy` is the explicit form of the same retain (no `give` on a
 // Shared — there is no move to make).

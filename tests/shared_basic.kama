@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // Shared<T>: heap construction + control block, auto-deref, RAII (last handle frees).
 type value Counter
 {

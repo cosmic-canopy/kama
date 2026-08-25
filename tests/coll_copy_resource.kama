@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M26f-5 — `copy` of a collection whose ELEMENTS are `Copyable` resources deep-copies each
 // element via its `copy()` method (a fresh, independent per-element buffer). This is the piece
 // M26f-3 deferred (it required the Copyable contract, M26f-4). Independence is proved by ASan:

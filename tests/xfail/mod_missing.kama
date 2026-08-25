@@ -1,2 +1,2 @@
-import nope::{thing};
+import { nope::thing };
 fn int32 main() { return 0; }

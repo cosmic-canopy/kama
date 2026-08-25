@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Definite assignment is a real flow merge, not "assigned somewhere". A LONE `if` may be skipped, so what
 // it assigns is not definite at the return below. (Both arms assigning IS accepted — see
 // tests/out_param_paths.kama — which is what makes an `out` parameter's fill-on-every-path usable.)

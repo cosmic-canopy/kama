@@ -1,8 +1,7 @@
 // M6.3 (reject): a `parallel_for` body may not touch `this`/fields. A worker runs on a fresh isolate with
 // no receiver (shared-nothing by construction, like a `spawn` entry); aliasing the instance across threads
 // would reintroduce shared mutable state. The fix: copy the field into a local before the loop.
-import std::concurrent;
-import std::collections::{DynamicArray, View};
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
 
 @generate(of)
 type value Bumper {

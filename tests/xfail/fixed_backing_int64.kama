@@ -3,7 +3,7 @@
 // oversight — a later reader adding `type intrinsic <int64> implements FixedBacking<This>` would compile,
 // and then every int64-backed multiply would silently overflow its own accumulator. This fixture is what
 // makes the omission a claim instead of a comment.
-import std::num::{FixedBacking};
+import { std::num::FixedBacking };
 
 fn int64 widen<B: FixedBacking<B>>(B b) { return b.wide(); }
 

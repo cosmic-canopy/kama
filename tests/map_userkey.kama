@@ -1,7 +1,7 @@
 // Map generality beyond primitives: a USER `value` key that nominally `implements Hashable, Equatable`
 // (the prelude contracts) is a valid `Map<K, V>` key — the same generic `<K: Hashable + Equatable>` path
 // as `string`, no special-casing. Lookups borrow the key (`ref K`), so the keys are bound to locals here.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type value Point implements Hashable, Equatable<This> {
     int32 x; int32 y;

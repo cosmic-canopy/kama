@@ -5,8 +5,7 @@
 // The source slot is left STALE — the bytes are still there — so the caller must vacate it or the value
 // gets dropped twice. Here the buffer is raw storage nothing owns, so there is nothing to vacate: the
 // relocated value is the sole owner and its drop is the only one.
-import std::ptr::{relocate};
-import std::collections::{DynamicArray};
+import { std::ptr::relocate, std::collections::DynamicArray };
 
 static int32 drops = 0;
 

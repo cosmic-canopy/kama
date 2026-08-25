@@ -3,7 +3,7 @@
 // `Shared<T>` retains on `copy` / transfers on move (shared ownership survives the pop), and a `Weak<T>`
 // handle round-trips through the deque and still upgrades. The deque never boxes the element — the element
 // type carries its own ownership, so no `Owned` wrapper is imposed by the container.
-import std::collections::{Deque};
+import { std::collections::Deque };
 @generate(of)
 type value Cell { public int32 v; }
 

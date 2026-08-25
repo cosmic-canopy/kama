@@ -1,7 +1,14 @@
 // M10b — the DEFAULT-allocator (bare) path is unchanged: every retrofitted container built without a type
 // arg uses the zero-size `GlobalAllocator` (filled from the M8 default). Notably `BitSet` — now an
 // all-defaulted generic — is still spelled BARE (`BitSet` == `BitSet<GlobalAllocator>`).
-import std::collections::{Deque, FixedArray, BitSet, SlotMap, Handle, PriorityQueue};
+import {
+    std::collections::Deque,
+    std::collections::FixedArray,
+    std::collections::BitSet,
+    std::collections::SlotMap,
+    std::collections::Handle,
+    std::collections::PriorityQueue,
+};
 
 fn int32 main() {
     int32 r = 0;

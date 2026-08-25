@@ -2,7 +2,7 @@
 // constructs directly into the place, like a local-init stackCtor. Covers: a generic ctor into a field
 // (Map/DynamicArray), a reassignment that re-inits (drops the old value — ASan-checked), and a non-generic ctor
 // with args into a field + a local reassignment. Previously each required "bind to a local first".
-import std::collections::{Map, DynamicArray};
+import { std::collections::Map, std::collections::DynamicArray };
 
 @generate(of)
 type value Point {

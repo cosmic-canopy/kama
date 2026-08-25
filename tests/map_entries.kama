@@ -2,7 +2,7 @@
 // copy of both), present only for a Copyable key AND value. Exercises (a) a plain int32->int32 map and (b) an
 // OWNING value (int32->string) so the Entry's deep-copy + drop path is ASan-exercised. Completes pair-parity
 // with the key (`iterator()`) and value (`values()`) iterators.
-import std::collections::{Map, Entry};
+import { std::collections::Map, std::collections::Entry };
 
 fn int32 main() {
     // (a) int32 -> int32: sum key+value across every entry.

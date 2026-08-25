@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Construction-model M3: wrapping an incomplete object in `Result::Ok(value: …)` does NOT excuse it — the
 // checker unwraps `Ok` and still requires every owning field set. (Infallible counterpart: ctor_missing_owning_ptr.)
 type enum HolderErr implements Error {

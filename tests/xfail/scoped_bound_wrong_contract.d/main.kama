@@ -4,8 +4,7 @@
 //
 // Conformances used to be pre-scanned under the BARE contract name, so the two were conflated and this
 // compiled. It then produced a wrong-but-plausible program: the call resolved to markx's `mark`.
-import markx::{Marker};
-import marky::{needsMarker};
+import { markx::Marker, marky::needsMarker };
 
 fn int32 main() {
     int32 x = 5;

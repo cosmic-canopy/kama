@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M26i — inline constructor in argument position: `f(x: Ctor(...))`. Materialized as a HOISTED
 // temporary (pure ISO C, no GNU statement-expression), passed by value: a `value` copies, a
 // `resource` moves (the temp is consumed by the callee and dropped at fn-end — no double-free).

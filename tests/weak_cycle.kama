@@ -4,8 +4,7 @@
 // NOT free the Ctrl while `a`'s own drop still needs it (the last strong handle releases `strong` only AFTER
 // the pointee dtor). Latent before the fix: benign at -O0, a UAF crash at -O2 / on wasm. Each node owns a
 // heap `DynamicArray` so the pointee dtor is non-trivial. Returns a.val() = 10.
-import std::memory::{Shared, Weak};
-import std::collections::{DynamicArray};
+import { std::memory::Shared, std::memory::Weak, std::collections::DynamicArray };
 
 type resource Node {
     DynamicArray<int32> data;                                  // owns heap -> a real pointee dtor runs on cycle drop

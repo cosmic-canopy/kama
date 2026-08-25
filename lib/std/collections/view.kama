@@ -1,5 +1,4 @@
-import std::ptr::{relocate};
-import { DynamicArray };
+import { std::ptr::relocate, DynamicArray };
 export { View, ViewIter, ViewIterMut };
 
 // A by-value iterator (the `foreach (T x in view)` protocol): yields each element by value. A view is a

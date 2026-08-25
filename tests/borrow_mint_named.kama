@@ -5,7 +5,7 @@
 //
 // Three grants, three windows, one file: the prelude's `Viewable<V>.view()`, `std::collections`'
 // `ValuesIterable<I>.values()`, and a USER contract's `span()`.
-import std::collections::{DynamicArray, Map, View};
+import { std::collections::DynamicArray, std::collections::Map, std::collections::View };
 
 @viewable type contract Spanned<S> for resource { fn S span(); }
 

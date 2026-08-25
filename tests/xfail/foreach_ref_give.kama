@@ -1,6 +1,6 @@
 // A `ref` foreach binding is a mutable BORROW: you cannot move (`give`) a resource out of it — that
 // would leave the collection holding a moved-from element.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 type resource R { int32 v; public R(int32 v){ this.v = v; } public fn int32 get(){ return this.v; } }
 fn int32 main() {
     DynamicArray<R> rs = DynamicArray.empty();

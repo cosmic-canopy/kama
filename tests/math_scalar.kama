@@ -1,4 +1,11 @@
-import std::math::{radians, lerp, sqrt, clampf, minf, maxf};
+import {
+    std::math::radians,
+    std::math::lerp,
+    std::math::sqrt,
+    std::math::clampf,
+    std::math::minf,
+    std::math::maxf,
+};
 fn int32 main() {
     float32 l = lerp(a: 0.0f32, b: 10.0f32, t: 0.5f32);   // 5
     float32 s = sqrt(x: 25.0f32);                          // 5

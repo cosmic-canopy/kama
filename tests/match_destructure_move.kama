@@ -1,7 +1,7 @@
 // Destructure-MOVE: `match (give x)` CONSUMES the subject so an OWNING payload can be moved out of a sum
 // type — `case Some(value: v): give v` / `:= give v`. Borrowing (`match (x)`) still can't give a payload out; this
 // is the consuming form the collections use to move an owning element out of `Result`/`Optional`.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 fn Optional<DynamicArray<int32>> takeIf(bool cond, DynamicArray<int32> xs) {
     if (cond) { return Optional::Some(value: give xs); }
     return Optional::None;

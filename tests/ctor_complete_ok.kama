@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // Construction-model M3: complete-init enforcement on a NAMED ctor (a static factory). `make` builds the
 // object field-by-field on a bare local and returns it. Enforcement ACCEPTS it because every owning
 // (`Owned`) field is unconditionally assigned before the return — the never-null seal, generalized from the

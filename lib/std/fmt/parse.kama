@@ -1,4 +1,4 @@
-import std::num::{int64Min};
+import { std::num::int64Min };
 export { ParseError, FromStr, parse, FromStrRadix, parseRadix };
 
 // Text -> number, the exact inverse of this module's `intStr`/`f64Str` side, which is why it lives here

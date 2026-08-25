@@ -1,7 +1,7 @@
 // M0.5 — Map/Set preallocation via `reserve(n:)`. A preallocated build must be byte-for-byte equivalent to
 // a grow-from-8 one (reserve only changes WHEN buffers are sized, never WHAT is stored), a too-small reserve
 // must be a safe no-op (never shrinks), and reserve on an already-populated map must resize + rehash cleanly.
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 fn int32 main() {
     int32 r = 0;

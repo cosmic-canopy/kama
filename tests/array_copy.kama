@@ -1,4 +1,4 @@
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 // `copy` of an `FixedArray<T>` whose element is Copyable makes a deep, independent copy (fresh buffer,
 // each element copied). Mutating the copy must not touch the original. ASan proves independence:
 // a shallow copy would alias + double-free the one buffer at scope exit.

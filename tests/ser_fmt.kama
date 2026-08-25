@@ -1,5 +1,13 @@
 // std::fmt number->string at the bounds (INT_MIN/MAX, UINT_MAX, negatives, zero) + float round-trip text.
-import std::fmt::{i64Str, u64Str, i32Str, u32Str, f64Str, f32Str, boolStr};
+import {
+    std::fmt::i64Str,
+    std::fmt::u64Str,
+    std::fmt::i32Str,
+    std::fmt::u32Str,
+    std::fmt::f64Str,
+    std::fmt::f32Str,
+    std::fmt::boolStr,
+};
 fn int32 main() {
     int32 r = 0;
     if (i64Str(v: 0i64) == "0")                                          { r = r + 1; }

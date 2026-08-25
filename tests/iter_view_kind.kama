@@ -7,7 +7,13 @@
 // would have to BOX, since `Iterable<T>.iterator()` returns a contract value. It does not — `foreach`
 // resolves `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, so nothing is ever
 // widened to a contract value on this path.
-import std::collections::{Map, MapValueIter, DynamicArray, View, sort};
+import {
+    std::collections::Map,
+    std::collections::MapValueIter,
+    std::collections::DynamicArray,
+    std::collections::View,
+    std::collections::sort,
+};
 
 // A view-kind iterator as a by-value parameter, behind a generic contract bound.
 fn int32 total<I: Iterator<int32>>(I it) {

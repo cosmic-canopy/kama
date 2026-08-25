@@ -1,7 +1,7 @@
 // M4: a bare `spawn` statement is a scope child — it is legal ONLY inside a `scope { }`, which owns the
 // join. Outside a scope there is nothing to join it (an orphan thread), so this MUST fail to compile.
 // Outside a scope, the handle form `Isolate h = spawn worker(...)` is the way to spawn.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type resource Payload {
     int32 value;

@@ -1,6 +1,6 @@
 // Map under stress: many grows (rehash), heavy tombstoning, tombstone reclamation, and churn — the
 // paths most likely to corrupt an open-addressing table. Verifies correctness throughout; ASan-clean.
-import std::collections::{Map};
+import { std::collections::Map };
 fn int32 main() {
     Map<int32, int32> m = Map.empty();
     int32 i = 0;

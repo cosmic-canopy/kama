@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 type resource Probe
 {
     int32 id;

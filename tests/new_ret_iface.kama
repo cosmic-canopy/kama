@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // B4 — inline `new Concrete` returned as an Owned<Contract>: the fat box {obj, vtbl} is built in a hoisted
 // temp and moved out; dispatch/drop go through the vtable.
 type contract Shape for value { fn int32 area(); }

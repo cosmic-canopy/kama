@@ -1,6 +1,6 @@
 // B4 ASan gate (return position) — inline `new` of a destructible resource moved out to the caller, which
 // is the sole owner and drops it once. ASan-clean == no leak, no double-free across the move-out.
-import std::memory::{Owned};
+import { std::memory::Owned };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);

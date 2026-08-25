@@ -1,9 +1,17 @@
 // std::net — exercise the `DatagramSocket` CONTRACT with dynamic dispatch (fat-pointer + vtbl), not the
 // concrete UdpSocket type. Proves the transport-unification abstraction works end-to-end: sendTo/recvFrom
 // are called through the contract vtbl. Two ephemeral UDP sockets, one datagram a->b. Returns 55.
-import std::net::{UdpSocket, DatagramSocket, SocketAddr, IpAddr, RecvFrom};
-import std::io::{IoError};
-import std::collections::{DynamicArray, FixedArray, View};
+import {
+    std::net::UdpSocket,
+    std::net::DatagramSocket,
+    std::net::SocketAddr,
+    std::net::IpAddr,
+    std::net::RecvFrom,
+    std::io::IoError,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+    std::collections::View,
+};
 
 // These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
 fn int32 sendVia(DatagramSocket d, View<uint8> msg, ref SocketAddr to) {

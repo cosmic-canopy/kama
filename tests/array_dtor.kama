@@ -2,7 +2,7 @@
 // Probe's destructor on every live element when the array leaves scope (RAII),
 // then free the buffer. Each element dtor traces a constant code; the trace
 // fold proves exactly `size` dtor calls fired.
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();
 unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`

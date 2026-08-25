@@ -1,4 +1,4 @@
-import std::memory::{Owned};
+import { std::memory::Owned };
 // M26b: a borrow names the OBJECT (`ref T`), so one function borrows a value wherever it
 // lives — `ref stackValue` or `ref ownedHandle` (auto-derefs to the heap object). Same fn.
 type value Counter {

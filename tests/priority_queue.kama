@@ -1,7 +1,7 @@
 // PriorityQueue<T: Comparable> — binary heap. Min-heap (default) pops smallest-first, maxHeap() pops
 // largest-first, peek/peekRef read the root without removing, and a move-only element rides through
 // push/pop/swap with its ownership intact (ASan-clean). Exit code sums the asserts.
-import std::collections::{PriorityQueue};
+import { std::collections::PriorityQueue };
 
 // A move-only (resource) element that is Comparable — proves the heap relocates owned elements correctly.
 // `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through

@@ -5,8 +5,11 @@
 //
 // The values are chosen to exercise the SIGN BIT at each width, since a value that fits both signednesses
 // would round-trip either way and prove nothing.
-import std::serialization::binary::{encode, decode};
-import std::collections::{DynamicArray};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+};
 
 @generate(Serialize, Deserialize)
 type value Neg {

@@ -2,7 +2,7 @@
 // map in every language — one shared hash (a single 32-bit Fibonacci multiply), fixed prealloc, no
 // stdlib map anywhere. Unlike `map`, which compares each language's idiomatic map DESIGN (hash
 // strength, growth policy, layout), this is a pure CODEGEN number: the AOT cluster should converge.
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 
 type resource IntMap {
     FixedArray<int32> keys;

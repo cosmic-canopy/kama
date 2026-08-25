@@ -1,6 +1,6 @@
 // std::time — Duration arithmetic + a monotonic clock that never runs backward. Every check is deterministic
 // (no wall-clock-dependent values); the eight flags sum to 255.
-import std::time::{Duration, Instant, monotonicNow};
+import { std::time::Duration, std::time::Instant, std::time::monotonicNow };
 
 fn int32 main() {
     int32 r = 0;

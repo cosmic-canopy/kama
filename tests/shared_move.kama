@@ -1,4 +1,4 @@
-import std::memory::{Shared};
+import { std::memory::Shared };
 // A Shared is now BOTH Movable and Copyable (`implements Copyable(bare: copy)`): a bare hand-off
 // RETAINS (strong++), but `give` RELOCATES the handle — the strong count is untouched (it's the same
 // handle in a new home) and the source is consumed. Use-after-give is a compile error (xfail).

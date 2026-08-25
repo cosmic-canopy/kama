@@ -1,6 +1,5 @@
 // std::process — start() + blocking wait() reads a non-zero exit code. The helper's `exit 7` -> code 7, !success.
-import std::process::{Command, Process, ExitStatus};
-import std::io::{IoError};
+import { std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

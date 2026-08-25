@@ -5,7 +5,7 @@
 //      trapping. `reset()` bulk-frees the whole frame in O(1) for the next tick.
 //   2. `@noheap` guarantee: the per-tick update runs with ZERO heap allocation — the compiler REJECTS any
 //      `new`/interpolation/etc. inside it (the "no malloc in the audio callback / frame tick" rule).
-import std::collections::{Arena, BumpAllocator};
+import { std::collections::Arena, std::collections::BumpAllocator };
 
 // The hot path: a fixed-work update the compiler proves never touches the heap.
 @noheap fn int32 tick(int32 liveEntities) {

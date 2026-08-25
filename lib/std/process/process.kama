@@ -10,9 +10,7 @@
 // leaves a growing pile of zombies either. Explicit `wait()` is the blocking reap that returns the exit
 // code. POSIX only (M1); Windows (CreateProcess) is a later milestone; wasm has no fork/exec.
 
-import std::io::{IoError, lastError};
-import std::fs::{File};
-import std::collections::{DynamicArray};
+import { std::io::IoError, std::io::lastError, std::fs::File, std::collections::DynamicArray };
 
 export { Command, Process, ExitStatus, Output, Stdio };
 

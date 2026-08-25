@@ -1,8 +1,8 @@
-// An `import … as N` may not claim a name that already roots a PROJECT this file can reach
+// An `as` alias may not claim a name that already roots a PROJECT this file can reach
 // (design/module-system.md §2f.29). Before, `global::std::…` could still spell the original past such an
 // alias; that absolute form is deleted, so the shadowing has to be refused where it is written or the
 // name becomes unspellable. The reachable set is exactly this file's: the reserved roots, its own
 // project, and the root of every module it imports.
-import std::collections as std;
+import { std::collections::Map as std };
 
 fn int32 main() { return 0; }

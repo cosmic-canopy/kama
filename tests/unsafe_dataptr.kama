@@ -1,5 +1,5 @@
 // M17: the safe FixedArray->pointer bridge (dataPtr() needs no unsafe); deref needs unsafe.
-import std::collections::{FixedArray};
+import { std::collections::FixedArray };
 unsafe fn int32 run()
 {
     FixedArray<int32> a = FixedArray.make(size: 3);

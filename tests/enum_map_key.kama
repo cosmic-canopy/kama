@@ -1,7 +1,7 @@
 // The working path for a payload-less enum: a declared `implements` supplies the same two contracts
 // the `@generate` derive supplies for a struct, and the enum becomes an ordinary `Map` key. Kept as the
 // counterpart to xfail/generate_on_plain_enum, which points here.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type enum Color implements Hashable, Equatable<This> {
     Red, Green, Blue;

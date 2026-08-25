@@ -962,6 +962,12 @@ struct Server {
                 for (const auto& m : lspImportModules(path, ctx.receiver, argv0))
                     push(m, CompletionKind::Module, "");
             } else if (ctx.trigger == CompletionTrigger::ImportSymbol) {
+                // Inside an import block a `::`-path may still be growing into a deeper MODULE, or may
+                // already name the module whose SYMBOLS are wanted — `std::` could want `collections` or
+                // a symbol of `std`, and the text cannot say. Offer both; the client filters as the user
+                // types. This is the shape the scope-inside-the-braces syntax asks for.
+                for (const auto& m : lspImportModules(path, ctx.receiver, argv0))
+                    push(m, CompletionKind::Module, "");
                 for (const auto& sym : lspImportSymbols(path, ctx.receiver, argv0)) {
                     bool already = false;
                     for (const auto& f : ctx.filled) if (f == sym) { already = true; break; }

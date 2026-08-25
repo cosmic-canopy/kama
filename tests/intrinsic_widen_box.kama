@@ -7,7 +7,7 @@
 //
 // Run under ASan: the box is a malloc a primitive's own drop knows nothing about, so a leak here would be
 // invisible to every other fixture. Returns 42.
-import std::memory::{Owned, Shared};
+import { std::memory::Owned, std::memory::Shared };
 
 fn uint64 sumOf(Owned<Hashable> a, Owned<Hashable> b) { return a.hash() + b.hash(); }
 

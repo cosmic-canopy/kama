@@ -5,7 +5,7 @@
 // The place machinery was already right; it simply never saw the view argument as a borrow of `d`. A
 // by-value parameter skips the `ref`/`out` overlap test, and `placePath(d.view())` is empty because an
 // invocation designates no place — so the view has to be rooted through its RECEIVER to be compared.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 fn int32 bad(ref DynamicArray<int32> d, View<int32> v) { d.reserve(n: 64); return v[0]; }
 

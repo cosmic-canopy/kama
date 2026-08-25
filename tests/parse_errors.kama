@@ -1,7 +1,7 @@
 // M2a: a parse FAILS, so it returns `Result`, not `Optional` — and the failure says WHICH kind, because
 // "not a number at all" and "a number too big for this type" want different messages. Rust, Zig and Go
 // all draw that same distinction; only the boolean/optional shapes throw it away.
-import std::fmt::{parse, ParseError};
+import { std::fmt::parse, std::fmt::ParseError };
 
 fn int32 kindOf(ref string s) {
     Result<int32, ParseError> r = parse::<int32>(s: s);

@@ -4,6 +4,6 @@
 // is a folder, not a declaration) and a query on either already sees the other. What a member-file query
 // cannot see is a DIFFERENT module of the same project — this file, listed as `parts` in kama.json — and
 // widening to every module under the nearest kama.json is exactly what `--project` is for.
-import wsproj::{Widget};
+import { wsproj::Widget };
 
 fn int32 partSize(Widget w) { return w.size; }

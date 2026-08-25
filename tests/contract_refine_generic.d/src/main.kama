@@ -1,6 +1,4 @@
-import std::collections::{View};
-import crgen::crbase::{Parent};
-import crgen::crchild::{Child};
+import { std::collections::View, crgen::crbase::Parent, crgen::crchild::Child };
 type resource Impl implements Child, Parent {
     int32 n;
     public ctor make(int32 n) { this.n = n; }

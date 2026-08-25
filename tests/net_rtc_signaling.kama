@@ -3,7 +3,7 @@
 // hand. Both peers run in one page: each opens a WsConnection to the relay + an RtcConnection, shuttles its
 // SDP (as bytes) through the relay, forms an unreliable DataChannel, then A sends a datagram to B -> verify,
 // exit 55. Proves the signaling-over-WebSocket path that a reusable connectPeer() helper is built from.
-import std::app::{run, TickFn, quit};
+import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";

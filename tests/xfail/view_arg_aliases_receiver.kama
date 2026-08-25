@@ -1,7 +1,7 @@
 // The RECEIVER form of the same aliasing. A non-`const fn` borrows its receiver mutably, so
 // `b.eat(v: b.view())` hands `eat` a window over the very object it may grow — and the receiver never
 // reaches the argument-overlap test, which only ever compares arguments with each other.
-import std::collections::{View, DynamicArray};
+import { std::collections::View, std::collections::DynamicArray };
 
 type resource Box {
     DynamicArray<int32> buf;

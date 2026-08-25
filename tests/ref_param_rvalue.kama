@@ -1,7 +1,7 @@
 // A primitive LITERAL or an inline CONSTRUCTOR passed to a `ref` parameter is materialized into a temp
 // (an addressable lvalue) instead of being rejected — so `m.get(key: 5)` / `m.get(key: Point(1,2))` work
 // without binding a local first (a `string` literal already did). The temp is a read-only borrow here.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type value Point implements Hashable, Equatable<This> {
     int32 x; int32 y;

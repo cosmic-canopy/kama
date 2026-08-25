@@ -2,7 +2,7 @@
 // from the LHS declared type (the same channel the bare ctor `Map.empty()` uses), so a scope-qualified static call
 // returning the generic type resolves to the concrete monomorphization. Covers a local decl, a Set decl, and
 // a NON-decl typed position (a function's `return`) to prove the target-type channel is position-general.
-import std::collections::{Map, Set};
+import { std::collections::Map, std::collections::Set };
 
 // Non-decl typed position: the return-statement's expected type carries K,V into the static call.
 fn Map<string, int32> build() {

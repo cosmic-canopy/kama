@@ -140,21 +140,51 @@ public:
         : ASTNode(context),  StatementNode(context), identifier(identifier), alias(alias) { }
 };
 
-// `import a::b::c;` (bare) | `import a::b as m;` (module alias) | `import a::b::{X, Y as Z};`
-// (per-symbol). `modulePath` = the `::`-segments; `symbols` = per-symbol (each carries an
-// optional local alias, reusing UsingDeclarationNode's identifier+alias); `moduleAlias` is set
-// only for the `as m` form. Empty `symbols` + null `moduleAlias` = the bare (qualified-only) form.
+// ONE ENTRY of a file's single `import { … };` block. **Every entry names a SYMBOL** — there is no
+// whole-module import, so `a::b::X` is always symbol `X` of module `a::b`, with no ambiguity to resolve
+// and nothing for the parser to defer:
+//
+//     import { std::collections::Map,       // -> bare `Map`
+//              std::collections::Map as M,  // renamed
+//              View };                      // a symbol of THIS file's own module: no scope to name
+//
+// Dropping the module form is what buys that. It cost 26 call sites and removed three things: the
+// module-vs-symbol ambiguity (is `a::b::X` a module or a symbol? only a module map could say), the
+// module ALIAS — `m::anything` is a qualified glob, and GOALS.md rejects globs for the unqualified case
+// already — and the bare load, whose only real job was pulling in a module so its `extern "header.h"`
+// seam registered. Importing any symbol of a module loads it, so that job survives with a name attached.
+//
+// `modulePath` = the `::`-segments before the name; `symbols` = the name, with an optional local alias
+// (reusing UsingDeclarationNode's identifier+alias). An EMPTY `modulePath` is the same-module form: no
+// scope, because a file's own module is the only candidate. `moduleAlias` is dead and stays null.
 class ImportDeclarationNode : public StatementNode {
 public:
     SharedStringList          modulePath;
     std::vector<SrcRange>     modulePathPos;   // one span per modulePath segment (M6 B3f), or empty
     SharedUsingDeclarationList symbols;
-    SharedString              moduleAlias;
+    SharedString              moduleAlias;     // always null now; kept while consumers are unwound
     ImportDeclarationNode(CodeGenContext& context, SharedStringList modulePath,
                           SharedUsingDeclarationList symbols, SharedString moduleAlias)
         : ASTNode(context), StatementNode(context)
         , modulePath(modulePath), symbols(symbols), moduleAlias(moduleAlias) { }
 };
+
+// Build one entry from `path [as alias]`: the last segment is the NAME and everything before it is the
+// module. A single-segment path therefore yields an empty `modulePath`, which is the same-module form.
+inline std::shared_ptr<ImportDeclarationNode>
+makeImportEntry(CodeGenContext& context, SharedStringList path, SharedString alias)
+{
+    auto mod  = std::make_shared<StringList>();
+    for (size_t i = 0; path && i + 1 < path->size(); ++i) mod->push_back((*path)[i]);
+    auto syms = std::make_shared<UsingDeclarationList>();
+    if (path && !path->empty()) {
+        auto id = std::make_shared<IdentifierNode>(context, path->back());
+        syms->push_back(alias ? std::make_shared<UsingDeclarationNode>(context, id,
+                                    std::make_shared<IdentifierNode>(context, alias))
+                              : std::make_shared<UsingDeclarationNode>(context, id));
+    }
+    return std::make_shared<ImportDeclarationNode>(context, mod, syms, SharedString());
+}
 
 //------------------------------------------------------------------------------ 
 //                              Primitive Types

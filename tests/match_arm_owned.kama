@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // Owned value out of a value-producing `match` arm: `:= give <local>` moves an owned value out, and a bare
 // generic ctor `:= DynamicArray.empty()` resolves from the match-target type. Both arm forms (block `:= …;` and simple
 // `case X: …;`), producing collection + resource results.

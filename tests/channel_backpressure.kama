@@ -1,7 +1,12 @@
 // M3.1: backpressure + ordering. A capacity-1 channel forces the producer to block after each send
 // until the consumer drains — so at most one element is ever buffered. This proves `send` blocks on a
 // full ring (not drop/overwrite) and that values arrive strictly in order. TSan-clean (KAMA_TSAN=1).
-import std::concurrent::{Channel, Sender, Receiver, Isolate};
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::Isolate,
+};
 
 fn void producer(Sender<int32> tx) {
     int32 i = 1;

@@ -4,7 +4,7 @@
 //
 // This is the escape vector that made the field case reachable in the first place: without it, a caller
 // could launder the borrow through a return value instead.
-import std::collections::{Map, MapValueIter};
+import { std::collections::Map, std::collections::MapValueIter };
 
 fn MapValueIter<int32> overLocal() {
     Map<int32, int32> m = Map.withCapacity(capacity: 8);

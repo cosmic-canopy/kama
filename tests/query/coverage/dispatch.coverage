@@ -1,6 +1,6 @@
-8:7 std unresolved
-8:12 collections unresolved
-8:26 DynamicArray ref:generic-type
+8:9 std unresolved
+8:14 collections unresolved
+8:27 DynamicArray ref:generic-type
 10:5 contract -
 10:14 Speaker decl:contract
 10:26 value -

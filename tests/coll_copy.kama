@@ -1,4 +1,4 @@
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 // M26f-3 — `copy` of a collection is a real DEEP copy: the source and the copy have
 // independent buffers, so mutating one doesn't touch the other (and each frees its own).
 fn int32 main() {

@@ -1,8 +1,11 @@
 // Entry (private file) pulling public symbols via per-symbol `import`.
-import std::memory::{Owned};
-import std::collections::{DynamicArray};
-import modbasic::math::{add, Counter};
-import modbasic::shapes::{Box};
+import {
+    std::memory::Owned,
+    std::collections::DynamicArray,
+    modbasic::math::add,
+    modbasic::math::Counter,
+    modbasic::shapes::Box,
+};
 
 fn int32 main()
 {

@@ -1,6 +1,5 @@
 // std::net error path — connecting to a port with nothing listening yields Err(ConnectionRefused).
-import std::net::{TcpStream};
-import std::io::{IoError};
+import { std::net::TcpStream, std::io::IoError };
 
 fn int32 isRefused(IoError e) { return match (e) { case ConnectionRefused: 1; case _: 0; }; }
 

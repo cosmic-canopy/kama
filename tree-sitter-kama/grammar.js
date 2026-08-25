@@ -108,8 +108,6 @@ module.exports = grammar({
   ],
 
   conflicts: ($) => [
-    // `import a::b::{X};` — after `a`, a `::` may continue the path or open the symbol brace.
-    [$.import_path],
     // The declaration-vs-expression fork every C-family grammar has: at statement position `Foo` may open
     // a local declaration (`Foo x = 1;`) or an expression (`Foo.bar();`), and `Foo <` may open type
     // arguments (`Map<K,V> m;`) or be a comparison. GLR explores both and the wrong branch dies at the
@@ -126,34 +124,29 @@ module.exports = grammar({
     // whole-corpus oracle have teeth.
     source_file: ($) =>
       seq(
-        repeat($.import_declaration),
+        optional($.import_declaration),
         optional($.export_manifest),
         repeat($._top_level_declaration),
       ),
 
 
-    // `import a::b;` / `import a::b as m;` / `import a::b::{X, Y as Z};`. The path gets its own rule (and
-    // its own declared conflict) because deciding whether a `::` continues the path or opens the symbol
-    // brace needs two tokens of lookahead, which LR(1) does not have.
+    // ONE `import { … };` block per file, exactly as there is one `export { … };`. Every entry names a
+    // SYMBOL — `a::b::X` is symbol `X` of module `a::b`, always — so there is no module-vs-symbol
+    // ambiguity and the `::{` two-token lookahead that needed a declared conflict is gone with it.
     import_declaration: ($) =>
       seq(
         'import',
-        choice(
-          seq(
-            field('path', $.import_path),
-            optional(
-              choice(
-                seq('as', field('alias', $.identifier)),
-                seq('::', '{', commaSep1($.import_symbol), '}'),
-              ),
-            ),
-          ),
-          // `import { X, Y as Z };` — the SAME-MODULE form, with no path because there is exactly one
-          // candidate: the module this file sits in. Visibility is per file, so a sibling's `export` is
-          // an offer and this is the acceptance. Unambiguous after `import`: a `{` cannot start a path.
-          seq('{', commaSep1($.import_symbol), '}'),
-        ),
+        '{',
+        commaSep1($.import_entry),
+        optional(','),
+        '}',
         ';',
+      ),
+
+    import_entry: ($) =>
+      seq(
+        field('path', $.import_path),
+        optional(seq('as', field('alias', $.identifier))),
       ),
 
     import_path: ($) => seq($.identifier, repeat(seq('::', $.identifier))),

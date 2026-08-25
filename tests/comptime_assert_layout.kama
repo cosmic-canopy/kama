@@ -15,7 +15,7 @@
 // BUILD, not the check, so the LSP cannot show it. tests/xfail/comptime_assert_layout_false.kama pins
 // that, and is enrolled in run_tests.sh's `analysis_skip` for exactly this reason.
 
-import std::math::{Vec2, Vec3, Vec4, Mat4};
+import { std::math::Vec2, std::math::Vec3, std::math::Vec4, std::math::Mat4 };
 
 comptime assert(cond: sizeof(Vec2) == 8,  msg: "Vec2 is 2 x float32, contiguous");
 comptime assert(cond: sizeof(Vec3) == 12, msg: "Vec3 is 3 x float32, contiguous");

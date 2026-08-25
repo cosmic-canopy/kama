@@ -6,7 +6,7 @@
 // the loop read the freed buffer (ASan-proven, zero `unsafe` tokens). The counter is now bumped in
 // `growTo` where the relocation happens, but that is depth — this rule is what makes the mistake
 // unnameable rather than merely trapped.
-import std::collections::{DynamicArray};
+import { std::collections::DynamicArray };
 
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);

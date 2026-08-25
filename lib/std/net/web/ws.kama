@@ -1,7 +1,11 @@
 
-import std::io::{IoError, Reader, Writer};
-import std::collections::{View};
-import std::net::{ReliableStream};
+import {
+    std::io::IoError,
+    std::io::Reader,
+    std::io::Writer,
+    std::collections::View,
+    std::net::ReliableStream,
+};
 
 export { WsConnection, WsState };
 

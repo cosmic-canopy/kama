@@ -1,7 +1,10 @@
 // KBIN binary round-trip for a value type of mixed scalars: encode -> DynamicArray<uint8> -> decode.
 // Exercises the tag+LE-payload path for i32 / f32 (exact bits) / bool / string / i64. Returns 55.
-import std::serialization::binary::{encode, decode};
-import std::collections::{DynamicArray};
+import {
+    std::serialization::binary::encode,
+    std::serialization::binary::decode,
+    std::collections::DynamicArray,
+};
 
 @generate(Serialize, Deserialize)
 type resource Rec {   // owns a `string` -> must be a resource (move-only)

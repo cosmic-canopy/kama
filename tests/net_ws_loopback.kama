@@ -7,7 +7,7 @@
 // + phase + scratch) threaded through the loop's UnsafePtr arg, since the loop is host-driven and kama has no
 // globals. The socket is CLOSED before quit(): an open handle keeps Node's event loop alive so the process
 // would never actually exit (a game likewise closes its sockets on quit).
-import std::app::{run, TickFn, quit};
+import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";

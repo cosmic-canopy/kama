@@ -1,7 +1,13 @@
 // M2a: `sort` is STABLE and `sortUnstable` is not required to be. Stability is what makes a two-pass
 // sort (by minor key, then major) produce the answer the caller meant, so it is asserted directly:
 // records sharing a major key must retain the order the first pass gave them.
-import std::collections::{DynamicArray, View, sort, sortWith, Order};
+import {
+    std::collections::DynamicArray,
+    std::collections::View,
+    std::collections::sort,
+    std::collections::sortWith,
+    std::collections::Order,
+};
 
 type value Rec {
     public int32 dept;

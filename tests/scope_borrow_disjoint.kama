@@ -3,7 +3,7 @@
 // disjoint, no race), writing the result straight into the borrowed cell. Sound with no lifetime
 // inference: the `scope` joins both children BEFORE `lower`/`upper` drop, so the borrowed pointers never
 // dangle. No move, no heap box, no `UnsafePtr`/`unsafe` — the ergonomic payoff over M4.1. Run under KAMA_TSAN=1.
-import std::concurrent;
+import { std::concurrent::Isolate };
 
 type value Acc {
     public int32 total;   // read by main after the scope

@@ -1,7 +1,7 @@
 // M2a: `parseRadix` for bases 2..36 — hex and binary are first-afternoon needs (colours, flags, config).
 // No `0x`/`0b` prefix is recognised: the base is already an argument, and accepting a prefix as well
 // would be a second way to say the same thing.
-import std::fmt::{parseRadix, ParseError};
+import { std::fmt::parseRadix, std::fmt::ParseError };
 
 fn int32 main() {
     string hex  = "ff";

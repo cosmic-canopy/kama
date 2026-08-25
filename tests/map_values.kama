@@ -1,7 +1,7 @@
 // Map value iteration: valuesMut() borrows every value in place (any V — works for a MOVE-ONLY value, where
 // values() can't exist), and values() yields copies (Copyable V). Together they complete borrow-all parity
 // with DynamicArray/Deque. ASan-clean.
-import std::collections::{Map};
+import { std::collections::Map };
 
 type resource Counter {
     int32 n;
