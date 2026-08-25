@@ -3197,6 +3197,35 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     return id;
 }
 
+// The stem of the `.c` a unit emits to, derived from the unit's IDENTITY rather than its position in the
+// argument list (§2e.26). The old form was `<basename>_<index>`, and the index made `--keep-c` output
+// depend on the order the operands were typed: the same three-file program emitted `main_0.c x_1.c x_2.c`
+// one way and `x_0.c x_1.c main_2.c` the other. The `_N` was not decoration — it was guarding the case
+// where two source files share a basename — so it can only go once something path-derived replaces it.
+//
+// A module IS a folder, so basenames inside one are unique by construction, and `ModuleId::full()` carries
+// the project name — `geo::shapes` and `app::shapes` cannot collide. That leaves exactly one ambiguous
+// population: files with no module at all, i.e. the loose ROOT (§2e.27), whose symbols are unimportable
+// anyway. Two of those sharing a basename is the collision the `_N` used to absorb, and the caller reports
+// it by name instead.
+static std::string cStemForUnit(const std::string& unitPath)
+{
+    // Non-identifier characters cannot appear in a C symbol and would be silently dropped by some tools,
+    // so fold them to `_`. That can map two distinct names onto one stem (`my-prog` and `my_prog`), which
+    // is exactly what the caller's duplicate check is for.
+    auto sanitize = [](const std::string& s) {
+        std::string r;
+        for (char c : s) r += (isalnum((unsigned char)c) || c == '_') ? c : '_';
+        return r;
+    };
+    const std::string stem = sanitize(stripExtension(baseName(unitPath)));
+    if (unitPath.empty() || unitPath[0] == '<') return stem;   // synthetic: no path to derive from
+    std::string mod = moduleIdForFile(unitPath).full();
+    if (mod.empty()) return stem;                              // the loose root — basename is all there is
+    for (size_t p; (p = mod.find("::")) != std::string::npos; ) mod.replace(p, 2, "__");
+    return mod + "__" + stem;
+}
+
 // ---- module name -> files: the inverse of the above (§2b) ------------------------------------------
 
 // The node whose composed name IS `want` ("net::web"), anywhere in the tree.
@@ -8882,9 +8911,25 @@ int main(int argc, char** argv)
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
             std::string headerPath = genDir + "/" + headerName;
             headerDir = genDir;
-            std::vector<std::string> cPaths;   // one per unit; index-suffixed so distinct dirs never collide
-            for (size_t i = 0; i < units.size(); ++i)
-                cPaths.push_back(genDir + "/" + stripExtension(baseName(unitPaths[i])) + "_" + std::to_string(i) + ".c");
+            // One .c per unit, named from the unit's MODULE rather than its position in the argument list
+            // (§2e.26) — `lib/std/collections/vec.kama` -> `std__collections__vec.c`. A file with no
+            // module (the loose root, §2e.27) keeps its bare basename, and two of those sharing one is the
+            // single case the old `_<index>` suffix was absorbing, so it is reported rather than hidden.
+            std::vector<std::string> cPaths;
+            std::map<std::string, std::string> stemOwner;      // stem -> the unit that claimed it
+            for (size_t i = 0; i < units.size(); ++i) {
+                const std::string stem = cStemForUnit(unitPaths[i]);
+                auto claimed = stemOwner.emplace(stem, unitPaths[i]);
+                if (!claimed.second) {
+                    fprintf(stderr,
+                        "kama: '%s' and '%s' would both generate '%s.c'.\n"
+                        "      A generated file is named from its unit's module and file name, so two\n"
+                        "      units cannot share both. Rename one, or move it into another module.\n",
+                        claimed.first->second.c_str(), unitPaths[i].c_str(), stem.c_str());
+                    return 1;
+                }
+                cPaths.push_back(genDir + "/" + stem + ".c");
+            }
             genFiles = cPaths;               // before the call that writes them — see the single-unit note
             genFiles.push_back(headerPath);
             if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
