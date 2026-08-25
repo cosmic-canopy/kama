@@ -1287,7 +1287,61 @@ And the keyword half, same build:
 type value Cfg { public int32 switch; ... }   ->  clang: 1 warning and 6 errors
 ```
 
-**5 — corpus and docs.** ⚠️ **Partly done in 2e's close-out, because a doc that contradicts a shipped
+**5 — the `native` module: one place for the FFI surface. DESIGN NOT STARTED.**
+
+An `extern` is the one thing in the language that sits **outside** the file rung, and it has to today: it
+keeps its **literal C spelling** and is therefore never scope-prefixed, so every file declaring
+`extern fn memset` collapses onto ONE emitter table entry whose `declFile` is whichever file was collected
+last. Judging that entry by file would reject the losers of a race. That exemption is now the only hole in
+an otherwise total rule — everything else a file names is governed by `export` and `import`.
+
+**Measured at `0.9.80`, so the design starts from the corpus and not from the idea:**
+
+| | |
+|---|---|
+| files declaring at least one `extern fn` | **109** — but only **25** are in `lib/`; **84** are elsewhere |
+| distinct extern names | 211, of which **47 are declared in more than one file** |
+| the worst | `malloc` and `free`: **39 files each** |
+| `extern "<stdlib.h>";` seam declarations | **50** |
+
+⚠️ **THE 84 IS THE CONSTRAINT, AND IT IS EASY TO MISS.** Most declaring files are single-file fixtures and
+examples with no project, no `source` root and no folder to put a `native/` in. So **`native/` cannot be
+mandatory**: a loose one-file program must still be able to declare an `extern`. That makes this a way to
+*organize and share* a project's FFI surface, not a way to forbid the seam elsewhere — which is a smaller
+and much safer change than "externs move".
+
+**Why it belongs after phase 4.** The hard part is not the folder; it is separating the **kama-side name**
+from the **emitted C name**, which are identical for an extern today. The language already does that split
+twice — `expose` gives a kama function a bare unmangled C name at the host boundary, and phase 4's keyword
+escape gives `switch` the C name `k_switch`. Phase 4 builds the interning that makes a third case cheap,
+so doing this first would mean building it twice.
+
+⚠️ **The crux, and the thing a design has to answer before anything else: MANY KAMA NAMES, ONE C SYMBOL.**
+`malloc` is genuinely one symbol in libc, and two unrelated projects both needing it is normal, not a
+collision. Today's accidental collapse handles that correctly. Any model that gives each declaration a
+module identity must keep it — `std::native::malloc` and `otherproj::native::malloc` must still be the
+same `malloc` at link time, and must not be a duplicate-symbol error.
+
+**Open, for the design session — none of these is decided:**
+
+1. Is `native` the right reserved word? `extern` is already a keyword; `ffi`, `sys` and `c` are the other
+   candidates. Whatever it is, it joins `global`/`std`/`core` in the reserved set — with §2f.29's
+   asymmetry in mind, which reserves `global` in the manifest reader ALONE.
+2. Is `native/` an ordinary entry in `modules`, or reserved and implicit? An ordinary entry costs nothing
+   and keeps one rule; implicit means one fewer thing to write and one more thing to know.
+3. Does an `extern` in `native/` need an `export` to leave its file, like everything else? Consistency
+   says yes. That is also what makes the surface auditable rather than merely co-located.
+4. What does an `extern` *outside* `native/` mean once the folder exists — still allowed (and still
+   exempt), or an error in a project that has one? The 84 files above argue strongly for "allowed".
+5. **The `extern "header.h";` seam.** It is per-FILE today, and it is what makes `spawn` work at all:
+   `externsHeader("kama_isolate.h")` is a capability gate, and importing a symbol of a module is what
+   loads the file carrying that seam (§3b retired the bare module import over exactly this). If externs
+   move into `native/`, does the header association move with them, and does the gate still key on a
+   loaded seam or on an imported symbol?
+6. Does a dependency's `native` module obey `visibility` like any other module — i.e. must a library
+   mark it `public` for a consumer to reach its FFI surface?
+
+**6 — corpus and docs.** ⚠️ **Partly done in 2e's close-out, because a doc that contradicts a shipped
 compiler is the exact failure this repo's house rule is about**: SPEC's *Modules* section is rewritten
 (file-modules, the search, the declaration and `global::a::b::X` all described things that no longer
 exist), `docs/packages.md` gained the `modules` section and its seeded manifests now match what `kama
@@ -1297,23 +1351,14 @@ paragraph went with it (§2f.29), and its "no browsable namespace" wording with 
 
 **What remains, re-counted at `0.9.80`:** `docs/packages.md`'s monorepo walkthrough and command table ·
 `docs/targets.md` for `link` · the ROADMAP row and ROADMAP_DETAIL's §10 *C symbol naming* pointer, both
-deleted when the campaign closes (phase 6) · and the **16 files that still spell `_F<n>`**, which cannot
+deleted when the campaign closes (phase 7) · and the **16 files that still spell `_F<n>`**, which cannot
 be touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`, `tools/check-slot.sh`,
 `tools/check-modules.sh`, `tools/embed_prelude.sh`, `run_tests.sh`, `docs/ENGINE_READINESS.md`,
 `docs/ROADMAP.md`, `docs/ROADMAP_DETAIL.md`, this file, and **7 fixtures** (`tests/ctor_generic.kama`,
 `poly_in_collection`, `enum_payload_unconstructed`, `constgen_value_widths`, `xfail/diag_no_mangled_name`,
 `xfail/generate_serialize_generic`, `xfail/dup_fn`).
 
-**ADJACENT AND UNDESIGNED — a `native/` folder for the FFI surface.** Raised 2026-08-25. `malloc` and
-`free` are each declared `extern` in **39 files**; 47 extern names are duplicated, 30 of them touching
-`lib/`. The idea is a reserved folder name under `source`, treated as a module you import from, so the
-FFI surface sits in one auditable place. ⚠️ The hard part is not the folder: an `extern` keeps its
-LITERAL C spelling and is therefore never scope-prefixed, which is precisely why it sits outside the file
-rung today (§2c) — every file declaring `extern fn memset` collapses onto one table entry. Making it an
-ordinary module symbol means separating the kama-side name from the emitted C name, which is the same
-split `expose` already makes in the other direction. Not scheduled, and not phase 4.
-
-**6 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
+**7 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
 
 ---
 
@@ -1358,7 +1403,7 @@ split `expose` already makes in the other direction. Not scheduled, and not phas
   the compiler reached through `$KAMA` (`. "$ROOT/tools/kama-bin.sh"`), never the `./kama` symlink.
 - `./dev matrix > /tmp/matrix.log 2>&1; tail -5 /tmp/matrix.log` — once, into a file — then `./dev test
   san` and `./dev test wasm`. The wasm leg emits one `.c` per unit, so it exercises the naming change.
-- **`VERSION` bumps on phases 1–5**; phase 6 is docs-only.
+- **`VERSION` bumps on phases 1–5**; phase 6 is docs-only and phase 7 deletes this file.
 
 ---
 

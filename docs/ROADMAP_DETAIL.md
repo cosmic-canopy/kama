@@ -1351,3 +1351,30 @@ rather than here, so there is one number to keep current. Forward work:
   (HTTP already dogfooded via `examples/httpd`), aiming to beat the Node/Deno overhead profile on the no-GC/AOT
   (or VM-scripted) runtime — the flagship *application* of the language + package manager + scripting tiers
   together. See [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md). Aspirational, post-ecosystem.
+
+<a id="s11"></a>
+## §11 — LSP auto-import
+
+The follow-on the module campaign creates, and it cannot be written before it: row 1 made an `import`
+mandatory for **every** name a file uses that it does not declare — including a sibling in the same
+module, which needed nothing before. That is the right rule (it is what lets a reader name the source of
+every symbol without leaving the file), but it moves a cost onto whoever is typing, and every language
+that requires imports pays it back through the editor. TypeScript, Java, Rust and C# all do.
+
+**kama does not, yet, and the gap is specific.** `kama lsp` advertises hover, definition, documentSymbol,
+references, workspaceSymbol, rename, completion, signatureHelp and semanticTokens — all present and
+working. What it does not advertise is **`codeActionProvider`**, which is the LSP mechanism a quick fix
+arrives through. So there is no "add this import for me", and no place to put one.
+
+Until there is, **the diagnostic is the tooling.** That is deliberate rather than an accident: the
+phase-3b message names the exact line to paste (``add `import { X };``` ), and the phase-3c and file-rung
+messages name the declaring file. A next step should keep that property rather than replace it — the
+diagnostic is what works over a pipe, in CI, and in an editor with no kama extension.
+
+**What it needs.** A `codeActionProvider` capability and a `textDocument/codeAction` handler; the resolver
+already answers the hard question (`lspImportModules` / `lspImportSymbols` are what completion inside an
+import block uses). The edit itself is unusually simple in kama, and that is a consequence of the campaign
+rather than luck: there is exactly **one** `import { … };` block per file, always at the top, so a quick
+fix inserts one entry into one known place instead of choosing among several directives and guessing an
+ordering convention.
+
