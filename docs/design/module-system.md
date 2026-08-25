@@ -1295,13 +1295,23 @@ seed` writes, and **`agents/AGENTS.md` — which SHIPS inside the binary — sto
 `namespace`**. FLOOR.md's `global::a::b::X`
 paragraph went with it (§2f.29), and its "no browsable namespace" wording with that.
 
-**What remains, re-counted at `0.9.74`:** `docs/packages.md`'s monorepo walkthrough and command table ·
+**What remains, re-counted at `0.9.80`:** `docs/packages.md`'s monorepo walkthrough and command table ·
 `docs/targets.md` for `link` · the ROADMAP row and ROADMAP_DETAIL's §10 *C symbol naming* pointer, both
-deleted when the campaign closes (phase 6) · and the **12 files that still spell `_F<n>`**, which cannot be
-touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`, `tools/check-slot.sh`,
-`docs/ENGINE_READINESS.md`, `docs/ROADMAP_DETAIL.md`, this file, and **7 fixtures**
-(`tests/ctor_generic.kama`, `poly_in_collection`, `enum_payload_unconstructed`, `constgen_value_widths`,
-`xfail/diag_no_mangled_name`, `xfail/generate_serialize_generic`, `xfail/dup_fn`).
+deleted when the campaign closes (phase 6) · and the **16 files that still spell `_F<n>`**, which cannot
+be touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`, `tools/check-slot.sh`,
+`tools/check-modules.sh`, `tools/embed_prelude.sh`, `run_tests.sh`, `docs/ENGINE_READINESS.md`,
+`docs/ROADMAP.md`, `docs/ROADMAP_DETAIL.md`, this file, and **7 fixtures** (`tests/ctor_generic.kama`,
+`poly_in_collection`, `enum_payload_unconstructed`, `constgen_value_widths`, `xfail/diag_no_mangled_name`,
+`xfail/generate_serialize_generic`, `xfail/dup_fn`).
+
+**ADJACENT AND UNDESIGNED — a `native/` folder for the FFI surface.** Raised 2026-08-25. `malloc` and
+`free` are each declared `extern` in **39 files**; 47 extern names are duplicated, 30 of them touching
+`lib/`. The idea is a reserved folder name under `source`, treated as a module you import from, so the
+FFI surface sits in one auditable place. ⚠️ The hard part is not the folder: an `extern` keeps its
+LITERAL C spelling and is therefore never scope-prefixed, which is precisely why it sits outside the file
+rung today (§2c) — every file declaring `extern fn memset` collapses onto one table entry. Making it an
+ordinary module symbol means separating the kama-side name from the emitted C name, which is the same
+split `expose` already makes in the other direction. Not scheduled, and not phase 4.
 
 **6 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
 
