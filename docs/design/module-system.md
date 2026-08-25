@@ -349,12 +349,50 @@ does not show. Add it if a real case appears.
 
 ### 2c. Visibility — one source rung, one manifest key
 
-15. **One `import` block and one `export` block per file.** Nearly free: 388 of 521 importing files
-    already have exactly one `import` line, the maximum anywhere is 4, and the largest symbol list is 12.
-16. **`export` has exactly one form.** `export { X }` puts X on its module's surface. Omitting the block is
-    how a file exports nothing — **1,372 of 1,451 `.kama` files have no block**, every single-file fixture
-    among them — so the block stays optional and the omission is the one spelling. **`export { }` remains a
-    syntax error** (claim 5, §1a).
+15. **One `import` block and one `export` block per file. SHIPPED `0.9.78`.** ⚠️ The original note here
+    said this was "nearly free: 388 of 521 importing files already have exactly one `import` line" — which
+    measured the wrong thing. `export` was ALREADY singular (`export_manifest_opt` is not a list), but
+    `import` was a **repeat of directives**: 136 files carried more than one line, max 4. Making it one
+    block moved the scope INSIDE the braces, and that is what the entry syntax below is for.
+
+    **Every import entry names a SYMBOL**, so `a::b::X` is symbol `X` of module `a::b`, always:
+
+    ```kama
+    import {
+        std::collections::Map,      // a symbol of another module
+        other::Thing as T,          // `as` renames
+        Sibling,                    // a symbol of THIS file's own module — no scope to name
+    };
+    ```
+
+    **There is no whole-module import**, and dropping it is what makes an entry unambiguous — otherwise
+    `a::b::X` could be module `a::b::X` or symbol `X` of `a::b`, and only a module map could say. It also
+    retires the module ALIAS, which gave `m::anything`, a qualified glob of the kind rule 16's successor
+    rejects unqualified. The one real use of the bare form was a **capability gate** — 22 files wrote
+    `import std::concurrent;` naming nothing from it, because `spawn` checks `externsHeader`, and loading
+    the module is what registers that `extern` block. Importing any symbol of a module still loads it, so
+    the gate survives with a name attached. Both blocks take a trailing comma.
+16. **VISIBILITY IS PER FILE, and it is symmetric. SHIPPED `0.9.75`–`0.9.76`.** A file may name only what
+    it **declares** or **imports**. `export { X }` is what lets a name LEAVE its file; an import entry is
+    what lets one ENTER. That holds for a **sibling in the same module** too — privacy used to stop at the
+    module, which is the rung Go never had and the reason a large Go package becomes a soup where any file
+    reaches any unexported identifier. Omitting the `export` block is how a file exports nothing, and
+    **`export { }` remains a syntax error** (claim 5, §1a).
+
+    ⚠️ **Migration cost was measured at ZERO for the outbound half** — all 52 `lib/` files already carried
+    an `export` block and no cross-file reference named an unexported name — and at **7 files** for the
+    inbound half. A static estimate said 18; it over-predicted 2.5x because most of the stdlib already
+    self-imported by full path, which was the long spelling of the same act.
+
+    **An exported symbol may not name an unexported type of its own file** (Rust's `private_interfaces`).
+    A project's API is DERIVED — the `public` modules of `kama.json` crossed with its files' `export`
+    blocks — and that enumeration is only usable if every name in it can be spelled. Publicly reachable
+    positions only: a `private` field leaks nothing. Measured 0 in `lib/`.
+
+    **The compiler-owned sources are outside all of it**: the prelude floor and the built-in `std::memory`
+    triad are intrinsics — always in scope, never imported, exempt from `export`. So is an **`extern`**
+    name, which keeps its literal C spelling, is never scope-prefixed, and therefore collapses onto one
+    table entry no matter how many files declare it.
 17. **`visibility` per module node**, required, with four forms:
 
     | `visibility` | who sees the module's surface |
@@ -396,13 +434,17 @@ does not show. Add it if a real case appears.
 | L | requires |
 |---|---|
 | F itself | always |
-| another file in M | `export` |
-| another module in this project | `export` **and** M's `visibility` is `internal`, `public`, or a list naming L |
-| a dependent project | `export` **and** M's `visibility` is `public` |
+| another file of M | `export` **and** L imports it (no scope in the entry — the module is implied) |
+| another module of this project | `export` **and** L imports it **and** M's `visibility` is `internal`, `public`, or a list naming L's module |
+| a dependent project | `export` **and** L imports it **and** M's `visibility` is `public` |
 
-This changes today's semantics: privacy is currently per-**module**, so a sibling in the same
-directory-module can see an unexported name (verified). Under the new rule a name must be `export`ed to
-reach a sibling file. **Migration cost measured at zero**: of `lib/`'s 245 top-level declarations, 18 are
+**Rows 1 and 2 SHIPPED (`0.9.75`–`0.9.78`); the `visibility` clause in rows 3 and 4 is phase 3c and is
+still unenforced** — `ModuleVis`/`visibleTo` are parsed and validated for self-consistency and consulted
+by no access decision.
+
+This changed today's semantics, and shipped: privacy WAS per-**module**, so a sibling in the same
+directory-module could see an unexported name (verified). A name must now be `export`ed AND imported to
+reach a sibling file. **Migration cost measured at zero for the export half**: of `lib/`'s 245 top-level declarations, 18 are
 unexported and **none is referenced from another file**. (A first pass said one — `siftDown` in
 `sort.kama:59` looked used by `priority_queue.kama`, but that file declares its **own** `fn void
 siftDown(isize i)` at `:102` and never calls the free function. Word match, not a reference.)
@@ -1152,49 +1194,85 @@ itself — `namespace foo;` is a syntax error.
 **3 — visibility.** `visibility` is parsed and form-checked; it is **enforced nowhere**. Closes claim 3.
 §2f.31 lands here too: `main` uncallable, unexportable, unique-per-project.
 
-#### ►► 3 — the ground, derived at `0.9.74`
+#### 3a/3b — the file rung. SHIPPED 2026-08-24/25 (`0.9.75`–`0.9.78`)
 
-⚠️ **The grammar half of this phase is ALREADY TRUE — do not re-plan it.** Earlier drafts said "one import
-block, one export block (single form; `export { }` stays a syntax error) … the `export` rule is unchanged
-apart from being made singular". Measured at HEAD, all four are already the case, and `compilation_unit`
-is why: `import_directives_opt export_manifest_opt code_opt`, in that order, each once.
+Five commits: **`export` gated at every position** · **a sibling must be imported** · SPEC · **one
+spelling for a sibling + `namespace` out of the other grammars** · **one `import { … };` block, entries
+name symbols**. All three holes reproduced at `0.9.74` first — each BUILT, LINKED AND RAN — and the
+`import { X };` form was a parse error, so none of it was recalled.
 
-| claim | measured |
-|---|---|
-| one import block, before any code | `import` after a declaration → `Parse error: unexpected IMPORT` |
-| one export block, after the imports | `export` after a declaration → `Parse error: unexpected EXPORT` |
-| the `export` rule is singular | `export_manifest_opt` is not a list — it is `/* nothing */ | EXPORT …` |
-| `export { }` is a syntax error | `Parse error: syntax error, unexpected }, expecting IDENTIFIER` |
-| the corpus already complies | **79** files carry an `export` block; **0** carry more than one |
+⚠️ **The `export` half needed no corpus migration and the `import` half needed 7 files.** Both numbers
+came from running the compiler with the rung on. A static estimate for the second said 18 and
+over-predicted 2.5x, carrying the exact `siftDown` word-match trap `.scratch`'s probe README warns about.
 
-**So phase 3 is ENTIRELY resolver work.** No grammar change, no corpus migration.
+**Four things the matrix found that reasoning did not:**
 
-**The two holes, reproduced at `0.9.74`** — a project with `secret` whose `visibility` is `["other"]`:
+1. A **substituted type argument** is not a reference in the file being walked. Generic instantiation
+   restores the TEMPLATE's context while the argument was written at the call site, so `View<Transform>`
+   blamed a single-file fixture for not exporting its own type. Three signals separate them: `_refUnit`
+   (whose text is being recorded), `synthesized` (an emitter-built node has no source text to attribute),
+   and `_typeSubst` (this name is a type parameter's binding, already judged where it was written). The
+   last surfaced only as 26 `kama check`/`kama build` DISAGREEMENTS, not as a failure.
+2. An **`extern` name must be exempt** — it keeps its literal C spelling, is never scope-prefixed, and so
+   every file declaring `extern fn memset` collapses onto one entry whose `declFile` is whichever file
+   lost the race. SPEC prescribes that repetition. 31 fs/net/proc fixtures.
+3. The declaration walk named **no file at all** (`at :17`) — it runs after `_collectingUnitPath` unwinds.
+   The wart the probe README logged and nobody had chased.
+4. **Two other grammars and a BNF doc** track `kama.y`: tree-sitter, the VS Code TextMate grammar, and
+   `docs/grammar.bnf`. The suite names all three. `namespace` had survived its own deletion in the first
+   two since 2e, invisible because `check-treesitter` only checks the compiler-accepts/tree-sitter-rejects
+   direction — a grammar that accepts MORE than the compiler is not tested.
 
-| | spelling | today |
-|---|---|---|
-| **a** | the root module calls `vis::secret::hidden()`, which `secret` does **not** `export` | **builds** |
-| **b** | the root module writes `import vis::secret::{shown}`, and `secret` does not list the root | **builds** |
+**§2f.29 had to MOVE or retire in silence.** "An `as` may not claim a name that roots a project this file
+can reach" was checked on the MODULE alias; dropping that form leaves `moduleAlias` permanently null, so
+the rule would have become dead code with its two xfails still passing. It rides on the symbol alias now.
 
-(a) is §1a claim 3 — a qualified spelling reaching past the `export` block. (b) is §2c's composition table,
-which nothing consults. Both need the same thing: a check where an importer's module is known and the
-target module's node is in hand.
+#### ►► 3c — the `visibility` rung. NEXT.
+
+**The one hole left of the three, reproduced at `0.9.74` and still open**: a project whose `secret` module
+has `visibility: ["other"]`, and the root writes `import { vis::secret::shown };` — **it builds**, because
+`ModuleVis`/`visibleTo` are write-only. They are parsed, checked for self-consistency (every entry names a
+module that exists; no self-reference; `children` refused on a leaf) and consulted by **no access
+decision**. Rows 3 and 4 of §2c's composition table are what is missing.
+
+**What the emitter can learn about a module today: nothing.** `ModuleVis`, `ModuleNode` and
+`ManifestModules` are all `static` in `kama.driver.cpp` and appear in no header; the only channel is
+`setModuleResolver`, a path→name callback whose answer is not even retained (`ctxOf` mangles it into
+`NsCtx::scope` and the unmangled name dies at scope exit). ⚠️ **Re-resolve these before use** — this
+table has been re-derived six times and was stale three of them.
 
 | what | where |
 |---|---|
-| `ModuleNode` (carries `visibility`) · `visibilityValue` · `validateModules` | [driver:2049](../../src/kama.driver.cpp) · [:2379](../../src/kama.driver.cpp) · [:3071](../../src/kama.driver.cpp) |
-| the per-symbol import check — where "does not export" fires today | [cemit:22018](../../src/kama.cemit.cpp) |
-| the `export` list validation loop | [cemit:22011](../../src/kama.cemit.cpp) |
-| the duplicate-function diagnostic to SPLIT (§2f.31) | [cemit:5980](../../src/kama.cemit.cpp) |
-| ⚠️ `main`'s TWO escapes — fix only one and every CALL still resolves to the old symbol | `qualify()` [cemit:350](../../src/kama.cemit.cpp) · `resolveFuncImpl` [cemit:1974](../../src/kama.cemit.cpp) |
+| `ModuleVis` · `ModuleNode` · `visibilityValue` · `validateModules` | `kama.driver.cpp` — grep, do not trust a line number |
+| the driver→emitter seam to mirror | `configureEmitter`'s `setModuleResolver` |
+| where an import is bound (all forms) | `CEmitter::ctxOf`'s entry loop |
+| where a qualified reference is judged | `CEmitter::checkReach` — the file rung's predicate, already threaded with the referencing file |
 
-⚠️ **Re-resolve these before use.** This table has been re-derived five times and was stale three of them;
-2e alone moved `cemit` by ~40 lines and `driver` by several hundred.
+**The shape.** A second driver-installed callback beside `setModuleResolver`, answering the PREDICATE
+(`may importer see imported?`) rather than exporting the enum — the driver owns filesystem work. It needs
+a module-name→manifest index, which does not exist: `manifestModulesCached` is keyed by manifest PATH.
+Record it as units load in `loadProgramUnits`, which already computes `moduleKeyOf` per unit. `ModuleId`
+supplies the project split for `internal` vs `public`; `via` is the existing precedent for "this came from
+a dependency". **No manifest node ⇒ allow** (loose modules, the prelude, synthetic units).
 
-The diagnostic split: an entry-point message scoped to the **project** (a project has one entry point, and
-`main` is scoped by nothing — the reason two collide where `a::helper` and `b::helper` do not), and a
-generic one, already re-worded from *namespace* to **module** in 2e. Both still owe the missing filename on
-the "first declared at" location.
+⚠️ Emitter side, `NsCtx` needs the **unmangled** module name — `ctxOf` computes it and throws it away.
+Do NOT recover it by turning `__` back into `::`: a kama identifier may contain `__` (`_Hidden` →
+`_F4___Hidden`). Keep a mangled→unmangled map filled in the `_unitCtx` loop.
+
+**A visibility rejection CANNOT be a `.d` xfail** — that leg is a LOOSE build of every `.kama` under the
+directory and ignores any `kama.json` beside it, so the rule would never fire. Either give the xfail leg
+the manifest arm the POSITIVE `.d` leg already has (`run_tests.sh:567` — *"the operand is the mode"*, ~4
+lines) or put them in a new `tools/check-module-visibility.sh`. The first is better: it is a one-leg
+asymmetry, not a design constraint.
+
+#### 3d — §2f.31, `main`. Still owed.
+
+Not started. `main` is callable and exportable today, and the duplicate diagnostic still says *"first
+declared at line N"* with **no filename** — worse now that two `main`s sit in different directories.
+`FuncSig::declFile` was added in 3a and is what that fix needs. ⚠️ `main` escapes scoping in **two**
+places, `qualify()` and `resolveFuncImpl`; fix one and every CALL still resolves. The generic arm of the
+split must keep the literal prefix `duplicate function '<name>'` — `dup_fn.msg` and `dup_generic_fn.msg`
+assert it.
 
 **4 — the C symbol.** §2e: identity-derived symbols; path-derived `.c` filenames; the `k_` escape interned
 once where each name enters the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`,
