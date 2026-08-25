@@ -1227,52 +1227,38 @@ over-predicted 2.5x, carrying the exact `siftDown` word-match trap `.scratch`'s 
 can reach" was checked on the MODULE alias; dropping that form leaves `moduleAlias` permanently null, so
 the rule would have become dead code with its two xfails still passing. It rides on the symbol alias now.
 
-#### ►► 3c — the `visibility` rung. NEXT.
+#### 3c/3d — the `visibility` rung and `main`. SHIPPED 2026-08-25 (`0.9.79`–`0.9.80`)
 
-**The one hole left of the three, reproduced at `0.9.74` and still open**: a project whose `secret` module
-has `visibility: ["other"]`, and the root writes `import { vis::secret::shown };` — **it builds**, because
-`ModuleVis`/`visibleTo` are write-only. They are parsed, checked for self-consistency (every entry names a
-module that exists; no self-reference; `children` refused on a leaf) and consulted by **no access
-decision**. Rows 3 and 4 of §2c's composition table are what is missing.
+**3c.** All four forms decide now, at the import entry AND at a qualified reference (which reaches a
+module without importing it — one position without the other is §1a claim 3 again). The driver answers a
+PREDICATE rather than exporting `ModuleVis`, installed beside `setModuleResolver`; it needed a module-name
+→ manifest index, which did not exist, so `moduleIdForFile` records one as each unit passes.
 
-**What the emitter can learn about a module today: nothing.** `ModuleVis`, `ModuleNode` and
-`ManifestModules` are all `static` in `kama.driver.cpp` and appear in no header; the only channel is
-`setModuleResolver`, a path→name callback whose answer is not even retained (`ctxOf` mangles it into
-`NsCtx::scope` and the unmangled name dies at scope exit). ⚠️ **Re-resolve these before use** — this
-table has been re-derived six times and was stale three of them.
+⚠️ **THE CHECK CANNOT LIVE IN `ctxOf`, AND THE FIRST VERSION DID.** That index fills as each unit is
+attributed — through the resolver callback `ctxOf` itself makes — so asking there consults a half-built
+index and the answer depends on unit order. It read as "internal is enforced, a list is not"; both were
+coin-flips. It runs in the import-privacy pass, where every unit's context already exists.
 
-| what | where |
-|---|---|
-| `ModuleVis` · `ModuleNode` · `visibilityValue` · `validateModules` | `kama.driver.cpp` — grep, do not trust a line number |
-| the driver→emitter seam to mirror | `configureEmitter`'s `setModuleResolver` |
-| where an import is bound (all forms) | `CEmitter::ctxOf`'s entry loop |
-| where a qualified reference is judged | `CEmitter::checkReach` — the file rung's predicate, already threaded with the referencing file |
+⚠️ **THE FAIL-CHECK CAUGHT TWO CANARIES IN MY OWN GUARD.** With the rung disabled, two of four assertions
+still passed: `["app"]` named a module the project did not have and `"children"` sat on a leaf, so both
+were refused by MANIFEST VALIDATION and never reached visibility. Rewritten against a manifest that is
+valid, they fail as they should. **Disable the predicate and re-run before trusting any of this.**
 
-**The shape.** A second driver-installed callback beside `setModuleResolver`, answering the PREDICATE
-(`may importer see imported?`) rather than exporting the enum — the driver owns filesystem work. It needs
-a module-name→manifest index, which does not exist: `manifestModulesCached` is keyed by manifest PATH.
-Record it as units load in `loadProgramUnits`, which already computes `moduleKeyOf` per unit. `ModuleId`
-supplies the project split for `internal` vs `public`; `via` is the existing precedent for "this came from
-a dependency". **No manifest node ⇒ allow** (loose modules, the prelude, synthetic units).
+The within-a-project rungs are fixtures, which needed a four-line fix: a `.d` xfail was built by naming
+its `.kama` files — a LOOSE build, applying no manifest — so a visibility rejection could not fire and the
+fixture failed on "cannot resolve module" instead. The POSITIVE `.d` leg has read the manifest since 1c;
+the xfail leg simply never got that arm. Cross-project rungs live in `tools/check-module-visibility.sh`
+because they need `kama pkg install`.
 
-⚠️ Emitter side, `NsCtx` needs the **unmangled** module name — `ctxOf` computes it and throws it away.
-Do NOT recover it by turning `__` back into `::`: a kama identifier may contain `__` (`_Hidden` →
-`_F4___Hidden`). Keep a mangled→unmangled map filled in the `_unitCtx` loop.
+**3d.** `main` is not callable, not exportable, unique per PROJECT. The export check runs BEFORE
+`qualify`, which maps `main` to `kama_main` and made `export { main }` pass validation while the import
+side looked for `m__main`. The duplicate diagnostic splits, both arms now printing
+`first declared at <file>:<line>`. ⚠️ The entry-point message's claim — that two collide *where
+`a::helper` and `b::helper` would not* — is pinned by `tests/mod_two_modules_same_name.d`; without it the
+message is the duplicate-name message with different words.
 
-**A visibility rejection CANNOT be a `.d` xfail** — that leg is a LOOSE build of every `.kama` under the
-directory and ignores any `kama.json` beside it, so the rule would never fire. Either give the xfail leg
-the manifest arm the POSITIVE `.d` leg already has (`run_tests.sh:567` — *"the operand is the mode"*, ~4
-lines) or put them in a new `tools/check-module-visibility.sh`. The first is better: it is a one-leg
-asymmetry, not a design constraint.
-
-#### 3d — §2f.31, `main`. Still owed.
-
-Not started. `main` is callable and exportable today, and the duplicate diagnostic still says *"first
-declared at line N"* with **no filename** — worse now that two `main`s sit in different directories.
-`FuncSig::declFile` was added in 3a and is what that fix needs. ⚠️ `main` escapes scoping in **two**
-places, `qualify()` and `resolveFuncImpl`; fix one and every CALL still resolves. The generic arm of the
-split must keep the literal prefix `duplicate function '<name>'` — `dup_fn.msg` and `dup_generic_fn.msg`
-assert it.
+**Phase 3 is COMPLETE.** What remains of the campaign: 4 (the C symbol), 5 (corpus + docs), 6 (delete
+this file).
 
 **4 — the C symbol.** §2e: identity-derived symbols; path-derived `.c` filenames; the `k_` escape interned
 once where each name enters the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`,

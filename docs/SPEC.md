@@ -3181,6 +3181,13 @@ a compile error — disambiguate with `as`. An `as` alias may **not** claim a na
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 
+**`visibility` decides what a module reaches beyond itself**, in four widening forms — a **list** of
+modules in this project, `"children"` (every module nested under it, at any depth), `"internal"` (every
+module in this project) and `"public"` (plus **dependent projects**, and the only form that crosses a
+project boundary). ⚠️ **Nesting determines NAME, never ACCESS**: a narrow parent does **not** confine a
+`public` child, which follows Go rather than Rust's implicit downward grant. A module's own files always
+see each other, so a list never names itself.
+
 **Visibility is per FILE. A file may name only what it DECLARES or IMPORTS** — `export { … };` is the
 outbound half and `import` the inbound one, and the symmetry is the rule. A top-level `type`/`fn` leaves its
 file only by being named in that file's one `export` block; a listed name must be a top-level declaration of
@@ -3273,7 +3280,13 @@ but a static has no receiver and its parameters need not mention `T`, so there i
 (`Box<int32>::tag()` cannot be the spelling — in expression position `Box < int32 >` is two comparisons,
 which is why kama has a turbofish at all.) Pinned by `tests/generic_static.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised
 constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the enclosing type or
-`Result<This, E>`, declare it a `ctor`. `main` is the global entry point (unmangled).
+`Result<This, E>`, declare it a `ctor`.
+
+**`main` is the entry point, not a symbol.** It is reached below the visibility system — every `main`
+emits as the same C symbol, and the generated C `main` calls it directly — so **calling `main` is an
+error**, **`main` may not be exported**, and it must be **unique per PROJECT** rather than per module:
+two collide where `a::helper` and `b::helper` do not. Its location is unconstrained; location simply does
+not scope it, which is exactly why it is not callable.
 
 **`global::` names the root scope explicitly** ✅ (the C# spelling). `global::X` is the same symbol as a bare
 `X` — the always-in-scope [floor](FLOOR.md). It exists for the case where a local declaration shadows the
