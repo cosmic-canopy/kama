@@ -1,0 +1,3 @@
+export { s };
+
+fn int32 s() { return 5; }

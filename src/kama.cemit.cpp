@@ -293,6 +293,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit, int fileIndex)
     NsCtx ctx;
     ctx.unitPath = unit->name ? *unit->name : std::string();
     const std::string module = (_moduleResolver && unit->name) ? _moduleResolver(*unit->name) : std::string();
+    ctx.module = module;
     if (!module.empty()) {
         ctx.scope = mangleNs(dottedModule(module));           // `std::collections` -> `std__collections`
         ctx.isPublic = true;
@@ -1782,6 +1783,22 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     const std::string declFile = declFileOf(key);
     if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
     if (declFile == refFile) return;                         // its own file — always
+    // §2c FOR A QUALIFIED REFERENCE. The import site above covers what a file imports; a qualified
+    // spelling reaches a module WITHOUT importing it (that is deliberate — see the inbound clause below),
+    // so the same rung has to be asked here or the manifest key is enforced in one position and not the
+    // other, which is the shape of §1a claim 3 all over again.
+    if (_moduleVisible) {
+        const size_t cut = key.rfind("__");
+        auto mn = cut == std::string::npos ? _moduleNames.end() : _moduleNames.find(key.substr(0, cut));
+        if (mn != _moduleNames.end() && !_moduleVisible(_nsCtx.module, mn->second)) {
+            unsupported(("module `" + mn->second + "` is not visible from "
+                         + (_nsCtx.module.empty() ? std::string("a file in no module")
+                                                  : "`" + _nsCtx.module + "`")
+                         + " — its `visibility` in `kama.json` does not name this module, and a qualified "
+                           "spelling reaches no further than an `import` would").c_str(), line);
+            return;
+        }
+    }
     if (!_exported.count(key)) {                             // OUTBOUND: it never left its file
         unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
                      + " cannot name it — visibility is per FILE, and a name leaves its file only through "
@@ -21904,6 +21921,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         else                          ctx = ctxOf(units[i], (int)i);
         _unitCtx[units[i].get()] = ctx;
         if (ctx.isPublic && !ctx.scope.empty()) _namespaces.insert(ctx.scope);
+        if (!ctx.scope.empty() && !ctx.module.empty()) _moduleNames[ctx.scope] = ctx.module;
     }
     // Record each module's PUBLIC SURFACE from its top-of-file `export { … };` manifest. Everything
     // unlisted is module-private and cannot be pulled in by another module's per-symbol `import`
@@ -22188,6 +22206,24 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             const bool sameModule = imp->modulePath->empty();
             _nsCtx = _unitCtx[u.get()];
             std::string mod = sameModule ? _nsCtx.scope : mangleNs(path);
+            // §2c AT THE IMPORT. `visibility` governs reach BEYOND a module; the file rung below has its
+            // own say. A same-module entry is always allowed — a module's own files see each other
+            // unconditionally, which is what "its own files" means in all four forms.
+            //
+            // ⚠️ THIS CANNOT LIVE IN `ctxOf`. The driver's module-name index is filled as each unit is
+            // ATTRIBUTED, which happens through the resolver callback `ctxOf` itself makes — so asking
+            // there consults a half-built index and the answer depends on which unit came first. It read
+            // as "internal is enforced, a list is not"; both were really coin-flips on unit order.
+            if (!sameModule && _moduleVisible) {
+                std::string target;                        // the entry's module, unmangled
+                for (auto& sg : *imp->modulePath) target += (target.empty() ? "" : "::") + *sg;
+                if (!_moduleVisible(_nsCtx.module, target))
+                    unsupported(("module `" + target + "` is not visible from "
+                                 + (_nsCtx.module.empty() ? std::string("a file in no module")
+                                                          : "`" + _nsCtx.module + "`")
+                                 + " — its `visibility` in `kama.json` does not name this module. Widen it, "
+                                   "or import from a module it does name").c_str(), imp->line);
+            }
             // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
             // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no
             // longer exists, which is the B3a failure again, across files. `_refUnit` is null throughout

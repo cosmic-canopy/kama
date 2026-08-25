@@ -1,0 +1,9 @@
+{
+  "name": "visnl", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+
+  "modules": {
+    ".":      { "visibility": "internal" },
+    "secret": { "visibility": ["other"] },
+    "other":  { "visibility": "internal" }
+  }
+}

@@ -1,0 +1,4 @@
+// The root module is not `other`, so it may not see `secret`'s surface.
+import { visnl::secret::shown };
+
+fn int32 main() { return shown(); }

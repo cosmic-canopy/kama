@@ -1,0 +1,5 @@
+// `"children"` grants the subtree and only the subtree. The project ROOT is not nested under `sub`, so
+// it is refused — while `sub::deep` reaches it, which `mod_vis_children_ok` pins as the positive twin.
+import { vischild::sub::s };
+
+fn int32 main() { return s(); }

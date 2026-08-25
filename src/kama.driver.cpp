@@ -881,6 +881,15 @@ struct ModuleId {
     }
 };
 static ModuleId moduleIdForFile(const std::string& absPath);
+bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported);   // §2c, defined below
+
+// module full name ("std::collections", or a bare project name for a root module) -> the `kama.json` that
+// declares it. Filled as units are attributed, consumed by the visibility rung.
+static std::map<std::string, std::string>& moduleManifestIndex()
+{
+    static std::map<std::string, std::string> m;
+    return m;
+}
 
 // owningPackageDir answers with an ABSOLUTE path, and that answer reaches user-facing output — the `out`
 // root is built from it, so every "kama: built …" line would carry a full path for an ordinary build run
@@ -1952,6 +1961,13 @@ static void configureEmitter(CEmitter& e)
             return std::string();          // `<prelude>` itself: the floor, scoped by collectProgram
         }
         return moduleIdForFile(unitPath).full();      // "" for a loose file — no kama.json above it
+    });
+    // The visibility rung (§2c). The driver answers the PREDICATE rather than exporting `ModuleVis`, for
+    // the same reason it answers `setModuleResolver`: this is manifest work, and `ModuleNode`/`ModuleVis`
+    // are static to this file and appear in no header. Both arguments are full module names as
+    // `ModuleId::full()` writes them; "" means a file in no module.
+    e.setModuleVisible([](const std::string& importer, const std::string& imported) -> bool {
+        return kamaModuleVisibleTo(importer, imported);
     });
     for (auto& m : preludeModuleUnits()) e.addPreludeModule(m);       // the always-in-scope triad
 }
@@ -3173,6 +3189,11 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     if (relDir == "." ) relDir.clear();
     if (!relDir.empty())
         if (const ModuleNode* n = deepestModuleFor(mm.mods, relDir)) id.module = n->modName;
+    // Remember which manifest owns this module name. There is no name->manifest index in the driver —
+    // `manifestModulesCached` is keyed by manifest PATH — and building one by searching would mean
+    // guessing which roots to search. Every unit in the compilation passes through here, so recording it
+    // on the way past is both complete and free. Read by `kamaModuleVisibleTo`.
+    moduleManifestIndex()[id.full()] = manifest;
     return id;
 }
 
@@ -3186,6 +3207,72 @@ static const ModuleNode* nodeByModName(const std::vector<ModuleNode>& nodes, con
         if (const ModuleNode* d = nodeByModName(n.children, want)) return d;
     }
     return nullptr;
+}
+
+// THE VISIBILITY RUNG (§2c). `visibility` governs reach BEYOND a module and nothing else — the file rung
+// (`export` out, `import` in) has already had its say by the time this is asked.
+//
+// Both arguments are FULL module names as `ModuleId::full()` writes them: `project::a::b`, or a bare
+// project name for a root module, or a bare folder chain for a LOOSE module, or "" for a file in no
+// module at all.
+//
+// ⚠️ NO NODE MEANS ALLOW, and it is the common case rather than a fallback: a loose module has no manifest
+// by design (§2i), the prelude is embedded, and `<prelude>/…` units are synthetic. Denying those would
+// break every single-file build in the corpus.
+//
+// ⚠️ A LOOSE IMPORTER IS IN NO PROJECT, so `internal`/`children`/a list can never grant it — only `public`
+// can. That is not a special case either: it falls out of "same project" being false. In practice a loose
+// build resolves only the stdlib and $KAMA_PATH, and `lib/kama.json` is `public` throughout.
+static std::string projectOfModule(const std::string& full)
+{
+    const size_t c = full.find("::");
+    return c == std::string::npos ? full : full.substr(0, c);
+}
+static std::string relativeModuleName(const std::string& full)
+{
+    const size_t c = full.find("::");
+    return c == std::string::npos ? std::string() : full.substr(c + 2);
+}
+
+bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported)
+{
+    if (imported.empty() || importer == imported) return true;   // its own files always see each other
+
+    auto it = moduleManifestIndex().find(imported);
+    if (it == moduleManifestIndex().end()) return true;          // no manifest declares it — see above
+    const ManifestModules& mm = manifestModulesCached(it->second);
+    if (!mm.ok) return true;                                     // unreadable: attribute nothing
+
+    const std::string rel = relativeModuleName(imported);
+    const ModuleNode* node = nullptr;
+    if (rel.empty()) {                                           // the project ROOT module, `"."`
+        for (auto& n : mm.mods) if (n.isRoot()) { node = &n; break; }
+    } else {
+        node = nodeByModName(mm.mods, rel);
+    }
+    if (!node) return true;                                      // not declared: nothing to enforce
+
+    if (node->vis == ModuleVis::Public) return true;
+    // Every remaining form is bounded by the project, so a different project — or none — cannot qualify.
+    // A LOOSE importer is caught here too rather than by a case of its own: its "project" is its own
+    // folder chain, which cannot equal the imported module's project.
+    if (projectOfModule(importer) != projectOfModule(imported)) return false;
+    switch (node->vis) {
+        case ModuleVis::Internal: return true;
+        case ModuleVis::Children: {
+            // Nested UNDER it, at any depth. `rel` is "" for a root node, which `composeModules` already
+            // refuses `children` on, so an empty prefix cannot match everything by accident.
+            const std::string mine = relativeModuleName(importer);
+            return rel.size() < mine.size() && mine.compare(0, rel.size(), rel) == 0
+                && mine.compare(rel.size(), 2, "::") == 0;
+        }
+        case ModuleVis::List: {
+            const std::string mine = relativeModuleName(importer);
+            for (auto& t : node->visibleTo) if (t == mine) return true;
+            return false;
+        }
+        default: return true;
+    }
 }
 
 // The files of the module `segs` inside the project rooted at `projDir`, or empty if that project is not

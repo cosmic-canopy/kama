@@ -1,0 +1,3 @@
+export { p };
+
+fn int32 p() { return 9; }

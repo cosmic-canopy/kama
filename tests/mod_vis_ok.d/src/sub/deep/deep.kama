@@ -1,0 +1,6 @@
+// `sub` is `"children"`, and `sub::deep` is nested under it. The negative twin is
+// `xfail/mod_vis_children.d`, where the importer is the ROOT and is not in the subtree.
+import { visok::sub::s };
+export { d };
+
+fn int32 d() { return s(); }

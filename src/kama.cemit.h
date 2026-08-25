@@ -220,6 +220,10 @@ struct NsCtx {
     // template body's references are judged from the file that wrote them, not the one that used them.
     // Empty for the prelude, which is compiler-owned and exempt.
     std::string unitPath;
+    // The module this file is in, UNMANGLED (`std::collections`), as the driver names it. `scope` holds the
+    // mangled form and cannot be turned back: a kama identifier may contain `__` (`_Hidden` -> `_F4___Hidden`),
+    // so the join is not injective. Empty for a file in no module.
+    std::string module;
     bool        isPublic = false;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
     std::map<std::string, std::string> aliases;       // alias -> mangled namespace (module alias / `using X = Y`)
@@ -611,6 +615,10 @@ public:
     // where a file's identity comes from (design/module-system.md §2b): the path plus the project's
     // `modules` map, never the `namespace` line the file happens to declare. Supplied by the driver
     // because the answer is filesystem work — walking to the owning manifest and reading its module tree.
+    // §2c's rung, answered by the driver: may a file of `importer` see `imported`'s surface? Both are full
+    // module names; "" is a file in no module. Absent (or unset) means allow, so a unit tree built without
+    // a driver — a test harness, a future front end — is not silently locked down.
+    void setModuleVisible(std::function<bool(const std::string&, const std::string&)> f) { _moduleVisible = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
 
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
@@ -1017,7 +1025,8 @@ private:
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
     std::function<std::string(const std::string&)> _packageResolver;   // unit path -> owning manifest, from the driver
-    std::function<std::string(const std::string&)> _moduleResolver;    // unit path -> owning module, from the driver
+    std::function<std::string(const std::string&)> _moduleResolver;
+    std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
     // Pre-scanned conformances: target `primKey` -> the contracts a `type intrinsic` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
@@ -1236,7 +1245,11 @@ private:
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
-    std::set<std::string> _namespaces;   // registered public namespaces (mangled)
+    std::set<std::string> _namespaces;
+    // Mangled module scope -> the unmangled name, for the visibility rung: a resolved symbol key carries the
+    // mangled prefix and §2c is asked in real module names. Complete by construction — every module in the
+    // compilation has at least one unit, and this is filled from the same loop that builds `_unitCtx`.
+    std::map<std::string, std::string> _moduleNames;   // registered public namespaces (mangled)
     std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives

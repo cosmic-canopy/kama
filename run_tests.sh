@@ -627,10 +627,19 @@ xfail_one() {
     # (today through _F<n>, and a diagnostic naming "the first declaration" picks by it), so a fixture
     # must not depend on whatever order the filesystem hands back.
     if [ -d "$src" ]; then
-        local srcs; srcs=$(find "$src" -name '*.kama' | sort)
         msg_file="$src/msg"
-        # shellcheck disable=SC2086
-        "$KAMA" build $srcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+        if [ -f "$src/kama.json" ]; then
+            # A fixture WITH a manifest is named BY ITS MANIFEST — the same rule the POSITIVE .d leg
+            # already follows, because the operand is the mode. Naming the .kama files instead is a LOOSE
+            # build, which by design applies no manifest at all, so a rejection that needs one could never
+            # fire: `visibility` would be read by nothing and the fixture would compile clean. This arm was
+            # simply never added when 1c gave it to the positive leg.
+            "$KAMA" build "$src/kama.json" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+        else
+            local srcs; srcs=$(find "$src" -name '*.kama' | sort)
+            # shellcheck disable=SC2086
+            "$KAMA" build $srcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+        fi
     else
         msg_file="$TESTS_DIR/xfail/$name.msg"
         "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?

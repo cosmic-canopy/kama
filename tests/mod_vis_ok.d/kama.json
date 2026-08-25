@@ -1,0 +1,11 @@
+{
+  "name": "visok", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+
+  "modules": {
+    ".":      { "visibility": "internal" },
+    "secret": { "visibility": ["other"] },
+    "other":  { "visibility": "internal" },
+    "sub":    { "visibility": "children", "modules": { "deep": { "visibility": "internal" } } },
+    "narrow": { "visibility": ["other"],  "modules": { "pub":  { "visibility": "public" } } }
+  }
+}

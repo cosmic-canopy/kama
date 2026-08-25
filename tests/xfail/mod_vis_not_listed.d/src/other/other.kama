@@ -1,0 +1,3 @@
+export { oth };
+
+fn int32 oth() { return 3; }

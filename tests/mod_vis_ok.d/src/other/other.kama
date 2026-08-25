@@ -1,0 +1,6 @@
+// `other` IS on `secret`'s list, so it may see its surface. The negative twin is
+// `xfail/mod_vis_not_listed.d`, where the importer is the root and is not on the list.
+import { visok::secret::shown };
+export { oth };
+
+fn int32 oth() { return shown(); }

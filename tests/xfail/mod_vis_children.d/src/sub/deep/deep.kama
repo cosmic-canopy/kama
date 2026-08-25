@@ -1,0 +1,4 @@
+import { vischild::sub::s };
+export { d };
+
+fn int32 d() { return s(); }
