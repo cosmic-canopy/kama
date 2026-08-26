@@ -3,6 +3,12 @@ import { std::ptr::relocate };
 // (`buf[0] = give w`), the same raw-slot move already allowed through a FIELD (`this.data[0] = give w`).
 // Proves the store happens (read it back = 42) and the moved source is consumed (its scope dtor is
 // skipped, so no double-drop — ASan-clean; a bare copy would leave `w` live and drop it twice).
+// An `extern` is a reference to a C symbol, not a module symbol, so a file that names one declares it —
+// inheriting the prelude's declaration is what the file rung closed.
+extern "<stdlib.h>";
+extern fn UnsafePtr malloc(usize n);
+extern fn void free(UnsafePtr p);
+
 type resource Widget {
     int32 id;
     public ctor make(int32 id) { this.id = id; }

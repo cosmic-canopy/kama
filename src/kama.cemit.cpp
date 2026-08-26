@@ -1799,6 +1799,34 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
                           int line, const std::string& refFile, bool qualified)
 {
     if (!_exportedReady || refFile.empty()) return;
+    // THE FFI ARM, and it runs BEFORE the `declFile.empty()` return because that return is exactly the
+    // hole: `declFileOf` reports "" for an extern on purpose (one table entry, many declaring files), so
+    // every extern name used to walk straight out of this predicate. A file could call `malloc` having
+    // neither declared nor imported it — measured at 0.9.84, and it built, linked and ran.
+    //
+    // The rule is DECLARE, not import: an extern is a reference to a symbol someone else defines, it keeps
+    // its literal C spelling and is never scope-prefixed, so there is no module surface for an `export` to
+    // put it on and nothing for an `import` to bind. Repeating the declaration is what SPEC prescribes and
+    // what all 109 declaring files already do. A file that would rather not repeat it wraps the extern in
+    // an ordinary `fn` and exports THAT — which costs nothing: `--release` folds every unit into one TU
+    // (kama.driver.cpp), and a pass-through wrapper compiles to assembly byte-identical to the direct call.
+    //
+    // No `<`-prefixed exemption here, deliberately. The prelude declares `malloc`/`free` for
+    // `GlobalAllocator`, and letting a compiler-owned declaration satisfy every file would leave the same
+    // leak with a shorter reach — a user program would still get libc's allocator for free, unwritten.
+    {
+        auto ext = _externDeclSites.find(key);
+        if (ext != _externDeclSites.end()) {
+            if (ext->second.count(refFile)) return;                        // declared right here — always
+            std::string other = *ext->second.begin();
+            unsupported(("`" + spelled + "` is an `extern` C symbol declared in `" + other + "`, and this "
+                         "file does not declare it — " + what + " cannot name it. An extern is not a module "
+                         "symbol: it keeps its literal C spelling, so it is never `export`ed or `import`ed. "
+                         "Repeat the declaration in this file, or call a `fn` that wraps it (a wrapper is "
+                         "free in `--release`, which builds one translation unit)").c_str(), line);
+            return;
+        }
+    }
     const std::string declFile = declFileOf(key);
     if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
     if (declFile == refFile) return;                         // its own file — always
@@ -6184,6 +6212,65 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             }
         }
 
+        // AGREEMENT. Re-declaring an extern in each file that calls it is the idiom SPEC prescribes, and
+        // the duplicate rule above is exempt for exactly that reason — but "exempt" used to mean the LAST
+        // declaration collected silently replaced every earlier one, and every call site in the program
+        // then lowered through the winner. That is a silent miscompile, not a nicety:
+        //
+        //   a.kama  extern fn UnsafePtr memcpy(UnsafePtr dst, UnsafePtr src, usize n);   // the true order
+        //   b.kama  extern fn UnsafePtr memcpy(UnsafePtr src, UnsafePtr dst, usize n);   // names swapped
+        //
+        // Both files write `memcpy(dst: d, src: s, n: 4)`; named arguments are REORDERED off the winning
+        // FuncSig, so a.kama's correct call emitted `memcpy(s, d, 4)` — source and destination reversed —
+        // and it built, linked and ran. Measured, not reasoned: that is `tests/xfail/extern_disagree.d`.
+        //
+        // And the winner can be the USER: a program declaring `extern fn int32 malloc(int32)` replaced the
+        // prelude's own, so `GlobalAllocator.allocate` stopped compiling with a diagnostic that named no
+        // file at all (`at :531`) and blamed the standard library for the user's line.
+        //
+        // kama never emits a prototype for an extern (SPEC: the prototype comes from the header), so C
+        // cannot catch the disagreement either — there is no second declaration for clang to compare.
+        // This is the only place that can. Agreement stays silent; that is still the idiom.
+        if (isExtern(fn)) {
+            auto prev = _funcs.find(sig.cName);
+            if (prev != _funcs.end() && prev->second.node && isExtern(prev->second.node)) {
+                const FuncSig& was = prev->second;
+                std::string diff;
+                if (was.retCType != sig.retCType)
+                    diff = "it returns `" + sig.retCType + "` here and `" + was.retCType + "` there";
+                else if (was.params.size() != sig.params.size())
+                    diff = "it takes " + std::to_string(sig.params.size()) + " parameter(s) here and "
+                         + std::to_string(was.params.size()) + " there";
+                else for (size_t i = 0; i < sig.params.size() && diff.empty(); ++i) {
+                    const ParamSig& a = sig.params[i];
+                    const ParamSig& b = was.params[i];
+                    // The NAME is part of the signature here in a way it is not in C: kama calls are
+                    // named-argument and reorder off this list, so two declarations that differ only in
+                    // parameter order are the memcpy case above.
+                    if (a.name != b.name)
+                        diff = "parameter " + std::to_string(i + 1) + " is named `" + a.name
+                             + "` here and `" + b.name + "` there";
+                    else if (a.className != b.className)
+                        diff = "parameter `" + a.name + "` is `" + a.className + "` here and `"
+                             + b.className + "` there";
+                    else if (a.byRef != b.byRef || a.isOut != b.isOut || a.isConst != b.isConst)
+                        diff = "parameter `" + a.name + "` disagrees on `ref`/`out`/`const`";
+                }
+                if (!diff.empty()) {
+                    std::string where = was.declFile.empty() ? std::string("another file")
+                                                             : "`" + was.declFile + "`";
+                    if (was.node && was.node->name)
+                        where += ":" + std::to_string(was.node->name->line);
+                    unsupported(("this `extern fn " + *fn->name->value + "` disagrees with the one in "
+                                 + where + " — " + diff + ". `" + sig.cName + "` is ONE C symbol, so every "
+                                 "declaration of it in a program must match: kama emits no prototype for an "
+                                 "extern, so nothing downstream can catch a mismatch, and call sites in "
+                                 "BOTH files lower through whichever was collected last").c_str(),
+                                fn->name->line);
+                }
+            }
+        }
+
         // The signature half of the containment rule, free-function side. `extern` is exempt for the same
         // reason a contract member is: it is BODILESS, so there is nothing in it to be unsafe — CALLING one
         // is the unsafe act, gated at the call. A bodiless `fn` is a function-pointer signature TYPE and
@@ -6193,6 +6280,10 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                                  *fn->name->value, fn->name->line);
 
         sig.declFile = _collectingUnitPath;   // the file rung's key, and the duplicate diagnostic's
+        // An extern's `declFile` is whichever file was collected LAST, so it cannot answer the rung on its
+        // own — the set can. Recorded before the table write, which overwrites the previous declaration.
+        if (isExtern(fn) && !_collectingUnitPath.empty())
+            _externDeclSites[sig.cName].insert(_collectingUnitPath);
         _funcs[sig.cName] = sig;
 
         // a generic template (`fn max<T>(…)`) is registered for monomorphization and is
@@ -6664,7 +6755,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         ci.symbolAliases = _nsCtx.symbolAliases;
         ci.declFile = unit && unit->name ? *unit->name : std::string();   // for a late whole-program check
         ci.isExternStruct = isExt;
-        if (isExt) _externNames.insert(ci.name);
+        if (isExt) {
+            _externNames.insert(ci.name);
+            if (!ci.declFile.empty()) _externDeclSites[ci.name].insert(ci.declFile);   // rung, FFI side
+        }
         ci.node = cd;
 
         // `@generate(Serialize, Deserialize)` — opt this type into serialization codegen (pay-for-what-you-
@@ -7362,6 +7456,43 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (sn == "Atomic"   && ci.scope == "std__concurrent") _atomicTmpl   = ci.name;
             }
         } else {
+            // AGREEMENT, extern-struct side — the same rule the FuncSig builder applies to an `extern fn`,
+            // and for the same reason: `type extern value div_t { … }` keeps its literal C name, so every
+            // file declaring it writes to ONE table entry and the last one collected wins. A FIELD READ is
+            // safe on its own (it emits the literal member name, so a reordering is harmless and the real
+            // C header supplies the layout) — what is not safe is a differing field TYPE, which decides how
+            // kama types every expression reading that member, in every file. Before this, the loser's
+            // correct code was rejected by a downstream numeric error naming the innocent file.
+            //
+            // A field this declaration does not mention is a disagreement too: `_classes` is replaced
+            // wholesale, so the other file's reads of the missing member stop resolving.
+            if (ci.isExternStruct) {
+                auto prev = _classes.find(ci.name);
+                if (prev != _classes.end() && prev->second.isExternStruct
+                    && !prev->second.declFile.empty() && prev->second.declFile != ci.declFile) {
+                    const ClassInfo& was = prev->second;
+                    std::string diff;
+                    if (was.fields.size() != ci.fields.size())
+                        diff = "it has " + std::to_string(ci.fields.size()) + " field(s) here and "
+                             + std::to_string(was.fields.size()) + " there";
+                    else for (size_t i = 0; i < ci.fields.size() && diff.empty(); ++i) {
+                        const std::string an = ci.fields[i].name,  bn = was.fields[i].name;
+                        const std::string at = ci.fields[i].type  ? *ci.fields[i].type->value  : std::string();
+                        const std::string bt = was.fields[i].type ? *was.fields[i].type->value : std::string();
+                        if (an != bn)      diff = "field " + std::to_string(i + 1) + " is named `" + an
+                                                + "` here and `" + bn + "` there";
+                        else if (at != bt) diff = "field `" + an + "` is `" + at + "` here and `" + bt
+                                                + "` there";
+                    }
+                    if (!diff.empty())
+                        unsupported(("this `type extern value " + *cd->name->value + "` disagrees with the "
+                                     "one in `" + was.declFile + "` — " + diff + ". `" + ci.name + "` is ONE "
+                                     "C struct, so every declaration of it in a program must match: kama "
+                                     "does not emit it (the real layout comes from the header), and the "
+                                     "last declaration collected decides how BOTH files type every read of "
+                                     "its members").c_str(), cd->line);
+                }
+            }
             _classes[ci.name] = ci;
         }
     }

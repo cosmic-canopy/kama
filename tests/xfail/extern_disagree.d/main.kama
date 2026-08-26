@@ -1,0 +1,8 @@
+// `dst` and `src` are swapped against lib.kama's declaration of the SAME C symbol. Named arguments are
+// reordered off whichever signature was collected last, so without this rule lib.kama's correct call
+// emitted `memcpy(src, dst, n)` — and built, linked and ran.
+import { copyInLib };
+extern "<string.h>";
+extern fn UnsafePtr memcpy(UnsafePtr src, UnsafePtr dst, usize n);
+unsafe fn void copyInMain(UnsafePtr d, UnsafePtr s) { memcpy(dst: d, src: s, n: cast<usize>(4)); }
+fn int32 main() { return 0; }

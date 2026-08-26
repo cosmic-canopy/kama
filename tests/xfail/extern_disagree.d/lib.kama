@@ -1,0 +1,4 @@
+export { copyInLib };
+extern "<string.h>";
+extern fn UnsafePtr memcpy(UnsafePtr dst, UnsafePtr src, usize n);   // the true C order
+unsafe fn void copyInLib(UnsafePtr d, UnsafePtr s) { memcpy(dst: d, src: s, n: cast<usize>(4)); }

@@ -236,6 +236,48 @@ does, and this map is where that location becomes an API.
 `kama seed` writes the root entry for you, so most projects start from a working example rather than a
 blank key.
 
+### Where the FFI goes — a `native` module, by convention
+
+`extern` is the one declaration that is not a module symbol. It keeps its literal C spelling, so it is
+never `export`ed and never `import`ed: **a file that names an extern declares it**, and every declaration
+of one C symbol in the program must agree ([SPEC](SPEC.md#ffi--calling-c-)). Repeating
+`extern fn UnsafePtr malloc(usize n);` in each file that calls `malloc` is correct and idiomatic — a
+declaration is not a definition, and it is exactly what including a C header does.
+
+When you would rather not repeat it, **wrap the extern in an ordinary `fn` and export that.** The wrapper
+is a normal module symbol, so `export`, `import` and `visibility` all work on it the usual way — and it is
+free: `--release` folds the program into a single translation unit, so a pass-through wrapper compiles to
+the same instructions as calling the extern directly.
+
+The convention is to put those together in **one `native` module per project**, at the source root:
+
+```
+src/
+  native/
+    libc.kama      ← the externs, plus the wrappers that publish them
+    curl.kama
+  net/client.kama  ← import { myproj::native::alloc };
+```
+```json
+"modules": { ".":      { "visibility": "public" },
+             "native": { "visibility": "internal" },
+             "net":    { "visibility": "public" } }
+```
+```kama
+// src/native/libc.kama
+export { alloc, release };
+extern "<stdlib.h>";
+extern fn UnsafePtr malloc(usize n);      // file-private: an extern never leaves its file
+extern fn void free(UnsafePtr p);
+unsafe fn UnsafePtr alloc(usize n) { return malloc(n: n); }
+unsafe fn void release(UnsafePtr p) { free(p: p); }
+```
+
+`native` is **not a keyword and not a reserved name** — the compiler knows nothing about it. It is an
+ordinary `modules` entry with ordinary `visibility`, and the value is entirely that "what does this program
+call out to?" has one directory as its answer. Nothing requires it: a single-file program with no manifest
+declares its externs inline, which is what most of this repo's own fixtures do.
+
 ## Composing projects — `kama_workspace.json`
 
 A **workspace** is the scope above a project: a monorepo root, declaring the projects it composes. It is

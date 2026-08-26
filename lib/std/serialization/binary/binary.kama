@@ -31,6 +31,11 @@ import {
 
 export { BinaryWriter, BinaryReader, encode, decode, decodeFrom };
 
+// The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
+// its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
+// (SPEC; the file rung). Every declaration of it in a program must agree, which is checked.
+extern fn string kama_string_from_raw(UnsafePtr<uint8> src, isize start, isize len);
+
 // IEEE-754 exact bit reinterpretation (a value cast would round) — defined in kama_runtime.h, always included.
 extern fn uint32 kama_f32_bits(float32 v);
 extern fn float32 kama_f32_from_bits(uint32 b);

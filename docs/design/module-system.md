@@ -1342,83 +1342,70 @@ warning-clean build and is what caught it. `docs/grammar.bnf` needed regeneratin
 tracker of `kama.y`, exactly as §7 warns.
 
 
-**5 — the `native` module: one place for the FFI surface. DESIGN NOT STARTED.**
+**5 — the `extern` seam joins the file rung. SHIPPED 2026-08-26** (`0.9.85`).
 
-An `extern` is the one thing in the language that sits **outside** the file rung, and it has to today: it
-keeps its **literal C spelling** and is therefore never scope-prefixed, so every file declaring
-`extern fn memset` collapses onto ONE emitter table entry whose `declFile` is whichever file was collected
-last. Judging that entry by file would reject the losers of a race. That exemption is now the only hole in
-an otherwise total rule — everything else a file names is governed by `export` and `import`.
+⚠️ **THE PHASE THIS DOC DESIGNED — a `native` FFI module with exportable, importable externs — WAS NOT
+BUILT, AND SHOULD NOT BE.** The design session killed it with one question: *what does this buy that a
+wrapper does not?* Nothing. `prelude/global.kama:519` already declares `extern fn malloc` file-privately
+and publishes `type value GlobalAllocator implements Allocator` — the wrapper is an ordinary kama
+declaration, so `export`/`import`/`visibility` reach it through machinery phase 3 already shipped. Making
+externs themselves importable would have been a SECOND way to do one thing, which
+[GOALS.md](../GOALS.md) argues against harder than anything else in it. All six "open questions" below
+dissolved rather than being answered: there is no reserved word, no implicit module, no second table key,
+and nothing in the compiler knows the string `native`.
 
-**Measured at `0.9.80` and RE-MEASURED at `0.9.84`, unchanged — so the design starts from the corpus and
-not from the idea, and the table below does not need re-deriving:**
+**What was under the feature were two real defects, and both were reproduced — built, linked and RUN —
+before either rule was written.**
+
+**1. The rung leak.** `declFileOf` reports `""` for an extern on purpose (one table entry, many declaring
+files), so `checkReach` walked straight out and a file could call `malloc` having neither declared nor
+imported it. Its widest reach was the prelude: every program got libc's allocator without writing a line.
+
+**2. Silent last-wins.** The duplicate rule is exempt for extern — re-declaring is the idiom SPEC
+prescribes — which meant the last declaration collected silently replaced every earlier one and all call
+sites lowered through the winner. kama emits no prototype for an extern, so C cannot catch it either. The
+measured consequence, and it is a memory-corruption class bug:
+
+```
+a.kama  extern fn UnsafePtr memcpy(UnsafePtr dst, UnsafePtr src, usize n);   // the true C order
+b.kama  extern fn UnsafePtr memcpy(UnsafePtr src, UnsafePtr dst, usize n);   // names swapped
+```
+
+Both files write `memcpy(dst: d, src: s, n: 4)`. Named arguments REORDER off the winning `FuncSig`, so
+a.kama's correct call emitted `memcpy(s, d, 4)` — source and destination reversed — and it built and ran.
+That is `tests/xfail/extern_disagree.d`.
+
+**The two rules that shipped**, replacing the whole feature:
 
 | | |
 |---|---|
-| files declaring at least one `extern fn` | **109** — but only **25** are in `lib/`; **84** are elsewhere |
-| distinct extern names | 211, of which **47 are declared in more than one file** |
-| the worst | `malloc` and `free`: **39 files each** |
-| `extern "<stdlib.h>";` seam declarations | **50** |
+| **the rung covers externs** | a file that names an extern must DECLARE it. `_externDeclSites` (C name → set of declaring files) answers what one `declFile` cannot, consulted in `checkReach` before the `declFile.empty()` return that WAS the hole. **No `<`-prefixed exemption** — a compiler-owned declaration must not satisfy a user file, or the leak survives with a shorter reach |
+| **agreement** | every declaration of one C symbol must match — return type, parameter names, parameter types; and for a `type extern value`, field names and types. Names are part of it *because calls are lowered by named argument* |
 
-⚠️ **THE 84 IS THE CONSTRAINT, AND IT IS EASY TO MISS.** Most declaring files are single-file fixtures and
-examples with no project, no `source` root and no folder to put a `native/` in. So **`native/` cannot be
-mandatory**: a loose one-file program must still be able to declare an `extern`. That makes this a way to
-*organize and share* a project's FFI surface, not a way to forbid the seam elsewhere — which is a smaller
-and much safer change than "externs move".
+⚠️ **AND "AN EXTERN IS NOT EXPORTABLE" NEEDED NO CODE — it was already structurally true**, which the
+fail-check found and this doc would otherwise have claimed credit for. An extern registers in `_funcs`
+under its LITERAL name while `export { malloc }` is validated against `qualify("malloc")`, so the export
+list has always refused it. `check-extern-rung`'s assertion 6 is a canary, and its header says so.
 
-⚠️ **THE REASON THIS WAS SEQUENCED AFTER PHASE 4 IS VOID — read this before planning around it.** The
-paragraph here used to say: *"the hard part is separating the kama-side name from the emitted C name…
-phase 4's keyword escape gives `switch` the C name `k_switch`, and phase 4 builds the interning that makes
-a third case cheap."* **Both halves are now false.** Phase 4 reserved C's keywords instead of escaping them
-(§2e.28), so there is no `k_switch` and no interning was built. Phase 5 is gated on **nothing** but being a
-design session.
+**Corpus cost: FIVE sites in FOUR files** — `lib/std/io/streams.kama`,
+`lib/std/serialization/{binary,json}/*.kama` and `examples/httpd/httpd.kama` inheriting the prelude's
+`kama_string_from_raw`, plus `tests/give_ptr_local.kama` inheriting its `malloc`/`free`. Each now declares
+what it names. The 74 fixture failures were all downstream of those four. Agreement found **one** real
+disagreement: `tests/opindex_heap.kama` declared `malloc` as returning `UnsafePtr<int32>`, which re-typed
+the prelude's own `malloc` program-wide; it casts at the use site now, as the stdlib already does.
 
-**And the "hard part" was never hard.** Checked at `0.9.84` rather than re-reasoned: the kama-name /
-C-name split already exists, as one line —
+⚠️ **The wrapper's cost was MEASURED, not assumed, because the whole design rests on it.** `--release`
+native folds every unit into ONE translation unit ([kama.driver.cpp:8924](../../src/kama.driver.cpp)) at
+`-O3`. Two programs — one calling `malloc` directly, one through a one-line `unsafe fn` wrapper — compile
+to **byte-identical assembly** for the calling function. ⚠️ The first attempt at this measurement was
+WRONG and looked like a refutation: clang deleted the whole loop (`work` folded to `mov w0, #100`) because
+an unused allocation is removable, and the surviving `bl _w__native__alloc` was unreachable code. A cost
+measurement needs a result the optimizer cannot discard.
 
-```cpp
-// kama.cemit.cpp, in the FuncSig builder
-sig.cName = (isExtern(fn) || isExposed(fn)) ? *fn->name->value : qualify(*fn->name->value);
-```
-
-`FuncSig::cName` **is** the C name and is already distinct from the kama name; `extern` and `expose` take
-the literal spelling, everything else is scope-prefixed. So the crux below — *many kama names, one C
-symbol* — is **already solved on the C side and needs no new machinery**. `std::native::malloc` and
-`otherproj::native::malloc` can both keep `cName == "malloc"` by leaving that line alone. **The whole of
-this phase is on the KAMA identity side**: module membership, `export`, `import`, `visibility`, and the
-header seam. Design accordingly, and do not budget for a rename table.
-
-⚠️ **The crux, and the thing a design has to answer before anything else: MANY KAMA NAMES, ONE C SYMBOL.**
-`malloc` is genuinely one symbol in libc, and two unrelated projects both needing it is normal, not a
-collision. Today's accidental collapse handles that correctly. Any model that gives each declaration a
-module identity must keep it — `std::native::malloc` and `otherproj::native::malloc` must still be the
-same `malloc` at link time, and must not be a duplicate-symbol error.
-
-**Open, for the design session — none of these is decided:**
-
-1. Is `native` the right reserved word? `extern` is already a keyword; `ffi`, `sys` and `c` are the other
-   candidates. Whatever it is, it joins `global`/`std`/`core` in the reserved set — with §2f.29's
-   asymmetry in mind, which reserves `global` in the manifest reader ALONE, and with §2e.28's C-keyword
-   set as the other precedent for reserving a spelling outright.
-
-   **Availability measured at `0.9.84`, so this question starts with the cheap half answered.** None of
-   the four is a kama keyword or a C keyword, and no `kama.json` declares a module by any of them. In the
-   corpus as an identifier: `ffi` **0**, `sys` **0**, `native` **26 — every one a comment** (printed, not
-   counted), and **`c` 1,148 real uses** (`char c`, loop cursors, …). **`c` is therefore not a candidate**
-   at any price; the other three are free.
-2. Is `native/` an ordinary entry in `modules`, or reserved and implicit? An ordinary entry costs nothing
-   and keeps one rule; implicit means one fewer thing to write and one more thing to know.
-3. Does an `extern` in `native/` need an `export` to leave its file, like everything else? Consistency
-   says yes. That is also what makes the surface auditable rather than merely co-located.
-4. What does an `extern` *outside* `native/` mean once the folder exists — still allowed (and still
-   exempt), or an error in a project that has one? The 84 files above argue strongly for "allowed".
-5. **The `extern "header.h";` seam.** It is per-FILE today, and it is what makes `spawn` work at all:
-   `externsHeader("kama_isolate.h")` is a capability gate, and importing a symbol of a module is what
-   loads the file carrying that seam (§3b retired the bare module import over exactly this). If externs
-   move into `native/`, does the header association move with them, and does the gate still key on a
-   loaded seam or on an imported symbol?
-6. Does a dependency's `native` module obey `visibility` like any other module — i.e. must a library
-   mark it `public` for a consumer to reach its FFI surface?
+**Not built, and named so nobody looks for it:** `lib/std/native/`. The convention is documented in
+`docs/packages.md` and demonstrated by `check-extern-rung`'s assertion 7; migrating the stdlib's repeated
+libc names behind wrappers is a corpus tidy with no rule riding on it, and the stdlib's externs sit beside
+the code that calls them, which is where they belong.
 
 **6 — corpus and docs.** ⚠️ **Partly done in 2e's close-out, because a doc that contradicts a shipped
 compiler is the exact failure this repo's house rule is about**: SPEC's *Modules* section is rewritten

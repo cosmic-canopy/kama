@@ -826,6 +826,21 @@ an extern function, so there are no redeclaration conflicts; and the runtime hid
 (block-scope declarations), so **no** C function (not even `malloc`) is available without its header — a
 missing include is a plain C error, never a silent guess.
 
+**An `extern` is DECLARED in every file that names it — never exported, never imported.** It keeps its
+literal C spelling and is therefore not a module symbol: there is no surface for an `export` to put it on
+and nothing for an `import` to bind. Repeating `extern fn UnsafePtr malloc(usize n);` in each file that
+calls `malloc` is the idiom, not a smell — it is what a C header does, and a declaration is not a
+definition. A file that would rather not repeat it wraps the extern in an ordinary `fn` and exports **that**;
+the wrapper costs nothing, because `--release` folds the program into one translation unit and a
+pass-through compiles to the same instructions as the direct call.
+
+**Every declaration of one C symbol in a program must agree** — same return type, same parameter names,
+same parameter types. They are one entry: kama emits no prototype, so nothing downstream could catch a
+mismatch, and calls are lowered by *named argument*, so two declarations differing only in parameter order
+would silently reorder one file's arguments (`memcpy(dst:, src:)` emitting `memcpy(src, dst, n)`). The same
+holds for a `type extern value` — matching field names and types. A disagreement is an error naming both
+files.
+
 `UnsafePtr` is `void*`; `UnsafePtr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
 **no dereference** in kama outside an `unsafe fn`). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
 `kama_` are reserved (runtime-provided).

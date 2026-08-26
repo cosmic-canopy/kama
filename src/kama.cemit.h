@@ -1257,6 +1257,12 @@ private:
     std::set<std::string> _privateScopes;
     std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
+    // THE FILE RUNG, FFI SIDE. Every other symbol is judged by the ONE file that declares it
+    // (`declFileOf`), but an extern keeps its literal C spelling and so collapses onto a single table
+    // entry no matter how many files declare it — 39 declare `malloc`. Repeating the declaration is the
+    // idiom SPEC prescribes, so the answer is a SET of declaring files per C name rather than one
+    // `declFile`, and `checkReach` asks whether the referencing file is in it.
+    std::map<std::string, std::set<std::string>> _externDeclSites;   // literal C name -> files declaring it
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
