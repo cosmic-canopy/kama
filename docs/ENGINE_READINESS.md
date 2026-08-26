@@ -70,9 +70,9 @@ worked example and `tools/check-ecs-zero-dispatch.sh` runs in the suite, asserti
 a concrete `T*` and that a contract-bounded generic lowers to a **direct** call:
 
 ```c
-_F4__Transform* t = …__next(&__it0);
-(*t).x = ((*t).x + ((*t).vx * dt));          // direct writes into the contiguous buffer
-sum = sum + _F4__Timer__tick(&(*it));        // contract BOUND -> direct call, no vtable
+_Fecs_pattern__Transform* t = …__next(&__it0);
+(*t).x = ((*t).x + ((*t).vx * dt));               // direct writes into the contiguous buffer
+sum = sum + _Fecs_pattern__Timer__tick(&(*it));   // contract BOUND -> direct call, no vtable
 ```
 
 **Contracts have two modes, and you choose per call site** — this is the point that decides engine

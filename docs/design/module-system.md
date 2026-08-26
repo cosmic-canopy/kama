@@ -1350,7 +1350,8 @@ keeps its **literal C spelling** and is therefore never scope-prefixed, so every
 last. Judging that entry by file would reject the losers of a race. That exemption is now the only hole in
 an otherwise total rule — everything else a file names is governed by `export` and `import`.
 
-**Measured at `0.9.80`, so the design starts from the corpus and not from the idea:**
+**Measured at `0.9.80` and RE-MEASURED at `0.9.84`, unchanged — so the design starts from the corpus and
+not from the idea, and the table below does not need re-deriving:**
 
 | | |
 |---|---|
@@ -1365,11 +1366,27 @@ mandatory**: a loose one-file program must still be able to declare an `extern`.
 *organize and share* a project's FFI surface, not a way to forbid the seam elsewhere — which is a smaller
 and much safer change than "externs move".
 
-**Why it belongs after phase 4.** The hard part is not the folder; it is separating the **kama-side name**
-from the **emitted C name**, which are identical for an extern today. The language already does that split
-twice — `expose` gives a kama function a bare unmangled C name at the host boundary, and phase 4's keyword
-escape gives `switch` the C name `k_switch`. Phase 4 builds the interning that makes a third case cheap,
-so doing this first would mean building it twice.
+⚠️ **THE REASON THIS WAS SEQUENCED AFTER PHASE 4 IS VOID — read this before planning around it.** The
+paragraph here used to say: *"the hard part is separating the kama-side name from the emitted C name…
+phase 4's keyword escape gives `switch` the C name `k_switch`, and phase 4 builds the interning that makes
+a third case cheap."* **Both halves are now false.** Phase 4 reserved C's keywords instead of escaping them
+(§2e.28), so there is no `k_switch` and no interning was built. Phase 5 is gated on **nothing** but being a
+design session.
+
+**And the "hard part" was never hard.** Checked at `0.9.84` rather than re-reasoned: the kama-name /
+C-name split already exists, as one line —
+
+```cpp
+// kama.cemit.cpp, in the FuncSig builder
+sig.cName = (isExtern(fn) || isExposed(fn)) ? *fn->name->value : qualify(*fn->name->value);
+```
+
+`FuncSig::cName` **is** the C name and is already distinct from the kama name; `extern` and `expose` take
+the literal spelling, everything else is scope-prefixed. So the crux below — *many kama names, one C
+symbol* — is **already solved on the C side and needs no new machinery**. `std::native::malloc` and
+`otherproj::native::malloc` can both keep `cName == "malloc"` by leaving that line alone. **The whole of
+this phase is on the KAMA identity side**: module membership, `export`, `import`, `visibility`, and the
+header seam. Design accordingly, and do not budget for a rename table.
 
 ⚠️ **The crux, and the thing a design has to answer before anything else: MANY KAMA NAMES, ONE C SYMBOL.**
 `malloc` is genuinely one symbol in libc, and two unrelated projects both needing it is normal, not a
@@ -1381,7 +1398,14 @@ same `malloc` at link time, and must not be a duplicate-symbol error.
 
 1. Is `native` the right reserved word? `extern` is already a keyword; `ffi`, `sys` and `c` are the other
    candidates. Whatever it is, it joins `global`/`std`/`core` in the reserved set — with §2f.29's
-   asymmetry in mind, which reserves `global` in the manifest reader ALONE.
+   asymmetry in mind, which reserves `global` in the manifest reader ALONE, and with §2e.28's C-keyword
+   set as the other precedent for reserving a spelling outright.
+
+   **Availability measured at `0.9.84`, so this question starts with the cheap half answered.** None of
+   the four is a kama keyword or a C keyword, and no `kama.json` declares a module by any of them. In the
+   corpus as an identifier: `ffi` **0**, `sys` **0**, `native` **26 — every one a comment** (printed, not
+   counted), and **`c` 1,148 real uses** (`char c`, loop cursors, …). **`c` is therefore not a candidate**
+   at any price; the other three are free.
 2. Is `native/` an ordinary entry in `modules`, or reserved and implicit? An ordinary entry costs nothing
    and keeps one rule; implicit means one fewer thing to write and one more thing to know.
 3. Does an `extern` in `native/` need an `export` to leave its file, like everything else? Consistency
@@ -1404,14 +1428,18 @@ seed` writes, and **`agents/AGENTS.md` — which SHIPS inside the binary — sto
 `namespace`**. FLOOR.md's `global::a::b::X`
 paragraph went with it (§2f.29), and its "no browsable namespace" wording with that.
 
-**What remains, re-counted at `0.9.80`:** `docs/packages.md`'s monorepo walkthrough and command table ·
+**What remains, re-counted at `0.9.84`:** `docs/packages.md`'s monorepo walkthrough and command table ·
 `docs/targets.md` for `link` · the ROADMAP row and ROADMAP_DETAIL's §10 *C symbol naming* pointer, both
-deleted when the campaign closes (phase 7) · and the **16 files that still spell `_F<n>`**, which cannot
-be touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`, `tools/check-slot.sh`,
-`tools/check-modules.sh`, `tools/embed_prelude.sh`, `run_tests.sh`, `docs/ENGINE_READINESS.md`,
-`docs/ROADMAP.md`, `docs/ROADMAP_DETAIL.md`, this file, and **7 fixtures** (`tests/ctor_generic.kama`,
-`poly_in_collection`, `enum_payload_unconstructed`, `constgen_value_widths`, `xfail/diag_no_mangled_name`,
-`xfail/generate_serialize_generic`, `xfail/dup_fn`).
+deleted when the campaign closes (phase 7).
+
+**The `_F<n>` sweep is DONE** — it went with phase 4, which is when the spelling changed. The count was 21
+files, not the 16 listed here (the estimate missed `tools/check-closure-pruning.sh` and the three `src/`
+files). Prose everywhere now uses one convention: a file-private scope is written **`_F<file>`**. Two
+guards were asserting the literal `_F4__` and had to be migrated rather than merely reworded —
+`check-ecs-zero-dispatch` (which now derives the prefix from the fixture name) and `check-modules` (whose
+`^_F[0-9]` test would have passed on every miss it was written to catch). The only surviving `_F[0-9]`
+spellings are in `src/kama.cemit.cpp` and `tools/check-ecs-zero-dispatch.sh`, where they deliberately quote
+the OLD form to say what changed.
 
 **7 — delete this file**, per its own header and the ROADMAP_DETAIL maintenance table.
 

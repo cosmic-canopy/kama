@@ -586,7 +586,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
   `@generate(Format)` draws — all of them now error rather than half-deriving; `Serialize`/`Deserialize`
   were the two kinds with no arm, so they were *accepted in silence* and died in the C compiler on a
-  missing `_F4__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
+  missing `_F<file>__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
   and on a payload-less **enum**, which
   has no struct to walk and today declares `implements` on its own `type enum` line instead. A `Copyable` derive is a
   **non-goal**: a value/view copies by kind, and a resource's `copy` ctor is an ownership decision no field
