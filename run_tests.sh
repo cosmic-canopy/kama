@@ -306,8 +306,30 @@ run_one() {
             KAMA_WT_CERT_HASH="$WT_CERT_HASH" \
             watchdog_run "$rdir/timed_out" node "$TESTS_DIR/support/browser_run.js" "$1.js" 2>"$2"
         else
+            # ⚠️ `--no-concurrent-recompilation` is not a performance knob — it is the fs_raii hang.
+            # node's shutdown deadlocks against V8's own background threads:
+            #
+            #     main thread   node::NodePlatform::DrainTasks            -> waits for background tasks
+            #     background    CollectionBarrier::AwaitCollectionBackground -> waits for main to run a GC
+            #
+            # A closed cycle with no kama frame and no wasm frame in it, entered after the fixture's work
+            # is done and its assertion has passed. The background thread is a concurrent TurboFan compile
+            # job — bisected: this flag took it to 0/200 while `--no-concurrent-marking` changed nothing.
+            # fs_raii is the most exposed fixture because its 5,000-iteration loop is exactly what triggers
+            # optimization, right before exit.
+            #
+            # `-sEXIT_RUNTIME=1` (kama.driver.cpp) was believed to close this path. It does NOT, and a live
+            # stack from a 2026-08-25 matrix run proves it: emscripten's node `quit_` sets `process.exitCode`
+            # and THROWS, so node still winds down gracefully and still reaches DrainTasks. EXIT_RUNTIME
+            # only narrows the window, which is why the hang went from ~11-13% to roughly 1 in 12,000 and
+            # then came back.
+            #
+            # Costs nothing here (8 vs 9 ms/run, measured): a 32 ms fixture never profits from concurrent
+            # recompilation anyway. Deliberately NOT pushed into what kama EMITS — forcing `process.exit()`
+            # into every user's wasm output truncates piped stdout (300,000 lines -> 309 against a slow
+            # reader, measured), which is a far worse bug than a rare teardown deadlock.
             NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
-            watchdog_run "$rdir/timed_out" node "$1.js" 2>"$2"
+            watchdog_run "$rdir/timed_out" node --no-concurrent-recompilation "$1.js" 2>"$2"
         fi
     else
         watchdog_run "$rdir/timed_out" "$1" 2>"$2"

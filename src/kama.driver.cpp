@@ -9077,7 +9077,7 @@ int main(int argc, char** argv)
         // shut down with a real exit code; and under -sPROXY_TO_PTHREAD `main` runs on a worker, where
         // this is what carries its return value out as the process exit code (else node sees 0 regardless).
         //
-        // ⚠️ The third reason, and the one that made this unconditional — `tests/fs_raii.kama` hung the
+        // The third reason, and the one that made this unconditional — `tests/fs_raii.kama` hung the
         // wasm leg four times (2026-08-13/15/17/23) and it was NOT a kama bug. Without EXIT_RUNTIME the
         // program returns from `main` and node proceeds through its full graceful teardown, which calls
         // node::NodePlatform::DrainTasks — and that DEADLOCKS against V8's own background threads:
@@ -9093,8 +9093,29 @@ int main(int argc, char** argv)
         // GC that the cycle turns on. fs_raii is the fixture most exposed because its 5,000-iteration
         // loop is exactly what triggers optimization, right before it exits.
         //
-        // With EXIT_RUNTIME the main thread calls process.exit() and never enters that teardown path at
-        // all: 0/300 against 40/300 for the same program built without it, same load, same session.
+        // With EXIT_RUNTIME the runtime is torn down as soon as `main` returns: 0/300 against 40/300 for
+        // the same program built without it, same load, same session.
+        //
+        // ⚠️ CORRECTED 2026-08-25. This paragraph used to say "the main thread calls process.exit() and
+        // never enters that teardown path at all", and that is FALSE — read emscripten's emitted node
+        // `quit_` rather than reasoning about what EXIT_RUNTIME ought to mean:
+        //
+        //     quit_ = (status, toThrow) => { process.exitCode = status; throw toThrow; };
+        //
+        // It sets the exit CODE and throws. It never calls `process.exit()`, so node unwinds and performs
+        // its full graceful teardown, DrainTasks included. EXIT_RUNTIME shortens the window in which a
+        // concurrent compile job is still in flight at that moment; it does not remove the path. Which is
+        // why the hang recurred at `0.9.73` and again during a `0.9.82` matrix run, where a live stack
+        // finally caught it parked in exactly the pair above — the SAME cycle, not a second one.
+        //
+        // The remaining exposure is real but not kama's to fix, and it is NOT wasm-specific: it is node's
+        // shutdown racing V8's, and any emscripten program can reach it. `run_tests.sh` runs node with
+        // `--no-concurrent-recompilation`, which is the lever the bisect actually identified.
+        //
+        // ⚠️ Do NOT try to close it here by forcing a hard exit (a `--pre-js` setting `Module.onExit` to
+        // call `process.exit`). Measured: `process.exit()` drops pending stdout, and against a slow reader
+        // 300,000 piped lines arrived as 309. That trades a rare teardown deadlock for silent output
+        // corruption in every user's pipeline, which is the worse bug by a wide margin.
         //
         // Checked for fallout on the wasm SURFACE, since that is what this could cost: the module's
         // exports are a strict SUPERSET afterwards (`__funcs_on_exit` and `strerror` arrive with the
