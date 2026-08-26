@@ -754,8 +754,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   checking that a back end supplies them or that their signatures agree. "A drop-in twin of the JSON back
   end" is true only by discipline. Wants a `Format` (or `Codec`) contract carrying the three, so a back end
   is a checked implementation. It is also the source of the **one** name collision in the flattened-stdlib
-  measurement (`encode`, json vs binary) — see [design/module-system.md](design/module-system.md) §2b, which
-  is where it surfaced. Take it with the std-lib cleanup pass, not before.
+  measurement (`encode`, json vs binary) — it surfaced while measuring a flattened stdlib for the module campaign. Take it with the std-lib cleanup pass, not before.
 - **`@deprecated` attribute (language, adjacent)** — a declaration marker (rides the `@`-attribute infra)
   emitting a use-site warning. Its own small task.
 - **Optional/default *function/constructor* parameters (language, adjacent)** — the "options struct with
@@ -1251,9 +1250,8 @@ rather than here, so there is one number to keep current. Forward work:
   rather than fixed where they showed. A kama identifier that is a C keyword is now REFUSED at the lexer —
   kama reserves the whole C11 + C23 set — rather than emitted raw for clang to choke on; and a generated
   `.c` is named by its module while a file-private symbol is named by its file, with units emitted in a
-  canonical order, so `--keep-c` is reproducible. The whole campaign, including the measurements and the
-  five unenforced SPEC claims it turned up, is in [design/module-system.md](design/module-system.md) —
-  the ROADMAP row points there.
+  canonical order, so `--keep-c` is reproducible. The campaign's design doc was deleted when it closed, per this
+  file's own maintenance rule; the record is the git log, SPEC's *Modules* section, and `docs/packages.md`.
 
 - **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
   costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,
@@ -1358,7 +1356,7 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s11"></a>
 ## §11 — LSP auto-import
 
-The follow-on the module campaign creates, and it cannot be written before it: row 1 made an `import`
+The follow-on the module campaign created, and it could not be written before it: that campaign made an `import`
 mandatory for **every** name a file uses that it does not declare — including a sibling in the same
 module, which needed nothing before. That is the right rule (it is what lets a reader name the source of
 every symbol without leaving the file), but it moves a cost onto whoever is typing, and every language

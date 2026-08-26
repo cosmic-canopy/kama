@@ -30,7 +30,7 @@ Nothing is overwritten without `--force`. If you already have an `AGENTS.md`, us
 ## `kama query` — the verified-facts interface
 
 ```
-kama query <file> <mode>... [--project] [--json]
+kama query [<kama.json>|<kama_workspace.json>] <file> <mode>... [--json]
 ```
 
 **Coordinates are 1-based LINE and 0-based COLUMN.** The two halves differ, so do not assume. On
@@ -40,8 +40,10 @@ line 6 of a file where `Point` begins at the 12th character, the column is `11`.
 combinable, answered in the order given, from a single analysis — see [Cost](#cost) for why that
 matters far more than it looks.
 
-`--project` widens the scope from the file's import closure to every `.kama` the nearest `kama.json`
-claims, and switches paths to absolute. Without it, only the named file is in scope.
+**The SCOPE is an operand, not a flag.** A leading `kama.json` widens the scope from the file's import
+closure to every `.kama` that project claims, and switches paths to absolute; `kama_workspace.json`
+widens it to every project in the workspace, which no flag could express. Without one, only the named
+file and its closure are in scope.
 
 ### `--search NAME` — find a symbol by name
 
@@ -49,7 +51,7 @@ The one mode that takes a **name** rather than a cursor, which usually makes it 
 is case-insensitive on a substring.
 
 ```console
-$ kama query src/app.kama --search Widget --project
+$ kama query kama.json src/app.kama --search Widget
 /abs/src/widget.kama:12:11 value Widget
 /abs/src/widget.kama:15:16 ctor Widget.of
 /abs/src/widget.kama:22:10 function defaultWidget
@@ -120,7 +122,7 @@ One envelope for every mode, so a caller can dispatch on `mode` and read `result
 per-mode parser. `schema` is a version you can pin.
 
 ```console
-$ kama query src/app.kama --search Widget --project --json
+$ kama query kama.json src/app.kama --search Widget --json
 {"schema":1,"mode":"search","file":"/abs/src/app.kama","query":"Widget","results":[
   {"line":12,"column":11,"uri":"/abs/src/widget.kama","kind":"value","name":"Widget"}]}
 ```

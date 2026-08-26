@@ -648,7 +648,7 @@ done
 # Some rejections need more than one file to be reachable at all: an import collision needs two modules
 # to collide, and "does not export" needs a module that exists and declines to export the name. Those
 # used to be spelled as one loose file importing sibling DIRECTORIES, which worked only because a loose
-# build searched the filesystem — the behavior design/module-system.md §2i removes. Passing every source
+# build searched the filesystem — the behavior SPEC.md §Modules removes. Passing every source
 # is the rule now, so the fixture has to be able to say what its sources are.
 #
 # Fanned out across NCPU like the single-file leg, and for the same reason: each fixture is an independent

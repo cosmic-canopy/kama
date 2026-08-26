@@ -12,7 +12,7 @@ imports and its aliases, so it still reaches the floor where a local declaration
 Precedent: C#'s `global::`. `global` is therefore a **reserved project name**, and that is the whole of its
 specialness — it is not a third kind of scope, just a name nobody else may claim. It names ONLY the floor: a
 longer `global::a::b::X` used to name a module absolutely and was deleted with the `namespace` declaration
-(design/module-system.md §2f.29), because `global` being a project name would make it mean module `a/b` OF a
+(SPEC.md §Modules), because `global` being a project name would make it mean module `a/b` OF a
 project called `global`. The job it did — reach a name past an `import … as` alias shadowing it — is done at
 the source now: such an alias is refused where it is written. Typing `global::` in an editor lists this
 whole surface — which is why the qualifier waited for a language server: without completion it would have

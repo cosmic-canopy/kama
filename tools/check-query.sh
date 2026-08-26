@@ -693,7 +693,7 @@ expect --complete 149:28 -- "ctor	of	fn Stat of(n: int32)" # ... a named ctor (t
 expect --complete 149:28 -- "constant	LIMIT	int32"          # ... and a type-associated `comptime` constant
 # A MODULE head lists what that module declares, one level deep. The head is an IMPORTED module, and that
 # is not a weakening of the assertion — it is the only spelling that exists. A file's identity is its
-# FOLDER (design/module-system.md §2b), so a loose single-file fixture like this one has no module of its
+# FOLDER (SPEC.md §Modules), so a loose single-file fixture like this one has no module of its
 # own to qualify with; `completeprobe::blend` used to work here only because the file DECLARED a namespace.
 expect --complete 177:23 -- "type	DynamicArray"
 expect --complete 177:23 -- "type	View"
@@ -886,7 +886,7 @@ reject --refs 14:10 -- "spellings.kama:59:21"    # `Green` belongs to the enum M
 # ---------------------------------------------------------------------------------------------------
 # M6 B3f — a MODULE path is a navigation target, never a rename target.
 #
-# In kama a module IS a folder (design/module-system.md §2b), so renaming one is a directory move rather
+# In kama a module IS a folder (SPEC.md §Modules), so renaming one is a directory move rather
 # than a symbol rename. `module:` keys therefore name NO def-site — which is what makes rename and
 # find-references skip them with no extra flag — while go-to-definition opens the module, the same
 # gesture clangd gives `#include` and gopls gives an import path.

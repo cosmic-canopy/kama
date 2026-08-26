@@ -16,7 +16,7 @@ plausible. It costs one process and no editor.
 ## The one-line orientation
 
 ```sh
-kama query <any-file-in-the-package> --search "" --project
+kama query kama.json <any-file-in-the-package> --search ""
 ```
 
 An empty needle lists every symbol the package declares, with kind, name and location. This is the
@@ -31,7 +31,7 @@ Never reconstruct one from call sites — kama has mandatory named parameters, s
 name is a compile error, and call sites do not show defaults or return types.
 
 ```sh
-kama query src/app.kama --search encodeTo --project   # 1. locate it -> path:LINE:COL
+kama query kama.json src/app.kama --search encodeTo   # 1. locate it -> path:LINE:COL
 kama query src/util.kama --type 42:9                  # 2. what it is
 kama query src/util.kama --sighelp 60:24              # 3. the signature, at a call site
 ```
@@ -54,11 +54,12 @@ resolve the receiver and the list below is not what you think it is.
 ### "Where is this used, and is it safe to change?"
 
 ```sh
-kama query src/util.kama --refs 42:9 --project
+kama query kama.json src/util.kama --refs 42:9
 ```
 
-`--project` is the difference between "uses in this file" and "uses in the package". Without it you
-will confidently miss the callers that matter.
+The leading `kama.json` is the difference between "uses in this file" and "uses in the package".
+Without it you will confidently miss the callers that matter. The scope is an OPERAND, not a flag:
+`kama_workspace.json` in the same position widens it again, to every project in the workspace.
 
 ### "Is my change correct?"
 
@@ -87,7 +88,7 @@ Add `--json` to any mode for one envelope — `{"schema":1,"mode":…,"file":…
 `results` always an array and `[]` for a miss, so you need no per-mode parser.
 
 ```sh
-kama query src/app.kama --search Widget --project --json | jq -r '.results[] | "\(.uri):\(.line) \(.kind) \(.name)"'
+kama query kama.json src/app.kama --search Widget --json | jq -r '.results[] | "\(.uri):\(.line) \(.kind) \(.name)"'
 ```
 
 ## Two things that will bite you

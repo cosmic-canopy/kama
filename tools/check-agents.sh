@@ -44,6 +44,13 @@ done
 FIX="$ROOT/tests/query/shapes.kama"
 DOC="$ROOT/docs/agents.md"
 [ -f "$DOC" ] || { echo "check-agents: missing $DOC" >&2; exit 1; }
+# ⚠️ THE LIST IS READ FROM THE DOC AND EVERY ENTRY MUST RUN — no `continue` arm for a spelling that is
+# merely hard to exercise. This loop used to skip `--project` as "a modifier, exercised below", and it
+# was not exercised below; the flag had been DELETED in the module campaign's phase 1c (replaced by a
+# manifest OPERAND — `kama query kama.json <file>`), so for four releases this guard passed while
+# agents/AGENTS.md and agents/skill/SKILL.md — both of which SHIP INSIDE THE BINARY — taught agents to
+# run it. A skipped entry is not coverage; the whole point of reading the list from the doc is that the
+# doc cannot document something the compiler does not have.
 modes=$(grep -oE '`?--(symbols|search|def|type|refs|complete|sighelp|coverage|diagnostics|project|json)' "$DOC" \
         | tr -d '`' | sort -u)
 for m in $modes; do
@@ -52,7 +59,10 @@ for m in $modes; do
         --def|--type|--refs) args="$m 6:11" ;;
         --complete) args="--complete 24:5" ;;
         --sighelp)  args="--sighelp 18:26" ;;
-        --project|--json) continue ;;    # modifiers, exercised below
+        --json)     args="--symbols --json" ;;   # a modifier still has to RUN; the schema is checked below
+        --project)  bad "docs/agents.md still spells \`--project\`, which was deleted in phase 1c —"
+                    bad "  the scope is an OPERAND now: \`kama query kama.json <file> <mode>\`"
+                    continue ;;
         *)          args="$m" ;;
     esac
     # shellcheck disable=SC2086

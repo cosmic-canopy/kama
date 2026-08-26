@@ -18,7 +18,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 # lib/lib.kama — a separate module (its own TU). `boom` panics from HERE, not from main's TU. It sits in
-# its OWN FOLDER because a module is a folder (design/module-system.md §2b) and a loose build names one by
+# its OWN FOLDER because a module is a folder (SPEC.md §Modules) and a loose build names one by
 # its directory: two files sharing one directory are both in the loose ROOT, which §2e.27 makes unimportable.
 mkdir -p "$tmp/lib"
 cat > "$tmp/lib/lib.kama" <<'KAMA'

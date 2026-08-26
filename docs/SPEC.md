@@ -1514,10 +1514,12 @@ Gate on the **derived** flag rather than a target name: `@compileFor(OS_NONE)` h
 *and* for a real board triple like `xtensa-none-elf`, whereas a built-in name describes only how the
 build was spelled — which is why built-in target names are not flags at all.
 
-**`kama.json`** (a *user-project* file, auto-discovered next to the source or via `--config PATH`)
+**`kama.json`** (a *user-project* file, named as the build's **operand** — `kama build kama.json`)
 declares the valid user-flag universe and any extra groups, and turns on **strict validation** — an
-undeclared `@compileFor`/`--define` name is then rejected (typo protection). Without a manifest, builds
-are permissive (an undeclared flag is simply inactive), so bare single-file builds need no config.
+undeclared `@compileFor`/`--define` name is then rejected (typo protection). A build that names `.kama`
+files instead is a *loose* build: it reads no manifest at all, so it is permissive (an undeclared flag is
+simply inactive) and bare single-file builds need no config. There is no auto-discovery and no
+`--config` flag — the operand says which of the two you meant, which is the rule everywhere in the CLI.
 
 ```json
 { "name": "myapp", "version": "0.1.0",
@@ -3147,7 +3149,7 @@ int32 idx = match (find(xs: list, target: 7)) {
 A **module is a FOLDER**, and a file's identity is **where it sits** — never anything it declares. A
 project's `kama.json` lists its modules in a nested `modules` map mirroring the source tree, and a module's
 name is the chain of keys read down to it, rooted at the project's `name`
-([design/module-system.md](design/module-system.md) §2b). `import` names a module by that full name; the
+(the *Modules* section above). `import` names a module by that full name; the
 compiler resolves it through the manifest, compiles the module's files, and scopes their public symbols.
 There is one keyword for depending on another module — `import` (it replaced `using`).
 
@@ -3215,8 +3217,7 @@ is exactly one candidate: `import { DynamicArray };`, then the bare name at ever
 share a name space but not a scope, so `export` offers a name and `import` accepts it — which is what lets a
 reader name the source of every symbol in a file without leaving it. This is the rung **Go** does not have
 (any file of a package reaches any unexported identifier in it) and the reason **Java** needed sealed JARs
-and then JPMS. What `visibility` in `kama.json` governs is reach **beyond the module** ([the module system
-design](design/module-system.md) §2c) — it says nothing about files.
+and then JPMS. What `visibility` in `kama.json` governs is reach **beyond the module** (the *Modules* rules above) — it says nothing about files.
 
 **An exported symbol may not name an unexported type of its own file.** A project's API is derived, never
 written down — the `public` modules of `kama.json` crossed with its files' `export` blocks — and that

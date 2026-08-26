@@ -76,7 +76,7 @@ fi
 # 4. CROSS-TU — argv is process-global (external linkage), so a prelude floor `args()` call from a NON-entry
 #    TU (a library module) must see the same vector as `main`. A per-TU `static` argv would read empty in the
 #    library TU. Two-file build; the program returns 0 iff the library-side count matches main's (== 3 here).
-#    The library file sits in its OWN FOLDER: a module is a folder (design/module-system.md §2b), and a
+#    The library file sits in its OWN FOLDER: a module is a folder (SPEC.md §Modules), and a
 #    loose build names one by its directory below the operand set's common ancestor. Two files sharing one
 #    directory would both land in the loose ROOT, where §2e.27 makes their symbols unimportable.
 libdir="$tmp/xtu"

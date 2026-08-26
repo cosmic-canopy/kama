@@ -515,7 +515,7 @@ accept stdname "...while \`std\` is NOT refused here — the stdlib's own manife
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: the module map states a name and an audience for every node"
 
-# design/module-system.md §2b/§2c. The map is NESTED because composition has to be written down rather
+# SPEC.md §Modules. The map is NESTED because composition has to be written down rather
 # than inferred: with flat `a/b` keys, adding or deleting an unrelated `"serialization"` entry would
 # silently rename `serialization/json`'s PUBLIC API. So a module's name is the chain of keys read down to
 # it, and nothing a sibling does can change it.

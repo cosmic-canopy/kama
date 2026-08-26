@@ -1,7 +1,7 @@
 #!/bin/sh
 # check-modules.sh — a file's module is WHERE IT SITS, and that is what reaches the C symbol.
 #
-# design/module-system.md §2b/§2i. A file's identity used to be the `namespace` it declared; phase 2
+# SPEC.md §Modules. A file's identity used to be the `namespace` it declared; phase 2
 # replaced it with the module its path puts it in, read against its project's `modules` map — or, with
 # no manifest in play, against the operand set's own root. This guard holds both halves down.
 #

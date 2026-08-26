@@ -12,14 +12,18 @@ Every tool that reads `AGENTS.md` picks this up automatically. For the ones that
 Prefer it to searching the tree — it is one process, one file, no editor and no language server.
 
 ```sh
-kama query <file> --search Widget --project   # find a symbol BY NAME, across the package
+kama query <kama.json> <file> --search Widget # find a symbol BY NAME, across the package
 kama query <file> --symbols                   # outline of one file
 kama query <file> --complete L:C              # candidates + FULL signatures with parameter names
 kama query <file> --type L:C                  # what is this, exactly
 kama query <file> --def L:C                   # where is it declared
-kama query <file> --refs L:C --project        # every use, across the package
+kama query <kama.json> <file> --refs L:C      # every use, across the package
 kama query <file> --diagnostics               # analysis diagnostics, structured
 ```
+
+**The SCOPE is an operand, not a flag.** With just a file, the query sees that file's import closure;
+put `kama.json` (or `kama_workspace.json`) *before* it and the same question is asked across the whole
+project — which is the only way to reach a symbol you cannot already point at.
 
 Add `--json` to any of them for one stable envelope: `{"schema":1,"mode":…,"file":…,"results":[…]}`.
 Coordinates are **1-based line, 0-based column** — do not assume both are 1-based.

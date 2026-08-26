@@ -1,5 +1,5 @@
 #!/bin/sh
-# check-module-visibility.sh — the CROSS-PROJECT rungs of `visibility` (design/module-system.md §2c).
+# check-module-visibility.sh — the CROSS-PROJECT rungs of `visibility` (SPEC.md §Modules).
 #
 # The within-a-project rungs are fixtures, because a `.d` fixture can carry a `kama.json` and the xfail leg
 # now builds by it: `tests/xfail/mod_vis_not_listed.d` (a list that does not name the importer),
