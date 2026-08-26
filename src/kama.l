@@ -59,9 +59,27 @@
  * The provider is marked unprunable instead; see harvestUnitFacts in kama.ast.h. */
 #define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng)
 
+/* kama reserves every C keyword (design/module-system.md §2e.28), so a spelling that would lex as an
+ * identifier but IS one is rejected here, at the single point where a spelling becomes a name.
+ *
+ * ⚠️ It rides on the identifier RULES, and there are THREE of them — see the note above; the easy miss is
+ * the STRING_TAG rule, which returns its token directly instead of going through `getToken`. A reserved
+ * word is reserved everywhere a name can appear, so all three carry this.
+ *
+ * The rules fire on every OCCURRENCE, not just the declaration, so `reservedReported` keeps it to one
+ * error per spelling per file. Lexing continues (handleError accumulates) so a file naming two reserved
+ * words reports both rather than one at a time. */
+#define RESERVED_CHECK(src)                                                       \
+    do {                                                                          \
+        if (cIsReservedWord(src) && yyextra->reservedReported.insert(src).second)  \
+            error(cReservedWhy(src).c_str(), yyscanner);                          \
+    } while (0)
+
 #define YY_EXTRA_TYPE struct LexerInstanceData *
 
 static int getToken(const char *);
+bool cIsReservedWord(const char *);
+static std::string cReservedWhy(const std::string&);
 char getSimpleEscape(const char* input, int index);
 std::string hexToUTF8(int cp);
 unsigned decodeUTF8Codepoint(const char* bytes, int len);
@@ -267,7 +285,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the hole and resumes string lexing (the next ISTR_CHUNK follows). Whitespace inside the hole is ignored. */
 <IN_INTERP_HOLE>[ \t]+                          { yyextra->next_column_number += yyleng; }
 <IN_INTERP_HOLE>{new_line}                      { ++(yyextra->next_line_number); yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE; }
-<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) RECORD_IDENT(yytext, leng); return t; }
+<IN_INTERP_HOLE>{identifier}                    { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
 <IN_INTERP_HOLE>{dec_literal_no_suffix}         { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); return DEC_LITERAL_NO_SUFFIX; }
 <IN_INTERP_HOLE>"."                             { RETURN_TOKEN(DOT, 1); }
 <IN_INTERP_HOLE>"["                             { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -307,8 +325,8 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the quote, so the {regular_string_start} rule fires next and lexes the string/interpolation unchanged;
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
-{identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RECORD_IDENT(yytext, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) RECORD_IDENT(yytext, leng); return t; }
+{identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); return STRING_TAG; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = getToken(yytext); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -551,6 +569,75 @@ static int getToken(const char *lexeme)
   if (token == -1)
     token = IDENTIFIER;
   return token;
+}
+
+/* ---- C's reserved words, which kama reserves too (design/module-system.md §2e.28) ------------------
+ *
+ * kama lowers to C, and a kama name that is a C keyword emits C that does not compile: `int32 switch;`
+ * becomes `int32_t switch;`. Measured at `0.9.80`, the exposure was not one position but seven — struct
+ * field, variant payload field, variant case union member, vtable slot, parameter (in the prototype, the
+ * definition AND the thunk cast), local, and an `expose`d function's bare C name. Type names, function
+ * names and enum case constants are scope-prefixed and were never at risk.
+ *
+ * The alternative was to RENAME on collision (`switch` -> `k_switch`) and keep the spelling legal. That is
+ * what an earlier draft of the design specified, and reserving was chosen over it deliberately: reserving
+ * now and relaxing later is source-compatible, the reverse is not, and pre-1.0 is the only moment. It also
+ * dissolves three sub-problems a rename carries — a `k_switch` clash with a user's own `k_switch`, a
+ * separate rule for `expose`/`extern` names (which are a declared C ABI and could never be renamed), and
+ * the risk of the C name leaking into a diagnostic, a hover or a `kama query` answer.
+ *
+ * Corpus cost, measured before deciding by PRINTING every match rather than counting it: zero. Every hit
+ * across lib/ tests/ prelude/ examples/ bench/ is a comment.
+ *
+ * The table is the FULL C11 + C23 set, not just the 38 spellings kama leaves free. The other 21 are
+ * already kama keywords and so never reach the identifier rule — but kama's own reserved list may shrink
+ * later, and a wider table costs nothing since an entry only ever fires on a real collision.
+ *
+ * This list must remain sorted (bin_search), and `tools/check-c-keywords.sh` holds it to both standards.
+ */
+static const char* c_reserved[] = {
+    "_Alignas", "_Alignof", "_Atomic", "_BitInt", "_Bool", "_Complex", "_Decimal128", "_Decimal32",
+    "_Decimal64", "_Generic", "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
+    "alignas", "alignof", "auto", "bool", "break", "case", "char", "const", "constexpr", "continue",
+    "default", "do", "double", "else", "enum", "extern", "false", "float", "for", "goto", "if",
+    "inline", "int", "long", "nullptr", "register", "restrict", "return", "short", "signed", "sizeof",
+    "static", "static_assert", "struct", "switch", "thread_local", "true", "typedef", "typeof",
+    "typeof_unqual", "union", "unsigned", "void", "volatile", "while",
+};
+
+/* Is this spelling reserved by C, and therefore by kama? Declared in kama.forward.h. Lives here beside
+   `kamaIsKeyword` for the same single-source-of-truth reason: one table per language, in the lexer. */
+bool cIsReservedWord(const char *word)
+{
+  int lo = 0, hi = (int)(sizeof(c_reserved) / sizeof(c_reserved[0]));
+  while (lo < hi) {
+    int mid = (lo + hi) / 2;
+    int cmp = strcmp(word, c_reserved[mid]);
+    if (cmp == 0) return true;
+    if (cmp < 0) hi = mid; else lo = mid + 1;
+  }
+  return false;
+}
+
+
+/* The diagnostic for a reserved spelling, reported once per file per spelling (see RESERVED_CHECK).
+ *
+ * Four of these already had a BETTER message than "reserved", and losing it would be a regression the
+ * corpus would not have caught: `int`, `double` and `float` are retired TYPE spellings that a C or Java
+ * reader will try, and telling them the width to write is the whole point. Those arms used to live in
+ * `checkTypeResolves`, which the lexer now precedes — so the guidance moves here rather than dying.
+ * (`uint` is NOT a C keyword and so is not reserved; it stays on the type-position path, which is the one
+ * asymmetry here and is asserted in tools/check-c-keywords.sh so nobody "fixes" it by accident.) */
+static std::string cReservedWhy(const std::string& w)
+{
+  if (w == "int")
+    return "`int` is a reserved word — write `int32` for a fixed 32-bit integer, or `isize` for a "
+           "platform-width size (the type of a length or index)";
+  if (w == "double" || w == "float")
+    return "`" + w + "` is a reserved word — every kama float states its width: write `float64`"
+         + (w == "float" ? " or `float32`" : " (`double` was an alias for it)");
+  return "`" + w + "` is a reserved word — kama reserves every C keyword, because it lowers to C and a "
+         "name that collides with one emits C that does not compile. Pick another name";
 }
 
 // Does this spelling lex as a reserved word rather than an identifier? The LSP's rename validation asks

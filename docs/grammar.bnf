@@ -61,15 +61,6 @@ import_path
   : IDENTIFIER
   | import_path COLONCOLON IDENTIFIER
   ;
-import_symbols
-  : import_symbol
-  | import_symbols COMMA import_symbol
-  ;
-import_symbol
-  : IDENTIFIER
-  | IDENTIFIER AS IDENTIFIER
-  ;
-
 code_opt
   : /* Nothing */
   | code_declarations

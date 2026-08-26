@@ -3,6 +3,10 @@
 // the `size` in `isize`/`usize`, which is what says WHY they are distinct and why a crossing needs a cast.
 // The diagnostic must name the replacement, not just report the absence — every pre-existing kama program
 // and every C/Java-trained reader lands here.
+//
+// It is a LEXICAL rejection since §2e.28: `int` is a C keyword, and kama reserves the whole C set because
+// a kama name that is one emits C that does not compile. The width guidance moved with it — the point of
+// this fixture is that the message still teaches, not merely that the spelling is refused.
 fn int32 main() {
     int x = 5;
     return x;

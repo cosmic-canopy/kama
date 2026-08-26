@@ -1,1 +1,1 @@
-`int` is not a kama type in a local declaration — write `int32`
+`int` is a reserved word — write `int32` for a fixed 32-bit integer

@@ -1,5 +1,9 @@
 // `volatile` is not a Kama keyword — the MMIO/ISR qualifier is spelled `hardware` (emits C `volatile`).
-// `static volatile int32 reg` is a plain syntax error (the accepted forms are in
-// tests/hardware_static_{flag,ptr}.kama). This guards that `volatile` is never silently accepted.
+// The accepted forms are in tests/hardware_static_{flag,ptr}.kama. This guards that `volatile` is never
+// silently accepted.
+//
+// It used to be refused as a plain syntax error. Since §2e.28 it is refused one step earlier, as a
+// RESERVED WORD: `volatile` is a C keyword, and kama reserves the whole C set because a kama name that is
+// one emits C that does not compile. Either way it is rejected, which is all this fixture claims.
 static volatile int32 reg = 0;
 fn int32 main() { return 0; }

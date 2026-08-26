@@ -3586,8 +3586,36 @@ One keyword has **reserved surface not yet implemented** — using it is a **har
   module exports, the scripting-host interface) remains reserved, distinct from in-language `public`/`private`
   (member access) and `export` (the module public-surface manifest — `export { … };`, which ships today).
 
-`volatile` is **not** a keyword: C's `volatile` is spelled `hardware` (emits C `volatile` for MMIO registers
-and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP_DETAIL §5).
+`volatile` is **not** a kama keyword: C's `volatile` is spelled `hardware` (emits C `volatile` for MMIO
+registers and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP_DETAIL §5). It is,
+however, **reserved** — see below.
+
+## C's reserved words are reserved in kama
+
+**Every C11 and C23 keyword is a reserved word in kama and cannot be used as a name** — not for a type, a
+function, a field, a parameter, a local, an enum case, a variant payload, a generic parameter, a `foreach`
+or `match` binding, or an `expose`d/`extern` symbol. Writing one is a **lexical error** that names the
+spelling.
+
+kama compiles to C, so a name that is a C keyword emits C that does not compile: `int32 switch;` becomes
+`int32_t switch;`. Renaming such a name on the way out (`switch` → `k_switch`) was considered and rejected —
+reserving a spelling now and relaxing it later is source-compatible, while the reverse is not.
+
+Twenty-one of the 59 are already kama keywords, so they were never spellable. The **38** that would
+otherwise lex as identifiers are:
+
+```
+alignas auto constexpr double float goto inline int long nullptr register restrict short signed
+static_assert struct switch thread_local typedef typeof typeof_unqual union unsigned volatile
+_Alignas _Alignof _Atomic _BitInt _Bool _Complex _Decimal128 _Decimal32 _Decimal64 _Generic
+_Imaginary _Noreturn _Static_assert _Thread_local
+```
+
+Four of these are spellings a C, Go or Java reader reaches for, and their diagnostics name the replacement
+rather than merely reporting that the word is reserved: `int` → `int32`/`isize`, `double` and `float` →
+`float64`/`float32`. **`uint` is not a C keyword and so is not reserved** — it is rejected in type position
+only, with the same guidance (`uint32`/`usize`). Both halves are guarded by `tools/check-c-keywords.sh`,
+which also holds the reserved table equal to the two C standards' sets.
 
 ## Known limitations (tracked → [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1)
 

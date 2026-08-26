@@ -1246,11 +1246,14 @@ rather than here, so there is one number to keep current. Forward work:
   the cascade above lands on `lib/std/collections/map.kama:190`, which is where it belongs. Guarded by
   `tools/check-diag-file.sh` cases 4 and 5.)*
 
-- **C symbol naming — folded into the module-system campaign.** The two defects (a kama identifier that
-  is a C keyword emits raw and breaks clang; a file-private symbol's C name is POSITIONAL, so `--keep-c`
-  is not reproducible) are downstream of a model with two ways to name a thing. The whole campaign,
-  including the measurements and the five unenforced SPEC claims it turned up, is in
-  [design/module-system.md](design/module-system.md) — the ROADMAP row points there.
+- **C symbol naming — folded into the module-system campaign, and SHIPPED in it** (`0.9.81`–`0.9.84`).
+  Both defects were downstream of a model with two ways to name a thing, which is why they were folded in
+  rather than fixed where they showed. A kama identifier that is a C keyword is now REFUSED at the lexer —
+  kama reserves the whole C11 + C23 set — rather than emitted raw for clang to choke on; and a generated
+  `.c` is named by its module while a file-private symbol is named by its file, with units emitted in a
+  canonical order, so `--keep-c` is reproducible. The whole campaign, including the measurements and the
+  five unenforced SPEC claims it turned up, is in [design/module-system.md](design/module-system.md) —
+  the ROADMAP row points there.
 
 - **Devirtualize a contract-value call in DEBUG builds.** `Comparable<int32> c = l; c.compareTo(other: r);`
   costs nothing at `-O2` — clang folds the `static const` vtable pointer, devirtualizes, inlines the thunk,

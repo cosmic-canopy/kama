@@ -1595,27 +1595,20 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
     if (isClass(ty) || isInterface(ty) || isEnum(ty) || isSigType(ty)) return;
     if (_genericTypes.count(ty) || _genericContracts.count(ty) || _externNames.count(ty)) return;
     if (isTypeParamName(ty)) return;
-    // RETIRED SPELLINGS. `int` was a bare alias for `int32` and carried no information of its own, so it
-    // was removed rather than repurposed — kama's platform-width types keep the `size` in their names
-    // (`isize`/`usize`), which is what says WHY they are a distinct type and why a crossing needs a cast.
-    // `uint` never existed, but a C/Go reader will try it, and "unknown type" would send them looking for
-    // a missing import instead of a different spelling. Both want the replacement named, not just the
-    // absence reported.
-    if (ty == "int" || ty == "uint") {
-        const bool sign = (ty == "int");
-        unsupported((std::string("`") + ty + "` is not a kama type in " + what + " — write `"
-                     + (sign ? "int32" : "uint32") + "` for a fixed 32-bit integer, or `"
-                     + (sign ? "isize" : "usize") + "` for a platform-width "
-                     + (sign ? "size (the type of a length or index)"
-                             : "size crossing into C (`sizeof`, an allocation, an `extern fn`)")).c_str(), line);
-        return;
-    }
-    // The float half of the same rule. `double` was an alias for `float64` (`float` never existed), and a
-    // C reader reads a WIDTH into both names that kama does not promise. Every kama float states its width.
-    if (ty == "double" || ty == "float") {
-        unsupported((std::string("`") + ty + "` is not a kama type in " + what
-                     + " — every float states its width: write `float64`"
-                     + (ty == "float" ? " or `float32`" : " (`double` was an alias for it)")).c_str(), line);
+    // RETIRED SPELLING. `uint` never existed in kama, but a C/Go reader will try it, and "unknown type"
+    // would send them looking for a missing import instead of a different spelling — so the replacement is
+    // named rather than the absence reported.
+    //
+    // ⚠️ `uint` IS THE ONLY ONE LEFT HERE, and the asymmetry is deliberate. `int`, `double` and `float`
+    // used to share this arm; they are C KEYWORDS, so since §2e.28 the lexer refuses them one step earlier
+    // — kama reserves the whole C set, because a kama name that is a C keyword emits C that does not
+    // compile. Their width guidance moved into that message rather than dying with the arm (`cReservedWhy`,
+    // kama.l). `uint` is not a C keyword, is not reserved, and so still arrives here.
+    // tools/check-c-keywords.sh asserts both halves so this cannot be tidied into "consistency" by mistake.
+    if (ty == "uint") {
+        unsupported((std::string("`uint` is not a kama type in ") + what + " — write `uint32` for a fixed "
+                     "32-bit integer, or `usize` for a platform-width size crossing into C (`sizeof`, an "
+                     "allocation, an `extern fn`)").c_str(), line);
         return;
     }
     std::string ns = namespaceOfType(name);

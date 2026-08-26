@@ -1,1 +1,1 @@
-`double` is not a kama type in a local declaration — every float states its width
+`double` is a reserved word — every kama float states its width: write `float64`

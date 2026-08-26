@@ -500,21 +500,47 @@ one-symbol modules — and that is exactly the signal that would justify the syn
     basename in one build is an error naming both**. This is not a small population today (there is no
     `kama.json` anywhere in this repo outside 16 test fixtures), but it is the one that by definition
     cannot be imported. **This design shrinks the naming problem enormously; it does not dissolve it.**
-28. **C keyword collisions** — rename **only on collision**, every other name emitted exactly as written:
-    - **Reserved set:** all 44 C11 keywords + the C23 additions — the full sets, not just the 33 kama
-      leaves free, since kama's own reserved list may shrink later and the cost of a wider table is zero
-      (an extra word only ever fires on an actual collision). One table, following the
-      single-source-of-truth shape kama already uses for its own keywords (`kamaIsKeyword`,
-      [kama.l:561](../../src/kama.l), declared in [kama.forward.h:182](../../src/kama.forward.h)).
-    - **Escape:** `k_` prefix. `switch` → `k_switch`.
-    - **A clash is a compile error**, naming both — if the author also declares `k_switch` in the same C
-      scope. Not a ladder, not a counter. *(There is no escape kama cannot spell: its identifier rule
-      admits leading `_` and `__` — `type value _Hidden` compiles and emits `_F4___Hidden` — and C11
-      §7.1.3 reserves exactly those forms to the implementation. Detection is the only sound answer.)*
-    - **`expose` / `@extern` names are never renamed** — they are a declared C ABI, so a keyword there is
-      an error, not a silent rename that would be a miscompile.
-    - **Intern once**, where each name enters the emitter's tables, so all ~60 emission sites read an
-      already-escaped string. The mangler is **not idempotent**, so applying it per-site is a bug.
+28. **C keyword collisions — kama RESERVES C's keywords.** A spelling that is a C keyword cannot be a kama
+    name, anywhere. It is a **lexical** error naming the spelling.
+    - **Reserved set:** the full C11 + C23 sets (59), not just the 38 kama leaves free — kama's own
+      reserved list may shrink later and a wider table costs nothing, since an entry only ever fires on a
+      real collision. One table, following the single-source-of-truth shape kama already uses for its own
+      keywords (`cIsReservedWord` beside `kamaIsKeyword` in [kama.l](../../src/kama.l), declared in
+      [kama.forward.h](../../src/kama.forward.h)).
+    - **Where it is checked:** the lexer's identifier rules — ⚠️ **all THREE of them**; the easy miss is
+      the `STRING_TAG` rule, which bypasses `getToken`. One site covers every declaration position (field,
+      param, local, variant payload, case, type, function, method, generic parameter, `foreach`/`match`
+      binding, `expose`, `extern`, import alias) instead of one rule per position. The rules fire on every
+      *occurrence*, so it reports **once per spelling per file**.
+    - **`expose` / `@extern` need no separate rule.** They are a declared C ABI and could never be safely
+      renamed — reserving means the name cannot be written at all, so the case disappears.
+    - **No grammar change.** This is a name rule, not a syntax rule, so `tree-sitter-kama/grammar.js`, the
+      VS Code TextMate grammar and `docs/grammar.bnf` are untouched by it — which is what keeps it to one
+      commit rather than the two an editor-pin change forces.
+
+    ⚠️ **THIS REPLACES THE EARLIER DESIGN, which was to RENAME on collision** (`switch` → `k_switch`,
+    interned once at the emitter's tables). Decided with the user 2026-08-25, on the grounds that reserving
+    now and relaxing later is source-compatible while the reverse is not, and pre-1.0 is the only moment.
+    Reserving also dissolves three sub-problems the rename carried: a `k_switch` clash with a user's own
+    `k_switch`, the `expose`/`extern` exception above, and any risk of the C name leaking into a
+    diagnostic, a hover, a completion or a `kama query` answer.
+
+    **Corpus cost, measured before deciding by PRINTING every match rather than counting it: zero.** Every
+    hit across `lib/ tests/ prelude/ examples/ bench/` is a comment. The only two source hits were xfails
+    that already rejected the spelling.
+
+    **The exposure was seven positions, not one** — measured at `0.9.80` by reading the emitted C, and two
+    of them (the vtable slot and the variant case union member) had been missed by an audit that reasoned
+    about it instead: struct field, variant payload field, variant case union member, vtable slot,
+    parameter (prototype, definition **and** thunk cast), local, and an `expose`d name — that last emitting
+    invalid C silently. Type names, function names and enum case constants are scope-prefixed and were
+    never at risk.
+
+    **One asymmetry, deliberate and guarded.** `int`, `double` and `float` are C keywords *and* retired
+    kama type spellings, so their width guidance (`int32`/`isize`, `float64`/`float32`) moved into the
+    reserved-word message rather than dying with the `checkTypeResolves` arm the lexer now precedes.
+    **`uint` is not a C keyword**, is not reserved, and keeps the type-position diagnostic.
+    `tools/check-c-keywords.sh` pins both halves so it cannot be tidied into "consistency".
 
 ### 2f. `global` and `main` — the two names that are not in the model
 
@@ -1260,32 +1286,61 @@ message is the duplicate-name message with different words.
 **Phase 3 is COMPLETE.** What remains of the campaign: 4 (the C symbol), 5 (corpus + docs), 6 (delete
 this file).
 
-**4 — the C symbol.** §2e: identity-derived symbols; path-derived `.c` filenames; the `k_` escape interned
-once where each name enters the emitter's tables (`ClassInfo` fields, `_paramNames`, `Scope::locals`,
-`VSlot::name`, variant records); the loose-file rule.
+#### 4 — the C symbol. SHIPPED 2026-08-25 (`0.9.81`–`0.9.84`)
 
-**Both defects reproduced at `0.9.74`**, so the phase opens on measurement rather than recall. One loose
-program, three files, two of them sharing the basename `x.kama`, built twice with the operands in
-different orders:
+Three commits, each green on all three legs. Baseline **1229 / 1212 / 1184** throughout; guards **42 → 44**
+(`check-c-reproducible`, `check-c-keywords`).
+
+| | what landed |
+|---|---|
+| `0.9.81` | **a generated `.c` is named by its module**, not its position — `std__collections__vec.c`. A stem collision is an error naming both files |
+| `0.9.82` | **a file-private scope is named after its file** (`_Fmain__priv`), `demangleForDisplay` reads a registry instead of an `_F<digits>` pattern, and **units emit in a canonical order** |
+| `0.9.84` | **C's keywords are reserved in kama** (§2e.28 as replaced), a lexical error at all three identifier rules |
+
+**Both defects reproduced first, at `0.9.74` and again at `0.9.80`** — the phase opened on measurement, not
+recall. One loose program, three files, two sharing the basename `x.kama`, built twice with the operands
+permuted:
 
 ```
-order 1:  main_0.c  x_1.c  x_2.c      _F4__helper
-order 2:  x_0.c     x_1.c  main_2.c   _F6__helper
+order 1:  main_0.c  x_1.c  x_2.c      _F4__priv
+order 2:  x_0.c     x_1.c  main_2.c   _F6__priv
 ```
 
-Both the generated **filenames** and the file-private **scope** are positional, so `--keep-c` is not
-reproducible — which is what the README's "drops into an existing C codebase" rests on. Note what phase 2
-already fixed and what it deliberately did not: every symbol with a MODULE is stable now (measured across
-the 2e deletion — identical symbol sets, 451 loose / 237 project), and `_F<n>` survives only for a file in
-the loose ROOT, which §2e.27 says is the one case that cannot be imported anyway. The `_N` on filenames is
-**load-bearing until something path-derived replaces it**: the two `x.kama` above are exactly the basename
-collision it guards.
+The `_N` was **not decoration** — it was the only thing keeping two files that share a basename from
+writing to one `.c`, which is why it could only be replaced, never dropped. Phase 2 had already made every
+symbol with a MODULE stable (identical symbol sets across the 2e deletion, 451 loose / 237 project); what
+remained was the loose ROOT, the one population §2e.27 makes unimportable anyway.
 
-And the keyword half, same build:
+**Three things this phase learned that the plan did not predict:**
 
-```kama
-type value Cfg { public int32 switch; ... }   ->  clang: 1 warning and 6 errors
-```
+1. ⚠️ **Naming the files was only HALF of reproducibility.** The shared header declares each unit in LOAD
+   order, so one program's three declarations came out in two different sequences even with every name
+   derived. Units are now sorted by the same stem the filenames use, before the emission branch — so the
+   unity release path, which folds everything into one translation unit, is covered too.
+2. ⚠️ **THE SORT ALONE MAKES A POSITIONAL SCOPE LOOK FIXED,** and `check-c-reproducible` believed that for
+   one revision. With units in canonical order the indices are handed out in canonical order, so
+   byte-identical output across a permutation **passes with the positional scope restored** — measured, by
+   restoring it. What a positional scope actually breaks is different: numbering is stable only within a
+   FIXED unit set, so adding one file shifts every later file's private symbols. The guard asserts that
+   directly now, and its header records which assertion proves what.
+3. **Two collision rules, not one.** A `.c` filename collision is reachable between units that DO have
+   modules (`b__c.kama` in module `a` vs `c.kama` in `a::b`) and fires at build; a scope collision needs
+   two module-less units and only surfaces under `kama check`, because at build the filename rule reports
+   first. Both are asserted in the guard rather than as an `xfail`, since the xfail leg only runs `kama
+   build` and could never reach the second.
+
+**And two guards were about to pass while testing nothing** — the shape 2d warned about, and it recurred:
+`check-ecs-zero-dispatch` hardcoded `_F4__`, so a changed scope form made it report *"tickAll was not
+monomorphized"* — a codegen regression, when it was a stale guard; it derives the prefix from the fixture
+name now. `check-modules` tested `^_F[0-9]`, which would have passed on **every** miss it was written to
+catch, and its order-invariance comparison covered only the module-scoped symbols.
+
+⚠️ **A `kama.y` edit forced a bison REGENERATE, which surfaced two dead nonterminals** (`import_symbols`,
+`import_symbol`) left unreachable by 3b's import redesign. `./dev build` skips the regenerate unless the
+grammar file changes, so the warning had been invisible since; `check-no-inheritance` requires a
+warning-clean build and is what caught it. `docs/grammar.bnf` needed regenerating with it — the fourth
+tracker of `kama.y`, exactly as §7 warns.
+
 
 **5 — the `native` module: one place for the FFI surface. DESIGN NOT STARTED.**
 
@@ -1364,12 +1419,17 @@ be touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`
 
 ## 6. Verification
 
-- **`tools/check-c-reproducible.sh`** — the guard this campaign exists for. Build one program twice with
-  different argument orders into two temp dirs; `diff` the emitted `.c`/`.h` **and their filenames**:
-  byte-identical, and `_F[0-9]` appears nowhere. Shape follows `tools/check-opaque-leak.sh:67`.
-- **`tools/check-c-keywords.sh`** — transpile a fixture using every legal-in-kama C11/C23 keyword as a
-  field, a parameter, a local, a contract method and an enum case; assert none appears as a declarator in
-  the emitted C. Shape follows `tools/check-ecs-zero-dispatch.sh`.
+- **`tools/check-c-reproducible.sh` — SHIPPED `0.9.81`/`0.9.82`.** Builds one program twice with the
+  operands permuted: identical filenames, no positional form in a filename OR a symbol, byte-identical
+  contents, adding a file moves nothing, and both identity collisions reported. Its header records which
+  assertion proves what — ⚠️ including that byte-identical output does NOT test the scope, which is the
+  mistake it made for one revision.
+- **`tools/check-c-keywords.sh` — SHIPPED `0.9.84`.** Holds the reserved table equal to the C11 + C23 sets
+  in **both** directions, asserts each of the 38 spellings that would otherwise lex as an identifier is
+  refused as a name, and pins the `uint` asymmetry with the width guidance that moved into the reserved
+  message. ⚠️ It deliberately does NOT sweep the emitted C for a keyword declarator: every fixture already
+  hands its C to clang, so a generated collision fails the native leg by name, while a grep cannot tell a
+  declarator from a type (`int32_t x;` contains `int`) and would read as coverage while providing less.
 - **`tools/check-module-visibility.sh`** — assert every rung of §2c, including the **call and
   construction** positions the current model lets through.
 - **`xfail` fixtures**, each `.msg` matching the rule's own wording. ⚠️ **Audited at `0.9.74` — some of
@@ -1421,19 +1481,21 @@ be touched before phase 4 changes what it is: `tools/check-ecs-zero-dispatch.sh`
   not a reference. Derive, then check the derivation.
 - **`comm` is locale-sensitive on macOS**, so a keyword-set diff silently reported nonsense until it was
   redone with `grep -Fxv`. Any set comparison in a guard wants `LC_ALL=C` or no `comm` at all.
-- **`qualify()` is not the site for the keyword fix.** It scope-prefixes *declared* names — exactly the
-  set that already cannot collide. The exposed names are emitted by their own paths, and there is no
-  single chokepoint. *(It is, however, where `main` escapes scoping entirely — §1c.)*
-- **The keyword escape is not idempotent.** `k_switch` would become `k_k_switch`. Intern once, at the
-  table, never at the emission site.
-- **A partial fix is worse than none** — a use must agree with its declaration, so renaming a declaration
-  without its uses trades a keyword error for an undeclared-identifier error.
+- **`qualify()` was not the site for the keyword fix, and neither was any emitter table.** It
+  scope-prefixes *declared* names — exactly the set that already cannot collide — and the exposed names
+  are emitted by their own paths with no single chokepoint. That absence is most of why RESERVING beat
+  renaming: the check moved to the LEXER, where one site covers every position. *(`qualify` is, however,
+  where `main` escapes scoping entirely — §1c.)*
+  *(Two traps that lived here — "the escape is not idempotent" and "a partial fix is worse than none" —
+  retired with the rename design in §2e.28. Both were about keeping a declaration and its uses in
+  agreement, which a reserved spelling makes impossible to get wrong.)*
 - **`demangleForDisplay`** ([kama.cemit.cpp:108–173](../../src/kama.cemit.cpp)) strips a leading
   `_F<digits>::` so diagnostics never leak a mangled name (`tests/xfail/diag_no_mangled_name.kama` guards
   it). Changing the scope form means changing that strip — from a *registry* of known scopes, not a
   pattern.
-- **The `_N` on generated `.c` filenames is load-bearing** until something path-derived replaces it: two
-  source files may share a basename.
+- **The `_N` on generated `.c` filenames was load-bearing** — two source files may share a basename —
+  which is why it could only be replaced, never dropped. Phase 4 replaced it with `<module>__<basename>`
+  and made the residual collision an error naming both files.
 - **Measure with a hidden instrument first** if any step needs sizing: `--strict-numeric` and
   `--probe-templates` are the precedent (TSV on stdout, never `warning:` — `run_tests.sh:443` fails any
   fixture whose stderr matches `/warning/i`; full-row dedupe; and a bucket for the blind spot, because a

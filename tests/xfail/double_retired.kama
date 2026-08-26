@@ -1,7 +1,12 @@
 // `double` was an alias for `float64` — a second spelling for a type that already had one, and a C reader
 // reads a WIDTH into the name that kama does not promise. Removed alongside bare `int` (which aliased
-// `int32`); every kama float now states its width. `float` never existed as a keyword but gets the same
+// `int32`); every kama float now states its width. `float` never existed as a kama type but gets the same
 // diagnostic, because a C/Java reader will try it and "unknown type" would send them hunting an import.
+//
+// Both are C keywords, so since §2e.28 this is a LEXICAL rejection — kama reserves the whole C set. The
+// width guidance moved into that message rather than dying with the type-position arm it used to live in.
+// ⚠️ `uint` is NOT a C keyword and so is NOT reserved; tests/xfail/uint_retired.kama still takes the
+// type-position path. That asymmetry is deliberate and asserted in tools/check-c-keywords.sh.
 fn int32 main() {
     double d = 1.0;
     return 0;

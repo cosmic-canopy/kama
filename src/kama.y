@@ -194,6 +194,13 @@ struct LexerInstanceData {
       `DynamicArray<T, A> data;` and imports nothing), so an import-edge closure under-computes.
       Unordered on purpose — this is one insert per identifier token on a ~14 ms parse. */
    std::unordered_set<std::string> identTokens;
+
+   /* Reserved-word spellings already reported in this file (RESERVED_CHECK in kama.l). kama reserves
+      every C keyword, and the check has to sit on the identifier RULES — which fire on every occurrence,
+      not just the declaration — so without this a local named `switch` used four times reports four
+      times. One error per spelling per file is what a reader needs; the position of the first is enough
+      to find the name. */
+   std::set<std::string> reservedReported;
 };
 
 struct kamayystype {
@@ -357,8 +364,6 @@ struct kamayystype {
 %type <statement> module_variable_declaration
 %type <statementlist> code_opt code_declarations statement_list statement_list_opt
 %type <statementlist> for_initializer_opt for_initializer for_iterator_opt for_iterator statement_expression_list
-%type <usingdeclaration> import_symbol
-%type <usingdeclarationlist> import_symbols
 %type <importdeclaration> import_entry
 %type <importdeclarationlist> import_directives_opt import_entries
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
@@ -475,15 +480,6 @@ import_path
   : IDENTIFIER   { $$ = std::make_shared<StringList>(); $$->push_back($1); STAMP_SEG($$, @1); }
   | import_path COLONCOLON IDENTIFIER   { $1->push_back($3); $$ = $1; STAMP_SEG($$, @3); }
   ;
-import_symbols
-  : import_symbol   { $$ = std::make_shared<UsingDeclarationList>(); $$->push_back($1); }
-  | import_symbols COMMA import_symbol   { $1->push_back($3); $$ = $1; }
-  ;
-import_symbol
-  : IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
-  | IDENTIFIER AS IDENTIFIER   { $$ = std::make_shared<UsingDeclarationNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3)); STAMP_LOC($$->identifier, @1); STAMP_LOC($$->alias, @3); }
-  ;
-
 code_opt
   : /* Nothing */   { $$ = std::make_shared<StatementList>(); }
   | code_declarations
