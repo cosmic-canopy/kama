@@ -2770,6 +2770,32 @@ existing `@name(args)` mechanism, extended from serialization to functions + sta
 - **`@section(".name")`** places a module static *or* a function in a named linker section — the ISR vector
   table, a flash const table, a `.ramfunc`, or a DMA RAM bank. The board's linker script owns the addresses.
 
+**Layout control — `@align(N)` / `@packed`.** The same passthrough mechanism, applied to a TYPE rather than
+a declaration: `@align(N)` emits `__attribute__((aligned(N)))` and `@packed` emits `((packed))` on the
+struct kama generates. They are the companion to layout *verification* — `sizeof`/`alignof` fold and
+`comptime assert` hands the rest to the C compiler — and verification shipped first deliberately, because
+asserting a layout is what makes stating one safe.
+
+```kama
+@packed  type value Reg  { public uint8 ctrl; public uint32 data; }   // sizeof 5, not 8 — an MMIO block
+@align(16) type value Vec4 { public float32 x; public float32 y; public float32 z; public float32 w; }
+comptime assert(cond: sizeof(Reg) == 5, msg: "the wire format is 5 bytes");
+```
+
+- **kama does not own layout, and deliberately does not start.** It emits C and the C compiler lays the
+  struct out; a layout model in kama would be a second source of truth that could disagree with the real
+  one per target. So these state a constraint and `sizeof`/`alignof`/`comptime assert` verify what the
+  toolchain actually did.
+- **`N` must be a power of two, 1 to 4096.** Not passthrough, because gcc and clang do not *refuse* a
+  non-power-of-two — they round it **up**, so `@align(3)` would compile and quietly mean 4.
+- **Types with a struct only** — `type value` and `type resource`. An `enum` is refused: a payload-less one
+  lowers to an integer and a tagged one to a tag plus a per-variant union, which an outer `packed` would
+  not reach; an enum states its layout with `type enum E : IntType` instead. A **declaration** is refused
+  too, so there is one way to align an object rather than two: write `@align(64) type value Buf {…}` and
+  declare the static with that type. Rust makes the same call — `#[repr(align(N))]` is types-only.
+- A type may carry both, and either may sit beside `@generate(...)`. Fixtures: `tests/layout_align_packed.kama`,
+  `tests/xfail/align_not_power_of_two.kama`, `layout_attr_on_enum.kama`, `layout_attr_on_static.kama`.
+
 **Operator overloading** — the sanctioned exception to named-args-only (a binary operator has exactly two
 operands, positional by nature). The full overloadable set is supported: arithmetic `+ - * / %`, comparison
 `== != < > <= >=`, bitwise `& | ^ << >>`, unary `- ! ~`, and `++`/`--`. **Arity picks the form:**

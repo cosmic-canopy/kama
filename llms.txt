@@ -76,7 +76,7 @@ builds; **C FFI** (`extern`, `UnsafePtr`, raw memory confined to an explicit `un
 **shared-nothing concurrency** (isolates, typed channels, structured `scope`, `Atomic<T>`,
 immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time evaluation**
 (`comptime` constants and `comptime fn`); **conditional compilation** (`@compileFor`); and the
-**MCU surface** (`hardware` MMIO, `@interrupt`/`@section`/`@noheap`, inline `asm`, fallible
+**MCU surface** (`hardware` MMIO, `@interrupt`/`@section`/`@noheap`, `@align(N)`/`@packed` layout control, inline `asm`, fallible
 allocation). Targets **native, WebAssembly and bare-metal**, debug/release, with source-level
 breakpoint debugging in an IDE and in browser DevTools. Tooling: a project seed (`kama seed`), a package +
 toolchain manager (`kama pkg`, `kama toolchain`, `kama publish`) and a language server (`kama lsp`)

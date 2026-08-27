@@ -560,6 +560,9 @@ module.exports = grammar({
         // `@compileFor(!RELEASE)` — negation is spelled in the attribute, not in the grammar at large.
         seq(optional('!'), $.identifier),
         $.string_literal,
+        // `@align(16)` — a bare LITERAL, matching kama.y's attr_arg. Not `_expression`: a bare identifier
+        // is already the flag form above, so a general expression would make the two the same parse.
+        $.integer_literal,
       ),
 
     // ── Types ───────────────────────────────────────────────────────────────────────────────────────

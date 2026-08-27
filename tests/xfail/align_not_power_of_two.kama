@@ -1,0 +1,8 @@
+// An alignment must be a power of two — C's own rule for `__attribute__((aligned(N)))`. The reason this
+// is REJECTED rather than passed through is that gcc and clang do not refuse a non-power-of-two: they
+// round it UP. So `@align(3)` would compile and quietly mean 4, which is the difference between kama
+// stating a layout and kama appearing to. Verification is the whole point of layout control.
+@align(3)
+type value V { public uint8 a; public ctor make() { this.a = 1; } }
+
+fn int32 main() { V v = V.make(); return cast<int32>(v.a); }

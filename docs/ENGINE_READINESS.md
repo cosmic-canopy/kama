@@ -63,7 +63,7 @@ ships:
 | a system | a free function over **`View<T>`** with `foreach (ref T x in …)` — borrows the buffer, mutates in place |
 | system parallelism | **`parallel_for`** — splits the View into **disjoint** sub-views, one worker isolate each, no locks |
 | zero-cost polymorphism | a **contract as a generic bound** (`<T: Tickable>`) — monomorphized to a direct call |
-| SIMD / no-heap | **auto-vectorization** — `std::math`'s types carry a SIMD-ready contiguous layout and `--release` inlines the ops so the C backend packs them (there is **no** `std::simd` module and no explicit vector type or intrinsic — see [SPEC.md](SPEC.md) *Math*); `@noheap` / `--no-heap` for frame allocators and audio callbacks |
+| SIMD / no-heap | **auto-vectorization** — `std::math`'s types carry a SIMD-ready contiguous layout and `--release` inlines the ops so the C backend packs them (there is **no** `std::simd` module and no explicit vector type or intrinsic — see [SPEC.md](SPEC.md) *Math*); `@noheap` / `--no-heap` for frame allocators and audio callbacks; **`@align(N)`/`@packed`** state a struct's layout for a vertex buffer or an std140 block |
 
 **The zero-dispatch claim is verified against emitted C, not asserted.** `tests/ecs_pattern.kama` is the
 worked example and `tools/check-ecs-zero-dispatch.sh` runs in the suite, asserting that a system loop walks

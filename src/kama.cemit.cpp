@@ -6631,6 +6631,20 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         _enumDeclNodes[name] = ed;   // the LSP def-site table's only source for enums
         if (unit == _preludeUnit) _preludeEnums.insert(name);
 
+        // Layout control is not offered on an enum, and saying so is the point: the `@generate` loops
+        // below `continue` past every name they do not recognize, so `@packed type enum` compiled clean
+        // with the attribute silently DROPPED. A payload-less enum has no struct to attach one to, and a
+        // tagged one has a per-variant payload struct plus a union that a `packed` on the outer struct
+        // would not reach — so one rejection is the honest answer, not an attribute that half works.
+        // Placed before the tagged/plain fork so it covers both, which the `@generate` loops do not.
+        if (ed->attributes)
+            for (auto& at : *ed->attributes)
+                if (at && at->name && (*at->name == "align" || *at->name == "packed"))
+                    unsupported(("`@" + *at->name + "` controls the layout of a struct, and an `enum` has "
+                                 "none to control: a payload-less one lowers to an integer, and a tagged "
+                                 "one to a tag plus a per-variant union. To fix an enum's tag width write "
+                                 "`type enum E : IntType`").c_str(), ed->line);
+
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
             ClassInfo ci = buildVariantClassInfo(ed, name);
@@ -6724,6 +6738,40 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         ei.declFile = _collectingUnitPath;
         _enums[ei.name] = ei;
     }
+}
+
+// Validate one `@align(N)` / `@packed` and fold it into a type's layout state.
+//
+// `N` must be a power of two: that is C's own rule for `__attribute__((aligned(N)))`, and a value that is
+// not one is silently rounded UP by gcc/clang rather than rejected — so `@align(3)` would compile and
+// quietly mean 4. Refusing it here is the difference between kama stating a layout and kama appearing to.
+// The 4096 ceiling is a page; nothing an aggregate needs goes past it, and an absurd value is far more
+// likely a typo than an intent.
+void CEmitter::readLayoutAttr(const AttributeNode& at, int& alignN, bool& packed, int line)
+{
+    const bool isAlign = at.name && *at.name == "align";
+    const size_t nargs = at.args ? at.args->size() : 0;
+    if (!isAlign) {
+        if (nargs) { unsupported("`@packed` takes no arguments — it removes padding, it does not set a "
+                                 "width. To set an alignment use `@align(N)`", line); return; }
+        packed = true;
+        return;
+    }
+    // A bare NUMBER, which is the only attribute-argument form that carries one (see attr_arg in kama.y).
+    int64_t n = 0;
+    SharedExpression arg = (nargs == 1 && at.args->front()) ? at.args->front()->expression : SharedExpression();
+    const bool bare = arg && (!at.args->front()->name);
+    if (!bare || !constValue(arg, n)) {
+        unsupported("`@align(N)` needs one literal number — the alignment in bytes, e.g. `@align(16)`", line);
+        return;
+    }
+    if (n < 1 || n > 4096 || (n & (n - 1)) != 0) {
+        unsupported(("`@align(" + std::to_string(n) + ")` — an alignment must be a power of two from 1 to "
+                     "4096. A C compiler rounds a non-power-of-two UP rather than refusing it, so this "
+                     "would quietly mean something else").c_str(), line);
+        return;
+    }
+    alignN = (int)n;
 }
 
 // enum Name { Name_M0, Name_M1 = <expr>, … }
@@ -6865,9 +6913,17 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                  + (cd->typeKind ? *cd->typeKind : std::string("?")) + "` — minting is a "
                                  "capability the VIEWED type declares by implementing a marked contract, "
                                  "so put the mark on that contract").c_str(), cd->line);
+                } else if (*at->name == "align" || *at->name == "packed") {
+                    // LAYOUT CONTROL — passthrough, the shape `@section` already has for functions and
+                    // statics. kama can KNOW a layout (`sizeof`/`alignof` fold, `comptime assert` hands the
+                    // rest to the C compiler) but could not CONTROL one, which is what an engine's vertex
+                    // buffer / std140 block and an MCU's packed register block both need. It stays
+                    // passthrough on purpose: kama emits C, the C compiler lays the struct out, and a
+                    // second source of truth in kama could only disagree with it per target.
+                    readLayoutAttr(*at, ci.alignN, ci.packed, cd->line);
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name
-                                 + "` (expected `@generate`)").c_str(), cd->line);
+                                 + "` (expected `@generate`, `@align(N)` or `@packed`)").c_str(), cd->line);
                 }
             }
 
@@ -18142,6 +18198,15 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // `@compileFor(FLAG)` is consumed by the conditional-compilation prune pass
             // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here means a
             // kept decl still carries it (defensive). It is a build-time gate, not a C attribute: no parts.
+        } else if (an == "align" || an == "packed") {
+            // Layout control is a property of a TYPE, not of one declaration — so there is one way to
+            // align an object rather than two, which is the call Rust makes as well (`#[repr(align(N))]`
+            // is types-only; a static is aligned by wrapping it in an aligned type). Named rather than
+            // swept into the catch-all because the user asked for something kama HAS, in the wrong place.
+            unsupported(("`@" + an + "` states the layout of a TYPE, not of one declaration. Put it on the "
+                         "type and declare this with that type: `@" + an
+                         + (an == "align" ? "(N) type value Buf { … }" : " type value Buf { … }")
+                         + "` then `static Buf …;`").c_str(), line);
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt`, `@section(\"...\")`, or `@noheap`").c_str(), line);
         }
@@ -18421,7 +18486,22 @@ void CEmitter::emitStruct(ClassInfo& ci)
         indent(1);
         *_out << "char __empty; /* C forbids empty structs */\n";
     }
-    *_out << "};\n\n";
+    *_out << "}" << layoutAttrSuffix(ci) << ";\n\n";
+}
+
+// `@align(N)` / `@packed` -> the trailing `__attribute__((…))` on a struct definition. Empty when the type
+// said nothing, which is every type that does not ask — an un-annotated struct is emitted byte-identically.
+//
+// A SUFFIX, not the prefix `declAttrPrefix` builds for functions and statics: on a struct definition GCC
+// and clang accept the attribute after the closing brace, and putting it before `struct` would attach it
+// to the typedef rather than the type on some toolchains.
+std::string CEmitter::layoutAttrSuffix(const ClassInfo& ci) const
+{
+    if (!ci.packed && !ci.alignN) return "";
+    std::string s = " __attribute__((";
+    if (ci.packed) s += "packed";
+    if (ci.alignN) { if (ci.packed) s += ", "; s += "aligned(" + std::to_string(ci.alignN) + ")"; }
+    return s + "))";
 }
 
 // `struct Name { <tag> tag; union { struct {…} <Variant>; … } u; };` — a discriminated union.

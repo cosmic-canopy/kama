@@ -66,6 +66,25 @@ C `__attribute__((...))` **only** on the exact declaration they annotate; `@nohe
 | `@section(".name")` | a **module static** or a **function** | `__attribute__((section(".name")))` | one string-literal section name — vector table (`.isr_vector`), flash const table (`.rodata`), DMA RAM bank, `.ramfunc`. The board's linker script owns the actual addresses |
 | `@noheap` | a **function** (`@noheap fn int32 tick() { … }`) | **nothing** — a *checker* flag, not codegen | Makes every emitter-visible heap allocation in the body a **compile error** (`new`/`try new`, `parallel_for`/`spawn` boxing, `Owned<Error>` boxing, string interpolation's `Formatter`). No args. Target-independent — guarantees an ISR / game frame-tick / real-time audio callback allocates nothing. The whole-program equivalent is the `--no-heap` build flag. Collection *methods* allocate in library C the emitter can't see per-call, so a pre-built growing collection called from a `@noheap` fn is not caught — the guarantee covers emitter-visible allocation |
 
+## Layout-control attributes (`@align`, `@packed`)
+
+The same passthrough mechanism applied to a **type** rather than a declaration, and the companion to
+layout *verification* (`sizeof`/`alignof` folding + `comptime assert`), which shipped first because
+asserting a layout is what makes stating one safe. kama does **not** own layout — it emits C and the C
+compiler lays the struct out — so these state a constraint and the assertions verify what the toolchain
+actually did, rather than kama keeping a second model that could disagree per target.
+
+| Attribute | On | Lowers to | Rules |
+|---|---|---|---|
+| `@align(N)` | a **type with a struct** (`@align(16) type value Vec4 { … }`) | `__attribute__((aligned(N)))` on the emitted struct | One **literal** number, a power of two from 1 to 4096. Held to a power of two rather than passed through because gcc/clang round a non-power-of-two **up** rather than refusing it, so `@align(3)` would compile and quietly mean 4 |
+| `@packed` | a **type with a struct** (`@packed type value Reg { … }`) | `__attribute__((packed))` on the emitted struct | No arguments — it removes padding, it does not set a width. A wire struct or an MMIO register block |
+
+Both are refused on an **enum** (a payload-less one lowers to an integer, a tagged one to a tag plus a
+per-variant union that an outer `packed` would not reach — an enum states its layout with
+`type enum E : IntType`) and on a **declaration** (`@align(64) static …`), so there is one way to align an
+object rather than two: put it on the type and declare the static with that type. Rust draws the same line
+— `#[repr(align(N))]` is types-only. A type may carry both, and either may sit beside `@generate(...)`.
+
 ## Conditional-compilation attribute (`@compileFor`)
 
 Also on the `@name(args)` mechanism, but **not MCU-specific and not codegen** — a build-time keep/drop

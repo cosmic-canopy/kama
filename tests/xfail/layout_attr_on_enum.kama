@@ -1,0 +1,11 @@
+// Layout control is offered on types with a STRUCT, which an enum is not: a payload-less one lowers to an
+// integer and a tagged one to a tag plus a per-variant union — and a `packed` on that outer struct would
+// not reach the inner payload structs, so the attribute would half work. One rejection is the honest
+// answer. What an enum CAN state about its layout is its tag width, `type enum E : IntType`.
+//
+// This used to compile CLEAN with the attribute silently dropped: the enum collect loop skipped every
+// attribute name it did not recognize, and there was no catch-all.
+@packed
+type enum Color : uint8 { Red, Green, Blue }
+
+fn int32 main() { return cast<int32>(Color::Blue); }

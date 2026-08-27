@@ -912,7 +912,10 @@ argument
   ;
 /* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
    (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
-   (`@field(name: "x")`) is `key: expr`. A NON-EMPTY attribute_list is a distinct alternative on the type/
+   (`@field(name: "x")`) is `key: expr`; a bare STRING is `@section(".isr_vector")` and a bare NUMBER is
+   `@align(16)`. The number alternative is deliberately a LITERAL and not `expression`: an identifier is
+   already the bare-flag form (`@compileFor(!RELEASE)`), so admitting a general expression here would make
+   `@align(N)` and a flag named `N` the same parse. A NON-EMPTY attribute_list is a distinct alternative on the type/
    field decl (never an empty prefix), keeping it free of shift/reduce conflicts with the plain
    modifiers_opt forms. */
 attribute_list
@@ -932,6 +935,7 @@ attr_arg
   | EXCLAMATION IDENTIFIER            /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression
   | STRING_LITERAL                    /* bare string, e.g. @section(".isr_vector") */
+  | DEC_LITERAL_NO_SUFFIX             /* bare number, e.g. @align(16) */
   ;
 variable_reference
   : expression

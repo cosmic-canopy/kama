@@ -1,0 +1,1 @@
+states the layout of a TYPE, not of one declaration

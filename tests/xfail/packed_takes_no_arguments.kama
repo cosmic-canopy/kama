@@ -1,0 +1,6 @@
+// `@packed` removes padding; it does not set a width, so it takes nothing. The pair is deliberately two
+// attributes rather than one `@layout(...)`: they are independent, and a type may carry both.
+@packed(1)
+type value V { public uint8 a; public ctor make() { this.a = 1; } }
+
+fn int32 main() { V v = V.make(); return cast<int32>(v.a); }

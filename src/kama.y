@@ -1503,7 +1503,10 @@ argument
   ;
 /* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
    (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
-   (`@field(name: "x")`) is `key: expr`. A NON-EMPTY attribute_list is a distinct alternative on the type/
+   (`@field(name: "x")`) is `key: expr`; a bare STRING is `@section(".isr_vector")` and a bare NUMBER is
+   `@align(16)`. The number alternative is deliberately a LITERAL and not `expression`: an identifier is
+   already the bare-flag form (`@compileFor(!RELEASE)`), so admitting a general expression here would make
+   `@align(N)` and a flag named `N` the same parse. A NON-EMPTY attribute_list is a distinct alternative on the type/
    field decl (never an empty prefix), keeping it free of shift/reduce conflicts with the plain
    modifiers_opt forms. */
 attribute_list
@@ -1523,6 +1526,7 @@ attr_arg
   | EXCLAMATION IDENTIFIER         { auto flag = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); STAMP_LOC(flag, @2); $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<SimpleUnaryExpressionNode>(SCANNER_CODEGENCONTEXT, $1, flag)); }   /* negated flag, e.g. @compileFor(!RELEASE) */
   | IDENTIFIER COLON expression    { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | STRING_LITERAL                 { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), std::make_shared<StringNode>(SCANNER_CODEGENCONTEXT, $1)); }   /* bare string, e.g. @section(".isr_vector") */
+  | DEC_LITERAL_NO_SUFFIX          { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, SharedIdentifier(), SharedModifier(), makeUnsuffixedInt(SCANNER_CODEGENCONTEXT, *$1, 10, &@1, scanner)); }   /* bare number, e.g. @align(16) */
   ;
 variable_reference
   : expression

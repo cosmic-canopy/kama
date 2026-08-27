@@ -1,0 +1,40 @@
+// `@align(N)` / `@packed` — LAYOUT CONTROL, the companion to the layout VERIFICATION that shipped first.
+// kama could already KNOW a layout (`sizeof`/`alignof` fold; `comptime assert` hands the rest to the C
+// compiler as a `_Static_assert`) but could not STATE one — which an engine needs for a vertex buffer or
+// an std140 block, and an MCU needs for a packed register block or a wire struct.
+//
+// It stays PASSTHROUGH on purpose: kama emits C and the C compiler lays the struct out, so kama does not
+// acquire a second source of truth that could disagree with it per target. `@align(N)` lowers to
+// `__attribute__((aligned(N)))` and `@packed` to `((packed))`, both as a suffix on the emitted struct —
+// and the assertions below are on `sizeof`/`alignof`, i.e. on what the toolchain ACTUALLY did, not on
+// what kama asked for. That is the whole design: state the constraint, then verify it.
+//
+// Types only. Aligning an object is `@align(64) type value Line` + a `Line` binding, so there is one way
+// to do it rather than two (Rust makes the same call: `#[repr(align(N))]` is types-only and a static is
+// aligned by wrapping it). tests/xfail/layout_attr_on_enum.kama pins the one type kind that is refused.
+
+type value Plain  { public uint8 a; public uint32 b;  public ctor make() { this.a = 1; this.b = 2; } }
+@packed
+type value Packed { public uint8 a; public uint32 b;  public ctor make() { this.a = 1; this.b = 2; } }
+@align(64)
+type value Line   { public uint64 x;           public ctor make() { this.x = 7; } }
+
+// Both at once — the two attributes are independent and a type may carry both.
+@align(8) @packed
+type value Both   { public uint8 a; public uint32 b;  public ctor make() { this.a = 3; this.b = 4; } }
+
+fn int32 main()
+{
+    // The padding `@packed` removes is real: 1 + 3 pad + 4 = 8 becomes 1 + 4 = 5.
+    comptime assert(cond: sizeof(Plain)   == 8, msg: "unpacked keeps its padding");
+    comptime assert(cond: sizeof(Packed)  == 5, msg: "@packed removes it");
+    comptime assert(cond: alignof(Packed) == 1, msg: "@packed drops the alignment too");
+    comptime assert(cond: alignof(Line)  == 64, msg: "@align(64) raises it");
+    comptime assert(cond: sizeof(Both)    == 8, msg: "packed to 5, then aligned up to 8");
+
+    // The values still round-trip — a packed struct is a struct, not a byte bag.
+    Packed p = Packed.make();
+    Line   l = Line.make();
+    Both   b = Both.make();
+    return cast<int32>(p.a) + cast<int32>(p.b) + cast<int32>(l.x) + cast<int32>(b.a) + cast<int32>(b.b);
+}                                                              // 1 + 2 + 7 + 3 + 4 = 17

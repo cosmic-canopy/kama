@@ -1,0 +1,7 @@
+// `@align` without the byte count says nothing. The argument is a bare LITERAL (kama.y `attr_arg`), not an
+// expression: a bare identifier is already the flag form `@compileFor(!RELEASE)`, so admitting a general
+// expression would make `@align(N)` and a flag named `N` the same parse.
+@align
+type value V { public uint8 a; public ctor make() { this.a = 1; } }
+
+fn int32 main() { V v = V.make(); return cast<int32>(v.a); }

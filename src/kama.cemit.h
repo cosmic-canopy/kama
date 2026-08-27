@@ -287,6 +287,13 @@ struct ClassInfo {
     // equality stays a deliberate NON-default: you ask for it. Bodies: emitEqualsDefinition/emitHashDefinition.
     bool                              genEquatable = false;
     bool                              genHashable = false;
+    // `@align(N)` / `@packed` — LAYOUT CONTROL, passed through to the C compiler as
+    // `__attribute__((aligned(N)))` / `((packed))` on the emitted struct. kama does not own layout (it
+    // emits C; the C compiler lays the struct out) and deliberately does not acquire a second source of
+    // truth that could disagree per target — these state the constraint and `sizeof`/`alignof`/
+    // `comptime assert` verify what the toolchain actually did. 0 / false = say nothing.
+    int                               alignN = 0;
+    bool                              packed = false;
     std::map<std::string, MethodInfo> methods;    // by kama method name
     bool                              preludeStatic = false;  // a non-generic prelude type (e.g. Chars) whose
                                                               // method bodies must be emitted static-inline in
@@ -2202,6 +2209,12 @@ private:
     // with the same compile-time exhaustiveness + `_` wildcard as the tagged-union path.
     void        emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const std::string* resultTemp, int depth);
     std::string exprEnumType(SharedExpression e);       // plain-enum type name of expr, "" if not a plain enum
+    // Validate one `@align(N)`/`@packed` into a type's layout state. See the definition for why N is
+    // held to a power of two rather than passed through.
+    void        readLayoutAttr(const AttributeNode& at, int& alignN, bool& packed, int line);
+    // The trailing `__attribute__((packed, aligned(N)))` on a struct definition; "" when unannotated.
+    std::string layoutAttrSuffix(const ClassInfo& ci) const;
+
     // The `default:` arm closing an exhaustive match's switch. `break` unless the temp of a
     // VALUE-producing match would be left unassigned on it — see the definition for why that is a
     // compile error and not merely a lost value.

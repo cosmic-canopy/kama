@@ -130,7 +130,7 @@
       ]
     },
     "attributes": {
-      "comment": "`@generate`, `@compileFor(FLAG)`, `@noheap`, `@skip`, `@interrupt`, `@section(...)`, `@builtin`, `@vertex`… There was no rule at all, so an attribute was invisible and — worse — one with arguments mis-scoped as a FUNCTION CALL (`compileFor` matched #functions' trailing-`(` lookahead). Anchored on the `@`, which is left of the name, so it wins on position regardless of include order; it is listed before #declarations anyway because `@generate(...) type …` is a legal prefix (kama.y marked_type_declaration).",
+      "comment": "`@generate`, `@compileFor(FLAG)`, `@noheap`, `@skip`, `@interrupt`, `@section(...)`, `@align(N)`, `@packed`, `@builtin`, `@vertex`… There was no rule at all, so an attribute was invisible and — worse — one with arguments mis-scoped as a FUNCTION CALL (`compileFor` matched #functions' trailing-`(` lookahead). Anchored on the `@`, which is left of the name, so it wins on position regardless of include order; it is listed before #declarations anyway because `@generate(...) type …` is a legal prefix (kama.y marked_type_declaration).",
       "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "punctuation.definition.annotation.kama" },

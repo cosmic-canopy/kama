@@ -245,6 +245,12 @@ fn void debugOnly() { }
 @section(".isr_vector")
 static int32 vec;
 
+@packed
+type value Reg { uint8 a; }
+
+@align(16)
+type value Line { uint64 x; }
+
 --------------------------------------------------------------------------------
 
 (source_file
@@ -291,7 +297,35 @@ static int32 vec;
             (string_content)))))
     (primitive_type)
     (variable_declarator
-      (identifier))))
+      (identifier)))
+  (type_declaration
+    (attribute_list
+      (attribute
+        (identifier)))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)))))
+  (type_declaration
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (integer_literal))))
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier))))))
 
 ================================================================================
 when clauses and friend use SQUARE brackets

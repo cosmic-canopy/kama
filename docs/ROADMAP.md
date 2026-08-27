@@ -43,14 +43,12 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 | 1 | **LSP auto-import — a `codeActionProvider` quick fix** — the follow-on the module campaign created. Imports are mandatory now, INCLUDING for a sibling in your own module, and every language that requires them makes it bearable by having the editor write them. `kama lsp` has hover, definition, references, rename, completion and semantic tokens but **no code actions at all**, so there is no "add this import for me". Until there is, the DIAGNOSTIC is the tooling — which is why the phase-3b message names the exact `import` line to paste | M | the module campaign made imports mandatory, which makes writing one the most-typed gesture in the language | [§11](ROADMAP_DETAIL.md#s11) |
 | 2 | **Go-to-definition on a compiler built-in lands nowhere** — `string`, `isize`, `int32` are registered in C++, so the LSP has no location to return. Take the **prelude** with it: `Optional`/`Result`/`Ordering` are real declarations in a real file that lost their path when embedded, and this repo's own `prelude/` wants special-casing to the worktree | M | every kama program uses them, so it is the most-hit navigation in the language | [§1](ROADMAP_DETAIL.md#s1) |
 | 3 | **Docs/naming reconcile** | M | 1.0 fixes naming and case conventions | [§1](ROADMAP_DETAIL.md#s1) |
-| 4 | **Layout control `@align(N)` / `@packed`** — passthrough lowering, the shape `@section` already has | S | an engine's first vertex buffer or `std140` block; a packed MMIO register block on MCU | [§2](ROADMAP_DETAIL.md#s2) |
-| 5 | **`spawn` disjointness: ROOT → PLACE granularity** — `w.bodies` + `w.springs` are rejected as "the same root `w`" | M? | the first parallel system. **Settle the design first** — relaxing a concurrency rule across a thread boundary | [§3](ROADMAP_DETAIL.md#s3) |
-| 6 | **Value-producing `match` over `enum X : IntType` does not compile** | S | render-command enums; the C compiler can't prove a plain-integer tag exhaustive | [§2](ROADMAP_DETAIL.md#s2) |
-| 7 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
-| 8 | **A failed generic bound still instantiates**, so one bad type argument emits a cascade of follow-on errors | S | consequences reported as findings | [§10](ROADMAP_DETAIL.md#s10) |
-| 9 | **A C-compiler error drifts past the construct it is in** — clang counts forward from the last `#line`, so a long lowering leaves the construct and, on a short file, the file: measured at `vm.kama:18` in a **10-line** file | S | `kama check` does not type-check expressions, so clang IS the diagnostic for a large class of real errors | [§2](ROADMAP_DETAIL.md#s2) |
-| 10 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | M | a prose claim that something is rejected is unguarded without one — the house rule, learned the hard way | [§2](ROADMAP_DETAIL.md#s2) |
-| 11 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
+| 4 | **`spawn` disjointness: ROOT → PLACE granularity** — `w.bodies` + `w.springs` are rejected as "the same root `w`" | M? | the first parallel system. **Settle the design first** — relaxing a concurrency rule across a thread boundary | [§3](ROADMAP_DETAIL.md#s3) |
+| 5 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
+| 6 | **A failed generic bound still instantiates**, so one bad type argument emits a cascade of follow-on errors | S | consequences reported as findings | [§10](ROADMAP_DETAIL.md#s10) |
+| 7 | **A C-compiler error drifts past the construct it is in** — clang counts forward from the last `#line`, so a long lowering leaves the construct and, on a short file, the file: measured at `vm.kama:18` in a **10-line** file | S | `kama check` does not type-check expressions, so clang IS the diagnostic for a large class of real errors | [§2](ROADMAP_DETAIL.md#s2) |
+| 8 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | M | a prose claim that something is rejected is unguarded without one — the house rule, learned the hard way | [§2](ROADMAP_DETAIL.md#s2) |
+| 9 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 
 ## NEXT — engine unblock
 
@@ -59,24 +57,24 @@ buildable today. These are the kama-side gaps it hits that the tag does not gate
 
 | # | item | size | bites at | detail |
 |---|---|---|---|---|
-| 12 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select. Wants **layout control** (row 4 above) first | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
-| 13 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
+| 10 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
+| 11 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — stdlib & platform reach
 
 | # | item | detail |
 |---|---|---|
-| 14 | **Stdlib parity M2b** — fs + path, io handles + `lines()`, sleep + wall clock, DNS | [§1](ROADMAP_DETAIL.md#s1) |
-| 15 | **Stdlib parity M2c** — `std::random`, `std::encoding` | [§1](ROADMAP_DETAIL.md#s1) |
-| 16 | **`std::io` transform adapters** — compression et al., composing with serde and net | [§1](ROADMAP_DETAIL.md#s1) |
-| 17 | **`std::net`** — IPv6, UDP multicast | [§2](ROADMAP_DETAIL.md#s2) |
-| 18 | **`std::process`** — live/streaming child-stream reads | [§1](ROADMAP_DETAIL.md#s1) |
-| 19 | **Serialization follow-ups** — deserialize breadth, more back ends, `@deprecated` | [§4](ROADMAP_DETAIL.md#s4) |
-| 20 | **Windows** — long-path support; suite wall-clock (~906 s vs ~75 s in the container) | [§1](ROADMAP_DETAIL.md#s1) |
-| 21 | **MCU toolchain packaging** — board presets, vendor-HAL glue, a real-hardware flash pass; AVR later | [§5](ROADMAP_DETAIL.md#s5) |
-| 22 | **Remaining language limitations** — no bound spells "an integer primitive", so `cast<T>` in a generic is checked per instantiation (the stdlib avoids it: pass by address, move `sizeof(T)` bytes); generic free fn calling a generic free fn; generic `enum` members; unresolved type names inside generic arguments; `--no-heap` not gating container allocation; contract-refinement thunks; `Fixed<B,const F>` implementing `Real` | [§2](ROADMAP_DETAIL.md#s2) |
-| 23 | **Collections knobs** — HashDoS-resistant keyed hashing; zero-size-field elision; thin smart-ptr handles | [§5](ROADMAP_DETAIL.md#s5) |
-| 24 | **Performance** — bench cohort (add Zig), serialization benchmark track, devirtualization ladder, CPU-tuning knob | [§9](ROADMAP_DETAIL.md#s9) |
+| 12 | **Stdlib parity M2b** — fs + path, io handles + `lines()`, sleep + wall clock, DNS | [§1](ROADMAP_DETAIL.md#s1) |
+| 13 | **Stdlib parity M2c** — `std::random`, `std::encoding` | [§1](ROADMAP_DETAIL.md#s1) |
+| 14 | **`std::io` transform adapters** — compression et al., composing with serde and net | [§1](ROADMAP_DETAIL.md#s1) |
+| 15 | **`std::net`** — IPv6, UDP multicast | [§2](ROADMAP_DETAIL.md#s2) |
+| 16 | **`std::process`** — live/streaming child-stream reads | [§1](ROADMAP_DETAIL.md#s1) |
+| 17 | **Serialization follow-ups** — deserialize breadth, more back ends, `@deprecated` | [§4](ROADMAP_DETAIL.md#s4) |
+| 18 | **Windows** — long-path support; suite wall-clock (~906 s vs ~75 s in the container) | [§1](ROADMAP_DETAIL.md#s1) |
+| 19 | **MCU toolchain packaging** — board presets, vendor-HAL glue, a real-hardware flash pass; AVR later | [§5](ROADMAP_DETAIL.md#s5) |
+| 20 | **Remaining language limitations** — no bound spells "an integer primitive", so `cast<T>` in a generic is checked per instantiation (the stdlib avoids it: pass by address, move `sizeof(T)` bytes); generic free fn calling a generic free fn; generic `enum` members; unresolved type names inside generic arguments; `--no-heap` not gating container allocation; contract-refinement thunks; `Fixed<B,const F>` implementing `Real` | [§2](ROADMAP_DETAIL.md#s2) |
+| 21 | **Collections knobs** — HashDoS-resistant keyed hashing; zero-size-field elision; thin smart-ptr handles | [§5](ROADMAP_DETAIL.md#s5) |
+| 22 | **Performance** — bench cohort (add Zig), serialization benchmark track, devirtualization ladder, CPU-tuning knob | [§9](ROADMAP_DETAIL.md#s9) |
 
 ## LATER — tooling & ecosystem
 
@@ -84,19 +82,19 @@ Most of this gates on the repo going public.
 
 | # | item | detail |
 |---|---|---|
-| 25 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model | [§10](ROADMAP_DETAIL.md#s10) |
-| 26 | **Editor/registry registrations** — Zed extension registry, nvim-treesitter, linguist, Helix upstreaming, Marketplace publish | [§10](ROADMAP_DETAIL.md#s10) |
-| 27 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke | [§10](ROADMAP_DETAIL.md#s10) |
-| 28 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
-| 29 | **Debugger value formatting** — render `string`/`Optional`/collections as kama values, not their emitted-C form | [§10](ROADMAP_DETAIL.md#s10) |
-| 30 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
-| 31 | **Hot-reload library** — `dlopen` + file-watch + fn-pointer rebind. Both compiler primitives already ship | [§8](ROADMAP_DETAIL.md#s8) |
-| 32 | **Job system / event-loop scheduler** — ordinary libraries on the shipped concurrency primitives | [§6](ROADMAP_DETAIL.md#s6) |
+| 23 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model | [§10](ROADMAP_DETAIL.md#s10) |
+| 24 | **Editor/registry registrations** — Zed extension registry, nvim-treesitter, linguist, Helix upstreaming, Marketplace publish | [§10](ROADMAP_DETAIL.md#s10) |
+| 25 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke | [§10](ROADMAP_DETAIL.md#s10) |
+| 26 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
+| 27 | **Debugger value formatting** — render `string`/`Optional`/collections as kama values, not their emitted-C form | [§10](ROADMAP_DETAIL.md#s10) |
+| 28 | **`kama query` residuals** — no `callers-of`/`implementors-of`, no stdin/unsaved-buffer mode | [§10](ROADMAP_DETAIL.md#s10) |
+| 29 | **Hot-reload library** — `dlopen` + file-watch + fn-pointer rebind. Both compiler primitives already ship | [§8](ROADMAP_DETAIL.md#s8) |
+| 30 | **Job system / event-loop scheduler** — ordinary libraries on the shipped concurrency primitives | [§6](ROADMAP_DETAIL.md#s6) |
 
 ## LATER — the big arcs, in this order
 
 | # | item | detail |
 |---|---|---|
-| 33 | **Editor tooling** — the front end as a reusable query API; everything later rides on it | [§10](ROADMAP_DETAIL.md#s10) |
-| 34 | **Scripting / multimodal — the flagship 2.0.** First step: refactor the C emitter behind an abstract backend interface | [§7](ROADMAP_DETAIL.md#s7) |
-| 35 | **Self-hosting — the capstone, LOWEST priority.** A maturity milestone, not an enabler | [§7](ROADMAP_DETAIL.md#s7) |
+| 31 | **Editor tooling** — the front end as a reusable query API; everything later rides on it | [§10](ROADMAP_DETAIL.md#s10) |
+| 32 | **Scripting / multimodal — the flagship 2.0.** First step: refactor the C emitter behind an abstract backend interface | [§7](ROADMAP_DETAIL.md#s7) |
+| 33 | **Self-hosting — the capstone, LOWEST priority.** A maturity milestone, not an enabler | [§7](ROADMAP_DETAIL.md#s7) |

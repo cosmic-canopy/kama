@@ -13,6 +13,8 @@ access_private_ctor	access_private_ctor.kama:3
 access_private_field	access_private_field.kama:3
 access_private_method	access_private_method.kama:2 access_private_method.kama:3
 addr_of_temporary	addr_of_temporary.kama:7
+align_no_argument	align_no_argument.kama:4
+align_not_power_of_two	align_not_power_of_two.kama:5
 alignof_not_foldable	alignof_not_foldable.kama:9
 arg_duplicate	arg_duplicate.kama:3
 arg_kind_intrinsic_inline_array	arg_kind_intrinsic_inline_array.kama:5
@@ -316,6 +318,8 @@ kind_argument	kind_argument.kama:6
 kind_match_arm	kind_match_arm.kama:7
 kind_return	kind_return.kama:4
 kind_variant_payload	kind_variant_payload.kama:6
+layout_attr_on_enum	layout_attr_on_enum.kama:8
+layout_attr_on_static	layout_attr_on_static.kama:4
 lex_char_bad_utf8	lex_char_bad_utf8.kama:4
 lex_comment_unterminated	lex_comment_unterminated.kama:2
 lex_string_badchar	lex_string_badchar.kama:4
@@ -434,6 +438,7 @@ override_nonvirtual	override_nonvirtual.kama:9
 override_param_mismatch	override_param_mismatch.kama:11
 override_return_mismatch	override_return_mismatch.kama:15
 owned_iface_nonimpl	owned_iface_nonimpl.kama:7
+packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parfor_noncontiguous	parfor_noncontiguous.kama:9
 parfor_this	parfor_this.kama:11
 parfor_write_capture	parfor_write_capture.kama:11
