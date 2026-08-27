@@ -21,19 +21,18 @@ type enum IoError implements Error {
     }
 }
 
-// Also pins the tag width. NOTE the statement-match-with-returns rather than a value-producing match: a
-// value match over an enum with an explicit `: IntType` hits a PRE-EXISTING codegen bug (the match temp is
-// left uninitialized and clang cannot prove a plain-integer switch exhaustive). Unrelated to conformance —
-// it reproduces on a bare `enum X : uint8` with no contract and no `type` marker at all.
+// Also pins the tag width, and uses the VALUE-producing match to do it — the same form `IoError` above
+// uses. This spelling used to be impossible: an explicit `: IntType` lowers to a plain `uint8_t` tag, so
+// clang could not prove the switch exhaustive and rejected the uninitialized match temp. The `default:`
+// arm of such a match now diverges, which is what lets clang drop that edge. See enum_match_intty.kama.
 type enum ParseError : uint8 implements Error {
     BadToken, Eof;
 
     public const fn string message() {
-        match (this) {
-            case BadToken: { return "bad"; }   // 3
-            case Eof:      { return "eof"; }   // 3
+        return match (this) {
+            case BadToken: "bad";   // 3
+            case Eof:      "eof";   // 3
         };
-        return "?";
     }
 }
 

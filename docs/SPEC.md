@@ -1578,6 +1578,20 @@ be written **in the language** rather than baked into the compiler. Three builti
   (`Optional<int8> r = try cast<int8>(n);`), because the declared destination is where its result type
   comes from. `truncate` is a **contextual** keyword: a keyword only where a conversion can start, so
   `string`'s `truncate(maxBytes:)` — and any method of that name — still reads as a member.
+- **An `enum` is not a `cast` target — `try cast<E>(x)` is the one door in.** The table above is about
+  numbers, whose valid values are a **range fixed by width**; an enum's are a **set of names the author
+  chose**, so an integer arriving from outside has no reason to name one. That makes the infallible verb
+  dishonest at both ends: when the value is known the variant already *has* a name (`Color::Green`), and
+  when it is not the conversion is fallible by construction. So `cast<Color>(n)` is a **compile error**
+  naming both answers, and `try cast<Color>(n)` yields `Optional<Color>` — `None` when the value names no
+  variant, tested against the declared discriminants rather than a range, so a value *between* two of them
+  (`{ Ok = 3, Bad = 200 }` given 4) is `None` too. The **`enum` → integer** direction is untouched:
+  `cast<int32>(Color::Blue)` is total. Rust draws the line in the same place — `200u8 as Color` is
+  rejected, and so is `0u8 as Color`, because validity does not enter into it; Swift's `Color(rawValue:)`
+  likewise hands back an optional. The payoff is that an enum holding a value that names no variant is
+  **unrepresentable in safe kama**, so `match` never meets one: the invalid byte is handled as a `None`
+  **arm**, by the same construct that reads the enum. Fixtures: `tests/try_cast_enum.kama`,
+  `tests/xfail/cast_enum_rejected.kama`.
 - **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
@@ -3059,7 +3073,17 @@ variant payloads, and it owns nothing beyond them. Declaring a method-carrying c
 payload-less enum a tagged representation so it can hold the method and a dispatch vtable; that is
 transparent to its by-value uses.
 
-A plain enum lowers to a C `enum`; a tagged union lowers to a tag + payload union. Enum variants are
+**`type enum E : IntType`** pins the tag to a fixed-width integer — `uint8` for a wire format or a packed
+MMIO field, where the default (a compiler-chosen `enum` width) is not something you can serialize against.
+It is the only part of an enum's layout kama lets you state, and it changes the lowering: ISO C cannot set
+an enum's underlying type, so a pinned enum emits `typedef <IntType> E;` plus an anonymous `enum` carrying
+the constants, where an unpinned one emits a real C `enum`. That is a genuine difference in what the C
+compiler can prove — with a plain integer tag it cannot see a `switch` over every variant as total — and it
+is why the `default:` arm of a **value-producing** `match` over a pinned enum diverges (a `kama_panic`)
+rather than falling through. Every other `match` emits `default: break;` unchanged. Fixture:
+`tests/enum_match_intty.kama`.
+
+An unpinned plain enum lowers to a C `enum`; a tagged union lowers to a tag + payload union. Enum variants are
 scope-resolved with `::` and constructed with named args (`Shape::Rect(w: 3.0, h: 4.0)`). A variant is
 **not a type** — `Rect r` does not name anything, and an enum cannot nest type declarations — so `Rect` is a
 member of `Shape`'s scope, reached with `::` like any other scope member; supplying its payload yields a
@@ -3068,6 +3092,9 @@ member of `Shape`'s scope, reached with `::` like any other scope member; supply
 **`match`** is the **one** construct for branching on an enum — payload-less enums, tagged unions, and the
 `Optional`/`Result` prelude types alike. It is **value-producing** (usable in statement or expression
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
+It is also the only construct that *reads* an enum, which is why the only way to *build* one from an
+integer — `try cast<E>(x)`, above — hands back an `Optional<E>`: a value that names no variant arrives as
+a `None` **arm** of the same construct, never as a trap.
 
 **A pattern NAMES the fields it binds** — `field: local` — exactly as a call names its arguments; there is
 no positional form, and kama no more exempts a one-field variant here than it exempts a one-argument call

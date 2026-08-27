@@ -1,0 +1,39 @@
+// `try cast<E>(x)` — the ONE door from an integer into an enum, and the reason `cast<E>(x)` is refused.
+//
+// An enum's valid values are a SET of named constants, not a range, so an integer arriving from outside
+// has no reason to name one. `cast<Color>(200)` used to compile and hand back a `Color` that is none of
+// its variants — the one narrowing conversion in the language that went unchecked, while `cast<int8>(300)`
+// has trapped since 0.9.30. Rust refuses the same direction outright (`200u8 as Color` is E0605, and so is
+// `0u8 as Color`). Here the infallible verb is a compile error (tests/xfail/cast_enum_rejected.kama) and
+// this is what replaces it: the `None` arm is where a byte off a wire gets handled, so an invalid value
+// becomes an ARM rather than a trap — which keeps `match` the one construct that reads an enum.
+//
+// The enum -> INT direction is untouched: it is total, and `cast<int32>(Code::Bad)` below still folds.
+//
+// `opaque()` launders each value through a call so nothing is a compile-time constant — the runtime path
+// is the one under test.
+
+type enum Color : uint8 { Red, Green, Blue }        // implicit: a contiguous 0..2, tested as a range
+type enum Code  : uint8 { Ok = 3, Warn = 5, Bad = 200 }   // explicit: a set, tested by membership
+
+fn uint8 opaque(uint8 n) { return n; }
+
+fn int32 main()
+{
+    Optional<Color> good = try cast<Color>(opaque(n: 2));     // Blue
+    Optional<Color> bad  = try cast<Color>(opaque(n: 200));   // past the run -> None
+
+    int32 a = match (good) { case Some(value: v): cast<int32>(v) + 1; case None: 0; };   // 3
+    int32 b = match (bad)  { case Some(value: v): cast<int32>(v);     case None: 9; };   // 9
+
+    // The membership path: 4 sits BETWEEN two variants, so a range test would wrongly accept it.
+    Optional<Code> hit  = try cast<Code>(opaque(n: 5));       // Warn
+    Optional<Code> gap  = try cast<Code>(opaque(n: 4));       // in range, names nothing -> None
+
+    int32 c = match (hit) { case Some(value: v): cast<int32>(v); case None: 0; };        // 5
+    int32 d = match (gap) { case Some(value: v): cast<int32>(v); case None: 7; };        // 7
+
+    int32 e = cast<int32>(Code::Bad);                          // enum -> int, still total   200
+
+    return a + b + c + d + e;                                  // 3 + 9 + 5 + 7 + 200 = 224
+}

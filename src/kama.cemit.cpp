@@ -3553,8 +3553,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // The test is "is this a kama type with a struct body", i.e. anything in `_classes` (a value/resource/
         // view, a collection, a smart pointer, `string` -> kama_string, a tagged enum) or a contract. It is
         // deliberately NOT a whitelist of scalars: an FFI type is opaque to kama (`cast<CompareFn>(c)` in
-        // tests/callback_qsort.d, a C function-pointer typedef reached through `extern`), and a plain enum
-        // is a C enum. Both must stay legal, and neither is something kama can prove scalar.
+        // tests/callback_qsort.d, a C function-pointer typedef reached through `extern`), which must stay
+        // legal and is not something kama can prove scalar. A plain enum reaches its own rule below —
+        // it lowers to a C scalar, so this test cannot catch it, and it needs a different answer anyway.
         // Three verbs share this node, so a diagnostic must name the one that was WRITTEN. Reporting
         // `truncate<string>(…)` as `cast<string>(…)` sends the reader to a line that does not say `cast`.
         const std::string verb = v->isTruncate ? "truncate" : (v->isTry ? "try cast" : "cast");
@@ -3570,6 +3571,25 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
                          "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
                          "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v->line);
+            return "0";
+        }
+        // A plain enum is a SET of named constants, not a range, so an integer arriving from outside has
+        // no reason to name one — and the infallible verb has no honest use at either end: when the value
+        // is known the variant already HAS a name (`Color::Green`), and when it is not the conversion is
+        // fallible by construction. `cast<Color>(200)` used to compile and hand back a `Color` that is
+        // none of its variants: the one narrowing conversion in the language that went unchecked, while
+        // `cast<int8>(300)` has trapped since 0.9.30. Rust refuses this direction outright (`200u8 as
+        // Color` is E0605, and so is `0u8 as Color` — validity does not enter into it); enum -> INT stays
+        // legal here as it does there, because it is total. `try cast<Color>(x)` is the door, and the
+        // `Optional` it yields is consumed by `match` — the one construct that reads an enum.
+        //
+        // `truncate` is excluded so its own message wins below: it keeps low bits, and pointing its
+        // reader at `try cast` would answer a question they did not ask.
+        if (!v->isTruncate && isEnum(target)) {
+            unsupported(("`" + verb + "<" + nm + ">(…)` — an integer is not a `" + nm + "` until it has "
+                         "been checked against the variants. Name the variant when you know it "
+                         "(`" + nm + "::…`), or use `try cast<" + nm + ">(…)` for a value from outside, "
+                         "which yields `Optional<" + nm + ">`").c_str(), v->line);
             return "0";
         }
         // A CONSTANT that provably does not fit the target. `cast<int8>(300)` silently produced 44, and
@@ -16939,7 +16959,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
+    emitMatchDefaultArm(hasWildcard, resultTemp != nullptr,
+                        _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(), subjCls, depth);
     indent(depth); *_out << "}\n";
     // a materialized owning subject (a call/construction result) is dropped once after the
     // switch — bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
@@ -16947,6 +16968,40 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth); *_out << subjCls << "__dtor(&" << subjOwner << ");\n";
     }
     if (instSubst) _typeSubst = savedSubst;
+}
+
+// The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.
+//
+// `break` is right almost everywhere, and wrong in exactly one shape: a VALUE-producing match whose tag
+// is a PINNED INTEGER (`type enum Color : uint8`). ISO C cannot set an enum's underlying type, so that
+// form lowers to `typedef uint8_t Color;` plus an anonymous constant enum (see emitEnum) — and clang
+// then sees a switch over 256 possible values with three cases, takes the default in its CFG, and reports
+// the result temp as used-uninitialized. `-Werror=uninitialized` (kama.driver.cpp) makes that FATAL, so
+// `int32 n = match (c) { … };` over a width-pinned enum simply did not compile.
+//
+// kama has already PROVEN the match exhaustive (the callers reject a missing variant), so nothing is
+// wrong with the program — the C compiler just cannot be told what kama knows. The fix is for the arm to
+// DIVERGE, which is what lets clang drop that CFG edge. Zero-initializing the temp instead was rejected:
+// it costs every match in every program to serve this one shape.
+//
+// `kama_panic` rather than `__builtin_unreachable()`, deliberately. Safe kama can no longer mint a tag
+// that names no variant (`cast<Color>(n)` is refused; `try cast` is the checked door; `bitcast` was
+// always refused), so on a pure-safe path this arm is dead and -O2 folds it away. But an `extern fn` and
+// a deserializer both hand back a raw integer that no static rule inspects, and there `unreachable` is UB
+// while a panic is a diagnosed abort. It is a cold, noreturn call either way.
+//
+// Everything else keeps `default: break;` BYTE-FOR-BYTE: a statement-form match has no value to produce
+// so falling through is correct, and a real C enum tag already satisfies clang.
+void CEmitter::emitMatchDefaultArm(bool hasWildcard, bool valueProducing, bool pinnedTag,
+                                   const std::string& what, int depth)
+{
+    if (hasWildcard) return;
+    indent(depth + 1);
+    if (!valueProducing || !pinnedTag) { *_out << "default: break;\n"; return; }
+    // The message a USER reads at runtime, so it goes through the same demangler every diagnostic does —
+    // `_Fvm__Color` is an emitter-internal spelling nobody wrote.
+    const std::string msg = "match on '" + demangleForDisplay(what) + "': value names no variant";
+    *_out << "default: kama_panic(kama_string_lit(\"" << msg << "\", " << msg.size() << "));\n";
 }
 
 // a value-producing `match` in expression position. Lifts to a result temp + a switch, hoisted
@@ -17153,7 +17208,8 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    if (!hasWildcard) { indent(depth + 1); *_out << "default: break;\n"; }   // exhaustive; keeps the C switch total
+    emitMatchDefaultArm(hasWildcard, resultTemp != nullptr,
+                        _enums.count(enumTy) && !_enums[enumTy].underlyingCType.empty(), enumTy, depth);
     indent(depth); *_out << "}\n";
 }
 
@@ -21045,10 +21101,16 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
 {
     const std::string dst = cType(cst->type);
     const std::string disp = (cst->type && cst->type->value) ? *cst->type->value : dst;
+    // A plain enum is the SECOND thing this verb converts into, and the only door from an integer into
+    // one — `cast<Color>(…)` is refused (see the CastNode path), so a `Color` that names no variant is
+    // unrepresentable in safe kama. It cannot share the numeric path: an enum's valid values are a SET of
+    // named constants, not a range, so the test is membership. `None` is where a byte off a wire gets
+    // handled, which keeps `match` the one construct that reads an enum.
+    const bool enumDst = isEnum(dst);
     std::string lo, hi;
-    if (!cNumRangeText(dst, lo, hi)) {
-        unsupported(("`try cast<" + disp + ">(…)` — only a NUMERIC conversion can fail, and `" + disp
-                     + "` is not one. Use `cast<" + disp + ">(…)`").c_str(), srcLine);
+    if (!enumDst && !cNumRangeText(dst, lo, hi)) {
+        unsupported(("`try cast<" + disp + ">(…)` — only a NUMERIC or `enum` conversion can fail, and `"
+                     + disp + "` is neither. Use `cast<" + disp + ">(…)`").c_str(), srcLine);
         return "";
     }
     // Read `Some`'s payload off the monomorphized Optional, exactly as emitTryNewBox does.
@@ -21086,9 +21148,31 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
     const bool unsignedSrc = !src.empty() && !cNumSigned(src) && !cNumFloat(src);
     const std::string tt = unsignedSrc ? "unsigned long long" : "long long";
     const std::string t = "__trycast" + std::to_string(_tempCounter++);
-    const std::string test = unsignedSrc ? (t + " > (unsigned long long)(" + hi + ")")
-                                        : (t + " < (long long)(" + lo + ") || (" + t + " >= 0 && "
-                                           "(unsigned long long)" + t + " > (unsigned long long)(" + hi + "))");
+    std::string test;
+    if (enumDst) {
+        // Implicit members run 0..N-1, so the common enum tests as a range and reads that way in
+        // `--keep-c` output. One explicit `= <expr>` anywhere breaks the run (`{ Ok, Warn = 5, Bad }` is
+        // 0,5,6), and then the only honest test is membership, written against the emitted constants so
+        // it stays correct whatever the author wrote. clang folds either shape back into a jump table.
+        const EnumInfo& ei = _enums[dst];
+        bool contiguous = !ei.members.empty();
+        for (auto& m : ei.members) if (m.value) { contiguous = false; break; }
+        if (contiguous) {
+            const std::string top = std::to_string((long long)ei.members.size() - 1);
+            test = unsignedSrc ? (t + " > " + top + "ULL")
+                               : (t + " < 0 || " + t + " > " + top + "LL");
+        } else {
+            for (auto& m : ei.members) {
+                if (!test.empty()) test += " && ";
+                test += t + " != (" + tt + ")" + ei.name + "_" + m.name;
+            }
+            if (test.empty()) test = "1";        // a memberless enum admits nothing
+        }
+    } else {
+        test = unsignedSrc ? (t + " > (unsigned long long)(" + hi + ")")
+                           : (t + " < (long long)(" + lo + ") || (" + t + " >= 0 && "
+                              "(unsigned long long)" + t + " > (unsigned long long)(" + hi + "))");
+    }
     std::string s;
     s  = tt + " " + t + " = (" + tt + ")(" + emitExpression(cst->unaryExpression) + "); ";
     s += "if (" + test + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";

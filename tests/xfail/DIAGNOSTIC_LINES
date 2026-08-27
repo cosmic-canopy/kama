@@ -69,6 +69,7 @@ brace_while_bare	brace_while_bare.kama:5
 cast_const_oob	cast_const_oob.kama:5
 cast_const_oob_comptime	cast_const_oob_comptime.kama:4
 cast_const_oob_unsigned	cast_const_oob_unsigned.kama:3
+cast_enum_rejected	cast_enum_rejected.kama:16
 cast_to_contract	cast_to_contract.kama:19
 cast_to_struct	cast_to_struct.kama:14
 channel_send_shared	channel_send_shared.kama:15

@@ -1,0 +1,45 @@
+// A VALUE-producing `match` over an enum whose tag width is pinned with `: IntType`, in both enum shapes.
+//
+// This did not compile at all before. ISO C cannot set an enum's underlying type, so `: uint8` lowers to
+// `typedef uint8_t Color;` plus an anonymous constant enum — and clang, seeing a switch over 256 possible
+// values with three cases, took the `default:` in its CFG and reported the match temp as used
+// uninitialized. `-Werror=uninitialized` made that fatal. kama had already PROVEN the match exhaustive;
+// the C compiler just could not be told so. The `default:` arm of a value-producing match over a pinned
+// tag now DIVERGES, which drops that CFG edge; every other match still emits `default: break;` byte for
+// byte, and tests/match_plain_enum.kama pins that unchanged shape.
+//
+// Both shapes are covered because the defect was in both and only the plain one was on record: a
+// payload-less enum lowers through emitMatchPlainEnum, a tagged one through emitMatchSwitch, and the two
+// `default:` arms are separate lines of the emitter.
+
+type enum Color : uint8 { Red, Green, Blue }
+
+type enum Shape : uint8 { Circle(int32 r), Empty }
+
+// Explicit discriminants are not a contiguous run, so the tag is a genuine SET of values. The match is
+// still exhaustive over the variants and must lower the same way.
+type enum Code : uint8 { Ok = 3, Bad = 200 }
+
+fn int32 main()
+{
+    Color c = Color::Green;
+    int32 a = match (c) {                        // plain, pinned tag
+        case Red:   1;
+        case Green: 2;
+        case Blue:  4;
+    };                                           // 2
+
+    Shape s = Shape::Circle(r: 10);
+    int32 b = match (s) {                        // tagged, pinned tag
+        case Circle(r: r): r;
+        case Empty:        0;
+    };                                           // 10
+
+    Code k = Code::Bad;
+    int32 d = match (k) {                        // non-contiguous discriminants
+        case Ok:  5;
+        case Bad: 30;
+    };                                           // 30
+
+    return a + b + d;                            // 2 + 10 + 30 = 42
+}

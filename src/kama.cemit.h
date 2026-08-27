@@ -2202,6 +2202,12 @@ private:
     // with the same compile-time exhaustiveness + `_` wildcard as the tagged-union path.
     void        emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const std::string* resultTemp, int depth);
     std::string exprEnumType(SharedExpression e);       // plain-enum type name of expr, "" if not a plain enum
+    // The `default:` arm closing an exhaustive match's switch. `break` unless the temp of a
+    // VALUE-producing match would be left unassigned on it — see the definition for why that is a
+    // compile error and not merely a lost value.
+    void        emitMatchDefaultArm(bool hasWildcard, bool valueProducing, bool pinnedTag,
+                                    const std::string& what, int depth);
+
     // Merge per-arm move-states at a match join. A `match` is exhaustive, so a local moved on some but
     // not all reaching arms becomes MaybeMoved (rejected as an undecidable drop at scope exit) — the
     // same conditional-drop guard `if`/`else` has.

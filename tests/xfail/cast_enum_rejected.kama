@@ -1,0 +1,18 @@
+// An integer is not an enum value until it has been checked against the variants, so `cast<E>(x)` — the
+// verb that must not fail — has no honest use in this direction. When the value is known the variant
+// already HAS a name (`Color::Green`); when it comes from outside the conversion is fallible by
+// construction, which is `try cast<Color>(x)` yielding `Optional<Color>` (tests/try_cast_enum.kama).
+//
+// This compiled before, and returned a `Color` that is none of Red/Green/Blue — the one narrowing
+// conversion in the language that went unchecked, next to `cast<int8>(300)`, which has trapped since
+// 0.9.30. Rust refuses the same direction outright: `200u8 as Color` is E0605, and so is `0u8 as Color`,
+// because validity does not enter into it. The enum -> INT direction stays legal here as it does there.
+type enum Color : uint8 { Red, Green, Blue }
+
+fn uint8 opaque(uint8 n) { return n; }
+
+fn int32 main()
+{
+    Color c = cast<Color>(opaque(n: 200));
+    return cast<int32>(c);
+}
