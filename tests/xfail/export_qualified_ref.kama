@@ -10,7 +10,7 @@
 //
 // Visibility is per FILE, not per module: a sibling in the same directory module is judged by the same
 // rule, because `export` is what a name leaves its file through. What `visibility` in `kama.json` governs
-// is reach BEYOND the module — see design/module-system.md §2c.
+// is reach BEYOND the module — see SPEC.md § Modules
 import { std::collections::SortedMap };
 
 type resource Keeper {

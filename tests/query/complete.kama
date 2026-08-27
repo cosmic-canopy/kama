@@ -10,7 +10,7 @@
 // declared in each of Block / If / Else / While / DoWhile / For / ForEach / Unsafe / Scope / match arm),
 // inheritance + visibility, a smart-pointer receiver, a generic-instance receiver, a generic type-param
 // receiver, chained and call/index receivers, and the literal/comment suppression cases.
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 import { std::collections::DynamicArray };
 
@@ -170,7 +170,7 @@ fn int32 rootScope() {
 }
 
 // M4.2 — a MODULE head lists what that module declares, one level deep. The head has to be a module the
-// file can NAME: a file's identity is its FOLDER (design/module-system.md §2b), so a loose single-file
+// file can NAME: a file's identity is its FOLDER (SPEC.md § Modules), so a loose single-file
 // fixture like this one has no module of its own to qualify with. An IMPORTED module is the spelling that
 // exists, and `std::collections` is loaded whole by the import at the top.
 fn int32 moduleHead() {

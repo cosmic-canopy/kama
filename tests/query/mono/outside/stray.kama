@@ -1,6 +1,6 @@
 // Deliberately OUTSIDE every declared source: a same-named type that must never be confused with the
 // workspace's `Gear`, and must never appear in its references. This is what `source`/`projects` buy.
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 type value Gear {
     public int32 teeth;

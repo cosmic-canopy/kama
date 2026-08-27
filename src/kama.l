@@ -59,7 +59,7 @@
  * The provider is marked unprunable instead; see harvestUnitFacts in kama.ast.h. */
 #define RECORD_IDENT(src, leng)  yyextra->identTokens.emplace(src, leng)
 
-/* kama reserves every C keyword (design/module-system.md §2e.28), so a spelling that would lex as an
+/* kama reserves every C keyword (SPEC.md § Modules), so a spelling that would lex as an
  * identifier but IS one is rejected here, at the single point where a spelling becomes a name.
  *
  * ⚠️ It rides on the identifier RULES, and there are THREE of them — see the note above; the easy miss is
@@ -571,7 +571,7 @@ static int getToken(const char *lexeme)
   return token;
 }
 
-/* ---- C's reserved words, which kama reserves too (design/module-system.md §2e.28) ------------------
+/* ---- C's reserved words, which kama reserves too (SPEC.md § Modules) ------------------
  *
  * kama lowers to C, and a kama name that is a C keyword emits C that does not compile: `int32 switch;`
  * becomes `int32_t switch;`. Measured at `0.9.80`, the exposure was not one position but seven — struct

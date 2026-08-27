@@ -612,7 +612,7 @@ public:
     void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
     // Maps a unit's source path to the MODULE that owns it — `std::collections`, or a bare project name
     // for a file in the project root module, and "" for a loose file with no `kama.json` above it. This is
-    // where a file's identity comes from (design/module-system.md §2b): the path plus the project's
+    // where a file's identity comes from (SPEC.md § Modules): the path plus the project's
     // `modules` map, never the `namespace` line the file happens to declare. Supplied by the driver
     // because the answer is filesystem work — walking to the owning manifest and reading its module tree.
     // §2c's rung, answered by the driver: may a file of `importer` see `imported`'s surface? Both are full

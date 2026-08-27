@@ -3,7 +3,7 @@
 // header for what these files are and how to regenerate them.
 //
 //     ./kama query tests/query/coverage/dispatch.kama --coverage > tests/query/coverage/dispatch.coverage
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 import { std::collections::DynamicArray };
 

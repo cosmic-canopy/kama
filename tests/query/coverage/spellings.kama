@@ -9,7 +9,7 @@
 // Adding a construct here is how the next gap gets found. Re-generate the table with:
 //     ./kama query tests/query/coverage/spellings.kama --coverage > tests/query/coverage/spellings.coverage
 // and read the diff: a line that flips to `-` is a regression, a line that flips off `-` is a fix.
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 type enum Color { Red, Green, Blue }
 

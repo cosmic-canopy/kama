@@ -1,0 +1,2 @@
+import { v };
+fn int32 use() { return v(); }

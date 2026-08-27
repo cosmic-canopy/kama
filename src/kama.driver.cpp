@@ -1937,7 +1937,7 @@ static void configureEmitter(CEmitter& e)
         return dir.empty() ? std::string() : dir + "/kama.json";
     });
     // Which MODULE owns a given source file — the file's identity, and what the emitter mangles its
-    // declarations with (design/module-system.md §2b). Same callback shape and the same reason: walking to
+    // declarations with (SPEC.md § Modules). Same callback shape and the same reason: walking to
     // the owning manifest and reading its module tree is filesystem work, cached driver-side.
     //
     // ⚠️ The synthetic arm is not a "return nothing" guard the way setPackageResolver's is. The
@@ -2043,7 +2043,7 @@ struct LogConfig {
     }
 };
 
-// One node of `kama.json`'s nested `modules` map (design/module-system.md §2b).
+// One node of `kama.json`'s nested `modules` map (SPEC.md § Modules).
 //
 // A module is a FOLDER that the manifest lists; folders without an entry stay invisible, so nothing
 // joins the API by accident. The map MIRRORS the folder tree — each key is one path segment, a folder

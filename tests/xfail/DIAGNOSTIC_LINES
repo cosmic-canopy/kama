@@ -249,6 +249,9 @@ impl_conflict	impl_conflict.kama:7
 import_alias_claims_global	import_alias_claims_global.kama:6
 import_alias_shadows_project	import_alias_shadows_project.kama:6
 import_empty_braces	import_empty_braces.kama:3
+import_loose_root	app.kama:1 app.kama:2
+import_module_private	b.kama:1 b.kama:2
+import_name_unloaded	b.kama:2
 import_named_iter_unimported	import_named_iter_unimported.kama:6
 index_const_write	index_const_write.kama:6
 index_give_element	index_give_element.kama:3 index_give_element.kama:5 index_give_element.kama:6 index_give_element.kama:7 index_give_element.kama:8

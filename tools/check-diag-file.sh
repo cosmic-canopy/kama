@@ -236,7 +236,40 @@ printf 'import { geo::v };\nfn int32 use3() { return v(); }\n' > "$tmp/proj6/src
 out6d=$("$KAMA" check "$tmp/proj6/kama.json" 2>&1 || true)
 want "$out6d" 'declares no dependency named `geo`' "...and a name that is not this project is a missing dependency"
 
+# ---- 7. a SAME-MODULE import tells its three causes apart --------------------------------------------
+#
+# `import { X };` is checked by ONE negative set lookup — is `X` in this module's export set — and three
+# unrelated mistakes fail it. One wording served all three, and for the loose-ROOT case it was FLATLY
+# FALSE: it said no file exports `X` while the sibling's `export { X };` sat right there, and moving either
+# file one directory down made the identical import succeed. Same "blame a rule that did not fire" shape
+# the six cases above exist for.
+#
+# Two of the three now have xfail fixtures (import_loose_root, import_module_private, import_name_unloaded).
+# The third CANNOT be one: `tests/xfail/<name>.d/` passes every `.kama` it contains, so a fixture is unable
+# to express "this file exists on disk and the build was not given it" — which is exactly the mistake §2i
+# made common, since a loose build compiles its operands and does not go looking. It needs a build the
+# fixture harness cannot spell, so it lives here, like cases 1-6.
+mkdir -p "$tmp/m7/geo"
+printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/m7/geo/a.kama"
+printf 'import { v };\nfn int32 use() { return v(); }\n'  > "$tmp/m7/geo/b.kama"
+printf 'fn int32 main() { return 0; }\n' > "$tmp/m7/main.kama"
+
+# 7a. `a.kama` is deliberately NOT an operand. It is on disk, it declares `v`, it exports it — and the
+#     build never read it, so an `export` list is the wrong thing to send the reader off to edit.
+out7=$("$KAMA" check "$tmp/m7/geo/b.kama" "$tmp/m7/main.kama" 2>&1 || true)
+want "$out7" 'was loaded — no file of this module declares it' \
+     "a sibling that was never passed says the name was never LOADED"
+want "$out7" 'a loose build compiles only the files it is given' \
+     "...and names the rule that actually refused it"
+
+# 7b. THE CONTROL, and the reason 7a is not just a reworded lie: hand the SAME build that one extra file
+#     and it compiles. Nothing about the export list changed between these two runs.
+"$KAMA" check "$tmp/m7/geo/a.kama" "$tmp/m7/geo/b.kama" "$tmp/m7/main.kama" >/dev/null 2>&1 \
+    && echo "  ok: ...which is not idle advice — passing that file does build it" \
+    || { echo "check-diag-file: FAIL — the file 7a says to pass does not fix the build" >&2; exit 1; }
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
-echo "                       in a generic body is reported once, not once per instantiation; and an"
-echo "                       unresolved module names the rule that refused it, not a directory)"
+echo "                       in a generic body is reported once, not once per instantiation; an"
+echo "                       unresolved module names the rule that refused it, not a directory; and a"
+echo "                       same-module import blames the cause that fired, not the export list)"

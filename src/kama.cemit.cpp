@@ -307,7 +307,7 @@ static std::string privateScopeFor(const std::string& unitPath)
 // `using`s and aliases.
 //
 // A file's identity is where it sits — its path under its project's `source` root, resolved against the
-// `modules` map in that project's `kama.json` (design/module-system.md §2b). The driver answers that
+// `modules` map in that project's `kama.json` (SPEC.md § Modules). The driver answers that
 // through `_moduleResolver`, because it is filesystem work. A loose file — nothing with a `kama.json`
 // above it — has no module to be in, and takes the file-private scope above; §2e.27 is what makes its
 // symbols unimportable, which is why deriving that scope from the file's own name is enough.
@@ -1778,7 +1778,7 @@ std::string CEmitter::declFileOf(const std::string& key) const
 //
 // This replaces a per-MODULE rule. Privacy used to stop at the module: a directory module's files shared
 // one namespace and saw each other's private names, so `export` gated only the way out of the module.
-// Under the decided model (design/module-system.md §2c) the file is the unit of privacy — which is the
+// Under the decided model (SPEC.md § Modules) the file is the unit of privacy — which is the
 // rung Go never had and the reason a large Go package becomes a soup where any file reaches any
 // unexported identifier. The `visibility` key governs reach BEYOND the module and nothing else.
 //
@@ -2149,8 +2149,8 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
 
 // `global::` has ONE job now: reach the floor past a local declaration that shadows the spelling
 // (`global::envOr`). It used to have a second — `global::a::b::X`, naming a namespace absolutely, through
-// neither the file's `using`s nor its aliases — and design/module-system.md §2f.29 removes it, because
-// `global` is an ordinary reserved PROJECT name in this model and `global::a::b::X` would have to mean
+// neither the file's `using`s nor its aliases — and the module model (SPEC.md § Modules) removed it,
+// because `global` is an ordinary reserved PROJECT name now and `global::a::b::X` would have to mean
 // module `a/b` OF a project called `global`. Two spellings for one path is exactly what this campaign
 // exists to remove.
 //
@@ -22503,13 +22503,53 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
-                else if (!_exported.count(q))
-                    unsupported((sameModule
-                                 ? "no file in this module exports `" + *sym->identifier->value
-                                   + "` — visibility is per file, so a sibling must `export` a name "
-                                     "before this file can import it"
-                                 : "module `" + path + "` does not export `" + *sym->identifier->value + "`")
-                                    .c_str(), imp->line);
+                else if (!_exported.count(q)) {
+                    const std::string& n = *sym->identifier->value;
+                    // ONE TEST, THREE MISTAKES. `!_exported.count(q)` is a single negative set lookup, and
+                    // three unrelated situations fail it. Saying "no file in this module exports X" for all
+                    // three blamed a rule that had not fired — the exact shape the module campaign existed
+                    // to remove, which survived it. Both discriminators were already computed and in scope.
+                    //
+                    // 1. THE LOOSE ROOT, where the sentence is FLATLY FALSE. A file the build was handed in
+                    //    its own root belongs to no module, so it gets a file-private `_F<file>` scope: the
+                    //    sibling's `export { X };` is recorded as `_Fb__X` while this file asks for
+                    //    `_Fmain__X`, and no pair of files in a loose root can ever match. The sibling
+                    //    demonstrably DOES export it — moving either file one directory down makes the
+                    //    identical import succeed — so the export list is the one thing that is not wrong.
+                    if (sameModule && _nsCtx.module.empty()) {
+                        std::string owner;   // the file that exports it, if some loose sibling does
+                        for (auto& kv : _unitCtx)
+                            if (_exported.count(kv.second.scope + "__" + n)) { owner = kv.second.unitPath; break; }
+                        unsupported((owner.empty()
+                                     ? "`" + n + "` cannot be imported: this file sits in the build's own "
+                                       "ROOT, which is not a module — a loose root's symbols are file-private "
+                                       "and it has no siblings to import from. Move these files into a "
+                                       "directory, or give the project a `kama.json`"
+                                     : "`" + n + "` IS exported by `" + owner + "`, but neither file is in a "
+                                       "module: a file in the build's own ROOT keeps its symbols file-private, "
+                                       "so there is nothing to import FROM. Move both files into a directory, "
+                                       "or give the project a `kama.json` — the `export` is already right")
+                                        .c_str(), imp->line);
+                    }
+                    // 2. IT IS HERE AND PRIVATE — the only case the old wording was right about. `live` says
+                    //    a declaration of that name exists under this module's scope; it just never left its
+                    //    file. This is the offer/acceptance rule doing its job.
+                    else if (sameModule && live)
+                        unsupported(("`" + n + "` is declared in this module but no file `export`s it — "
+                                     "visibility is per file, so the sibling that declares it must say "
+                                     "`export { " + n + " };` before this file can import it").c_str(), imp->line);
+                    // 3. IT WAS NEVER LOADED. Nothing of that name is in the compilation at all, so an
+                    //    `export` list is the wrong thing to go and edit: either the name is misspelled, or
+                    //    the file that declares it was never handed to the build. §2i — a loose build
+                    //    compiles its operands and does not go looking on disk — makes the second common.
+                    else if (sameModule)
+                        unsupported(("nothing named `" + n + "` was loaded — no file of this module declares "
+                                     "it. Check the spelling; and if a sibling declares it, pass that file "
+                                     "too, because a loose build compiles only the files it is given").c_str(),
+                                    imp->line);
+                    else
+                        unsupported(("module `" + path + "` does not export `" + n + "`").c_str(), imp->line);
+                }
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
                 // `identifier` holds.

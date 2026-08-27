@@ -179,7 +179,7 @@ typedef std::shared_ptr<CodeGenContext> SharedCodeGenContext;
 // Defined in kama.l, over the lexer's own keyword table — so callers that must reject reserved words
 // (the LSP's rename validation) can never drift from what the compiler actually reserves.
 bool kamaIsKeyword(const char* word);
-// Is this spelling reserved by C, and so by kama (design/module-system.md §2e.28)? kama lowers to C, and
+// Is this spelling reserved by C, and so by kama (SPEC.md § Modules)? kama lowers to C, and
 // a name that is a C keyword emits C that does not compile — so the whole set is refused at the lexer
 // rather than renamed on the way out. Same table-in-the-lexer shape as `kamaIsKeyword` above.
 bool cIsReservedWord(const char* word);

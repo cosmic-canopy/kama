@@ -1,7 +1,7 @@
 // LSP module-loading fixture (M2.6) — exercised by tools/check-lsp.sh. Opening a file that imports a std
 // module must resolve that module's exports (no false "does not export"). Kept tiny + stable; the imported
 // DynamicArray is referenced in a signature, which is enough to exercise import resolution.
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 import { std::collections::DynamicArray };
 

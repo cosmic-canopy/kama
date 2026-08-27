@@ -2,7 +2,7 @@
 // The root kama.json says `"projects": ["libs/*", "group"]` and each project's `source` root defaults to
 // `src/`, so the project is DECLARED, not inferred: no walk of the repo, no file cap, and `outside/` is
 // excluded because nothing ever claimed it.
-// Its module is this file's FOLDER, read off the project's `modules` map (design/module-system.md §2b).
+// Its module is this file's FOLDER, read off the project's `modules` map (SPEC.md § Modules).
 
 export { Gear };
 

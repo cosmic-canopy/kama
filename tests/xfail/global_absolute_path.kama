@@ -1,4 +1,4 @@
-// `global::` reaches the always-in-scope FLOOR and nothing else (design/module-system.md §2f.29).
+// `global::` reaches the always-in-scope FLOOR and nothing else (SPEC.md § Modules).
 // It used to have a second job — `global::a::b::X`, naming a module absolutely, past this file's own
 // `import … as` aliases — and that job is gone with the `namespace` declaration: `global` is an ordinary
 // reserved PROJECT name now, so `global::std::collections::X` would have to mean module `std/collections`

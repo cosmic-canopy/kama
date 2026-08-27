@@ -1,0 +1,2 @@
+// `v` is declared and deliberately NOT exported: the offer/acceptance rule doing its job.
+fn int32 v() { return 1; }

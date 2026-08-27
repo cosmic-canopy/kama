@@ -1,0 +1,3 @@
+// `vv` is nothing: not private, not unexported — simply not in the compilation.
+import { vv };
+fn int32 use() { return 1; }

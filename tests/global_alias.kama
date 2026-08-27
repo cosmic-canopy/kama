@@ -4,7 +4,7 @@
 // for bare lookups.
 //
 // It had a SECOND form, `global::a::b::X`, naming a namespace absolutely. That form is gone with the
-// `namespace` declaration (design/module-system.md §2f.29): `global` is a project name now, so
+// `namespace` declaration (SPEC.md § Modules): `global` is a project name now, so
 // `global::a::b::X` would have to mean module `a/b` OF a project called `global`. The job it did — reach
 // a name past an `as` alias that shadows it — is done at the source instead, by refusing such an alias.
 

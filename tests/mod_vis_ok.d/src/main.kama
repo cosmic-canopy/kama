@@ -1,7 +1,7 @@
 // ⚠️ THE ONE THAT MUST NOT BE A REJECTION, and the reason this fixture exists: `narrow` is
 // `["other"]`, which does not name the root — and its CHILD `narrow::pub` is `"public"`, which does.
 // NESTING DETERMINES NAME, NEVER ACCESS. A narrow parent does not confine its children in either
-// direction, which is Go's answer rather than Rust's implicit downward grant (design/module-system.md
+// direction, which is Go's answer rather than Rust's implicit downward grant (SPEC.md § Modules
 // §2c). Silence is the whole claim here, so it needs a fixture that runs.
 import {
     visok::other::oth,

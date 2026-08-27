@@ -8,7 +8,7 @@
 // keys must be per-declaration, not per-name.
 //
 // Positions are asserted by the harness — keep the layout stable, and APPEND rather than insert.
-// A file in a loose build's ROOT is in no module, so it is file-private (design/module-system.md §2e.27).
+// A file in a loose build's ROOT is in no module, so it is file-private (SPEC.md § Modules).
 
 type enum Code {
     Ok,          // no value  -> name span already precise

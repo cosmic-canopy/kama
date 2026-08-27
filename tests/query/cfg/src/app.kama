@@ -7,7 +7,7 @@
 //
 // `sources` keeps this a DECLARED project, so it is never widened by inference. Deliberately NO `main`:
 // tests/query is enumerated as an inferred project by other cases, and a second `main` would collide.
-// Its module is this file's FOLDER, read off the project's `modules` map (design/module-system.md §2b).
+// Its module is this file's FOLDER, read off the project's `modules` map (SPEC.md § Modules).
 
 @compileFor(FEATURE_A)
 fn int32 onlyWithA() { return 1; }

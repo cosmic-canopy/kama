@@ -1,0 +1,6 @@
+// This file DOES export `helper`. That is the point of the fixture: the old wording said no file in
+// this module exports it, which was flatly false — moving either file one directory down makes the
+// identical import succeed, because the rule that actually refuses it is about the loose ROOT, not
+// about the export list.
+export { helper };
+fn int32 helper() { return 7; }
