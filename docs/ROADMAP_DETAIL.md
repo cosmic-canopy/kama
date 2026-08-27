@@ -278,6 +278,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `@align(N)` / `@packed` → `__attribute__((aligned(N)))` / `((packed))`. Verification shipped first
   deliberately: asserting a layout is what makes changing one safe.
 
+  ⚠️ **Probed 2026-08-27 — "the shape `@section` already has" is true of the LOWERING and not of the
+  GRAMMAR.** `@packed` reaches the emitter and is rejected there (*"unknown type attribute `@packed`
+  (expected `@generate`)"*), so that half really is passthrough plus a table entry. `@align(16)` does not
+  parse at all: `@section(".x")` takes a STRING, and an attribute argument list accepts an identifier or a
+  string literal, so a NUMERIC argument is a grammar change (`Parse error: unexpected
+  DEC_LITERAL_NO_SUFFIX, expecting IDENTIFIER or STRING_LITERAL`). Small, but not zero, and it is a
+  `src/kama.y` edit rather than an emitter-only one — which also means the tree-sitter grammar and the
+  editor grammars move with it, and `tools/check-grammar.sh` / `check-treesitter.sh` will say so.
+
 - **Per-target primitive availability — considered, deliberately NOT built.** *If a target genuinely cannot
   supply a primitive, reject its uses with a kama diagnostic rather than a C-level assert.* The reasoning, so
   it is not re-derived: (1) it would not replace `kama_runtime.h`'s asserts, which answer "did the C compiler
@@ -618,15 +627,38 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
   Both are ordinary socket-option work on the shipped seam.
+- **A C-compiler error drifts PAST the construct it is in, and past the end of the file.** `#line` is how
+  clang's errors are placed back onto kama source, and clang counts FORWARD from the last directive — so a
+  kama statement whose lowering spans many C lines has every line after the first attributed to a kama line
+  that is merely "the statement's line plus the offset". Measured 2026-08-27 on a **10-line** file:
+
+      #line 4 "vm.kama"     <- C line 1838, the `match` statement
+      …
+      default: break;       <- C line 1853, and clang reports it as vm.kama:18
+
+  4 + 15 - 1 = 18, eight lines past the end of a file that has ten. The emitter stamps roughly one directive
+  per statement, which bounds the drift to one construct's lowering — usually a few lines, but a `match`,
+  a `foreach` or a destructuring lowering is long enough to leave the file. Fix = re-stamp `#line` at the
+  END of a multi-line lowering as well as the start, so a construct cannot leak its offsets into the next
+  one. ⚠️ **`tools/check-diag-line.sh` cannot see this**: it validates the DIRECTIVES, and every directive
+  here is correct — it is clang's arithmetic between them that leaves the file. A guard for this has to
+  compile a probe and read what the C COMPILER says, not what the emitter wrote. Found while probing the
+  `enum : IntType` row below, whose reproduction is what produced the numbers above.
+
 - **A value-producing `match` over an `enum X : IntType` does not compile (small, self-contained).** The
   explicit underlying type makes the tag a plain `uint8_t`/`int16_t`/… rather than a C `enum`, so the C
   compiler cannot prove the emitted `switch` exhaustive and rejects the uninitialized match temp
   (`kama_string __match1;` — `emitValueMatch`, [kama.cemit.cpp](../src/kama.cemit.cpp), the temp declared just
   before `emitMatchSwitch`). Reproduces on a bare `enum Color : uint8 { Red, Green, Blue }` with no
   contract and no `type` marker; a statement-form `match` is unaffected, and so is the same enum without
-  the `: IntType`. Fix = emit a `default:` arm for a plain-integer tag (kama has already checked
-  exhaustiveness), rather than zero-initializing every match temp — which would cost every match in every
-  program. Found while building the contract-model campaign's enum fixtures; `tests/enum_implements.kama`
+  the `: IntType`. ⚠️ **Re-probed 2026-08-27, and the fix written here was WRONG:** *"emit a `default:`
+  arm"* — there already is one. The emitted lowering ends `default: break;`, and `break` is exactly the
+  problem: it leaves `__match0` unassigned on a path clang can reach, so the diagnostic is
+  `-Wsometimes-uninitialized` ("used uninitialized whenever switch default is taken"), not a missing arm.
+  What the default arm needs is to be unreachable *to clang* — kama has already proved exhaustiveness —
+  or to assign. Zero-initializing every match temp is still the wrong answer: it would cost every match in
+  every program. Verified reproduction, and the control: the same enum WITHOUT `: uint8` builds clean.
+  Found while building the contract-model campaign's enum fixtures; `tests/enum_implements.kama`
   works around it with a statement match and says so.
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not

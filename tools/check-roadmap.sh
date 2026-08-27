@@ -67,5 +67,36 @@ done
     exit 1
 }
 
+# ---- 4. a `row N` cross-reference still means what it meant ------------------------------------
+#
+# Rows are numbered by POSITION, so deleting a shipped row renumbers every row below it — which silently
+# re-points every `row N` written in prose. It has already happened: the LSP auto-import row said "it cannot
+# be written before ROW 1's rule exists" while itself sitting at row 1, because the module-system row it
+# meant had been row 1 and was deleted when that campaign closed. A row citing ITSELF is the tell, and it is
+# the one form of this drift a machine can recognise with certainty. An out-of-range number is the other.
+#
+# This does not — and cannot — catch a reference that now points at a real but WRONG row. That is why the
+# repo's rule is to find a row by its TEXT and to prefer naming the work over numbering it.
+rows=$(LC_ALL=C grep -cE '^\| [0-9]+ \|' "$RM")
+bad=$(LC_ALL=C awk -v max_rows="$rows" '
+    match($0, /^\| [0-9]+ \|/) {
+        self = substr($0, 3, RLENGTH - 4) + 0
+        rest = $0
+        while (match(rest, /row [0-9]+/)) {
+            ref = substr(rest, RSTART + 4, RLENGTH - 4) + 0
+            if (ref == self)          print "    row " self " cites ITSELF — a renumber stole its referent"
+            else if (ref > max_rows)  print "    row " self " cites row " ref ", which does not exist"
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+    }
+' "$RM")
+if [ -n "$bad" ]; then
+    echo "check-roadmap: FAIL — a \`row N\` reference no longer means what it meant:" >&2
+    printf '%s\n' "$bad" >&2
+    echo "  Rows renumber whenever one is deleted. Name the work instead of its number." >&2
+    exit 1
+fi
+
 n=$(printf '%s\n' "$want" | grep -c . )
-echo "check-roadmap: OK (ROADMAP.md $lines/$MAX_LINES lines; $n detail sections, all linked, none orphaned)"
+echo "check-roadmap: OK (ROADMAP.md $lines/$MAX_LINES lines; $n detail sections, all linked, none orphaned;"
+echo "                   no \`row N\` reference cites itself or a row that does not exist)"
