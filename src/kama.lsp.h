@@ -249,6 +249,35 @@ std::vector<std::string> lspImportModules(const std::string& fromPath, const std
 std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std::string& modulePath,
                                           const char* argv0);
 
+// ---- auto-import (the `codeActionProvider` quick fix) -----------------------------------------------
+//
+// Every `import` spelling that would bring `symbol` into scope from `fromPath`, best first: a SIBLING in
+// this file's own module spelled bare (`Helper`), then each other module that exports the name, spelled
+// qualified (`std::collections::DynamicArray`). Empty when nothing exports it.
+//
+// Answers from the module resolver and the filesystem, like the two above and for the same reason — the
+// module a quick fix is about to import is one the file does not import, so no index holds it. Costs a
+// parse of each candidate module's files; a per-GESTURE cost, never per keystroke, and the server keeps
+// the parse cache open across them. Capped.
+std::vector<std::string> lspImportCandidates(const std::string& fromPath, const std::string& symbol,
+                                             const char* argv0);
+
+// Where a new import goes in `path`, which is one place because kama has exactly ONE `import { … };`
+// block per file and it is always at the top — two blocks do not parse, and neither does one below a
+// declaration. So a quick fix inserts into one known position instead of choosing among directives and
+// guessing an ordering convention.
+//
+// `hasBlock` true  -> `at` is the FIRST entry's start; insert `"<spelling>, "` there (inserting at the
+//                     head means never having to find the closing brace).
+// `hasBlock` false -> `at` is column 0 of the line a whole new block goes on; insert
+//                     `"import { <spelling> };\n"`.
+// `at.line == 0`   -> no answer (the index holds no unit for this path).
+struct LspImportInsertion {
+    SrcRange at;
+    bool     hasBlock = false;
+};
+LspImportInsertion lspImportInsertion(const SharedLspIndex& idx, const std::string& path);
+
 // Run the language server over stdio; blocks until the client's `exit`. `argv0` is the compiler's own path
 // (for resolving the stdlib when loading imported modules). Returns the process exit code (0 after a clean
 // shutdown→exit handshake, 1 if `exit` arrives without a prior `shutdown`).

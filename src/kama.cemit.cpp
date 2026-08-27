@@ -240,6 +240,15 @@ const std::string& CEmitter::diagFile() const
 
 void CEmitter::unsupported(const char* rawWhat, int srcLine)
 {
+    unsupported(rawWhat, srcLine, std::string());
+}
+
+// The same channel, plus the NAME the defect is about — see Diagnostic::subject for why a tool must be
+// handed the name rather than left to find it in the prose. Only the sites a TOOL can act on pass one;
+// everything else keeps the two-argument form, so an empty subject means "nothing to act on" rather
+// than "nobody got round to it".
+void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& subject)
+{
     const std::string display = demangleForDisplay(rawWhat);
     const char* what = display.c_str();
     // ONE mistake, ONE diagnostic. A generic type's member body is emitted once per instantiation, so a
@@ -267,6 +276,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
     d.code = "unsupported";
     d.message = what;
     d.file = diagFile();
+    d.subject = subject;
     _diagnostics.push_back(d);
     *_out << "/* TODO(kama): unsupported " << what << " */";
 }
@@ -1641,12 +1651,16 @@ void CEmitter::checkTypeResolves(SharedIdentifier type, const std::string& cType
         return;
     }
     std::string ns = namespaceOfType(name);
+    // ⚠️ The spelling this names has to be one that PARSES. It said `import ns::{Name}` — the module form
+    // the module campaign deleted — so the one message whose whole job is to hand the reader a line to
+    // paste handed them a syntax error (`unexpected IDENTIFIER, expecting {`). There is one import form
+    // now, `import { … };`, which is also what the phase-3b message below already teaches.
     if (!ns.empty())
         unsupported((std::string("type `") + name + "` is not imported — it lives in `" + ns
-                     + "`; add it to your `import` (`import " + ns + "::{" + name + "}`)").c_str(), line);
+                     + "`; add `import { " + ns + "::" + name + " };`").c_str(), line, name);
     else
         unsupported((std::string("unknown type `") + name + "` in " + what
-                     + " — no such type is declared or imported").c_str(), line);
+                     + " — no such type is declared or imported").c_str(), line, name);
 }
 
 // A type node the emitter invents. Lazily creates the shared synth context on first use (several call
@@ -1903,7 +1917,7 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     unsupported(("`" + spelled + "` is declared in `" + declFile + "` and this file does not import it — "
                  "add `import { " + spelled + " };`. A module's files share a name space but not a scope: "
                  "`export` offers a name and `import` accepts it, so every name a file uses is written "
-                 "down at its top").c_str(), line);
+                 "down at its top").c_str(), line, spelled);
 }
 
 // The file a reference is being written in, for `checkReach`. Empty outside a body walk.
@@ -18093,7 +18107,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          "result to a `comptime` constant and use that").c_str(), call->line);
             return "0";
         }
-        unsupported("call to unknown function (args kept in source order)", call->line);
+        // The SUBJECT, so an editor can offer the import: a free `fn` is an importable name like any
+        // other, and "unknown function" is what a missing import looks like from here.
+        unsupported("call to unknown function (args kept in source order)", call->line, name);
         std::string s = cFunctionName(name) + "(";
         bool first = true;
         if (call->args) for (auto& a : *call->args) {

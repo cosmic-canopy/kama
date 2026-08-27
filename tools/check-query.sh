@@ -496,6 +496,31 @@ else
     fail=1
 fi
 
+# `subject` — the NAME a diagnostic is about, carried as data rather than left in the prose. The LSP's
+# auto-import quick fix acts on this field, and the reason it is a field is the house rule: `message` is
+# written for a human and gets reworded, so a tool recovering the name by parsing it would turn any
+# wording edit into a silent tooling regression.
+#
+# BOTH directions, and the second is the one that gives the first its meaning: it must be OMITTED where
+# there is no name, or "has a subject" stops distinguishing anything and every diagnostic looks
+# actionable to an editor.
+sjbad="$tmp/subject.kama"
+printf 'fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n' > "$sjbad"
+out=$("$KAMA" check "$sjbad" --json 2>/dev/null || true)
+if printf '%s' "$out" | grep -qF '"subject":"Nonexistent"'; then
+    echo "  ok: --json carries a diagnostic's \`subject\` (the name a quick fix acts on)"
+else
+    echo "  FAIL: --json dropped the diagnostic subject, got: $out" >&2
+    fail=1
+fi
+# `local … has no initializer` is about a local, not about an importable name — no subject.
+if printf '%s' "$out" | grep -qF '"subject":"thing"'; then
+    echo "  FAIL: a diagnostic with no actionable name carried a subject anyway: $out" >&2
+    fail=1
+else
+    echo "  ok: ...and omits it where there is no name to act on"
+fi
+
 # Real parseability, not just the shape. Skipped rather than failed where python3 is absent, so the guard
 # stays runnable on a bare box — the grep assertions above still hold the line there.
 if command -v python3 >/dev/null 2>&1; then

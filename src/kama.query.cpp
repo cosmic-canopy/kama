@@ -1140,6 +1140,55 @@ Location CEmitter::definitionAt(const std::string& uri, int line, int col) const
     return Location{ d.unit->name ? *d.unit->name : uri, d.selectionRange };
 }
 
+// Where an auto-import's one edit goes. There is exactly ONE `import { … };` block per file and it is
+// always at the top — a second `import` statement is a parse error, and so is one below a declaration —
+// so this returns a single position rather than a choice among directives with an ordering to guess.
+// That is a consequence of the module campaign's syntax, not luck, and it is what makes the quick fix an
+// insertion instead of a rewrite.
+SrcRange CEmitter::importInsertionAt(const std::string& uri, bool& hasBlock) const
+{
+    hasBlock = false;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return SrcRange{};
+
+    // (1) The block exists: aim at the FIRST entry's start and insert `"X, "` there. Deliberately the
+    // head and not the tail — the tail would mean finding the closing brace, which no node's span
+    // records, whereas every entry's own start IS indexed (it is what go-to-definition on an import line
+    // already answers from).
+    if (unit->importDeclarationList && !unit->importDeclarationList->empty()) {
+        for (const auto& imp : *unit->importDeclarationList) {
+            if (!imp) continue;
+            // A qualified entry starts at its first module segment (`std` of `std::collections::Map`); a
+            // same-module entry has no module path, so its own symbol identifier is the start.
+            if (!imp->modulePathPos.empty() && imp->modulePathPos.front().line > 0) {
+                hasBlock = true;
+                return imp->modulePathPos.front();
+            }
+            if (imp->symbols && !imp->symbols->empty()) {
+                const auto& first = imp->symbols->front();
+                if (first && first->identifier && first->identifier->line > 0) {
+                    hasBlock = true;
+                    return rangeOfId(first->identifier);
+                }
+            }
+        }
+        // A block whose entries carry no usable span: better to write a fresh block than to guess a
+        // position, so fall through rather than returning something that would corrupt the file.
+    }
+
+    // (2) No block. A new one goes on the line of the `export { … };` when there is one — exports sit
+    // exactly where an import block belongs, immediately above them — else on the first declaration's
+    // line, else line 1.
+    int line = 0;
+    if (!unit->exportListPos.empty() && unit->exportListPos.front().line > 0)
+        line = unit->exportListPos.front().line;
+    if (line == 0 && unit->codeDeclarationList)
+        for (const auto& d : *unit->codeDeclarationList)
+            if (d && d->line > 0) { line = d->line; break; }
+    if (line == 0) line = 1;
+    return SrcRange{ line, 0, line, 0 };
+}
+
 // Hover: a short "<kind> <name>" for a declaration or a resolved reference.
 std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col) const
 {

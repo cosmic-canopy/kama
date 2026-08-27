@@ -672,6 +672,11 @@ public:
     Location    definitionAt(const std::string& uri, int line, int col) const;     // go-to-definition
     std::string typeAtPosition(const std::string& uri, int line, int col) const;   // hover: kind + name at a decl/type ref
     std::vector<Diagnostic> diagnosticsFor(const std::string& uri) const;          // diagnostics for one file
+    // Where an auto-import's edit goes in `uri` — the first `import` entry's start when the file has a
+    // block, else column 0 of the line a new block belongs on. `hasBlock` (out) says which. An empty
+    // range means the index holds no unit for this path. See LspImportInsertion (kama.lsp.h) for the two
+    // texts a server writes at it, and why one position is enough.
+    SrcRange importInsertionAt(const std::string& uri, bool& hasBlock) const;
     // find-references (M3): every USE of the symbol at the cursor, across every unit passed to analyze().
     // `includeDecl` adds the declaration's own name range (LSP's context.includeDeclaration).
     std::vector<Location> referencesAt(const std::string& uri, int line, int col, bool includeDecl) const;
@@ -2415,6 +2420,9 @@ private:
     // (`_F<file>__Plain`, `std__collections__Map_int32_..._GlobalAllocator`) can never reach the user or the LSP.
     const std::string& diagFile() const;   // the file a diagnostic belongs to — see the definition
     void unsupported(const char* rawWhat, int srcLine);
+    // ...and the form that names the SYMBOL the defect is about, for the sites an editor can offer a fix
+    // on (an unimported name, an unknown type). See Diagnostic::subject.
+    void unsupported(const char* rawWhat, int srcLine, const std::string& subject);
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
     std::string demangleForDisplay(const std::string& msg, int depth = 0) const;
     // A call's resolved return type, UNFILTERED (class, plain enum or primitive). exprClass keeps the

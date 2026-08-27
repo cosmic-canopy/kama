@@ -5954,6 +5954,9 @@ Json jsonDiagnostic(const Diagnostic& d)
     if (d.endColumn) j.set("endColumn", d.endColumn);
     j.set("severity", diagSeverityName(d.severity));
     if (!d.code.empty()) j.set("code", d.code);
+    // Omitted when there is none, so its presence MEANS "there is a name here a tool can act on" rather
+    // than needing a truth test against "". See Diagnostic::subject.
+    if (!d.subject.empty()) j.set("subject", d.subject);
     j.set("message", d.message);
     return j;
 }
@@ -7339,6 +7342,14 @@ Location lspDefinition(const SharedLspIndex& idx, const std::string& path, int l
     return idx->idx->definitionAt(path, line, col);
 }
 
+LspImportInsertion lspImportInsertion(const SharedLspIndex& idx, const std::string& path)
+{
+    LspImportInsertion ins;
+    if (!idx || !idx->idx) return ins;
+    ins.at = idx->idx->importInsertionAt(path, ins.hasBlock);
+    return ins;
+}
+
 std::vector<Location> lspRenameDeclarations(const SharedLspIndex& idx, const std::string& path,
                                             int line, int col)
 {
@@ -7510,6 +7521,89 @@ std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std
         for (auto& n : *u->exportList) if (n) out.insert(*n);
     }
     return { out.begin(), out.end() };
+}
+
+// Every composed module name reachable from `fromPath`, breadth-first through lspImportModules — the top
+// level (the stdlib, this file's own project, its declared dependencies), then each of those projects'
+// modules, and so on. A project ROOT is a module too (`geo`, declared `"."`), so a name is BOTH a result
+// and a prefix to descend from.
+//
+// Bounded on both axes rather than trusted to terminate: `modules` is a declared map that a hand-written
+// manifest can nest arbitrarily, and this walk is on an interactive path. Blowing either bound narrows
+// what auto-import can offer; it can never wedge the server.
+static std::vector<std::string> lspAllModuleNames(const std::string& fromPath, const char* argv0)
+{
+    static const size_t kMaxModules = 256;
+    static const int    kMaxDepth   = 6;
+    std::vector<std::string> out;
+    std::set<std::string>    seen;
+    std::vector<std::string> frontier{ std::string() };      // "" = the top level
+    for (int depth = 0; depth < kMaxDepth && !frontier.empty() && out.size() < kMaxModules; ++depth) {
+        std::vector<std::string> next;
+        for (const auto& prefix : frontier) {
+            for (const auto& seg : lspImportModules(fromPath, prefix, argv0)) {
+                const std::string full = prefix.empty() ? seg : prefix + "::" + seg;
+                if (!seen.insert(full).second) continue;
+                out.push_back(full);
+                next.push_back(full);
+                if (out.size() >= kMaxModules) break;
+            }
+            if (out.size() >= kMaxModules) break;
+        }
+        frontier.swap(next);
+    }
+    return out;
+}
+
+// Every `import` spelling that would bring `symbol` into scope from `fromPath` — what the auto-import
+// quick fix offers, in the order it offers them.
+//
+// Two rungs, and the ORDER is the module campaign's own shape rather than a preference. A SIBLING in this
+// file's own module comes first and is spelled bare (`import { Helper };`): that is the case the campaign
+// created — a name that needed no import before now needs one — and it is the diagnostic the phase-3b
+// message already names the fix for. Everything else is a module away and is spelled qualified
+// (`import { std::collections::DynamicArray };`).
+//
+// Answers from the FILESYSTEM and the module resolver, never from the query index, for the same reason
+// lspImportSymbols does: a symbol the file is about to import is by definition one it does not import,
+// so it is in no index. That costs a parse of each candidate module's files — per GESTURE (a lightbulb),
+// never per keystroke, and the server holds the parse cache open, so a second lightbulb on the same file
+// is free.
+std::vector<std::string> lspImportCandidates(const std::string& fromPath, const std::string& symbol,
+                                             const char* argv0)
+{
+    static const size_t kMaxCandidates = 16;
+    if (symbol.empty()) return {};
+    std::vector<std::string> out;
+    std::set<std::string>    seen;
+    auto offer = [&](const std::string& spelling) {
+        if (out.size() < kMaxCandidates && seen.insert(spelling).second) out.push_back(spelling);
+    };
+
+    // (1) A sibling of this file's own module. Same-module membership is asked of moduleIdForFile rather
+    // than assumed from the directory: that is the one derivation of "which module owns this file?", and
+    // a second one here would be exactly the disagreement between two spellings the campaign removed.
+    // (Directory-local only, so a module spread over an unlisted subfolder is under-offered rather than
+    // mis-offered — rung 2 still reaches it, qualified.)
+    const std::string mine = moduleIdForFile(fromPath).full();
+    const std::string self = absolutePath(fromPath);
+    for (const auto& f : listKamaFiles(dirName(absolutePath(fromPath)))) {
+        if (absolutePath(f) == self) continue;                    // its own declarations need no import
+        if (moduleIdForFile(f).full() != mine) continue;
+        SharedCompilationUnit u = parseFile(f);
+        if (!u || !u->exportList) continue;                       // unexported: an import cannot accept it
+        for (auto& n : *u->exportList)
+            if (n && *n == symbol) { offer(symbol); break; }
+    }
+
+    // (2) Every other reachable module, by its `export` manifest.
+    for (const auto& mod : lspAllModuleNames(fromPath, argv0)) {
+        if (mod == mine) continue;                                // rung 1 owns this one, spelled bare
+        for (const auto& sym : lspImportSymbols(fromPath, mod, argv0))
+            if (sym == symbol) { offer(mod + "::" + symbol); break; }
+        if (out.size() >= kMaxCandidates) break;
+    }
+    return out;
 }
 
 // ------------------------------------------------------------------------------------------------

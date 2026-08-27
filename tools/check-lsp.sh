@@ -158,6 +158,26 @@ WW='export { Widget, defaultSize };\ntype value Widget {\n    public int32 size;
 SURI="file:///sem.kama"
 SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 
+# ---- auto-import quick fix (textDocument/codeAction) -----------------------------------------------
+#
+# All three buffers are OVERLAYS on real on-disk files, and they have to be: the whole gesture is "which
+# module exports this name?", which is answered from the filesystem and the module resolver, so an
+# invented path resolves nothing and every fixture would pass by returning an empty list.
+#
+# CAW is `tests/query/ws/src/app.kama` WITHOUT its import — the case the module campaign created, where
+# `Widget` is a sibling in this file's own module (`wsproj`) and needed no import before. The offered fix
+# is the BARE spelling, and that spelling was checked by building the project with it, not by reading the
+# grammar.
+CAWURI=$(furi "$ROOT/tests/query/ws/src/app.kama")
+CAW='fn Widget make(int32 n) {\n    Widget w = Widget.of(size: n);\n    return w;\n}\n'
+# The other half: a name from another module entirely, which the diagnostic canNOT name (it says only
+# "unknown type `DynamicArray`"), so the fix has to search for it. Two spellings of the same buffer —
+# without an import block and with one — because they take the two different edits, and the second is
+# the one that must not produce a SECOND `import` statement: two blocks is a parse error, so an edit
+# that appended one would hand back a file that no longer compiles.
+CANOBLK='fn int32 useit() {\n    DynamicArray<int32> a = DynamicArray.empty();\n    return 0;\n}\n'
+CABLK='import { std::collections::View };\nfn int32 useit() {\n    DynamicArray<int32> a = DynamicArray.empty();\n    return 0;\n}\n'
+
 # M3.4 fixture: one of each binding kind, each WITH the trailing syntax whose span used to be swallowed.
 # The prepareRename ranges below are the DATA-LOSS GUARD — rename replaces the range it is given, so a
 # range that ran past the name would rewrite `seeded = 7` (or `Code::Ok`, or `Bad = 2`) as the new name.
@@ -468,6 +488,18 @@ frame '{"jsonrpc":"2.0","id":67,"method":"textDocument/rename","params":{"textDo
 frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IIURI"'","languageId":"kama","version":1,"text":"'"$IIB"'"}}}'
 frame '{"jsonrpc":"2.0","id":69,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":2,"character":95}}}'
 frame '{"jsonrpc":"2.0","id":70,"method":"textDocument/completion","params":{"textDocument":{"uri":"'"$IIURI"'"},"position":{"line":5,"character":109}}}'
+# --- auto-import. 71: a SIBLING in the file's own module -> the bare spelling, and a whole new block.
+#     72: a name from another module, which the diagnostic cannot name -> the search finds it. 73: the
+#     same into a file that ALREADY has a block -> one entry joins it, and the range must be ZERO-WIDTH
+#     (a one-character range REPLACES, which is how this first shipped: it ate the `std` it aimed at).
+#     74: a clean buffer offers nothing.
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$CAWURI"'","languageId":"kama","version":1,"text":"'"$CAW"'"}}}'
+frame '{"jsonrpc":"2.0","id":71,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$CAWURI"'"},"range":{"start":{"line":1,"character":4},"end":{"line":1,"character":4}},"context":{"diagnostics":[]}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":3},"contentChanges":[{"text":"'"$CANOBLK"'"}]}}'
+frame '{"jsonrpc":"2.0","id":72,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$IURI"'"},"range":{"start":{"line":1,"character":4},"end":{"line":1,"character":4}},"context":{"diagnostics":[]}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":4},"contentChanges":[{"text":"'"$CABLK"'"}]}}'
+frame '{"jsonrpc":"2.0","id":73,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$IURI"'"},"range":{"start":{"line":2,"character":4},"end":{"line":2,"character":4}},"context":{"diagnostics":[]}}}'
+frame '{"jsonrpc":"2.0","id":74,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$QURI"'"},"range":{"start":{"line":0,"character":0},"end":{"line":2,"character":0}},"context":{"diagnostics":[]}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -495,6 +527,7 @@ expect '"renameProvider":{"prepareProvider":true}'   "advertises renameProvider 
 expect '"completionProvider"'                        "advertises completionProvider (M4)"
 expect '"triggerCharacters":[".",":"]'               "... triggered by . and :"
 expect '"signatureHelpProvider":{"triggerCharacters":["(",","]}' "advertises signatureHelpProvider (M4)"
+expect '"codeActionProvider":{"codeActionKinds":["quickfix"]}'   "advertises codeActionProvider for quickfix (auto-import)"
 expect '"method":"textDocument/publishDiagnostics"'  "server publishes diagnostics"
 expect '"message":"syntax error'                     "syntax error surfaced on the bad buffer"
 expect '"start":{"line":2,"character":0}'            "error range mapped to LSP 0-based (kama 3:0 -> 2:0)"
@@ -819,6 +852,32 @@ expect '"id":54,"result":[{"uri":"file:///labels.kama","range":{"start":{"line":
        "references from a label finds the parameter declaration"
 
 # --- M6 A1: the editor analyzes the program the BUILD analyzes ---------------------------------------
+echo "check-lsp: auto-import quick fix"
+# ⚠️ THE EDIT IS AN INSERTION, AND THAT IS WHAT THESE RANGES PIN. The first version emitted the anchor
+# through the diagnostic range helper, whose "unknown end" arm widens a point to ONE CHARACTER so a
+# squiggle is always visible — correct there, and destructive here, because a one-character TextEdit
+# REPLACES. Measured before the fix: the new-block edit ate the file's first byte (`fn int32 main()` ->
+# `n int32 main()`) and the join-a-block edit overwrote the `std` it aimed at. Both fixtures below assert
+# `start` == `end`, which is the only thing that tells the two apart.
+expect '"id":71,"result":[{"title":"add `import { Widget };`","kind":"quickfix"' \
+    "codeAction: a sibling in the file's own module is offered BARE — the case imports-are-mandatory created"
+expect '"newText":"import { Widget };\n"' \
+    "codeAction: ...as a whole new import block (this file had none)"
+expect '"id":72,"result":[{"title":"add `import { std::collections::DynamicArray };`","kind":"quickfix"' \
+    "codeAction: a name from another module is FOUND — the diagnostic can only say \`unknown type\`, so the fix searches"
+expect '"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}},"newText":"import { std::collections::DynamicArray };\n"' \
+    "codeAction: ...inserted at 0:0 as a ZERO-WIDTH edit, not a one-character replacement"
+expect '"range":{"start":{"line":0,"character":9},"end":{"line":0,"character":9}},"newText":"std::collections::DynamicArray, "' \
+    "codeAction: an existing block gains ONE ENTRY at its head — a second \`import\` statement does not parse"
+expect '"id":74,"result":[]' \
+    "codeAction: a buffer with nothing to fix offers nothing"
+# The quick fix ADDS to the diagnostic, it does not replace it: the message still names the exact line to
+# paste, which is what works over a pipe, in CI, and in an editor with no kama extension. Assert both
+# halves are present, or a later "tidy-up" of the message would silently remove the only answer a
+# non-LSP user ever gets.
+expect 'and this file does not import it — add `import { Widget };`' \
+    "the DIAGNOSTIC still names the exact line to paste, alongside the code action"
+
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
 # rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the
 # session above: proving the outline CHANGES with the manifest needs a fresh server per configuration.

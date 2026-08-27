@@ -357,6 +357,23 @@ Json lspRange(int startLine1, int startCol0, int endLine1, int endCol0) {
     Json range = Json::object(); range.set("start", start); range.set("end", end);
     return range;
 }
+// A zero-width range AT a position — an INSERTION point, which lspRange above cannot express and must
+// not be asked to. Its "unknown end" arm deliberately widens a point to one character so a diagnostic's
+// squiggle is always visible, and that is exactly wrong for a TextEdit: a one-character range REPLACES
+// the character it covers. Measured on the auto-import fix before this existed — the edit inserting a
+// new `import` block ate the file's first byte (`fn int32 main()` -> `n int32 main()`), and the one
+// joining an existing block overwrote the `std` of the entry it aimed at. Same coordinate conversion,
+// different question, so it is a second function rather than a flag on the first.
+Json lspInsertionPoint(int line1, int col0) {
+    Json at = Json::object();
+    at.set("line", line1 > 0 ? line1 - 1 : 0);
+    at.set("character", col0 >= 0 ? col0 : 0);
+    Json range = Json::object();
+    range.set("start", at);
+    range.set("end", at);
+    return range;
+}
+
 // Would this spelling lex as a kama identifier? Guards rename: an editor will happily send `2x`, `my var`
 // or `return` as a new name, and writing any of those produces a file that no longer parses. Answered by
 // the LEXER (kamaIsIdentifier, kama.l) rather than here, so this and the manifest reader — which asks the
@@ -376,17 +393,24 @@ int severityToLsp(DiagSeverity s) {
     return 1;
 }
 
+// One diagnostic, protocol-shaped. Its own function because a code action must echo back the EXACT
+// diagnostic it fixes — a client matches the two by value to attach the lightbulb to the right squiggle
+// — so the published form and the one carried inside a CodeAction have to be built here or they drift.
+// `Diagnostic::subject` is deliberately NOT sent: it is what the SERVER acts on, and there is no field
+// for it that survives every client. See Doc::lastDiags.
+Json diagnosticJson(const Diagnostic& d) {
+    Json j = Json::object();
+    j.set("range", rangeToJson(d));
+    j.set("severity", severityToLsp(d.severity));
+    if (!d.code.empty()) j.set("code", d.code);
+    j.set("source", "kama");
+    j.set("message", d.message);
+    return j;
+}
+
 Json diagnosticsArray(const std::vector<Diagnostic>& diags) {
     Json arr = Json::array();
-    for (const auto& d : diags) {
-        Json j = Json::object();
-        j.set("range", rangeToJson(d));
-        j.set("severity", severityToLsp(d.severity));
-        if (!d.code.empty()) j.set("code", d.code);
-        j.set("source", "kama");
-        j.set("message", d.message);
-        arr.push(std::move(j));
-    }
+    for (const auto& d : diags) arr.push(diagnosticJson(d));
     return arr;
 }
 
@@ -397,6 +421,13 @@ struct Doc {
     std::string    text;
     SharedLspIndex lastGoodIndex;    // last analyzed index; since M5.4 a mid-edit buffer still produces
                                      // one (recovery keeps what parsed), so this stays current, not stale
+    // The diagnostics last PUBLISHED for this buffer, in kama's own form. Kept because a code action has
+    // to answer from a diagnostic and the protocol's way of handing one back — `Diagnostic.data`, round
+    // -tripped through publishDiagnostics into the codeAction request — is a client courtesy rather than
+    // a guarantee, and it would lose `Diagnostic::subject` on the way through any client that skips it.
+    // The server already has the authoritative list; reading its own is both simpler and drivable over
+    // raw JSON-RPC with no client behaviour to emulate.
+    std::vector<Diagnostic> lastDiags;
 };
 
 struct Server {
@@ -641,6 +672,7 @@ struct Server {
         std::vector<Diagnostic> diags;
         SharedLspIndex idx = lspAnalyze(path, it->second.text, diags, argv0);
         if (idx) it->second.lastGoodIndex = idx;
+        it->second.lastDiags = diags;      // what a code action acts on — see Doc::lastDiags
         publish(uri, diags);
     }
 
@@ -725,6 +757,14 @@ struct Server {
         semtok.set("legend", std::move(legend));
         semtok.set("full", true);
         caps.set("semanticTokensProvider", std::move(semtok));
+        // Auto-import. `quickfix` only — that is the one kind kama has actions for, and advertising the
+        // list lets a client ask for just that kind rather than for everything and filtering. No
+        // `resolveProvider`: every action is sent complete, edit included, because the edit is one
+        // insertion the server already computed and there is nothing to defer.
+        Json codeAction = Json::object();
+        Json cakinds = Json::array(); cakinds.push(Json("quickfix"));
+        codeAction.set("codeActionKinds", std::move(cakinds));
+        caps.set("codeActionProvider", std::move(codeAction));
         Json folders = Json::object();
         folders.set("supported", true);
         Json ws = Json::object();
@@ -909,6 +949,68 @@ struct Server {
         Json result = Json::object();
         result.set("contents", std::move(contents));
         sendResponse(id, std::move(result));
+    }
+
+    // ---- auto-import quick fix -----------------------------------------------------------------------
+    //
+    // The module campaign made an `import` mandatory for every name a file uses that it does not declare
+    // — including a sibling in its own module, which needed nothing before. That is the right rule, and
+    // every language that has it pays the typing cost back through the editor. This is that repayment.
+    //
+    // ⚠️ IT ADDS TO THE DIAGNOSTIC, IT DOES NOT REPLACE IT. The message still names the exact line to
+    // paste, deliberately: that is what works over a pipe, in CI, and in an editor with no kama
+    // extension. A quick fix is the convenience on top, not the only way to learn the answer.
+    //
+    // textDocument/codeAction -> CodeAction[], always an array.
+    void handleCodeAction(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json actions = Json::array();
+        auto it = docs.find(uri);
+        if (it == docs.end()) { sendResponse(id, std::move(actions)); return; }
+
+        // The requested span, as LSP 0-based lines.
+        int fromLine = 0, toLine = 0;
+        if (const Json* r = params.get("range")) {
+            if (const Json* s = r->get("start")) if (const Json* l = s->get("line")) fromLine = l->asInt();
+            if (const Json* e = r->get("end"))   if (const Json* l = e->get("line")) toLine   = l->asInt();
+        }
+        if (toLine < fromLine) toLine = fromLine;
+
+        std::string path = uriToPath(uri);
+        LspImportInsertion ins = lspImportInsertion(it->second.lastGoodIndex, path);
+        if (ins.at.line == 0) { sendResponse(id, std::move(actions)); return; }
+
+        for (const auto& d : it->second.lastDiags) {
+            // ⚠️ Match by LINE, not by range overlap. A semantic diagnostic is filed with a LINE and no
+            // column (`unsupported` is handed `node->line`), so it publishes as a one-character span at
+            // column 0 — and an overlap test against that would offer the lightbulb only with the cursor
+            // at the very start of the line, which reads as the fix not existing. The line is the honest
+            // grain of what the compiler actually knows here.
+            if (d.line - 1 < fromLine || d.line - 1 > toLine) continue;
+            if (d.subject.empty()) continue;              // no name to act on — see Diagnostic::subject
+            for (const auto& spelling : lspImportCandidates(path, d.subject, argv0)) {
+                Json e = Json::object();
+                // The anchor's START, collapsed — an insertion, never a replacement. See lspInsertionPoint.
+                e.set("range", lspInsertionPoint(ins.at.line, ins.at.column));
+                e.set("newText", ins.hasBlock ? spelling + ", "
+                                              : "import { " + spelling + " };\n");
+                Json edits = Json::array(); edits.push(std::move(e));
+                Json changes = Json::object(); changes.set(uri, std::move(edits));
+                Json edit = Json::object(); edit.set("changes", std::move(changes));
+                Json diags = Json::array(); diags.push(diagnosticJson(d));
+                Json act = Json::object();
+                act.set("title", "add `import { " + spelling + " };`");
+                act.set("kind", "quickfix");
+                act.set("diagnostics", std::move(diags));
+                act.set("edit", std::move(edit));
+                actions.push(std::move(act));
+            }
+        }
+        // `isPreferred` on exactly one action, and only when it IS the only one: it licenses a client to
+        // apply the fix without asking (VS Code's auto-fix), which is right for the unambiguous case and
+        // wrong the moment two modules export the same name.
+        if (actions.arr.size() == 1) actions.arr.front().set("isPreferred", true);
+        sendResponse(id, std::move(actions));
     }
 
     // ---- M4 completion + signature help --------------------------------------------------------------
@@ -1259,6 +1361,7 @@ struct Server {
         if (method == "textDocument/completion")     { if (isRequest) handleCompletion(*idp, params);     return true; }
         if (method == "textDocument/signatureHelp")  { if (isRequest) handleSignatureHelp(*idp, params);  return true; }
         if (method == "textDocument/semanticTokens/full") { if (isRequest) handleSemanticTokens(*idp, params); return true; }
+        if (method == "textDocument/codeAction")     { if (isRequest) handleCodeAction(*idp, params);     return true; }
         if (method == "workspace/didChangeWatchedFiles") { handleDidChangeWatchedFiles(params); return true; }
         // `workspace/didChangeConfiguration` is deliberately NOT handled — see kama.lsp.h. The one
         // configuration channel is `kama.local.json`, which arrives through the watcher above, so this

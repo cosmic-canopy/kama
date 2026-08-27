@@ -46,6 +46,12 @@ struct Diagnostic {
     std::string  code;            // short stable id, e.g. "unsupported", "parse"
     std::string  message;         // human-readable text
     std::string  file;            // source path / module name the position is relative to
+    // The single NAME this diagnostic is about, when it has one ("" otherwise) — an unimported symbol,
+    // an unknown type. Structured on purpose, and the reason is the house rule: `message` is prose
+    // written for a HUMAN and is rewritten freely (four of these were reworded in one campaign), so a
+    // tool that recovered the name by parsing it would turn every wording edit into a silent
+    // regression. The LSP's auto-import quick fix acts on this field and never reads the message.
+    std::string  subject;
 };
 
 inline void renderDiagnostic(std::FILE* to, const Diagnostic& d)

@@ -37,9 +37,21 @@ Advertised by `kama lsp` today, in every editor:
 | completion (triggers: `.` and `::`), including argument labels | `textDocument/completion` |
 | signature help (triggers: `(` and `,`) | `textDocument/signatureHelp` |
 | semantic highlighting | `textDocument/semanticTokens/full` |
+| auto-import quick fix on an unimported name | `textDocument/codeAction` (`quickfix`) |
 
 Rename refuses a symbol the project does not own (a `std` or dependency declaration), and renaming a
 parameter also rewrites its argument labels at every call site.
+
+**Auto-import.** Every name a file uses that it does not declare needs an `import`, including a sibling
+in the same module, so the editor writes it for you: put the cursor on the error and the lightbulb offers
+one fix per module that exports the name — the bare spelling for a sibling (`import { Widget };`), the
+qualified one otherwise (`import { std::collections::DynamicArray };`). A file has exactly one
+`import { … };` block, so the fix either starts it or adds one entry to it.
+
+**The diagnostic is still the answer, and that is on purpose.** The message itself names the exact line
+to paste, so nothing above is required to find out what to write — it works over a pipe, in CI, and in an
+editor with no kama support at all. The quick fix saves the typing; it is not the only way to learn the
+fix.
 
 ## Syntax colouring differs per editor — read this before filing a bug
 
@@ -320,8 +332,8 @@ nothing at all.
 2. Choose the `editor/zed/` directory.
 
 That gives you syntax colouring, the outline view, bracket matching and indentation from the grammar, plus
-diagnostics, hover, go-to-definition, find-references, rename, completion, signature help and semantic
-tokens from `kama lsp`.
+diagnostics, hover, go-to-definition, find-references, rename, completion, signature help, semantic
+tokens and the auto-import quick fix from `kama lsp`.
 
 The server is launched by `editor/zed/src/kama.rs`, which resolves the binary through the worktree's `PATH`:
 
