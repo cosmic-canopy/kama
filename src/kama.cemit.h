@@ -565,7 +565,16 @@ public:
 
     // The implicit prelude (library sum types Optional/Result). Collected before user code
     // with a global namespace, so its templates register but emit nothing unless instantiated.
-    void setPrelude(SharedCompilationUnit u) { _preludeUnit = u; }
+    // `srcPath` is where that source ACTUALLY lives on disk (the driver resolves it; "" when there is no
+    // such file, as in a `--no-std` install). It travels ALONGSIDE the unit's synthetic `<prelude>` name
+    // rather than replacing it — see DefSite::file and builtinSourcePath for the four passes that read
+    // the `<` sentinel and would change behaviour if the name became a path. Its one reader is
+    // go-to-definition.
+    void setPrelude(SharedCompilationUnit u, const std::string& srcPath = std::string())
+    {
+        _preludeUnit = u;
+        if (u && !srcPath.empty()) _builtinUnitFile[u.get()] = srcPath;
+    }
 
     // `--no-heap` (MCU step 5): reject every emitter-visible heap allocation program-wide (the no-heap
     // subset — also serves game-engine hot paths / real-time audio, not just bare metal). Composes with
@@ -631,7 +640,12 @@ public:
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
     // scope. Like the prelude, its generic templates emit nothing unless instantiated.
-    void addPreludeModule(SharedCompilationUnit u) { if (u) _preludeModuleUnits.push_back(u); }
+    void addPreludeModule(SharedCompilationUnit u, const std::string& srcPath = std::string())
+    {
+        if (!u) return;
+        _preludeModuleUnits.push_back(u);
+        if (!srcPath.empty()) _builtinUnitFile[u.get()] = srcPath;   // see setPrelude
+    }
 
     // Emit a single self-contained translation unit (transpile / single-file
     // build). Returns the number of unsupported nodes (0 == fully lowered).
@@ -724,6 +738,9 @@ private:
     std::vector<SharedCompilationUnit> _units;   // the USER units passed to analyze() (URI->unit, outline filter)
     std::map<std::string, DefSite>     _defSites;  // resolved mangled name -> declaration site
     std::map<const ASTNode*, const CompilationUnit*> _declUnit;  // top-level decl node -> owning unit
+    // Its compiler-owned sibling: a prelude/built-in-module decl -> the file it was embedded from. A
+    // SEPARATE map on purpose — see buildDeclUnits for why these must not make `DefSite::unit` non-null.
+    std::map<const ASTNode*, std::string> _declBuiltinFile;
     std::map<const CompilationUnit*, std::vector<PosEntry>> _positions;  // per-unit sorted decl/sig/body positions
     // ---- M3 reference index -----------------------------------------------------------------------------
     // A body use-site as the REAL resolver produced it (recordRef), pending merge into _positions. Held only
@@ -826,8 +843,14 @@ private:
     const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
     void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                     ASTNode* declNode, const SharedIdentifier& nameId,
-                    const std::string& display, const std::string& container);  // one _defSites entry
+                    const std::string& display, const std::string& container,
+                    // For a MEMBER of a compiler-owned type, whose node is not a top-level declaration and
+                    // so is in no map: its type's file, already resolved by the caller. See DefSite::file.
+                    const std::string& builtinFile = std::string());  // one _defSites entry
     const CompilationUnit* unitOfDecl(const ASTNode* topLevelDecl) const;  // _declUnit lookup (nullptr => prelude/std)
+    // The file a compiler-owned top-level declaration was embedded from, or "" (a user decl, or no such
+    // file on disk). The `unitOfDecl` sibling for the half `_declUnit` deliberately cannot express.
+    std::string builtinFileOfDecl(const ASTNode* topLevelDecl) const;
 
     // ---- M4 completion helpers (kama.query.cpp) --------------------------------------------------------
     // Save/restore the two pieces of resolver state a query mutates. RAII rather than paired assignments
@@ -934,6 +957,9 @@ private:
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
+    // Compiler-owned unit -> the file it was embedded FROM. Filled by setPrelude / addPreludeModule; read
+    // only by buildDeclUnits, to give those declarations' DefSites a `file` they can be opened at.
+    std::map<const CompilationUnit*, std::string> _builtinUnitFile;
     // Does the program use serde at all? Set in collectProgram from a `@generate` type or a Serializer/
     // Deserializer backend — the only ways to (de)serialize anything. When false we emit NONE of the serde
     // machinery: the prelude's primitive Serialize/Deserialize conformances are skipped, and a collection's

@@ -178,6 +178,10 @@ CAW='fn Widget make(int32 n) {\n    Widget w = Widget.of(size: n);\n    return w
 CANOBLK='fn int32 useit() {\n    DynamicArray<int32> a = DynamicArray.empty();\n    return 0;\n}\n'
 CABLK='import { std::collections::View };\nfn int32 useit() {\n    DynamicArray<int32> a = DynamicArray.empty();\n    return 0;\n}\n'
 
+# Go-to-definition on the PRELUDE. Also an overlay on a real path, because the answer is a real file the
+# driver resolves relative to the compiler binary.
+PRELB='fn Optional<int32> pick() {\n    return Optional::None;\n}\n'
+
 # M3.4 fixture: one of each binding kind, each WITH the trailing syntax whose span used to be swallowed.
 # The prepareRename ranges below are the DATA-LOSS GUARD — rename replaces the range it is given, so a
 # range that ran past the name would rewrite `seeded = 7` (or `Code::Ok`, or `Bad = 2`) as the new name.
@@ -500,6 +504,13 @@ frame '{"jsonrpc":"2.0","id":72,"method":"textDocument/codeAction","params":{"te
 frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":4},"contentChanges":[{"text":"'"$CABLK"'"}]}}'
 frame '{"jsonrpc":"2.0","id":73,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$IURI"'"},"range":{"start":{"line":2,"character":4},"end":{"line":2,"character":4}},"context":{"diagnostics":[]}}}'
 frame '{"jsonrpc":"2.0","id":74,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"'"$QURI"'"},"range":{"start":{"line":0,"character":0},"end":{"line":2,"character":0}},"context":{"diagnostics":[]}}}'
+# --- go-to-definition on the PRELUDE. 75: F12 on `Optional` opens prelude/global.kama. 76/77: F2 on the
+#     same name is still refused — the prelude is openable, never renameable, and those are two different
+#     questions that a single `unit == nullptr` test used to answer with one "no".
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":5},"contentChanges":[{"text":"'"$PRELB"'"}]}}'
+frame '{"jsonrpc":"2.0","id":75,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3}}}'
+frame '{"jsonrpc":"2.0","id":76,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3}}}'
+frame '{"jsonrpc":"2.0","id":77,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3},"newName":"Maybe"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -877,6 +888,21 @@ expect '"id":74,"result":[]' \
 # non-LSP user ever gets.
 expect 'and this file does not import it — add `import { Widget };`' \
     "the DIAGNOSTIC still names the exact line to paste, alongside the code action"
+
+echo "check-lsp: go-to-definition reaches the prelude"
+# `Optional` is an ordinary kama declaration in a real file that got embedded into the binary and lost
+# its path on the way in. Nothing is synthesized to answer this — the definition was always written.
+expect '"id":75,"result":{"uri":"'"$(furi "$ROOT/prelude/global.kama")"'"' \
+    "definition: F12 on \`Optional\` opens prelude/global.kama"
+expect '"id":75,"result":{"uri":"'"$(furi "$ROOT/prelude/global.kama")"'","range":{"start":{"line":7,"character":10},"end":{"line":7,"character":18}}}' \
+    "definition: ...on the declaration ITSELF (kama 8:10 — the embed used to shift every line by one)"
+# ⚠️ AND IT IS STILL READ-ONLY. These two are why `DefSite` gained a `file` rather than a `unit`: not
+# owning a declaration is a reason to refuse to REWRITE it, and was never a reason to refuse to OPEN it.
+# A prelude that became renameable would be a regression the assertion above cannot see.
+expect '"id":76,"result":null' \
+    "prepareRename: F2 on a prelude name is still greyed out"
+expect '"id":77,"error":' \
+    "rename: ...and the rename itself is still refused"
 
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
 # rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the

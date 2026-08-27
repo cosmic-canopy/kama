@@ -75,6 +75,12 @@ jobs:
           # local leg stays green. Same failure shape as the individually-named headers above.
           cp lib/kama.json payload/lib/kama/kama.json
           cp -R lib/std payload/lib/kama/std
+          # The global prelude, for GO-TO-DEFINITION. `Optional`/`Result`/`Ordering` and the language
+          # contracts are ordinary kama declarations that get EMBEDDED into the binary, so an install had
+          # the definitions and no file to open them in. Shipping the source costs ~30 KB and is what
+          # `builtinSourcePath` looks for beside the stdlib. The `std::memory` triad needs no line here:
+          # it already ships under lib/std.
+          cp -R prelude payload/lib/kama/prelude
           cp LICENSE payload/ 2>/dev/null || true
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
 
@@ -150,6 +156,12 @@ jobs:
           # local leg stays green. Same failure shape as the individually-named headers above.
           cp lib/kama.json payload/lib/kama/kama.json
           cp -R lib/std payload/lib/kama/std
+          # The global prelude, for GO-TO-DEFINITION. `Optional`/`Result`/`Ordering` and the language
+          # contracts are ordinary kama declarations that get EMBEDDED into the binary, so an install had
+          # the definitions and no file to open them in. Shipping the source costs ~30 KB and is what
+          # `builtinSourcePath` looks for beside the stdlib. The `std::memory` triad needs no line here:
+          # it already ships under lib/std.
+          cp -R prelude payload/lib/kama/prelude
           cp LICENSE payload/ 2>/dev/null || true
           cp docs/GETTING_STARTED.md payload/README.md 2>/dev/null || true
       - name: Package (slim)

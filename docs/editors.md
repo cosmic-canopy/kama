@@ -29,7 +29,7 @@ Advertised by `kama lsp` today, in every editor:
 |---|---|
 | live diagnostics as you type (semantic, not just parse errors) | `textDocument/publishDiagnostics` |
 | hover — kind and type | `textDocument/hover` |
-| go to definition | `textDocument/definition` |
+| go to definition, including into `std` and the prelude | `textDocument/definition` |
 | find references | `textDocument/references` |
 | rename, project-wide | `textDocument/rename` (+ `prepareRename`) |
 | document outline / breadcrumbs | `textDocument/documentSymbol` |
@@ -40,7 +40,13 @@ Advertised by `kama lsp` today, in every editor:
 | auto-import quick fix on an unimported name | `textDocument/codeAction` (`quickfix`) |
 
 Rename refuses a symbol the project does not own (a `std` or dependency declaration), and renaming a
-parameter also rewrites its argument labels at every call site.
+parameter also rewrites its argument labels at every call site. Go-to-definition does **not** refuse
+those — it opens them read-only, `Optional`/`Result`/`Ordering` and the smart-pointer triad included.
+Not owning a declaration is a reason not to rewrite it, not a reason not to read it.
+
+A compiler built-in (`string`, `int32`, `isize`, and the `string` intrinsic methods) is the one thing
+with nowhere to go: those are registered in C++ and have no kama source anywhere. Hover still answers
+for them.
 
 **Auto-import.** Every name a file uses that it does not declare needs an `import`, including a sibling
 in the same module, so the editor writes it for you: put the cursor on the error and the lightbulb offers

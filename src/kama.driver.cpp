@@ -388,6 +388,42 @@ std::string resolveStdlibDir(const char* argv0)
     return "lib";
 }
 
+// This process's own argv[0], for the exe-relative resolvers above. Set once at the top of main, beside
+// the other build configuration, because `configureEmitter` — the ONE place every CEmitter is set up —
+// is handed an emitter and nothing else, and the answer is a process constant either way.
+static const char* g_argv0 = nullptr;
+
+// Where a compiler-owned source ACTUALLY lives on disk, given the synthetic name it carries inside the
+// binary (`<prelude>`, `<prelude>/std/memory/owned.kama`). Empty when there is no such file.
+//
+// ⚠️ The synthetic name is NOT replaced by this, and must not be. The leading `<` is a sentinel four
+// passes read: `checkReach` exempts compiler-owned declarations from the export/import rungs on it,
+// `CEmitter::line` suppresses a `#line` into a file that may not exist, `setPackageResolver` skips the
+// filesystem walk for such a unit, and `moduleOfUnit` returns "" for `<prelude>` specifically — a real
+// path there would derive a module name and re-mangle every prelude symbol. So the path travels
+// ALONGSIDE the name, for the query layer only, and go-to-definition is the one thing that reads it.
+//
+// The triad resolves in both trees, since `lib/std/memory/*.kama` ships either way. The global prelude
+// resolves beside the stdlib in an install and one level up in this repo, where `lib/` IS the stdlib
+// root and `prelude/` is its sibling.
+static std::string builtinSourcePath(const std::string& unitName)
+{
+    // Normalized, because this becomes a `file://` URI an editor opens and shows in a tab. The resolvers
+    // are exe-relative and compose `..` freely — a dev tree yields
+    // `out/Darwin-arm64/../../lib/../prelude/global.kama`, which opens fine and reads as a bug.
+    const std::string root = resolveStdlibDir(g_argv0);
+    const std::string pfx = "<prelude>/";
+    if (unitName.compare(0, pfx.size(), pfx) == 0) {
+        const std::string p = root + "/" + unitName.substr(pfx.size());
+        return fileExists(p) ? lspRealPath(p) : std::string();
+    }
+    if (unitName == "<prelude>") {
+        for (const std::string& p : { root + "/prelude/global.kama", root + "/../prelude/global.kama" })
+            if (fileExists(p)) return lspRealPath(p);
+    }
+    return std::string();
+}
+
 // The native WebGPU SDK root: wgpu-native's prebuilt drop (include/webgpu/{webgpu,wgpu}.h + a
 // lib/libwgpu_native.* under it). Fetched on demand by tools/fetch-webgpu.sh into a gitignored dir;
 // $KAMA_WGPU_DIR overrides. NOT vendored (multi-MB, MPL-2.0) — the repo stays lean and MIT: we only
@@ -1918,7 +1954,9 @@ static std::string g_logDefault;
 // merely unlikely: the next construction site cannot forget what it never spells out.
 static void configureEmitter(CEmitter& e)
 {
-    e.setPrelude(preludeUnit());       // Optional/Result available implicitly
+    // ...and where that source lives on disk, so go-to-definition on `Optional` opens the declaration
+    // instead of landing nowhere. The unit keeps its synthetic `<prelude>` NAME — see builtinSourcePath.
+    e.setPrelude(preludeUnit(), builtinSourcePath("<prelude>"));   // Optional/Result available implicitly
     e.setNoHeap(g_noHeap);             // `--no-heap`: reject heap allocation program-wide
     e.setStrictNumeric(g_strictNumeric);   // `--strict-numeric` (M5a): measure numeric hand-offs
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk
@@ -1969,7 +2007,10 @@ static void configureEmitter(CEmitter& e)
     e.setModuleVisible([](const std::string& importer, const std::string& imported) -> bool {
         return kamaModuleVisibleTo(importer, imported);
     });
-    for (auto& m : preludeModuleUnits()) e.addPreludeModule(m);       // the always-in-scope triad
+    // The always-in-scope triad, each with the `lib/std/memory/*.kama` it was embedded from — a file
+    // that ships in every install, unlike the global prelude.
+    for (auto& m : preludeModuleUnits())
+        e.addPreludeModule(m, builtinSourcePath(m && m->name ? *m->name : std::string()));
 }
 
 // Minimal purpose-built reader for the `kama.json` project manifest. v1 needs only the declared flag
@@ -7681,6 +7722,7 @@ int main(int argc, char** argv)
     if (argc < 2) { usage(); return 2; }
 
     std::string subcommand = argv[1];
+    g_argv0 = argv[0];               // the exe-relative resolvers' anchor (runtime headers, stdlib, prelude)
 
     maybeReExec(argv, subcommand);   // PATH selector: hand off to the version this directory pins (M1)
 

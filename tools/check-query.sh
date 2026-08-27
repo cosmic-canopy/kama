@@ -708,6 +708,27 @@ expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int
 # M4.2 — after `::`. A `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value, and the
 # emitter rejects it), so there are exactly two answers.
 FIXTURE="$ROOT/tests/query/complete.kama"
+
+# ---------------------------------------------------------------------------------------------------
+# Go-to-definition on the PRELUDE. `Optional`, `Result`, `Ordering`, the language contracts and the
+# smart-pointer triad are ordinary kama declarations in real files; they are EMBEDDED into the binary,
+# which is how they lost their path, and the answer used to be `no definition` for the most-navigated
+# names in the language.
+#
+# ⚠️ THE LINE NUMBERS ARE THE ASSERTION, not decoration. tools/embed_prelude.sh wrapped each source as
+# `R"KAMASRC(\n<file>` — that newline was line 1 of the embedded copy, so every declaration sat one line
+# below where it does on disk. Nothing could see it while nothing pointed at the file; the moment
+# go-to-definition did, `Optional` opened the blank line under itself. Pinning `8:10` here is what stops
+# that returning (and any real edit to global.kama's head will fail this and should).
+echo "check-query: go-to-definition reaches the prelude"
+expect --def 102:4  -- "prelude/global.kama:8:10"    # `Optional` -> its declaration, not `no definition`
+expect --def 102:27 -- "prelude/global.kama:8:10"    # ...and from the `Optional::` qualifier too
+expect --def 118:4  -- "std/memory/owned.kama:12:14" # `Owned` -> the embedded built-in MODULE's own file
+# The prelude stays READ-ONLY, and that is the point of `DefSite::file` being a second field rather than
+# a `unit`. Not owning a declaration is a reason to refuse to REWRITE it; it was never a reason to refuse
+# to OPEN it, and conflating the two is what sent this navigation nowhere.
+reject --refs 102:4 -- "prelude/global.kama"
+
 echo "check-query: M4.2 completion after \`::\`"
 expect --complete 134:24 -- "enum-member	High"          # Level::| — a plain enum's members
 expect --complete 134:24 -- "enum-member	Low"

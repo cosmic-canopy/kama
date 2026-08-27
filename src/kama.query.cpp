@@ -417,9 +417,16 @@ const CompilationUnit* CEmitter::unitOfDecl(const ASTNode* topLevelDecl) const
     return it == _declUnit.end() ? nullptr : it->second;   // not a user top-level decl => prelude/std
 }
 
+std::string CEmitter::builtinFileOfDecl(const ASTNode* topLevelDecl) const
+{
+    auto it = _declBuiltinFile.find(topLevelDecl);
+    return it == _declBuiltinFile.end() ? std::string() : it->second;
+}
+
 void CEmitter::addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                           ASTNode* declNode, const SharedIdentifier& nameId,
-                          const std::string& display, const std::string& container)
+                          const std::string& display, const std::string& container,
+                          const std::string& builtinFile)
 {
     if (key.empty()) return;
     DefSite d;
@@ -428,6 +435,18 @@ void CEmitter::addDefSite(const std::string& key, SymKind kind, const Compilatio
     d.range          = rangeOfNode(declNode);
     d.selectionRange = nameId ? rangeOfId(nameId) : d.range;   // the NAME id is the tighter click target
     d.unit           = unit;
+    // The declaring file, which every def-site has and only a USER one has a `unit` for. A user unit
+    // carries its own name; a compiler-owned declaration gets the path the driver resolved for the source
+    // it was embedded from, which is what lets go-to-definition open `Optional` (see DefSite::file).
+    //
+    // `builtinFile` is for a MEMBER, whose node is not a top-level declaration and so is in no map — the
+    // caller has already worked out its type's file and hands it down.
+    if (unit && unit->name)          d.file = *unit->name;
+    else if (!builtinFile.empty())   d.file = builtinFile;
+    else if (declNode) {
+        auto bf = _declBuiltinFile.find(declNode);
+        if (bf != _declBuiltinFile.end()) d.file = bf->second;
+    }
     d.node           = declNode;
     d.display        = display;
     d.container      = container;
@@ -450,6 +469,22 @@ void CEmitter::buildDeclUnits()
         for (auto& decl : *u->codeDeclarationList)
             if (decl) _declUnit[decl.get()] = u.get();
     }
+    // ...and the compiler-owned ones, into a SEPARATE map. They deliberately do not join `_declUnit`:
+    // that map is what makes `DefSite::unit` non-null, and a non-null unit means "user code" everywhere
+    // downstream — the outline filter, the rename-ownership guard, the find-references refusal. Putting
+    // the prelude in it would make `Optional` look renameable, which is the one thing it must never be.
+    // What they get instead is a FILE, so go-to-definition can open the declaration without any of that
+    // following. See DefSite::file.
+    _declBuiltinFile.clear();
+    auto recordBuiltin = [&](const SharedCompilationUnit& u) {
+        if (!u || !u->codeDeclarationList) return;
+        auto f = _builtinUnitFile.find(u.get());
+        if (f == _builtinUnitFile.end()) return;              // no file on disk (a --no-std install)
+        for (auto& decl : *u->codeDeclarationList)
+            if (decl) _declBuiltinFile[decl.get()] = f->second;
+    };
+    recordBuiltin(_preludeUnit);
+    for (auto& m : _preludeModuleUnits) recordBuiltin(m);
 }
 
 void CEmitter::buildDefSites()
@@ -468,20 +503,21 @@ void CEmitter::buildDefSites()
     // declared exactly like anyone else's, and a generic member with no def-site would leave B3's node-keyed
     // references pointing at nothing.
     auto addMembers = [&](ClassInfo& ci, const std::string& key, const CompilationUnit* unit,
-                          const std::string& bare) {
+                          const std::string& bare, const std::string& bfile) {
         for (auto& mkv : ci.methods) {
             MethodInfo& mi = mkv.second;
             ASTNode* mnode = mi.node ? (ASTNode*)mi.node : (ASTNode*)mi.opDecl;
             if (!mnode) continue;   // intrinsic / synthesized (serde, bag ctor) — no source site
             SharedIdentifier mname = mi.node ? mi.node->name : SharedIdentifier();
             addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mnode, mname,
-                       bare + "." + mkv.first, bare);
+                       bare + "." + mkv.first, bare, bfile);
         }
         // Fields (M3.4). Only the DECLARING type gets an entry: a generic INSTANCE shares the template's
         // field nodes, and instances are skipped by the caller, so a field can never be keyed twice.
         for (auto& fi : ci.fields) {
             if (!fi.nameId) continue;   // synthesized (variant payload of an instantiated template, etc.)
-            addDefSite(fieldKey(key, fi.name), SymKind::Field, unit, fi.nameId.get(), fi.nameId, fi.name, bare);
+            addDefSite(fieldKey(key, fi.name), SymKind::Field, unit, fi.nameId.get(), fi.nameId, fi.name,
+                       bare, bfile);
         }
         for (auto& ckv : ci.ctors) {
             CtorInfo& ctor = ckv.second;
@@ -489,7 +525,7 @@ void CEmitter::buildDefSites()
             // key the ctor under a synthetic "<type>::ctor <name>" — it is not a resolveFunc target, but it
             // gives the outline a construction entry with a real span.
             addDefSite(key + "::ctor:" + ckv.first, SymKind::Ctor, unit, ctor.node,
-                       SharedIdentifier(), bare + "." + ckv.first, bare);
+                       SharedIdentifier(), bare + "." + ckv.first, bare, bfile);
         }
     };
 
@@ -504,7 +540,7 @@ void CEmitter::buildDefSites()
         const CompilationUnit* unit = unitOfDecl(ci.node);
         std::string bare = bareOf(ci.node->name, kv.first);
         addDefSite(kv.first, k, unit, ci.node, ci.node->name, bare, "");
-        addMembers(ci, kv.first, unit, bare);
+        addMembers(ci, kv.first, unit, bare, builtinFileOfDecl(ci.node));
     }
 
     // Generic type templates (Box<T>) — parked out of _classes; the ClassInfo.node is the template decl.
@@ -518,7 +554,7 @@ void CEmitter::buildDefSites()
         const CompilationUnit* unit = unitOfDecl(ci.node);
         std::string bare = bareOf(ci.node->name, kv.first);
         addDefSite(kv.first, SymKind::GenericType, unit, ci.node, ci.node->name, bare, "");
-        addMembers(ci, kv.first, unit, bare);
+        addMembers(ci, kv.first, unit, bare, builtinFileOfDecl(ci.node));
     }
 
     // Contracts (non-generic + generic templates). node is the `type contract` ClassDeclarationNode.
@@ -527,8 +563,9 @@ void CEmitter::buildDefSites()
             InterfaceInfo& ii = kv.second;
             if (!ii.node) continue;
             const CompilationUnit* unit = unitOfDecl(ii.node);
+            const std::string bfile = builtinFileOfDecl(ii.node);
             std::string bare = bareOf(ii.node->name, kv.first);
-            addDefSite(kv.first, SymKind::Contract, unit, ii.node, ii.node->name, bare, "");
+            addDefSite(kv.first, SymKind::Contract, unit, ii.node, ii.node->name, bare, "", bfile);
             // The contract's METHOD declarations (M6 B3c). They have no `cName` — a contract declares a
             // vtbl slot, not a function — so they get an index-only key in the same style as `field:` /
             // `enum:`. Without these there is no def-site for a fat-pointer call to point at, and renaming
@@ -537,7 +574,7 @@ void CEmitter::buildDefSites()
             for (const auto& im : ii.methods) {
                 if (!im.nameId) continue;                      // the operator arm carries no name node
                 addDefSite(contractMethodKey(kv.first, im.name), SymKind::Method, unit,
-                           im.nameId.get(), im.nameId, im.name, bare);
+                           im.nameId.get(), im.nameId, im.name, bare, bfile);
             }
         }
     }
@@ -549,13 +586,15 @@ void CEmitter::buildDefSites()
         EnumDeclarationNode* en = kv.second;
         if (!en) continue;
         const CompilationUnit* unit = unitOfDecl(en);
+        const std::string bfile = builtinFileOfDecl(en);
         std::string bare = bareOf(en->identifier, kv.first);
-        addDefSite(kv.first, SymKind::Enum, unit, en, en->identifier, bare, "");
+        addDefSite(kv.first, SymKind::Enum, unit, en, en->identifier, bare, "", bfile);
         if (!en->body) continue;
         for (auto& m : *en->body) {
             if (!m || !m->identifier || !m->identifier->value) continue;
             const std::string mkey = enumMemberKey(kv.first, *m->identifier->value);
-            addDefSite(mkey, SymKind::EnumMember, unit, m.get(), m->identifier, *m->identifier->value, bare);
+            addDefSite(mkey, SymKind::EnumMember, unit, m.get(), m->identifier, *m->identifier->value,
+                       bare, bfile);
             // A tagged variant's PAYLOAD fields (`Circle(int32 r)`) — M6 B3e. They are real named
             // declarations that construction sites spell as labels, but they live only on the variant
             // BACKING ClassInfo, which the _classes loop skips as compiler-synthesized, so this is their
@@ -567,7 +606,7 @@ void CEmitter::buildDefSites()
                 if (!p || !p->identifier || !p->identifier->value) continue;
                 addDefSite(fieldKey(mkey, *p->identifier->value), SymKind::Field, unit,
                            p->identifier.get(), p->identifier, *p->identifier->value,
-                           bare + "." + *m->identifier->value);
+                           bare + "." + *m->identifier->value, bfile);
             }
         }
     }
@@ -1135,8 +1174,21 @@ Location CEmitter::definitionAt(const std::string& uri, int line, int col) const
         return Location{ uri, it->second.selectionRange };
     }
     auto it = _defSites.find(e->declKey);
-    if (it == _defSites.end() || !it->second.unit) return Location{};   // builtin / prelude / unresolved
+    if (it == _defSites.end()) return Location{};
     const DefSite& d = it->second;
+    // A compiler-owned declaration has no `unit` and IS still openable: `Optional`, `Result`, `Ordering`,
+    // `Deref` and the smart-pointer triad are ordinary kama declarations in real files that merely got
+    // embedded into the binary. Nothing is synthesized here — the definition is already written; it just
+    // lost its path on the way in, and `DefSite::file` is that path handed back by the driver.
+    //
+    // ⚠️ This is where go-to-definition parts company with rename and find-references, deliberately.
+    // They keep testing `unit` and keep refusing, because not owning a declaration is a reason not to
+    // REWRITE it. It was never a reason not to OPEN it, and treating the two the same is why the
+    // most-navigated names in the language went nowhere.
+    if (!d.unit) {
+        if (d.file.empty()) return Location{};       // a builtin registered in C++, or a --no-std install
+        return Location{ d.file, d.selectionRange };
+    }
     return Location{ d.unit->name ? *d.unit->name : uri, d.selectionRange };
 }
 

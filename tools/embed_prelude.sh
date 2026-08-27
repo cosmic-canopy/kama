@@ -19,15 +19,20 @@ global=$1; shift
 
   # No `extern` on the definitions: kama.prelude.h (included above) already declares them extern, so
   # these get external linkage from that prior declaration — and without the -Wextern-initializer warning.
+  # ⚠️ NO NEWLINE AFTER THE OPENING DELIMITER. It read `R"KAMASRC(\n` and that newline became LINE 1 of
+  # the embedded source, shifting every declaration in the file down by one — so everything the compiler
+  # knows about a prelude line was off by one against the file on disk. Invisible while nothing pointed
+  # at that file; the moment go-to-definition did, `Optional` (real line 8) opened line 9. A diagnostic
+  # raised inside the prelude had been quietly misreporting the same way all along.
   printf 'const char* KAMA_PRELUDE_SRC =\n'
-  printf 'R"KAMASRC(\n'
+  printf 'R"KAMASRC('
   cat "$global"
   printf ')KAMASRC";\n\n'
 
   printf 'const KamaPreludeModule KAMA_PRELUDE_MODULES[] = {\n'
   n=0
   for m in "$@"; do
-    printf '  { R"KAMASRC(\n'
+    printf '  { R"KAMASRC('     # no newline — see the note above KAMA_PRELUDE_SRC
     cat "$m"
     printf ')KAMASRC",\n'
     # These files live under the stdlib tree (lib/std/memory/…) because they ARE stdlib modules; they

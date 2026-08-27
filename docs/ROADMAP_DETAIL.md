@@ -143,38 +143,37 @@ deliberate gap. Two shapes are used in the wild:
 ⚠️ The risk with the first is DRIFT: a hand-written `builtin.kama` and the C++ registration are two
 statements of one truth. Whatever lands wants a `tools/check-*.sh` asserting every intrinsic registered in
 `registerCollection` appears in the doc file and vice versa — otherwise it rots exactly the way a prose
-claim does. Hover is a cheaper partial win and worth checking first: if hover already answers for these,
-the gap is only the jump.
+claim does.
 
-**Take the PRELUDE with it — and it is the easier half, because the source already exists.** Requested
-2026-08-22. Measured, not assumed: `kama query --def` on `Ordering` (declared at
-[prelude/global.kama:17](../prelude/global.kama)) answers **`no definition`** today. The cause is one line
-— `preludeUnit()` is `parseString(KAMA_PRELUDE_SRC, "<prelude>")`
-([kama.driver.cpp:1410](../src/kama.driver.cpp)) — so the unit's name is the literal string `<prelude>`
-rather than a path, and there is nothing for the LSP to return. The same goes for the embedded built-in
-modules beside it (`KAMA_PRELUDE_MODULES`, the `std::memory` triad, `preludeModuleUnits`).
+**Measured, so nobody re-derives it: HOVER ALREADY ANSWERS, so the gap really is only the jump.**
+`kama query --type` returns `string` on a `string` and `int32` on an `int32` (`typeAtPosition` falls
+through to echoing the source spelling when no def-site matches), and `--def` returns `no definition`.
+So this is not "the built-ins are unknown to the compiler" — it is exactly the missing location, and
+nothing but a location has to be produced. Note what that also means for the doc file: the DefSites it
+backs have to be reachable from a position that currently indexes with an EMPTY `declKey`, which is the
+part that is more than writing the file.
 
-This is a **different problem from the built-ins above, and strictly smaller**: `string` and `int32` have
-no source location because none exists, while `Optional`, `Result`, `Ordering`, `Deref` and the rest are
-ordinary kama declarations in a real file that merely got embedded into the binary and lost their path on
-the way in. Nothing has to be synthesized or kept in sync — the definition is already written.
+**The PRELUDE half SHIPPED** — `Optional`, `Result`, `Ordering`, the language contracts and the
+`std::memory` triad now open their real files, and the release tarball carries `prelude/` beside the
+stdlib so an install can too. What it settles for the built-in half above:
 
-Two cases, and they want different answers:
+- **Naming the unit by its path is NOT the fix, and would have been a bad one.** That was the open
+  question here; the answer is no. The `<` in `<prelude>` is a sentinel four passes read — `checkReach`
+  exempts compiler-owned declarations from the export/import rungs on it, `CEmitter::line` suppresses a
+  `#line` into a file that may not exist, `setPackageResolver` skips the filesystem walk, and
+  `moduleOfUnit` returns `""` for `<prelude>` specifically, so a real path there would derive a module
+  name and re-mangle every prelude symbol. The path travels ALONGSIDE the name, as `DefSite::file`.
+- **`unit` and `file` answer different questions, and the built-in half wants the same split.** Not
+  owning a declaration is a reason to refuse to REWRITE it; it was never a reason to refuse to OPEN it.
+  Rename and find-references still test `unit` and still refuse the prelude.
+- **⚠️ A defect the work uncovered, worth knowing before trusting any prelude line number:**
+  `tools/embed_prelude.sh` wrapped each source as `R"KAMASRC(\n<file>`, and that newline was line 1 of
+  the embedded copy — so every declaration sat one line below where it does on disk, and any diagnostic
+  raised inside the prelude had been misreporting the same way. Fixed, and pinned by an exact line in
+  both `check-query.sh` and `check-lsp.sh`.
 
-- **A user's project**, where `prelude/` is not on disk at all. The unit needs a stable location the
-  editor can open — an installed `<prefix>/…/prelude/global.kama` if an install ships one, else the
-  read-only virtual document of the second shape above. Whatever is chosen, it is the same machinery the
-  built-ins want, which is why the two belong in one piece of work.
-- **⚠️ The kama compiler's OWN repository, which wants special-casing and is the ask that prompted this.**
-  Here `prelude/global.kama` and `lib/std/memory/*.kama` ARE in the worktree, and they are files
-  someone edits — so the right answer is not a doc stub or a virtual document but the real path: while
-  working in this repo the LSP should resolve a prelude symbol to the file on disk, and a rename or a
-  find-references over it should behave like any other source. It does not today, and the effect is that
-  the language server is at its least useful precisely where the language is being built.
-
-Worth checking first, the same way hover is above: whether naming the unit by path is enough on its own,
-or whether `unitForUri`/the workspace file set also have to learn about a unit that no CLI input pulled
-in. That measurement decides whether this is a one-line change with a fixture or a real seam.
+What is left is only the C++-registered half: those names have no source anywhere, which is why they
+need a written file and a guard rather than a resolved path.
 
 **The Zed grammar pin follows the GRAMMAR — done, and no longer a scheduled row.** `editor/zed/extension.toml`
 pins a *commit* and Zed fetches that rev, so the pin — not the working tree — is what Zed users get. It had

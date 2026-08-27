@@ -36,6 +36,18 @@ struct DefSite {
     SrcRange                range;               // full decl node span (approximate)
     SrcRange                selectionRange;      // the NAME identifier span — the go-to-definition target
     const CompilationUnit*  unit = nullptr;      // owning USER unit; nullptr => prelude/std (excluded from outlines)
+    // The declaring FILE, which a compiler-owned declaration has and `unit` cannot express. `Optional`,
+    // `Result`, `Ordering` and the smart-pointer triad are ordinary kama declarations in real files that
+    // lost their path on the way into the binary (they are embedded, and carry a synthetic `<prelude>`
+    // name); this is that path, supplied by the driver, which is the layer that knows where the compiler
+    // was installed.
+    //
+    // ⚠️ It does NOT make them user code. `unit` keeps its exact meaning — "a unit this analysis was
+    // handed, i.e. renameable and in the outline" — so every `!unit` test still refuses to rename the
+    // prelude or list it in a file's symbols. Go-to-definition is the one reader: not owning a
+    // declaration is a reason to refuse to REWRITE it, never a reason to refuse to OPEN it.
+    std::string             file;
+
     ASTNode*                node = nullptr;      // decl node (null for a node-less table entry)
     std::string             display;             // human name ("Point", "Point.area")
     std::string             container;           // enclosing type for methods/fields ("Point"), else ""

@@ -106,11 +106,43 @@ cp "$KAMA" "$t/bin/kama"
 cp "$ROOT"/include/*.h "$t/include/"
 cp "$ROOT"/lib/kama.json "$t/lib/kama/kama.json"
 cp -R "$ROOT"/lib/std     "$t/lib/kama/std"
+cp -R "$ROOT"/prelude     "$t/lib/kama/prelude"
 if ( cd "$tmp" && "$t/bin/kama" build "$tmp/s.kama" -o "$t/out.exe" >"$t/err" 2>&1 ); then
     say_ok "an installed payload resolves \`import std::…\`"
 else
     say_fail "the staged payload cannot resolve the stdlib — is release.yml still copying everything lib/ needs?"
     head -5 "$t/err" | sed 's/^/      /' >&2
+fi
+
+# The PRELUDE half of the same claim, and it is a separate assertion because it fails separately: the
+# prelude is EMBEDDED, so every `Optional` in the world resolves whether or not the source ships. What
+# does not work without it is opening the declaration — an installed toolchain would answer "no
+# definition" for the most-navigated names in the language while every local leg stayed green, which is
+# precisely the failure shape this file exists for.
+cat > "$tmp/p.kama" <<'KAMA'
+fn Ordering pick() {
+    return Ordering::Less;
+}
+KAMA
+pq=$( cd "$tmp" && "$t/bin/kama" query "$tmp/p.kama" --def 1:3 2>/dev/null | tail -1 )
+# Matched on the payload-relative TAIL, not on "$t/...": the answer is normalized through realpath, and
+# on macOS the temp dir is reached as /var/... but resolves to /private/var/..., so an exact-prefix test
+# fails on a correct answer. `lib/kama/prelude/` cannot be the repo's own copy either way.
+case "$pq" in
+    */lib/kama/prelude/global.kama:*)
+        say_ok "...and go-to-definition on a prelude name opens the payload's own prelude/global.kama" ;;
+    *)
+        say_fail "an installed payload cannot open a prelude declaration (got '$pq') — is release.yml still copying prelude/?" ;;
+esac
+# The negative that gives it meaning: WITHOUT the source there is no location, and the compiler says so
+# rather than inventing a path into a tree that does not exist.
+mv "$t/lib/kama/prelude" "$t/prelude-away"
+pq2=$( cd "$tmp" && "$t/bin/kama" query "$tmp/p.kama" --def 1:3 2>/dev/null | tail -1 )
+mv "$t/prelude-away" "$t/lib/kama/prelude"
+if [ "$pq2" = "no definition" ]; then
+    say_ok "...and a payload staged without it answers \`no definition\` rather than a path to nowhere"
+else
+    say_fail "a payload with no prelude/ still claimed a definition at '$pq2'"
 fi
 
 # A build SUCCEEDING is not enough on its own to say the manifest was READ, so assert what the manifest
