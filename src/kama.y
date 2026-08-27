@@ -126,6 +126,15 @@ static void rejectFnTypeParamDefault(const SharedIdentifierList& params, YYLTYPE
     _sid->line = (Loc).first_line;   _sid->column = (Loc).first_column;       \
     _sid->endLine = (Loc).last_line; _sid->endColumn = (Loc).last_column; } } while (0)
 
+/* Move only where a node BEGINS, keeping the end of its span. A rule that starts with a NULLABLE
+ * nonterminal gets the wrong start for free: on the empty derivation YYLLOC_DEFAULT's `N == 0` branch above
+ * gives that symbol `YYRHSLOC(Rhs, 0)` — the end of whatever sat below it on the parse stack — and @$ takes
+ * its start from RHS 1. For a top-level `fn` that is not a token's worth of skew, it is a whole DECLARATION:
+ * functions really on lines 4, 7, 8 reported 1, 4, 7. STAMP_LOC is the wrong tool here because it replaces
+ * the END too, which would shrink a declaration's span to its keyword. */
+#define STAMP_START(nodeExpr, Loc)  do { auto _snd = (nodeExpr); if (_snd) {  \
+    _snd->line = (Loc).first_line;   _snd->column = (Loc).first_column; } } while (0)
+
 /* A `::`-separated name list (a qualifier, an import path, an export manifest) is a list of plain STRINGS,
  * so a segment has no node to carry its position. STAMP_SEG records the token's span beside the list, in
  * CodeGenContext::listSegPos (see there for why it is keyed by the list object); TAKE_SEGS moves the whole
@@ -865,7 +874,12 @@ function_declaration
   }
   | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
-      STAMP_LOC(fn->name, @5);   /* precise name span (an unmodified fn's @$ starts at the previous token) */
+      STAMP_LOC(fn->name, @5);   /* precise name span */
+      /* ...and the DECLARATION's own start, which without this is the end of the previous declaration —
+         see STAMP_START. `expose` (RHS 1) is the only non-nullable modifier, so @$ is already right when it
+         is present; otherwise the first real token is `unsafe` if written, else `fn`. This is what
+         ~10 diagnostics and, through `line(fn->line)`, the `#line` directive of every function body read. */
+      if (!$1) STAMP_START(fn, $2 ? @2 : @3);
       fn->isUnsafe = ($2 != nullptr);
       /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
       rejectFnTypeParamDefault($6, &@6, scanner);
@@ -914,6 +928,7 @@ function_declaration
          check at the ReturnNode place path enforces it. */
       auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $11 );
       STAMP_LOC(fn->name, @6);
+      if (!$1) STAMP_START(fn, $2 ? @2 : @3);   /* same nullable-modifier skew as the arm above */
       fn->isRef = true;
       fn->isUnsafe = ($2 != nullptr);
       rejectFnTypeParamDefault($7, &@7, scanner);

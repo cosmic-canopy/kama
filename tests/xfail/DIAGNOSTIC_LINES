@@ -235,7 +235,7 @@ generic_value_owns_resource	generic_value_owns_resource.kama:4
 generic_wrong_bound_call	generic_wrong_bound_call.kama:5
 give_inline_ctor_arg	give_inline_ctor_arg.kama:7
 give_ptr_local_reuse	give_ptr_local_reuse.kama:13 give_ptr_local_reuse.kama:16
-global_absolute_path	global_absolute_path.kama:10 global_absolute_path.kama:7
+global_absolute_path	global_absolute_path.kama:10
 graph_alloc_iface	graph_alloc_iface.kama:23
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
@@ -294,7 +294,7 @@ intrinsic_incomplete	intrinsic_incomplete.kama:3
 intrinsic_multi_contract	intrinsic_multi_contract.kama:4
 intrinsic_no_contract	intrinsic_no_contract.kama:2
 intrinsic_uncovered_member	intrinsic_uncovered_member.kama:4
-intrinsic_widen_escape	intrinsic_widen_escape.kama:1
+intrinsic_widen_escape	intrinsic_widen_escape.kama:5
 isolate_use_after_move	isolate_use_after_move.kama:25
 isr_nonvoid	isr_nonvoid.kama:2
 isr_params	isr_params.kama:2
@@ -436,7 +436,7 @@ parfor_write_capture	parfor_write_capture.kama:11
 pin_conformance_concrete	pin_conformance_concrete.kama:7
 pin_keyword_typo	pin_keyword_typo.kama:3
 pin_not_first	pin_not_first.kama:3
-pin_on_fn	pin_on_fn.kama:1
+pin_on_fn	pin_on_fn.kama:3
 pin_on_value	pin_on_value.kama:4
 pin_operand_not_this	pin_operand_not_this.kama:7
 pin_twice	pin_twice.kama:3
@@ -514,7 +514,7 @@ unknown_type_variant_payload	unknown_type_variant_payload.kama:5
 unsafe_extern_call_outside	unsafe_extern_call_outside.kama:17
 unsafe_extern_call_scalar	unsafe_extern_call_scalar.kama:6
 unsafe_fn_out_unfilled	unsafe_fn_out_unfilled.kama:12
-unsafe_main	unsafe_main.kama:1
+unsafe_main	unsafe_main.kama:8
 unsafe_on_contract_member	unsafe_on_contract_member.kama:7
 unsafe_on_field	unsafe_on_field.kama:5
 unsafe_on_type	unsafe_on_type.kama:4

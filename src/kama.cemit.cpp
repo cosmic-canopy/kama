@@ -2165,19 +2165,19 @@ bool CEmitter::rejectRootedPath(SharedStringList qualifier, const IdentifierNode
     // Name resolution runs from passes with no current module, so this named no file. `_nsCtx` is the
     // context of the file doing the naming, which is the file that wrote the `global::` path. See diagFile().
     ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
-    // REJECT ALWAYS, REPORT ONLY WHERE WE CAN POINT. `site` is defaulted to null at ~75 of this predicate's
-    // call sites — name resolution asks the same question from positions that carry no identifier node —
-    // and those calls reported the violation at line 0, which is not a line any file has. Because
-    // `unsupported` dedupes on (file, line, message), that did not merge with the correctly-positioned
-    // firing: ONE mistake was reported TWICE, once where it is and once nowhere. `_curLine` covers a body
-    // walk; outside one there is no honest position, and a diagnostic that cannot say where is not worth
-    // printing when the same mistake is already reported at its real line. The `return true` is unchanged,
-    // so the path is still refused and the build still fails — which the xfail leg checks first of all.
-    const int at = site ? site->line : _curLine;
-    if (at > 0)
+    // REJECT ALWAYS, REPORT ONLY FROM THE SITE. `site` is defaulted to null at ~75 of this predicate's call
+    // sites — name resolution asks the same question from positions that carry no identifier node — and
+    // those calls reported the violation wherever the emitter happened to be: at line 0 before the walk,
+    // and at the enclosing function's line inside it. Because `unsupported` dedupes on (file, line,
+    // message), neither merged with the correctly-positioned firing, so ONE mistake was reported TWICE —
+    // `global_absolute_path.kama` said line 10, which is right, and then line 9, which is the `fn` above it.
+    // A second copy at an approximate line teaches a reader that the compiler is guessing. The sited call
+    // is the one that knows, so it is the only one that speaks; `return true` is unchanged, so the path is
+    // still refused. That the build still FAILS is not an assumption — it is the xfail leg's first assertion.
+    if (site)
         unsupported(("`global::" + rest + "::…` names a module absolutely, which `global::` no longer does — "
                      "it reaches the always-in-scope floor and nothing else. Write `" + rest + "::…`, and if "
-                     "an `import … as` alias is shadowing that name, rename the alias").c_str(), at);
+                     "an `import … as` alias is shadowing that name, rename the alias").c_str(), site->line);
     return true;
 }
 
