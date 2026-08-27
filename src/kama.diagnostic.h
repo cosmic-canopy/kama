@@ -8,6 +8,7 @@
 // stderr. Source ranges start as a single (line,column) point; end positions are filled once the lexer
 // carries them (T3) — until then `endLine/endColumn == 0` means "unknown, treat as the start point".
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,16 @@ inline const char* diagSeverityName(DiagSeverity s)
     return "error";
 }
 
+struct Diagnostic;
+// ONE renderer for the CLI, for the same reason `diagSeverityName` is one function: `kama build` and
+// `kama check` walk the SAME analysis and must not describe a defect differently. They used to. The
+// emitter printed each rejection to stderr as it walked — `kama: warning: unsupported <msg> at
+// <file>:<line> (not yet lowered)` — and ALSO filed the structured form below with severity Error, which
+// only `check` replayed. So a build called a hard error a "warning", while a single `check` run printed
+// every defect TWICE, under two severities, in two formats, on consecutive lines. The streaming print is
+// gone; both subcommands render the accumulated list through here.
+inline void renderDiagnostic(std::FILE* to, const Diagnostic& d);
+
 struct Diagnostic {
     int          line      = 0;   // 1-based start line
     int          column    = 0;   // 1-based start column (0 = whole line / unknown)
@@ -36,5 +47,11 @@ struct Diagnostic {
     std::string  message;         // human-readable text
     std::string  file;            // source path / module name the position is relative to
 };
+
+inline void renderDiagnostic(std::FILE* to, const Diagnostic& d)
+{
+    std::fprintf(to, "%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
+                 diagSeverityName(d.severity), d.message.c_str());
+}
 
 #endif // __KAMA_DIAGNOSTIC_H__

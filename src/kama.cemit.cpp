@@ -230,10 +230,11 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
         return;
     }
     ++_unsupported;
-    std::fprintf(stderr, "kama: warning: unsupported %s at %s:%d (not yet lowered)\n",
-                 what, diagFile().c_str(), srcLine);
-    // Structured form for the query surface. `unsupported` is a hard error at the driver (unsupported > 0
-    // fails the build), so it surfaces as an Error in an editor even though the stderr line says "warning".
+    // The ONE record of this defect. It is NOT printed here: `unsupported` is a hard error at the driver
+    // (unsupported > 0 fails the build), and a stderr line printed from inside the walk could only ever be
+    // a second, differently-worded rendering of what this struct already says — which is exactly what it
+    // was. See `renderDiagnostic` (kama.diagnostic.h) for the shape that replaced it; the driver renders
+    // this list for `build` and `check` alike, so the two cannot disagree about a defect they both found.
     // We only know the line here (call sites pass `node->line`); precise column/end come with spans (T3).
     Diagnostic d;
     d.line = srcLine;

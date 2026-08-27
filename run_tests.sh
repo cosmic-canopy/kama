@@ -694,6 +694,20 @@ xfail_one() {
         { echo "FAIL xfail/$name (rejected, but error missing \"$(cat "$msg_file")\")"; head -2 "$err"; } >"$out"
         echo FAIL >"$res"; return
     fi
+    # A rejection is an ERROR, and says so. The emitter used to stream `kama: warning: unsupported <msg>`
+    # while filing the same defect as severity Error, so a build called a hard error a "warning" and a
+    # single `kama check` printed both spellings on consecutive lines. Nothing in the suite noticed,
+    # because every `.msg` matches the message BODY — the prefix was free to say anything at all. It is
+    # asserted here rather than in a guard so that all 557 fixtures hold it down, not one hand-written case.
+    if ! grep -q 'error:' "$err"; then
+        { echo "FAIL xfail/$name (rejected, but no line says \`error:\` — a rejection must name itself one)"
+          head -2 "$err"; } >"$out"; echo FAIL >"$res"; return
+    fi
+    if grep -qi 'warning' "$err"; then
+        { echo "FAIL xfail/$name (rejected, but reported as a WARNING — a compiler that calls an error a"
+          echo "  warning cannot be trusted about the errors it does report)"; grep -i warning "$err" | head -2; } >"$out"
+        echo FAIL >"$res"; return
+    fi
     echo "PASS xfail/$name (rejected)" >"$out"; echo PASS >"$res"
 }
 phase_end

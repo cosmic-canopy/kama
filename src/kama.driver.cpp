@@ -4264,8 +4264,9 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsIsolate) *externsIsolate = emitter.externsHeader("kama_isolate.h")     // std::concurrent seams ->
                                        || emitter.externsHeader("kama_channel.h");    // native -lpthread (isolate OR channel)
     out.close();
+    for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
-        fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
+        fprintf(stderr, "kama: %d unlowered construct(s) — see the errors above.\n", unsupported);
         return 1;   // a construct kama couldn't lower (incl. a safety-gate violation) is a hard error
     }
     return 0;
@@ -4308,8 +4309,9 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     header.close();
     for (auto& f : moduleFiles) f->close();
 
+    for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
-        fprintf(stderr, "kama: %d unlowered construct(s) — see the warnings above.\n", unsupported);
+        fprintf(stderr, "kama: %d unlowered construct(s) — see the errors above.\n", unsupported);
         return 1;
     }
     return 0;
@@ -8305,9 +8307,7 @@ int main(int argc, char** argv)
                 jsonPrint(j);
                 return errs ? 1 : 0;
             }
-            for (const auto& d : diags)
-                fprintf(stderr, "%s:%d:%d: %s: %s\n",
-                        d.file.c_str(), d.line, d.column, diagSeverityName(d.severity), d.message.c_str());
+            for (const auto& d : diags) renderDiagnostic(stderr, d);
             if (errs) {
                 fprintf(stderr, "kama: %s FAILED (%zu error%s)\n",
                         src.c_str(), errs, errs == 1 ? "" : "s");
@@ -8540,9 +8540,7 @@ int main(int argc, char** argv)
                         return j;
                     }
                     if (ds.empty()) { printf("no diagnostics\n"); return Json::object(); }
-                    for (const auto& d : ds)
-                        printf("%s:%d:%d: %s: %s\n", d.file.c_str(), d.line, d.column,
-                               diagSeverityName(d.severity), d.message.c_str());
+                    for (const auto& d : ds) renderDiagnostic(stdout, d);
                     return Json::object();
                 }
                 case QMode::Def: {
