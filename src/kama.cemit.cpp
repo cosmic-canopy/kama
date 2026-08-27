@@ -83,13 +83,34 @@ void CEmitter::indent(int depth)
 void CEmitter::line(int srcLine)
 {
     if (srcLine > 0) _curLine = srcLine;   // track for conditional-drop diagnostics
-    if (_lines && srcLine > 0) {
-        // The path is a C string literal: escape `\` and `"` so a Windows path (`D:\a\…\tests\foo.kama`)
-        // isn't read as escape sequences (`\o`/`\x`/… are errors, not just the file name we meant).
-        *_out << "#line " << srcLine << " \"";
-        for (char c : _sourcePath) { if (c == '\\' || c == '"') *_out << '\\'; *_out << c; }
-        *_out << "\"\n";
-    }
+    if (!_lines || srcLine <= 0) return;
+    // `diagFile()`, not `_sourcePath` — a `#line` is a DIAGNOSTIC, routed through the C compiler and the
+    // debugger instead of through `unsupported()`, and it wants the same answer: the file that owns the
+    // code being written. Reading `_sourcePath` gave it "whatever the emitter was constructed with", so
+    // the prelude's static-inline bodies — folded into the header, which no module owns — came out stamped
+    // with the ENTRY file in a single-unit build and with "" in a multi-file one. A one-line program
+    // emitted 391 `#line` directives, 389 of them past its own end, the highest claiming line 633 of a file
+    // with one. That is `check-diag-file.sh`'s "line right, file wrong" one layer down, and it decides
+    // where clang reports an error and where a debugger stops.
+    //
+    // ⚠️ AND IT MUST NOT GUESS. `<prelude>` is a synthetic unit name, not a path — the same `<`-sentinel
+    // `checkReach` reads for "compiler-owned" — and there is no file on disk to point at. Emitting nothing
+    // is the honest answer: the C compiler then attributes to the GENERATED file, which does exist, which
+    // `--keep-c` hands the user, and which is where that code actually lives.
+    //
+    // In the HEADER pass, `_emitDeclFile` alone. Header content belongs to nobody's module: a generic
+    // instance carries the template's file there (that is what `_emitDeclFile` is for), and everything
+    // else is the prelude, which carries nothing. Falling through to `_sourcePath` is what produced the
+    // lie. This is deliberately NARROWER than `diagFile()` and must not be widened to it: `diagFile()` is
+    // right for a DIAGNOSTIC, which should still name the user's file when that is the best it knows,
+    // whereas a `#line` that names the wrong file silently relocates every error the C compiler reports.
+    const std::string& f = _inHeaderPass ? _emitDeclFile : diagFile();
+    if (f.empty() || f[0] == '<') return;
+    // The path is a C string literal: escape `\` and `"` so a Windows path (`D:\a\…\tests\foo.kama`)
+    // isn't read as escape sequences (`\o`/`\x`/… are errors, not just the file name we meant).
+    *_out << "#line " << srcLine << " \"";
+    for (char c : f) { if (c == '\\' || c == '"') *_out << '\\'; *_out << c; }
+    *_out << "\"\n";
 }
 
 // Render an INTERNAL mangled name the way the user spelled it. Declarations are scope-prefixed by
@@ -204,7 +225,11 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
 // — far above its old home — needs it to name the unit its diagnostics are about.
 namespace { struct ScopedStr { std::string& s; std::string prev;
     ScopedStr(std::string& s_, const std::string& v) : s(s_), prev(s_) { s = v; }
-    ~ScopedStr() { s = prev; } }; }
+    ~ScopedStr() { s = prev; } };
+// Its boolean sibling, for a flag that must be restored on every exit from a pass.
+struct ScopedFlag { bool& b; bool prev;
+    ScopedFlag(bool& b_) : b(b_), prev(b_) { b = true; }
+    ~ScopedFlag() { b = prev; } }; }
 
 const std::string& CEmitter::diagFile() const
 {
@@ -23161,7 +23186,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
         return _unsupported;
     emitIncludes({unit});           // FFI #include directives
     collectProgram({unit});
-    emitHeaderContent({unit});
+    { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     return _unsupported;
@@ -23184,7 +23209,9 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     header << "#ifndef " << guard << "\n#define " << guard << "\n";
     header << "#include \"kama_runtime.h\"\n";
     emitIncludes(units);        // FFI #include directives (before any type decls)
-    emitHeaderContent(units);   // declarations only — no bodies, so no #line needed
+    // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
+    // `#line` directives with an EMPTY file name, because the emitter is constructed with no path.
+    { ScopedFlag _hp(_inHeaderPass); emitHeaderContent(units); }
     header << "#endif /* " << guard << " */\n";
 
     for (size_t i = 0; i < units.size(); ++i) {

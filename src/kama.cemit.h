@@ -1201,6 +1201,9 @@ private:
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
+    // Inside emitHeaderContent: the text being written belongs to no module, so `#line` reads only
+    // `_emitDeclFile` (a generic instance's template) and stays silent for everything else. See line().
+    bool                                      _inHeaderPass = false;
     bool                                      _emitStaticInlineFn = false;// prefix `static inline` on a free fn (prelude helper body emitted in the header)
     bool                                      _strictNumericScan = false;  // `--strict-numeric`: TALLY numeric hand-offs, reject nothing
     std::set<std::string>                     _strictNumericSeen;          // dedupe: a template body is emitted once per instantiation
