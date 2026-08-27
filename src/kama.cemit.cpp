@@ -319,6 +319,9 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
 {
     NsCtx ctx;
     ctx.unitPath = unit->name ? *unit->name : std::string();
+    // Every rejection below is about an `import` line written in THIS unit, and this runs before any
+    // module is current — `_sourcePath` is "" in a multi-file build — so they named no file at all.
+    ScopedStr _cu(_collectingUnitPath, ctx.unitPath);   // see diagFile()
     const std::string module = (_moduleResolver && unit->name) ? _moduleResolver(*unit->name) : std::string();
     ctx.module = module;
     if (!module.empty()) {
@@ -1831,6 +1834,14 @@ void CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     const std::string declFile = declFileOf(key);
     if (declFile.empty() || declFile[0] == '<') return;      // unresolved, synthesized, or compiler-owned
     if (declFile == refFile) return;                         // its own file — always
+    // ...and its own file AGAIN, when a generic instantiation has installed the TEMPLATE's context under a
+    // caller's `refFile`. `sorted_map.kama:31` spells `BTreeNode` inside `BTreeNode` — the template's own
+    // internal self-reference — and re-walking it for a user's `BTreeNode<int32,int32>` judged that line
+    // against the USER's file: `tests/xfail/export_qualified_ref_local.kama:31`, in a 19-line file. The
+    // inbound clause below already defends itself this way ("_nsCtx ... is NOT always the file being
+    // judged"); the outbound one did not, so the same instantiation produced a third, impossible copy of a
+    // diagnostic it had already reported correctly twice.
+    if (!_nsCtx.unitPath.empty() && _nsCtx.unitPath != refFile && declFile == _nsCtx.unitPath) return;
     // §2c FOR A QUALIFIED REFERENCE. The import site above covers what a file imports; a qualified
     // spelling reaches a module WITHOUT importing it (that is deliberate — see the inbound clause below),
     // so the same rung has to be asked here or the manifest key is enforced in one position and not the
@@ -2151,10 +2162,22 @@ bool CEmitter::rejectRootedPath(SharedStringList qualifier, const IdentifierNode
     if (!qualifier || qualifier->size() < 2 || *(*qualifier)[0] != "global") return false;
     std::string rest;
     for (size_t i = 1; i < qualifier->size(); ++i) rest += (rest.empty() ? "" : "::") + *(*qualifier)[i];
-    unsupported(("`global::" + rest + "::…` names a module absolutely, which `global::` no longer does — "
-                 "it reaches the always-in-scope floor and nothing else. Write `" + rest + "::…`, and if "
-                 "an `import … as` alias is shadowing that name, rename the alias").c_str(),
-                site ? site->line : 0);
+    // Name resolution runs from passes with no current module, so this named no file. `_nsCtx` is the
+    // context of the file doing the naming, which is the file that wrote the `global::` path. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
+    // REJECT ALWAYS, REPORT ONLY WHERE WE CAN POINT. `site` is defaulted to null at ~75 of this predicate's
+    // call sites — name resolution asks the same question from positions that carry no identifier node —
+    // and those calls reported the violation at line 0, which is not a line any file has. Because
+    // `unsupported` dedupes on (file, line, message), that did not merge with the correctly-positioned
+    // firing: ONE mistake was reported TWICE, once where it is and once nowhere. `_curLine` covers a body
+    // walk; outside one there is no honest position, and a diagnostic that cannot say where is not worth
+    // printing when the same mistake is already reported at its real line. The `return true` is unchanged,
+    // so the path is still refused and the build still fails — which the xfail leg checks first of all.
+    const int at = site ? site->line : _curLine;
+    if (at > 0)
+        unsupported(("`global::" + rest + "::…` names a module absolutely, which `global::` no longer does — "
+                     "it reaches the always-in-scope floor and nothing else. Write `" + rest + "::…`, and if "
+                     "an `import … as` alias is shadowing that name, rename the alias").c_str(), at);
     return true;
 }
 
@@ -8695,6 +8718,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // Empty args is valid ONLY for a bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`);
     // otherwise there is nothing to instantiate. Below, `args` may be null/empty (defaults fill every slot).
     if ((!args || args->empty()) && !allTypeParamsDefaulted(tmpl)) return;
+    // Every rejection here is about the USE SITE — the line below is the first type argument's — and
+    // `_nsCtx` at registration IS the use-site context (that is exactly what `_genericTypeInstCtx` records
+    // further down). Instantiation is discovered from passes that leave `_collectingUnitPath` empty, so
+    // without this a bad type argument named no file at all. Keeps the current value when there is nothing
+    // better to say. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     const std::vector<std::string>& params = _genericTypeParams[tmpl];
 
     // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
@@ -8968,9 +8997,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     for (auto& v : ci.variants)
         for (auto& f : v.payload)
             if (f.type && isViewCType(cType(f.type)))
+                // `line`, not `f.type->line`: the payload field belongs to the TEMPLATE — `Optional`'s
+                // payload is declared in the prelude — so its line is a line of a file this diagnostic
+                // does not name. The mistake is the type argument, at the use site, which is what `line` is.
                 unsupported(("a view (`" + cType(f.type) + "`) can't be an `enum` payload (`" + ci.name
                              + "`) — it borrows and would escape via the enum; a view is local/parameter-only").c_str(),
-                            f.type->line);
+                            line);
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
@@ -9037,6 +9069,7 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl, SharedIdenti
     // (a dangling `Optional_Entry_K_V`). Mirrors registerGenericTypeInst exactly.
     // Bind positional + named args, then fill trailing defaults (mirror of registerGenericTypeInst).
     int line = args->front() ? args->front()->line : 0;
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     auto dit = _genericContractDefaults.find(tmpl);
     const std::vector<SharedIdentifier> emptyDefs;
     const std::vector<SharedIdentifier>& defs = dit != _genericContractDefaults.end() ? dit->second : emptyDefs;
@@ -10603,7 +10636,7 @@ void CEmitter::checkUninstantiatedTypeTemplates()
                 const ClassInfo& tci = _genericTypes[tmpl];
                 std::fprintf(stdout, "probe-type\t%s\t%s\t%d\t%zu\t%ld\t%ld\t%ld",
                              tmpl.c_str(), tci.declFile.empty() ? "<prelude>" : tci.declFile.c_str(),
-                             tci.node ? tci.node->line : 0, params.size(),
+                             tci.declLine(), params.size(),
                              (long)(_unsupported - errsBefore), _probeDeferred - defBefore,
                              _probeResolved - resBefore);
                 for (int i = 0; i < DK_Count; ++i) std::fprintf(stdout, "\t%ld", _probeDeferBy[i] - byBefore[i]);
@@ -12066,7 +12099,7 @@ void CEmitter::linkBases()
             for (size_t j = 0; j < i; ++j)
                 if (ci.interfaces[i] == ci.interfaces[j]) {
                     unsupported(("`" + ci.name + "` already implements `" + ci.interfaces[i] + "`").c_str(),
-                                ci.node ? ci.node->line : 0);
+                                ci.declLine());
                     break;
                 }
         // Mint each generic-contract instance HERE, not only in collectCollections. A bound check
@@ -12082,13 +12115,13 @@ void CEmitter::linkBases()
         if (ci.baseName.empty()) continue;
         auto it = _classes.find(ci.baseName);
         if (it == _classes.end()) {
-            unsupported("unknown base class", ci.node ? ci.node->line : 0);
+            unsupported("unknown base class", ci.declLine());
             ci.baseName.clear();
         } else {
             ci.base = &it->second;
             // The base must be extensible: a `virtual`/`abstract class`, never a
             // plain/`final` (sealed) class.
-            int bl = ci.node ? ci.node->line : 0;
+            int bl = ci.declLine();
             if (ci.base->isFinalClass)
                 unsupported(("cannot extend '" + ci.base->name + "': it is a `final class` (a sealed leaf)").c_str(), bl);
             else if (!(ci.base->isVirtualClass || ci.base->isAbstractClass))
@@ -12120,7 +12153,7 @@ void CEmitter::linkBases()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.isGenericInst) continue;
-            int line = ci.node ? ci.node->line : 0;
+            int line = ci.declLine();
             bool extensible = ci.isVirtualClass || ci.isAbstractClass;
 
             // Opting in without stating the budget.
@@ -12167,7 +12200,7 @@ void CEmitter::checkDerivedPublicSurface()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (ci.isGenericInst || !ci.base) continue;
-        int line = ci.node ? ci.node->line : 0;
+        int line = ci.declLine();
 
         // A contract's methods are public and need not exist on the base, so allowing `implements` here
         // would be a hole straight through the rule. If a hierarchy conforms to a contract, its ROOT says
@@ -12232,9 +12265,13 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
     std::function<void(ClassInfo*)> visit = [&](ClassInfo* ci) {
         if (!ci || done.count(ci)) return;
         if (visiting.count(ci)) {
+            // This runs from a whole-program pass, where `_collectingUnitPath` is unwound and `_sourcePath`
+            // is "" in a multi-file build — so the cycle used to be reported against no file at all. The
+            // type that closes the cycle owns the mistake, and `declFile` is where it was written.
+            ScopedStr _cu(_collectingUnitPath, ci->declFile);
             unsupported(("type '" + ci->name + "' contains itself by value (infinite size) — hold a "
                          "member behind Owned<...>, Shared<...>, or List<...>").c_str(),
-                        ci->node ? ci->node->line : 0);
+                        ci->declLine());
             return;   // stop unwinding this cycle; the driver aborts on the recorded error
         }
         visiting.insert(ci);
@@ -12484,9 +12521,11 @@ void CEmitter::computeDestructible()
     // compiler-built `Intrinsic` types (collections/smart-ptrs/variants) own by their own machinery.
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct)
+        if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct) {
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
             unsupported(("a `value` owns nothing, but `" + ci.name + "` transitively owns a resource "
-                         "— declare it `type resource`").c_str(), ci.node ? ci.node->line : 0);
+                         "— declare it `type resource`").c_str(), ci.declLine());
+        }
     }
 }
 
@@ -12746,7 +12785,7 @@ void CEmitter::computeDeeplyImmutable()
                      + "` — every part of an `immutable` type must itself be deeply immutable (a primitive, "
                        "`string`, `enum`, or another `immutable` type); it may not hold an `UnsafePtr`, an "
                        "`Owned`/`Shared`/`Weak`, or a mutable collection").c_str(),
-                    ci.node ? ci.node->line : 0);
+                    ci.declLine());
     }
 }
 
@@ -13411,6 +13450,7 @@ void CEmitter::checkChannelSendability()
         }
         if (inst) _typeSubst.clear();
         if (culprit.empty()) culprit = "a field";   // reached via a base / variant payload / collection element
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
         unsupported(("cannot send `" + elem + "` over a channel — its " + culprit + " shares a non-atomic "
                      "refcount across isolates; use `Owned<Y>` (unique) or send the value by copy").c_str(), line);
     }
@@ -14074,6 +14114,12 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
                            SharedIdentifierList bounds, int line, const std::string& templateKey)
 {
     if (!bounds || bounds->empty()) return;
+    // A failed bound is the USE SITE's mistake and carries the use site's line, so it belongs to the file
+    // that wrote the type argument — which is what `_nsCtx` names here. All three callers (a generic type,
+    // a generic contract, a generic function) reach this from passes where no module is current, so
+    // without it a bad type argument named no file at all. Keeps the current value when there is nothing
+    // better to say. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
 
     // The argument may not be concrete yet: one generic function forwarding its own parameters into
     // another (`sortWith::<T, C>` calling `lessAt::<T, C>`) passes `C` itself, and a generic type
@@ -18261,6 +18307,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 void CEmitter::emitStruct(ClassInfo& ci)
 {
     ScopedStr _ts(_thisType, ci.name);   // `This` -> this class while emitting its struct
+    // Struct layout is emitted from the HEADER pass, where no module is current and `_sourcePath` is "" in
+    // a multi-file build — so a field-level rejection here named no file at all. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, ci.declFile);
     // a tagged union — a discriminant tag + a union of per-variant payloads.
     if (ci.isVariant) { emitVariantStruct(ci); return; }
     *_out << "struct " << ci.name << " {\n";
@@ -18280,7 +18329,7 @@ void CEmitter::emitStruct(ClassInfo& ci)
         hasMember = true;
     }
     for (auto& f : ci.fields) {
-        rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.node ? ci.node->line : 0),
+        rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.declLine()),
                               /*alsoView=*/true);   // a view can't be a field (would dangle) — but a view's OWN
                                                     // `UnsafePtr<T>`/`int` fields are fine; only view-TYPED fields reject
         indent(1);
@@ -18639,7 +18688,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
             continue;
         }
         rejectStoredInterface(mi.returnType, "returned from a method",
-                              mi.node ? mi.node->line : (ci.node ? ci.node->line : 0));
+                              mi.node ? mi.node->line : (ci.declLine()));
         // an operator has no `node`; emit its prototype from `opDecl` (free form: no self).
         SharedParameterList plist = mi.isOperator ? operatorParamList(mi.opDecl->operatorDeclarator.get())
                                                   : mi.node->params;
@@ -18657,7 +18706,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
 // reverse declaration order. (Early return inside a dtor body is unsupported.)
 void CEmitter::emitDtorDefinition(ClassInfo& ci)
 {
-    line(ci.dtorNode ? ci.dtorNode->line : (ci.node ? ci.node->line : 0));
+    line(ci.dtorNode ? ci.dtorNode->line : (ci.declLine()));
     _currentClass = &ci;
     // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
     // exactly like any other body.
@@ -19124,7 +19173,7 @@ std::string CEmitter::eqFieldTest(SharedIdentifier ty, const std::string& a, con
 // field is excluded from identity, matching how it is excluded from the wire form).
 void CEmitter::emitEqualsDefinition(ClassInfo& ci)
 {
-    int line = ci.node ? ci.node->line : 0;
+    int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "bool " << ci.name
           << "__equals(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
     std::string cond;
@@ -19145,7 +19194,7 @@ void CEmitter::emitEqualsDefinition(ClassInfo& ci)
 // hash/equals contract (equal values hash equal) true by construction.
 void CEmitter::emitHashDefinition(ClassInfo& ci)
 {
-    int line = ci.node ? ci.node->line : 0;
+    int line = ci.declLine();
     *_out << (_emitStaticClass ? "static inline " : "") << "uint64_t " << ci.name
           << "__hash(" << ci.name << "* self)\n{\n";
     indent(1); *_out << "uint64_t h = 2166136261ULL;\n";
@@ -19175,7 +19224,7 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
 // its own Format — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
 void CEmitter::emitFormatDefinition(ClassInfo& ci)
 {
-    int line = ci.node ? ci.node->line : 0;
+    int line = ci.declLine();
     // The dump uses the SOURCE type name (`Stat`), not the mangled C name (`_F<file>__Stat`).
     std::string disp = (ci.node && ci.node->name && ci.node->name->value) ? *ci.node->name->value : ci.name;
     *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name
@@ -19542,6 +19591,9 @@ void CEmitter::computeGraphNodeTypes()
         std::string cur = work.back(); work.pop_back();
         ClassInfo& ci = _classes[cur];
         _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        // Both rejections below are about a FIELD of `ci` and carry that field's line, so they belong to the
+        // file that declared `ci`. Whole-program pass — without this they named no file at all. See diagFile().
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);
         _typeSubst.clear();
         for (auto& f : ci.fields) {
             GraphEdge e = graphEdgeOf(f.type);
@@ -22328,10 +22380,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // at registerGenericTypeInst, where the payload type is substituted concrete.)
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.isBorrow && ci.destructible)
+        if (ci.isBorrow && ci.destructible) {
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
             unsupported(("a `view` (`" + ci.name + "`) borrows and owns nothing — it may not have an owning "
                          "or resource field (hold a non-owning `UnsafePtr<T>` instead)").c_str(),
-                        ci.node ? ci.node->line : 0);
+                        ci.declLine());
+        }
     }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
     computeDeeplyImmutable();     // M6.2: mark deeply-immutable types (feeds the sendability seed below)
@@ -22384,6 +22438,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || u == _preludeUnit || !u->exportList) continue;
         _nsCtx = _unitCtx[u.get()];
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());   // see diagFile()
         for (auto& name : *u->exportList) {
             if (!name) continue;
             std::string q = qualify(*name);
@@ -22406,6 +22461,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // mistake spelled a shorter way.
     for (auto& u : units) {
         if (!u || !u->importDeclarationList) continue;
+        ScopedStr _cu(_collectingUnitPath, u->name ? *u->name : std::string());   // see diagFile()
         for (auto& imp : *u->importDeclarationList) {
             if (!imp || !imp->symbols || !imp->modulePath) continue;
             std::string path;

@@ -114,19 +114,22 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 bool CEmitter::ctFail(const char* what, int line)
 {
     if (!_ctFailed) {
-        std::fprintf(stderr, "kama: error: comptime evaluation: %s at %s:%d\n", what, _sourcePath.c_str(), line);
         ++_unsupported;
-        // ALSO record the structured form. `kama check` and the language server decide purely from the
+        // The structured form is the ONLY form. `kama check` and the language server decide purely from the
         // Diagnostic list (`_unsupported` is a build-path counter they never read), so a comptime failure
         // that only reached stderr made the editor call a file clean that `kama build` rejects — the same
         // "check and build disagree" defect this pass exists to close. Guarded by the check/build agreement
-        // assertion in run_tests.sh.
+        // assertion in run_tests.sh. A stderr line printed here as well was the OTHER half of that defect:
+        // it duplicated every comptime failure under a second wording, exactly as `unsupported` once did.
+        //
+        // `diagFile()`, not `_sourcePath` — the latter is "" in a multi-file build, so a comptime failure
+        // inside an imported module reported no file at all.
         Diagnostic d;
         d.line = line;
         d.severity = DiagSeverity::Error;
         d.code = "comptime";
         d.message = std::string("comptime evaluation: ") + what;
-        d.file = _sourcePath;
+        d.file = diagFile();
         _diagnostics.push_back(d);
         _ctFailed = true;
     }

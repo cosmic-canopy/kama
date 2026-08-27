@@ -653,8 +653,37 @@ done
 #
 # Fanned out across NCPU like the single-file leg, and for the same reason: each fixture is an independent
 # `kama build` into its own $TMP files. Serial, this leg was ~325 compiler processes run one at a time.
+# Every POSITION a diagnostic names must be real: a file, and a line that file actually has. This is the
+# cheap half of "nothing in the repo checks a diagnostic's line number" — it cannot tell a right line from
+# a wrong-but-plausible one (DIAGNOSTIC_LINES below does that), but it is free here, because the build has
+# already run and its stderr is already captured, and it applies to EVERY diagnostic of EVERY fixture
+# rather than to the one each `.msg` happens to assert.
+#
+# It is not hypothetical. On the corpus it stood up on, it found 18 fixtures: 15 emitting a diagnostic with
+# NO FILE NAME AT ALL (`:3:0: error: …` — `diagFile()` returned empty and nobody looked), 2 reporting line
+# 0, which no file has, and one pointing at line 31 of a 19-line file. A reader sent to line 31 of a 19-line
+# file learns that the compiler does not know where the mistake is; a wrong line inside the file merely
+# misleads them quietly, which is worse but needs the golden record to catch.
+#
+# LC_ALL=C throughout: diagnostic text carries em-dashes and backticks, and a UTF-8 locale makes BSD sed
+# and grep fail outright ("illegal byte sequence") on the very messages we are trying to read.
+diag_position_faults() {   # diag_position_faults <errfile> <fixture.kama>...
+    local err="$1" s sb slen; shift
+    if LC_ALL=C grep -qE '^:[0-9]+:[0-9]+: ' "$err"; then echo "names NO FILE at all"; fi
+    for s in "$@"; do
+        sb="${s##*/}"; slen=$(wc -l < "$s" | tr -d ' ')
+        LC_ALL=C awk -v sb="$sb" -v max="$slen" '
+            { i = index($0, sb ":"); if (i == 0) next
+              rest = substr($0, i + length(sb) + 1)
+              if (rest !~ /^[0-9]+:/) next
+              n = rest + 0
+              if (n < 1 || n > max) seen[n] = 1 }
+            END { for (n in seen) print sb ":" n " (the file has " max " lines)" }' "$err"
+    done
+}
+
 xfail_one() {
-    local src="$1" name out res err rc msg_file
+    local src="$1" name out res err rc msg_file fsrcs faults
     name="${src##*/}"; name="${name%.kama}"; name="${name%.d}"
     out="$TMP/xf_$name.out"; res="$TMP/xf_$name.res"; err="$TMP/xf_$name.err"
     # One file, or every file of a .d directory. `sort` because the ORDER the operands are written in used
@@ -664,6 +693,7 @@ xfail_one() {
     # order, and `kama check` does not sort. Sorting here costs nothing and keeps the input stable too.
     if [ -d "$src" ]; then
         msg_file="$src/msg"
+        fsrcs=$(find "$src" -name '*.kama' | sort)
         if [ -f "$src/kama.json" ]; then
             # A fixture WITH a manifest is named BY ITS MANIFEST — the same rule the POSITIVE .d leg
             # already follows, because the operand is the mode. Naming the .kama files instead is a LOOSE
@@ -672,12 +702,12 @@ xfail_one() {
             # simply never added when 1c gave it to the positive leg.
             "$KAMA" build "$src/kama.json" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
         else
-            local srcs; srcs=$(find "$src" -name '*.kama' | sort)
             # shellcheck disable=SC2086
-            "$KAMA" build $srcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
+            "$KAMA" build $fsrcs -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
         fi
     else
         msg_file="$TESTS_DIR/xfail/$name.msg"
+        fsrcs="$src"
         "$KAMA" build "$src" -o "$TMP/xf_$name" >/dev/null 2>"$err"; rc=$?
     fi
     if [ "$rc" -eq 0 ]; then
@@ -707,6 +737,13 @@ xfail_one() {
         { echo "FAIL xfail/$name (rejected, but reported as a WARNING — a compiler that calls an error a"
           echo "  warning cannot be trusted about the errors it does report)"; grep -i warning "$err" | head -2; } >"$out"
         echo FAIL >"$res"; return
+    fi
+    # shellcheck disable=SC2086
+    faults=$(diag_position_faults "$err" $fsrcs)
+    if [ -n "$faults" ]; then
+        { echo "FAIL xfail/$name (rejected, but a diagnostic points nowhere real)"
+          printf '%s\n' "$faults" | sed 's/^/    /'
+          head -3 "$err"; } >"$out"; echo FAIL >"$res"; return
     fi
     echo "PASS xfail/$name (rejected)" >"$out"; echo PASS >"$res"
 }
