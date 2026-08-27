@@ -260,6 +260,20 @@ native and web**. Don't conflate "can emit WASM directly" with "the fast web pat
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+- **Layout control does not reach an `enum`.** `@align(N)`/`@packed` ship on a type with a struct
+  (`type value`/`type resource`) and are REFUSED on both enum shapes, with a diagnostic that says so — this
+  is a tracked deferral, not an oversight, and it is deliberately not a half-answer. A payload-less enum has
+  no struct at all: it lowers to an integer (`typedef uint8_t E;` when pinned), and what it can already say
+  about its layout is its tag width, `type enum E : IntType`. A **tagged** enum is the real gap, and the
+  reason it waits is that `emitVariantStruct` emits an outer struct wrapping a per-variant payload
+  `struct` and a `union` — so `__attribute__((packed))` on the outer one does **not** reach the payloads,
+  and "packed except where it matters" is worse than refused. Settling it means deciding whether `packed`
+  propagates inward and pinning that with a fixture that reads real `sizeof`s, which is a different piece
+  of work from the passthrough that shipped. `@align(N)` alone would reach a tagged enum today, but
+  shipping align-yes/packed-no is a worse rule than one line that covers both. Nothing needs it: the
+  motivating cases (a vertex buffer, an `std140` block, an MMIO register block, a wire struct) are all
+  `type value`. Reopen when a real wire-format union appears.
+
 - **`Fixed<B, const F>` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
   CORDIC and polynomial-approximation work, a numerical-methods project rather than a library chore. It is
