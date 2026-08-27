@@ -4326,8 +4326,19 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 // this BEFORE writing its own line — so the temps appear first. Pure ISO C, no `({ … })`.
 void CEmitter::flushHoisted(int depth)
 {
+    if (_hoisted.empty()) return;
     for (auto& s : _hoisted) { indent(depth); *_out << s << "\n"; }
     _hoisted.clear();
+    // RE-STAMP. `#line` is written once per statement and clang counts FORWARD from it, so every C line a
+    // lowering emits after its first is attributed to "the statement's line plus the offset". A hoisted
+    // block is the long shape — a `match` lowering runs ~18 C lines — so without this the REST of the
+    // statement it was hoisted for is reported many lines below itself, and on a short file below the end
+    // of the file: `#line 4` + 15 reported as vm.kama:18 in a 10-line file.
+    //
+    // ⚠️ check-diag-line.sh cannot see this and is not the guard for it: every directive here is correct,
+    // and it is clang's arithmetic BETWEEN them that leaves the file. tools/check-diag-drift.sh compiles a
+    // probe and reads what the C compiler says instead.
+    line(_curLine);
 }
 
 // emit a condition with hoisting enabled so an inline ctor / `match` works in `if`/`while`/`for`.
@@ -16673,6 +16684,11 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
     flushHoisted(depth);
+    // The value line is where the user's expression IS, and both callers — a `return` and a
+    // value-producing `match` arm — declare the destination temp on the line above it. Without a stamp
+    // here that declaration consumes the enclosing `#line` and every C-compiler error in the expression is
+    // reported one line low. `this->` because the parameter shadows the stamper.
+    this->line(line);
     indent(depth); *_out << dst << " = " << rv << ";\n";
     std::string rc = exprClass(v);
     // Smart pointer: give (or a bare dying local) MOVES out (invalidate the source); copy RETAINS.
@@ -16832,6 +16848,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 1);
         if (a->isWildcard()) *_out << "default: {\n";
         else                 *_out << "case " << subjCls << "_" << *a->variantName << ": {\n";
+        // Each arm carries its OWN kama line. Without this the whole switch is attributed to the
+        // `match` keyword's line and clang counts forward from there, so an error the C compiler finds in
+        // arm 3 is reported several lines below the arm — measured past the end of a short file. An arm is
+        // where the user wrote the expression, so it is where a `#line` belongs. It goes AFTER
+        // the `case …: {` line, which would otherwise consume the stamp and push the body one line down —
+        // naming the NEXT arm, the most misleading answer available.
+        line(a->line);
 
         const VariantCase* vc = nullptr;
         if (!a->isWildcard()) for (auto& v : ci.variants) if (v.name == *a->variantName) { vc = &v; break; }
@@ -17207,6 +17230,13 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         indent(depth + 1);
         if (a->isWildcard()) *_out << "default: {\n";
         else                 *_out << "case " << enumTy << "_" << *a->variantName << ": {\n";
+        // Each arm carries its OWN kama line. Without this the whole switch is attributed to the
+        // `match` keyword's line and clang counts forward from there, so an error the C compiler finds in
+        // arm 3 is reported several lines below the arm — measured past the end of a short file. An arm is
+        // where the user wrote the expression, so it is where a `#line` belongs. It goes AFTER
+        // the `case …: {` line, which would otherwise consume the stamp and push the body one line down —
+        // naming the NEXT arm, the most misleading answer available.
+        line(a->line);
 
         Scope sc; _scopes.push_back(sc);
         if (a->block) {

@@ -605,24 +605,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
   Both are ordinary socket-option work on the shipped seam.
-- **A C-compiler error drifts PAST the construct it is in, and past the end of the file.** `#line` is how
-  clang's errors are placed back onto kama source, and clang counts FORWARD from the last directive — so a
-  kama statement whose lowering spans many C lines has every line after the first attributed to a kama line
-  that is merely "the statement's line plus the offset". Measured 2026-08-27 on a **10-line** file:
-
-      #line 4 "vm.kama"     <- C line 1838, the `match` statement
-      …
-      default: break;       <- C line 1853, and clang reports it as vm.kama:18
-
-  4 + 15 - 1 = 18, eight lines past the end of a file that has ten. The emitter stamps roughly one directive
-  per statement, which bounds the drift to one construct's lowering — usually a few lines, but a `match`,
-  a `foreach` or a destructuring lowering is long enough to leave the file. Fix = re-stamp `#line` at the
-  END of a multi-line lowering as well as the start, so a construct cannot leak its offsets into the next
-  one. ⚠️ **`tools/check-diag-line.sh` cannot see this**: it validates the DIRECTIVES, and every directive
-  here is correct — it is clang's arithmetic between them that leaves the file. A guard for this has to
-  compile a probe and read what the C COMPILER says, not what the emitter wrote. Found while probing the
-  `enum : IntType` row below, whose reproduction is what produced the numbers above.
-
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
