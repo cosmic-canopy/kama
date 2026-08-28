@@ -595,33 +595,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **A FALLIBLE ctor on a generic instance has no static result type.** `match (Reader::<int32>.open(…))`
-  answers *"`match` subject's type could not be resolved"*, while the concrete `match (Reader.open(…))`
-  and the generic INFALLIBLE `G::<int32>.make(…).get()` both resolve.
-
-  ⚠️ **RE-PROBED 2026-08-28, and this entry's stated cause was WRONG — do not start from it.** It used to
-  say the blocker was *rendering*: that a fallible ctor's declared `Result<T, E>` "needs the owning
-  instance's type args bound, which this path does not do", pointing at the `if (inst != dotTy) return "";`
-  bail in `callReturnTypeRaw`. **Deleting that bail and rendering through `cTypeInInstance` changes
-  nothing** — measured, on a real build. The code never reaches it.
-
-  **The real cause is DISCOVERY, one step earlier.** Instrumenting the dot-on-type branch:
-
-  ```
-  fallible:    inst=_Fc__G_int32  inClasses=0     <- the name is computed, the instance does not exist
-  infallible:  inst=_Fb__G_int32  inClasses=1
-  ```
-
-  `dotOnTypeInstance` computes the right mangled name, but nothing ever REGISTERED `G<int32>`, so
-  `_classes.find(inst)` misses and the branch returns "" before any rendering question arises. A
-  turbofish on a fallible ctor call is not a site that collects a generic instance; on an infallible one
-  it is. Confirmed from the other side: **adding one unrelated `G::<int32>.make(…)` to the same function
-  makes the fallible inline subject compile.** That is also the honest workaround to document, and it is
-  a better one than the typed local.
-
-  So the work is in instance COLLECTION (`collectGenericInsts` and friends), not in `callReturnTypeRaw`.
-  ✅ Separately: the old workaround — "bind it to a typed local first" — **now actually works**; the
-  `match` substitution fix is what had been breaking it.
+- **A field's DEFAULT INITIALIZER is not walked by either discovery pass.** `collectGenericInsts` and
+  `collectCollections` both read a field's declared *type* and never its initializer expression, so
+  `public int32 v = ident(x: 7);` — a generic call as a field default — is never discovered. It used to
+  emit the template's own mangled C name and let clang refuse the result; since `0.9.100` it is a kama
+  diagnostic naming the callee, pinned by `tests/xfail/generic_call_unresolved_instance.kama`. The
+  workaround is the turbofish or a call from a body. Fixing it means walking the initializer in both
+  passes and settling the substitution context for a generic type's fields, which is why it is tracked
+  here rather than folded into the walk-parity work. ⚠️ **`tools/check-scan-parity.sh` cannot see this
+  one** — it holds the two walks at parity on AST *node kinds*, and this is an asymmetry in which
+  *declarations* get walked at all, which is the same for both.
 - **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
   used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
   *different* ceilings that want separate fixes:

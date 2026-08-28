@@ -41,7 +41,7 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 | # | item | size | why it gates the tag | detail |
 |---|---|---|---|---|
 | 1 | **`spawn` disjointness: ROOT → PLACE granularity** — ⚠️ probed: `spawn` takes only a bare local, so a field never reaches the root check | L? | the first parallel system. **Settle the design first** — it is a lifetime question before it is a disjointness one | [§3](ROADMAP_DETAIL.md#s3) |
-| 2 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type — ⚠️ re-probed: the cause is instance COLLECTION, not rendering | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
+| 2 | **Fallible `new` is concrete-only** — `try new` / `new(allocator:)` report "not yet supported" for the type-erased `Owned<Contract>` and the stateful-allocator form | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
 | 3 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | M | a prose claim that something is rejected is unguarded without one — the house rule, learned the hard way | [§2](ROADMAP_DETAIL.md#s2) |
 | 4 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 
@@ -67,7 +67,7 @@ buildable today. These are the kama-side gaps it hits that the tag does not gate
 | 12 | **Serialization follow-ups** — deserialize breadth, more back ends, `@deprecated` | [§4](ROADMAP_DETAIL.md#s4) |
 | 13 | **Windows** — long-path support; suite wall-clock (~906 s vs ~75 s in the container) | [§1](ROADMAP_DETAIL.md#s1) |
 | 14 | **MCU toolchain packaging** — board presets, vendor-HAL glue, a real-hardware flash pass; AVR later | [§5](ROADMAP_DETAIL.md#s5) |
-| 15 | **Remaining language limitations** — no bound spells "an integer primitive", so `cast<T>` in a generic is checked per instantiation (the stdlib avoids it: pass by address, move `sizeof(T)` bytes); generic free fn calling a generic free fn; generic `enum` members; unresolved type names inside generic arguments; `--no-heap` not gating container allocation; contract-refinement thunks; `Fixed<B,const F>` implementing `Real`; `@align`/`@packed` not reaching a tagged `enum` (an outer `packed` misses the per-variant payload structs) | [§2](ROADMAP_DETAIL.md#s2) |
+| 15 | **Remaining language limitations** — no bound spells "an integer primitive", so `cast<T>` in a generic is checked per instantiation (the stdlib avoids it: pass by address, move `sizeof(T)` bytes); generic free fn calling a generic free fn; a generic call in a field's DEFAULT INITIALIZER (neither discovery pass walks one); generic `enum` members; unresolved type names inside generic arguments; `--no-heap` not gating container allocation; contract-refinement thunks; `Fixed<B,const F>` implementing `Real`; `@align`/`@packed` not reaching a tagged `enum` (an outer `packed` misses the per-variant payload structs) | [§2](ROADMAP_DETAIL.md#s2) |
 | 16 | **Collections knobs** — HashDoS-resistant keyed hashing; zero-size-field elision; thin smart-ptr handles | [§5](ROADMAP_DETAIL.md#s5) |
 | 17 | **Performance** — bench cohort (add Zig), serialization benchmark track, devirtualization ladder, CPU-tuning knob | [§9](ROADMAP_DETAIL.md#s9) |
 
