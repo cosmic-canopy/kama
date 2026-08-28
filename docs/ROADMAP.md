@@ -41,7 +41,7 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 | # | item | size | why it gates the tag | detail |
 |---|---|---|---|---|
 | 1 | **`spawn` disjointness: ROOT → PLACE granularity** — ⚠️ probed: `spawn` takes only a bare local, so a field never reaches the root check | L? | the first parallel system. **Settle the design first** — it is a lifetime question before it is a disjointness one | [§3](ROADMAP_DETAIL.md#s3) |
-| 2 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
+| 2 | **Fallible `new` is concrete-only**; a fallible ctor on a generic instance has no static result type — ⚠️ re-probed: the cause is instance COLLECTION, not rendering | M | asset loading | [§2](ROADMAP_DETAIL.md#s2) |
 | 3 | **~42 negative doc claims have no machine-readable link to an xfail fixture** | M | a prose claim that something is rejected is unguarded without one — the house rule, learned the hard way | [§2](ROADMAP_DETAIL.md#s2) |
 | 4 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 

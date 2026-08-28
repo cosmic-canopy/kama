@@ -595,17 +595,33 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **A FALLIBLE ctor on a generic instance has no static result type.** `callReturnTypeRaw` now resolves a
-  dot-on-type ctor call on a generic receiver (so a method chains off `Fixed::<int32, 16>.fromInt(…)`), but
-  only for an INFALLIBLE ctor, whose result is the instance itself. A fallible one declares
-  `ctor Result<T, E> open(…)`, and rendering that needs the owning instance's type args bound — a binding
-  this path does not do. So `match (Reader::<int32>.open(…))` still wants a typed local first, while the
-  concrete `match (Reader.open(…))` does not. The binding pattern exists three times already in
-  `callReturnTypeRaw` / `indexElemTypeRaw` / `cTypeInInstance`; the work is reaching for the last of
-  those rather than adding a fourth copy. ✅ **The stated workaround — "bind it to a typed local first" —
-  now actually works**, re-probed 2026-08-28 after the `match` substitution fix, which is what had been
-  breaking it. The row itself is unchanged: the inline subject still answers *"`match` subject's type
-  could not be resolved"*.
+- **A FALLIBLE ctor on a generic instance has no static result type.** `match (Reader::<int32>.open(…))`
+  answers *"`match` subject's type could not be resolved"*, while the concrete `match (Reader.open(…))`
+  and the generic INFALLIBLE `G::<int32>.make(…).get()` both resolve.
+
+  ⚠️ **RE-PROBED 2026-08-28, and this entry's stated cause was WRONG — do not start from it.** It used to
+  say the blocker was *rendering*: that a fallible ctor's declared `Result<T, E>` "needs the owning
+  instance's type args bound, which this path does not do", pointing at the `if (inst != dotTy) return "";`
+  bail in `callReturnTypeRaw`. **Deleting that bail and rendering through `cTypeInInstance` changes
+  nothing** — measured, on a real build. The code never reaches it.
+
+  **The real cause is DISCOVERY, one step earlier.** Instrumenting the dot-on-type branch:
+
+  ```
+  fallible:    inst=_Fc__G_int32  inClasses=0     <- the name is computed, the instance does not exist
+  infallible:  inst=_Fb__G_int32  inClasses=1
+  ```
+
+  `dotOnTypeInstance` computes the right mangled name, but nothing ever REGISTERED `G<int32>`, so
+  `_classes.find(inst)` misses and the branch returns "" before any rendering question arises. A
+  turbofish on a fallible ctor call is not a site that collects a generic instance; on an infallible one
+  it is. Confirmed from the other side: **adding one unrelated `G::<int32>.make(…)` to the same function
+  makes the fallible inline subject compile.** That is also the honest workaround to document, and it is
+  a better one than the typed local.
+
+  So the work is in instance COLLECTION (`collectGenericInsts` and friends), not in `callReturnTypeRaw`.
+  ✅ Separately: the old workaround — "bind it to a typed local first" — **now actually works**; the
+  `match` substitution fix is what had been breaking it.
 - **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
   used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
   *different* ceilings that want separate fixes:
