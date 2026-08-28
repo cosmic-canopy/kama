@@ -21545,9 +21545,9 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
     }
     recordNodeRef(oc->ctorName.get(), mi->node);   // M6 B3a: `new Type.name(...)` references the ctor
     if (mi->returnType && mi->returnType->value && *mi->returnType->value == "Result") {
-        // Reached only from an INFALLIBLE box path (concrete/interface/library smart-ptr target) — a fallible
-        // ctor there means the declared result type is wrong. Fallible `new` into a concrete `Owned`/`Shared`
-        // is routed to `emitFallibleNewBox` upstream; interface/library fallible `new` is a follow-on.
+        // Reached only from an INFALLIBLE box path (a plain `new`, or a `try new` — which reports a failed
+        // ALLOCATION, not a failed constructor) — so a fallible ctor here means the declared result type is
+        // wrong. A fallible `new` is routed to `emitFallibleNewBox` upstream, for every destination.
         unsupported(("fallible `new " + disp + "." + cn + "(...)` returns `Result` — declare the result "
                      "`Result<Owned<" + disp + ">, E>` (a fallible ctor yields `Err` or an owned value)").c_str(), lineNo);
         return "";
@@ -21586,10 +21586,10 @@ bool CEmitter::ctorIsFallible(ObjectCreationNode* oc)
 // M4b — `new Type.name(args)` over a FALLIBLE ctor (returns `Result<T,E>`) builds `Result<Owned<T>,E>`: call
 // the factory into a temp, propagate `Err` with NO allocation (leak-free by construction), else box the `Ok`
 // payload into a fresh owning handle (`adopt`) and wrap it in `Ok`. Returns a C statement sequence that
-// assigns the (already-declared) `lval`, or "" after emitting a diagnostic. Concrete `Owned`/`Shared` (the
-// `std::memory` library `HeapOwner`) only — the type-erased interface-element handle (`Owned<Contract>`,
-// `isSmartPtrClass`) and the `new(allocator: …)`/stateful-allocator form get a precise "not yet supported"
-// diagnostic (a follow-on milestone), never the old "coming in M4b" text.
+// assigns the (already-declared) `lval`, or "" after emitting a diagnostic. Serves BOTH destinations: the
+// type-erased interface-element handle (`Owned<Contract>`, `isSmartPtrClass`) and the concrete
+// `Owned`/`Shared` (the `std::memory` library `HeapOwner`), each with the placement `new(allocator: …)`
+// form. `emitTryNewBox` is its non-panicking twin and mirrors both branches.
 std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::string& lval,
                                          ObjectCreationNode* oc, int srcLine)
 {
@@ -21767,11 +21767,12 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     return s;
 }
 
-// `try new T(args)` (M-step5): the ONE non-panic construction entry. Mirrors the infallible bare-`new` into
-// a library `Owned<T>` (~2033-2110) but yields `Optional<Owned<T>>` — `None` when the raw allocation fails,
-// instead of `kama_panic`. Scoped to the BARE form (no placement / named ctor — those are a follow-on). The
+// `try new T(args)` (M-step5): the ONE non-panic construction entry. Mirrors the infallible `new` into a
+// library `Owned<T>` (~2033-2110) but yields `Optional<Owned<T>>` — `None` when an allocation fails,
+// instead of `kama_panic`. Two destinations, exactly as emitFallibleNewBox has: the type-erased
+// INTERFACE-element fat handle (`isSmartPtrClass`) and the concrete library `HeapOwner` (`adopt`). The
 // `Some`/`None` compound literal mirrors emitWeakTryUpgrade; the malloc/ctor/adopt mirrors the library-adopt
-// path in emitFallibleNewBox. `lval` (declared + RAII-tracked by the caller) is assigned on both branches.
+// path in emitFallibleNewBox. `lval` (declared + RAII-tracked by the caller) is assigned on every branch.
 std::string CEmitter::emitTryNewBox(const std::string& target, const std::string& lval,
                                     ObjectCreationNode* oc, int srcLine)
 {
@@ -21795,10 +21796,63 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     }
     std::string S = cTypeInInstance(target, someV->payload[0].type);   // the inner Owned/Shared instance
     const std::string someName = someV->payload[0].name;              // "value"
-    if (isSmartPtrClass(S)) {   // interface-element handle — a follow-on (bare concrete `Owned<T>` only)
-        unsupported(("`try new` into an interface handle `" + S + "` is a follow-on — box a concrete `Owned<"
-                     + disp + ">`").c_str(), srcLine);
-        return "";
+    // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
+    // Mirrors emitFallibleNewBox's interface branch (malloc `.obj`, construct into it, set `.vtbl`, and —
+    // Shared — the ctrl) with ONE deliberate difference, which is this verb's whole reason to exist:
+    // ⚠️ every allocation here answers `None`, never `kama_panic`. That also rules out `kama_ctrl_new()`,
+    // which does not check its own malloc — the ctrl is allocated inline and tested. Both blocks are taken
+    // BEFORE anything is constructed, so a failure has no live object to unwind.
+    if (isSmartPtrClass(S)) {
+        const std::string Tif = _classes[S].collElemClass;   // the interface the fat handle erases
+        if (!isInterface(Tif)) {
+            unsupported(("`try new` into `" + S + "` — not an interface-element handle").c_str(), srcLine);
+            return "";
+        }
+        if (smartKind(S) == CollKind::Weak) {
+            unsupported("a `Weak` handle owns nothing, so it is not a `try new` destination — build an "
+                        "`Optional<Owned<…>>`/`Optional<Shared<…>>` and take a `Weak` from that", srcLine);
+            return "";
+        }
+        bool implementsT = false;
+        auto cit = _classes.find(cls);
+        if (cit != _classes.end())
+            for (auto& i : cit->second.interfaces) if (i == Tif) { implementsT = true; break; }
+        if (!implementsT) {
+            unsupported(("`try new " + disp + "(...)` builds `" + cls + "`, which does not implement `"
+                         + Tif + "`").c_str(), srcLine);
+            return "";
+        }
+        if (isClass(cls) && _classes[cls].isAbstractClass) {
+            unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
+            return "";
+        }
+        std::string ctorStmt;                                // built first: it pushes the arg hand-offs
+        std::string obj = "__tobj"  + std::to_string(_tempCounter++);
+        std::string box = "__tbox"  + std::to_string(_tempCounter++);
+        std::string ctl = "__tctrl" + std::to_string(_tempCounter++);
+        if (oc->ctorName) {
+            std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
+            if (fc.empty()) return "";                            // diagnostic already emitted
+            ctorStmt = "*(" + cls + "*)" + obj + " = " + fc + "; ";
+        }
+        const bool shared = smartKind(S) == CollKind::Shared;
+        const std::string none = lval + " = (" + target + "){ .tag = " + target + "_None }; ";
+        std::string s;
+        s  = "void* " + obj + " = malloc(sizeof(" + cls + ")); ";
+        s += "if (!" + obj + ") { " + none + "} else { ";
+        if (shared) {
+            s += "kama_ctrl* " + ctl + " = (kama_ctrl*)malloc(sizeof(kama_ctrl)); ";
+            s += "if (!" + ctl + ") { free(" + obj + "); " + none + "} else { ";
+            s += ctl + "->strong = 1; " + ctl + "->weak = 0; ";
+        }
+        s += ctorStmt;
+        s += S + " " + box + "; " + box + ".obj = " + obj + "; ";
+        s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
+        if (shared) s += box + ".ctrl = " + ctl + "; ";
+        s += lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
+           + box + " } }; ";
+        s += shared ? "} }" : "}";
+        return s;
     }
     std::string T = heapOwnerTarget(S);
     if (T.empty() || T != cls) {

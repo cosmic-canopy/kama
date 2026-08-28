@@ -1,0 +1,29 @@
+// `try new` into an INTERFACE handle: the concrete is boxed behind the type-erased `Owned<Shape>` fat
+// handle {obj, vtbl}, and dispatch goes through the vtbl exactly as it does for the infallible `new`
+// (owned_iface). The verb's contract is unchanged by the erasure — a failed allocation is `None`, never a
+// panic — so the two `Some` arms below are the ONLY way to reach an area.
+import { std::memory::Owned };
+
+type contract Shape for value { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+type value Square implements Shape {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s + this.s; }
+}
+
+fn int32 areaOf(Optional<Owned<Shape>> h) { return match (h) { case Some(value: s): s.area(); case None: 0 - 1; }; }
+
+fn int32 main() {
+    Optional<Owned<Shape>> c = try new Circle.make(r: 5);    // 25 through the vtbl
+    Optional<Owned<Shape>> q = try new Square.make(s: 8);    // 16 — a different concrete, same handle type
+    // ARGUMENT position, straight into a contract-typed handle — the value-position hoist and the
+    // interface boxing composing, with no local to name the box.
+    return areaOf(h: give c) + areaOf(h: give q) + areaOf(h: try new Square.make(s: 4));   // 25+16+8
+}

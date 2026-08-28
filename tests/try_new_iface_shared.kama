@@ -1,0 +1,24 @@
+// `try new` into a SHARED interface handle — the ref-counted twin of try_new_iface. The ctrl block is a
+// second allocation, so it is a second way to fail: this verb must answer `None` there too, which is why
+// the ctrl cannot come from `kama_ctrl_new()` (it does not check its own malloc). Cloning the handle
+// bumps the count, and the box is freed once, when the last strong reference drops.
+import { std::memory::Shared };
+
+type contract Shape for value { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn int32 main() {
+    Optional<Shared<Shape>> h = try new Circle.make(r: 6);
+    return match (h) {
+        case Some(value: s): {
+            Shared<Shape> alias = copy s;      // second strong reference to the same boxed Circle
+            := s.area() + alias.area();        // 36 + 36
+        }
+        case None: 0 - 1;
+    };
+}
