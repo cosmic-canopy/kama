@@ -1,0 +1,14 @@
+// `try cast<T>(x)` in a VALUE position — return and argument. The fallible conversion is a statement form
+// (the operand is evaluated once into a temp, and `Some`'s payload type comes from the destination), and
+// a value position supplies a destination just as a typed local does: the function's return type, or the
+// parameter's. Its sibling verb `try new` gets the same treatment through the same hoist.
+fn Optional<int8> narrow(int32 v) { return try cast<int8>(v); }
+
+fn int32 unwrap(Optional<int8> o) { return match (o) { case Some(value: x): cast<int32>(x); case None: 0 - 1; }; }
+
+fn int32 main() {
+    int32 a = unwrap(o: narrow(v: 100));            // 100 — fits int8, through the return position
+    int32 b = unwrap(o: narrow(v: 300));            // -1  — does not fit, `None` rather than a trap
+    int32 c = unwrap(o: try cast<int8>(20));        // 20  — ARGUMENT position
+    return a + b + c;   // 119
+}

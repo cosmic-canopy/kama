@@ -2271,7 +2271,7 @@ private:
     // materialize a preceding temp (ISO C, no `({…})`) and return its name; else "". Generalizes the
     // argument-position lowering to any value site (return, variant payload, …).
     std::string tryHoistInlineCtor(SharedExpression e, const std::string& targetCType, int srcLine);
-    std::string tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine);
+    std::string tryHoistInlineValue(SharedExpression e, const std::string& targetCType, int srcLine);
     // Materialize `value` (unwrapping a give/copy marker; resolving an inline ctor/`new`/bare-generic-ctor
     // from `dstCType`) and assign it into the already-declared lvalue `dst` of type `dstCType`, applying the
     // give/copy matrix for an OWNED value (smart-ptr / resource / collection / bindable — move consumes the

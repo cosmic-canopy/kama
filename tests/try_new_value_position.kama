@@ -1,0 +1,23 @@
+// `try new` in a VALUE position — return, argument, and variant payload. The result type is read off the
+// destination exactly as it is for a typed local; in these three positions the destination is the
+// function's return type, the parameter's type, and the payload field's type. Mirrors what the fallible
+// `new` twin already does (dot_on_type_new_fallible), which is why the hoist is the same seam.
+type resource Box {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+
+// RETURN position — the asset-loading shape: a factory that reports OOM as `None` instead of trapping.
+fn Optional<Owned<Box>> load(int32 v) { return try new Box.make(v: v); }
+
+fn int32 unwrap(Optional<Owned<Box>> b) { return match (b) { case Some(value: x): x.get(); case None: 0 - 1; }; }
+
+fn int32 main() {
+    int32 a = unwrap(b: load(v: 7));                  // 7  — through the return position
+    int32 b = unwrap(b: try new Box.make(v: 20));     // 20 — ARGUMENT position, boxed into a hoisted temp
+    // PAYLOAD position — the `Some` arm of an outer Optional carries the boxed handle.
+    Optional<Optional<Owned<Box>>> nested = Optional::Some(value: try new Box.make(v: 15));
+    int32 c = match (give nested) { case Some(value: inner): unwrap(b: inner); case None: 0 - 1; };
+    return a + b + c;   // 42
+}

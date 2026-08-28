@@ -1,0 +1,6 @@
+// The VALUE-POSITION twin of noheap_try_new: `try new` allocates wherever it is written, so the hoist
+// path (return/argument/payload) must reach the same `@noheap` gate as the local-initializer path. Its
+// sibling verb `try cast` allocates nothing and is deliberately NOT gated — see try_cast_value_position.
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+@noheap fn Optional<Owned<Box>> load(int32 v) { return try new Box.make(v: v); }
+fn int32 main() { return match (load(v: 1)) { case Some(value: x): x.get(); case None: 0; }; }

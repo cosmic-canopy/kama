@@ -846,6 +846,15 @@ static bool needsTargetType(const ASTNode* n)
 }
 }  // namespace
 
+// `try cast<T>(x)` — the fallible conversion. Three verbs share `CastNode`, and only this one is a
+// STATEMENT form (it needs a destination type to read `Some`'s payload from, and a slot to evaluate the
+// operand once), so the positions that hoist it must be able to pick it out of the other two.
+static bool isTryCast(const ASTNode* n)
+{
+    auto* c = dynamic_cast<const CastNode*>(n);
+    return c && c->isTry;
+}
+
 void CEmitter::restoreLocalTypeBindings(const std::vector<SavedLocalType>& saved)
 {
     for (auto& sv : saved) {
@@ -3893,12 +3902,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<CastNode*>(n)) {
         std::string target = cType(v->type);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
-        // `try cast` is a STATEMENT form (see emitTryCast) — the declaration path intercepts it before the
-        // expression walk. Arriving here means it was written somewhere that has no `Optional<T>`
-        // destination to read, which is `try new`'s rule and its diagnostic's shape.
+        // `try cast` is a STATEMENT form (see emitTryCast) — the declaration path and the value-position
+        // hoist (tryHoistInlineValue) intercept it before the expression walk. Arriving here means it was
+        // written somewhere with no `Optional<T>` destination to read at all (nested inside another
+        // expression, say), which is `try new`'s rule and its diagnostic's shape.
         if (v->isTry) {
-            unsupported(("`try cast<" + nm + ">(…)` must initialize a declared `Optional<" + nm
-                         + ">` local — that is where its result type comes from. For a value that must "
+            unsupported(("`try cast<" + nm + ">(…)` needs a declared `Optional<" + nm
+                         + ">` destination — a local, an argument, or the function's return type — that is "
+                           "where its result type comes from. For a value that must "
                            "not fail use `cast<" + nm + ">(…)`, and to keep the low bits use `truncate<"
                          + nm + ">(…)`").c_str(), v->line);
             return "0";
@@ -5267,7 +5278,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // `Owned<Box> p = new Box(...)`. (BindableFunctionPtr keeps `new` for
                     // its bind.) `new` into a plain value type is an error — drop `new`.
                     // NOTE: the intrinsic-iface + library-adopt boxing below is mirrored (as a
-                    // hoisted-temp string) in tryHoistInlineNew for return/arg/payload positions —
+                    // hoisted-temp string) in tryHoistInlineValue for return/arg/payload positions —
                     // keep the two in sync (esp. the Shared ctrl asymmetry: iface path emits
                     // kama_ctrl_new(), the library-adopt path lets `adopt` allocate it).
                     std::string octy = cType(oc->type);
@@ -6063,7 +6074,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // materializes into a hoisted temp from the element type.
                     bool ph = _hoistOK; _hoistOK = true;
                     std::string src = tryHoistInlineCtor(rhs, et, n->line);
-                    if (src.empty()) src = tryHoistInlineNew(rhs, et, n->line);
+                    if (src.empty()) src = tryHoistInlineValue(rhs, et, n->line);
                     if (src.empty()) src = emitExpression(rhs);
                     _hoistOK = ph;
                     std::string tv = "__elv" + std::to_string(_tempCounter++);
@@ -15136,10 +15147,18 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                             "bind it to a local first, then pass that", srcLine);
                 val = "0";   // rejected — throwaway (compilation already failed); don't re-diagnose via the gate
             } else {
-                std::string t = tryHoistInlineNew(argExpr, p.className, srcLine);
+                std::string t = tryHoistInlineValue(argExpr, p.className, srcLine);
                 val = t.empty() ? emitExpression(argExpr) : t;   // "" => not an owning target; emitExpression diagnoses
             }
             valHoisted = true;   // rejected (byRef) or boxed temp — never a bare rvalue for the ref hoist below
+        } else if (isTryCast(argExpr.get()) && _hoistOK && !p.byRef) {
+            // `f(x: try cast<int8>(v))` — the fallible conversion as an argument. Same treatment as the
+            // inline `new` above and for the same reason: a statement form materialized into a hoisted
+            // temp, here typed by the PARAMETER. A `ref`/`out` param wants an lvalue to reseat, so it
+            // falls through to the ordinary path and gets that rule's diagnostic.
+            std::string t = tryHoistInlineValue(argExpr, p.className, srcLine);
+            val = t.empty() ? emitExpression(argExpr) : t;   // "" => no Optional param; emitExpression diagnoses
+            valHoisted = true;
         } else if (p.byRef && dynamic_cast<ElementAccessNode*>(argExpr.get())) {
             // `ref a[i]` borrows the ELEMENT: emit it as a place (`*NAME__at(...)`) so the `&(...)`
             // below is the bounds-checked `T*` (index evaluated once), not the address of a by-value
@@ -17161,7 +17180,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
     std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
-    if (rv.empty()) rv = tryHoistInlineNew(v, dstCType, line); // `:= new T(…)`
+    if (rv.empty()) rv = tryHoistInlineValue(v, dstCType, line); // `:= new T(…)`
     if (rv.empty()) rv = emitExpression(v);
     if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
@@ -17814,24 +17833,41 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     return t;
 }
 
-// an inline `new T(...)` as a general rvalue whose target is an owning-pointer type (Owned/Shared, or a
-// library HeapOwner) — box it into a HOISTED temp (declared before the leaf statement, pure ISO C, no
+// an inline `new T(...)` / `try new T(...)` / `try cast<T>(x)` as a general rvalue whose target type the
+// CALLER knows — materialize it into a HOISTED temp (declared before the leaf statement, pure ISO C, no
 // `({…})`) and return its name. Ownership transfers to the CONSUMER (a callee param, or a return `__ret`
 // temp), which is the sole party registered to drop it — the box is NOT recordDestructibleLocal'd here.
 // The emitted C mirrors the (ASan-clean) local-init boxing at emitLocalVariableDeclaration; keep in sync.
-//   returns "" when not applicable (not a `new`, or the target isn't an owning pointer / the element
-//   plainly mismatches) so the CALLER diagnoses; on a specific semantic error (Weak/abstract/non-impl/no
-//   `adopt`) it emits ONE precise diagnostic and returns a declared degenerate temp (compilation already
-//   failed, so the throwaway C is never built) — this suppresses the caller's generic fallback gate.
-std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& targetCType, int srcLine)
+//   returns "" when not applicable (not one of those forms, or the target isn't an owning pointer / the
+//   element plainly mismatches) so the CALLER diagnoses; on a specific semantic error (Weak/abstract/
+//   non-impl/no `adopt`) it emits ONE precise diagnostic and returns a declared degenerate temp
+//   (compilation already failed, so the throwaway C is never built) — suppressing the caller's gate.
+//
+// The two `try` verbs are here for the same reason the fallible `new` is: they are STATEMENT forms whose
+// result type is read off the DESTINATION, and a value position supplies both — the destination is the
+// param/return/payload type instead of a declared local, and the hoist IS the statement slot. Without
+// this, `return try new T.make(…)` reported "`new` outside a local-variable initializer", which named
+// neither the verb the user wrote nor anything they could act on.
+std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string& targetCType, int srcLine)
 {
     if (!_hoistOK || targetCType.empty()) return "";
+    // `try cast<T>(x)` — BEFORE the no-heap gate below, because a conversion allocates nothing: routing it
+    // through that gate would make `@noheap` reject the one verb in the language that cannot allocate.
+    if (auto* cst = dynamic_cast<CastNode*>(e.get())) {
+        if (!cst->isTry || !_classes.count(targetCType)) return "";   // plain cast / no Optional destination
+        std::string t = "__trycastv" + std::to_string(_tempCounter++);
+        std::string s = emitTryCast(targetCType, t, cst, srcLine);
+        _hoisted.push_back(targetCType + " " + t + " = {0};" + (s.empty() ? "" : " " + s));
+        return t;
+    }
     auto* oc = dynamic_cast<ObjectCreationNode*>(e.get());
     if (!oc) return "";
     checkNamelessNewBanned(oc, srcLine);   // M8 Phase E: no nameless `new Type(...)`
     auto cit = _classes.find(targetCType);
     if (cit == _classes.end()) return "";
-    rejectIfNoHeap("new", srcLine);   // no-heap gate — value-position `new` (return/arg/payload)
+    // no-heap gate — value-position `new` (return/arg/payload). `try new` still ALLOCATES (it reports OOM
+    // as `None` rather than trapping), so it is gated too — under the name the user wrote.
+    rejectIfNoHeap(oc->isTry ? "try new" : "new", srcLine);
     std::string octy = cType(oc->type);
     // one precise diagnostic + a declared degenerate temp (see header) — suppresses the caller's gate.
     auto reject = [&](const std::string& msg) -> std::string {
@@ -17840,6 +17876,14 @@ std::string CEmitter::tryHoistInlineNew(SharedExpression e, const std::string& t
         _hoisted.push_back(targetCType + " " + t + " = {0};");
         return t;
     };
+    // `try new T(...)` in a value position — `targetCType` is the `Optional<Owned<T>>`. Same shape as the
+    // fallible box just below (wrap-a-box-in-a-sum-type); `emitTryNewBox` assigns the temp on both branches.
+    if (oc->isTry) {
+        std::string t = "__newarg" + std::to_string(_tempCounter++);
+        std::string s = emitTryNewBox(targetCType, t, oc, srcLine);
+        _hoisted.push_back(targetCType + " " + t + " = {0};" + (s.empty() ? "" : " " + s));
+        return t;
+    }
     // M4b: a fallible `new Type.name(...)` in a value position (return/arg/payload) — `targetCType` is the
     // `Result<Owned<T>,E>`. Hoist the box (factory into a temp, propagate `Err`, box `Ok`) into a fresh temp
     // and hand it back as the value. `emitFallibleNewBox` pushes its arg hand-offs first (ordering preserved).
@@ -18047,7 +18091,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // propagate the target so the nested variant/match resolves.
             std::string pmt = _matchTargetCType, pvt = _variantTargetType;
             _matchTargetCType = _variantTargetType = fcls;
-            std::string val = tryHoistInlineNew(argExpr, fcls, srcLine);
+            std::string val = tryHoistInlineValue(argExpr, fcls, srcLine);
             if (val.empty()) val = tryHoistInlineCtor(argExpr, fcls, srcLine);
             if (val.empty()) val = emitExpression(argExpr);
             // `return Result::Ok(value: this);` — a fallible ctor handing back the value it built.
@@ -21485,7 +21529,7 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
 // (`Type__name(reordered args)`, no `self` lead arg), or "" after emitting a diagnostic. A named `ctor` is
 // a FACTORY returning `Type` by value (unlike the legacy in-place `Type__ctor(ptr, args)`), so the caller
 // MOVES the result into the freshly-`malloc`'d heap slot. Shared by the local-decl path (emitNewFactoryMove)
-// and the hoist path (tryHoistInlineNew). M4a: infallible only — a fallible (`Result`) ctor is rejected
+// and the hoist path (tryHoistInlineValue). M4a: infallible only — a fallible (`Result`) ctor is rejected
 // here (M4b threads `Result<Owned<T>,E>` through the box path).
 std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
 {
@@ -21569,7 +21613,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     if (rc && rc->isVariant)
         for (auto& v : rc->variants) { if (v.name == "Ok") okV = &v; else if (v.name == "Err") errV = &v; }
     if (!okV || !errV || okV->payload.empty() || errV->payload.empty()) {
-        unsupported(("fallible `new " + disp + "." + cn + "(...)` must be assigned to a `Result<Owned<"
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` needs a `Result<Owned<"
                      + disp + ">, E>` — a fallible ctor yields `Err` or an owned value").c_str(), srcLine);
         return "";
     }
@@ -21649,7 +21693,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     }
     std::string T = heapOwnerTarget(S);               // the boxed element (an owning `HeapOwner` element)
     if (T.empty()) {
-        unsupported(("fallible `new " + disp + "." + cn + "(...)` must be assigned to a `Result<Owned<"
+        unsupported(("fallible `new " + disp + "." + cn + "(...)` needs a `Result<Owned<"
                      + disp + ">, E>` (an owning handle over `" + disp + "`)").c_str(), srcLine);
         return "";
     }
@@ -21745,7 +21789,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     if (rc && rc->isVariant)
         for (auto& v : rc->variants) if (v.name == "Some") { someV = &v; break; }
     if (!someV || someV->payload.empty()) {
-        unsupported(("`try new " + disp + "(...)` must be assigned to an `Optional<Owned<" + disp
+        unsupported(("`try new " + disp + "(...)` needs an `Optional<Owned<" + disp
                      + ">>` — it yields the owned value or `None` on OOM").c_str(), srcLine);
         return "";
     }
@@ -21758,7 +21802,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     }
     std::string T = heapOwnerTarget(S);
     if (T.empty() || T != cls) {
-        unsupported(("`try new " + disp + "(...)` must be assigned to an `Optional<Owned<" + disp
+        unsupported(("`try new " + disp + "(...)` needs an `Optional<Owned<" + disp
                      + ">>` (an owning handle over `" + disp + "`)").c_str(), srcLine);
         return "";
     }
