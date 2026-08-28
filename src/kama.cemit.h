@@ -1587,6 +1587,9 @@ private:
     // cType(typeNode) resolved in the type-substitution context of generic instance `inCls` (binds its
     // type args, like computeDestructible); plain cType for a non-generic class.
     std::string cTypeInInstance(const std::string& inCls, SharedIdentifier typeNode);
+    // The node-returning twin: deepSubstType(typeNode) under `inCls`'s type args, so a caller can scope
+    // the binding to one resolution rather than hold it open across a construct.
+    SharedIdentifier deepSubstInInstance(const std::string& inCls, SharedIdentifier typeNode);
     // `ea` indexes a value whose class defines a place-returning `operator[]` (not a built-in collection).
     bool indexesUserOp(ElementAccessNode* ea);
 
@@ -2076,11 +2079,8 @@ private:
     // variant name), with no diagnostic on failure. "" when it is not a resolvable variant class, which
     // is the only answer a total classifier may give. `inlineSubj` (optional) reports steps 3–4.
     std::string matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj = nullptr);
-    // Bind a generic instance's type args into `_typeSubst` so a payload's `T` resolves concretely
-    // (`Optional<int64>` stores its payload in the TEMPLATE's `T`). Returns false — and touches nothing —
-    // when `cls` is not a generic instance. Restore `_typeSubst` from `saved` when it returns true.
-    bool bindInstSubst(const std::string& cls, std::map<std::string, SharedIdentifier>& saved);
-    // Install one arm's payload bindings for the duration of classifying that arm's value.
+    // Install one arm's payload bindings for the duration of classifying that arm's value. Binds the
+    // subject instance's type args itself, per resolution — the caller must NOT hold them open.
     std::vector<SavedLocalType> bindArmPayloadTypes(const ClassInfo& ci, const SharedMatchArm& a);
     void noteNumericHandoff(const std::string& dstCType, SharedExpression value,
                             const char* what, int line);   // M5a measurement; silent unless the flag is on

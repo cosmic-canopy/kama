@@ -1,0 +1,19 @@
+// The gate half of the `match` substitution leak, from the rejecting side. `v.item` is an `int32`; the
+// destination is a `Reader<int32>`. That is a plain type error the author wrote, and KAMA must be the one
+// to say so.
+//
+// It used to say nothing: the arm resolved `item` under the ENUM's binding for `T` — which is
+// `Reader<int32>` — so the arm and the destination "agreed", `kama check` answered OK, and only clang
+// refused the emitted C with `assigning to '_F…__Reader_int32' from incompatible type 'int32_t'`. A
+// check/build disagreement plus invalid emitted C, the two things the 1.0 gate's own sentence names.
+//
+// The accepting side is `tests/match_generic_payload_member.kama`.
+type value Reader<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+}
+fn int32 main() {
+    Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
+    Reader<int32> wrong = match (o) { case Some(value: v): v.item; case None: Reader.make(item: 0); };
+    return 0;
+}

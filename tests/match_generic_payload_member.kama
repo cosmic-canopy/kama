@@ -1,0 +1,38 @@
+// A `match` arm reads a MEMBER of a generic payload, where the payload's own type parameter shares a
+// NAME with the enum's. `Optional<T>`/`Result<T,E>` are the prelude's and use `T` — the name almost
+// every user also picks — so `Optional<Reader<T>>` is the commonest generic shape there is.
+//
+// Both halves were broken, and the second is why this gated 1.0:
+//   * `v.item` toward a primitive was a FALSE REJECTION ("a `match` arm expects a number, so it cannot
+//     be given a type value") — the arm read the `int32` field as `Reader<int32>`;
+//   * `v.item` toward that wrong type made `kama check` answer OK and left clang to refuse the emitted C
+//     — a check/build disagreement, pinned from the other side by `xfail/match_arm_member_type_mismatch`.
+//
+// The cause was a FIELD resolved under the ambient `_typeSubst` rather than its OWNER INSTANCE's type
+// args: a generic instance's ClassInfo is a copy of the TEMPLATE, so `item`'s declared type is literally
+// `T`, and the enum's binding for `T` was what happened to be live. `exprClass` and `receiverScalarCType`
+// had always resolved in the instance; `lvalueCType` — which `typeOfExpr` asks FIRST — had not.
+type value Reader<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+}
+// NESTED: `Outer<T>` -> `Reader<T>` -> `T`, so the chain `v.r.item` re-resolves at every hop.
+type value Outer<T> {
+    public Reader<T> r;
+    public ctor make(Reader<T> r) { this.r = r; return this; }
+}
+// A USER enum fails identically when its parameter is spelled `T` — nothing here is about `Optional`.
+type enum MyOpt<T> { Has(T value), Nope }
+
+fn int32 main() {
+    Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
+    int32 a = match (o) { case Some(value: v): v.item; case None: 0; };            // 7
+
+    Optional<Outer<int32>> n = Optional::Some(value: Outer::<int32>.make(r: Reader::<int32>.make(item: 15)));
+    int32 b = match (n) { case Some(value: v): v.r.item; case None: 0; };          // 15
+
+    MyOpt<Reader<int32>> u = MyOpt::Has(value: Reader::<int32>.make(item: 20));
+    int32 c = match (u) { case Has(value: v): v.item; case Nope: 0; };             // 20
+
+    return a + b + c;   // 7 + 15 + 20 = 42
+}

@@ -1,0 +1,57 @@
+// A `match` sits inside a GENERIC SCOPE, and its arm body mentions that scope's own `T`. The subject's
+// type argument deliberately differs from the enclosing binding, which is the only way to see the bug:
+// `emitMatchSwitch` bound the SUBJECT enum's type args for the whole switch — arm bodies included — on
+// the stated grounds that "arm bodies contain no `T`". They do, whenever the `match` is written inside a
+// generic type's method or a generic free function, and the subject's binding had replaced the
+// enclosing one.
+//
+// It reached EMISSION, not just the classifier: `T local = this.item;` in an arm of `Box<A>.run` over an
+// `Optional<B>` emitted `_F…__B local` and `kama check` still said OK — only clang refused. That is why
+// nothing in the corpus caught it: the leak is a no-op whenever the subject's argument EQUALS the
+// enclosing binding, which is the ordinary stdlib shape (`match (opt)` over `Optional<T>` inside
+// `List<T>`). It bites only when they differ.
+type value A { public int32 n; public ctor make(int32 n) { this.n = n; return this; } public fn int32 val() { return 20; } }
+type value B { public int32 n; public ctor make(int32 n) { this.n = n; return this; } public fn int32 val() { return 7; } }
+
+type value Box<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+    // `T` is A here; the subject is an `Optional<B>`. Both the arm's `T` local and the `this.item` read
+    // must stay A — dispatching `val()` on the wrong one would have answered 7.
+    public fn int32 run(Optional<B> o) {
+        match (o) {
+            case Some(value: x): { T local = this.item; return local.val(); }
+            case None: { return 0; }
+        };
+        return 0;
+    }
+}
+
+// The same defect with no type involved at all: a generic FREE function's `T` was replaced just as
+// readily. `T local = a;` was refused as "a local is declared `int8`, so it cannot be initialized with
+// a `int32`" — the `int8` being the SUBJECT's argument, which the local has nothing to do with.
+fn T pick<T>(T a, Optional<int8> o) {
+    match (o) {
+        case Some(value: x): { T local = a; return local; }
+        case None: { return a; }
+    };
+    return a;
+}
+
+// A generic method whose `T` differs from the subject's, reading `this.item` toward a numeric
+// destination — the FALSE REJECTION direction ("a return value expects `int64`, so it cannot be given a
+// `int32`", where the `int32` was the subject's argument).
+type value Keep<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+    public fn T pass(Optional<int32> o) {
+        return match (o) { case Some(value: n): this.item; case None: this.item; };
+    }
+}
+
+fn int32 main() {
+    int32 a = Box::<A>.make(item: A.make(n: 1)).run(o: Optional::Some(value: B.make(n: 2)));   // 20
+    int32 b = pick::<int32>(a: 17, o: Optional::Some(value: 1i8));                             // 17
+    int64 c = Keep::<int64>.make(item: 5i64).pass(o: Optional::Some(value: 1));                // 5
+    return a + b + cast<int32>(c);   // 20 + 17 + 5 = 42
+}

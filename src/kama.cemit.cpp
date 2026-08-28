@@ -875,18 +875,6 @@ std::string CEmitter::matchSubjectClassQuiet(MatchNode* m, bool* inlineSubj)
     return subjCls;
 }
 
-bool CEmitter::bindInstSubst(const std::string& cls, std::map<std::string, SharedIdentifier>& saved)
-{
-    auto cit = _classes.find(cls);
-    if (cit == _classes.end() || !cit->second.isGenericInst || !_genericTypeInsts.count(cls)) return false;
-    saved = _typeSubst;
-    _typeSubst.clear();
-    const GenericTypeInst& gi = _genericTypeInsts[cls];
-    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-    return true;
-}
-
 // The classifier's half of the arm-payload binding. `emitMatchSwitch` does the same lookup, but it also
 // emits, indexes for the LSP, checks containment and tracks moves — and it may DIAGNOSE, which a total
 // classifier may not. So the two share the lookup shape and the save/restore, not the install: everything
@@ -914,8 +902,10 @@ std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassI
                          (bool)_localTypeNodes.count(bn),
                          _localTypeNodes.count(bn) ? _localTypeNodes[bn] : SharedIdentifier()});
         // SUBSTITUTED — a generic instance stores its payload in the TEMPLATE's `T`, so the raw node
-        // would classify as nothing. The caller has bound `_typeSubst` for the whole match.
-        SharedIdentifier ty = deepSubstType(pf->type);
+        // would classify as nothing. The binding is scoped to THIS RESOLUTION (`deepSubstInInstance`),
+        // not held open by the caller: the arm body that follows belongs to the ENCLOSING generic scope,
+        // whose own `T` a whole-match binding would have replaced.
+        SharedIdentifier ty = deepSubstInInstance(ci.name, pf->type);
         const std::string bcty = classifierCType(ty);   // classifier-safe: "" where cType would diagnose
         _localTypes[bn]     = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
         _localTypeNodes[bn] = ty;
@@ -1128,8 +1118,11 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
             std::string subjCls = matchSubjectClassQuiet(mx);
             auto scit = _classes.find(subjCls);
             const ClassInfo* mci = (scit != _classes.end() && scit->second.isVariant) ? &scit->second : nullptr;
-            std::map<std::string, SharedIdentifier> savedSubst;
-            const bool instSubst = mci && bindInstSubst(subjCls, savedSubst);
+            // NOTE the subject's type args are NOT bound around the loop below. `bindArmPayloadTypes`
+            // binds them for its own resolution and gives them straight back, so `typeOfExpr(v)` below
+            // classifies the arm VALUE under the enclosing scope's substitution — which is the one the
+            // arm body was written in. Holding the subject's binding open here answered `this.item`
+            // inside a generic type's method with the subject enum's `T`.
 
             bool anyValueArm = false;                            // a non-literal arm EXISTS, answered or not
             std::string answer;
@@ -1143,7 +1136,6 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                 restoreLocalTypeBindings(bound);
                 if (!ac.empty()) { answer = ac; break; }
             }
-            if (instSubst) _typeSubst = savedSubst;
             if (!answer.empty()) return answer;
             // Pass 2 belongs to "EVERY arm is a literal", which is what its comment always claimed — but it
             // used to run whenever pass 1 produced no ANSWER, which is not the same test. A payload arm the
@@ -11214,6 +11206,29 @@ std::string CEmitter::cTypeInInstance(const std::string& inCls, SharedIdentifier
     return r;
 }
 
+// `deepSubstType(typeNode)` in the type-substitution context of a generic-instance class `inCls` — the
+// NODE-returning twin of cTypeInInstance, for the callers that need the substituted type node rather
+// than its C spelling (a `match` payload's declared type, which is then classified and containment-checked).
+//
+// It exists so the binding can be SCOPED TO THE RESOLUTION instead of held open across a whole
+// construct. `emitMatchSwitch` used to bind the subject enum's args for the entire switch, on the stated
+// grounds that "arm bodies contain no `T`" — which is false the moment the `match` sits inside a generic
+// type's method or a generic free function, where the arm body's `T` is the ENCLOSING scope's and the
+// binding had replaced it. Three payload resolutions needed it; the arm bodies never did.
+SharedIdentifier CEmitter::deepSubstInInstance(const std::string& inCls, SharedIdentifier typeNode)
+{
+    if (!_genericTypeInsts.count(inCls)) return deepSubstType(typeNode);   // non-generic: plain
+    auto savedSubst = _typeSubst; NsCtx savedCtx = _nsCtx;
+    const GenericTypeInst& gi = _genericTypeInsts[inCls];
+    _nsCtx = _genericTypeInstCtx.count(inCls) ? _genericTypeInstCtx[inCls] : _genericTypeCtx[gi.templateKey];
+    _typeSubst.clear();
+    const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    SharedIdentifier r = deepSubstType(typeNode);
+    _typeSubst = savedSubst; _nsCtx = savedCtx;
+    return r;
+}
+
 // `foreach` over a user type via the ITERATOR PROTOCOL (structural, zero-cost — direct monomorphized
 // calls, no vtable). VALUE (`foreach (T x in v)`): `v.iterator()` yields an iterator with
 // `next() -> Optional<T>` (or `v` itself is the iterator); loop while `next()` returns `Some`. MUTABLE
@@ -16818,11 +16833,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     }
     ClassInfo& ci = cit->second;
 
-    // a specialized generic union (Optional_int32) stores its variant payloads in the template's
-    // `T`; bind the instance's type args so payload binding types resolve concretely (mirrors
-    // computeDestructible). Restored at the end; arm bodies contain no `T`, so a whole-switch scope is safe.
-    std::map<std::string, SharedIdentifier> savedSubst;
-    bool instSubst = bindInstSubst(subjCls, savedSubst);
+    // A specialized generic union (Optional_int32) stores its variant payloads in the TEMPLATE's `T`, so
+    // every payload type below is resolved in the SUBJECT's instance — `cTypeInInstance` /
+    // `deepSubstInInstance`, one scoped binding per resolution.
+    //
+    // ⚠️ It used to be one binding held open across the WHOLE switch, justified by "arm bodies contain no
+    // `T`, so a whole-switch scope is safe". That is false wherever the `match` sits inside a generic
+    // scope: the arm body's `T` is the ENCLOSING generic's, and clearing `_typeSubst` for the subject
+    // replaced it. `T local = this.item;` in an arm of `Box<A>.run(Optional<B>)` emitted `B local` and
+    // `kama check` said OK — clang refused the C. Only these three payload resolutions ever wanted the
+    // subject's args; the arm bodies, and the subject expression itself, want the enclosing scope's.
 
     // Exhaustiveness (compile-time): every variant handled exactly once, unless a `_` wildcard is present.
     bool hasWildcard = false;
@@ -16970,7 +16990,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // at a USE site — the diagnostic lands on the `match` the author actually wrote — whereas
                 // substituting in the signature rule would make a declaration's error depend on which
                 // instantiation happened to exist.
-                if (namesUnsafePtr(deepSubstType(pf.type)))
+                if (namesUnsafePtr(deepSubstInInstance(subjCls, pf.type)))
                     rejectRawOutsideUnsafe(("`match` binding `" + *(*a->bindings)[i] + "`").c_str(),
                                            (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
                                                ? (*a->bindingIds)[i]->line : a->line);
@@ -16978,7 +16998,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // hover, go-to-definition and rename all reach it, the same as any other named use.
                 if (a->labelIds && i < a->labelIds->size() && pf.nameId)
                     recordNodeRef((*a->labelIds)[i].get(), pf.nameId.get());
-                std::string bcty = cType(pf.type);
+                std::string bcty = cTypeInInstance(subjCls, pf.type);
                 std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
                 indent(depth + 2);
                 *_out << bcty << " " << bn << " = " << slot << ";\n";
@@ -17009,9 +17029,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 //
                 // SUBSTITUTED, for the reason the `namesUnsafePtr` check above is: a generic instance
                 // stores its payload in the TEMPLATE's `T`, so `Optional<int64>` has `pf.type == T` and the
-                // raw node would classify as nothing. `instSubst` has already bound `_typeSubst` for the
-                // whole switch, which is what makes this resolve concretely.
-                _localTypeNodes[bn] = deepSubstType(pf.type);
+                // raw node would classify as nothing, so it is resolved in the SUBJECT's instance — a
+                // binding scoped to this one resolution, never held open over the arm body.
+                _localTypeNodes[bn] = deepSubstInInstance(subjCls, pf.type);
             }
         }
 
@@ -17102,7 +17122,6 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     if (!subjOwner.empty() && _classes.count(subjCls) && _classes[subjCls].destructible) {
         indent(depth); *_out << subjCls << "__dtor(&" << subjOwner << ");\n";
     }
-    if (instSubst) _typeSubst = savedSubst;
 }
 
 // The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.
@@ -17218,7 +17237,9 @@ std::string CEmitter::exprEnumType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *id->value && f.type) { std::string r = asEnum(cType(f.type)); if (!r.empty()) return r; }
+                    // resolved in the OWNER INSTANCE, like every other field resolution — a `T`-typed
+                    // field whose instance binds `T` to a plain enum is a legal `match` subject.
+                    if (f.name == *id->value && f.type) { std::string r = asEnum(cTypeInInstance(_currentClass->name, f.type)); if (!r.empty()) return r; }
         }
         return "";
     }
@@ -17230,7 +17251,7 @@ std::string CEmitter::exprEnumType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type) { std::string r = asEnum(cType(f.type)); if (!r.empty()) return r; }
+                    if (f.name == *ma->identifier->value && f.type) { std::string r = asEnum(cTypeInInstance(recv, f.type)); if (!r.empty()) return r; }
         }
         return "";
     }
@@ -20337,7 +20358,14 @@ std::string CEmitter::lvalueCType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *id->value && f.type) return cType(f.type);
+                    // Under the OWNER INSTANCE's type args, never the ambient _typeSubst — the same rule
+                    // `exprClass` and `receiverScalarCType` already follow, and the one this resolver was
+                    // never taught. A generic instance's ClassInfo is a COPY OF THE TEMPLATE
+                    // (registerGenericTypeInst), so `f.type` is literally `T` and whatever happens to be
+                    // bound wins: inside `Box<int64>`'s method, `r.item` on a `Reader<int32>` answered
+                    // int64. `typeOfExpr` consults this resolver FIRST, so its wrong answer beat the three
+                    // that had it right.
+                    if (f.name == *id->value && f.type) return cTypeInInstance(_currentClass->name, f.type);
         }
         return "";
     }
@@ -20349,7 +20377,7 @@ std::string CEmitter::lvalueCType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type) return cType(f.type);
+                    if (f.name == *ma->identifier->value && f.type) return cTypeInInstance(recv, f.type);
         }
         return "";
     }

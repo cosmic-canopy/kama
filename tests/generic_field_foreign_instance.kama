@@ -1,0 +1,27 @@
+// A field of a FOREIGN generic instance, read from inside another generic type's method. No `match`
+// anywhere — this is the same defect as `match_generic_payload_member`, stripped of the construct the
+// roadmap row blamed it on.
+//
+// Inside `Box<int64>`'s method the ambient `_typeSubst` binds `T` to int64. `r` is a `Reader<int32>`,
+// whose `item` field is declared `T` on the TEMPLATE (a generic instance's ClassInfo is a copy of the
+// template, so the field type is never pre-substituted). `lvalueCType` resolved it under the ambient
+// binding and answered int64, so `return r.item;` was refused: "a return value expects `int32`, so it
+// cannot be given a `int64`". A field resolves in its OWNER INSTANCE, never in whatever scope happens
+// to be reading it.
+type value Reader<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+}
+
+type value Box<T> {
+    public T item;
+    public ctor make(T item) { this.item = item; return this; }
+    public fn int32 grab(Reader<int32> r) { return r.item; }
+    // the other direction: the enclosing `T` must still resolve to Box's own argument next to it
+    public fn T mine() { return this.item; }
+}
+
+fn int32 main() {
+    Box<int64> b = Box::<int64>.make(item: 22i64);
+    return b.grab(r: Reader::<int32>.make(item: 20)) + cast<int32>(b.mine());   // 20 + 22 = 42
+}
