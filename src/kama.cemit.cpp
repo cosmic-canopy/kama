@@ -667,7 +667,13 @@ CEmitter::TKind CEmitter::kindOfCType(const std::string& ct)
     // A payload/generic `enum` is backed by a ClassInfo (`isVariant`), so `isClass` already covers it;
     // `_enums` holds ONLY the payload-less kind, which this compiler calls "a bare integer, not a struct"
     // in its own `@generate` diagnostic — and emits as one (`typedef uint8_t Tag;` for `: IntType`, a C
-    // enum otherwise). So a plain enum is `Num`, and `Tag t = 0` keeps compiling.
+    // enum otherwise). So a plain enum is `Num`.
+    //
+    // ⚠️ This used to end "…and `Tag t = 0` keeps compiling", stated as a deliberate allowance. It is not
+    // one any more, and it never should have been: an integer names no variant until it has been checked
+    // against them, which is why `cast<Tag>(n)` is refused. `rejectTypeIdentityMismatch` owns that now.
+    // The KIND answer here is still `Num` and still correct — a plain enum is not an aggregate — which is
+    // exactly why identity had to become a separate rule rather than a sixth bucket.
     if (isClass(ct)) {
         // …and the same exemption follows the contract into a smart-pointer handle. `Owned<Hashable> b = 20;`
         // is the OWNING form of that widening (tests/intrinsic_widen_box.kama) — the one that can outlive its
@@ -1623,6 +1629,104 @@ void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpres
                  + ">(…)`").c_str(), line);
 }
 
+// The name a diagnostic uses for a type that owns identity. A numeric primitive wants its kama spelling
+// (`usize`, not `size_t`); an enum or a sig is a USER name, and `unsupported` runs every message through
+// `demangleForDisplay`, so the mangled key is already the right thing to hand it.
+std::string CEmitter::idTypeName(const std::string& ct)
+{
+    if (idFamilyOf(ct) == IdFamily::Num) return kamaNameOf(ct, primKeyOfCType(ct));
+    return ct;
+}
+
+// Two signature types always differ in NAME; when they also differ in SHAPE the mismatch is not a
+// nominal-typing nicety but a miscompile, and the message has to say which. `H hp = fp;` between
+// `fnptr int32 F(int32)` and `fnptr int32 H(int32, int32)` compiles today with only a clang warning, and
+// the call through it passes two arguments to a one-parameter function — an indirect call through a
+// mismatched function pointer, which is exactly the UB class UBSan's `function` check would catch and
+// which is disabled suite-wide for an unrelated, permanent reason (run_tests.sh).
+std::string CEmitter::sigShapeNote(const std::string& srcCType, const std::string& dstCType)
+{
+    auto s = _sigs.find(srcCType), d = _sigs.find(dstCType);
+    if (s == _sigs.end() || d == _sigs.end()) return "";
+    if (s->second.params.size() != d->second.params.size())
+        return " taking " + std::to_string(s->second.params.size()) + " and "
+             + std::to_string(d->second.params.size()) + " parameters — calling one through the other "
+               "would pass the wrong number of arguments";
+    if (s->second.retCType != d->second.retCType)
+        return " returning `" + idTypeName(s->second.retCType) + "` and `"
+             + idTypeName(d->second.retCType) + "`";
+    return "";
+}
+
+// TYPE IDENTITY — the rule the five kinds cannot express, for the families the numeric rules skip.
+//
+// The kind rule sorts every type into five buckets and passes when both sides land in one, so two
+// DISTINCT kama types in the same bucket cross unexamined. The numeric rules cannot catch them either:
+// each bails on a C spelling it does not recognize as a number, and `rejectMixedOperands`' bail names
+// the escapee outright — "`string + string`, a bool, AN ENUM". A pinned enum lowers to a typedef NAME
+// (`typedef uint8_t _Fu__A;`), so every numeric rule reads it as "not a number I know" and takes its
+// documented silent path while the kind rule reads both sides as `Num` and passes. Neither rule is wrong
+// on its own terms. Nothing owned identity, so this does.
+//
+// Measured over the whole corpus before it was written: ZERO sites change (see the `--strict-numeric`
+// identity buckets). The exemptions are why — and they are the CLASSIFIER's, not a list here:
+// `idFamilyOf` answers `None` for a contract, a class, a smart-pointer or `Optional` handle, an
+// inheritance upcast and a type parameter, and `None` is silent on both sides. What survives is only the
+// pairs that genuinely share a C representation.
+//
+// Two exemptions do need spelling out, because they are the ones a reader will reach for:
+//
+//   NUM -> NUM is not ours. Every width has its own C spelling and `rejectNumericConversion` already
+//     holds them apart, with a better message. Returning here rather than shadowing it is what keeps one
+//     mistake to one diagnostic.
+//   A LITERAL is NOT exempt here, which is the one place this rule departs from its neighbours. D2a says
+//     a literal takes its type from its destination — but that is a statement about WIDTH, and it holds
+//     because every integer literal is a legitimate value of every integer type wide enough for it. It
+//     does not survive a destination whose values are NAMED VARIANTS: `A a = 0;` is not "the literal
+//     written at `A`'s type", it is an integer standing in for a variant, which is the exact thing
+//     `cast<A>(n)` has been refused for since 0.9.94. `kindOfCType` used to promise the opposite in a
+//     comment ("`Tag t = 0` keeps compiling"); no corpus site ever took it up, and it is corrected there.
+//     `rejectConstOutOfRange` cannot double-diagnose here — it fires only on numeric destinations.
+void CEmitter::rejectTypeIdentityMismatch(const std::string& dstCType, SharedExpression value,
+                                          const char* what, bool isInit, int line)
+{
+    if (!value || dstCType.empty()) return;
+    const IdFamily dstF = idFamilyOf(dstCType);
+    if (dstF == IdFamily::None) return;                        // the destination owns no identity
+    const std::string src = typeOfExpr(value);
+    if (src.empty() || src == dstCType) return;                // unknown is silent; same type is fine
+    const IdFamily srcF = idFamilyOf(src);
+    if (srcF == IdFamily::None) return;
+    if (srcF == IdFamily::Num && dstF == IdFamily::Num) return;      // rejectNumericConversion said it
+
+    const std::string dstName = idTypeName(dstCType), srcName = idTypeName(src);
+    const std::string head = std::string(what) + (isInit ? " is declared `" : " expects `") + dstName
+                           + "`, so it cannot be " + (isInit ? "initialized with " : "given ");
+
+    // Each crossing names the door OUT, because each has a different one — and getting that wrong is how
+    // `cast<A>(n)` came to be refused with a careful diagnostic while `A a = n;` sailed past. The enum
+    // directions are NOT symmetric: enum -> int is total (`cast<int32>(Code::Bad)` folds, and
+    // tests/try_cast_enum.kama says so), while int -> enum is fallible by construction, which is the
+    // whole reason `try cast` exists.
+    if (srcF == IdFamily::Enum && dstF == IdFamily::Enum)
+        unsupported((head + "a `" + srcName + "` — these are two distinct enums, and sharing a tag width "
+                     "does not make a value of one name a variant of the other. `match` on it, or write "
+                     "the `" + dstName + "` variant you mean").c_str(), line);
+    else if (srcF == IdFamily::Enum && dstF == IdFamily::Num)
+        unsupported((head + "a `" + srcName + "` — an enum is not its underlying integer. That direction "
+                     "is total, so convert it explicitly: `cast<" + dstName + ">(…)`").c_str(), line);
+    else if (srcF == IdFamily::Num && dstF == IdFamily::Enum)
+        unsupported((head + "a `" + srcName + "` — an integer names no variant of `" + dstName + "` until "
+                     "it has been checked against them. Write the variant (`" + dstName + "::…`), or "
+                     "`try cast<" + dstName + ">(…)` for a value from outside").c_str(), line);
+    else if (srcF == IdFamily::Sig && dstF == IdFamily::Sig)
+        unsupported((head + "a `" + srcName + "` — these are two distinct signature types" + sigShapeNote(src, dstCType)
+                     + ". A function pointer is not converted; declare the value at the signature it is "
+                       "called through").c_str(), line);
+    else
+        unsupported((head + "a `" + srcName + "`").c_str(), line);
+}
+
 // Milestone 6, the OPERAND half — the seventh position. D2 read literally: mixing two numeric types in
 // one expression is an implicit conversion just as surely as `int8 a = big` is, so it is an error.
 // `i32 + u8` does not compile in Rust (`Add<u8>` is not implemented for `i32`), nor in Swift, nor in Go.
@@ -1653,6 +1757,39 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
 
     std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
 
+    // ENUM OPERANDS, ahead of everything below — including the literal branch, which would otherwise
+    // return silently on `a + 1` (it bails when the non-literal side is not a C numeric spelling, and an
+    // enum never is).
+    //
+    // An enum's values are NAMED VARIANTS, not numbers that happen to have names, so arithmetic over them
+    // is not a narrower version of integer arithmetic — it has no meaning at all. `a + A::A1` compiled and
+    // yielded an `A` that is no declared variant: a value of an enum type that `match` cannot handle, in
+    // a language where `match` is the one construct that reads an enum. ORDERING goes the same way for a
+    // second, independent reason — comparison in kama is a contract (`<` lowers to `Comparable.compareTo`)
+    // — so an enum with an order says so by implementing it.
+    //
+    // `==`/`!=` between two values of the SAME enum is the one operator that survives, and it must: it is
+    // how every `match`-free variant test is written. Across two DIFFERENT enums it is the sharpest form
+    // of the identity hole, so it falls through to the crossing message below.
+    if (idFamilyOf(lt) == IdFamily::Enum || idFamilyOf(rt) == IdFamily::Enum) {
+        const bool isEq = (opToken == EQEQ || opToken == NOTEQ);
+        if (isEq && lt == rt) return;                        // the one meaningful operator over an enum
+        if (!isEq) {
+            const std::string& et = idFamilyOf(lt) == IdFamily::Enum ? lt : rt;
+            const std::string  en = idTypeName(et);
+            if (isComparisonToken(opToken))
+                unsupported(("`" + opName + "` has no meaning over enum `" + en + "` — comparison in kama "
+                             "is a contract, so an enum with an order implements `Comparable`. To order "
+                             "by the underlying value, `match` it to a number first").c_str(), line);
+            else
+                unsupported(("`" + opName + "` has no meaning over enum `" + en + "` — its values are "
+                             "named variants, not numbers, and the result would be an `" + en + "` that is "
+                             "no declared variant. `match` it to a number first, or `cast<…>` it").c_str(),
+                            line);
+            return;
+        }
+    }
+
     // A literal takes the other operand's type. Claim any wide unsuffixed literal against it first —
     // otherwise `governWideLiterals`' end-of-emit report fires on a literal this rule just legitimized —
     // then range-check it there, which is the same predicate the hand-off uses.
@@ -1666,6 +1803,23 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
     }
 
     if (lt.empty() || rt.empty() || lt == rt) return;
+
+    // IDENTITY, ahead of the numeric bail below — which is exactly where `a == b` across two enums used
+    // to escape. Its own comment names the escapee ("`string + string`, a bool, AN ENUM"), and for `==`
+    // that silence is not a missing niggle: two enums of DIFFERENT widths compare equal through it and
+    // the program takes the wrong branch, in a language whose comparison model is otherwise a contract.
+    {
+        const IdFamily lf = idFamilyOf(lt), rf = idFamilyOf(rt);
+        if (lf != IdFamily::None && rf != IdFamily::None
+            && !(lf == IdFamily::Num && rf == IdFamily::Num)) {   // Num/Num is the numeric rule's
+            unsupported(("`" + opName + "` needs both operands to have the same type, and the left is `"
+                         + idTypeName(lt) + "` while the right is `" + idTypeName(rt)
+                         + "` — these are two distinct types that happen to share a representation, so "
+                           "the comparison C performs is not the one written here").c_str(), line);
+            return;
+        }
+    }
+
     if (!(cNumBits(lt) || cNumTargetWidth(lt))) return;      // `string + string`, a bool, an enum
     if (!(cNumBits(rt) || cNumTargetWidth(rt))) return;
 
@@ -1686,6 +1840,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
     rejectConstOutOfRange(dstCType, value, what, false, line);
     rejectNumericConversion(dstCType, value, what, /*isInit*/false, line);   // milestone 6
+    rejectTypeIdentityMismatch(dstCType, value, what, /*isInit*/false, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -1716,10 +1871,16 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // before the call it is passed to: writing `rejectNumericConversion(classifierCType(declType), …)`
     // would lower the declared type on every initializer in the program, which is exactly what the
     // comment above says this site must not do inside `checkDeclaredTypes`.
+    //
+    // The identity rule rides the same gate for the same reason, and reads the same `srcT`: a source that
+    // owns no identity can never make it fire, so there is no destination worth lowering for it. That
+    // covers most initializers in the program.
     if (init) {
         const std::string srcT = typeOfExpr(init);
         if (!srcT.empty() && (cNumBits(srcT) || cNumTargetWidth(srcT)))
             rejectNumericConversion(classifierCType(declType), init, what, /*isInit*/true, line);
+        if (idFamilyOf(srcT) != IdFamily::None)
+            rejectTypeIdentityMismatch(classifierCType(declType), init, what, /*isInit*/true, line);
     }
     // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
     // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where

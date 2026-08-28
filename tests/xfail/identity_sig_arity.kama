@@ -1,0 +1,22 @@
+// The signature crossing that is a MISCOMPILE rather than a nominal-typing nicety, which is why the
+// diagnostic names the shape and not just the two names.
+//
+// `f1` takes one parameter. `hp` is declared at a two-parameter signature. Before 0.9.102 the assignment
+// below produced only a clang warning, and `hp(a: 10, b: 20)` then built and RAN — an indirect call
+// through a mismatched function pointer, passing two arguments to a one-parameter function.
+//
+// ⚠️ Nothing else catches this. Named-argument checking is strict and did its job: it validated `a`/`b`
+// against `H`, correctly, because `hp` is an `H`. The defect is one line earlier. And UBSan's `function`
+// check — the sanitizer sub-check that exists for exactly this — is disabled suite-wide for an unrelated
+// and permanent reason (run_tests.sh, and SPEC.md's sanitizer section says why).
+fnptr int32 F(int32 x);
+fnptr int32 H(int32 a, int32 b);
+
+fn int32 f1(int32 x) { return x + 1; }
+
+fn int32 main()
+{
+    F fp = f1;
+    H hp = fp;
+    return hp(a: 10, b: 20);
+}

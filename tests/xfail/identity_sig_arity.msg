@@ -1,0 +1,1 @@
+would pass the wrong number of arguments

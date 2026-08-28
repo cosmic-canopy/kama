@@ -1,0 +1,11 @@
+// An enum is not its underlying integer. This direction IS total — `cast<int32>(Code::Bad)` folds and
+// tests/try_cast_enum.kama pins it — so the diagnostic points at the cast rather than at `try cast`.
+// What is rejected is writing no conversion at all.
+type enum A : uint8 { A0, A1, A2 }
+
+fn int32 main()
+{
+    A a = A::A2;
+    uint8 n = a;
+    return cast<int32>(n);
+}

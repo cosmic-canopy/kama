@@ -243,6 +243,16 @@ global_absolute_path	global_absolute_path.kama:10
 graph_alloc_iface	graph_alloc_iface.kama:23
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
+identity_enum_arg_return	identity_enum_arg_return.kama:12 identity_enum_arg_return.kama:17
+identity_enum_arith	identity_enum_arith.kama:16 identity_enum_arith.kama:17 identity_enum_arith.kama:18
+identity_enum_cmp_cross	identity_enum_cmp_cross.kama:16
+identity_enum_cross_enum	identity_enum_cross_enum.kama:15 identity_enum_cross_enum.kama:16
+identity_enum_int_literal	identity_enum_int_literal.kama:17 identity_enum_int_literal.kama:18
+identity_enum_order	identity_enum_order.kama:14
+identity_enum_to_int	identity_enum_to_int.kama:9
+identity_int_to_enum	identity_int_to_enum.kama:13
+identity_sig_arity	identity_sig_arity.kama:20
+identity_sig_cross_sig	identity_sig_cross_sig.kama:13
 iface_collection	iface_collection.kama:5
 iface_field	iface_field.kama:5
 iface_method_private	iface_method_private.kama:6

@@ -1,0 +1,20 @@
+// An integer LITERAL into an enum destination. The one place the identity rule departs from its
+// neighbours' treatment of literals, and deliberately.
+//
+// D2a — "a literal takes its type from its destination" — is a statement about WIDTH, and it holds
+// because every integer literal is a legitimate value of every integer type wide enough for it. That
+// reasoning does not survive a destination whose values are NAMED VARIANTS. `A a = 0;` is not the literal
+// written at `A`'s type; it is an integer standing in for a variant, which is the exact thing
+// `cast<A>(n)` has been refused for since 0.9.94 (tests/xfail/cast_enum_rejected.kama).
+//
+// The second line is the same shape with a value no variant has, which is what makes the point: if 0 is
+// accepted because it "happens to be A0", the rule is a range check on an accident of declaration order.
+// An enum value is written by name.
+type enum A : uint8 { A0, A1, A2 }
+
+fn int32 main()
+{
+    A a = 0;
+    A bogus = 99;
+    return 0;
+}

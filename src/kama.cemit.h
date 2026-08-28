@@ -2103,6 +2103,12 @@ private:
                           const char* what, int line);     // the identity measurement; same hidden flag
     void noteTypeIdentityOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
                                   const char* opName, int line);
+    std::string idTypeName(const std::string& ct);       // the name a diagnostic gives an identity-bearing type
+    std::string sigShapeNote(const std::string& srcCType, const std::string& dstCType);
+    // Two distinct types that share a C spelling, at a hand-off. The identity peer of
+    // `rejectNumericConversion`, for the families it and the kind rule both skip.
+    void rejectTypeIdentityMismatch(const std::string& dstCType, SharedExpression value,
+                                    const char* what, bool isInit, int line);
     void rejectNumericConversion(const std::string& dstCType, SharedExpression value,
                                  const char* what, bool isInit, int line);   // M6: no implicit conversion
     void rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpression rhs,

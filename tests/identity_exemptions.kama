@@ -1,0 +1,65 @@
+// The EXEMPTIONS to the type-identity rule, pinned. The rule's size was always in these rather than in
+// the check: every shape below reaches the same hand-off funnels with a destination whose C spelling
+// differs from the source's, and every one is legal. They are safe by CONSTRUCTION — `idFamilyOf`
+// answers `None` for a contract, a class, a smart-pointer handle and a type parameter, and `None` is
+// silent on both sides — but "safe by construction" is a claim, and a claim in this repo needs a fixture.
+//
+// Measured before the rule landed: the whole corpus had ZERO identity crossings, so nothing here had to
+// change to accommodate it. This fixture is what keeps that true.
+//
+// Returns 42.
+
+type enum Color : uint8 { Red, Green, Blue }
+type enum Code  : uint8 { Ok = 3, Warn = 5, Bad = 200 }
+
+fnptr int32 Unary(int32 x);
+
+fn int32 bump(int32 x) { return x + 1; }
+
+fn uint64 hashVia(Hashable h) { return h.hash(); }
+
+fn int32 viaMatch(Color c) {
+    return match (c) { case Red: 1; case Green: 2; case Blue: 4; };
+}
+
+fn Optional<Color> maybe(Color c) { return Optional::Some(value: c); }
+
+fn int32 main()
+{
+    int32 acc = 0;
+
+    // enum -> int, EXPLICIT. Total, and it stays legal — the rule rejects writing no conversion, not the
+    // conversion itself.
+    acc = acc + cast<int32>(Code::Bad);                              // 200
+
+    // int -> enum through the one sanctioned door.
+    Optional<Color> got = try cast<Color>(2ui8);
+    int32 fromCast = match (got) { case Some(value: v): viaMatch(c: v); case None: 0; };
+    acc = acc + fromCast;                                            // Blue -> 4
+
+    // The same enum on both sides of `==` — never an identity crossing, and the shape the rule must not
+    // touch. (`<` on an enum is a separate question and is rejected; see tests/xfail/identity_enum_order.)
+    Color c = Color::Green;
+    if (c == Color::Green) { acc = acc + 1; }                        // 205
+
+    // An enum handed to a CONTRACT destination. A contract admits every kind by design — that is what
+    // makes `Hashable h = n;` over a primitive a shipped feature — so it can never be a crossing.
+    acc = acc + cast<int32>(hashVia(h: 7));                          // 212
+
+    // A concrete value promoted into `Optional`. The destination is the instance class, not a family.
+    Optional<Color> o = maybe(c: Color::Red);
+    int32 fromOpt = match (o) { case Some(value: v): viaMatch(c: v); case None: 0; };
+    acc = acc + fromOpt;                                             // Red -> 1  = 213
+
+    // A bare FUNCTION into a signature type. `typeOfExpr` answers "" for a function name, so the identity
+    // rule is silent — and it should be: `sigMatches` already checks this structurally, which is why
+    // `Unary bad = someOtherShape;` has always been an error.
+    Unary f = bump;
+    acc = acc + f(x: 1);                                             // 215
+
+    // A pinned enum through a value-producing `match`, the idiom the stdlib uses everywhere it needs an
+    // enum's ordinal (`levelBits`, `orderBits`).
+    acc = acc + viaMatch(c: Color::Blue);                            // 219
+
+    return acc - 177;                                                // 42
+}

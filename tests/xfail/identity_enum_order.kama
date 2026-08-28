@@ -1,0 +1,16 @@
+// Ordering an enum, rejected for a reason independent of the arithmetic one: comparison in kama is a
+// CONTRACT — `<` lowers to `Comparable.compareTo`, `==` to `Equatable.equals` — so a type with an order
+// says so by implementing `Comparable`. A raw C integer comparison on the tag sneaking in underneath
+// that model is exactly what the model exists to prevent.
+//
+// The idiom this replaces is the one the stdlib already uses everywhere it needs an enum's ordinal:
+// `match` it to a number (see `levelBits` in lib/std/log/log.kama, `orderBits` in
+// lib/std/concurrent/atomic.kama) and compare the numbers.
+type enum Level : uint8 { Error, Warn, Info, Debug, Trace }
+
+fn int32 main()
+{
+    Level a = Level::Warn;
+    bool quieter = (a < Level::Debug);
+    return 0;
+}

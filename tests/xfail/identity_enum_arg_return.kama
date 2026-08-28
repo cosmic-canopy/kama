@@ -1,0 +1,19 @@
+// The hand-off funnels reach six positions, not just an initializer. ARGUMENT and RETURN are the two
+// that carry a value across a function boundary, where the declared type is the only thing a caller can
+// read — so a crossing there is the one least likely to be noticed.
+//
+// Both errors are expected; the fixture asserts the rule is wired at `rejectValueKindMismatch` (argument
+// + return + assignment) and not only at `rejectInitKindMismatch`.
+type enum A : uint8 { A0, A1, A2 }
+type enum B : uint8 { B0, B1, B2 }
+
+fn void takeB(B b) { }
+
+fn B asB(A a) { return a; }
+
+fn int32 main()
+{
+    A a = A::A2;
+    takeB(b: a);
+    return 0;
+}

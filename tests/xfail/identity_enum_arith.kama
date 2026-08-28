@@ -1,0 +1,20 @@
+// Arithmetic over an enum yields a value of that enum which is NO DECLARED VARIANT — a `Color` that
+// `match` cannot handle, in a language where `match` is the one construct that reads an enum.
+//
+// This is not "narrower integer arithmetic". An enum's values are named variants, not numbers that
+// happen to have names, so `+` over two of them has no meaning to narrow. It compiled because
+// `rejectMixedOperands` returns early when both operands have the SAME type — which they do here — and
+// the identity rule that catches the cross-type case never saw it.
+//
+// The compound form is the same defect at the other funnel (`emitAssignment`'s operand check), so both
+// are pinned.
+type enum A : uint8 { A0, A1, A2 }
+
+fn int32 main()
+{
+    A a = A::A0;
+    A sum = a + A::A1;
+    a += A::A1;
+    A bits = a | A::A2;
+    return 0;
+}

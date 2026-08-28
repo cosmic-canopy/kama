@@ -1,0 +1,1 @@
+names no variant of `A` until it has been checked against them

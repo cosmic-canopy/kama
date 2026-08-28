@@ -1,0 +1,1 @@
+an enum is not its underlying integer

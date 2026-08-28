@@ -1,0 +1,18 @@
+// The operand position, and the reason it is not the same fix as the hand-off: `rejectMixedOperands`
+// bails on any spelling it does not recognize as a number, and its own comment names the escapee —
+// "`string + string`, a bool, AN ENUM". For `==` that silence is not a missing niggle. These two enums
+// have DIFFERENT widths and different variant names, and the comparison below evaluated TRUE: `A::A2`
+// and `W::W2` are both 2, so the program took a branch the source never offers.
+//
+// kama's comparison model is otherwise a contract (`==` -> Equatable.equals), which is what makes a raw
+// C integer comparison sneaking in underneath it worth its own fixture.
+type enum A : uint8  { A0, A1, A2 }
+type enum W : uint32 { W0, W1, W2 }
+
+fn int32 main()
+{
+    A a = A::A2;
+    W w = W::W2;
+    bool eq = (a == w);
+    return 0;
+}

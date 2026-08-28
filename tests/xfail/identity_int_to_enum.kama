@@ -1,0 +1,15 @@
+// The sharpest statement of the hole this closes: `cast<A>(n)` has been REJECTED since 0.9.94, with a
+// careful diagnostic saying an integer is not an `A` until it has been checked against the variants and
+// pointing at `try cast<A>` (tests/xfail/cast_enum_rejected.kama, tests/try_cast_enum.kama) — while the
+// plain assignment below was not. The door was locked and the window left open, so everything the
+// `try cast` rule exists to prevent was reachable by writing no cast at all.
+type enum A : uint8 { A0, A1, A2 }
+
+fn uint8 opaque(uint8 n) { return n; }
+
+fn int32 main()
+{
+    uint8 n = opaque(n: 200);
+    A a = n;
+    return 0;
+}

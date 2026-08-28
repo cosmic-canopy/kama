@@ -1,0 +1,1 @@
+two distinct types that happen to share a representation

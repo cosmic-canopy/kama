@@ -1,0 +1,15 @@
+// A `fnptr` signature type is nominal: two signatures with the same shape are still two types. Assigning
+// a FUNCTION into one has always been checked structurally (`sigMatches` — see
+// tests/xfail/identity_sig_arity.kama's note), but assigning one signature-typed VALUE into another was
+// not checked at all.
+fnptr int32 F(int32 x);
+fnptr int32 G(int32 y);
+
+fn int32 f1(int32 x) { return x + 1; }
+
+fn int32 main()
+{
+    F fp = f1;
+    G gp = fp;
+    return gp(y: 1);
+}

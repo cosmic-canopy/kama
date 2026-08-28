@@ -1,0 +1,18 @@
+// Two enums that share a tag width share a C spelling, and until 0.9.102 that made them interchangeable
+// at every hand-off. The kind rule reads both sides as `Num` and passes; every numeric rule reads the
+// typedef name as "not a number I know" and takes its documented silent path. Neither is wrong on its
+// own terms — nothing owned type IDENTITY.
+//
+// `W` is deliberately a DIFFERENT width from `A`: the crossing is not a widening that happens to be
+// safe, it is a value of one type arriving where a value of another was declared.
+type enum A : uint8  { A0, A1, A2 }
+type enum B : uint8  { B0, B1, B2 }
+type enum W : uint32 { W0, W1, W2 }
+
+fn int32 main()
+{
+    A a = A::A2;
+    B b = a;
+    W w = a;
+    return 0;
+}
