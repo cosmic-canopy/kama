@@ -1,0 +1,32 @@
+// A fallible ctor on a GENERIC instance, used inline as a `match` subject. This was ROADMAP row 2, and it
+// was TWO defects in series — which is why deleting either one alone measurably changed nothing:
+//
+//   1. DISCOVERY. `G::<int32>.open(…)` written as a match subject was never walked (no `MatchNode` arm in
+//      `scanExprForGenerics`), so `G<int32>` was never registered and `_classes.find(inst)` missed. The
+//      workaround was to mention `G::<int32>` somewhere else in the same function, which is a site that
+//      IS walked.
+//   2. RENDERING. With the instance registered, `exprClass`'s dot-on-type branch then bailed on
+//      `if (inst != dotTy) return "";` — a fallible ctor's declared `Result<G<T>, Err>` needs the owning
+//      instance's type args bound to render. `cTypeInInstance` binds exactly those.
+//
+// The infallible ctor on the same instance always worked, which is what made the row read as a
+// fallible-ctor problem rather than a discovery one.
+type enum Err implements Error {
+    Bad;
+
+    public const fn string message() { return "bad"; }
+}
+type value G<T> {
+    public T item;
+    public ctor Result<G<T>, Err> open(T item) {
+        this.item = item;
+        return Result::Ok(value: this);
+    }
+    public ctor make(T item) { this.item = item; }
+}
+fn int32 main()
+{
+    int32 a = match (G::<int32>.open(item: 40)) { case Ok(value: v): v.item; case Err(error: e): 0; };  // 40
+    int32 b = G::<int32>.make(item: 2).item;                                                            // 2
+    return a + b;   // 42
+}

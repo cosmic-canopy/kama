@@ -10180,6 +10180,55 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         scanExprForGenerics(po->expression, localTys);
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForGenerics(su->expression, localTys);
+    } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+        // The three arms below (array literal, `.as<T>()`, `match`) are the ones this walk was MISSING
+        // while its sibling `scanExprForCollections` had them all along. The two functions answer the same
+        // question — what must be registered before emission — over the same tree, so a shape one enters
+        // and the other does not is a hole by construction, and every one of these three was: a generic
+        // call written inside an array literal, inside a `.as<T>()` operand, or anywhere in a `match` was
+        // never discovered. `tools/check-scan-parity.sh` now holds the two at parity.
+        if (al->elements) for (auto& x : *al->elements) scanExprForGenerics(x, localTys);
+        scanExprForGenerics(al->fillValue, localTys);
+    } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {
+        scanExprForGenerics(ad->operand, localTys);
+    } else if (auto* mm = dynamic_cast<MatchNode*>(n)) {
+        scanExprForGenerics(mm->subject, localTys);
+        // A payload BINDING is a locally-typed value exactly like a declaration or a `foreach` element, and
+        // this is the table `inferGenericInst` reads (through `exprTypeNode`, which consults `localTys` and
+        // nothing else — never `_localTypeNodes`, which is emit-time state and must stay untouched here).
+        // Without it, `case Some(value: x): f(x: x)` could not infer and the call reached emission with no
+        // instantiation. The subject's class is resolved through the type node, not `exprClass`, because
+        // `exprClass` reads the emit-time `_localTypes` — empty at discovery.
+        //
+        // Resolved IN THE SUBJECT'S INSTANCE: `Optional<int64>` stores its payload in the template's `T`,
+        // so the declared field type is the bare `T` and only `deepSubstInInstance` answers `int64`. That
+        // is the same resolution `emitMatchSwitch` does for `_localTypeNodes`.
+        const ClassInfo* subjCi = nullptr;
+        std::string subjCls;
+        if (SharedIdentifier subjTy = exprTypeNode(mm->subject, localTys)) {
+            subjCls = cType(subjTy);
+            auto cit = _classes.find(subjCls);
+            if (cit != _classes.end() && cit->second.isVariant) subjCi = &cit->second;
+        }
+        if (mm->arms) for (auto& a : *mm->arms) if (a) {
+            // Per-arm COPY: two arms bind different names for the same slot, and an arm's bindings and
+            // block locals must not leak sideways into the next arm or outward past the match.
+            std::map<std::string, SharedIdentifier> armTys = localTys;
+            const VariantCase* vc = nullptr;
+            if (subjCi && !a->isWildcard() && a->variantName)
+                for (auto& v : subjCi->variants) if (v.name == *a->variantName) { vc = &v; break; }
+            if (vc && a->bindings && a->labels)
+                for (size_t i = 0; i < a->bindings->size() && i < a->labels->size(); ++i) {
+                    if (!(*a->bindings)[i] || !(*a->labels)[i]) continue;
+                    for (auto& pf : vc->payload)
+                        if (pf.name == *(*a->labels)[i]) {
+                            armTys[*(*a->bindings)[i]] = deepSubstInInstance(subjCls, pf.type);
+                            break;      // an unknown/duplicate label is emitMatchSwitch's to report
+                        }
+                }
+            scanExprForGenerics(a->body, armTys);
+            scanStmtForGenerics(a->block, armTys);
+        }
     }
 }
 
@@ -20497,18 +20546,22 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
                 if (cit != ci->second.ctors.end()) {
                     // Infallible: the ctor yields the enclosing type by value.
                     if (!cit->second.isFallible) return inst;
-                    // A FALLIBLE ctor on a generic instance keeps the old "" answer: rendering its declared
-                    // `Result<T, E>` needs the owning instance's type args bound, which this path does not.
-                    if (inst != dotTy) return "";
                     // Fallible (`ctor Result<T, E> open(...)`): yield the DECLARED return type, so the call
                     // is a first-class `match` subject inline — `match (Widget.make(n: 7))`. The `::` bridge
                     // resolved this all along (it reads `mi->returnType`); the dot path returning "" here is
                     // what made an inline fallible ctor unusable as a subject. Now that construction has one
                     // spelling, that gap would leave the pattern unwritable.
-                    if (cit->second.returnType) {
-                        std::string rc = cType(cit->second.returnType);
-                        return rc;
-                    }
+                    //
+                    // A GENERIC receiver (`G::<int32>.open(…)`) used to bail out to "" right here, on the
+                    // grounds that rendering `Result<G<T>, Err>` needs the owning instance's type args bound
+                    // and this path does not bind them. `cTypeInInstance` binds exactly those (and the
+                    // instance's namespace context with them), and degrades to a plain `cType` for a
+                    // non-generic receiver — so one call answers both, and the bail is gone.
+                    //
+                    // ⚠️ That bail and the discovery hole this commit fixes were IN SERIES, which is why
+                    // deleting either one alone changed nothing measurable: with `G<int32>` never
+                    // registered, `_classes.find(inst)` missed and control never got here at all.
+                    if (cit->second.returnType) return cTypeInInstance(inst, cit->second.returnType);
                 }
             }
         }

@@ -1,0 +1,12 @@
+// The array-literal half of the same drift: `scanExprForGenerics` had no `ArrayLiteralNode` arm while its
+// sibling `scanExprForCollections` did, so a generic call written as an element (or as the `[v; N]` fill
+// value) was never discovered. The turbofish form failed loudly with a diagnostic that named the wrong
+// cause; the inferred form emitted a call to the template's own C name and left clang to refuse it.
+fn T ident<T>(T x) { return x; }
+
+fn int32 main()
+{
+    InlineArray<int32, 3> a = [ident::<int32>(x: 3), ident(x: 4), 5];
+    InlineArray<int32, 2> b = [ident::<int32>(x: 10); 2];      // the FILL value is a separate walk
+    return a[0] + a[1] + a[2] + b[0] + b[1];                   // 3 + 4 + 5 + 10 + 10 = 32
+}

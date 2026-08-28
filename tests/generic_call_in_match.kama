@@ -1,0 +1,41 @@
+// Generic discovery must ENTER a `match`. It did not: `scanExprForGenerics` had no `MatchNode` arm, so
+// neither the subject nor any arm was ever walked, and no instantiation written inside one was discovered.
+//
+// Three visible failures came out of that one hole, all measured on 0.9.99:
+//   - a turbofish in an arm answered "turbofish type arguments are only valid on a generic function",
+//     about a call that IS a generic function — and kept answering it when the SAME instantiation was
+//     registered by another call one line above, because routing is per call NODE (`_callInst`);
+//   - an inferred call in an arm emitted the TEMPLATE's own mangled C name, which no body defines, so
+//     clang refused the generated C (`call to undeclared function '_F…__ident'`) and kama reported success;
+//   - inference from a payload BINDING had nothing to read: `exprTypeNode` consults the discovery-side
+//     `localTys` map only, and no arm binding was ever put in it.
+//
+// Every arm shape below is here because it is a separate walk: the subject, a single-expression arm, a
+// block arm, and the `:=` arm value. A corpus grep at the time of writing found ZERO generic calls inside
+// a match arm anywhere in lib/, tests/, prelude/, examples/ or bench/ — nobody could write one, so nothing
+// caught it.
+type enum Color { Red, Green }
+
+fn T ident<T>(T x) { return x; }
+fn Color pick(int32 n) { return n > 0 ? Color::Red : Color::Green; }
+
+fn int32 main()
+{
+    // the SUBJECT is walked
+    int32 a = match (pick(n: ident::<int32>(x: 3))) { case Red: 1; case Green: 0; };          // 1
+
+    Color c = Color::Red;
+    // a single-expression arm: turbofish, and inference from a literal
+    int32 b = match (c) { case Red: ident::<int32>(x: 2); case Green: 0; };                   // 2
+    int32 d = match (c) { case Red: ident(x: 4);          case Green: 0; };                   // 4
+
+    // a BLOCK arm, through the `:=` arm value
+    int32 e = match (c) { case Red: { int32 z = ident::<int32>(x: 8); := z; } case Green: { := 0; } };   // 8
+
+    // inference from a payload BINDING — the binding's type comes from the subject's variant, resolved
+    // in the subject's instance (`Optional<int32>` stores its payload in the template's `T`).
+    Optional<int32> o = Optional::Some(value: 16);
+    int32 f = match (o) { case Some(value: x): ident(x: x); case None: 0; };                  // 16
+
+    return a + b + d + e + f;   // 1 + 2 + 4 + 8 + 16 = 31
+}
