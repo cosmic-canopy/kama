@@ -194,7 +194,7 @@ extern_undeclared	main.kama:3 main.kama:4
 extern_value_unknown_field	extern_value_unknown_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
-fixed_backing_int64	fixed_backing_int64.kama:12 fixed_backing_int64.kama:8
+fixed_backing_int64	fixed_backing_int64.kama:12
 fixed_bad_pairing	-
 float_bare_dot	float_bare_dot.kama:6
 float_literal_to_int	float_literal_to_int.kama:1
@@ -218,10 +218,10 @@ generate_eq_unconformed_field	generate_eq_unconformed_field.kama:8
 generate_on_plain_enum	generate_on_plain_enum.kama:4
 generate_serialize_generic	generate_serialize_generic.kama:6
 generate_unknown_name	generate_unknown_name.kama:4
-generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2 generic_arith_unsat.kama:9
+generic_arith_unsat	generic_arith_unsat.kama:14 generic_arith_unsat.kama:2
 generic_arity	generic_arity.kama:4
 generic_bare_use	generic_bare_use.kama:4
-generic_bound_unsat	generic_bound_unsat.kama:11 generic_bound_unsat.kama:8
+generic_bound_unsat	generic_bound_unsat.kama:11
 generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11 generic_ctor_incomplete_field.kama:16
 generic_infer_conflict	generic_infer_conflict.kama:6
 generic_resource_uam	generic_resource_uam.kama:10 generic_resource_uam.kama:5 generic_resource_uam.kama:8

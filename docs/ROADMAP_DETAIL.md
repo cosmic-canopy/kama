@@ -1152,18 +1152,6 @@ rather than here, so there is one number to keep current. Forward work:
     agree on — a ready-made test set for the two properties that matter, **idempotence**
     (`fmt(fmt(x)) == fmt(x)`) and **semantic preservation** (reparse, or compare emitted C).
 
-- **A failed generic bound still instantiates.** A generic whose bound fails reports that correctly at the
-  call site — and then emits the whole body's follow-on errors as well, because the instantiation proceeds
-  anyway. `Map<NotHashable, int32>` gives two accurate bound diagnostics followed by two cascade ones
-  (`NotHashable has no method equals` / `hash`), which are consequences, not findings. Wants the
-  instantiation abandoned once a bound has failed, the way `unsupported`'s dedupe made the error count
-  track mistakes rather than instantiations.
-
-  *(This entry used to carry a second defect — the cascade landed on `<user file>:<prelude line>`, a line
-  the user's file may not even have. That half is CLOSED: the unit now travels with the diagnostic, and
-  the cascade above lands on `lib/std/collections/map.kama:190`, which is where it belongs. Guarded by
-  `tools/check-diag-file.sh` cases 4 and 5.)*
-
 - **C symbol naming — folded into the module-system campaign, and SHIPPED in it** (`0.9.81`–`0.9.84`).
   Both defects were downstream of a model with two ways to name a thing, which is why they were folded in
   rather than fixed where they showed. A kama identifier that is a C keyword is now REFUSED at the lexer —

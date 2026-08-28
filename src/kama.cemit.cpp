@@ -9018,20 +9018,32 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // each concrete type argument must satisfy its parameter's contract bounds. Runs once per
     // unique instance (after dedup); with _typeSubst still at the caller's binding so a nested arg is
     // already the resolved `concrete[i]`. A bound NAMES a contract visible where the TEMPLATE was
-    // declared (like a default type arg — see the M8 default-slot ctx handling), NOT at the use site, so
-    // resolve bound names under the template's home ctx: a prelude-global bound (`Hashable`) resolves
-    // from anywhere via the global fallback, but a stdlib-namespaced bound (`std::collections::Hasher`
-    // on `Map`) is invisible at a use site that imported only `Map`. The concrete args are already
-    // absolutized, so the ctx swap only affects the contract-name lookup.
+    // declared (like a default type arg — see the M8 default-slot ctx handling), NOT at the use site: a
+    // prelude-global bound (`Hashable`) resolves from anywhere via the global fallback, but a
+    // stdlib-namespaced bound (`std::collections::Hasher` on `Map`) is invisible at a use site that
+    // imported only `Map`.
+    //
+    // ⚠️ That ctx move belongs to `checkBounds`, which does it NARROWLY (BoundCtxScope, around the
+    // contract-NAME lookup alone) off the same `_genericTypeCtx[tmpl]` this used to read. A second, wider
+    // swap here was redundant for resolution and actively wrong for attribution: `checkBounds` scopes its
+    // diagnostic's FILE from `_nsCtx`, so moving the whole call under the template's ctx handed the
+    // template's file to a mistake the use site made. `Map<NotHashable, int32>` in a four-line user
+    // program reported `lib/std/collections/map.kama:4` — the user's line, the library's name, and line 4
+    // of map.kama is a comment. The generic FUNCTION path never had the swap and always named the right
+    // file, which is what identified this one. Guarded by tools/check-diag-file.sh case 8.
     SharedBoundsList bounds = _genericTypeBounds.count(tmpl) ? _genericTypeBounds[tmpl] : SharedBoundsList();
-    if (bounds) {
-        NsCtx savedBoundCtx = _nsCtx;
-        auto bctx = _genericTypeCtx.find(tmpl);
-        if (bctx != _genericTypeCtx.end()) _nsCtx = bctx->second;
+    bool boundsOk = true;
+    if (bounds)
         for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
-            checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl);   // `line` is null-args-safe (bare all-defaulted use)
-        _nsCtx = savedBoundCtx;
-    }
+            if (!checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl))   // `line` is null-args-safe (bare all-defaulted use)
+                boundsOk = false;
+    // A type argument the bound REFUSED must not be carried into the template's body. Registration
+    // continues — the instance's shape has to exist or every later reference to it becomes a second,
+    // unrelated cascade ("unknown type") — but `emitGenericTypeInst` skips its member BODIES, so the
+    // template cannot go on to report the consequences of an argument it already rejected. This is
+    // Rust's `ty::Error` / Swift's `ErrorType` poisoning, and C++20's "constraint not satisfied, do not
+    // instantiate"; walking the body anyway is the pre-concepts C++ behaviour, which is what this was.
+    if (!boundsOk) _boundFailedInsts.insert(mangled);
 
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
@@ -10010,10 +10022,12 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     }
 
     // each inferred concrete type must satisfy its parameter's contract bounds (points at this call).
+    bool boundsOk = true;
     if (tmpl->typeBounds)
         for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key);
+                if (!checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key))
+                    boundsOk = false;
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -10024,6 +10038,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         mangled += "__" + mangleElem(a);
     }
     out.mangledName = mangled;
+    if (!boundsOk) _boundFailedInsts.insert(mangled);   // prototype only — see emitGenericInst
     return true;
 }
 
@@ -10060,10 +10075,12 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
     for (auto& c : concrete) if (argCarriesUnboundParam(c)) return false;
 
     // Bounds are checked against the SUBSTITUTED argument, so the diagnostic names the real type.
+    bool boundsOk = true;
     if (tmpl->typeBounds)
         for (size_t i = 0; i < np && i < tmpl->typeBounds->size(); ++i)
             if ((*tmpl->typeParams)[i])
-                checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key);
+                if (!checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key))
+                    boundsOk = false;
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -10073,6 +10090,7 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
         mangled += "__" + mangleElem(concrete[i]);
     }
     out.mangledName = mangled;
+    if (!boundsOk) _boundFailedInsts.insert(mangled);   // prototype only — see emitGenericInst
     return true;
 }
 
@@ -10280,6 +10298,10 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
 // namespace scope, under the instantiation's mangled name.
 void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
 {
+    // The generic-FUNCTION half of the same rule emitGenericTypeInst states: a refused type argument gets
+    // a prototype (so the call site still resolves) but no body (so the template cannot report the
+    // consequences of an argument its own bound rejected).
+    if (!prototypeOnly && _boundFailedInsts.count(gi.mangledName)) return;
     auto tit = _generics.find(gi.templateKey);
     if (tit == _generics.end()) return;
     FunctionDeclarationNode* tmpl = tit->second;
@@ -14246,10 +14268,15 @@ CEmitter::BoundCtxScope::~BoundCtxScope() { _e->_nsCtx = _saved; }
 
 // at each monomorphization, verify the concrete type argument bound to `paramName` satisfies
 // every contract on it (`+` = AND); a clean diagnostic instead of a downstream "class missing method".
-void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
+//
+// Returns false when a bound was REFUSED, so the caller can poison the instance and stop the template's
+// body being walked with an argument it just rejected — see registerGenericTypeInst. A DEFERRAL (an
+// argument that is not concrete yet) is not a refusal and answers true: the per-instantiation re-walk
+// runs this again with the real argument, and poisoning on a deferral would silence the whole template.
+bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
                            SharedIdentifierList bounds, int line, const std::string& templateKey)
 {
-    if (!bounds || bounds->empty()) return;
+    if (!bounds || bounds->empty()) return true;
     // A failed bound is the USE SITE's mistake and carries the use site's line, so it belongs to the file
     // that wrote the type argument — which is what `_nsCtx` names here. All three callers (a generic type,
     // a generic contract, a generic function) reach this from passes where no module is current, so
@@ -14269,8 +14296,9 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         if (t->genericArgs) for (auto& a : *t->genericArgs) if (mentionsParam(a)) return true;
         return false;
     };
-    if (mentionsParam(concreteArg)) return;
+    if (mentionsParam(concreteArg)) return true;          // deferred, not refused
 
+    bool ok = true;
     std::string cls = cType(concreteArg);                 // concrete class key (or a primitive C type)
     std::string rkey = primKey(concreteArg);              // the CONFORMANCE key — `cls` still feeds _classes
     std::string clsName = (concreteArg && concreteArg->value) ? *concreteArg->value : cls;   // source-level
@@ -14282,6 +14310,7 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         if (!contractMethods(contract)) {   // a plain contract OR a generic-contract template (`Iterator<T>`)
             unsupported(("unknown contract `" + *b->value + "` in a bound on type parameter `"
                          + paramName + "`").c_str(), line);
+            ok = false;                     // an unspellable bound is unsatisfiable — poison it too
             continue;
         }
         // A declared conformance to <bound> also satisfies it. Consult the pre-scan so a bound check that
@@ -14305,10 +14334,13 @@ void CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // than let the two disagree. They did: `<T: Copyable<T>>` was unusable as a DECLARED bound while
         // `when [T: Copyable<T>]` worked, because the gate goes through `satisfiesBound` and this did not.
         bool structural = !ci && satisfiesBound(rkey, contract);
-        if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract)))
+        if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
             unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
                          + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
+            ok = false;
+        }
     }
+    return ok;
 }
 
 // "__base." repeated for each hop from `from` down to ancestor `to` ("" if equal).
@@ -20207,6 +20239,11 @@ void CEmitter::emitGraphDeserializeDefinition(ClassInfo& ci)
 // functions are header-`static` (every module includes the header), so `_emitStaticClass` is set here.
 void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
 {
+    // A type argument the bound REFUSED is not carried into the template's body. The shape (phase 0) and
+    // the prototypes (phase 1) still emit, so every later reference to this instance resolves and the one
+    // rejection stays one rejection; the BODIES do not, because walking `Map<K,V>` with a `K` that has no
+    // `hash` can only produce consequences of a mistake already reported. See registerGenericTypeInst.
+    if (phase == 2 && _boundFailedInsts.count(gi.mangledName)) return;
     auto cit = _classes.find(gi.mangledName);
     if (cit == _classes.end()) return;
     ClassInfo& ci = cit->second;

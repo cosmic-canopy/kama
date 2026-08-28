@@ -1258,6 +1258,12 @@ private:
     std::map<std::string, GenericTypeInst>    _genericTypeInsts;    // mangled name -> instantiation (dedup)
     std::map<std::string, std::string>        _genericTypeInstOf;   // mangled name -> template name (construction)
     std::vector<std::string>                  _genericTypeInstOrder;// registration order (inner-first; struct-typedef emit)
+    // Instances (a generic type's, or a generic function's) whose type argument was REFUSED by a bound.
+    // Their shape still registers — an unregistered instance turns one rejection into a second, unrelated
+    // "unknown type" cascade — but their member BODIES are never emitted, so a template cannot go on to
+    // report the consequences of an argument it already refused. Rust's `ty::Error` poisoning, and what
+    // C++20 concepts do; walking the body anyway is the pre-concepts C++ template-error vomit.
+    std::set<std::string>                     _boundFailedInsts;
     bool                                      _emitStaticClass = false;  // prefix `static` on specialized class fns (header ODR)
     // Inside emitHeaderContent: the text being written belongs to no module, so `#line` reads only
     // `_emitDeclFile` (a generic instance's template) and stays silent for everything else. See line().
@@ -1943,7 +1949,9 @@ private:
     // recorded `interfaces` list (a plain name == tmpl, or a generic instance whose `templateKey` == tmpl).
     bool implementsContractTemplate(ClassInfo* ci, const std::string& tmpl);
     // Verify a concrete type arg satisfies each contract bound on a type parameter (else diagnose).
-    void checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
+    // False means REFUSED — the caller poisons the instance so the template's body is never walked with
+    // an argument the bound rejected. A deferral (a not-yet-concrete arg) answers true, not false.
+    bool checkBounds(const std::string& paramName, SharedIdentifier concreteArg,
                      SharedIdentifierList bounds, int line, const std::string& templateKey);
     // Resolve a generic's BOUNDS under the template's home namespace rather than the call site's, so a
     // bound need not be imported by every caller. RAII — restores `_nsCtx` on scope exit.

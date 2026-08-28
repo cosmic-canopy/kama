@@ -268,8 +268,82 @@ want "$out7" 'a loose build compiles only the files it is given' \
     && echo "  ok: ...which is not idle advice — passing that file does build it" \
     || { echo "check-diag-file: FAIL — the file 7a says to pass does not fix the build" >&2; exit 1; }
 
+# ---- 8. a FAILED GENERIC BOUND is the use site's mistake, in the use site's file ------------------------
+#
+# Case 1 INVERTED, and the one direction that file did not cover. There the broken declaration lived in the
+# library and was reported against the consumer; here the mistake is the CONSUMER's — a type argument that
+# does not satisfy the template's bound — and it was reported against the LIBRARY. Same "line right, file
+# wrong" shape, opposite direction, and this guard passed the whole time it was true.
+#
+# The cause was that `registerGenericTypeInst` swapped `_nsCtx` to the TEMPLATE's home context before
+# calling `checkBounds` — a swap `checkBounds` already performs internally, narrowly, around the contract
+# NAME lookup alone (BoundCtxScope). The wider one also moved the file `checkBounds` attributes its
+# diagnostic to, so `Map<NotHashable, int32>` in a four-line user program reported four errors, not one of
+# them in a file the user wrote:
+#
+#   lib/std/collections/map.kama:4:0: error: … does not satisfy bound `Hashable`     <- the USER's line 4
+#   lib/std/collections/map.kama:4:0: error: … does not satisfy bound `Equatable`    <- map.kama:4 is a comment
+#   lib/std/collections/map.kama:189:0: error: `NotHashable` has no method `equals`  <- a CONSEQUENCE
+#   lib/std/collections/map.kama:188:0: error: `NotHashable` has no method `hash`    <- a CONSEQUENCE
+#
+# The generic FUNCTION path never had the swap and always named the right file, which is what identified it.
+#
+# Two assertions, because the two halves fail independently and a fix for one can leave the other:
+#   8a. the bound diagnostic names the USER's file, not the template's.
+#   8b. a failed bound is reported ONCE — the instantiation is abandoned rather than walked, so the
+#       template's body cannot contribute follow-on errors about the argument it was already refused.
+#       This is what Rust, Swift and C++20 concepts all do; the pre-concepts C++ alternative is above.
+mkdir -p "$tmp/lib/keyed"
+cat > "$tmp/lib/keyed/keyed.kama" <<'EOF'
+export { Keyed };
+// The BOUND is this file's. The bad ARGUMENT is not — and the mistake belongs to whoever wrote it.
+type value Keyed<K: Hashable> {
+    public K key;
+    public ctor make(K key) { this.key = key; }
+    public fn uint64 digest() { return this.key.hash(); }
+}
+EOF
+cat > "$tmp/bound_user.kama" <<'EOF'
+import { lib::keyed::Keyed };
+type value NoHash {
+    public int32 v;
+    public ctor make(int32 v) { this.v = v; }
+}
+fn int32 main() {
+    Keyed<NoHash> k = Keyed.make(key: NoHash.make(v: 1));   // line 7 — the mistake, in THIS file
+    return 0;
+}
+EOF
+
+out8=$("$KAMA" check "$tmp/bound_user.kama" "$tmp/lib/keyed/keyed.kama" 2>&1 || true)
+
+# 8a. ⚠️ The library file is only 7 lines long and line 7 is its closing brace, so "keyed.kama:7" is not a
+#     near miss — it is the user's line number wearing the library's name.
+if ! printf '%s' "$out8" | grep -q 'bound_user\.kama:7.*does not satisfy bound'; then
+    echo "check-diag-file: FAIL — a failed generic bound does not name the file that wrote the type argument."
+    echo "  expected bound_user.kama:7; got:"
+    printf '%s\n' "$out8" | sed 's/^/    /' | head -6
+    exit 1
+fi
+if printf '%s' "$out8" | grep -q 'keyed\.kama:.*does not satisfy bound'; then
+    echo "check-diag-file: FAIL — the USER's bad type argument is reported against the TEMPLATE's file."
+    echo "  line right, file wrong — case 1 inverted:"
+    printf '%s\n' "$out8" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
+# 8b. one refused argument, one diagnostic — the template's body must not be walked with it.
+n8=$(printf '%s\n' "$out8" | grep -c 'error:' || true)
+if [ "$n8" != 1 ]; then
+    echo "check-diag-file: FAIL — one unsatisfied bound produced $n8 errors (expected 1)."
+    echo "  a bound that failed must abandon the instantiation, not instantiate and report the fallout:"
+    printf '%s\n' "$out8" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
-echo "                       unresolved module names the rule that refused it, not a directory; and a"
-echo "                       same-module import blames the cause that fired, not the export list)"
+echo "                       unresolved module names the rule that refused it, not a directory; a"
+echo "                       same-module import blames the cause that fired, not the export list; and a"
+echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file)"
