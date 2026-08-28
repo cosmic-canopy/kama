@@ -88,4 +88,38 @@ done
 [ "$fail" -eq 0 ] && ok "$n fixture(s) outside the suite's four globs analyze clean ($skipped deliberately-invalid, asserted invalid)"
 
 # ---------------------------------------------------------------------------------------------------
+# The same failure mode one glob over, found 2026-08-28: a fixture the suite DOES walk but then declines
+# to assert. `run_tests.sh` skips any `tests/<name>.kama` with no `tests/<name>.expect` (and any
+# `tests/<name>.d/` with no `expect` inside it) — printing SKIP, counting neither pass nor fail. The
+# fixture is compiled by the analysis leg, so it looks alive in the log; nothing ever RUNS it or checks
+# what it returned.
+#
+# It swallowed three fixtures the hour this section was written: the whole point of them was the exit
+# code, and all three sat green as SKIPs. A fixture with no expected value is not coverage, exactly as a
+# DIAGNOSTIC_LINES row with no fixture is not — same doctrine, same guard.
+#
+# Cheap: a set comparison over the worktree, no compiler.
+missing=""
+# ⚠️ The FILESYSTEM, not `git ls-files` — these are the two shell globs run_tests.sh itself iterates, and
+# a guard about what the harness walks has to walk the same thing. A brand-new fixture is UNTRACKED until
+# it is committed, which is precisely when this is worth catching; asking git would have made the guard
+# blind to every fixture it exists for. (Only `tests/xfail/` and `tests/trap/` live deeper, and their legs
+# assert a rejection or a trap rather than an exit code.)
+for f in tests/*.kama; do
+    [ -e "$f" ] || continue
+    [ -f "${f%.kama}.expect" ] || missing="$missing $f"
+done
+for d in tests/*.d; do
+    [ -d "$d" ] || continue
+    [ -f "$d/expect" ] || missing="$missing $d/"
+done
+if [ -n "$missing" ]; then
+    bad "these fixtures are walked by the suite but SKIPPED — no expected exit code, so nothing runs them:"
+    for m in $missing; do echo "        $m" >&2; done
+    echo "        add <name>.expect (a .d fixture: expect inside it) holding the expected exit code" >&2
+else
+    ok "every fixture the suite walks has an expected exit code"
+fi
+
+# ---------------------------------------------------------------------------------------------------
 [ "$fail" -eq 0 ] && echo "check-fixture-reach: PASS" || { echo "check-fixture-reach: FAIL" >&2; exit 1; }
