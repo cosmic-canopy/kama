@@ -138,7 +138,7 @@ decided and why, and SPEC for the surface itself. What follows is what M2b/M2c s
 
 ## Mechanics you will want to know
 
-- **A new stdlib module needs no registration anywhere.** `import std::foo::{X}` resolves by path to
+- **A new stdlib module needs no registration anywhere.** `import { std::foo::X };` resolves by path to
   `lib/std/foo/foo.kama` (or a directory of files sharing `namespace std::foo;`). Release packaging is
   `cp -R lib/std` (`.github/workflows/release.yml`), so a new directory ships automatically.
 - **A module's cost is its seam header.** `extern "<math.h>"` is what makes the driver link `-lm`; the same

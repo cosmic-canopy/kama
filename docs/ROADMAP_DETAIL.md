@@ -35,10 +35,32 @@ permanent doc (see the table below) and its section is deleted from here.
 What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability matrices in
 [ENGINE_READINESS.md](ENGINE_READINESS.md) / [MCU_READINESS.md](MCU_READINESS.md); the history in the git log.
 
-**The language surface is feature-complete.** What is left before the tag is the
-docs/naming reconcile — 1.0 is the API-stability point, so naming and case conventions fix there
-(PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase `string`), and anything that
-would *break* source has to land first or wait for 2.0.
+**The language surface is feature-complete.** Anything that would *break* source has to land before the
+tag or wait for 2.0.
+
+**The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
+scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
+`string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
+`I`-prefixed contract, no non-PascalCase type declaration (the only lowercase ones are
+`prelude/builtin.kama`'s primitives, which the convention wants lowercase), no non-lowerCamel public
+method in `lib/std`. There was nothing to reconcile.
+
+What was actually broken was **doc code that the compiler refuses**, and it was worse than stale: `SPEC.md`
+says in prose *"Bare `int` is not a kama type"* and then used `int` as a type in seventeen of its own code
+blocks. Those snippets were legal until the module campaign (`0.9.80`) made every C keyword a reserved
+word; nothing noticed, because nothing reads the docs' code. Measured and fixed: **29 × bare `int`**
+(SPEC.md), **10 × bare `float`** (TYPE_MODEL.md), and **8 ×** the `p::{X}` module-import spelling the same
+campaign deleted (the form that parses is brace-first, `import { p::X };`) — all eight of those in prose
+rather than in blocks. **13 fenced blocks were rejected by the lexer before; zero after.**
+
+`tools/check-doc-spelling.sh` holds it down, deriving its flag set from `kama.l`'s own two tables (the C
+words kama reserves, minus the ones kama uses) rather than listing them — hardcoding is how the docs
+rotted in the first place. ⚠️ **It is a LEXICAL check on purpose.** Compiling every fenced block was the
+first design and is wrong: 81 of 139 blocks do not parse standalone, and almost none of those is a defect
+— they are deliberate fragments. That guard would mean annotating ~110 blocks with opt-out markers and
+would not have caught one of the 47 real defects. A reserved word is refused wherever it appears, fragment
+or not, which is why text is the right substrate here. The same extraction, aimed at negative claims
+instead, is what the "~42 negative doc claims have no xfail link" row wants.
 
 The **manifest** key set is reconciled: the entry field is `entry`, not `main` (npm's `main` names a
 library's entry point for importers — the opposite end of the word), and `out` names the build-output
@@ -1025,7 +1047,7 @@ rather than here, so there is one number to keep current. Forward work:
   stop exercising. (`--release` native already folds to one unity TU, for cross-module inlining.)
 
 - **Closure pruning — SHIPPED 2026-08-10.** A directory-module import used to compile the whole
-  directory: `import std::collections::{DynamicArray}` pulled in all 14 files of `lib/std/collections`,
+  directory: `import { std::collections::DynamicArray };` pulled in all 14 files of `lib/std/collections`,
   because `resolveModuleFiles` falls back to a flat listing and the `{…}` names control *visibility*, not
   what gets compiled. `examples/httpd` named four imports and got 32 TUs, 20 of which contributed no live
   symbol. An import now resolves to the files defining the named symbols plus their transitive

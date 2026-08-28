@@ -533,7 +533,7 @@ immutable** — re-publishing an existing version is refused; bump the `version`
 ### Scopes and the `registries` config
 
 A package name may be **scoped** as `@scope/name`. A scoped dependency **imports under its bare last
-segment** — `@acme/geo` is `import geo::{…}` in your code — the scope only selects which registry serves
+segment** — `@acme/geo` is `import { geo::X };` in your code — the scope only selects which registry serves
 it. Bind scopes (and the default) with a top-level `registries` object:
 
 ```json

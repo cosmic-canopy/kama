@@ -49,13 +49,13 @@ shares that object), a kama `value` owns **nothing**, so its copy has no hidden 
 
 ```kama
 type value Vec2 {
-    public float x;         // fields choose visibility per field
-    public float y;
-    public fn float length() { return sqrt(this.x*this.x + this.y*this.y); }
+    public float32 x;       // fields choose visibility per field
+    public float32 y;
+    public fn float32 length() { float32 q = this.x*this.x + this.y*this.y; return sqrt(x: q); }
 }
 
 type value Rect {
-    float x; float y; float w; float h;    // private (default) — guards its own invariant
+    float32 x; float32 y; float32 w; float32 h;   // private (default) — guards its own invariant
     public fn bool contains(Vec2 p) { ... }
 }                                          // still copies freely — it owns nothing
 ```
@@ -130,7 +130,7 @@ are just "its API."
 
 ```kama
 type contract Drawable for value, resource { fn void draw(); }
-type contract Animated for value, resource implements Drawable { fn void step(float dt); }   // refines: requires Drawable + more
+type contract Animated for value, resource implements Drawable { fn void step(float32 dt); }   // refines: requires Drawable + more
 ```
 
 - All members are **public** (a contract *is* public) — no visibility modifiers, no fields, no bodies
@@ -235,8 +235,8 @@ Because public-virtual is banned, a `contract` method that must vary per subclas
 
 ```kama
 type abstract resource Polygon : Shape {
-    public fn float area() { return this.computeArea(); }   // public, non-virtual: the stable face
-    protected abstract fn float computeArea();              // the protected customization point
+    public fn float32 area() { return this.computeArea(); }   // public, non-virtual: the stable face
+    protected abstract fn float32 computeArea();              // the protected customization point
 }
 ```
 

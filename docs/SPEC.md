@@ -58,7 +58,7 @@ fat value that is one of two things, chosen automatically:
 ```kama
 string s = "ab";                    // borrowed literal — no alloc
 string t = s.concat(other: "cd");   // heap-owned, RAII-freed at scope exit
-bool eq = s.equals(other: t);   int len = s.length();
+bool eq = s.equals(other: t);   isize len = s.length();
 ```
 
 You never spell the borrowed-vs-owned distinction; the type carries it, and RAII frees exactly the owned
@@ -79,7 +79,7 @@ never blur:
 
 ```kama
 string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
-int n = 0;
+int32 n = 0;
 foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
 uint8 first = s[0];                     // 65 ('A'), a byte
 ```
@@ -239,7 +239,7 @@ foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
 foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
 
 DynamicArray<Point> ps = DynamicArray.empty();             // growable
-ps.add(item: p);   int n = ps.length();   Point q = ps[0];
+ps.add(item: p);   isize n = ps.length();   Point q = ps[0];
 
 string s = "ab";                                // borrowed literal (no alloc)
 string t = s.concat(other: "cd");               // heap-owned, RAII-freed
@@ -616,9 +616,9 @@ Use it for heap objects, recursive data structures, and polymorphic ownership.
 
 ```kama
 Owned<Counter> c = new Counter.make(start: 40);     // `new` heap-boxes the ELEMENT type
-c.bump();  int n = c.get();                          // auto-deref: . reaches the pointee
+c.bump();  int32 n = c.get();                        // auto-deref: . reaches the pointee
 Owned<Counter> d = c;                                // MOVE: c is now empty (moved-from)
-fn Owned<Node> make(int v) { return new Node.make(id: v); }   // inline `new` in return/arg position — factory, moves out
+fn Owned<Node> make(int32 v) { return new Node.make(id: v); }   // inline `new` in return/arg position — factory, moves out
 ```
 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so the
@@ -633,7 +633,7 @@ are `Copyable` and declare `bare: copy`, so a bare hand-off **retains** (refcoun
 retain, and **`give` still moves the handle** — the ref transfers and the source is consumed (this is how a
 `Shared` returns from a factory without a spurious retain/drop). A `value`/primitive just copies. A fresh
 `new`/constructor/call result needs no marker. Smart pointers also **pass by value**: the callee *owns* the
-argument and drops it at function end — `fn int use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int
+argument and drops it at function end — `fn int32 use(Owned<T> p)` consumes it (`use(p: give x)`), `fn int32
 peek(Shared<T> s)` retains it (`peek(s: x)`, `x` stays valid).
 
 ```kama
@@ -725,7 +725,7 @@ allowed; a static method has no `this`, so a local there can never shadow a fiel
 ```kama
 Shared<Tex> a = new Tex.make(id: 7);
 Shared<Tex> b = a;     // retain — a and b share one Tex (both valid)
-b.use();  int n = a.id;
+b.use();  int32 n = a.id;
 // a, b drop in RAII order; the Tex is freed exactly once, with the last handle
 ```
 
@@ -764,8 +764,8 @@ each handle in RAII order and dispatches polymorphically through it. See **Gener
 ## Functions ✅
 
 ```kama
-fn int add(int a, int b) { return a + b; }
-fn int main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
+fn int32 add(int32 a, int32 b) { return a + b; }
+fn int32 main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
 `ref` and `out` parameters both pass by pointer, but they are **different promises**:
 
@@ -811,11 +811,11 @@ extern fn UnsafePtr  malloc(usize n);     // UnsafePtr = void* (opaque pointer/h
 extern fn void free(UnsafePtr p);
 extern fn float64 sqrt(float64 x);  // libm auto-links when a program `extern "<math.h>";`s (pay-for-use)
 
-fn int main() {
+fn int32 main() {
     UnsafePtr p = malloc(n: 64);
     if (p == null) { return 1; }  // hold / null-check / compare — but no deref yet
     free(p: p);
-    return cast<int>(sqrt(x: 1764.0));   // 42
+    return cast<int32>(sqrt(x: 1764.0));   // 42
 }
 ```
 
@@ -848,7 +848,7 @@ files.
 ### Math (`std::math`) ✅
 
 Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus a
-full scalar surface over libm. `import std::math::{Vec3, Mat4, sqrt, sin, …}`.
+full scalar surface over libm. `import { std::math::Vec3, std::math::Mat4, std::math::sqrt, std::math::sin, … };`.
 
 **One name per scalar operation, at BOTH float widths** — the width is inferred from the argument, so
 `sqrt(x: 1.0)` is a float64 call and `sqrt(x: 1.0f32)` a float32 one. That matters because a bare `1.0`
@@ -894,14 +894,15 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 `float32Max`/`float32MinNormal`/`float32Epsilon` (signed min is `-max - 1`) — and per-width integer
 **operations** `minI32/maxI32/clampI32/absI32/signI32` (+ the `I64` set), parallel to `std::math`'s float32
 `minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
-`wrappingNegI32` (+ `I64`) for intentional overflow. `import std::num::{int32Max, minI32, wrappingAddI32,
-…}`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
+`wrappingNegI32` (+ `I64`) for intentional overflow. `import { std::num::int32Max, std::num::minI32,
+std::num::wrappingAddI32, … };`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
 — `fn Ordering compareTo(ref T other)` with `type intrinsic` conformances for every int/float/string — the bound for
 `PriorityQueue` + the sorted containers.)
 
 ### Sorting & searching (`std::collections`) ✅
 
-`import std::collections::{sort, sortUnstable, binarySearch, lowerBound, isSorted, Order, …}`.
+`import { std::collections::sort, std::collections::sortUnstable, std::collections::binarySearch,
+std::collections::lowerBound, std::collections::isSorted, std::collections::Order, … };`.
 
 **Free functions over a `View<T>`, not methods on each container.** One implementation therefore serves
 `DynamicArray`, `FixedArray` and any **sub-range** — `sort(items: xs.slice(from: 1, count: 4))` orders a
@@ -961,7 +962,7 @@ reports `ERANGE` as `OutOfRange` rather than folding it to an infinity.
 
 ### ASCII (`std::ascii`) ✅
 
-`import std::ascii::{isDigit, isAlpha, isSpace, toLower, …}` — `isDigit`, `isHexDigit`, `isAlpha`,
+`import { std::ascii::isDigit, std::ascii::isAlpha, std::ascii::isSpace, std::ascii::toLower, … };` — `isDigit`, `isHexDigit`, `isAlpha`,
 `isAlnum`, `isSpace`, `isUpper`, `isLower`, `isPunct`, `isControl`, `isAscii`, `toLower`, `toUpper`,
 `digitValue`, all over `char`.
 
@@ -1111,12 +1112,12 @@ the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whe
 
 ```kama
 import { std::math::Vec3, std::math::Mat4 };
-fn int main() {
+fn int32 main() {
     Mat4 vp = Mat4.perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
             * Mat4.lookAt(eye: Vec3.of(x: 0.0f32, y: 2.0f32, z: 5.0f32),
                            center: Vec3.zero(), up: Vec3.unitY());   // method chaining
     Vec3 p = vp.transformPoint(p: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32));
-    return cast<int>(p.length());
+    return cast<int32>(p.length());
 }
 ```
 
@@ -1158,7 +1159,7 @@ they take `View<uint8>` buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
 import { std::fs::readFile, std::fs::writeFile };
-fn int main() {
+fn int32 main() {
     match writeFile(path: "out.txt", data: "hi") {
         case Ok: {}
         case Err(error: e): { return 1; }
@@ -1184,7 +1185,7 @@ extern fn div_t div(int32 numer, int32 denom);
 
 extern fn float64 frexp(float64 value, UnsafePtr<int32> exp);
 
-fn int main() {
+fn int32 main() {
     div_t r = div(numer: 17, denom: 5);    // r.quot=3, r.rem=2  (field access on a C struct)
     int32 e = 0;
     frexp(value: 1764.0, exp: addr(of: e));// addr(of: x) = &x  — controlled out-param
@@ -1259,7 +1260,7 @@ log level, never an abort). Import it — the module is the discovery unit; it i
 ```kama
 import { std::log::logInfo, std::log::logWarn, std::log::logError, std::log::logDebug, std::log::logTrace, std::log::logEnabled, std::log::setLogSink, std::log::LogLevel };
 
-fn int main() {
+fn int32 main() {
     logInfo(tag: "boot", msg: "starting ${version()}");   // tag may be "" (untagged)
     logWarn(tag: "net", msg: "returning");
     logDebug(tag: "audio", msg: "mix ${dumpState()}");    // dumpState() runs ONLY if the record passes (v2)
@@ -1728,7 +1729,7 @@ unmangled** C name (no `Namespace__` prefix — mirroring how `extern` keeps a l
 ```kama
 // gameplay.kama — a hot-reload module (note: no `main`)
 expose fn void update(UnsafePtr<World> w, float32 dt) { /* … */ }
-expose fn int   version() { return 3; }
+expose fn int32 version() { return 3; }
 ```
 
 - **Native shared library:** `kama build --shared gameplay.kama -o libgameplay.so` (→ `.dylib`/`.dll` per
@@ -1902,10 +1903,10 @@ mismatched member reached *through* the contract does not fail, it silently does
 
 ```kama
 type value Counter {
-    int value;                                       // fields are private by default
-    public ctor make(int start) { Counter r; r.value = start; return give r; }   // named ctor (`public` to call from outside)
-    public fn void add(int n) { value = value + n; } // method (implicit self)
-    public fn int get() { return value; }
+    int32 value;                                     // fields are private by default
+    public ctor make(int32 start) { Counter r; r.value = start; return give r; }   // named ctor (`public` to call from outside)
+    public fn void add(int32 n) { value = value + n; } // method (implicit self)
+    public fn int32 get() { return value; }
 }
 Counter c = Counter.make(start: 40);   // stack value — dot-on-type construction, not `new`
 c.add(n: 2);                            // a `value` copies on hand-off
@@ -1924,7 +1925,7 @@ declared **`type resource`** and is move-only:
 ```kama
 type resource Buffer {
     DynamicArray<byte> data;                                 // owns heap → resource; fields stay private
-    public ctor make(int n) { … }
+    public ctor make(int32 n) { … }
     public fn isize size() { return this.data.length(); }
 }
 ```
@@ -2250,12 +2251,12 @@ extensible base opts in with a qualifier after `type`:
 type virtual(maxDepth: 1) resource Shape {             // opts in to extension, and says how deep
     int32 sides;
     public ctor make(int32 sides) { this.sides = sides; }
-    public fn int describe() { return this.area(); }   // public surface
-    protected virtual fn int area() { return 0; }      // overridable hooks are written `protected`
+    public fn int32 describe() { return this.area(); }   // public surface
+    protected virtual fn int32 area() { return 0; }      // overridable hooks are written `protected`
 }
 type final resource Circle extends Shape {             // `type final resource` = sealed leaf
     public ctor make() { this.base = Base.make(sides: 1); }   // installs its base FIRST
-    protected override fn int area() { return 42; }
+    protected override fn int32 area() { return 42; }
 }
 ```
 
@@ -2418,7 +2419,7 @@ Shared<Circle> c = new Circle.make();
 Shared<Shape>  s = c;          // upcast — retain (both handles share one Circle)
 Owned<Circle>  u = new Circle.make();
 Owned<Shape>   o = give u;     // upcast — move (u consumed)
-int a = s.describe();          // polymorphic: describe() calls the protected virtual area() -> Circle's
+int32 a = s.describe();          // polymorphic: describe() calls the protected virtual area() -> Circle's
 ```
 
 Polymorphism flows through the base's **public surface**, which invokes the `protected virtual` hooks
@@ -2891,7 +2892,7 @@ int32 m = max(a: 3, b: 4);                              // -> max<int32>, a stat
 DynamicArray<Shared<Shape>> scene;                              // nested generics, no space (the `>>` split)
 ```
 
-- **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int, int>>`) — nested
+- **Generic functions and types**; multi-parameter (`Pair<A, B>`), nested (`Box<Pair<int32, int32>>`) — nested
   `>>` needs no space. `type value`/`resource` generics both work (a generic resource is move-only with a
   per-instance dtor). Function type args are inferred from the call.
 - **Turbofish — explicit type arguments.** When inference can't determine the type args — most commonly a
@@ -3230,10 +3231,10 @@ import {
     geometry::graphics::scale,
     physics::Body as PhysBody,        // `as` renames
 };
-fn int main() {
+fn int32 main() {
     Texture t = ...;                    // imported, bare
     phys::Body b = ...;                 // alias-qualified
-    int n = scale(x: 3);
+    int32 n = scale(x: 3);
 }
 ```
 
