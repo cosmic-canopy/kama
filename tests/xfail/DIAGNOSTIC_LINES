@@ -524,7 +524,7 @@ truncate_widening	truncate_widening.kama:6
 try_new_bad_type	try_new_bad_type.kama:5
 try_new_stateful_bare	try_new_stateful_bare.kama:9
 trycast_float	trycast_float.kama:7
-trycast_no_destination	trycast_no_destination.kama:6
+trycast_no_destination	trycast_no_destination.kama:7
 turbofish_nongeneric	turbofish_nongeneric.kama:3
 two_defaults	two_defaults.kama:5
 type_param_shadows_type	type_param_shadows_type.kama:10 type_param_shadows_type.kama:12

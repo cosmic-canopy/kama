@@ -532,7 +532,8 @@ Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handl
 never panics. Infallible `new` and the direct-`malloc` containers (`DynamicArray`, `Map`, `Set`, `Deque`,
 `FixedArray`, `BitSet`, `SlotMap`, `PriorityQueue`) plus the boxed `SortedMap`/`SortedSet` B-tree keep the
 pre-step-5 **panic-on-OOM** behavior (they unwrap the `Optional` via the prelude `unwrapPtr`, panicking on
-`None`). The ONE non-panic construction entry is **`try new`** (below); user code that calls `allocate`
+`None`; `try new` takes the same pointer through `ptrOrNull`, the sibling that answers with a null pointer
+so the failure can become a `None`). The ONE non-panic construction entry is **`try new`** (below); user code that calls `allocate`
 directly can `match` on `None` (e.g. a bump/arena that stops at exhaustion instead of trapping — the
 game-engine frame-allocator / real-time pattern, not only MCU).
 
@@ -541,13 +542,31 @@ game-engine frame-allocator / real-time pattern, not only MCU).
 `try new T.make(...)` yields
 `Optional<Owned<T>>` — `None` when the allocation fails, instead of panicking. It is the single fallible
 construction entry (`new` stays the infallible sugar that unwraps-or-panics); there is no parallel
-`tryAllocate`. Scoped to a typed local-variable initializer; a placement `try new(allocator: …)` is a
-follow-on.
+`tryAllocate`.
+
+**`try` accepts exactly what `new` accepts** — they share one grammar rule, so the two spellings cannot
+drift: the placement form (`try new(allocator: a) T.make(…)`), the on-type turbofish
+(`try new T::<A>.make(…)`), and an interface-element handle (`Optional<Owned<Contract>>`,
+`Optional<Shared<Contract>>`) all work. Like `try cast`, it needs a **declared destination** to read
+`Some`'s payload type from — a local, an argument, or the function's return type — which is what makes a
+fallible factory the ordinary shape.
 
 ```kama
 Optional<Owned<Box>> b = try new Box.make(v: 7);
 match (b) { case Some(value: x): use(x); case None: /* OOM — recover, don't trap */ }
+
+fn Optional<Owned<Mesh>> load(string path) { return try new Mesh.parse(path: path); }   // return position
+
+// Placement: the block comes from the arena, and `None` is how an EXHAUSTED arena answers — no trap.
+Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Circle.make(r: 5);
 ```
+
+Every allocation on this path answers `None`, including a `Shared` handle's control block. A bare
+`try new` into a box whose allocator is **stateful** is refused — that block would be released through
+the wrong allocator — so an arena-backed box is built with the placement form
+([tests/try_new_arena.kama](../tests/try_new_arena.kama),
+[tests/try_new_iface.kama](../tests/try_new_iface.kama),
+[tests/xfail/try_new_stateful_bare.kama](../tests/xfail/try_new_stateful_bare.kama)).
 
 #### No-heap subset ✅ (MCU step 5)
 
@@ -1632,9 +1651,13 @@ be written **in the language** rather than baked into the compiler. Three builti
   in turn), and every language that traps ships a named truncating form — Swift `truncatingIfNeeded:`, Zig
   `@truncate`, C# `unchecked`. A **provably widening** `truncate` is rejected: there are no high bits to
   drop, so `cast` is what was meant. **`try cast<T>(x)`** is the fallible form, yielding `Optional<T>` —
-  `None` exactly where `cast` would trap. Like `try new` it is a **typed-local initializer**
-  (`Optional<int8> r = try cast<int8>(n);`), because the declared destination is where its result type
-  comes from. `truncate` is a **contextual** keyword: a keyword only where a conversion can start, so
+  `None` exactly where `cast` would trap. Like `try new` it needs a **declared `Optional<T>` destination**,
+  because that is where its result type comes from — a local (`Optional<int8> r = try cast<int8>(n);`), an
+  argument (`f(x: try cast<int8>(n))`), or the function's return type
+  (`fn Optional<int8> narrow(int32 n) { return try cast<int8>(n); }`) — and nowhere else
+  ([tests/try_cast_value_position.kama](../tests/try_cast_value_position.kama),
+  [tests/xfail/trycast_no_destination.kama](../tests/xfail/trycast_no_destination.kama)).
+  `truncate` is a **contextual** keyword: a keyword only where a conversion can start, so
   `string`'s `truncate(maxBytes:)` — and any method of that name — still reads as a member.
 - **An `enum` is not a `cast` target — `try cast<E>(x)` is the one door in.** The table above is about
   numbers, whose valid values are a **range fixed by width**; an enum's are a **set of names the author
