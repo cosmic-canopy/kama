@@ -2091,6 +2091,18 @@ private:
                             const char* what, int line);   // M5a measurement; silent unless the flag is on
     void noteNumericOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
                              const char* posWhat, int line);   // the seventh position; same flag, same rows
+    // Type IDENTITY, which the kind rule above cannot express. `TKind` has five buckets, so two DISTINCT
+    // kama types that land in the same bucket are interchangeable at every hand-off — and the numeric
+    // rules cannot catch them either, because they bail on any C spelling that is not a name they know.
+    // A family is a set of types whose members are mutually non-interchangeable AND recognizable from an
+    // already-lowered C type. `None` is silent, exactly as `TKind::Unknown` is.
+    enum class IdFamily { None, Enum, Num, Sig };
+    IdFamily idFamilyOf(const std::string& ct);
+    static const char* idFamilyName(IdFamily f);
+    void noteTypeIdentity(const std::string& dstCType, SharedExpression value,
+                          const char* what, int line);     // the identity measurement; same hidden flag
+    void noteTypeIdentityOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                                  const char* opName, int line);
     void rejectNumericConversion(const std::string& dstCType, SharedExpression value,
                                  const char* what, bool isInit, int line);   // M6: no implicit conversion
     void rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpression rhs,

@@ -988,6 +988,24 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
                     auto it = _localTypeNodes.find(*id->value);
                     if (it != _localTypeNodes.end()) ct = classifierCType(it->second);
                 }
+        // An ENUM MEMBER — `[Ns::]Enum::Member`. None of the resolvers above reaches one either: it is a
+        // QUALIFIED name, so the binding fallback just above excludes it by construction, and the four
+        // before it answer for a place rather than a constant. So `A::A2` classified as "" — meaning
+        // `uint8 n = A::A2;` was invisible to every rule that reads this classifier, while `uint8 n = a;`
+        // through a local was not. Half of each enum shape was unexaminable purely by spelling.
+        //
+        // Same resolution the emitter does at `emitExpression`'s IdentifierNode arm: the enum name is the
+        // LAST qualifier segment, resolved through the file's scope with the segments before it. Quiet —
+        // `resolveUserName` on a non-enum qualifier just fails to match `_enums` and leaves "".
+        if (ct.empty())
+            if (auto* id = dynamic_cast<IdentifierNode*>(n))
+                if (id->value && id->qualifier && !id->qualifier->empty()) {
+                    auto enumQual = std::make_shared<StringList>();
+                    for (size_t i = 0; i + 1 < id->qualifier->size(); ++i)
+                        enumQual->push_back((*id->qualifier)[i]);
+                    std::string en = resolveUserName(*id->qualifier->back(), enumQual);
+                    if (isEnum(en)) ct = en;
+                }
         return ct;
     }
 
@@ -1327,6 +1345,122 @@ void CEmitter::noteNumericOperands(int opToken, SharedExpression lhs, SharedExpr
 }
 
 // ---------------------------------------------------------------------------------------------------
+// TYPE IDENTITY — the measuring instrument, and the classifier the rule will be built on.
+//
+// The kind rule sorts every type into five buckets, so two DISTINCT kama types that land in the same
+// bucket cross every hand-off unexamined. The numeric rules cannot catch them either: each one bails on
+// a C spelling it does not recognize as a number, and `rejectMixedOperands`' bail names the escapee
+// outright — "`string + string`, a bool, AN ENUM". Neither rule is wrong on its own terms. Nothing owns
+// identity.
+//
+// A FAMILY is a set of types that are (a) mutually non-interchangeable and (b) recognizable from an
+// already-lowered C type — which is all the hand-off funnels hold. Two members of one family, or of two
+// families, may never cross. `None` is silent, exactly as `TKind::Unknown` is, and it is what keeps the
+// rule off everything the rest of the campaign made legal: a contract destination (which admits every
+// kind by design), a smart-pointer or `Optional` promotion, an inheritance upcast, a type parameter.
+//
+// `Num` is EVERY numeric primitive taken together, not one family member per width. The widths are
+// already held apart by `rejectNumericConversion` — each has its own C spelling — so splitting them here
+// would only duplicate it. What this family is for is naming the enum<->number boundary, and it must
+// include the target-width pair (`size_t`/`ptrdiff_t`) and the floats: leaving them out reported
+// `isize == int32` as an identity crossing, which is the numeric rule's subject and not this one's.
+CEmitter::IdFamily CEmitter::idFamilyOf(const std::string& ct)
+{
+    if (ct.empty()) return IdFamily::None;
+    // A payload-less `enum` — `_enums` holds only that kind; a payload/generic one is a ClassInfo, which
+    // C refuses to assign across anyway. Pinned (`: IntType`) it is a typedef NAME, unpinned a C `enum`;
+    // both are why every numeric rule reads it as "not a number I know" and takes its silent path.
+    if (isEnum(ct))                            return IdFamily::Enum;
+    if (isSigType(ct))                         return IdFamily::Sig;
+    if (cNumBits(ct) || cNumTargetWidth(ct))   return IdFamily::Num;
+    return IdFamily::None;
+}
+
+const char* CEmitter::idFamilyName(IdFamily f)
+{
+    switch (f) {
+        case IdFamily::Enum: return "enum";
+        case IdFamily::Sig:  return "sig";
+        case IdFamily::Num:  return "num";
+        default:             return "none";
+    }
+}
+
+// The hand-off half of the measurement. Rides the same two funnels and the same hidden flag as M5a, and
+// keeps its row shape so one `cut -f6 | sort | uniq -c` still answers the histogram.
+//
+// ⚠️ The exemptions are where this rule's size lives, not the check — so this instrument REPORTS them
+// rather than dropping them. `x-none` is every crossing where one side is a family and the other is not
+// (a contract, a class, a smart pointer, an unresolved type parameter): all legal, all silent under the
+// rule, and all invisible unless counted. M5a's first draft dropped its blind spot and reported 219 rows
+// while hiding 29,282; this is that lesson applied before the fact.
+void CEmitter::noteTypeIdentity(const std::string& dstCType, SharedExpression value,
+                                const char* what, int line)
+{
+    if (!_strictNumericScan || !value || dstCType.empty()) return;
+    const IdFamily dstF = idFamilyOf(dstCType);
+    if (dstF == IdFamily::None) return;                 // the destination owns no identity to violate
+    const std::string src = typeOfExpr(value);
+    const IdFamily srcF = idFamilyOf(src);
+
+    const char* cat;
+    if (src.empty())                                    cat = "id-unknown-src";
+    else if (srcF == IdFamily::None)                    cat = "id-x-none";
+    else if (src == dstCType)                           return;        // the same type: nothing crossed
+    else if (srcF == IdFamily::Num && dstF == IdFamily::Num) return;   // rejectNumericConversion's subject
+    else if (isLiteralExpr(value.get()))                cat = srcF == IdFamily::Num ? "id-lit-into-enum"
+                                                                                    : "id-lit-cross";
+    else if (srcF == IdFamily::Enum && dstF == IdFamily::Enum) cat = "id-enum-enum";
+    else if (srcF == IdFamily::Enum && dstF == IdFamily::Num)  cat = "id-enum-num";
+    else if (srcF == IdFamily::Num  && dstF == IdFamily::Enum) cat = "id-num-enum";
+    else if (srcF == IdFamily::Sig  && dstF == IdFamily::Sig)  cat = "id-sig-sig";
+    else                                                       cat = "id-cross-family";
+
+    std::string pos(what ? what : "");
+    size_t tick = pos.find('`');
+    if (tick != std::string::npos) pos = pos.substr(0, tick);
+    while (!pos.empty() && pos.back() == ' ') pos.pop_back();
+
+    std::string row = "kama-typeid\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+                    + (src.empty() ? "?" : src) + "\t" + dstCType + "\t" + cat + "\t" + pos;
+    if (!_strictNumericSeen.insert(row).second) return;
+    std::fprintf(stdout, "%s\n", row.c_str());
+}
+
+// The operand half. Two shapes are counted and they are NOT the same defect:
+//   - two operands of DIFFERENT identity (`a == w` across two enums, which compares equal and takes the
+//     wrong branch) — the identity rule's own subject;
+//   - an arithmetic, bitwise or ordering operator over operands of the SAME enum (`a + A::A1`), which
+//     yields a value of that enum that is no declared variant. Equality is exempt: `a == a` is the one
+//     operator whose result over an enum is meaningful, and `==` is a contract in this language.
+void CEmitter::noteTypeIdentityOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
+                                        const char* opName, int line)
+{
+    if (!_strictNumericScan || !lhs || !rhs) return;
+    if (opToken == LTLT || opToken == GTGT) return;      // a shift count is not a co-operand
+    const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
+    const IdFamily lf = idFamilyOf(lt), rf = idFamilyOf(rt);
+    if (lf == IdFamily::None && rf == IdFamily::None) return;
+    if (lf == IdFamily::Num  && rf == IdFamily::Num)  return;   // rejectMixedOperands' subject
+
+    const char* cat;
+    if (lt.empty() || rt.empty())                       cat = "id-op-unknown";
+    else if (lf == IdFamily::None || rf == IdFamily::None) cat = "id-op-x-none";
+    else if (lt != rt)                                  cat = "id-op-cross";
+    else if (lf != IdFamily::Enum)                      return;   // same sig on both sides: nothing to say
+    else if (isComparisonToken(opToken))
+        cat = (opToken == EQEQ || opToken == NOTEQ) ? nullptr : "id-op-enum-order";
+    else                                                cat = "id-op-enum-arith";
+    if (!cat) return;
+
+    std::string row = "kama-typeid\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+                    + (lt.empty() ? "?" : lt) + "\t" + (rt.empty() ? "?" : rt) + "\t" + cat + "\t"
+                    + (opName ? opName : "");
+    if (!_strictNumericSeen.insert(row).second) return;
+    std::fprintf(stdout, "%s\n", row.c_str());
+}
+
+// ---------------------------------------------------------------------------------------------------
 // 5b-A — CONTEXTUAL LITERAL TYPING (D2a). A literal takes its type from its DESTINATION, and the
 // fits-check runs against that type.
 //
@@ -1546,6 +1680,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
                                        const char* what, int line)
 {
     noteNumericHandoff(dstCType, value, what, line);   // M5a: measure first, then judge
+    noteTypeIdentity(dstCType, value, what, line);     // the identity measurement, same discipline
     // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
     // They cannot both fire: a folded integer constant is `Num`, so its kind never mismatches.
     if (!dstCType.empty()) governWideLiterals(value);   // 5b-B, and BEFORE the value is emitted
@@ -1562,7 +1697,10 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
 void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init,
                                       const char* what, int line)
 {
-    if (_strictNumericScan) noteNumericHandoff(classifierCType(declType), init, what, line);
+    if (_strictNumericScan) {
+        noteNumericHandoff(classifierCType(declType), init, what, line);
+        noteTypeIdentity(classifierCType(declType), init, what, line);
+    }
     // 5b-A, ahead of the kind rule for the reason given at `rejectValueKindMismatch`, and gated on the
     // initializer folding FIRST: this site runs inside `checkDeclaredTypes`, where a type is deliberately
     // half-resolved and the rule below is careful not to lower one unless it must. `constValue` fails in
@@ -2840,6 +2978,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // above. The guard is the control flow, not a classifier test, which is what keeps it out of the
         // three traps `exprClass`'s `isClass` filter has already sprung on this campaign.
         noteNumericOperands(token, lhs, rhs, binaryOperator(token).c_str(), line);
+        noteTypeIdentityOperands(token, lhs, rhs, binaryOperator(token).c_str(), line);
         rejectMixedOperands(token, lhs, rhs, binaryOperator(token), line);   // milestone 6, the operands
 
         // D-arith, the emission half: `T op T` IS a `T`, so where C would hand back a promoted `int` the
@@ -3464,6 +3603,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (binTok) {
             noteNumericOperands(binTok, v->unaryExpression, v->expression,
                                 assignmentOperator(v->token).c_str(), v->line);
+            noteTypeIdentityOperands(binTok, v->unaryExpression, v->expression,
+                                     assignmentOperator(v->token).c_str(), v->line);
             rejectMixedOperands(binTok, v->unaryExpression, v->expression,
                                 assignmentOperator(v->token), v->line);
         }
