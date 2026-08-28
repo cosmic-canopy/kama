@@ -592,9 +592,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   deliberately as an `enum` so a `V6(...)` arm adds without reshaping `SocketAddr` or any call site.
   Multicast join/leave (`IP_ADD_MEMBERSHIP`) is likewise unbuilt — broadcast covers LAN discovery today.
   Both are ordinary socket-option work on the shipped seam.
-- **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
-  the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
-  yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
+- **`try new` is concrete-and-bare-only.** ⚠️ **Re-probed 2026-08-28, and the row this replaces was wrong
+  in three ways** — worth reading before scheduling it.
+
+  It named `emitFallibleNewBox` as the site. That function is NOT the limitation: a **fallible ctor** into
+  `Result<Owned<Contract>, E>` compiles today (probed). The interface-element boxing there is implemented,
+  whatever the stale "a follow-on milestone" comment above it still says.
+
+  The real site is `emitTryNewBox`, with exactly one reachable limitation: `try new` into an interface
+  handle — *"`try new` into an interface handle `…Owned…Shape…` is a follow-on — box a concrete
+  `Owned<Sq>`"*. Bare concrete `try new` works.
+
+  ⚠️ **And the placement form does not "report not yet supported" — it does not PARSE.**
+  `object_creation_expression` carries `NEW LPAREN argument_list RPAREN type …` for the infallible form and
+  two `TRY NEW type …` rules with no placement variant, so `try new(allocator: a) T.make()` is a syntax
+  error. The `oc->placement` guard inside `emitTryNewBox` is therefore **dead code** — unreachable, because
+  the parser cannot build that node. The work is a grammar rule first, then the emitter path.
+
+  Infallible `new(allocator: …)` is unaffected and ships (`tests/owned_arena_iface.kama`,
+  `tests/weak_arena_iface.kama`, `tests/alloc_sorted_map_arena.kama`). A follow-on to the MCU step-5
+  allocator work.
 - **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
   only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
   for a contract destination, correctly (a contract admits every kind by design, which is what makes

@@ -1102,6 +1102,9 @@ A c = a + A::A1;      // error — the result would be an `A` that is no declare
 bool q = (a < A::A1); // error — ordering is `Comparable`, which an enum may implement
 ```
 
+(`tests/xfail/identity_enum_cross_enum.kama`, `identity_enum_to_int`, `identity_int_to_enum`,
+`identity_enum_int_literal`, `identity_enum_arith`, `identity_enum_order`, `identity_enum_cmp_cross`.)
+
 The two directions have different doors, because they are not symmetric. **Enum → integer is total**, so
 it is an ordinary cast: `cast<int32>(Code::Bad)`. **Integer → enum is fallible by construction** — an
 arbitrary integer names no variant — so it is `try cast<Color>(x)`, yielding `Optional<Color>`, and the
@@ -1120,16 +1123,20 @@ char e = 65;    // error — write the character: 'A'
 
 That last line is where contextual literal typing stops. `float32 f = 3;` is accepted because 3 *is* a
 `float32`; `65` is not a codepoint, it is an integer standing in for one.
+(`tests/xfail/identity_char_to_int.kama`, `tests/xfail/identity_char_literal.kama`.)
 
 **A `fnptr` signature type is nominal.** Two signatures with the same shape are still two types, and
 assigning one signature-typed value into another is an error — including, and especially, when the shapes
 differ, since calling through a mismatched function pointer is undefined behavior that neither the C
 compiler nor the sanitizers will report here. Assigning a *function* to a signature is checked
 structurally and is unaffected.
+(`tests/xfail/identity_sig_cross_sig.kama`, `tests/xfail/identity_sig_arity.kama`.)
 
 What this rule does **not** touch: a contract destination (which admits every kind by design, so
 `Hashable h = someInt32;` keeps working), an inheritance upcast, `Owned`/`Shared`/`Optional` promotion,
-and any hand-off whose type kama cannot resolve — the same silence the width rule keeps.
+and any hand-off whose type kama cannot resolve — the same silence the width rule keeps. Every exemption is
+pinned, running, by `tests/identity_exemptions.kama`. Binding a value to a contract it does *not*
+implement is a separate error (`tests/xfail/contract_arg_nonconforming.kama` and its two siblings).
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
