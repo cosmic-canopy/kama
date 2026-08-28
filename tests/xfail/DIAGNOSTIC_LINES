@@ -110,8 +110,10 @@ constparam_shadow_foreach	constparam_shadow_foreach.kama:12
 constparam_shadow_local	constparam_shadow_local.kama:8
 constparam_shadow_match	constparam_shadow_match.kama:9
 constparam_shadow_param	constparam_shadow_param.kama:6
+contract_arg_nonconforming	contract_arg_nonconforming.kama:17
 contract_arity_mismatch	contract_arity_mismatch.kama:7
 contract_ctor_missing	contract_ctor_missing.kama:10 contract_ctor_missing.kama:5
+contract_enum_nonconforming	contract_enum_nonconforming.kama:15
 contract_for_bad_kind	contract_for_bad_kind.kama:3
 contract_for_both	contract_for_both.kama:3
 contract_instance_for_static	contract_instance_for_static.kama:6
@@ -121,6 +123,7 @@ contract_kind_gate_intrinsic	contract_kind_gate_intrinsic.kama:5
 contract_kind_gate_resource	contract_kind_gate_resource.kama:4
 contract_kind_gate_view	contract_kind_gate_view.kama:4 contract_kind_gate_view.kama:6
 contract_label_mismatch	contract_label_mismatch.kama:12
+contract_local_nonconforming	contract_local_nonconforming.kama:13
 contract_no_for	contract_no_for.kama:1
 contract_operator_mismatch	contract_operator_mismatch.kama:9
 contract_param_mismatch	contract_param_mismatch.kama:7

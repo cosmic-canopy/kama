@@ -5120,6 +5120,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     *_out << ty << " " << nm;
                     if (d->initializer) {
                         std::string c = exprClass(d->initializer);
+                        // Conformance, ahead of the cascade. The `else` at the bottom used to be the only
+                        // thing standing here, and it fires only when `exprClass` answers NOTHING — so it
+                        // caught a plain enum and let every non-conforming CLASS through to the
+                        // `isClass(c)` branch, which cheerfully emitted `Plain__as_Hashable` for clang to
+                        // discover did not exist.
+                        rejectContractNonConformance(ty, d->initializer, "a local", n->line);
                         if (!c.empty() && isClass(c) && dynamic_cast<ThisAccessNode*>(d->initializer.get()))
                             // `this` is ALREADY a pointer to the concrete object; fatPointer's `&(lvalue)` would
                             // wrongly take the address OF the `this` pointer. Bind the pointer directly.
@@ -15001,6 +15007,13 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         if (!pKindCType.empty() && !isInterface(pKindCType))
             rejectValueKindMismatch(pKindCType, argExpr,
                                     ("argument `" + p.name + "`").c_str(), srcLine);
+        // ...and the check that belongs in the branch the line above skips. A contract param is exempt
+        // from the KIND rule because a contract admits every kind — but nothing was put in its place, so
+        // the one position that skipped the kind check checked nothing at all, and a non-conforming
+        // argument reached clang as `<Concrete>__as_<Contract>: undeclared identifier`.
+        else if (!pKindCType.empty())
+            rejectContractNonConformance(pKindCType, argExpr,
+                                         ("argument `" + p.name + "`").c_str(), srcLine);
         // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
         // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is
         // mandatory), so the marker would miss the commonest spelling.
@@ -17143,6 +17156,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     // `dstCType` is empty for a void return and for a statement-position `match`, which reads as Unknown
     // and says nothing — the same silence every other unresolved destination gets.
     rejectValueKindMismatch(dstCType, v, what, line);
+    rejectContractNonConformance(dstCType, v, what, line);     // the branch that rule leaves to a contract
     bool ph = _hoistOK; _hoistOK = true;                       // inline-ctor hoisting
     std::string pmt = _matchTargetCType; _matchTargetCType = dstCType;   // `:= match(…)` / bare generic ctor
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
@@ -19299,6 +19313,67 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 std::string CEmitter::fatPointer(const std::string& iface, const std::string& concrete, const std::string& lvalue)
 {
     return "(" + iface + "){ (void*)&(" + lvalue + "), &" + concrete + "__as_" + iface + " }";
+}
+
+// Does a class REACH a contract — declared on itself or on any base? `ci.interfaces` holds only what a
+// class declares in its own header, and `emitClassInterfaceVtables` walks the same list, so a derived
+// class's vtables come from its own entry while the conformance may have been declared further up.
+// Walks `ci->base` for the same reason `findMethod` does.
+bool CEmitter::classDeclaresContract(const std::string& cls, const std::string& itf)
+{
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return false;
+    for (ClassInfo* k = &it->second; k; k = k->base)
+        for (auto& ifn : k->interfaces) if (ifn == itf) return true;
+    return false;
+}
+
+// Can a value of C type `c` be bound to contract `itf`? This mirrors the four routes the emission
+// cascades actually take — a contract value passing through, a class with a vtable, a smart-pointer
+// pointee, a widened primitive — and it exists because nothing checked ANY of them.
+//
+// ⚠️ It answers ONE-SIDED: `false` means "no route, and I am sure", and the callers reject only on that.
+// Every uncertainty must read as conforming, because the alternative is rejecting the shapes this
+// campaign spent five commits keeping legal — a type parameter, a const-generic binding, an unresolved
+// name. That is the same discipline `TKind::Unknown` and `IdFamily::None` keep, for the same reason.
+bool CEmitter::valueReachesContract(SharedExpression e, const std::string& c, const std::string& itf)
+{
+    if (c.empty() || !isInterface(itf)) return true;               // nothing certain to say
+    // An existing CONTRACT value passes straight through the cascade. Refinement between two different
+    // contracts is a separate, tracked limitation (contract-refinement thunks, ROADMAP §2) — whatever it
+    // does today, this rule must not be what newly breaks it.
+    if (isInterface(c))                       return true;
+    if (classDeclaresContract(c, itf))        return true;
+    // `encode(v: sharedRoot)` — a `Shared`/`Owned<T>` whose pointee implements the contract is deref'd
+    // and the POINTEE wrapped, so the handle itself never needs the conformance.
+    const std::string dt = derefTarget(c);
+    if (!dt.empty() && (isInterface(dt) || classDeclaresContract(dt, itf))) return true;
+    if (!primWidenKey(e, itf).empty())        return true;         // a primitive that declares it
+    // A class the emitter knows nothing about cannot be judged. `isClass` is the test for "this name is a
+    // resolved type", so anything failing it is an unresolved spelling and stays silent.
+    if (!isClass(c) && !isEnum(c) && primKeyOfCType(c) == c && !cNumBits(c)) return true;
+    return false;
+}
+
+// A concrete value bound to a contract it does not implement. Until now NOTHING checked this: the
+// emitter reached for `<Concrete>__as_<Contract>` and let clang discover that no such vtable exists, or —
+// where the value is not a class at all — emitted the raw value into a struct parameter. Both surface as
+// a C-level message about a mangled name, on a kama line, which is the shape the 1.0 gate's
+// "the diagnostics can be trusted" half exists to remove.
+//
+// The one diagnostic that DID fire was the local-declaration cascade's fall-through `else`, and it fired
+// only for values `exprClass` cannot type — so it caught a plain enum and missed every class. Its wording
+// is good and is reused here.
+void CEmitter::rejectContractNonConformance(const std::string& itf, SharedExpression value,
+                                            const char* what, int line)
+{
+    if (!value || !isInterface(itf)) return;
+    std::string c = exprClass(value);
+    if (c.empty()) c = typeOfExpr(value);                          // a plain enum / primitive place
+    if (valueReachesContract(value, c, itf)) return;
+    unsupported((std::string(what) + " expects the contract `" + itf + "`, and `" + idTypeName(c)
+                 + "` does not implement it — a contract value borrows a concrete object that declares "
+                   "the conformance (`implements " + itf + "`), or a primitive that does").c_str(), line);
 }
 
 // True for a bare C identifier (a local/param) — cheap and side-effect-free to read more than

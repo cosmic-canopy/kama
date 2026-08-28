@@ -1,0 +1,15 @@
+// The same defect in LOCAL-declaration position, which looked checked and was not.
+//
+// A diagnostic did exist here — "cannot bind this to the contract ... it needs a named value, or a
+// primitive that declares the conformance" — but it was the fall-through `else` of the emission cascade,
+// so it fired only for a value `exprClass` cannot type. That caught a plain enum and missed every CLASS:
+// a class took the `isClass(c)` branch above it and emitted `Plain__as_Hashable` for clang to discover
+// did not exist. A check that only sees the cases its neighbours could not classify is not a check.
+type value Plain { public int32 v = 0; public ctor make() { this.v = 0; } }
+
+fn int32 main()
+{
+    Plain p = Plain.make();
+    Hashable h = p;
+    return 0;
+}

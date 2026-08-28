@@ -595,28 +595,16 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **Conformance is not checked in ARGUMENT position.** A value handed to a contract PARAMETER that it
-  does not implement passes `kama check` and is then refused by clang, naming a mangled C type on a kama
-  line. The same mistake in a LOCAL DECLARATION is caught properly, and says the right thing — *"cannot
-  bind this to the contract `Hashable` — a contract value borrows a concrete object, so it needs a named
-  value, or a primitive that declares the conformance"*. So the correct diagnostic already exists two
-  positions away.
-
-  The cause is visible at the site: the argument hand-off skips the kind rule when the parameter is a
-  contract (`if (!pKindCType.empty() && !isInterface(pKindCType))` in `emitReorderedCall`), because a
-  contract admits every kind by design — a class, another contract, and a widened primitive
-  (`tests/intrinsic_widen.kama`). That exemption is right. What is missing is that nothing was put back
-  in its place, so the one position that skips the kind check checks nothing at all.
-
-  ⚠️ **Not an enum defect, though that is how it was found** (writing the exemptions fixture for the
-  type-identity rule, 0.9.103). It reproduces with a plain `type value` just as well, and an enum that
-  DOES implement its contract widens correctly in argument position — `tests/enum_implements.kama` ships
-  exactly that. Reproduced on `0.9.101`, before that campaign.
-
-  Sound rather than unsound — clang refuses it, so no wrong-typed value reaches a running program — which
-  is why it sits under "the diagnostics can be trusted" rather than under a miscompile. It is the same
-  family as the class-to-class case below, and the sharper instance of it. `primWidenKey` already
-  computes the conformance test the local path uses.
+- **Contract conformance now IS checked when a value is bound to a contract** (0.9.105) — recorded here
+  only because the shape of the miss is worth not repeating. The argument hand-off skipped the KIND rule
+  for a contract destination, correctly (a contract admits every kind by design, which is what makes
+  `hashVia(h: 22)` over a primitive a shipped feature) — but nothing was put in its place, so the one
+  position that skipped the kind check checked nothing at all. ⚠️ And the diagnostic that DID exist, in
+  local-declaration position, was the emission cascade's fall-through `else`: it fired only for a value
+  `exprClass` cannot type, so it caught a plain enum and let every non-conforming CLASS through to the
+  branch above it, which emitted `Plain__as_Hashable` for clang to discover did not exist. **A check that
+  only sees what its neighbours could not classify is not a check** — and it read as one for as long as
+  nobody wrote the class case down. Pinned by three `tests/xfail/contract_*_nonconforming.kama`.
 - **Class-to-class mismatches are a DIAGNOSTICS defect, not a soundness one.** `D d = c;`, `return c;`
   where `D` is declared, and `take(d: c)` all fail — but as a *C-level* message about mangled names, on a
   kama line. C never assigns between two struct types, so clang refuses them and nothing wrong-typed

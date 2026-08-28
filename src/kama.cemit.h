@@ -2104,6 +2104,11 @@ private:
     void noteTypeIdentityOperands(int opToken, SharedExpression lhs, SharedExpression rhs,
                                   const char* opName, int line);
     std::string idTypeName(const std::string& ct);       // the name a diagnostic gives an identity-bearing type
+    bool classDeclaresContract(const std::string& cls, const std::string& itf);   // itf on `cls` or any base
+    bool valueReachesContract(SharedExpression e, const std::string& c, const std::string& itf);
+    // A concrete value bound to a contract it does not implement. One-sided: silent unless certain.
+    void rejectContractNonConformance(const std::string& itf, SharedExpression value,
+                                      const char* what, int line);
     std::string sigShapeNote(const std::string& srcCType, const std::string& dstCType);
     // Two distinct types that share a C spelling, at a hand-off. The identity peer of
     // `rejectNumericConversion`, for the families it and the kind rule both skip.

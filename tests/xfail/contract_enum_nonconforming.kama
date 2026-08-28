@@ -1,0 +1,16 @@
+// The non-class shape of the same gap. Where a class emitted a call to a vtable that does not exist, a
+// plain enum fell through the cascade entirely to `s += val` and passed a raw integer into a struct
+// parameter — "passing '_Fx__Color' (aka 'unsigned char') to parameter of incompatible type 'Hashable'".
+//
+// ⚠️ Not an enum limitation. An enum that DOES implement its contract widens correctly in exactly this
+// position — tests/enum_implements.kama passes three of them to `fn isize describe(Error e)` and
+// dispatches each to its own impl. What was missing was the check, not the capability.
+type enum Color : uint8 { Red, Green, Blue }
+
+fn uint64 hashVia(Hashable h) { return h.hash(); }
+
+fn int32 main()
+{
+    Color c = Color::Green;
+    return cast<int32>(hashVia(h: c));
+}

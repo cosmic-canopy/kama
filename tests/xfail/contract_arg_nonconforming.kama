@@ -1,0 +1,18 @@
+// A value passed to a contract PARAMETER that it does not implement. This passed `kama check` clean and
+// was refused by clang, naming `_Fx__Plain__as_Hashable` — a symbol the author never wrote, in generated
+// code they never saw. The headline shape of the analysis gap, one position over from where it was
+// already fixed.
+//
+// The cause was visible at the site: the argument hand-off skips the KIND rule when the parameter is a
+// contract, and rightly — a contract admits every kind by design, which is what makes `hashVia(h: 22)`
+// over a primitive a shipped feature (tests/intrinsic_widen.kama). But nothing was put in its place, so
+// the one position that skipped the kind check checked nothing at all.
+type value Plain { public int32 v = 0; public ctor make() { this.v = 0; } }
+
+fn uint64 hashVia(Hashable h) { return h.hash(); }
+
+fn int32 main()
+{
+    Plain p = Plain.make();
+    return cast<int32>(hashVia(h: p));
+}
