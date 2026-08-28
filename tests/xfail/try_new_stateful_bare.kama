@@ -1,0 +1,11 @@
+// A box whose allocator is STATEFUL (`Owned<T, BumpAllocator>` carries the handle) cannot be built by a
+// bare `try new`: the block would come from libc malloc and be released through the arena's no-op
+// `deallocate`, which leaks. The placement form is the one that threads the handle — and now that
+// `try new(allocator: …)` exists, the diagnostic can point at it. Same rule as the infallible `new`.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+type value Cell { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 64);
+    Optional<Owned<Cell, BumpAllocator>> c = try new Cell.make(v: 7);   // ERROR: needs try new(allocator: …)
+    return match (c) { case Some(value: x): x.get(); case None: 0; };
+}

@@ -1,0 +1,15 @@
+// `try new T::<A>.make(...)` — the on-type turbofish through the fallible verb. It parses because `new`
+// and `try new` now share one grammar tail, which is the point: the two spellings cannot drift again.
+// (This form was a SYNTAX ERROR while its infallible twin `new Box::<int32>.make(...)` shipped.)
+import { std::memory::Owned };
+
+type resource Box<T> {
+    T v;
+    public ctor make(T v) { this.v = v; }
+    public fn T get() { return this.v; }
+}
+
+fn int32 main() {
+    Optional<Owned<Box<int32>>> b = try new Box::<int32>.make(v: 42);
+    return match (b) { case Some(value: x): x.get(); case None: 0 - 1; };
+}

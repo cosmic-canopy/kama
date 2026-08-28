@@ -1673,7 +1673,8 @@ private:
     // allocator-aware emission path applies (the box's `allocType` is a stateful, non-Global allocator).
     // Rejects a stateful box built with a bare `new`, or a placement whose handle type != the box's declared
     // `A`. Pre-flight only (placementAllocator with emit=false) — the caller re-runs it with emit=true.
-    bool ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line);
+    bool ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line,
+                           const char* verb = "new");   // `try new` wants its own spelling in the advice
     // If `cls` implements the prelude `HeapOwner<T>` contract, the owned element `T` (so `new T(args)` can
     // placement-construct into `cls` via its `adopt(UnsafePtr<T>)`); "" otherwise. Inert when no HeapOwner in scope.
     std::string heapOwnerTarget(const std::string& cls);

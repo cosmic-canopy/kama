@@ -14578,8 +14578,9 @@ std::string CEmitter::boxAllocatorArg(const std::string& ty)
     return "";
 }
 
-bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line)
+bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, int line, const char* verb)
 {
+    const std::string V(verb);   // "new" / "try new" — the advice must name the verb the user wrote
     std::string allocType = _collections.count(ty) ? _collections[ty].allocType : "";
     bool boxStateful = !allocType.empty() && allocType != "GlobalAllocator";
     auto pa = placementAllocator(oc, line, /*emit=*/false);   // resolve the handle type only (no emission)
@@ -14588,13 +14589,13 @@ bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, 
         // No inference axis: the placement handle's type must equal the box's declared allocator.
         if (allocType != pa.second)
             unsupported((allocType.empty()
-                ? "`" + ty + "` has no allocator parameter — a placement `new(allocator: …)` needs a box like "
-                  "`Owned<Contract, A>`/`Shared<Contract, A>`"
-                : "the box's allocator type `" + allocType + "` does not match the `new(allocator: …)` handle `"
-                  + pa.second + "` — spell the box's allocator explicitly").c_str(), line);
+                ? "`" + ty + "` has no allocator parameter — a placement `" + V + "(allocator: …)` needs a box "
+                  "like `Owned<Contract, A>`/`Shared<Contract, A>`"
+                : "the box's allocator type `" + allocType + "` does not match the `" + V + "(allocator: …)` "
+                  "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), line);
     } else if (boxStateful) {
         unsupported(("this box's allocator `" + allocType + "` is stateful — construct it with "
-                     "`new(allocator: …) T(...)`, not a bare `new`").c_str(), line);
+                     "`" + V + "(allocator: …) T(...)`, not a bare `" + V + "`").c_str(), line);
     }
     return boxStateful;   // a matched, non-Global placement drives the `_ALLOC_` emission path
 }
@@ -21778,11 +21779,6 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
 {
     const std::string cls = cType(oc->type);
     std::string disp = (oc->type && oc->type->value) ? *oc->type->value : cls;
-    if (oc->placement && !oc->placement->empty()) {
-        unsupported(("`try new` has no placement form yet — `try new(allocator: …)` is a follow-on; use the "
-                     "bare `try new " + disp + "(...)` / `try new " + disp + ".name(...)`").c_str(), srcLine);
-        return "";
-    }
     // The declared result must be `Optional<Owned<T>>` — read the `Some` payload type off the monomorphized
     // Optional ClassInfo (substituted-concrete), like emitFallibleNewBox reads its `Ok`/`Err`.
     ClassInfo* rc = _classes.count(target) ? &_classes[target] : nullptr;
@@ -21826,10 +21822,15 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
             unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
             return "";
         }
+        // Placement `try new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl from `a`, storing
+        // `a`+`objsize` in the fat handle so its dtor frees through it. `ifaceNewAllocator` validates the
+        // box/handle allocator match and rejects a bare `try new` into a stateful-A box.
+        bool useAlloc = ifaceNewAllocator(S, oc, srcLine, "try new");
         std::string ctorStmt;                                // built first: it pushes the arg hand-offs
         std::string obj = "__tobj"  + std::to_string(_tempCounter++);
         std::string box = "__tbox"  + std::to_string(_tempCounter++);
         std::string ctl = "__tctrl" + std::to_string(_tempCounter++);
+        std::string ap  = "__talloc" + std::to_string(_tempCounter++);
         if (oc->ctorName) {
             std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
             if (fc.empty()) return "";                            // diagnostic already emitted
@@ -21837,17 +21838,35 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         }
         const bool shared = smartKind(S) == CollKind::Shared;
         const std::string none = lval + " = (" + target + "){ .tag = " + target + "_None }; ";
+        // `ptrOrNull`, not `unwrapPtr`: the allocator's `Optional<UnsafePtr>` failure must arrive here as a
+        // null pointer to be turned into `None`. `unwrapPtr` would panic, which is the one thing this verb
+        // promises not to do — and it is what every INFALLIBLE placement site correctly calls.
         std::string s;
-        s  = "void* " + obj + " = malloc(sizeof(" + cls + ")); ";
+        if (useAlloc) {
+            auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+            s  = pa.second + " " + ap + " = " + pa.first + "; ";
+            s += "void* " + obj + " = ptrOrNull(" + pa.second + "__allocate(&" + ap + ", sizeof(" + cls + "))); ";
+        } else {
+            s  = "void* " + obj + " = malloc(sizeof(" + cls + ")); ";
+        }
         s += "if (!" + obj + ") { " + none + "} else { ";
         if (shared) {
-            s += "kama_ctrl* " + ctl + " = (kama_ctrl*)malloc(sizeof(kama_ctrl)); ";
-            s += "if (!" + ctl + ") { free(" + obj + "); " + none + "} else { ";
+            const std::string aTy = _collections[S].allocType;   // ctrl from the SAME allocator (validated)
+            s += useAlloc
+               ? "kama_ctrl* " + ctl + " = (kama_ctrl*)ptrOrNull(" + aTy + "__allocate(&" + ap + ", sizeof(kama_ctrl))); "
+               : "kama_ctrl* " + ctl + " = (kama_ctrl*)malloc(sizeof(kama_ctrl)); ";
+            // The pointee is already taken, so a failed ctrl releases it — through the SAME route it came
+            // from, which for an arena is the no-op `deallocate` that keeps the region's own accounting.
+            s += "if (!" + ctl + ") { ";
+            s += useAlloc ? aTy + "__deallocate(&" + ap + ", " + obj + ", sizeof(" + cls + ")); "
+                          : "free(" + obj + "); ";
+            s += none + "} else { ";
             s += ctl + "->strong = 1; " + ctl + "->weak = 0; ";
         }
         s += ctorStmt;
         s += S + " " + box + "; " + box + ".obj = " + obj + "; ";
         s += box + ".vtbl = &" + cls + "__as_" + Tif + "; ";
+        if (useAlloc) s += box + ".alloc = " + ap + "; " + box + ".objsize = sizeof(" + cls + "); ";
         if (shared) s += box + ".ctrl = " + ctl + "; ";
         s += lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
            + box + " } }; ";
@@ -21864,15 +21883,36 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         unsupported(("cannot instantiate abstract class '" + cls + "'").c_str(), srcLine);
         return "";
     }
-    // A bare `try new` uses the default allocator (libc malloc) + `adopt` (a stateful-A box is unreachable in
-    // the bare form). `adopt` allocates nothing beyond the pointee; the box frees through GlobalAllocator.
-    ClassInfo* ao = nullptr;
-    MethodInfo* adoptM = findMethod(&_classes[S], "adopt", &ao);
-    if (!adoptM) {
-        unsupported(("`" + S + "` implements `HeapOwner` but has no `adopt` — cannot box a `try new`").c_str(), srcLine);
+    // ---- (2) concrete library `HeapOwner`. A bare `try new` draws from libc malloc and boxes via `adopt`;
+    // a placement `try new(allocator: a)` draws the block from `a` and boxes via `adoptIn`, which stores the
+    // handle so the dtor releases through the SAME allocator. A bare `try new` into a stateful-A box would
+    // leak on that box's no-op deallocate, so it is refused and told which form to write — the rule the
+    // infallible and fallible paths already enforce, said in this verb's own spelling.
+    auto pa = placementAllocator(oc, srcLine, /*emit=*/true);
+    bool placed = !pa.second.empty();
+    std::string boxA = boxAllocatorArg(S);
+    if (!placed) {
+        if (!boxA.empty() && _classes.count(boxA) && !_classes[boxA].fields.empty()) {
+            unsupported(("this box's allocator `" + boxA + "` is stateful — construct it with "
+                         "`try new(allocator: …) " + disp + "(...)`, not a bare `try new`").c_str(), srcLine);
+            return "";
+        }
+    } else if (!boxA.empty() && boxA != pa.second) {   // no inference axis — the declared box-A must match
+        unsupported(("the box's allocator type `" + boxA + "` does not match the `try new(allocator: …)` "
+                     "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), srcLine);
         return "";
     }
-    std::string hp = "__theap" + std::to_string(_tempCounter++);
+    const char* adoptName = placed ? "adoptIn" : "adopt";
+    ClassInfo* ao = nullptr;
+    MethodInfo* adoptM = findMethod(&_classes[S], adoptName, &ao);
+    if (!adoptM) {
+        unsupported((placed
+            ? "allocator-aware `try new(allocator: …)` needs an `adoptIn(raw, allocator)` on `" + S + "`"
+            : "`" + S + "` implements `HeapOwner` but has no `adopt` — cannot box a `try new`").c_str(), srcLine);
+        return "";
+    }
+    std::string hp = "__theap"  + std::to_string(_tempCounter++);
+    std::string ap = "__talloc" + std::to_string(_tempCounter++);
     // Construct the object at `hp`: a named ctor (`try new T.make(...)`, the M8 norm) MOVES a factory result
     // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
     std::string ctorStmt;
@@ -21882,11 +21922,17 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         ctorStmt = "*(" + hp + ") = " + fc + "; ";
     }
     std::string s;
-    s  = cls + "* " + hp + " = (" + cls + "*)malloc(sizeof(" + cls + ")); ";
+    if (placed) {   // `ptrOrNull`, not `unwrapPtr` — see the interface branch above
+        s  = pa.second + " " + ap + " = " + pa.first + "; ";
+        s += cls + "* " + hp + " = (" + cls + "*)ptrOrNull(" + pa.second + "__allocate(&" + ap
+           + ", sizeof(" + cls + "))); ";
+    } else {
+        s  = cls + "* " + hp + " = (" + cls + "*)malloc(sizeof(" + cls + ")); ";
+    }
     s += "if (!" + hp + ") { " + lval + " = (" + target + "){ .tag = " + target + "_None }; } else { ";
     s += ctorStmt;
     s +=   lval + " = (" + target + "){ .tag = " + target + "_Some, .u.Some = { ." + someName + " = "
-             + adoptM->cName + "(" + hp + ") } }; ";
+             + adoptM->cName + "(" + hp + (placed ? ", " + ap : "") + ") } }; ";
     s += "}";
     return s;
 }

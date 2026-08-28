@@ -1,0 +1,36 @@
+// Placement `try new(allocator: a)` — the two fallible seams meeting. `BumpAllocator.allocate` returns
+// `None` on exhaustion and never panics; `try new` is the construction verb that can carry that answer
+// out. So an arena that runs out yields `None` at the construction site, with no trap and no allocation
+// left behind — the game-engine frame-allocator / real-time pattern, and a claim lib/std/collections/
+// allocator.kama has made in prose since MCU step 5 with nothing running it.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+
+type value Cell {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+
+fn int32 valueOf(Optional<Owned<Cell, BumpAllocator>> c) {
+    return match (c) { case Some(value: x): x.get(); case None: 0 - 1; };
+}
+
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 64);      // declared FIRST → drops LAST (outlives every box)
+
+    // Fits: the Cell is placed inside the arena region, and the handle frees through the SAME allocator
+    // (a no-op — the Arena bulk-frees its one buffer).
+    Optional<Owned<Cell, BumpAllocator>> a = try new(allocator: arena.handle()) Cell.make(v: 30);
+    int32 x = valueOf(c: give a);                                              // 30
+
+    // Exhaust the region, then ask for one more. `allocate` answers `None`, so `try new` does.
+    Optional<Owned<Cell, BumpAllocator>> filler = try new(allocator: arena.handle()) Cell.make(v: 1);
+    int32 y = 0;
+    for (int32 i = 0; i < 16; i = i + 1) {
+        Optional<Owned<Cell, BumpAllocator>> more = try new(allocator: arena.handle()) Cell.make(v: 1);
+        int32 refused = match (more) { case Some(value: c): 0; case None: 1; };   // count the refusals
+        y = y + refused;
+    }
+    int32 f = valueOf(c: give filler);                                         // 1
+    return x + f + (y > 0 ? 11 : 0);   // 30 + 1 + 11 = 42, and the 11 says the arena really did refuse
+}

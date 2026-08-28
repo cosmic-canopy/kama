@@ -954,20 +954,30 @@ base_access
 new_expression
   : object_creation_expression
   ;
+   /* `new …` and `try new …` share ONE tail, so the fallible verb accepts exactly what the infallible one
+      accepts and the two cannot drift again. They had drifted: `try` carried only the bare and named forms,
+      so `try new(allocator: a) T.make(…)` and `try new T::<A>.make(…)` were SYNTAX ERRORS while their `new`
+      spellings shipped — and the emitter's placement guard for `try new` was therefore dead code, sitting
+      behind a node the parser could not build. `try new` (M-step5) is the ONE non-panic construction entry:
+      it yields `Optional<Owned<T>>`, `None` where `new` would trap. */
 object_creation_expression
-  : NEW type LPAREN argument_list_opt RPAREN
-    /* `try new T(...)` / `try new T.name(...)` (M-step5): the ONE non-panic construction entry — yields
-       `Optional<Owned<T>>`, `None` on OOM instead of trapping. No placement variant (a follow-on). The named
-       form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`). */
-  | TRY NEW type LPAREN argument_list_opt RPAREN
-  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
-  | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN
-  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
-  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
-    /* On-type turbofish through `new`: `new BTreeNode::<K,V,A>.make(...)` — the uniform construction spelling
-       (explicit type args always ride the type as `::<…>`). Reuses `generic_turbofish_name` (the type carries
-       its args), mirroring the plain-call on-type turbofish in invocation_expression. */
-  | NEW generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+  : NEW new_tail
+    /* Every `new_tail` production builds an ObjectCreationNode, so the downcast is total — the parse
+       stack carries the ExpressionStatement base (adding a YYSTYPE field would cost stack on every
+       keystroke the LSP parses, for one flag). */
+  | TRY NEW new_tail
+  ;
+   /* The named form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`).
+      The turbofish spelling `T::<A>.make(…)` is the uniform one — explicit type args always ride the type —
+      and reuses `generic_turbofish_name`, mirroring the plain-call on-type turbofish in
+      invocation_expression. A leading `( … )` is the PLACEMENT list (`new(allocator: a) T(…)`); no `type`
+      begins with `(`, so it costs no conflict. */
+new_tail
+  : type LPAREN argument_list_opt RPAREN
+  | type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+  | LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN
+  | LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
 
   ;
 unary_expression

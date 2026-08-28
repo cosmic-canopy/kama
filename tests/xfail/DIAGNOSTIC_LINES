@@ -522,6 +522,7 @@ tag_unknown	tag_unknown.kama:4
 this_outside	this_outside.kama:3
 truncate_widening	truncate_widening.kama:6
 try_new_bad_type	try_new_bad_type.kama:5
+try_new_stateful_bare	try_new_stateful_bare.kama:9
 trycast_float	trycast_float.kama:7
 trycast_no_destination	trycast_no_destination.kama:6
 turbofish_nongeneric	turbofish_nongeneric.kama:3

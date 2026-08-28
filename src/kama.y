@@ -394,7 +394,7 @@ struct kamayystype {
 %type <matcharmlist> match_arms
 %type <argumentlist> match_bindings
 %type <argument> match_binding
-%type <expressionstatement> object_creation_expression new_expression post_increment_expression post_decrement_expression
+%type <expressionstatement> object_creation_expression new_expression new_tail post_increment_expression post_decrement_expression
 %type <expressionstatement> pre_increment_expression pre_decrement_expression
    /* %type <unaryexpression> unary_expression */
    /*%type <binaryexpression>*/
@@ -1545,23 +1545,33 @@ base_access
 new_expression
   : object_creation_expression
   ;
+   /* `new …` and `try new …` share ONE tail, so the fallible verb accepts exactly what the infallible one
+      accepts and the two cannot drift again. They had drifted: `try` carried only the bare and named forms,
+      so `try new(allocator: a) T.make(…)` and `try new T::<A>.make(…)` were SYNTAX ERRORS while their `new`
+      spellings shipped — and the emitter's placement guard for `try new` was therefore dead code, sitting
+      behind a node the parser could not build. `try new` (M-step5) is the ONE non-panic construction entry:
+      it yields `Optional<Owned<T>>`, `None` where `new` would trap. */
 object_creation_expression
-  : NEW type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $2, $4 ); }
-    /* `try new T(...)` / `try new T.name(...)` (M-step5): the ONE non-panic construction entry — yields
-       `Optional<Owned<T>>`, `None` on OOM instead of trapping. No placement variant (a follow-on). The named
-       form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`). */
-  | TRY NEW type LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $5); n->isTry = true; $$ = n; }
-  | TRY NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $3, $7); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5); STAMP_LOC(n->ctorName, @5); n->isTry = true; $$ = n; }
-  | NEW LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $5, $7, $3 ); }
-  | NEW type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4); STAMP_LOC(n->ctorName, @4); $$ = n; }
-  | NEW LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $5, $9, $3); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7); STAMP_LOC(n->ctorName, @7); $$ = n; }
-    /* On-type turbofish through `new`: `new BTreeNode::<K,V,A>.make(...)` — the uniform construction spelling
-       (explicit type args always ride the type as `::<…>`). Reuses `generic_turbofish_name` (the type carries
-       its args), mirroring the plain-call on-type turbofish in invocation_expression. */
-  | NEW generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
-        auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $2, $6);
-        n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4);
-        STAMP_LOC(n->ctorName, @4);
+  : NEW new_tail       { $$ = $2; }
+    /* Every `new_tail` production builds an ObjectCreationNode, so the downcast is total — the parse
+       stack carries the ExpressionStatement base (adding a YYSTYPE field would cost stack on every
+       keystroke the LSP parses, for one flag). */
+  | TRY NEW new_tail   { auto n = std::static_pointer_cast<ObjectCreationNode>($3); n->isTry = true; $$ = n; }
+  ;
+   /* The named form is the norm under the M8 construction model (a named-ctor type rejects the bare `new`).
+      The turbofish spelling `T::<A>.make(…)` is the uniform one — explicit type args always ride the type —
+      and reuses `generic_turbofish_name`, mirroring the plain-call on-type turbofish in
+      invocation_expression. A leading `( … )` is the PLACEMENT list (`new(allocator: a) T(…)`); no `type`
+      begins with `(`, so it costs no conflict. */
+new_tail
+  : type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $1, $3 ); }
+  | type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $1, $5); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(n->ctorName, @3); $$ = n; }
+  | LPAREN argument_list RPAREN type LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT,  $4, $6, $2 ); }
+  | LPAREN argument_list RPAREN type DOT IDENTIFIER LPAREN argument_list_opt RPAREN   { auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $4, $8, $2); n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6); STAMP_LOC(n->ctorName, @6); $$ = n; }
+  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
+        auto n = std::make_shared<ObjectCreationNode>(SCANNER_CODEGENCONTEXT, $1, $5);
+        n->ctorName = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3);
+        STAMP_LOC(n->ctorName, @3);
         $$ = n;
     }
   ;

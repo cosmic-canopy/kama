@@ -1,0 +1,1 @@
+is stateful — construct it with `try new(allocator: …)

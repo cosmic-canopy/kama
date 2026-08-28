@@ -546,6 +546,15 @@ unsafe fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
     return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<UnsafePtr>(0); } };
 }
 
+// The NON-panicking sibling, and the reason it has to exist: `try new(allocator: a) T(...)` promises `None`
+// where `new` traps, so the one thing it may not do is reach `unwrapPtr` — the emitter needs the raw
+// pointer with the failure still in hand. Answering with a null pointer keeps that path in the shape it
+// already had for the libc-malloc case (`if (!p) → None`), instead of teaching the emitter to name and
+// destructure a monomorphized `Optional<UnsafePtr>`. Non-generic for exactly the reasons above.
+unsafe fn UnsafePtr ptrOrNull(Optional<UnsafePtr> o) {
+    return match (o) { case Some(value: p): p; case None: cast<UnsafePtr>(0); };
+}
+
 // ── std::fmt core: human-facing text rendering (language-level) ──────────────────────────────────────────
 // `Format` is the ONE to-text contract — the display twin of `Serialize`: a type writes its own pieces into
 // a caller-owned `Formatter` sink, so a whole nested value materializes in ONE allocation (no O(n²) concat).

@@ -1,0 +1,31 @@
+// Placement `try new(allocator: a)` into an INTERFACE handle — the two halves of this verb's surface at
+// once: the type-erased fat handle {obj, vtbl, alloc, objsize} with its pointee drawn from a caller-owned
+// arena, and `None` rather than a trap when that arena is out. The infallible twin is owned_arena_iface.
+import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
+
+type contract Shape for value { fn int32 area(); }
+
+type value Circle implements Shape {
+    int32 r;
+    public ctor make(int32 r) { this.r = r; }
+    public fn int32 area() { return this.r * this.r; }
+}
+
+fn int32 areaOf(Optional<Owned<Shape, BumpAllocator>> h) {
+    return match (h) { case Some(value: s): s.area(); case None: 0 - 1; };
+}
+
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 32);      // room for a couple of Circles, not for many
+
+    Optional<Owned<Shape, BumpAllocator>> a = try new(allocator: arena.handle()) Circle.make(r: 5);
+    int32 x = areaOf(h: give a);                 // 25, dispatched through the vtbl
+
+    int32 refused = 0;
+    for (int32 i = 0; i < 12; i = i + 1) {
+        Optional<Owned<Shape, BumpAllocator>> more = try new(allocator: arena.handle()) Circle.make(r: 2);
+        int32 no = match (more) { case Some(value: s): 0; case None: 1; };
+        refused = refused + no;
+    }
+    return x + (refused > 0 ? 17 : 0);   // 42 — and the 17 says the exhausted arena answered None
+}
