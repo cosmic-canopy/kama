@@ -1081,6 +1081,56 @@ value-producing `match` seen before its arms are bound. Silence there is deliber
 classifier that confuses "this is a primitive" with "I have no idea" is either silent on every primitive or
 fires on every unresolved name.
 
+### Two types are two types, even when they share a representation
+
+The rule above is about *width*. This one is about **identity**: a value must already have its
+destination's type, and sharing a machine representation does not make two types one. It reaches the three
+kinds of type that a C backend would otherwise let blur together.
+
+**A plain `enum` is not an integer, and not another `enum`.** Its values are named variants, so:
+
+```kama
+type enum A : uint8  { A0, A1, A2 }
+type enum B : uint8  { B0, B1, B2 }
+
+A a = A::A2;
+B b = a;              // error — two distinct enums, whatever tag width they share
+uint8 n = a;          // error — an enum is not its underlying integer
+A back = n;           // error — an integer names no variant until it has been checked
+A z = 0;              // error — an enum value is written by name: `A::A0`
+A c = a + A::A1;      // error — the result would be an `A` that is no declared variant
+bool q = (a < A::A1); // error — ordering is `Comparable`, which an enum may implement
+```
+
+The two directions have different doors, because they are not symmetric. **Enum → integer is total**, so
+it is an ordinary cast: `cast<int32>(Code::Bad)`. **Integer → enum is fallible by construction** — an
+arbitrary integer names no variant — so it is `try cast<Color>(x)`, yielding `Optional<Color>`, and the
+`None` arm is where a byte off a wire gets handled. `==`/`!=` between two values of the *same* enum is
+the one operator that stays; everything else goes through `match`.
+
+**`char` is one Unicode codepoint, not a number.** `s[i]` is a `uint8` (a byte); `.chars()` yields
+codepoints. The two never cross implicitly, in either direction:
+
+```kama
+char c = 'a';   uint32 u = 65ui32;
+uint32 n = c;   // error — cast<uint32>(c)
+char d = u;     // error — cast<char>(u)
+char e = 65;    // error — write the character: 'A'
+```
+
+That last line is where contextual literal typing stops. `float32 f = 3;` is accepted because 3 *is* a
+`float32`; `65` is not a codepoint, it is an integer standing in for one.
+
+**A `fnptr` signature type is nominal.** Two signatures with the same shape are still two types, and
+assigning one signature-typed value into another is an error — including, and especially, when the shapes
+differ, since calling through a mismatched function pointer is undefined behavior that neither the C
+compiler nor the sanitizers will report here. Assigning a *function* to a signature is checked
+structurally and is unaffected.
+
+What this rule does **not** touch: a contract destination (which admits every kind by design, so
+`Hashable h = someInt32;` keeps working), an inheritance upcast, `Owned`/`Shared`/`Optional` promotion,
+and any hand-off whose type kama cannot resolve — the same silence the width rule keeps.
+
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
 - **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during

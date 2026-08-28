@@ -42,8 +42,15 @@ fn int32 main()
     Color c = Color::Green;
     if (c == Color::Green) { acc = acc + 1; }                        // 205
 
-    // An enum handed to a CONTRACT destination. A contract admits every kind by design — that is what
-    // makes `Hashable h = n;` over a primitive a shipped feature — so it can never be a crossing.
+    // A value handed to a CONTRACT destination. A contract admits every kind by design — that is what
+    // makes `Hashable h = n;` over a primitive a shipped feature — so it can never be an identity
+    // crossing, and `idFamilyOf` answers `None` for it rather than needing a special case.
+    //
+    // ⚠️ The obvious stronger case, `hashVia(h: Color::Blue)`, is NOT written here because it does not
+    // compile — and not because of this rule. `kama check` accepts it and clang then refuses the call:
+    // the primitive-to-contract widening does not cover a plain enum, so no fat pointer is built.
+    // Verified to reproduce identically on 0.9.101, before any of this campaign. It is an analysis-gap
+    // defect of its own (kama says OK, the build fails) and is filed in ROADMAP_DETAIL §2.
     acc = acc + cast<int32>(hashVia(h: 7));                          // 212
 
     // A concrete value promoted into `Optional`. The destination is the instance class, not a family.

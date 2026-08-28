@@ -595,56 +595,40 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **Two distinct types with the same C spelling cross silently.** The type-identity check between a value
-  and its destination compares KINDS (`Num` / `Class` / …), never identity, so any two types that lower to
-  the same C spelling are interchangeable everywhere a value is handed over. Probed 2026-08-28 on
-  `0.9.101`; every one of these built clean and ran, returning the wrong-typed value:
+- **Conformance is not checked in ARGUMENT position.** A value handed to a contract PARAMETER that it
+  does not implement passes `kama check` and is then refused by clang, naming a mangled C type on a kama
+  line. The same mistake in a LOCAL DECLARATION is caught properly, and says the right thing — *"cannot
+  bind this to the contract `Hashable` — a contract value borrows a concrete object, so it needs a named
+  value, or a primitive that declares the conformance"*. So the correct diagnostic already exists two
+  positions away.
 
-  ```kama
-  type enum A : uint8 { A0, A1, A2 }
-  type enum B : uint8 { B0, B1, B2 }
-  type enum W : uint32 { W0, W1, W2 }
-  A a = A::A2;
-  B b = a;                          // an A is not a B
-  W w = a;                          // …nor a W, across two different widths
-  uint8 n = a;                      // an enum is not its underlying integer
-  A back = n;                       // ⚠️ nor the reverse — see below
-  ```
+  The cause is visible at the site: the argument hand-off skips the kind rule when the parameter is a
+  contract (`if (!pKindCType.empty() && !isInterface(pKindCType))` in `emitReorderedCall`), because a
+  contract admits every kind by design — a class, another contract, and a widened primitive
+  (`tests/intrinsic_widen.kama`). That exemption is right. What is missing is that nothing was put back
+  in its place, so the one position that skips the kind check checks nothing at all.
 
-  …and the same in ARGUMENT and RETURN position, and between two distinct `fnptr` signature types (both
-  lower to one C function-pointer type). Unpinned enums get a clang *warning* and still run. It reaches
-  OPERANDS too, which is a third funnel (`rejectMixedOperands`) and not the same fix: `a + A::A1` yields
-  an `A` that is no declared variant, and `a == b` across two enums of **different widths** compares
-  equal and takes the wrong branch — in a language whose comparison model is otherwise a contract
-  (`==` → `Equatable.equals`).
+  ⚠️ **Not an enum defect, though that is how it was found** (writing the exemptions fixture for the
+  type-identity rule, 0.9.103). It reproduces with a plain `type value` just as well, and an enum that
+  DOES implement its contract widens correctly in argument position — `tests/enum_implements.kama` ships
+  exactly that. Reproduced on `0.9.101`, before that campaign.
 
-  ⚠️ **The sharpest statement of it: `cast<A>(n)` is REJECTED — deliberately, with a careful diagnostic
-  that says an integer is not an `A` until it has been checked against the variants and points at
-  `try cast<A>` — while the plain assignment `A a = n;` is not.** The door was locked and the window left
-  open. Everything the `try cast` rule exists to prevent is reachable by writing no cast at all.
-
-  This is the 1.0 gate's own criterion (*no ordinary safe-kama construct miscompiles*), and it is the
-  no-implicit-conversion rule (milestone 6) applied to non-numeric kinds — which is exactly where it stops
-  today. **Class-to-class mismatches are NOT part of this**: two struct types are never assignable in C, so
-  clang refuses them. They are still a diagnostics defect (the user gets a C-level message about mangled
-  names, on a kama line), but they are sound, and they belong to the "the diagnostics can be trusted" half
-  of the gate rather than to this one.
-
-  **Why it leaks, from the source rather than from a guess.** `rejectMixedOperands` bails with
-  `if (!(cNumBits(lt) || cNumTargetWidth(lt))) return;`, and its own comment names what falls out:
-  *"`string + string`, a bool, **an enum**"*. A pinned enum lowers to a typedef NAME
-  (`typedef uint8_t _Fu__A;`), not to a C numeric spelling, so every numeric rule reads it as "not a
-  number I know" and takes its documented silent path — while the KIND rule reads both sides as the same
-  kind and passes. Neither rule is wrong on its own terms; nothing owns type IDENTITY.
-
-  **Where the work goes.** The funnels already exist and already hold both sides:
-  `rejectValueKindMismatch` (argument + return + assignment), `rejectInitKindMismatch` (local + field
-  initializer) — the pair `rejectNumericConversion` hangs off — and `rejectMixedOperands` for operands.
-  This is a rule beside them, for the kinds those rules skip.
-  ⚠️ **The size is in the exemptions, not the check** — an inheritance upcast, a concrete value handed to a
-  contract parameter, smart-pointer and `Optional` promotion, and a string literal all reach these funnels
-  with a destination whose C spelling differs from the source's, and every one of them is legal. Enumerate
-  those against the corpus before writing the rejection, or the rule rejects the stdlib.
+  Sound rather than unsound — clang refuses it, so no wrong-typed value reaches a running program — which
+  is why it sits under "the diagnostics can be trusted" rather than under a miscompile. It is the same
+  family as the class-to-class case below, and the sharper instance of it. `primWidenKey` already
+  computes the conformance test the local path uses.
+- **Class-to-class mismatches are a DIAGNOSTICS defect, not a soundness one.** `D d = c;`, `return c;`
+  where `D` is declared, and `take(d: c)` all fail — but as a *C-level* message about mangled names, on a
+  kama line. C never assigns between two struct types, so clang refuses them and nothing wrong-typed
+  reaches a running program. Deliberately scoped OUT of the type-identity rule (0.9.103) for that reason.
+  ⚠️ **`return this;` in a fallible ctor** (instead of `return Result::Ok(value: this);`) is the same
+  defect reached from the ctor path: it emits `__ret_0 = self;`, a `G*` into a `Result<G,Err>`, caught
+  only by clang.
+- **`UnsafePtr<A>` into `UnsafePtr<B>` is unchecked by kama.** Probed 2026-08-28: `UnsafePtr<int32>` into
+  `UnsafePtr<int64>` compiles with a clang *warning* and runs, which is a genuine width hole (eight bytes
+  read from a four-byte allocation). It sits inside `unsafe fn`, which is the sanctioned trusted region,
+  and the two C spellings differ so clang does see it — hence tracked here rather than in the identity
+  rule, which covers only types that SHARE a spelling.
 - **A field's DEFAULT INITIALIZER is not walked by either discovery pass.** `collectGenericInsts` and
   `collectCollections` both read a field's declared *type* and never its initializer expression, so
   `public int32 v = ident(x: 7);` — a generic call as a field default — is never discovered. It used to

@@ -1,0 +1,18 @@
+// `char` is one Unicode CODEPOINT, not a byte and not a number. AGENTS.md opens with the story of
+// SPEC.md claiming the byte/codepoint distinction was enforced when it was not — and the
+// codepoint/INTEGER distinction was in the same state until 0.9.104, for a mechanical reason: `char`
+// lowered straight to `uint32_t`, so by the time any rule ran there was nothing left to compare. It was
+// never exempted; it was invisible.
+//
+// Both directions, and the `==` that reads as a comparison of two different types and is not.
+// `lib/std/ascii/ascii.kama` has always written `cast<uint32>(c)` on every line — this is the rule that
+// discipline was already following.
+fn int32 main()
+{
+    char c = 'a';
+    uint32 u = 65ui32;
+    uint32 n = c;
+    char d = u;
+    bool same = (c == u);
+    return 0;
+}

@@ -657,7 +657,7 @@ CEmitter::TKind CEmitter::kindOfCType(const std::string& ct)
     if (ct == "bool")                                   return TKind::Bool;
     if (ct == "int8_t"  || ct == "int16_t"  || ct == "int32_t"  || ct == "int64_t"
      || ct == "uint8_t" || ct == "uint16_t" || ct == "uint32_t" || ct == "uint64_t"
-     || ct == "float"   || ct == "double"
+     || ct == "float"   || ct == "double"   || ct == "kama_char"
      || ct == "size_t"  || ct == "ptrdiff_t")           return TKind::Num;
     // A CONTRACT or a `sig` is deliberately Unknown, not an aggregate. A contract value accepts a class,
     // another contract, AND a widened primitive — `Hashable h = n;` over an `int32` is a shipped feature
@@ -723,7 +723,7 @@ int cNumBits(const std::string& ct)
 {
     if (ct == "int8_t"  || ct == "uint8_t")  return 8;
     if (ct == "int16_t" || ct == "uint16_t") return 16;
-    if (ct == "int32_t" || ct == "uint32_t" || ct == "float") return 32;
+    if (ct == "int32_t" || ct == "uint32_t" || ct == "float" || ct == "kama_char") return 32;
     if (ct == "int64_t" || ct == "uint64_t" || ct == "double") return 64;
     return 0;
 }
@@ -752,6 +752,7 @@ bool cNumRangeText(const std::string& ct, std::string& lo, std::string& hi)
     if (ct == "uint8_t")   { lo = "0";           hi = "UINT8_MAX";   return true; }
     if (ct == "uint16_t")  { lo = "0";           hi = "UINT16_MAX";  return true; }
     if (ct == "uint32_t")  { lo = "0";           hi = "UINT32_MAX";  return true; }
+    if (ct == "kama_char") { lo = "0";           hi = "UINT32_MAX";  return true; }   // ranged by WIDTH
     if (ct == "uint64_t")  { lo = "0";           hi = "UINT64_MAX";  return true; }
     if (ct == "ptrdiff_t") { lo = "PTRDIFF_MIN"; hi = "PTRDIFF_MAX"; return true; }
     if (ct == "size_t")    { lo = "0";           hi = "SIZE_MAX";    return true; }
@@ -944,7 +945,7 @@ std::string CEmitter::typeOfExpr(SharedExpression e)
     // --- literals: the one place a type is known outright -------------------------------------------
     if (dynamic_cast<StringNode*>(n))   return "kama_string";
     if (dynamic_cast<BooleanNode*>(n))  return "bool";
-    if (dynamic_cast<CharNode*>(n))     return "uint32_t";   // `char` IS a Unicode scalar, lowered to uint32
+    if (dynamic_cast<CharNode*>(n))     return "kama_char";  // a codepoint, and its own type since 0.9.104
     if (dynamic_cast<Int8Node*>(n))     return "int8_t";
     if (dynamic_cast<Int16Node*>(n))    return "int16_t";
     if (dynamic_cast<Int32Node*>(n))    return "int32_t";
@@ -1378,6 +1379,11 @@ CEmitter::IdFamily CEmitter::idFamilyOf(const std::string& ct)
     // both are why every numeric rule reads it as "not a number I know" and takes its silent path.
     if (isEnum(ct))                            return IdFamily::Enum;
     if (isSigType(ct))                         return IdFamily::Sig;
+    // `char` is a codepoint, not a number that happens to be 32 bits wide, and it is the third family for
+    // the same reason as the other two. It is ALSO numeric (`cNumBits("kama_char")` is 32) — deliberately,
+    // so it keeps range checking and mixed-operand checking — which is why this test comes first and why
+    // `rejectTypeIdentityMismatch` hands the non-literal crossings back to `rejectNumericConversion`.
+    if (ct == "kama_char")                     return IdFamily::Char;
     if (cNumBits(ct) || cNumTargetWidth(ct))   return IdFamily::Num;
     return IdFamily::None;
 }
@@ -1388,6 +1394,7 @@ const char* CEmitter::idFamilyName(IdFamily f)
         case IdFamily::Enum: return "enum";
         case IdFamily::Sig:  return "sig";
         case IdFamily::Num:  return "num";
+        case IdFamily::Char: return "char";
         default:             return "none";
     }
 }
@@ -1629,12 +1636,15 @@ void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpres
                  + ">(…)`").c_str(), line);
 }
 
-// The name a diagnostic uses for a type that owns identity. A numeric primitive wants its kama spelling
-// (`usize`, not `size_t`); an enum or a sig is a USER name, and `unsupported` runs every message through
+// The name a diagnostic uses for a type that owns identity. A PRIMITIVE wants its kama spelling — `usize`
+// not `size_t`, `char` not `kama_char`, and that second one is not cosmetic: `kama_char` is a name no
+// author ever typed, so a message carrying it would send the reader looking for a type that does not
+// exist in their source. An enum or a sig is a USER name, and `unsupported` runs every message through
 // `demangleForDisplay`, so the mangled key is already the right thing to hand it.
 std::string CEmitter::idTypeName(const std::string& ct)
 {
-    if (idFamilyOf(ct) == IdFamily::Num) return kamaNameOf(ct, primKeyOfCType(ct));
+    const IdFamily f = idFamilyOf(ct);
+    if (f == IdFamily::Num || f == IdFamily::Char) return kamaNameOf(ct, primKeyOfCType(ct));
     return ct;
 }
 
@@ -1699,6 +1709,18 @@ void CEmitter::rejectTypeIdentityMismatch(const std::string& dstCType, SharedExp
     if (srcF == IdFamily::None) return;
     if (srcF == IdFamily::Num && dstF == IdFamily::Num) return;      // rejectNumericConversion said it
 
+    // `char` <-> number is REAL and is rejected — but by `rejectNumericConversion`, not here. Since
+    // `char` lowers to its own C name while still answering `cNumBits` (32), that rule already sees two
+    // different numeric spellings and says the right thing, pointing at `cast<uint32>` / `cast<char>`,
+    // which genuinely are the sanctioned doors. Firing here too would be two diagnostics for one mistake.
+    //
+    // ONE case it cannot own, and it is the case the whole codepoint distinction dies in: a LITERAL.
+    // D2a exempts it there — correctly, for widths — but `char d = 65;` is not a literal written at
+    // `char`'s type, it is an integer standing in for a codepoint, and `uint32 n = 'a';` is the same
+    // trade in reverse. Same reasoning as the int-literal-into-an-enum case, and the same answer.
+    if (srcF == IdFamily::Char || dstF == IdFamily::Char)
+        if (!isLiteralExpr(value.get())) return;
+
     const std::string dstName = idTypeName(dstCType), srcName = idTypeName(src);
     const std::string head = std::string(what) + (isInit ? " is declared `" : " expects `") + dstName
                            + "`, so it cannot be " + (isInit ? "initialized with " : "given ");
@@ -1723,6 +1745,16 @@ void CEmitter::rejectTypeIdentityMismatch(const std::string& dstCType, SharedExp
         unsupported((head + "a `" + srcName + "` — these are two distinct signature types" + sigShapeNote(src, dstCType)
                      + ". A function pointer is not converted; declare the value at the signature it is "
                        "called through").c_str(), line);
+    // Only literals reach here (the non-literal crossings went back to `rejectNumericConversion` above),
+    // so the message is about what the literal MEANS rather than about a conversion. `char` is a
+    // codepoint: `'A'` is how one is written, and an integer is one only after somebody decides it is.
+    else if (dstF == IdFamily::Char)
+        unsupported((head + "a `" + srcName + "` — a `char` is one Unicode codepoint, not a number. Write "
+                     "the character (`'A'`), or `cast<char>(…)` if the integer really is a scalar "
+                     "value").c_str(), line);
+    else if (srcF == IdFamily::Char)
+        unsupported((head + "a `" + srcName + "` — a `char` is one Unicode codepoint, not a number. "
+                     "Convert it explicitly: `cast<" + dstName + ">(…)`").c_str(), line);
     else
         unsupported((head + "a `" + srcName + "`").c_str(), line);
 }
@@ -2676,7 +2708,12 @@ std::string CEmitter::cType(SharedIdentifier type)
         case IDENTIFIER_FLOAT64_VAL: return "double";
         case IDENTIFIER_STRING_VAL:  return "kama_string";
         case IDENTIFIER_VOID_VAL:    return "void";
-        case IDENTIFIER_CHAR_VAL:    return "uint32_t";   // `char` = a Unicode scalar value (codepoint)
+        // `char` is one Unicode scalar value (codepoint), and it is its OWN C type — `typedef uint32_t
+        // kama_char;` in kama_runtime.h. It used to lower straight to `uint32_t`, which cost the language
+        // the whole codepoint/integer distinction: every rule decides identity by comparing lowered
+        // spellings, so with nothing left to compare `uint32 n = c;` and `char d = u;` both crossed in
+        // silence. Representation is unchanged — this is a typedef, not a wrapper.
+        case IDENTIFIER_CHAR_VAL:    return "kama_char";
         default:
             // User-defined type (class/enum/interface) — resolve through the
             // current file's namespace scope + usings to its mangled C name.
@@ -2730,9 +2767,14 @@ bool CEmitter::isScalarPrimKey(const std::string& k)
 }
 
 // The same key recovered from a C type, for the places that have already lost the kama type node (an
-// element of a collection, a field of a generic instance). `uint32_t` is the one ambiguous input; it
-// answers `uint32`, so a `char` that reaches a contract only through such a place still rides `uint32`'s
-// conformance. Callers that CAN produce the type node must use `primKey` instead.
+// element of a collection, a field of a generic instance).
+//
+// This used to carry a caveat — "`uint32_t` is the one ambiguous input; it answers `uint32`, so a `char`
+// that reaches a contract only through such a place still rides `uint32`'s conformance" — and it is gone
+// as of 0.9.104, because `char` now lowers to `kama_char` rather than to `uint32_t`. There is no longer
+// an ambiguous input: every scalar's C spelling names exactly one kama type, which is the property the
+// whole type-identity rule rests on. Callers that CAN produce the type node should still prefer
+// `primKey`, since it answers without lowering anything.
 std::string CEmitter::primKeyOfCType(const std::string& ct)
 {
     if (ct == "int8_t")   return "int8";
@@ -2742,6 +2784,7 @@ std::string CEmitter::primKeyOfCType(const std::string& ct)
     if (ct == "uint8_t")  return "uint8";
     if (ct == "uint16_t") return "uint16";
     if (ct == "uint32_t") return "uint32";
+    if (ct == "kama_char") return "char";
     if (ct == "uint64_t") return "uint64";
     if (ct == "bool")     return "bool";
     if (ct == "float")    return "float32";
@@ -8071,9 +8114,10 @@ bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
     if (ct == "int32_t")  { lo = -2147483648LL;   hi = 2147483647LL;   return true; }
     if (ct == "uint8_t")  { lo = 0;               hi = 255;            return true; }
     if (ct == "uint16_t") { lo = 0;               hi = 65535;          return true; }
-    // `char` also lowers to uint32_t, and is ranged by its WIDTH rather than by 0x10FFFF: "that is not a
-    // codepoint" is a different rule from "that does not fit", and this campaign is only about the second.
     if (ct == "uint32_t") { lo = 0;               hi = 4294967295LL;   return true; }
+    // `char` is ranged by its WIDTH rather than by 0x10FFFF: "that is not a codepoint" is a different
+    // rule from "that does not fit", and this campaign is only about the second.
+    if (ct == "kama_char"){ lo = 0;               hi = 4294967295LL;   return true; }
     return false;             // int64_t (holds every fold), uint64_t, floats, size_t/ptrdiff_t, classes
 }
 
@@ -8092,7 +8136,7 @@ bool CEmitter::primIntRange(SharedIdentifier type, int64_t& lo, int64_t& hi)
         case IDENTIFIER_UINT8_VAL:  return primIntRangeC("uint8_t",  lo, hi);
         case IDENTIFIER_UINT16_VAL: return primIntRangeC("uint16_t", lo, hi);
         case IDENTIFIER_UINT32_VAL: return primIntRangeC("uint32_t", lo, hi);
-        case IDENTIFIER_CHAR_VAL:   return primIntRangeC("uint32_t", lo, hi);
+        case IDENTIFIER_CHAR_VAL:   return primIntRangeC("kama_char", lo, hi);
         default: return false;    // int64 (always fits), uint64, floats, usize/isize, everything else
     }
 }

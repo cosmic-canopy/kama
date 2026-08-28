@@ -5,6 +5,14 @@
 //
 // Every position the rejection reaches is pinned here too, plus the three destinations whose width this
 // compiler refuses to assert (`usize`, `isize`, `uint64`) and which are therefore answered by SIGN alone.
+//
+// ⚠️ ONE destination was on this list and is not any more: `char codepoint = 65;` compiled here until
+// 0.9.104 and is now an error (tests/xfail/identity_char_literal.kama). Contextual literal typing is a
+// statement about WIDTH — every integer literal is a legitimate value of every integer type wide enough
+// to hold it — and `char` is not an integer type, it is one Unicode codepoint. `65` standing in for
+// `'A'` is not the literal written at the destination's type; it is a different value that happens to
+// share a representation. `float32 fromInt = 3;` two lines below is the contrast and stays: 3 IS a
+// float32, exactly, which is why 5b took that step past Rust deliberately.
 // A module-level `comptime` above INT64_MAX. `constValue` folds it to -1 — a REINTERPRETATION, not a
 // value — and the rule must not read that as negative. It knows the difference because
 // `moduleStaticCTypeRaw` states the const's TYPE; before that existed the classifier answered "" here and
@@ -28,7 +36,7 @@ fn int32 main() {
     uint8  uhi       = 255;
     int16  wide      = 32767;
     uint32 big       = 4294967295;   // unsuffixed, and wider than int32 — see tests/int_literal_wide
-    char   codepoint = 65;
+    char   codepoint = 'A';          // ⚠️ NOT `= 65`; see the note at the top
     float32 fromInt  = 3;            // an int literal into a float destination is contextual too
 
     local = 127;                     // assignment

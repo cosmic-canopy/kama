@@ -1,0 +1,15 @@
+// The literal half of the codepoint distinction, and the half `rejectNumericConversion` structurally
+// cannot own: D2a exempts a literal from conversion checking because a literal takes its type from its
+// destination. That is true about WIDTH — every integer literal is a legitimate value of every integer
+// type wide enough to hold it — and it is not true about MEANING. `char d = 65;` is not the literal
+// written at `char`'s type; it is an integer standing in for a codepoint. `uint32 n = 'a';` is the same
+// trade in reverse.
+//
+// Same reasoning as tests/xfail/identity_enum_int_literal.kama, and the same answer: write the value the
+// way the type spells it, or say `cast<…>` and mean it.
+fn int32 main()
+{
+    char d = 65ui32;
+    uint32 n = 'a';
+    return 0;
+}

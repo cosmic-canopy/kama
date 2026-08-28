@@ -2096,7 +2096,7 @@ private:
     // rules cannot catch them either, because they bail on any C spelling that is not a name they know.
     // A family is a set of types whose members are mutually non-interchangeable AND recognizable from an
     // already-lowered C type. `None` is silent, exactly as `TKind::Unknown` is.
-    enum class IdFamily { None, Enum, Num, Sig };
+    enum class IdFamily { None, Enum, Num, Sig, Char };
     IdFamily idFamilyOf(const std::string& ct);
     static const char* idFamilyName(IdFamily f);
     void noteTypeIdentity(const std::string& dstCType, SharedExpression value,

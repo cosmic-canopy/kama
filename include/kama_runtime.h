@@ -561,6 +561,18 @@ static inline NAME   NAME##__fill(T x) {                                        
 #define KAMA_FIXED_DEFINE(T, N, NAME) KAMA_FIXED_TYPE(T, N, NAME) KAMA_FIXED_FUNCS(T, N, NAME)
 
 
+// kama `char` is ONE UNICODE CODEPOINT, not a byte and not a number — `s[i]` is a `uint8`, and
+// codepoints are reached only through `.chars()`. Its representation is a 32-bit unsigned integer, but it
+// is a DISTINCT TYPE, and this typedef is what makes that true for kama's own checker.
+//
+// It used to lower straight to `uint32_t`, and the consequence was not cosmetic: every rule in the
+// compiler decides type identity by comparing lowered C spellings, so with `char` spelled `uint32_t`
+// there was nothing left to compare and `uint32 n = c;`, `char d = u;` and `c == u` all crossed in
+// silence. The codepoint/integer distinction was documented, believed, and unenforced — the same shape
+// as the byte/codepoint bug AGENTS.md opens with. Giving it a name of its own is what enforces it; C
+// behaviour is byte-for-byte unchanged, since this is a typedef and not a wrapper.
+typedef uint32_t kama_char;
+
 // kama `string` lowers to a fat, length-prefixed value. `cap == 0` means
 // the bytes are BORROWED (e.g. a C string literal in static storage) and must
 // never be written or freed; `cap > 0` means HEAP-OWNED (NUL-terminated) and is
