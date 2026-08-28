@@ -182,6 +182,13 @@ CABLK='import { std::collections::View };\nfn int32 useit() {\n    DynamicArray<
 # driver resolves relative to the compiler binary.
 PRELB='fn Optional<int32> pick() {\n    return Optional::None;\n}\n'
 
+# A compiler BUILT-IN, which unlike the prelude has no source anywhere — `string` is a reserved word, not
+# a declaration. LSP L1 char 4 = the `string` annotation IN A BODY (the road that needed indexing at all);
+# L2 char 13 = the `.length()` call, an intrinsic with no declaration node of its own.
+# ⚠️ No string LITERAL in here: every buffer on this page is inlined into a JSON body, so a `"` would end
+# the string and the server would answer questions about a file that never parsed.
+BLTB='fn isize measure(string a) {\n    string s = a;\n    return s.length();\n}\n'
+
 # M3.4 fixture: one of each binding kind, each WITH the trailing syntax whose span used to be swallowed.
 # The prepareRename ranges below are the DATA-LOSS GUARD — rename replaces the range it is given, so a
 # range that ran past the name would rewrite `seeded = 7` (or `Code::Ok`, or `Bad = 2`) as the new name.
@@ -511,6 +518,14 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocumen
 frame '{"jsonrpc":"2.0","id":75,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3}}}'
 frame '{"jsonrpc":"2.0","id":76,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3}}}'
 frame '{"jsonrpc":"2.0","id":77,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":0,"character":3},"newName":"Maybe"}}'
+# --- ...and on a compiler BUILT-IN, which has no source anywhere and so gets a documentation file
+#     (prelude/builtin.kama) the way Go's `builtin.go` and Rust's `primitive_docs.rs` do. 78: the type.
+#     79: an intrinsic METHOD, which has no declaration node either. tools/check-builtin-doc.sh is what
+#     holds that file against the C++ registrations; these two prove the editor actually reaches it.
+frame '{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"'"$IURI"'","version":6},"contentChanges":[{"text":"'"$BLTB"'"}]}}'
+frame '{"jsonrpc":"2.0","id":78,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":4}}}'
+frame '{"jsonrpc":"2.0","id":79,"method":"textDocument/definition","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":2,"character":13}}}'
+frame '{"jsonrpc":"2.0","id":80,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"'"$IURI"'"},"position":{"line":1,"character":4}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -903,6 +918,17 @@ expect '"id":76,"result":null' \
     "prepareRename: F2 on a prelude name is still greyed out"
 expect '"id":77,"error":' \
     "rename: ...and the rename itself is still refused"
+
+echo "check-lsp: go-to-definition reaches a compiler built-in"
+# A built-in has no source ANYWHERE — `string` is a reserved word, not a declaration — so unlike the
+# prelude there is nothing to resolve and something had to be written. The exact lines are asserted by
+# tools/check-builtin-doc.sh against the file itself; what these pin is that the EDITOR reaches it at all.
+expect '"id":78,"result":{"uri":"'"$(furi "$ROOT/prelude/builtin.kama")"'"' \
+    "definition: F12 on \`string\` opens prelude/builtin.kama"
+expect '"id":79,"result":{"uri":"'"$(furi "$ROOT/prelude/builtin.kama")"'"' \
+    "definition: ...and on \`s.length()\`, an intrinsic with no declaration node of its own"
+expect '"id":80,"result":null' \
+    "prepareRename: a built-in is read-only too — F2 stays greyed out"
 
 # The build configuration is resolved ONCE PER PROCESS (the M5 parse cache holds units pruneInactiveDecls
 # rewrote in place, so two configurations cannot share it), which is exactly why these cannot ride the

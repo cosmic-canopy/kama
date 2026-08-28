@@ -2326,11 +2326,21 @@ std::string CEmitter::cType(SharedIdentifier type)
     // FFI: a raw C pointer carrier (opaque). Bare `UnsafePtr` -> void* (the
     // universal handle / opaque pointer); `UnsafePtr<T>` -> T*. usize/isize map to the
     // C size types. These are the explicit, extern-marked unsafe boundary.
-    if (type->value && *type->value == "UnsafePtr")
+    // ⚠️ These arms RETURN before the resolver runs, which is why they also have to index themselves.
+    // Every other built-in is a reserved WORD carrying a `builtInVal`, and its spelling reaches the
+    // reference index through the ordinary resolve path; `usize`/`isize`/`UnsafePtr` are plain
+    // identifiers that this function short-circuits, so nothing recorded them and a body-local
+    // `isize k = 1;` was the one type annotation the editor could see nothing at — no hover, no jump,
+    // while `bool` and `float32` on the lines around it both answered.
+    if (type->value && *type->value == "UnsafePtr") {
+        recordBuiltinRef(*type->value, type.get());
         return type->genericArg ? (cType(type->genericArg) + "*") : "void*";
+    }
     if (type->value && !type->genericArg) {
-        if (*type->value == "usize") return "size_t";
-        if (*type->value == "isize") return "ptrdiff_t";
+        if (*type->value == "usize" || *type->value == "isize") {
+            recordBuiltinRef(*type->value, type.get());
+            return *type->value == "usize" ? "size_t" : "ptrdiff_t";
+        }
     }
 
     // InlineArray<T, N> spells `InlineArray_<mangleT>_<N>` (two args — the const size mangles to its value).
@@ -20835,6 +20845,13 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     // the level that actually resolves. Recorded by NODE (mi->node is null for an intrinsic, which drops
     // it) so a generic instance's call collapses onto the template's one declaration.
     recordNodeRef(site, mi->node);
+    // ...and the intrinsic half of that same sentence. `string`'s methods are synthesized in
+    // registerCollection and have no declaration node, so the record above drops them and `s.length()`
+    // indexed as nothing whatever: no hover, no jump, on the most-called methods in the language. They
+    // have no AST to point at, but they do have a written place — the same documentation file the
+    // receiver type itself resolves to.
+    if (mi->isIntrinsic && !mi->node && owner && owner->isIntrinsicColl && owner->collKind == CollKind::String)
+        recordBuiltinRef("string." + method, site);
 
 #if KAMA_INHERITANCE
     if (mi->isVirtual) {

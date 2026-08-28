@@ -1,0 +1,113 @@
+// The built-in types — DOCUMENTATION, NEVER COMPILED.
+//
+// `int32`, `string`, `isize` and the rest are registered in C++ (see `primKey` and `registerCollection`
+// in src/kama.cemit.cpp); they are reserved words, not declarations, so this file is not — and cannot be
+// — their definition. It exists so that the things which need a *place* for them have one: hover already
+// answered for these names, and go-to-definition landed nowhere, which reads as the language server
+// being broken rather than as the deliberate gap it is.
+//
+// This is the shape Go and Rust settled on for exactly this problem — Go's `builtin.go` declares `int`,
+// `string`, `len` and `append` and is never compiled; Rust's `library/core/src/primitive_docs.rs` does
+// the same. kama picks it over a synthesized virtual document because the prelude is already a real file
+// that ships beside the stdlib, so this one rides the same road with no new machinery and no custom URI
+// scheme for a client to honour.
+//
+// ⚠️ THIS FILE AND THE C++ REGISTRATIONS ARE TWO STATEMENTS OF ONE TRUTH, which is the failure mode a
+// documentation-only file has. `tools/check-builtin-doc.sh` holds them together in BOTH directions —
+// every name the compiler registers appears here, and every name here is one the compiler registers —
+// because without that it rots exactly the way an unguarded prose claim does.
+//
+// ⚠️ THE LAYOUT IS LOAD-BEARING, not style. The compiler finds a name by scanning for its declaration
+// line, so: one declaration per line, a type as `type <kind> <Name>`, a method as `fn <ret> <name>(`
+// indented inside its type. Reformatting this file moves where go-to-definition lands.
+//
+// The bodies are empty on purpose. A primitive has no members to describe, and `string`'s methods are
+// intrinsics whose real implementation is `kama_string__*` in include/kama_runtime.h — the authority for
+// what each one does. What belongs here is the SIGNATURE, so a reader who jumped here learns the shape.
+
+// ---- the scalar primitives ------------------------------------------------------------------------
+//
+// Fixed-width, all of them, and that is the language's position rather than an omission: a width you can
+// read is worth more than a width that follows the host. `int` is reserved and rejected with a message
+// naming these two replacements, because a C or Go reader will try it.
+
+type value bool { }        // `true` / `false`
+
+type value int8 { }        // signed, 8-bit
+type value int16 { }       // signed, 16-bit
+type value int32 { }       // signed, 32-bit — the default integer of the language
+type value int64 { }       // signed, 64-bit
+
+type value uint8 { }       // unsigned, 8-bit — also the element a `string` indexes to
+type value uint16 { }      // unsigned, 16-bit
+type value uint32 { }      // unsigned, 32-bit
+type value uint64 { }      // unsigned, 64-bit
+
+type value float32 { }     // IEEE-754 single
+type value float64 { }     // IEEE-754 double
+
+type value char { }        // one Unicode CODEPOINT, not a byte — `.chars()` yields these
+
+// The two platform-width types, and the distinction between them is the one to get right: `isize` is a
+// LENGTH or an offset (it is what `string.length()` returns and what indexing takes), `usize` is the C
+// ABI's size type and belongs where a value crosses into C — `sizeof`, an allocation, an `extern fn`.
+type value isize { }       // signed platform width   (C `ptrdiff_t`)
+type value usize { }       // unsigned platform width (C `size_t`)
+
+type value void { }        // no value — a return type only, never a variable's
+
+// ---- string ---------------------------------------------------------------------------------------
+//
+// IMMUTABLE and owned. Every method below reads; the ones that appear to change a string (`concat`,
+// `trim`, `substring`, the case pair) return a NEW owned string and leave the receiver untouched, which
+// is why each is safe to call on a borrowed one.
+//
+// It indexes to BYTES — `s[i]` is a `uint8` — and iterates codepoints only through `.chars()`. That
+// split is deliberate and is the one thing to know before writing string code: a byte offset is not a
+// character offset, `substring` traps on an offset that splits a character, and `floorCharBoundary` is
+// the total function that snaps an arbitrary offset down to a safe one.
+type value string {
+    public fn isize length();                                   // length in BYTES, not codepoints
+    public fn bool equals(string other);                        // also what `==` resolves to
+    public fn string concat(string other);                      // a new owned string
+    public fn UnsafePtr<char> cstr();                           // FFI: the NUL-terminated C pointer
+    public fn uint8 get(isize index);                           // `s[i]` — the i-th BYTE
+    public fn Chars chars();                                    // codepoint iterator (see the prelude)
+
+    public fn string substring(isize start, isize end);         // traps on a non-boundary offset
+    public fn isize floorCharBoundary(isize at);                // snap DOWN to a safe offset, total, O(1)
+    public fn string truncate(isize maxBytes);                  // substring on a floored budget
+
+    public fn bool contains(string substring);
+    public fn bool startsWith(string prefix);
+    public fn bool endsWith(string suffix);
+    public fn bool isEmpty();
+    public fn Optional<usize> find(string substring);           // None when it is not there
+
+    public fn string trim();
+    public fn string trimStart();
+    public fn string trimEnd();
+    public fn string replace(string old, string with);          // `with:` — `new` is a keyword
+    public fn string toLower();
+    public fn string toUpper();
+    public fn Split split(string separator);                    // lazy — pieces come out one at a time
+}
+
+// ---- the intrinsic generic types --------------------------------------------------------------------
+//
+// Everything else that once lived here is an ordinary library type now: `DynamicArray`, `FixedArray`,
+// `View` and `Map` are `std::collections`, and `Owned`/`Shared`/`Weak` are `std::memory`. Go-to-definition
+// on those already opens their real sources. These three stay intrinsic because each needs something the
+// language cannot yet say about itself.
+
+// A raw C pointer, and the whole of kama's unsafe boundary. Bare `UnsafePtr` is C's `void*`; storing one
+// is safe, and only DEREFERENCING it needs `unsafe`.
+type value UnsafePtr<T> { }
+
+// The const-generic value array: `struct { T v[N]; }`, sized at compile time. It owns no heap, copies by
+// value and has no destructor, which is what makes it — unlike every other container — a `value`.
+type value InlineArray<T, const N: int32> { }
+
+// A callable with its receiver bound in. The type argument is a function SIGNATURE rather than a type,
+// which is why it is not an ordinary generic.
+type value BindableFunctionPtr<Sig> { }

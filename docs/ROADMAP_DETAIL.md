@@ -127,54 +127,6 @@ README's "drops into an existing C codebase" rests on. **The "~19% of a 2M-itera
 during the cast trap does not reproduce for this shape** — do not repeat it without re-measuring what it
 was actually about. Neither the exit code nor a timing can see this, which is why the guard reads the C.
 
-**Go-to-definition on a compiler built-in lands nowhere.** `string`, `isize`, `usize`, `int32` and the
-`string`/`Fixed`/`View` intrinsic methods are registered in C++ (`registerCollection` in `kama.cemit.cpp`),
-so there is no source location for the LSP to return and the jump silently does nothing. These are the
-most-navigated names in any kama program, so it reads as the language server being broken rather than as a
-deliberate gap. Two shapes are used in the wild:
-
-- **A documentation-only source file** the tooling points at. Go ships `builtin.go` declaring `int`,
-  `string`, `len`, `append` — never compiled as the definition, it exists so docs and `gopls` have a target.
-  Rust does the same with `library/core/src/primitive_docs.rs`. **This is the fit for kama**: the prelude is
-  already a real embedded file, and `agents/`/`seed/` establish the embedded-doc pattern.
-- **A synthesized read-only virtual document** — C#/Roslyn's metadata-as-source. More machinery, and it
-  needs a client that honours a custom URI scheme.
-
-⚠️ The risk with the first is DRIFT: a hand-written `builtin.kama` and the C++ registration are two
-statements of one truth. Whatever lands wants a `tools/check-*.sh` asserting every intrinsic registered in
-`registerCollection` appears in the doc file and vice versa — otherwise it rots exactly the way a prose
-claim does.
-
-**Measured, so nobody re-derives it: HOVER ALREADY ANSWERS, so the gap really is only the jump.**
-`kama query --type` returns `string` on a `string` and `int32` on an `int32` (`typeAtPosition` falls
-through to echoing the source spelling when no def-site matches), and `--def` returns `no definition`.
-So this is not "the built-ins are unknown to the compiler" — it is exactly the missing location, and
-nothing but a location has to be produced. Note what that also means for the doc file: the DefSites it
-backs have to be reachable from a position that currently indexes with an EMPTY `declKey`, which is the
-part that is more than writing the file.
-
-**The PRELUDE half SHIPPED** — `Optional`, `Result`, `Ordering`, the language contracts and the
-`std::memory` triad now open their real files, and the release tarball carries `prelude/` beside the
-stdlib so an install can too. What it settles for the built-in half above:
-
-- **Naming the unit by its path is NOT the fix, and would have been a bad one.** That was the open
-  question here; the answer is no. The `<` in `<prelude>` is a sentinel four passes read — `checkReach`
-  exempts compiler-owned declarations from the export/import rungs on it, `CEmitter::line` suppresses a
-  `#line` into a file that may not exist, `setPackageResolver` skips the filesystem walk, and
-  `moduleOfUnit` returns `""` for `<prelude>` specifically, so a real path there would derive a module
-  name and re-mangle every prelude symbol. The path travels ALONGSIDE the name, as `DefSite::file`.
-- **`unit` and `file` answer different questions, and the built-in half wants the same split.** Not
-  owning a declaration is a reason to refuse to REWRITE it; it was never a reason to refuse to OPEN it.
-  Rename and find-references still test `unit` and still refuse the prelude.
-- **⚠️ A defect the work uncovered, worth knowing before trusting any prelude line number:**
-  `tools/embed_prelude.sh` wrapped each source as `R"KAMASRC(\n<file>`, and that newline was line 1 of
-  the embedded copy — so every declaration sat one line below where it does on disk, and any diagnostic
-  raised inside the prelude had been misreporting the same way. Fixed, and pinned by an exact line in
-  both `check-query.sh` and `check-lsp.sh`.
-
-What is left is only the C++-registered half: those names have no source anywhere, which is why they
-need a written file and a guard rather than a resolved path.
-
 **The Zed grammar pin follows the GRAMMAR — done, and no longer a scheduled row.** `editor/zed/extension.toml`
 pins a *commit* and Zed fetches that rev, so the pin — not the working tree — is what Zed users get. It had
 drifted 16 grammar changes and 19 days behind, which is why `slot` and named match patterns stopped

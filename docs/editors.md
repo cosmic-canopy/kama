@@ -44,9 +44,17 @@ parameter also rewrites its argument labels at every call site. Go-to-definition
 those — it opens them read-only, `Optional`/`Result`/`Ordering` and the smart-pointer triad included.
 Not owning a declaration is a reason not to rewrite it, not a reason not to read it.
 
-A compiler built-in (`string`, `int32`, `isize`, and the `string` intrinsic methods) is the one thing
-with nowhere to go: those are registered in C++ and have no kama source anywhere. Hover still answers
-for them.
+A compiler built-in — `string`, `int32`, `isize`, `UnsafePtr`, and the `string` intrinsic methods —
+opens [`prelude/builtin.kama`](../prelude/builtin.kama). Those names are registered in C++ and have no
+kama source anywhere, so that file is documentation rather than a definition, the same way Go's
+`builtin.go` and Rust's `primitive_docs.rs` are; `tools/check-builtin-doc.sh` holds it against the
+registrations in both directions so it cannot drift into describing a language kama does not have.
+A `--no-std` install ships no `lib/kama/`, so there these answer "no definition" — which is the honest
+answer, not a failure.
+
+Built-ins are deliberately left out of semantic highlighting: they are reserved words, and every
+grammar already colours them as such. A semantic token would override that and make `int32` look like a
+type someone declared.
 
 **Auto-import.** Every name a file uses that it does not declare needs an `import`, including a sibling
 in the same module, so the editor writes it for you: put the cursor on the error and the lightbulb offers

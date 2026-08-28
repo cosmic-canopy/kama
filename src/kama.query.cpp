@@ -487,10 +487,38 @@ void CEmitter::buildDeclUnits()
     for (auto& m : _preludeModuleUnits) recordBuiltin(m);
 }
 
+// Def-sites for the C++-registered built-ins, from the documentation file the driver scanned. These have
+// no `unit` and no `node` — there is no AST anywhere for `int32` — so they are written straight into the
+// table rather than going through addDefSite, which is shaped around a declaration that exists.
+//
+// Keys are namespaced `builtin:`, which cannot collide with a resolved mangled name, and are attached to
+// a reference only when ordinary resolution found nothing (see the resolve-fill in buildPositions). So a
+// user declaration always wins, and a name in this file that the compiler does not actually register is
+// simply never reached — tools/check-builtin-doc.sh is what catches that, not this code.
+void CEmitter::addBuiltinDefSites()
+{
+    if (!_builtinDocIndex || _builtinDocFile.empty()) return;   // no doc file: keep answering "no definition"
+    for (const auto& kv : *_builtinDocIndex) {
+        const size_t dot = kv.first.find('.');
+        DefSite d;
+        d.key            = "builtin:" + kv.first;
+        d.kind           = dot == std::string::npos ? SymKind::Value : SymKind::Method;
+        d.range          = kv.second;
+        d.selectionRange = kv.second;
+        d.unit           = nullptr;      // never user code: not in an outline, never renameable
+        d.node           = nullptr;
+        d.file           = _builtinDocFile;
+        d.display        = kv.first;
+        if (dot != std::string::npos) d.container = kv.first.substr(0, dot);
+        _defSites[d.key] = d;
+    }
+}
+
 void CEmitter::buildDefSites()
 {
     _defSites.clear();
     buildDeclUnits();
+    addBuiltinDefSites();
 
     auto bareOf = [](const SharedIdentifier& id, const std::string& key) -> std::string {
         if (id && id->value) return *id->value;                 // the source spelling, when we have the name id
@@ -740,6 +768,17 @@ void CEmitter::recordRef(const std::string& key, const IdentifierNode* site)
     if (site->synthesized) return;   // an emitter-built node: no source text to point at, and often a
                                      // temporary whose address would dangle (see ASTNode::synthesized)
     _bodyRefs.push_back(RecordedRef{ _refUnit, site, key });
+}
+
+// A reference to a C++-registered BUILT-IN, for the spellings that never reach the resolver. Only the
+// identifier-spelled ones need it (`usize`, `isize`, `UnsafePtr`): a reserved word carries a `builtInVal`
+// and its position is indexed either structurally or through the ordinary resolve path, whereas these
+// three are short-circuited by `cType` before anything records them. Same gating and same pure-append
+// discipline as recordRef, which it delegates to; the key it mints is the one addBuiltinDefSites uses.
+void CEmitter::recordBuiltinRef(const std::string& name, const IdentifierNode* site)
+{
+    if (!_builtinDocIndex || !_builtinDocIndex->count(name)) return;   // no doc file, or not documented
+    recordRef("builtin:" + name, site);
 }
 
 // A binding DECLARATION (local / param / foreach or match binding), recorded by the walk that knows the
@@ -993,9 +1032,19 @@ void CEmitter::buildPositions()
             auto uit = _unitCtx.find(kv.first);
             if (uit == _unitCtx.end()) continue;
             _nsCtx = uit->second;
-            for (auto& e : kv.second)
+            for (auto& e : kv.second) {
                 if (e.declKey.empty() && e.id && e.id->value)
                     e.declKey = resolveUserName(*e.id->value, e.id->qualifier);   // no `site` => not re-recorded
+                // A BUILT-IN: `int32`, `string`, `isize`. Resolution had nothing to find — these are
+                // reserved words, not declarations — so the entry is left naming a key no def-site
+                // answers, which is why the jump landed nowhere. Point it at the documentation file.
+                //
+                // LAST, and only when nothing else resolved, so a user declaration always wins and this
+                // can never shadow real code with a doc stub.
+                if (e.id && e.id->value && !_defSites.count(e.declKey) && _builtinDocIndex
+                    && _builtinDocIndex->count(*e.id->value))
+                    e.declKey = "builtin:" + *e.id->value;
+            }
 
             // (4b) Appending while iterating would invalidate, so collect first and merge after. The
             // gather below is deliberately the cheap half: an identifier with no qualifier costs one
@@ -1388,6 +1437,13 @@ std::vector<SemanticToken> CEmitter::semanticTokensFor(const std::string& uri) c
     int lastLine = -1, lastEnd = -1;
     for (const auto& e : it->second) {
         if (e.declKey.empty()) continue;                                   // (4)
+        // A BUILT-IN is a reserved WORD, and every grammar already colours it as one. Giving it a
+        // semantic token would OVERRIDE that with `struct`/`method`, so `int32` would stop looking like
+        // a keyword and start looking like a type someone declared — a downgrade the moment
+        // prelude/builtin.kama gave these names a def-site to be found through. The rule for prelude and
+        // std is the opposite and stays: those ARE declarations, and the resolver knows more about them
+        // than a regex can.
+        if (e.declKey.compare(0, 8, "builtin:") == 0) continue;
         auto d = _defSites.find(e.declKey);
         if (d == _defSites.end()) continue;
         const SrcRange& r = e.range;

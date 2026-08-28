@@ -417,11 +417,71 @@ static std::string builtinSourcePath(const std::string& unitName)
         const std::string p = root + "/" + unitName.substr(pfx.size());
         return fileExists(p) ? lspRealPath(p) : std::string();
     }
-    if (unitName == "<prelude>") {
-        for (const std::string& p : { root + "/prelude/global.kama", root + "/../prelude/global.kama" })
+    if (unitName == "<prelude>" || unitName == "<builtin>") {
+        const std::string base = unitName == "<builtin>" ? "/prelude/builtin.kama" : "/prelude/global.kama";
+        for (const std::string& p : { root + base, root + "/.." + base })
             if (fileExists(p)) return lspRealPath(p);
     }
     return std::string();
+}
+
+// ---- the built-in documentation file (prelude/builtin.kama) -----------------------------------------
+//
+// `int32`, `string`, `isize` and the `string` intrinsics are registered in C++ — they are reserved words,
+// not declarations, so unlike the prelude there is no source anywhere to point at. The shape Go and Rust
+// both settled on for this is a documentation-only file the tooling aims at (`builtin.go`,
+// `primitive_docs.rs`), and this is the scan that finds a name's line in it.
+//
+// ⚠️ THE FILE'S LAYOUT IS THIS FUNCTION'S CONTRACT: one declaration per line, a type as
+// `type <kind> <Name>`, a method as `fn <ret> <name>(` indented inside its type. Reformatting the file
+// moves where go-to-definition lands, which is why the file says so at the top.
+//
+// It reads the FILE rather than carrying a table, deliberately. A hand-written table here plus the file
+// would be a THIRD statement of the same truth on top of the two that already exist; this way the
+// compiler knows only "the registered names" and "the file", and tools/check-builtin-doc.sh holds those
+// two together in both directions.
+static const std::map<std::string, SrcRange>& builtinDocIndex()
+{
+    static std::map<std::string, SrcRange> idx;
+    static bool built = false;
+    if (built) return idx;
+    built = true;
+    const std::string path = builtinSourcePath("<builtin>");
+    if (path.empty()) return idx;                       // no such file (a --no-std install): no locations
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return idx;
+    auto isIdent = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
+    std::string line, curType;
+    int lineNo = 0;
+    while (std::getline(in, line)) {
+        ++lineNo;
+        const size_t cmt = line.find("//");
+        if (cmt != std::string::npos) line.erase(cmt);   // a trailing comment is not a declaration
+        size_t i = line.find_first_not_of(" \t");
+        if (i == std::string::npos) continue;
+
+        // `type <kind> <Name>` at column 0 — a top-level type, and the enclosing scope for what follows.
+        if (i == 0 && line.compare(0, 5, "type ") == 0) {
+            size_t k = line.find_first_not_of(" ", 5);                 // the kind word
+            if (k == std::string::npos) continue;
+            size_t ke = k; while (ke < line.size() && isIdent(line[ke])) ++ke;
+            size_t n = line.find_first_not_of(" ", ke);                // the NAME
+            if (n == std::string::npos || !isIdent(line[n])) continue;
+            size_t ne = n; while (ne < line.size() && isIdent(line[ne])) ++ne;
+            curType = line.substr(n, ne - n);
+            idx[curType] = SrcRange{ lineNo, (int)n, lineNo, (int)ne };
+            continue;
+        }
+        // `… fn <ret> <name>(` inside the type above. The name is the identifier before the paren, which
+        // is the one spelling a return type cannot be confused with however it is written.
+        if (curType.empty() || line.find("fn ") == std::string::npos) continue;
+        const size_t lp = line.find('(');
+        if (lp == std::string::npos || lp == 0) continue;
+        size_t ne = lp; while (ne > 0 && isIdent(line[ne - 1])) --ne;
+        if (ne == lp) continue;                                        // `(` not preceded by a name
+        idx[curType + "." + line.substr(ne, lp - ne)] = SrcRange{ lineNo, (int)ne, lineNo, (int)lp };
+    }
+    return idx;
 }
 
 // The native WebGPU SDK root: wgpu-native's prebuilt drop (include/webgpu/{webgpu,wgpu}.h + a
@@ -1957,6 +2017,8 @@ static void configureEmitter(CEmitter& e)
     // ...and where that source lives on disk, so go-to-definition on `Optional` opens the declaration
     // instead of landing nowhere. The unit keeps its synthetic `<prelude>` NAME — see builtinSourcePath.
     e.setPrelude(preludeUnit(), builtinSourcePath("<prelude>"));   // Optional/Result available implicitly
+    // ...and a place for the names that have no source at all — see builtinDocIndex.
+    e.setBuiltinDoc(builtinSourcePath("<builtin>"), builtinDocIndex());
     e.setNoHeap(g_noHeap);             // `--no-heap`: reject heap allocation program-wide
     e.setStrictNumeric(g_strictNumeric);   // `--strict-numeric` (M5a): measure numeric hand-offs
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk

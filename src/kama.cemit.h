@@ -640,6 +640,18 @@ public:
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
     // scope. Like the prelude, its generic templates emit nothing unless instantiated.
+    // The built-in documentation file (prelude/builtin.kama) and where each registered name is written in
+    // it. `int32`/`string`/`isize` are reserved words rather than declarations, so unlike the prelude
+    // there is no source to resolve — this is a written PLACE for them, the shape Go's `builtin.go` and
+    // Rust's `primitive_docs.rs` use. The driver scans the file (it owns filesystem work); the emitter
+    // only turns the table into def-sites. Empty path = no such file, and then a built-in keeps answering
+    // "no definition", which stays the honest answer.
+    void setBuiltinDoc(const std::string& path, const std::map<std::string, SrcRange>& index)
+    {
+        _builtinDocFile = path;
+        _builtinDocIndex = &index;
+    }
+
     void addPreludeModule(SharedCompilationUnit u, const std::string& srcPath = std::string())
     {
         if (!u) return;
@@ -790,6 +802,9 @@ private:
     std::string _emitDeclFile;
     bool _analysis = false;                      // analysis-mode ctor => record references; a build records none
     void recordRef(const std::string& key, const IdentifierNode* site);  // pure append; no diagnostics, no cType
+    // ...for the built-in spellings `cType` short-circuits before the resolver sees them (usize/isize/
+    // UnsafePtr). A no-op when there is no doc file, so nothing indexes a location that does not exist.
+    void recordBuiltinRef(const std::string& name, const IdentifierNode* site);
     void recordDef(const std::string& key, const IdentifierNode* site, SymKind kind,
                    const std::string& container);                        // pure append (M3.4 bindings)
     // pure append, keyed later off the referent's DECLARATION node (see RecordedNodeRef above). `declNode`
@@ -824,6 +839,7 @@ private:
     // long before buildDefSites. Depends on nothing but _units, and is idempotent.
     void buildDeclUnits();
     void buildDefSites();                        // fill _defSites/_declUnit from the tables (T4a)
+    void addBuiltinDefSites();                   // ...plus the C++-registered names, from prelude/builtin.kama
     void buildRenameGroups();                    // contract method <-> its implementations (M6 B3c)
     // Def-site keys that must be renamed TOGETHER: a contract's method declaration and every
     // implementation of it. Each member maps to the whole sorted group; singletons are absent, so a
@@ -960,6 +976,10 @@ private:
     // Compiler-owned unit -> the file it was embedded FROM. Filled by setPrelude / addPreludeModule; read
     // only by buildDeclUnits, to give those declarations' DefSites a `file` they can be opened at.
     std::map<const CompilationUnit*, std::string> _builtinUnitFile;
+    // prelude/builtin.kama and its name -> span table, both owned by the driver (the table is a process
+    // -wide static, scanned once). See setBuiltinDoc.
+    std::string                            _builtinDocFile;
+    const std::map<std::string, SrcRange>* _builtinDocIndex = nullptr;
     // Does the program use serde at all? Set in collectProgram from a `@generate` type or a Serializer/
     // Deserializer backend — the only ways to (de)serialize anything. When false we emit NONE of the serde
     // machinery: the prelude's primitive Serialize/Deserialize conformances are skipped, and a collection's
