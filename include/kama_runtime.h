@@ -151,11 +151,9 @@ static inline void NAME##__dtor(NAME* self) {                                  \
 // Weak<T> can outlive the T. `ptr` mirrors Owned's, so auto-deref is identical.
 typedef struct kama_ctrl { size_t strong; size_t weak; } kama_ctrl;   // weak: reserved for Weak<T>
 #include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
-static inline kama_ctrl* kama_ctrl_new(void) {
-    kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl));
-    c->strong = 1; c->weak = 0;
-    return c;
-}
+// kama_ctrl_new is defined further down, next to kama_panic: it has to CHECK its allocation, and the
+// panic path (and `kama_string`) is declared below this point. Its only in-header caller is well past it.
+static inline kama_ctrl* kama_ctrl_new(void);
 #define KAMA_SHARED_TYPE(T, NAME) typedef struct NAME { T* ptr; kama_ctrl* ctrl; } NAME;
 // The last strong drop keeps `strong` at 1 while the pointee dtor runs, then releases it: dropping the
 // pointee can free a `Weak` back-edge into THIS same ctrl (a cycle), which would free the ctrl early
@@ -1006,6 +1004,18 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
     kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
     abort();
 #endif
+}
+
+// A `Shared<T>`'s control block (declared up beside `kama_ctrl`). ⚠️ It CHECKS its allocation: it used to
+// write `c->strong` straight through whatever kama_alloc returned, so the one path that is supposed to
+// answer OOM with kama's documented panic answered it with a null dereference instead. The fallible verb
+// `try new` does not come through here at all — it allocates its ctrl inline so a failure can become
+// `None` (see emitTryNewBox); this is the infallible path, where panic IS the contract.
+static inline kama_ctrl* kama_ctrl_new(void) {
+    kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl));
+    if (!c) kama_panic(kama_string_lit("out of memory", 13));
+    c->strong = 1; c->weak = 0;
+    return c;
 }
 
 // --- Fatal diagnostics with source location (panic / assert) -----------------
