@@ -595,6 +595,56 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
+- **Two distinct types with the same C spelling cross silently.** The type-identity check between a value
+  and its destination compares KINDS (`Num` / `Class` / …), never identity, so any two types that lower to
+  the same C spelling are interchangeable everywhere a value is handed over. Probed 2026-08-28 on
+  `0.9.101`; every one of these built clean and ran, returning the wrong-typed value:
+
+  ```kama
+  type enum A : uint8 { A0, A1, A2 }
+  type enum B : uint8 { B0, B1, B2 }
+  type enum W : uint32 { W0, W1, W2 }
+  A a = A::A2;
+  B b = a;                          // an A is not a B
+  W w = a;                          // …nor a W, across two different widths
+  uint8 n = a;                      // an enum is not its underlying integer
+  A back = n;                       // ⚠️ nor the reverse — see below
+  ```
+
+  …and the same in ARGUMENT and RETURN position, and between two distinct `fnptr` signature types (both
+  lower to one C function-pointer type). Unpinned enums get a clang *warning* and still run. It reaches
+  OPERANDS too, which is a third funnel (`rejectMixedOperands`) and not the same fix: `a + A::A1` yields
+  an `A` that is no declared variant, and `a == b` across two enums of **different widths** compares
+  equal and takes the wrong branch — in a language whose comparison model is otherwise a contract
+  (`==` → `Equatable.equals`).
+
+  ⚠️ **The sharpest statement of it: `cast<A>(n)` is REJECTED — deliberately, with a careful diagnostic
+  that says an integer is not an `A` until it has been checked against the variants and points at
+  `try cast<A>` — while the plain assignment `A a = n;` is not.** The door was locked and the window left
+  open. Everything the `try cast` rule exists to prevent is reachable by writing no cast at all.
+
+  This is the 1.0 gate's own criterion (*no ordinary safe-kama construct miscompiles*), and it is the
+  no-implicit-conversion rule (milestone 6) applied to non-numeric kinds — which is exactly where it stops
+  today. **Class-to-class mismatches are NOT part of this**: two struct types are never assignable in C, so
+  clang refuses them. They are still a diagnostics defect (the user gets a C-level message about mangled
+  names, on a kama line), but they are sound, and they belong to the "the diagnostics can be trusted" half
+  of the gate rather than to this one.
+
+  **Why it leaks, from the source rather than from a guess.** `rejectMixedOperands` bails with
+  `if (!(cNumBits(lt) || cNumTargetWidth(lt))) return;`, and its own comment names what falls out:
+  *"`string + string`, a bool, **an enum**"*. A pinned enum lowers to a typedef NAME
+  (`typedef uint8_t _Fu__A;`), not to a C numeric spelling, so every numeric rule reads it as "not a
+  number I know" and takes its documented silent path — while the KIND rule reads both sides as the same
+  kind and passes. Neither rule is wrong on its own terms; nothing owns type IDENTITY.
+
+  **Where the work goes.** The funnels already exist and already hold both sides:
+  `rejectValueKindMismatch` (argument + return + assignment), `rejectInitKindMismatch` (local + field
+  initializer) — the pair `rejectNumericConversion` hangs off — and `rejectMixedOperands` for operands.
+  This is a rule beside them, for the kinds those rules skip.
+  ⚠️ **The size is in the exemptions, not the check** — an inheritance upcast, a concrete value handed to a
+  contract parameter, smart-pointer and `Optional` promotion, and a string literal all reach these funnels
+  with a destination whose C spelling differs from the source's, and every one of them is legal. Enumerate
+  those against the corpus before writing the rejection, or the rule rejects the stdlib.
 - **A field's DEFAULT INITIALIZER is not walked by either discovery pass.** `collectGenericInsts` and
   `collectCollections` both read a field's declared *type* and never its initializer expression, so
   `public int32 v = ident(x: 7);` — a generic call as a field default — is never discovered. It used to
