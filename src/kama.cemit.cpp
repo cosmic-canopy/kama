@@ -10117,6 +10117,8 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                 if (ok) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
                     _callInst[inv][substSig()] = gi.mangledName;   // per call node, per enclosing substitution
+                } else {
+                    _genericInferFailed.insert(inv);   // already diagnosed here — see the emit-side rule
                 }
             }
             // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
@@ -17921,6 +17923,28 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (deferUnknownWhileProbing(DK_Turbofish)) return "0";
         unsupported(("`" + name + "::<…>` — turbofish type arguments are only valid on a generic function").c_str(), call->line);
         return "0";
+    }
+
+    // FAIL CLOSED: the callee IS a generic template, and no instantiation was ever resolved for this call.
+    //
+    // Falling through here is what the code used to do, and it is silently wrong: the ordinary function
+    // path below emits the TEMPLATE's own mangled C name, which no body ever defines — only instances are
+    // emitted. So the compiler wrote a call to a function that does not exist, reported success, and let
+    // CLANG find it: `call to undeclared function '_Fd__ident'`. Every discovery hole in this family
+    // surfaced that way rather than as a kama diagnostic, which is how they stayed unnoticed.
+    //
+    // Silent in the two cases that are absence rather than error: while PROBING an uninstantiated template
+    // (discovery never walks that body, so `_callInst` is legitimately empty — the turbofish arm above says
+    // the same), and when discovery already LOOKED and diagnosed, which would otherwise make one mistake
+    // report twice.
+    if (!_probingTemplate && !_genericInferFailed.count(call)) {
+        const std::string gk = resolveFunc(name, call->identifier->qualifier);
+        if (_generics.count(gk)) {
+            unsupported(("`" + name + "` is a generic function and no instantiation was resolved for this "
+                         "call — pass the type arguments explicitly (`" + name + "::<…>(…)`)").c_str(),
+                        call->line, name);
+            return "0";
+        }
     }
 
     // FunctionPtr invoke: a bare local whose type is a signature → an indirect

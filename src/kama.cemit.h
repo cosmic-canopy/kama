@@ -1222,6 +1222,11 @@ private:
     // alone cannot identify the callee: `Pair<int32>.first()` and `Pair<int64>.first()` route to different
     // specializations of the same generic function. The signature is empty everywhere else.
     std::map<const InvocationNode*, std::map<std::string, std::string>> _callInst;
+    // Call sites discovery LOOKED AT and could not resolve — it diagnosed them itself (inferGenericInst /
+    // explicitGenericInst report before returning false). The emit-side fail-closed rule below reads this
+    // to tell "discovery said no" from "discovery never came here", and stays silent about the first, so
+    // one mistake keeps producing one diagnostic.
+    std::set<const InvocationNode*>                 _genericInferFailed;
     std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
     std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
