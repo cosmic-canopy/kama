@@ -595,6 +595,37 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
+- **A `match` arm leaks the enum's type substitution into its payload's own members** — PROBED
+  2026-08-27, root-caused, previously unrecorded. When a generic enum's type parameter shares a NAME with
+  its payload type's parameter, the enum's binding wins inside the arm, so a field declared with the
+  payload's parameter resolves to the wrong type:
+
+  ```kama
+  type value Reader<T> { public T item; public ctor make(T item) { this.item = item; } }
+  Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
+  match (o) { case Some(value: v): v.item; … }   // `v.item` is int32; the arm reads it as Reader<int32>
+  ```
+
+  ⚠️ **It is a NAME collision, not anything about `Optional`.** Renaming the payload's parameter to `U`
+  makes it compile; a *user* enum `MyOpt<T>` fails identically. `Optional<T>`/`Result<T,E>` are the
+  prelude's and use `T` — the name almost every user also picks — so this hits the commonest generic shape
+  in the language, and `Result<Generic<T>, E>` is the standard fallible return.
+
+  **Both failure directions, and the second is why this gates the tag:**
+  - to a primitive (`return v.item` where the arm must yield `int32`) it is a FALSE REJECTION —
+    *"a `match` arm expects a number, so it cannot be given a type value"*;
+  - to the wrongly-inferred type (`Reader<int32> x = match (o) { case Some(value: v): v.item; … }`)
+    **`kama check` answers OK** and only clang refuses the emitted C, with a raw
+    `assigning to '_F…__Reader_int32' from incompatible type 'int32_t'`. A check/build disagreement and
+    invalid emitted C — the two things the gate's sentence names.
+
+  Lead: `bindArmPayloadTypes` installs `_typeSubst` from the SUBJECT's params only
+  (`kama.cemit.cpp:886`), and that binding is still live when the arm resolves a member of the payload,
+  whose own template parameters were never bound. Wants a fixture pair (the rejection and the false OK)
+  plus the `tests/analysis agreement` phase, which would have caught the second had the shape been in the
+  corpus. **Blocks the fallible-ctor row below** — that row's stated workaround ("bind it to a typed local
+  first") does not actually work, for this reason.
+
 - **A FALLIBLE ctor on a generic instance has no static result type.** `callReturnTypeRaw` now resolves a
   dot-on-type ctor call on a generic receiver (so a method chains off `Fixed::<int32, 16>.fromInt(…)`), but
   only for an INFALLIBLE ctor, whose result is the instance itself. A fallible one declares
@@ -654,14 +685,23 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Should `spawn`'s disjointness check move from ROOT granularity to PLACE granularity?** The view
   model introduced `placePath()` / `placesConflict()` — a place is a base plus its chain of field
   names, and two places conflict iff one is a prefix of the other. `spawn`'s existing rule
-  (`Scope::borrowedRoots`, pinned by `tests/xfail/scope_borrow_same_root.kama`) compares **roots**, so
-  two children borrowing `w.bodies` and `w.springs` are rejected as "the same root `w`" even though the
-  fields cannot overlap. Adopting the place test would unify the two predicates — one rule, which is
-  what [GOALS.md](GOALS.md) §4 asks for — and admit the disjoint-field case the ECS/engine shape wants.
-  **It is a relaxation of a concurrency rule, which is why it is a question and not a chore:** the
-  argument that two disjoint fields are safe to hand two threads is the same disjointness argument the
-  view model rests on, but it has to hold across a thread boundary rather than within one frame, and
-  nothing has been probed. Cheap to do, not cheap to get wrong. Do not fold it into a view commit.
+  (`Scope::borrowedRoots`, pinned by `tests/xfail/scope_borrow_same_root.kama`) compares **roots**.
+  Adopting the place test would unify the two predicates — one rule, which is what [GOALS.md](GOALS.md) §4
+  asks for — and admit the disjoint-field case the ECS/engine shape wants.
+
+  ⚠️ **PROBED 2026-08-27, and this entry's premise was wrong.** It said `w.bodies` and `w.springs` "are
+  rejected as *the same root `w`*". They are not: `spawn` never reaches the root comparison, because it
+  accepts only a **bare local** by `ref` — the argument must be an `IdentifierNode`
+  (`kama.cemit.cpp:11970`), so a field expression is refused outright with a different message
+  (*"`spawn` to `step` borrows — pass a bare local by `ref`"*). The restriction has its own stated reason,
+  which the row never mentioned: *"a field/element root's lifetime we don't track"*.
+
+  So this is **not** a predicate swap. The order is: (1) decide whether a `spawn` borrow may designate a
+  place at all, which is a LIFETIME question about the field's owning root, not a disjointness one;
+  (2) teach the borrow trampoline to pass `&w.bodies` rather than `&local`; only then (3) does
+  `placesConflict` vs `borrowedRoots` matter. **It is a relaxation of a concurrency rule across a thread
+  boundary, and it is not cheap to DO either — the `M?` was read off a mechanism that does not exist.**
+  Settle the design first; do not fold it into a view commit.
 
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
