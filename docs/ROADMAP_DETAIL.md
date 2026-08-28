@@ -595,44 +595,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **Fallible `new` is concrete-only.** `try new` / `new(allocator:)` support concrete `Owned`/`Shared`;
   the type-erased interface-element handle (`Owned<Contract>`) and the stateful-allocator form report "not
   yet supported" (`emitFallibleNewBox`). A follow-on to the MCU step-5 allocator work.
-- **A `match` arm leaks the enum's type substitution into its payload's own members** — PROBED
-  2026-08-27, root-caused, previously unrecorded. When a generic enum's type parameter shares a NAME with
-  its payload type's parameter, the enum's binding wins inside the arm, so a field declared with the
-  payload's parameter resolves to the wrong type:
-
-  ```kama
-  type value Reader<T> { public T item; public ctor make(T item) { this.item = item; } }
-  Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
-  match (o) { case Some(value: v): v.item; … }   // `v.item` is int32; the arm reads it as Reader<int32>
-  ```
-
-  ⚠️ **It is a NAME collision, not anything about `Optional`.** Renaming the payload's parameter to `U`
-  makes it compile; a *user* enum `MyOpt<T>` fails identically. `Optional<T>`/`Result<T,E>` are the
-  prelude's and use `T` — the name almost every user also picks — so this hits the commonest generic shape
-  in the language, and `Result<Generic<T>, E>` is the standard fallible return.
-
-  **Both failure directions, and the second is why this gates the tag:**
-  - to a primitive (`return v.item` where the arm must yield `int32`) it is a FALSE REJECTION —
-    *"a `match` arm expects a number, so it cannot be given a type value"*;
-  - to the wrongly-inferred type (`Reader<int32> x = match (o) { case Some(value: v): v.item; … }`)
-    **`kama check` answers OK** and only clang refuses the emitted C, with a raw
-    `assigning to '_F…__Reader_int32' from incompatible type 'int32_t'`. A check/build disagreement and
-    invalid emitted C — the two things the gate's sentence names.
-
-  Lead: `bindArmPayloadTypes` installs `_typeSubst` from the SUBJECT's params only
-  (`kama.cemit.cpp:886`), and that binding is still live when the arm resolves a member of the payload,
-  whose own template parameters were never bound. Wants a fixture pair (the rejection and the false OK)
-  plus the `tests/analysis agreement` phase, which would have caught the second had the shape been in the
-  corpus. **Blocks the fallible-ctor row below** — that row's stated workaround ("bind it to a typed local
-  first") does not actually work, for this reason.
-
 - **A FALLIBLE ctor on a generic instance has no static result type.** `callReturnTypeRaw` now resolves a
   dot-on-type ctor call on a generic receiver (so a method chains off `Fixed::<int32, 16>.fromInt(…)`), but
   only for an INFALLIBLE ctor, whose result is the instance itself. A fallible one declares
   `ctor Result<T, E> open(…)`, and rendering that needs the owning instance's type args bound — a binding
   this path does not do. So `match (Reader::<int32>.open(…))` still wants a typed local first, while the
-  concrete `match (Reader.open(…))` does not. The binding pattern exists twice already in
-  `callReturnTypeRaw`; the work is factoring it out rather than adding a third copy.
+  concrete `match (Reader.open(…))` does not. The binding pattern exists three times already in
+  `callReturnTypeRaw` / `indexElemTypeRaw` / `cTypeInInstance`; the work is reaching for the last of
+  those rather than adding a fourth copy. ✅ **The stated workaround — "bind it to a typed local first" —
+  now actually works**, re-probed 2026-08-28 after the `match` substitution fix, which is what had been
+  breaking it. The row itself is unchanged: the inline subject still answers *"`match` subject's type
+  could not be resolved"*.
 - **Windows long-path support is deferred.** Surfaces only on a deep working directory. ⚠️ This entry
   used to say "the temp-path builder"; there is no such builder, and grepping `MAX_PATH` turns up two
   *different* ceilings that want separate fixes:
