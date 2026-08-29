@@ -620,6 +620,19 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
     `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
     so). Lower stakes: it degrades to the unresolved spelling rather than failing.
+- **Explicit SIMD — UNSCOPED, and that is the finding.** The row has carried a size for a long time and
+  this section has never held a word about it (27 bullets, none on SIMD), so that size was read off
+  reasoning that does not exist. It is marked `?` until someone writes the design, and it is now a gate
+  row, so that design is the first work — not a prototype. What it has to answer, at minimum: whether the
+  surface is a **generic vector type** (`Vec<T, const N>` lowering to clang's `ext_vector_type`, which the
+  C backend gets nearly free and which auto-degrades to scalars on a target without the unit) or a set of
+  **intrinsic free functions** per operation; how a shuffle spells its compile-time lane indices given const
+  generics already ship; what happens on a target with no SIMD unit (scalar fallback vs a compile error);
+  and whether `parallel_for` and the `Real`/math contracts need to say anything about it. ⚠️ Weigh it
+  against [GOALS.md](GOALS.md) *"one way to do a thing"* early: a vector type and a bag of intrinsics are
+  two ways, and the engine only needs one. The **performance invariant** at the top of ROADMAP.md also
+  binds here — whatever ships must not slow the existing scalar path.
+
 - **Every Windows binary kama emits is CONSOLE subsystem, including GUI programs.** Double-clicking the
   native `examples/webgpu` triangle opens TWO windows: the console Windows creates for a console-subsystem
   PE, and then the actual graphics window GLFW opens on top of it. Verified with `file` — `triangle.exe`
