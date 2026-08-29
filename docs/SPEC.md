@@ -3497,6 +3497,20 @@ all gone hands the item **back** rather than dropping it on the floor, so nothin
 and the sender decides what to do. `recv()` returns `Optional<T>`: `None` means the channel is
 closed and empty, which is why dropping the last `Sender` is how a producer signals end-of-stream.
 
+**Endpoints are counted, so a channel is many-to-many.** `sender()` and `receiver()` may each be
+called any number of times; every call registers another endpoint, and a *side* closes only when its
+last endpoint drops. Several `Receiver`s over one channel is a **worker pool** — each item goes to
+exactly one of them <!-- test: channel_pool_recv --> — and several `Senders` is a fan-in
+<!-- test: channel_multi_send -->, rendezvous included <!-- test: channel_rendezvous_multi -->. The
+count moves exactly where ownership does, the same way a `Shared<T>` control block works, so the
+last endpoint to drop is the one that frees the queue. There is no `clone()` on an endpoint and none
+is needed: a `Channel<T>` is itself a move-only `resource`, so it can be moved *into* an isolate
+whose worker then mints its own endpoint there. <!-- test: channel_mint_in_isolate -->
+
+A side is also open **before it is ever claimed**, which is what lets that last pattern work: a
+receiver may call `recv()` before the isolate holding the `Channel` has minted its `Sender`, and it
+blocks rather than reading "no senders yet" as end-of-stream.
+
 **Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
 sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
 `Shared`/`Weak` over a deeply-immutable type. What is **rejected** is a **non-atomic shared refcount** — a <!-- xfail: channel_send_shared -->
@@ -3521,6 +3535,12 @@ scope {
     spawn writer(s: give sb);
 }                                 // BARRIER: both joined here, before anything below runs
 ```
+
+A bare `spawn` must be a **direct statement of its scope**; one inside a nested block is rejected. <!-- xfail: spawn_in_nested_block -->
+So a scope's children are exactly the `spawn`s written in it, and can be counted by reading the
+block. That matches the coarse-isolate model above: roughly one isolate per core, not one per work
+item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
+and per-item work over a container is `parallel_for`.
 
 ### Data parallelism — `parallel_for` ✅
 
