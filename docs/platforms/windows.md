@@ -192,39 +192,51 @@ Worth knowing before debugging, because each of these produced a confident wrong
 `windows-test` CI leg is no longer `continue-on-error`. Windows is a supported platform, not a
 best-effort one, and a program kama builds here is distributable as it stands.
 
-What is left is one question with two entries against it — **what shape a Windows *application* is,
-as opposed to a Windows console tool.** Both are parked in [ROADMAP.md](../ROADMAP.md)'s known-issues
-list; neither is a regression:
+**What shape a Windows *application* is, as opposed to a Windows console tool**, used to be two open
+entries here. One has shipped:
 
-- **Console subsystem** — every emitted binary is CONSOLE subsystem, so a GUI program opens a console
-  it never asked for. `-mwindows` suppresses it but then `print`/`eprintln` go nowhere, so it needs an
-  explicit choice rather than a new default.
-
-  ⚠️ **This one does NOT need a Windows machine to build or to guard** — measured 2026-08-29 on an
-  arm64 Mac, which is worth knowing before anyone schedules it around hardware:
+- **Subsystem — SHIPPED.** A GUI program asks for it; console stays the default. See
+  [targets.md § Subsystem](../targets.md#subsystem) for the full surface.
 
   ```sh
-  kama build prog.kama -o prog.exe --target WINDOWS      # -> PE32+ executable (console) Aarch64
-  # …and with -Wl,--subsystem,windows reaching the linker:
-  file prog.exe                                          # -> PE32+ executable (GUI) Aarch64
+  kama build game.kama -o game.exe --target WINDOWS                      # PE32+ executable (console)
+  kama build game.kama -o game.exe --target WINDOWS --subsystem windows  # PE32+ executable (GUI)
   ```
 
-  `file` reads the PE subsystem field directly, so the guard is "build both ways, assert the word in
-  parentheses" — no execution, no Windows host. Three things make that work, and each cost a wrong turn:
+  ⚠️ **It needed no Windows machine to build or to guard** — `file` reads the PE subsystem field
+  directly, so `tools/check-target.sh` builds both ways and asserts the word in parentheses. Worth
+  knowing before scheduling anything else here around hardware. Three things make that work, and each
+  cost a wrong turn:
 
   * **`zig cc` is the cross toolchain.** The driver resolves it for any non-host target
     (`resolveCCompiler`, `kama.driver.cpp`), and it brings its own `lld`, which is what accepts
     `--subsystem`. Apple's `ld` does not — a hand-rolled `clang --target=aarch64-windows-gnu` fails with
     `unknown options: -Bdynamic`, which looks like a flag problem and is a *linker* problem.
   * ⚠️ **`--cc <override>` suppresses the target triple.** The driver assumes an explicitly named compiler
-    knows its own target, so an override must supply `-target <triple>` itself. A wrapper script is the
-    practical way to inject a link flag today: `exec zig cc -target aarch64-windows-gnu -Wl,… "$@"`.
+    knows its own target, so an override must supply `-target <triple>` itself.
   * ⚠️ **`kama: built <path>` does not prove a file exists.** The driver reports success on the C
     compiler's exit status without stat-ing its own output, so a `--cc` that silently produces nothing
     still prints "built". Any guard that goes through `--cc` must assert on `file` output, never on the
     build message.
+
+  ⚠️ **The one part a cross-build cannot check — VERIFY THIS ON REAL HARDWARE.** A GUI-subsystem process
+  gets no console, so `kama_args_init` (`include/kama_runtime.h`) calls
+  `AttachConsole(ATTACH_PARENT_PROCESS)` and rebinds the standard streams so `print` still reaches a
+  terminal that launched it. Building proves it compiles and links; only a Windows host proves it
+  *works*. Two specific things to confirm, because both were reasoned rather than measured:
+
+  * **It is the FILE DESCRIPTORS that must be rebound, not `stdout`/`stderr`.** `print` goes through
+    `kama_raw_write` → `_write(fd, …)` and never touches a `FILE*`, so the obvious
+    `freopen("CONOUT$", "w", stdout)` fixes a stream kama does not use and leaves `print` silent. The
+    code opens `CONOUT$`, wraps the HANDLE with `_open_osfhandle`, and `_dup2`s it over fd 1 and 2 —
+    plus `SetStdHandle`, since the CRT fd and the Win32 std handle are independent namespaces.
+    (The ROADMAP prose specified `freopen`; it was wrong, for this reason.)
+  * **Double-clicked from Explorer there is no parent console**, `AttachConsole` fails, the rebind is
+    skipped, and output is discarded — which is the correct behaviour, but confirm it does not hang or
+    crash.
+
 - **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Surfaces only on a deep
-  working directory.
+  working directory. Still open, and parked in [ROADMAP.md](../ROADMAP.md); not a regression.
 
 The **wall clock** is the other thing to know: the suite is ~906 s here against ~75 s in the Linux
 container. The cost is per-fixture C compilation plus Windows process startup — `kama build -j`

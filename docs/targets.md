@@ -273,6 +273,50 @@ Check what you actually produced:
 objdump -p app.exe | grep 'DLL Name'    # want only KERNEL32 + api-ms-win-crt-*
 ```
 
+## Subsystem
+
+Another Windows-only axis, and the same shape as runtime linkage: **what kind of application the PE
+declares itself to be.** Windows gives a *console-subsystem* program a console window whether it wants
+one or not — so a GUI program built the default way opens two windows, the console Windows created for
+it and then the one it actually asked for.
+
+**Console is the default, and you opt *in* to windows:**
+
+```sh
+kama build game.kama --target WINDOWS                        # console subsystem (the default)
+kama build game.kama --target WINDOWS --subsystem windows    # no console window
+```
+
+…or per-project, since the subsystem is a permanent property of the artifact:
+
+```json
+"select": { "TARGET": { "WINDOWS": { "subsystem": "windows" } } }
+```
+
+`--subsystem` wins over the manifest, the same way `--dynamic-runtime` does.
+
+**`console` is the default deliberately.** It keeps every console tool, the CI legs and `kama` itself
+behaving exactly as they always have, and a GUI app is the thing that knows it is a GUI app. The
+alternative default breaks `print` for everyone to fix a stray window for a few.
+
+**`print` still works from a terminal.** The cost that normally comes with `-mwindows` is that
+`print`/`eprintln` go nowhere, because a GUI-subsystem process is given no console. kama undoes the half
+that matters: at startup a `windows`-subsystem binary calls `AttachConsole(ATTACH_PARENT_PROCESS)` and,
+if it was launched *from* a terminal, rebinds its standard descriptors onto that console. So the same
+binary is silent when double-clicked from Explorer — correct for a GUI app — and prints normally when run
+from PowerShell. Launched from Explorer there is no parent console, the attach fails, and output is
+discarded.
+
+**Everywhere else it is an accepted no-op.** No other object format has a subsystem field, so one
+cross-platform build script can carry the flag unconditionally — the same stance `--dynamic-runtime`
+takes.
+
+Check what you actually produced:
+
+```sh
+file app.exe        # PE32+ executable (GUI) … , for MS Windows
+```
+
 ## Where the artifacts land
 
 Inside a **project** (a directory with a `kama.json`), everything a build generates goes under one root:

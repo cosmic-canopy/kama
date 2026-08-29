@@ -197,6 +197,70 @@ if ! grep -qF 'must be "static" or "dynamic"' "$rt/err"; then
     exit 1
 fi
 
+# 2b. PE SUBSYSTEM — the same three-part shape as runtime linkage above (CLI flag, manifest key, validated
+#     value), because it is the same kind of question: a permanent property of the artifact, chosen per
+#     target. Console is the default and must stay byte-for-byte what it always was.
+if ccline WINDOWS | grep -qF -- "--subsystem"; then
+    echo "check-target: FAIL — a default Windows build asked for a subsystem; console must stay the default" >&2
+    exit 1
+fi
+#     Opting in emits TWO flags into DIFFERENT phases: the linker gets --subsystem, and the C compiler gets
+#     a -D so kama_args_init() reattaches the parent console. Assert both — a -D that silently landed in the
+#     link tail instead of the compile flags would be lost by every per-TU `-c` job, and the symptom (a GUI
+#     program that prints nothing) looks exactly like the feature never shipped.
+guiline=$(tryline gui build --release --cc "echo" "$FIXTURE" --target WINDOWS --subsystem windows -o "$tmp/gui")
+for flag in "-Wl,--subsystem,windows" "-DKAMA_SUBSYSTEM_WINDOWS=1"; do
+    if ! printf '%s' "$guiline" | grep -qF -- "$flag"; then
+        echo "check-target: FAIL — --subsystem windows did not emit $flag" >&2
+        why gui; exit 1
+    fi
+done
+#     …and everywhere else it is an accepted NO-OP, not an error, so one cross-platform build script can
+#     carry the flag. No other object format has a subsystem field to set.
+if tryline guilinux build --release --cc "echo" "$FIXTURE" --target LINUX --subsystem windows -o "$tmp/gl" \
+   | grep -qF -- "--subsystem"; then
+    echo "check-target: FAIL — --subsystem leaked into a non-Windows link" >&2
+    why guilinux; exit 1
+fi
+#     The same choice per-project, as a target property in kama.json — beside `runtime`, for its reasons.
+sub="$tmp/sub"; mkdir -p "$sub/src"
+cat > "$sub/kama.json" <<'JSON'
+{ "name": "subdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "TARGET": { "WINDOWS": { "subsystem": "windows" } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cp "$FIXTURE" "$sub/src/app.kama"
+subline=$("$KAMA" build --release --cc "echo" "$sub/kama.json" --target WINDOWS -o "$sub/app" 2>/dev/null || true)
+if ! printf '%s' "$subline" | grep -qF -- "-Wl,--subsystem,windows"; then
+    echo "check-target: FAIL — a target's \"subsystem\": \"windows\" did not reach the link tail" >&2
+    printf '%s\n' "$subline" | sed 's/^/    /' >&2
+    exit 1
+fi
+#     A typo must not read as "not windows" and silently hand back the console default being changed.
+printf '%s\n' '{ "name": "subdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "WINDOWS": { "subsystem": "gui" } } } }' > "$sub/kama.json"
+if "$KAMA" build --release --cc "echo" "$sub/kama.json" --target WINDOWS -o "$sub/app" >/dev/null 2>"$sub/err"; then
+    echo "check-target: FAIL — an unknown \"subsystem\" value was accepted" >&2
+    exit 1
+fi
+if ! grep -qF 'must be "console" or "windows"' "$sub/err"; then
+    echo "check-target: FAIL — a bad \"subsystem\" value failed, but not with the value diagnostic:" >&2
+    sed 's/^/  /' "$sub/err" >&2
+    exit 1
+fi
+#     …and so must a bad value on the CLI, which is a separate code path from the manifest reader.
+if "$KAMA" build --release --cc "echo" "$FIXTURE" --target WINDOWS --subsystem gui -o "$tmp/bad" \
+   >/dev/null 2>"$tmp/badsub.err"; then
+    echo "check-target: FAIL — an unknown --subsystem value was accepted" >&2
+    exit 1
+fi
+if ! grep -qF 'must be "console" or "windows"' "$tmp/badsub.err"; then
+    echo "check-target: FAIL — a bad --subsystem value failed, but not with the value diagnostic:" >&2
+    sed 's/^/  /' "$tmp/badsub.err" >&2
+    exit 1
+fi
+
 # 3. SHARED-LIBRARY EXTENSION — the default output name follows the target's platform convention, so a
 #    cross build does not produce a `.dylib` for Windows.
 for spec in "WINDOWS .dll" "MACOS .dylib" "LINUX .so"; do
@@ -250,6 +314,32 @@ if command -v zig >/dev/null 2>&1; then
             echo "check-target: FAIL — --target $CROSS_OS produced something that is not a $CROSS_FILE_MAGIC binary:" >&2
             file "$tmp/auto.exe" | sed 's/^/  /' >&2
             exit 1
+        fi
+        # …and while a real cross toolchain is in hand, prove the SUBSYSTEM end to end rather than only at
+        # the command line: `file` reads the PE subsystem field directly, so a build each way is the whole
+        # assertion — no execution, no Windows host. Only meaningful when the foreign target IS Windows
+        # (on a Windows host CROSS_OS is LINUX, and ELF has no subsystem field).
+        #
+        # ⚠️ This must go through the ORDINARY build path, never `--cc`: an override suppresses the target
+        # triple, and `kama: built <path>` is printed off the C compiler's exit status without stat-ing the
+        # output — so a --cc that produced nothing still says "built". Assert on `file`, never on that.
+        if [ "$CROSS_OS" = WINDOWS ]; then
+            if ! file "$tmp/auto.exe" | grep -qi 'console'; then
+                echo "check-target: FAIL — the default Windows binary is not console-subsystem:" >&2
+                file "$tmp/auto.exe" | sed 's/^/  /' >&2
+                exit 1
+            fi
+            if ! "$KAMA" build "$FIXTURE" --target WINDOWS --subsystem windows -o "$tmp/autogui.exe" \
+                 >/dev/null 2>"$tmp/autogui.err"; then
+                echo "check-target: FAIL — a --subsystem windows cross build did not link:" >&2
+                sed 's/^/  /' "$tmp/autogui.err" >&2
+                exit 1
+            fi
+            if ! file "$tmp/autogui.exe" | grep -qi 'GUI'; then
+                echo "check-target: FAIL — --subsystem windows did not produce a GUI-subsystem PE:" >&2
+                file "$tmp/autogui.exe" | sed 's/^/  /' >&2
+                exit 1
+            fi
         fi
     fi
 else

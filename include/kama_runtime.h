@@ -1120,6 +1120,57 @@ extern int    kama_argc;
 extern char** kama_argv;
 static inline void kama_args_init(int argc, char** argv) {
     kama_argc = argc; kama_argv = argv;
+#if defined(_WIN32) && defined(KAMA_SUBSYSTEM_WINDOWS)
+    // A GUI-subsystem PE (`--subsystem windows`) is given NO console, so `print`/`eprintln` write to
+    // handles that go nowhere. That is the cost that stops windows-subsystem being the default. Undo the
+    // half that matters: if this program was launched FROM a terminal, borrow that terminal.
+    //
+    // ⚠️ AttachConsole ALONE IS NOT ENOUGH, and this is the whole trap. It gives the process a console,
+    // but the CRT bound stdout/stderr to nothing back at startup — before `main` — so the FILE* streams
+    // stay pointed at nothing and `print` is still silent. The streams have to be reopened onto the
+    // console device by name. Double-clicked from Explorer there is no parent console, AttachConsole
+    // fails, and the freopens are skipped: output goes nowhere, which is exactly right for a GUI app.
+    //
+    // ⚠️ AND IT IS THE FILE DESCRIPTORS THAT MUST BE REBOUND, NOT stdout/stderr. `print` goes through
+    // kama_raw_write -> _write(fd, …) (see above); it never touches a FILE*. So the obvious spelling —
+    // freopen("CONOUT$", "w", stdout) — fixes a stream kama does not use and leaves `print` silent. Open
+    // the console device, wrap the HANDLE in a CRT fd, and _dup2 it over fd 1 and 2.
+    //
+    // SetStdHandle as well, because the two namespaces are independent: _dup2 moves the CRT fd and leaves
+    // the Win32 std handle alone, so anything a user links that calls GetStdHandle/WriteConsole (a C
+    // library, wgpu's logging) would still be writing nowhere.
+    //
+    // Ordered BEFORE the _setmode block below so the binary-mode calls act on the rebound descriptors.
+    // ATTACH_PARENT_PROCESS is (DWORD)-1; the STD_*_HANDLE ids are -10/-11/-12; the CreateFileA constants
+    // are GENERIC_READ|GENERIC_WRITE and FILE_SHARE_READ|FILE_SHARE_WRITE with OPEN_EXISTING. All declared
+    // at block scope, like _setmode/_write below, so <windows.h> never leaks into user code.
+    {
+        extern int   __stdcall AttachConsole(unsigned long);
+        extern void* __stdcall CreateFileA(const char*, unsigned long, unsigned long, void*,
+                                           unsigned long, unsigned long, void*);
+        extern int   __stdcall SetStdHandle(unsigned long, void*);
+        extern int   _open_osfhandle(intptr_t, int);
+        extern int   _dup2(int, int);
+        extern int   _close(int);
+        if (AttachConsole((unsigned long)-1)) {
+            void* hOut = CreateFileA("CONOUT$", 0x80000000u | 0x40000000u, 0x1u | 0x2u,
+                                     (void*)0, 3u, 0u, (void*)0);
+            void* hIn  = CreateFileA("CONIN$",  0x80000000u | 0x40000000u, 0x1u | 0x2u,
+                                     (void*)0, 3u, 0u, (void*)0);
+            if (hOut != (void*)(intptr_t)-1) {
+                int fd = _open_osfhandle((intptr_t)hOut, 0);
+                if (fd >= 0) { _dup2(fd, 1); _dup2(fd, 2); _close(fd); }
+                SetStdHandle((unsigned long)-11, hOut);
+                SetStdHandle((unsigned long)-12, hOut);
+            }
+            if (hIn != (void*)(intptr_t)-1) {
+                int fd = _open_osfhandle((intptr_t)hIn, 0);
+                if (fd >= 0) { _dup2(fd, 0); _close(fd); }
+                SetStdHandle((unsigned long)-10, hIn);
+            }
+        }
+    }
+#endif
 #if defined(_WIN32)
     // ...and, on Windows, put the standard streams in BINARY mode before a single byte moves.
     //

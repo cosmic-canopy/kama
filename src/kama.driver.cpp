@@ -1744,6 +1744,12 @@ struct TargetSpec {
     // Rust's model. Only Windows has a default worth overriding today (see the -lpthread arm of the link
     // tail); elsewhere libc IS the system, so there is no non-system runtime to make a choice about.
     std::string runtime;
+    // Which Windows SUBSYSTEM the PE declares: "" (unset -> "console") | "console" | "windows".
+    // A GUI program linked console-subsystem gets a stray console window Windows opens for it, on top of
+    // the window it actually asked for. Same shape as `runtime` directly above and for the same reason —
+    // a permanent property of the artifact, chosen per target, not a per-invocation switch. Only Windows
+    // has a subsystem field at all; elsewhere this is an accepted no-op so one build script carries it.
+    std::string subsystem;
     std::vector<std::string> cflags, ldflags;
     // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
     // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
@@ -1951,6 +1957,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (!u.ar.empty())      out.ar      = u.ar;
         if (!u.sysroot.empty()) out.sysroot = u.sysroot;
         if (!u.runtime.empty()) out.runtime = u.runtime;
+        if (!u.subsystem.empty()) out.subsystem = u.subsystem;
         out.cflags.insert(out.cflags.end(),  u.cflags.begin(),  u.cflags.end());
         out.ldflags.insert(out.ldflags.end(), u.ldflags.begin(), u.ldflags.end());
         if (u.linkSet)   { out.link   = u.link;   out.linkSet   = true; }   // replace, per the note in the reader
@@ -2724,6 +2731,14 @@ struct ManifestReader {
                     if (!str(t.runtime)) return false;
                     if (t.runtime != "static" && t.runtime != "dynamic")
                         return fail("a target's `runtime` must be \"static\" or \"dynamic\"");
+                }
+                // The PE subsystem. VALIDATED for the same reason `runtime` is: "gui" or "win32" would
+                // otherwise read as "not windows" and hand back the console default being changed —
+                // and the symptom (a stray console window) looks like the feature never shipped.
+                else if (k == "subsystem") {
+                    if (!str(t.subsystem)) return false;
+                    if (t.subsystem != "console" && t.subsystem != "windows")
+                        return fail("a target's `subsystem` must be \"console\" or \"windows\"");
                 }
                 else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
                 else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
@@ -4004,6 +4019,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!l.ar.empty())      t.ar      = l.ar;
                 if (!l.sysroot.empty()) t.sysroot = l.sysroot;
                 if (!l.runtime.empty()) t.runtime = l.runtime;
+                if (!l.subsystem.empty()) t.subsystem = l.subsystem;
                 if (!l.cflags.empty())  t.cflags  = l.cflags;
                 if (!l.ldflags.empty()) t.ldflags = l.ldflags;
             }
@@ -6614,6 +6630,11 @@ void usage()
         "                              Windows only in effect (elsewhere libc IS the system, so there is no\n"
         "                              non-system runtime to choose about); a target's `runtime` key in\n"
         "                              kama.json says the same thing per-project. See docs/targets.md.\n"
+        "                             [--subsystem console|windows]  the Windows PE subsystem (default\n"
+        "                              console). `windows` suppresses the console a GUI program would\n"
+        "                              otherwise be given, and reattaches the parent's console so `print`\n"
+        "                              still works from a terminal. Windows only in effect; a target's\n"
+        "                              `subsystem` key in kama.json says the same thing per-project.\n"
         "                  (pass multiple .kama files to build a multi-file program; --dev also resolves dev-dependencies)\n"
         "  kama run       [<file>] [--release|--debug] [--dev] [--define NAME]... [--config PATH] [-- <program args>]\n"
         "                  (build the entry .kama — explicit <file>, else the manifest \"entry\" — and run it; native-only)\n"
@@ -8094,6 +8115,7 @@ int main(int argc, char** argv)
     bool releaseExplicit   = false;        // was --release/--debug passed? (sugar must not beat a manifest default)
     bool        shared     = false;        // --shared: build a native .so/.dylib/.dll (expose entry points)
     bool dynamicRuntime    = false;        // --dynamic-runtime: link the runtime as a DLL (Windows opt-in)
+    std::string cliSubsystem;              // --subsystem console|windows: the PE subsystem (Windows opt-in)
     std::vector<std::string> defines;      // --define NAME: activate a `@compileFor` flag (repeatable)
     std::vector<std::string> selects;      // --select GROUP=VALUE: pick a single-select group (repeatable)
     std::vector<std::string> undefines;    // --undefine NAME: deactivate a default flag (repeatable)
@@ -8148,6 +8170,16 @@ int main(int argc, char** argv)
         // choose about, so one cross-platform build script can carry it. Orthogonal to `--shared`, which
         // picks the OUTPUT kind rather than how the runtime is linked.
         else if (a == "--dynamic-runtime")        dynamicRuntime = true;
+        // Which Windows subsystem the PE declares. A VALUED flag rather than a boolean `--gui`, so the CLI
+        // and the `subsystem` manifest key speak one vocabulary. Validated here for the same reason the
+        // manifest reader validates it: a typo must not quietly hand back the console default.
+        else if (a == "--subsystem" && i + 1 < argc) {
+            cliSubsystem = argv[++i];
+            if (cliSubsystem != "console" && cliSubsystem != "windows") {
+                fprintf(stderr, "kama: --subsystem must be \"console\" or \"windows\"\n");
+                return 2;
+            }
+        }
         else if (a == "--no-heap")                g_noHeap = true;   // reject heap allocation program-wide (MCU step 5)
         else if (a == "--strict-numeric")         g_strictNumeric = true;   // M5a: measure, don't reject (hidden)
         else if (a == "--probe-templates")        g_probeTemplates = true;  // size the template probe (hidden)
@@ -8331,6 +8363,7 @@ int main(int argc, char** argv)
     // The CLI wins over the manifest's `runtime`, exactly as --target wins over a `"default": true`.
     // Set after resolveBuildConfig because that is what assigns g_target.
     if (dynamicRuntime) g_target.runtime = "dynamic";
+    if (!cliSubsystem.empty()) g_target.subsystem = cliSubsystem;
 
     // Package deps (M2): if the manifest declares dependencies, the resolved view must already be
     // materialized. The build is a pure, reproducible READ of the view — it never fetches — so a missing
@@ -9434,6 +9467,22 @@ int main(int argc, char** argv)
         // Keying this on the host was the sharpest example of the cross-compilation blocker: a Windows
         // build produced on Linux silently omitted the socket library.
         if (!wasm && !stopsAtObject && g_target.isWindows()) link << "-lws2_32 ";
+        // The PE SUBSYSTEM. Console is the default and stays byte-for-byte what it always was, so every
+        // console tool, the CI legs and `kama` itself are untouched; a GUI program opts IN and stops
+        // getting the stray console window Windows opens for a console-subsystem PE.
+        //
+        // Keyed on the TARGET, not on the host and not on `needsPthread` — a GUI program need not spawn.
+        // Everywhere else this is an accepted no-op (no other object format HAS a subsystem field), which
+        // is the same stance `--dynamic-runtime` takes so one build script can carry the flag.
+        //
+        // TWO flags, and they must go to different phases. The linker gets --subsystem; the C compiler
+        // gets a -D so kama_args_init() knows to reattach a console (see kama_runtime.h). The -D belongs
+        // in `cmd` and NOT in the link tail for the reason spelled out at KAMA_PARFOR_WORKERS_DEFAULT
+        // above: a per-TU `-c` job takes only the compile flags, so a link-tail -D is silently lost.
+        if (!wasm && !stopsAtObject && g_target.isWindows() && g_target.subsystem == "windows") {
+            link << "-Wl,--subsystem,windows ";
+            cmd  << "-DKAMA_SUBSYSTEM_WINDOWS=1 ";
+        }
         // The target's own link flags from kama.json, last so they can override anything above.
         if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << f << " ";
 
