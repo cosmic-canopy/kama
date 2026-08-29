@@ -1,0 +1,20 @@
+// TYPE_MODEL.md: "A bare `implements Copyable` *without* `(bare: …)` is a compile error." SPEC says the
+// same thing at the `copy`/`give` rules, and `copyable_no_method` guards the neighbouring claim (declaring
+// the contract without a public `copy` constructor) — but nothing covered the missing `(bare: …)` itself.
+//
+// The declaration is what a BARE hand-off means for this type: `Copyable(bare: give)` moves,
+// `Copyable(bare: copy)` deep-copies. Defaulting it either way would make `R r2 = r1;` mean something the
+// author never wrote, in the one place where guessing wrong is either a surprise deep copy or a surprise
+// move — so kama makes the author say which, rather than picking. There is deliberately no
+// "ambiguous — must annotate" error at the USE site; the annotation is required here, once.
+type resource R implements Copyable<This> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public ctor copy(ref R source) { this.n = source.n; }
+    ~R() {}
+}
+
+fn int32 main() {
+    R a = R.make(n: 1);   // ERROR is on the `implements` above, not here
+    return 0;
+}

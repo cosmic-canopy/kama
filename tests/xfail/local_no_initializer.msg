@@ -1,0 +1,1 @@
+has no initializer — prefix it with `slot`

@@ -138,6 +138,7 @@ copy_conditional_off	copy_conditional_off.kama:13
 copy_owned	copy_owned.kama:4
 copy_resource_coll	copy_resource_coll.kama:8
 copy_value	copy_value.kama:3 copy_value.kama:4
+copyable_no_bare_default	copyable_no_bare_default.kama:10
 copyable_no_method	copyable_no_method.kama:3
 ctor_declares_own_type	ctor_declares_own_type.kama:9
 ctor_fallible_missing_owning_ptr	ctor_fallible_missing_owning_ptr.kama:14
@@ -354,6 +355,7 @@ lit_oob_variant	lit_oob_variant.kama:4
 lit_wide_into_int32	lit_wide_into_int32.kama:5
 lit_wide_negative_past_int64	lit_wide_negative_past_int64.kama:5
 lit_wide_past_uint64	lit_wide_past_uint64.kama:5
+local_no_initializer	local_no_initializer.kama:9
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
 match_arm_member_type_mismatch	match_arm_member_type_mismatch.kama:17
@@ -480,6 +482,7 @@ ref_arg_overlap_field	ref_arg_overlap_field.kama:13
 ref_arg_overlap_receiver	ref_arg_overlap_receiver.kama:11
 ref_arg_rvalue_mut	ref_arg_rvalue_mut.kama:10 ref_arg_rvalue_mut.kama:8
 ref_handle	ref_handle.kama:5
+ref_on_slot	ref_on_slot.kama:12 ref_on_slot.kama:13 ref_on_slot.kama:14
 ref_through_weak	ref_through_weak.kama:3 ref_through_weak.kama:6 ref_through_weak.kama:8
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3

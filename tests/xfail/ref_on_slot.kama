@@ -1,0 +1,15 @@
+// coming-from-other-languages.md: "Reaching for `ref` on a `slot` is rejected, correctly: `ref` is a
+// read-write borrow of a value that is *already live*, and a `slot` has nothing in it yet."
+//
+// `slot_read_before_assign` already covers reading a hole, and the diagnostic here is the same one — but it
+// covers it by READING the slot, which is the spelling nobody writes by accident. The mistake a C or C++
+// reader actually makes is this one: reach for the borrow they know (`ref`) where kama wants the promise
+// (`out`). That spelling appeared nowhere in the tree, which is the same shape as the `foreach (char c in
+// s)` hole — every fixture used a correct spelling, so the wrong one was never typed and never checked.
+fn void fill(ref int32 x) { x = 5; }
+
+fn int32 main() {
+    slot int32 q;
+    fill(x: ref q);   // ERROR: `ref` borrows a live value; a slot has none yet — this wants `out`
+    return q;
+}

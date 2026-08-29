@@ -1,0 +1,11 @@
+// KEYWORDS.md's `slot` row: "A local with no initializer and no `slot` is an error; so is `slot` *with* an
+// initializer." The second half has had a fixture since the slot campaign (`slot_with_initializer`); the
+// first half — the far more common typo — had none, so nothing held the diagnostic that teaches `slot`.
+//
+// It matters that this is an ERROR and not a zero-init: C's `int32 a;` is a live value of unspecified
+// content, and reading it is the undefined behavior kama's `slot` exists to make unrepresentable. Silently
+// accepting the same spelling would import exactly the hazard the keyword was added to close.
+fn int32 main() {
+    int32 a;   // ERROR: no initializer and no `slot`
+    return 0;
+}
