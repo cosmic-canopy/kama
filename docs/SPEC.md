@@ -69,9 +69,9 @@ encode `\u{…}` escapes to UTF-8. Two ways to traverse it, kept distinct by typ
 never blur:
 
 - **bytes** — `s[i]` returns the i-th byte as a **`uint8`** (bounds-checked); `foreach (uint8 b in s)`
-  iterates bytes. `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced.
+  iterates bytes. `foreach (char c in s)` is a type error — the byte/codepoint distinction is enforced. <!-- xfail: foreach_char_over_string -->
   That is one case of a general rule: a `foreach` binding must have the type the collection actually
-  yields, and a mismatch is rejected rather than left to C's implicit conversions
+  yields, and a mismatch is rejected rather than left to C's implicit conversions <!-- xfail: foreach_elem_type_mismatch -->
   (`tests/xfail/foreach_char_over_string`, `tests/xfail/foreach_elem_type_mismatch`).
 - **codepoints** — `s.chars()` is a **UTF-8 codepoint iterator** (`implements Iterator<char>`):
   `foreach (char c in s.chars())` yields each Unicode scalar value as a **`char`**. It's a borrow, valid
@@ -95,7 +95,7 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
 
 - **`+` / `==` / `!=`** — `a + b` concatenates (a fresh heap-owned string), `a == b` / `a != b` compare
   bytes. The compiler special-cases string operands (not a user overload — `string` is a primitive); both
-  operands must be `string` (`string + <number>` is a compile error — **string interpolation** is the one way
+  operands must be `string` (`string + <number>` is a compile error — **string interpolation** is the one way <!-- xfail: string_plus_number -->
   to mix values into text; see below). An interpolation counts as a `string` operand (`name == "hi ${x}"`).
   Chains and compose: `a + b + c`, `s.trim() == "x"`.
 - **slice** — `substring(start:, end:)` copies the byte range `[start, end)` into an owned string. A
@@ -180,7 +180,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   (prefixed — itself a valid Kama literal); the letter's case controls digit case (`${n:0X}` → `0XFF`). Base
   requires an **integer** hole and shows the unsigned bit pattern of its declared width, so a signed negative
   round-trips (`${x:0x}` on `-1i8` → `0xff`). A spec on a user-type hole, or a kind mismatch (`.N` on an int,
-  `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter`
+  `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter` <!-- xfail: interp_spec_user_type, interp_spec_kind_mismatch -->
   fast-paths). A **minimum field width** right-aligns: `${n:6}` space-pads, `${n:06}` zero-pads (the sign
   stays ahead of the zeros), and on a float it composes with a precision (`${pi:8.2}`, `${pi:08.2}`) — ideal
   for zero-padded columns (`${h:02}:${m:02}`). A leading **`+`** forces a sign on non-negatives (`${n:+}` →
@@ -315,7 +315,7 @@ expressible because the mint is read from the grant — `Map` has no `view()`, s
 
 **`foreach` and `parallel_for` are the same window under a different spelling.** Each holds a borrowing
 iterator over its operand for the extent of the body, so the operand is frozen there by rule 2 —
-`foreach (int32 x in d) { d.add(item: 9); }` is a **compile error**, not the runtime panic the growable
+`foreach (int32 x in d) { d.add(item: 9); }` is a **compile error**, not the runtime panic the growable <!-- xfail: iter_reserve_dynarray, iter_reserve_map -->
 containers' mods counter used to raise. The operand roots through its receiver, so `foreach (v in
 m.values())` freezes `m`. Reads stay free: a `const fn` call on the operand, an element write through a
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
@@ -325,14 +325,14 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   **`slice(from:, count:)`** (bounds-checked sub-range); `View<T>` itself has `slice`, `length()`,
   `isEmpty()`, `operator[]` (a mutate-through place), and `iterator()`/`iterMut()` for `foreach`.
 - A view **flows down the call stack** as a by-value parameter; **`const View<T>`** expresses read-only
-  intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it
+  intent. It may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field -->
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
-  over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`.
-- **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra
+  over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`. <!-- xfail: view_return_over_local, view_ctor_over_local -->
+- **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra <!-- xfail: view_ref_param, view_out_param -->
   indirection adds is the power to reseat the caller's view at storage the caller never named. Pass it by
   value (it is two words) or return one. The ban covers contract members too, where a bodiless signature
   would otherwise propagate the spelling to every implementer.
-- **A view argument may not root in another argument's mutable place**, nor in the receiver of a
+- **A view argument may not root in another argument's mutable place**, nor in the receiver of a <!-- xfail: view_arg_aliases_ref, view_arg_aliases_receiver -->
   non-`const fn`: `bad(d: ref d, v: d.view())` and `b.eat(v: b.view())` hand the callee a window over
   storage it may grow. A view roots through its *receiver*, so a chained derive roots where its receiver
   roots.
@@ -341,7 +341,7 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   iterator (`"ab".chars()`, `m.valuesMut()`) is copied by value and stays legal.
 - **A view is minted by the type it views, and by nothing else.** A view is a bidirectional
   relationship — it does not exist without a type to view — so a `type view`'s **constructor is private**,
-  and writing `public` on it is a compile error rather than a silent downgrade (the same rule a `view`
+  and writing `public` on it is a compile error rather than a silent downgrade (the same rule a `view` <!-- xfail: view_ctor_public -->
   *field* already obeys). Two places may call it: the **view itself**, which is what makes `View.slice`
   work; and the **type being viewed**, which declares that relationship by implementing a member of a
   contract marked **`@viewable`**. Implementing such a member lets that member's body mint the view it
@@ -360,7 +360,7 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   `ValuesIterable`/`ValuesIterableMut`/`EntriesIterable` (`std::collections`). A **`@viewable` contract is a
   mint protocol, not a value**: it declares *who* may hand out a view, so boxing one would erase the very
   identity the grant is about. It emits no C type at all — no vtable, no fat pointer — and naming one as a
-  local, parameter, field or return type is an error. Use it in an `implements` clause or as a generic
+  local, parameter, field or return type is an error. Use it in an `implements` clause or as a generic <!-- xfail: mint_protocol_not_a_value -->
   bound. `borrow` and `parallel_for` are **nominal** on it too: a host whose method was never granted is
   rejected, though resolution stays structural, so the emitted call is still direct. `parallel_for` wants
   one specific grant — `view()` — because it needs contiguous storage; `borrow` accepts any.
@@ -562,7 +562,7 @@ Optional<Owned<Shape, BumpAllocator>> s = try new(allocator: arena.handle()) Cir
 ```
 
 Every allocation on this path answers `None`, including a `Shared` handle's control block. A bare
-`try new` into a box whose allocator is **stateful** is refused — that block would be released through
+`try new` into a box whose allocator is **stateful** is refused — that block would be released through <!-- xfail: try_new_stateful_bare -->
 the wrong allocator — so an arena-backed box is built with the placement form
 ([tests/try_new_arena.kama](../tests/try_new_arena.kama),
 [tests/try_new_iface.kama](../tests/try_new_iface.kama),
@@ -598,8 +598,8 @@ Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7); 
 ```
 
 The allocator must be spelled on the box type (`Owned<T, A>` / `Shared<T, A>`, explicit over implicit — a
-`new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). A stateful `A` **requires**
-the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). For
+`new(allocator: BumpAllocator)` into a box spelled `Shared<T>` is a compile error). A stateful `A` **requires** <!-- xfail: new_alloc_shared -->
+the placement form — a bare `new` into a stateful-allocator box is a compile error (it would leak). For <!-- xfail: new_bare_stateful -->
 `Shared`/`Weak`, **both** the pointee and the shared control block are drawn from `A`, and every handle carries
 its own copyable `A` value (copied through `copy()`/`downgrade()`/`tryUpgrade()`), so whichever handle observes
 `strong == 0 && weak == 0` — even a `Weak` that outlived its `Shared` — frees the ctrl through the right
@@ -612,7 +612,7 @@ by-value `A alloc` + pointee `objsize`, so the pointee and control block are dra
 — completing allocator coverage for **every** box (concrete and contract-erased). Default-`GlobalAllocator`
 interface boxes are byte-identical to before (they keep the plain intrinsic macros). One design limit:
 object-graph serialization (`@generate` `Shared`/`Weak`/`Owned` edges) is **`GlobalAllocator`-only** — a graph
-edge spelling a stateful `A` is rejected at compile time (deserialize has no allocator on the wire).
+edge spelling a stateful `A` is rejected at compile time (deserialize has no allocator on the wire). <!-- xfail: graph_alloc_iface -->
 
 ## Smart pointers ✅ (triad → prelude/built-in ✅ — embedded, always in scope, no `import`)
 
@@ -647,7 +647,7 @@ pointee is freed exactly once (RAII, with the pointee's destructor).
 assignment, argument, or return — an explicit marker states the intent, uniformly in all four positions:
 **`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates. **Every owning
 kind is movable**; what varies is whether it is *also* `Copyable` and what a *bare* hand-off defaults to.
-`Owned` is move-only — a bare hand-off moves, and `copy Owned` is an error (it's unique). `Shared`/`Weak`
+`Owned` is move-only — a bare hand-off moves, and `copy Owned` is an error (it's unique). `Shared`/`Weak` <!-- xfail: copy_owned -->
 are `Copyable` and declare `bare: copy`, so a bare hand-off **retains** (refcount++); `copy` is the explicit
 retain, and **`give` still moves the handle** — the ref transfers and the source is consumed (this is how a
 `Shared` returns from a factory without a spurious retain/drop). A `value`/primitive just copies. A fresh
@@ -663,16 +663,16 @@ Shared<Counter> u = copy s;  // explicit retain (same as bare); `give s` moves t
 
 *(`copy` of a collection is a deep copy — a fresh buffer, element-wise: a bitwise-copyable element is copied
 memberwise, a `Copyable`-resource element is deep-copied via its own `copy` ctor. A resource element that is not
-`Copyable` is rejected. `give` of a collection **moves** the buffer.)*
+`Copyable` is rejected. `give` of a collection **moves** the buffer.)* <!-- xfail: copy_resource_coll -->
 
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
-`give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy**
+`give` is optional emphasis; `copy` is an error unless the type opts in. A `resource` **opts into copy** <!-- xfail: copy_value -->
 **nominally** — `implements Copyable(bare: …)` (the prelude contract `Copyable<T is This> { ctor copy(ref T source); }`)
 plus a **public `copy` constructor** (a lone `copy` ctor without the `implements` does *not* make a type
 copyable). It is a **`ctor`** because a copy *is* a new object — the same reason a self-returning `static fn`
-is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes
+is rejected as a disguised constructor; the source is *borrowed* (`ref This`), since copying never consumes <!-- xfail: self_returning_static_fn -->
 it. Opting in **requires declaring the bare-hand-off default**: `Copyable(bare: give)` (a bare hand-off moves)
 or `Copyable(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
 overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are markers only
@@ -728,11 +728,11 @@ rvalue (`new`/constructor/call result) never takes a marker.
 | `Copyable` resource (has a `copy` ctor) | its declared `bare:` default | move | **deep copy** via `copy` |
 | collection of `Copyable` elements | ⛔ marker required | move | **deep copy** (element-wise `copy`) |
 
-A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a
+A marker on a fresh rvalue is an error. Move tracking is compile-time: reading a moved value, moving out of a <!-- xfail: handoff_fresh -->
 field/element, moving inside a loop a value declared outside it, and a conditional move that is still live at
 scope exit are all rejected — there is no runtime drop flag.
 
-**Local variable shadowing is a compile error.** A local declaration may not shadow a parameter, an
+**Local variable shadowing is a compile error.** A local declaration may not shadow a parameter, an <!-- xfail: shadow_param, shadow_field, shadow_enclosing -->
 enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; one name = one binding within
 any live scope — keeps both name resolution and move tracking unambiguous). Sibling scopes may reuse a name
 freely (they never coexist). A *parameter* sharing a field's name — the `this.x = x` constructor idiom — is
@@ -764,7 +764,7 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 **No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
 is always valid: there is nothing to null-check. `null` is only for `UnsafePtr<T>` at the FFI boundary, and
 that holds in **both directions** and for **every** other type — a safe type can neither be *compared* to
-`null` (`== null` / `!= null` is a compile error; the C habit checks the wrong thing here) nor *set* to it.
+`null` (`== null` / `!= null` is a compile error; the C habit checks the wrong thing here) nor *set* to it. <!-- xfail: null_safe_compare -->
 `int32 x = null;`, `Thing t = null;`, a `string` field defaulted to `null`, `x = null` and `x == null` on
 any of them are all rejected; model absence with `Optional<T>`, or use a zero value. The rule reads the
 **declared type**, so it covers primitives — and it does not care whether you are inside an `unsafe fn`,
@@ -773,7 +773,7 @@ alone, since a C typedef for a pointer is a legitimate `null` target. A `Weak<T>
 whose result forces you to handle the dead case.
 
 Passing a smart pointer: **borrow** it by passing `ref T` — the borrow names the *object* (`ref T`,
-storage-agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or
+storage-agnostic; a `ref` may not name the smart pointer itself), which auto-derefs to the held object; or <!-- xfail: ref_handle -->
 **transfer by value**, where the callee owns the argument and drops it at function end (`Owned` moves in,
 `Shared` retains). The pointee is a **`value`/`resource`** or a **contract** — `Owned`/`Shared`/`Weak<Shape>`
 own a concrete implementer behind a fat handle and dispatch polymorphically (see Contracts below). A smart
@@ -790,7 +790,7 @@ fn int32 main() { return add(b: 20, a: 10); }   // named args; reordered to decl
 
 - **`ref T x`** — a read-write **borrow** of a value that is already live. The marker at the call site is
   optional (`f(x: ref v)` and `f(x: v)` are both fine), because nothing is riding on it.
-- **`out T x`** — the callee **must assign it** on every path before returning, and may not read the
+- **`out T x`** — the callee **must assign it** on every path before returning, and may not read the <!-- xfail: out_read_before_assign -->
   incoming value. **The call site must say `out`** (`divmod(a: 17, b: 5, q: out quotient, r: out rem)`).
   The marker is mandatory because both forms lower to the same `T*`: without it neither a reader nor the
   caller's definite-assignment analysis could tell a borrow from a fill. `out` is what lets a
@@ -857,7 +857,7 @@ pass-through compiles to the same instructions as the direct call.
 same parameter types. They are one entry: kama emits no prototype, so nothing downstream could catch a
 mismatch, and calls are lowered by *named argument*, so two declarations differing only in parameter order
 would silently reorder one file's arguments (`memcpy(dst:, src:)` emitting `memcpy(src, dst, n)`). The same
-holds for a `type extern value` — matching field names and types. A disagreement is an error naming both
+holds for a `type extern value` — matching field names and types. A disagreement is an error naming both <!-- xfail: extern_disagree -->
 files.
 
 `UnsafePtr` is `void*`; `UnsafePtr<T>` is `T*` — an **opaque carrier** (hold, pass to/from C, `null`-check, compare;
@@ -891,7 +891,7 @@ the API.
 
 Two limits worth knowing. A **nested generic call cannot infer** — `log(x: exp(x: 1.0))` fails because
 the inner call's return type is the very `T` being resolved; bind it to a local (kama's usual "bind it to
-a local" rule). And a `ref` parameter may not name a smart pointer, so a contract instantiated at
+a local" rule). And a `ref` parameter may not name a smart pointer, so a contract instantiated at <!-- xfail: ref_handle -->
 `Owned<T>` — e.g. `Order<Owned<T>>` — is not expressible; sort or compare the resources themselves.
 Methods + operators (one `operator*` per type: matrices/quaternions **compose**, vector transform / rotate
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
@@ -947,7 +947,7 @@ is what stands in for a capturing closure, since kama has none. It is also the f
 compiler cannot inline (the reason `qsort` trails `std::sort`). `fnptr` could not express it in any case —
 a function-pointer type takes no type parameters (ROADMAP_DETAIL §2).
 
-Because a `ref` parameter may not name a smart pointer, `Order<Owned<T>>` is not instantiable: sort a
+Because a `ref` parameter may not name a smart pointer, `Order<Owned<T>>` is not instantiable: sort a <!-- xfail: ref_handle -->
 container of the resources themselves. Searching splits what Rust folds into `Result<usize, usize>` —
 kama's `Result<T, E>` constrains `E` to `Error`, so `binarySearch` returns `Optional<int32>` (the **first**
 index of an equal run) and `lowerBound` returns the total insertion point.
@@ -975,7 +975,7 @@ contract (`FromStr`) plus a per-type `type intrinsic` impl supplying a fallible 
 The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
 `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
 2..36 for the integer widths, case-insensitive, with **no** `0x`/`0b` prefix — the base is already an
-argument. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so
+argument. Parsing is **strict**, as in Rust: no whitespace is trimmed and a trailing byte is an error, so <!-- test: parse_errors -->
 `" 7"` and `"7x"` both fail. Floats go through `strtod` behind `kama_fmt.h`, whose checked entry point
 reports `ERANGE` as `OutOfRange` rather than folding it to an infinity.
 
@@ -1004,7 +1004,7 @@ is no `int128`), and `F` is the fraction count as a **const generic parameter** 
 the classic Q16.16 and `Fixed<int16, 8>` is Q8.8. The backing is *passed*, not computed from a bit count:
 kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
 explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8, 16>`)
-is a compile error, from one [`comptime assert`](#compile-time-assertions--comptime-assert-) in the type's
+is a compile error, from one [`comptime assert`](#compile-time-assertions--comptime-assert-) in the type's <!-- xfail: fixed_bad_pairing -->
 own body reading `sizeof(B)` — not a rule the compiler knows about this type. See
 [MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.
 
@@ -1035,9 +1035,9 @@ predict which lines need a cast. The emitted C carries an explicit narrowing so 
 — the Rust/Swift/Go rule. It applies in two places:
 
 - **Wherever a value crosses into a destination of a stated type** — a local, a field, an assignment, a
-  `return`, a `match` arm, an argument, an enum payload. `int8 a = big;` is an error wanting
+  `return`, a `match` arm, an argument, an enum payload. `int8 a = big;` is an error wanting <!-- xfail: narrow_local, narrow_return, narrow_argument -->
   `cast<int8>(big)`.
-- **Between an operator's two operands.** `int32 + uint8` does not compile, and neither does
+- **Between an operator's two operands.** `int32 + uint8` does not compile, and neither does <!-- xfail: op_mixed_width, op_mixed_sign, op_compare_usize -->
   `int32 < usize`. That second one is the point: C answers `-1 < 1u32` with *false*, and a rule that
   covered assignments but not comparisons would leave the sharpest edge in place.
 
@@ -1052,7 +1052,7 @@ are all conversions. What is **not** a conversion, and needs no cast:
 | a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
 
 A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
-cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`).
+cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local -->
 
 ### `isize` is the size type; `usize` is the C ABI
 
@@ -1145,7 +1145,7 @@ That last line is where contextual literal typing stops. `float32 f = 3;` is acc
 (`tests/xfail/identity_char_to_int.kama`, `tests/xfail/identity_char_literal.kama`.)
 
 **A `fnptr` signature type is nominal.** Two signatures with the same shape are still two types, and
-assigning one signature-typed value into another is an error — including, and especially, when the shapes
+assigning one signature-typed value into another is an error — including, and especially, when the shapes <!-- xfail: identity_sig_cross_sig, identity_sig_arity -->
 differ, since calling through a mismatched function pointer is undefined behavior that neither the C
 compiler nor the sanitizers will report here. Assigning a *function* to a signature is checked
 structurally and is unaffected.
@@ -1171,7 +1171,7 @@ UB:
 - **A narrowing `cast<T>(x)` whose value does not fit `T`** **traps**, in every build — the integer sibling
   of the line above, and the same policy for the same reason. `cast` preserves the *value*, so a value that
   does not fit is not a conversion but a different number: `int32 big = 300; int8 a = cast<int8>(big);`
-  aborts rather than binding 44. A **constant** that does not fit is rejected at compile time instead. The
+  aborts rather than binding 44. A **constant** that does not fit is rejected at compile time instead. The <!-- xfail: cast_const_oob -->
   escapes are explicit and cost nothing: **`truncate<T>(x)`** keeps the low bits, **`try cast<T>(x)`** hands
   back `Optional<T>`. A widening, a same-type cast, and one whose operand provably fits emit no check at
   all, and where the check remains its bounds are compile-time constants — so the comparison that cannot
@@ -1273,7 +1273,7 @@ fn int32 main() {
 kama uses its fields (all public, the C layout) but never re-emits it (so no redefinition), and its name is
 the literal C name. It has no ctor; construct it either by binding a struct-returning C fn (`div(...)`
 above) or by **by-name aggregate init** — `div_t r = div_t(quot: 3, rem: 2)` sets the named fields
-(unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a
+(unset fields stay zero; an unknown field name is a compile error). `addr(of: x)` takes the address of a <!-- xfail: extern_value_unknown_field -->
 real local (out-params, descriptor pointers) — a *controlled* op, no `unsafe fn` needed. `s.cstr()` yields a C
 `const char*`.
 
@@ -1426,7 +1426,7 @@ safe boundary, so a caller needs no permission. There is no propagation and no c
 what forces containment there. kama does not take that meaning.)
 
 It is markable wherever a body exists: a method, a `ctor`, a destructor, an `operator`, and a free function.
-It is **rejected where no body exists** — on a type, on a field, on an `abstract` method, and on a `contract`
+It is **rejected where no body exists** — on a type, on a field, on an `abstract` method, and on a `contract` <!-- xfail: unsafe_on_type, unsafe_on_field, unsafe_on_contract_member -->
 member — because there is nothing there to be unsafe. A contract member is a *conduit*: the implementation
 whose signature names `UnsafePtr` must itself be an `unsafe fn`, and a caller cannot invoke the member
 without holding an `UnsafePtr`. That is what keeps `A: Allocator` a perfectly safe **bound** while
@@ -1485,7 +1485,7 @@ a double-close primitive by effect; 87 of the 188 stdlib extern declarations are
 this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it
 can — so a type-based carve-out would look like a rule and behave like a hole.
 
-**`main` may not be `unsafe`.** It encloses the whole program, so the marker would put every line in
+**`main` may not be `unsafe`.** It encloses the whole program, so the marker would put every line in <!-- xfail: unsafe_main -->
 the trusted region and stop marking anything — the same shape as an `extern fn` call that needed no
 marker at all. Since calling an `unsafe fn` from safe code is unrestricted (above), the fix is always
 available and always better: move the raw work into a helper `unsafe fn` and call it from `main`, so
@@ -1504,7 +1504,7 @@ while the collection is alive + unmodified, and dereferencing it requires an `un
 success.
 
 Moving an **owned** value into a raw slot uses `give`: `buf[i] = give w;` (inside an `unsafe fn`) stores the bytes and
-**consumes** `w` (its scope-drop is skipped — a use-after-move is a compile error), the one marker that
+**consumes** `w` (its scope-drop is skipped — a use-after-move is a compile error), the one marker that <!-- xfail: use_after_move -->
 carries ownership across into unsafe manual storage. An *unmarked* `slot[i] = x` is a plain bitwise store
 (the untracked raw-relocate a container uses internally, e.g. moving elements between buffers). Getting a
 value back *out* is manual (bitwise-copy into a local, take responsibility) — there is no `give`-out of a
@@ -1649,7 +1649,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   arithmetic*. `truncate<T>(x)` is the wrapping form and is **required, not a convenience**: masking first
   cannot express it (`cast<int8>(x & 0xFF)` yields 0..255, which is itself outside `int8`, so it would trap
   in turn), and every language that traps ships a named truncating form — Swift `truncatingIfNeeded:`, Zig
-  `@truncate`, C# `unchecked`. A **provably widening** `truncate` is rejected: there are no high bits to
+  `@truncate`, C# `unchecked`. A **provably widening** `truncate` is rejected: there are no high bits to <!-- xfail: truncate_widening -->
   drop, so `cast` is what was meant. **`try cast<T>(x)`** is the fallible form, yielding `Optional<T>` —
   `None` exactly where `cast` would trap. Like `try new` it needs a **declared `Optional<T>` destination**,
   because that is where its result type comes from — a local (`Optional<int8> r = try cast<int8>(n);`), an
@@ -1663,7 +1663,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   numbers, whose valid values are a **range fixed by width**; an enum's are a **set of names the author
   chose**, so an integer arriving from outside has no reason to name one. That makes the infallible verb
   dishonest at both ends: when the value is known the variant already *has* a name (`Color::Green`), and
-  when it is not the conversion is fallible by construction. So `cast<Color>(n)` is a **compile error**
+  when it is not the conversion is fallible by construction. So `cast<Color>(n)` is a **compile error** <!-- xfail: cast_enum_rejected -->
   naming both answers, and `try cast<Color>(n)` yields `Optional<Color>` — `None` when the value names no
   variant, tested against the declared discriminants rather than a range, so a value *between* two of them
   (`{ Ok = 3, Bad = 200 }` given 4) is `None` too. The **`enum` → integer** direction is untouched:
@@ -1677,7 +1677,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
   `uint8..uint64`/`float32`/`float64`); a width mismatch, a non-scalar, or an operand whose scalar type isn't
-  statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun.
+  statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun. <!-- xfail: bitcast_width, bitcast_nonscalar -->
   It is the safe-surface primitive for binary formats / hashing / endianness (`std::num` `byteswapF32` rides
   it); raw-memory reinterpret of composites stays behind `unsafe`/`UnsafePtr`.
 - **`assert(cond:, msg:)` / `debugAssert(cond:, msg:)` / `panic(msg:)`** — a clean **trap** (writes the
@@ -1705,7 +1705,7 @@ built-in `InlineArray`) via a small **iterator protocol** — not indexing, so i
 map, range). It's zero-cost: monomorphized to **direct calls** (no vtable), and the container is
 **borrowed, not consumed**. The container hands out an iterator via a nullary factory method, and that
 **iterator must `implements` the matching prelude contract** — `foreach` is **nominal**: a type with the
-right method shape but no `implements` is rejected (explicit over implicit).
+right method shape but no `implements` is rejected (explicit over implicit). <!-- xfail: iter_no_contract -->
 - **value** — `foreach (T x in v)`: `v` provides `fn <Iter> iterator()` whose iterator
   `implements Iterator<T>` (`fn Optional<T> next()` — `Some` per element, `None` at the end); or `v`
   *is* the iterator (`implements Iterator<T>` + a nullary `next()`).
@@ -1822,8 +1822,8 @@ expose fn int32 version() { return 3; }
   native-only; the web host re-instantiates the module).
 
 **Rules** (checked at compile time — a clear error, never a silent no-op):
-- **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected.
-- **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a
+- **Free functions only.** `expose` is not a member/type modifier; on a method/field/type it is rejected. <!-- xfail: expose_on_method -->
+- **C-ABI-safe signature.** A param or return may not be an owned-by-value type — a kama `string`, a <!-- xfail: expose_bad_abi -->
   collection (`DynamicArray`/`FixedArray`/`Map`/`Set`/…), or an `Owned`/`Shared`/`Weak` smart pointer — since RAII /
   refcount state cannot cross a raw C boundary; pass an `UnsafePtr<T>` or an `extern` struct instead.
 - **No generics / no `fn ref T` place-return** (no single concrete C-ABI symbol); **bare names are unique**
@@ -1886,7 +1886,7 @@ every function, so declarations are greppable and self-describing:
   and its host is frozen for that window's extent, so it cannot outlive the storage it views — see *Slices /
   spans* for the window rule. A view is also never a `ref`/`out` parameter: it is already a borrow. A view may **not** declare a `~dtor` or own a resource field, and
   its fields are **private only** (its raw `UnsafePtr<T>` must not leak). A view's **conformance is checked at the
-  `implements` site**: it may not implement a contract whose `ctor` **member** constructs the implementer from
+  `implements` site**: it may not implement a contract whose `ctor` **member** constructs the implementer from <!-- xfail: view_contract_ctor_infallible, view_contract_ctor_escape -->
   parameters that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — such a constructor could only borrow one
   of its own locals, so no body could satisfy it. A member taking something borrowable is fine, and an
   *instance* method returning the self-type is always fine (it borrows the receiver, like `View.slice()`).
@@ -2010,7 +2010,7 @@ type resource Buffer {
 }
 ```
 
-A `value` that transitively owns a resource is a **compile error** ("declare `type resource`"), and a `~dtor`
+A `value` that transitively owns a resource is a **compile error** ("declare `type resource`"), and a `~dtor` <!-- xfail: value_owns_resource -->
 is allowed only on a `resource` (`~dtor` ⟺ `resource` — a `value` owns nothing to free).
 
 ## RAII / destructors ✅
@@ -2044,13 +2044,13 @@ Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an own
   a `type extern value`, where `div_t(quot: 3, rem: 2)` is by-name **aggregate init** of a C struct that has
   no constructor to name, and the intrinsic `new BindableFunctionPtr<Sig>(obj:, method:)`. A generic ctor
   puts the turbofish on the **type**: `T::<Args>.make(…)`.
-- **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built,
+- **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.
 - **Reuse is a visible call.** A ctor delegates by calling another (`return Buffer.make(…)`). There is no
   `init` hook, no designated/final ctor, and no mandatory funnel — shared logic lives in the ctor others
   chain to, and it is greppable.
-- **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor
+- **A self-returning `static fn` is rejected** as a disguised constructor; so is a class-named ctor <!-- xfail: self_returning_static_fn, ctor_declares_own_type -->
   (`public Buffer(…)`). Genuine static utilities returning *other* types (`Vec3::dot` → `float`) stay
   `static fn`.
 - **A contract may require a `ctor`** — `type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }`
@@ -2096,7 +2096,7 @@ other.) Falling off the end returns that value, exactly as a `void` function nee
 `return give this;` is the **early-return** form.
 
 **`self` is reserved inside a type body.** It is the emitted C name of the receiver pointer, so a local or
-parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error
+parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error <!-- xfail: self_param -->
 pointing at `this`. Outside a type body it is an ordinary identifier: a free `fn` or `fnptr` may name a
 parameter `self` to spell an explicit receiver.
 
@@ -2123,7 +2123,7 @@ ctor fresh() when [A: default] { this.item = A.default(); }
 ```
 
 Electing a default stays the **type's** choice: a type that never marked one has no `default()`, and the
-call site is a compile error naming that choice rather than a silently synthesized zero
+call site is a compile error naming that choice rather than a silently synthesized zero <!-- xfail: default_ctor_missing -->
 (`tests/default_ctor_call.kama`, `tests/xfail/default_ctor_missing.kama`).
 
 ### Derives — `@generate(...)` ✅
@@ -2200,7 +2200,7 @@ c.bump();                 // error: cannot call non-const method `bump` on a con
 **`const fn` is ABI-neutral.** It is a front-end rule only — the emitted C signature is identical either
 way, so marking a method costs nothing and changes no generated code.
 
-**A `const fn` may not return `ref T`.** A place returned out of a const method is a writable alias into
+**A `const fn` may not return `ref T`.** A place returned out of a const method is a writable alias into <!-- xfail: const_place_return -->
 the receiver, so `c.place() = 99` would mutate a `const` binding with no `unsafe` anywhere. The two halves
 take separate names instead — `get`/`getRef`, `iterator`/`iterMut`, `peek`/`peekRef` — which is the split
 the standard library already spelled and now the one the compiler enforces. (This is Rust's
@@ -2218,12 +2218,12 @@ place it can break. The same holds one level down for a `const ref` **parameter*
 checked: an implementation may be *more* const than its member asks, which merely widens where it can be
 called.
 
-This is the opposite call from `unsafe`, which is **rejected** on a contract member — and the reason is
+This is the opposite call from `unsafe`, which is **rejected** on a contract member — and the reason is <!-- xfail: unsafe_on_contract_member -->
 the difference between the two markers. `unsafe` describes a *body*, which a member does not have.
 `const` constrains what a *caller* may pass as receiver, so it is signature-level and belongs on the
 declaration.
 
-An `override` may not drop `const` either: the caller sees only the base declaration, so a const receiver
+An `override` may not drop `const` either: the caller sees only the base declaration, so a const receiver <!-- xfail: const_override_drops -->
 that is legal there has to stay legal for whatever subclass sits behind the slot.
 
 ### What the standard library marks
@@ -2268,7 +2268,7 @@ openInto(path: p, dst: out f);        // now it is live, and drops normally from
    `addr(of: x)`. A value that arrives one line late is an ordinary local — `T x = …;` says so with the
    value in hand, and a branch has a stronger spelling still, since `match` and the ternary are
    value-producing and can build a `resource` (`Conn c = match (k) { case A: Conn.tcp(fd: 3); … };`).
-2. **A slot with no `out` fill anywhere is an error.** A hole nothing fills is a dead declaration, not an
+2. **A slot with no `out` fill anywhere is an error.** A hole nothing fills is a dead declaration, not an <!-- xfail: slot_never_filled -->
    opportunity to elide a drop.
 3. **The fill sits on the same unconditional path as the declaration** — a statement of the declaring
    block, or of a nested block that always runs. Not inside an `if`, a `match` arm or a loop the
@@ -2289,7 +2289,7 @@ that join analysis is where conditional filling legitimately lives.
 
 Two consequences worth stating plainly. A **class-typed** slot is valid-but-empty from the declaration on,
 so reading a non-owning field of one or handing it to a callee is fine; an **`Owned`/`Shared`** slot is not
-— its zero value is a null pointer, so reading through it is rejected, as is reading a primitive slot,
+— its zero value is a null pointer, so reading through it is rejected, as is reading a primitive slot, <!-- xfail: slot_read_before_assign -->
 which has no field-default fill behind it.
 
 This is **not** `Optional<T>`: a slot has no runtime tag and no drop, and it disappears entirely at
@@ -2400,14 +2400,14 @@ by which time the design has been built around an assumption the language was ne
 Inheritance is deliberately restricted here (it is a footgun more often than a tool), and a budget you
 must write down is how that restriction announces itself.
 
-`maxDepth: 0` is an error — extensible yet unextendable is a contradiction; write `final`. So is a budget
+`maxDepth: 0` is an error — extensible yet unextendable is a contradiction; write `final`. So is a budget <!-- xfail: maxdepth_zero, maxdepth_over_ceiling -->
 above the compiler's ceiling, `KAMA_INHERIT_DEPTH` (**default 2**: a root, a middle layer and a leaf,
 which is what mainstream hierarchies use). Neither bound is clamped: a clamp would hide the very surprise
 the annotation exists to prevent.
 
-### Shadowing is an error ✅
+### Shadowing is an error ✅ <!-- xfail: derived_shadows_base_method -->
 
-A derived type may not redeclare a method it inherits. The only way to redefine one is `override` on a
+A derived type may not redeclare a method it inherits. The only way to redefine one is `override` on a <!-- xfail: derived_shadows_base_method -->
 `protected virtual` (*may* override) or `protected abstract` (*must* override) — the type designer decides
 what is overridable, which is what `protected` + `virtual`/`abstract` is for.
 
@@ -2430,11 +2430,11 @@ invisible to the derived type, so the two names are unrelated and each type sees
 same question access control does — *would the derived type even see this?* — so a `friend` grant opens no
 back door either.
 
-### A derived type may not widen the public interface ✅
+### A derived type may not widen the public interface ✅ <!-- xfail: derived_widens_public -->
 
 The hierarchy's public surface is fixed at its **root**. A derived type may add **fields**, add
 **private** helpers, and **override the protected seams the base sanctioned** (`virtual` = may,
-`abstract` = must) — it may not add a public method, and it may not declare `implements`.
+`abstract` = must) — it may not add a public method, and it may not declare `implements`. <!-- xfail: derived_widens_public -->
 
 ```kama
 type final resource Exposer extends Base {
@@ -2460,7 +2460,7 @@ hierarchy conforms to a contract, its root declares it and every leaf inherits t
 ### Depth — a declared budget ✅
 
 See *The depth budget* above for the rule. `Widget -> Control -> Button -> …` — a chain that keeps adding
-middle layers — runs out of budget and is refused at the type that asks for more than its base left:
+middle layers — runs out of budget and is refused at the type that asks for more than its base left: <!-- xfail: inherit_depth_exceeded -->
 
 ```
 'Button' extends 'Control', which allows 1 more level(s) — so 'Button' may allow at most 0,
@@ -2540,13 +2540,13 @@ Animated : Drawable { … }`) for capability layering, without inheritance.
 - `ref Shape sh` / `out Shape sh` — "I may **reseat** your handle." Requires the argument to be an actual
   `Shape` variable (its address is passed, so the reseat sticks); `out` additionally requires the callee to
   assign it and the call site to say `out`. Passing a **concrete type** by `ref`/`out`
-  is a compile error — bind it first (`Shape s = c; measure(sh: ref s)`). Mutable references are *invariant*:
+  is a compile error — bind it first (`Shape s = c; measure(sh: ref s)`). Mutable references are *invariant*: <!-- xfail: iface_ref_concrete -->
   a `Circle` variable isn't a slot that could hold an arbitrary shape, so it can't back a `ref Shape`.
 
 **Borrow vs. storage — a contract value is second-class.** The fat pointer *borrows* its object, so a bare
-contract value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot be
+contract value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot be <!-- xfail: iface_field, iface_return, iface_collection -->
 stored beyond the call that made it** — a bare `Shape` **field**, **return type**, or **collection element**
-is a compile error, because the borrowed object could die and leave it dangling. To keep polymorphism around,
+is a compile error, because the borrowed object could die and leave it dangling. To keep polymorphism around, <!-- xfail: iface_field, iface_return, iface_collection -->
 **own the object** with a smart pointer over the contract (below). Ownership is always written explicitly —
 never an implicit box. This is the language-wide rule **"borrow is parameter-only; storage requires
 ownership"** — the same reason a `ref` parameter can't be returned and a returnable "reference" is always an
@@ -2660,7 +2660,7 @@ type value Vec2 {
 float64 d = Vec2::dot(left: a, right: b);
 ```
 
-A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch
+A `static` method has no vtable slot (so it can't be `virtual`/`override`/`abstract`) and may not touch <!-- xfail: static_this -->
 `this` or a bare field.
 
 **Module statics** — `static T name = const;` at module scope declares a module-level mutable variable
@@ -2684,8 +2684,8 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   model: the same declaration is race-free the day it runs multicore (proven ThreadSanitizer-clean).
 - **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `UnsafePtr`, or `InlineArray`**
   (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
-  or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or
-  const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**.
+  or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or <!-- xfail: module_static_resource -->
+  const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is module-private (internal C linkage). A `hardware` static (`static hardware T name`) adds the
@@ -2728,7 +2728,7 @@ fn void demo() {
 - **Initializer must fold** — a literal, `sizeof` of a fixed-width scalar (**not** `alignof`, and not
   `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, or another
   `comptime`. A
-  `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message
+  `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message <!-- xfail: sizeof_usize_not_foldable, alignof_not_foldable -->
   points you back to `const` for a runtime-initialized immutable). A plain `const` *local* whose initializer
   happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs
   `constexpr`: `const` works when it can, `comptime` guarantees it); at module and type scope there is no
@@ -2827,7 +2827,7 @@ fn void render() {
     model — an aggregate's `sizeof`, any `alignof`, `sizeof(usize)`. kama emits a C11 `_Static_assert`
     carrying the message, and the target's real ABI decides. This needs no layout model in kama, which is
     exactly why `sizeof` folds only for fixed-width scalars.
-  - Anything else — a predicate naming a runtime value, or mixing a layout fact with one — is an error.
+  - Anything else — a predicate naming a runtime value, or mixing a layout fact with one — is an error. <!-- xfail: comptime_assert_runtime_cond -->
 - **⚠️ The caveat, and it is the price of the split: the layout form fails at BUILD, not at `kama check`.**
   The C compiler is what rejects it, and `kama check` runs no C compiler — so **the LSP cannot show it**.
   A scalar predicate has no such gap. Prefer the scalar form when a claim can be stated either way.
@@ -2869,9 +2869,9 @@ comptime assert(cond: sizeof(Reg) == 5, msg: "the wire format is 5 bytes");
   toolchain actually did.
 - **`N` must be a power of two, 1 to 4096.** Not passthrough, because gcc and clang do not *refuse* a
   non-power-of-two — they round it **up**, so `@align(3)` would compile and quietly mean 4.
-- **Types with a struct only** — `type value` and `type resource`. An `enum` is refused: a payload-less one
+- **Types with a struct only** — `type value` and `type resource`. An `enum` is refused: a payload-less one <!-- xfail: layout_attr_on_enum -->
   lowers to an integer and a tagged one to a tag plus a per-variant union, which an outer `packed` would
-  not reach; an enum states its layout with `type enum E : IntType` instead. A **declaration** is refused
+  not reach; an enum states its layout with `type enum E : IntType` instead. A **declaration** is refused <!-- xfail: layout_attr_on_static -->
   too, so there is one way to align an object rather than two: write `@align(64) type value Buf {…}` and
   declare the static with that type. Rust makes the same call — `#[repr(align(N))]` is types-only.
 - A type may carry both, and either may sit beside `@generate(...)`. Fixtures: `tests/layout_align_packed.kama`,
@@ -2906,7 +2906,7 @@ and re-evaluates each pass); a `do`/`while` condition is the one place it must s
 
 **Comparison is a contract, not an operator.** The six comparison operators are the one place where the
 operator is not declared on the type: `==`/`!=` lower to **`Equatable.equals`**, and `<`/`>`/`<=`/`>=`
-lower to **`Comparable.compareTo`**. Declaring `operator==` (or any of the other five) is a compile error
+lower to **`Comparable.compareTo`**. Declaring `operator==` (or any of the other five) is a compile error <!-- xfail: operator_cmp_declared -->
 that hands back the `implements` form. This is what keeps `a == b` and a `<K: Equatable>` bound from ever
 disagreeing — the split C# has, where `operator==`, `Equals`, `IEquatable<T>` and `EqualityComparer<T>` can
 all give different answers. Rust is the same shape as kama here (`a == b` *is* `PartialEq::eq`).
@@ -2931,7 +2931,7 @@ type value Cents implements Equatable, Comparable {
 
 Both contracts **borrow** their operand (`ref This`) — a comparison never consumes or copies it. `!=` is
 `!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
-**explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated
+**explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated <!-- xfail: operator_missing -->
 structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
 (see *Derives*). The `true`/`false` conversion operators are out of scope.
 
@@ -2952,7 +2952,7 @@ works for a **named method** — `public fn ref T at(usize i) { … }` — so `v
 works on a **free function** and a **`static` method** — `fn ref int32 at(ref Buf b, usize i) { return
 b.d[i]; }`, called as `at(b: ref b, i: 0) = 5`. Because a free/static function has no `this`, the
 returned place must borrow a **`ref`/`out` parameter** (the caller-held borrow that outlives the call);
-a place into a local or a by-value param is rejected (*"would dangle"*), the same escape rule as a
+a place into a local or a by-value param is rejected (*"would dangle"*), the same escape rule as a <!-- xfail: refreturn_local, reffn_byval -->
 method borrowing `this`. Generic free functions work too (monomorphized per `T`). A **`ref` of a
 `contract`** is *not* returnable — a contract value already borrows its object, so own it
 (`Shared<Contract>`) to hand polymorphism back.
@@ -3033,21 +3033,21 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   }
   fn int32 shifted<const S: int32>(int32 x) { return x << S; }
 
-  Fixed<int32, 16> q = Fixed::<int32, 16>.one();   // Q16.16; `Fixed<int8, 16>` is a compile error
+  Fixed<int32, 16> q = Fixed::<int32, 16>.one();   // Q16.16; `Fixed<int8, 16>` is a compile error <!-- xfail: fixed_bad_pairing -->
   int32 y = shifted::<3>(x: 2);                    // a turbofish carries a const argument too
   ```
   - The parameter's **type is declared** and the argument must be a compile-time constant — a literal or a
     parenthesized expression, so a negative one is written `f::<(-1)>()`. An argument that does not fit its
-    declared type is an error, not a wrap.
+    declared type is an error, not a wrap. <!-- xfail: constgen_oob -->
   - The **name is reserved for the whole declaration**: a parameter, field, local, `foreach` variable or
-    `match` binding may not reuse it, and it cannot be assigned to. The value is resolved ahead of every
+    `match` binding may not reuse it, and it cannot be assigned to. The value is resolved ahead of every <!-- xfail: constparam_shadow_match, constparam_assign -->
     runtime name, so a rebinding would be discarded rather than shadowed — the one case kama's general
     shadowing rules do not already cover.
   - Const parameters pair with **[`comptime assert`](#compile-time-assertions--comptime-assert-)**, which is
     checked once per instantiation with that instance's arguments bound: a generic states its own invariant
-    over its own parameters, and a bad instantiation is rejected at the use site, naming the arguments that
+    over its own parameters, and a bad instantiation is rejected at the use site, naming the arguments that <!-- xfail: constgen_arity, constgen_count -->
     broke it. `sizeof` folding (above) is what lets that invariant mention a type parameter's width.
-  - A generic **`enum`** may not declare members at all, so a const parameter there could never be read;
+  - A generic **`enum`** may not declare members at all, so a const parameter there could never be read; <!-- xfail: enum_field -->
     the kind still accepts one for parity with the other type kinds.
 - **`This`** — the self-type. Inside a type's **own** body it is that type (`fn This clone()`,
   `implements Comparable<This>`) and needs no declaration, because nothing is erased there. A **contract**
@@ -3097,7 +3097,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   a custom allocator) without breaking existing call sites: `Map<string, int32>` keeps meaning
   `Map<string, int32, DefaultHasher, GlobalAllocator>`. Overriding a *later* default without spelling an
   earlier one uses Kama's **named argument model applied to type args** — name the arg to skip a default
-  (`Map<int32, Entity, A: ArenaAllocator>`). Leading args stay positional; a positional arg may not follow a
+  (`Map<int32, Entity, A: ArenaAllocator>`). Leading args stay positional; a positional arg may not follow a <!-- xfail: default_positional_after_named -->
   named one; the `:` is unambiguous at use sites (contract bounds appear only in *declarations*). Defaults +
   named overrides resolve to one canonical positional tuple **before** monomorphization, so the omitted,
   named, and fully-spelled forms all dedup to a single specialized instance.
@@ -3110,18 +3110,18 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   Defaults are a **`type`** feature — a `type value`/`resource`/`contract` or a `type enum`. A default
   fills in an argument the *use site* omitted, and a **function's** type arguments are not written at the
   use site at all: inference reads them off the arguments, or a turbofish spells them. So there is nothing
-  for a default to fill in, and `fn f<T = int32>()` is an error naming that
+  for a default to fill in, and `fn f<T = int32>()` is an error naming that <!-- xfail: fn_type_param_default -->
   (`tests/xfail/fn_type_param_default`).
 
   Default **function/constructor** parameters are a deliberate non-goal (one way to do a thing) — a
   self-documenting named `ctor` (`Map.withAllocator(allocator: …)`) covers that need instead.
-- **A type parameter may not shadow a visible type.** A type parameter is a binder, so `fn area<Point>(…)`
+- **A type parameter may not shadow a visible type.** A type parameter is a binder, so `fn area<Point>(…)` <!-- xfail: type_param_shadows_type -->
   would declare a fresh `Point` and make the real one unreachable inside that declaration — legal in Rust
   and C++, and silent in both. kama rejects it and says so, because the failure otherwise surfaces as a
   C-compiler error about the substituted type. Visibility is the declaration's own: a type it declares,
   imports, aliases or gets from the prelude all count (`tests/xfail/type_param_shadows_type`).
 - **A name is declared once per module** — kama has no overloading, so a second `fn` of the same name
-  is an error naming both declaration sites, for a plain function and a generic template alike. `extern`
+  is an error naming both declaration sites, for a plain function and a generic template alike. `extern` <!-- xfail: dup_fn, dup_generic_fn -->
   is exempt on both sides: re-declaring a C entry point in each module that calls it is what an `extern`
   is for (`tests/xfail/dup_fn`, `tests/xfail/dup_generic_fn`).
 - **Specialization is a non-goal.** There is no way to give one generic function a second body for a
@@ -3232,7 +3232,7 @@ arm names the value it produces with a **`:= <expr>;`** statement, which must be
 statement (single-exit) — it accepts any expression, and reads as "bind this value out" (a `match` in a
 typed position *is* an assignment from the outside, `x = match … { … := v; }`). `:=` is distinct from
 `return`, which leaves the enclosing function. An arm of a value-producing `match` must therefore either
-end in `:=` or **diverge** (`return` / `break` / `continue`); in particular a block arm cannot be *empty*,
+end in `:=` or **diverge** (`return` / `break` / `continue`); in particular a block arm cannot be *empty*, <!-- xfail: match_empty_arm -->
 since it would leave the match's value unset:
 
 ```kama
@@ -3328,7 +3328,7 @@ outright — `namespace` is not a keyword and writing one is a syntax error.
 there the scope is the only candidate. Importing any symbol of a module loads that module, so a qualified
 `a::b::Y` stays available afterwards. There is no glob — unqualified-everything is deliberately not offered. Fully-qualified `a::b::X` is always available once
 imported; the symbol list only controls what's *also* unqualified. Two imports binding the same bare name is
-a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project
+a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 
@@ -3353,7 +3353,7 @@ reader name the source of every symbol in a file without leaving it. This is the
 (any file of a package reaches any unexported identifier in it) and the reason **Java** needed sealed JARs
 and then JPMS. What `visibility` in `kama.json` governs is reach **beyond the module** (the *Modules* rules above) — it says nothing about files.
 
-**An exported symbol may not name an unexported type of its own file.** A project's API is derived, never
+**An exported symbol may not name an unexported type of its own file.** A project's API is derived, never <!-- xfail: export_leak_field, export_leak_return -->
 written down — the `public` modules of `kama.json` crossed with its files' `export` blocks — and that
 enumeration is only usable if every name in it can be spelled by whoever reads it. Rust calls the family it
 rules out `private_interfaces`. Publicly reachable positions only: a `private` field's type is not part of
@@ -3407,11 +3407,11 @@ shared header (`<out>.gen.h`) + one `.c` per unit — imports just add the resol
 **instance/value access only** (`obj.field`, `obj.method()`). The two are *syntactically* distinct, so
 there's no module-vs-object precedence rule — a `::` head is always a type/module, a `.` head always a
 value. This is **enforced**, not merely conventional: a `::` whose head is a local, a parameter or a field
-is rejected with a message naming the `.` spelling, so field access has exactly one spelling
+is rejected with a message naming the `.` spelling, so field access has exactly one spelling <!-- xfail: scope_op_on_value -->
 (`tests/xfail/scope_op_on_value.kama`). The one deliberate crossover is **dot-on-type for constructors** —
 `Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — and the split is **enforced in both
 directions**, so it is a real greppability guarantee rather than a convention: a `static fn` called with a
-dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called with `::` is rejected
+dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called with `::` is rejected <!-- xfail: dot_on_type_not_ctor, scope_op_on_ctor -->
 (`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserialize` — and for a
@@ -3428,13 +3428,13 @@ Box::<int32>::tag()         // static — colon-colon
 Here the turbofish is **mandatory**, unlike for a ctor: a ctor can infer its instance from its arguments,
 but a static has no receiver and its parameters need not mention `T`, so there is nothing to infer from.
 (`Box<int32>::tag()` cannot be the spelling — in expression position `Box < int32 >` is two comparisons,
-which is why kama has a turbofish at all.) Pinned by `tests/generic_static.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised
+which is why kama has a turbofish at all.) Pinned by `tests/generic_static.kama`. Relatedly, a **self-returning `static fn` is rejected as a disguised <!-- xfail: self_returning_static_fn -->
 constructor** (`tests/xfail/self_returning_static_fn.kama`): if it returns the enclosing type or
 `Result<This, E>`, declare it a `ctor`.
 
 **`main` is the entry point, not a symbol.** It is reached below the visibility system — every `main`
 emits as the same C symbol, and the generated C `main` calls it directly — so **calling `main` is an
-error**, **`main` may not be exported**, and it must be **unique per PROJECT** rather than per module:
+error**, **`main` may not be exported**, and it must be **unique per PROJECT** rather than per module: <!-- xfail: main_exported -->
 two collide where `a::helper` and `b::helper` do not. Its location is unconstrained; location simply does
 not scope it, which is exactly why it is not callable.
 
@@ -3442,7 +3442,7 @@ not scope it, which is exactly why it is not callable.
 `X` — the always-in-scope [floor](FLOOR.md). It exists for the case where a local declaration shadows the
 spelling you want: a file that defines its own `envOr` still reaches the floor's with
 `global::envOr(name: …, dflt: …)` (`tests/global_alias.kama`). It names **only** the floor: `global` is a
-reserved project name, not a path prefix, so `global::a::b::X` is an error
+reserved project name, not a path prefix, so `global::a::b::X` is an error <!-- xfail: global_absolute_path -->
 (`tests/xfail/global_absolute_path.kama`).
 
 ## Concurrency ✅
@@ -3499,15 +3499,15 @@ closed and empty, which is why dropping the last `Sender` is how a producer sign
 
 **Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
 sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
-`Shared`/`Weak` over a deeply-immutable type. What is **rejected** is a **non-atomic shared refcount** — a
+`Shared`/`Weak` over a deeply-immutable type. What is **rejected** is a **non-atomic shared refcount** — a <!-- xfail: channel_send_shared -->
 `Shared`/`Weak` over a mutable payload, or anything transitively containing one — with an error naming the
 offending field, the same way the escape check reports.
 A `view` and a bare `contract` value need no rule here: neither can be a field at all, so neither ever
-reaches a bundle.
+reaches a bundle. <!-- xfail: view_field, iface_field -->
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
 bundle is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
 closing brace, or an explicit `h.join()` — is what orders the write against the parent's read. It is the
-primary isolate idiom, not an edge case.
+primary isolate idiom, not an edge case. <!-- test: isolate_basic -->
 
 ### Structured concurrency — `scope` ✅
 
@@ -3535,7 +3535,7 @@ parallel_for (ref int32 e in xs) { e = e * 2; }   // closing brace is the barrie
 
 `ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
 contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
-non-contiguous container such as a `Map` has no `.view()` and is rejected.
+non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
 
 ### The three sharing seams ✅
 
@@ -3571,7 +3571,7 @@ whole shared-mutable surface; general shared mutable memory stays outside the sa
 The other way to share safely is to share something that cannot change. `type immutable value T` (or
 `type immutable resource T`) marks a type **deeply** immutable, which the compiler verifies: every
 field, base and variant payload must itself be a primitive, a `string`, an `enum`, or another deeply
-immutable type. A mutable member is a compile error naming that member.
+immutable type. A mutable member is a compile error naming that member. <!-- xfail: immutable_mutable_field -->
 
 A `Shared<T>` over a deeply-immutable `T` is sendable, so any number of isolates can hold and read
 the same asset with no copy. Its control block switches to an atomic refcount only in that case, so
@@ -3618,7 +3618,7 @@ restrictions — and nothing leaks into the public API.
   JavaScript, so a codepoint above the BMP arrives as a `😀` pair, which is the ordinary shape
   of JSON produced elsewhere (Python's `json.dumps` escapes *all* non-ASCII by default). The pair is
   combined at the wire edge and nothing above it ever sees a UTF-16 code unit — kama stays UTF-8
-  everywhere. An **unpaired** surrogate is malformed input and is rejected, not encoded as WTF-8.
+  everywhere. An **unpaired** surrogate is malformed input and is rejected, not encoded as WTF-8. <!-- test: ser_json_unicode -->
   (Fixture: `tests/ser_json_unicode`.)
 - **Intrinsic (compiler):** the per-type field walk and the whole graph machinery (id table, heap shells,
   two-pass wire, ownership transfer, ordering, cycles). Zero-cost — emitted **only** for `@generate` types.
@@ -3641,11 +3641,11 @@ exactly what you name:
   `Weak` back-edge, none of which survive a by-value return — so it is **always heap**, even a single node.
   `encode` writes the id-table envelope `{"root":id,"objects":{id:{"__type":…,…}}}`; `decode::<Shared<T>>`
   rebuilds it and returns the owning root handle. A `value` type is welcome in a graph *via* `Shared` (a
-  one-node heap graph); a live pointer field in a `value` type is a compile error (pointers need a graph).
+  one-node heap graph); a live pointer field in a `value` type is a compile error (pointers need a graph). <!-- xfail: value_owns_resource -->
 
 **Common rules (both modes).**
 - **Per-field marks are mandatory** on a `@generate`d product: each field is `@field`, `@field(name: "wire")`,
-  or `@skip` — an unmarked field is a **compile error** (no silent omission).
+  or `@skip` — an unmarked field is a **compile error** (no silent omission). <!-- xfail: ser_unmarked_field -->
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
   deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`.
 - **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
@@ -3658,7 +3658,7 @@ polymorphic edge — `Shared`/`Weak`/`Owned<Contract>` — reconstructs the conc
 tag and re-forms the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the
 contract → `DeError::TypeMismatch`. Every nominal implementor of a contract used as a graph edge **must** be
 `@generate(Serialize, Deserialize)` — this is **compile-enforced**: a non-`@generate` implementor (which would
-have no node writer and be silently dropped from the wire) is a compile error at the edge field.
+have no node writer and be silently dropped from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 `DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
 
 The `Owned`/`Shared`/`Weak` triad is **prelude / built-in** (always in scope, no `import`) — RAII-over-GC is the
@@ -3736,7 +3736,7 @@ embedded and hot-path targets.
 
 ## Reserved keywords not yet implemented 🚧
 
-One keyword has **reserved surface not yet implemented** — using it is a **hard error** (never a silent no-op):
+One keyword has **reserved surface not yet implemented** — using it is a **hard error** (never a silent no-op): <!-- xfail: expose_generic, expose_bad_abi, expose_on_method -->
 
 - **`expose`** 🚧 — the minimal free-function C-ABI symbol ships today; its **full** 2.0 surface (richer WASM
   module exports, the scripting-host interface) remains reserved, distinct from in-language `public`/`private`
@@ -3748,12 +3748,12 @@ however, **reserved** — see below.
 
 ## C's reserved words are reserved in kama
 
-**Every C11 and C23 keyword is a reserved word in kama and cannot be used as a name** — not for a type, a
+**Every C11 and C23 keyword is a reserved word in kama and cannot be used as a name** — not for a type, a <!-- xfail: int_retired, double_retired -->
 function, a field, a parameter, a local, an enum case, a variant payload, a generic parameter, a `foreach`
 or `match` binding, or an `expose`d/`extern` symbol. Writing one is a **lexical error** that names the
 spelling.
 
-kama compiles to C, so a name that is a C keyword emits C that does not compile: `int32 switch;` becomes
+kama compiles to C, so a name that is a C keyword emits C that does not compile: `int32 switch;` becomes <!-- xfail: int_retired, double_retired -->
 `int32_t switch;`. Renaming such a name on the way out (`switch` → `k_switch`) was considered and rejected —
 reserving a spelling now and relaxing it later is source-compatible, while the reverse is not.
 
@@ -3769,7 +3769,7 @@ _Imaginary _Noreturn _Static_assert _Thread_local
 
 Four of these are spellings a C, Go or Java reader reaches for, and their diagnostics name the replacement
 rather than merely reporting that the word is reserved: `int` → `int32`/`isize`, `double` and `float` →
-`float64`/`float32`. **`uint` is not a C keyword and so is not reserved** — it is rejected in type position
+`float64`/`float32`. **`uint` is not a C keyword and so is not reserved** — it is rejected in type position <!-- xfail: uint_retired -->
 only, with the same guidance (`uint32`/`usize`). Both halves are guarded by `tools/check-c-keywords.sh`,
 which also holds the reserved table equal to the two C standards' sets.
 

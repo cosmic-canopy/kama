@@ -50,7 +50,7 @@ slot int32 q; slot int32 r;
 split(a: 17, b: 5, q: out q, r: out r);       // 3, 2
 ```
 
-Reaching for `ref` on a `slot` is rejected, correctly: `ref` is a read-write borrow of a value that is
+Reaching for `ref` on a `slot` is rejected, correctly: `ref` is a read-write borrow of a value that is <!-- xfail: ref_on_slot -->
 *already live*, and a `slot` has nothing in it yet. `out` is the promise that the callee **assigns on every
 path** — which is what lets the caller's definite-assignment analysis count the slot as filled afterwards.
 The `out` at the call site is mandatory because both lower to `T*`, and without it no reader could tell a
@@ -112,7 +112,7 @@ there is nothing to infer from.
 - **`match` is exhaustive and value-producing; there is no `switch`.** Every arm must be covered, and the
   whole construct yields a value.
 - **No `null` in the safe surface.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
-  safe type is a compile error. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
+  safe type is a compile error. `null` exists only for `UnsafePtr<T>` at the FFI boundary. <!-- xfail: null_safe_compare, null_safe_assignment -->
 - **No exceptions.** A constructor cannot fail — fallible acquisition is a `static`/`ctor` factory
   returning `Result`.
 - **A `string` is UTF-8 bytes.** `length()` is bytes, `s[i]` is a `uint8`, and `.chars()` is the explicit

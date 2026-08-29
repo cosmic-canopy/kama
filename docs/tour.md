@@ -71,7 +71,7 @@ it is the first thing you write:
 | --- | --- | --- |
 | `type value` | Owns nothing but its bytes | Copies freely |
 | `type resource` | Owns something — memory, a file, a handle | Moves; runs a destructor |
-| `type view` | Borrows someone else's data | Stack-only, cannot be stored |
+| `type view` | Borrows someone else's data | Stack-only, cannot be stored | <!-- xfail: view_field -->
 | `type contract` | A guarantee other types implement | — |
 
 ```kama
@@ -105,7 +105,7 @@ Constructors are named because *making* a thing is as meaningful as any other op
 **Dot-on-type is the constructor spelling, and only that.** `::` is scope resolution — static
 functions, enum variants, namespaces — so `Vec2.make(...)` constructs and `Vec2::dot(...)` calls a
 static utility. The split is deliberate: `.make(` greps for construction and never catches anything
-else. Calling a static function with a dot is a compile error that names the fix.
+else. Calling a static function with a dot is a compile error that names the fix. <!-- xfail: dot_on_type_static -->
 
 When construction can fail, the constructor itself returns a `Result` — it is still a `ctor`, just one
 with a declared return type. It fails *before* the object exists, so a half-built value never escapes:
@@ -167,7 +167,7 @@ fn int32 main()
 ```
 
 Because a `resource` is move-only, handing one off is explicit: `give` moves it, and using the
-source afterwards is a **compile error**, not a crash.
+source afterwards is a **compile error**, not a crash. <!-- xfail: use_after_move -->
 
 ```kama
 Owned<Counter> a = new Counter.make(n: 20);
@@ -224,7 +224,7 @@ fn int32 main()
 ```
 
 Arms are `case <pattern>: <expression>;` — a semicolon, not a comma. `case _:` is the wildcard, and
-a missing case is a compile error, so adding a variant tells you every place that needs to care. A
+a missing case is a compile error, so adding a variant tells you every place that needs to care. A <!-- xfail: match_nonexhaustive -->
 block arm ends with `:= value;` to say what it produces. There is no `switch` and no fallthrough.
 
 **A pattern names the fields it binds**, exactly as a call names its arguments: `h: height` binds the

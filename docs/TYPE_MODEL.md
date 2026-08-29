@@ -62,10 +62,10 @@ type value Rect {
 
 - A "plain-old-data" type is just a `value` whose fields are all `public`. Encapsulation (public vs
   private fields) is a per-field choice, not a separate kind; `memcpy` semantics hold either way.
-- **Checked intent:** a `value` that (transitively) owns a resource is a **compile error** ("declare
+- **Checked intent:** a `value` that (transitively) owns a resource is a **compile error** ("declare <!-- xfail: value_owns_resource -->
   `resource`"). Like `override` — derivable, but a checked assertion that catches a design/field
   disagreement, and it closes a latent hole (a `value` holding an `Owned` → double-free).
-- A `value` is **sealed** and has **no destructor** — declaring `~dtor` on a value is an error whose
+- A `value` is **sealed** and has **no destructor** — declaring `~dtor` on a value is an error whose <!-- xfail: dtor_on_value -->
   message *is* the lesson: "a value owns nothing — a `~dtor` makes it a `resource`."
 
 ### `resource` — owns something (or has identity), moved
@@ -113,7 +113,7 @@ uploadToGpu(window: verts.slice(from: 2, count: 6));   // zero copy, no ownershi
 - **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
   it has an invariant (a borrowed `UnsafePtr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
   `resource` — its **fields are private-only**.
-- **Owns nothing.** A `view` may **not** declare a `~dtor` and may **not** have an owning/resource field
+- **Owns nothing.** A `view` may **not** declare a `~dtor` and may **not** have an owning/resource field <!-- xfail: view_dtor, view_owns -->
   (that would make it try to free memory it doesn't own) — the compiler rejects both.
 - **Second-class borrow (the escape rule).** Exactly like a `contract` value, a `view` may be a
   **parameter or a local** but **not** a field, a collection element, or an `enum` payload — and it may be
@@ -255,10 +255,10 @@ takes a marker.
   like a `value`). A view owns nothing, so `give` is meaningless and `copy` is redundant; and because a
   view is a *second-class borrow*, no hand-off can outlive the buffer it borrows (the escape rule, above).
 - **`resource` without a copy contract** (move-only) → **move** on a bare hand-off (the source is
-  consumed); `give` is optional emphasis; `copy` is an error — nothing to copy with — until it opts in.
+  consumed); `give` is optional emphasis; `copy` is an error — nothing to copy with — until it opts in. <!-- xfail: copy_value -->
 - **`resource` with a copy contract** → it **must declare its bare default** at opt-in:
   `implements Copyable(bare: give)` (bare **moves**) or `Copyable(bare: copy)` (bare **deep-copies** via
-  its public nullary `copy()`). A bare `implements Copyable` *without* `(bare: …)` is a compile error.
+  its public nullary `copy()`). A bare `implements Copyable` *without* `(bare: …)` is a compile error. <!-- xfail: copyable_no_bare_default -->
   `give x` moves, `copy x` deep-copies — a marker always overrides the declared default.
 - **`Shared`/`Weak`** (shared ownership, `implements Copyable(bare: copy)`) → a bare hand-off **retains**
   (refcount++); `copy` is the explicit retain; **`give` moves the handle** — the ref transfers and the
@@ -271,6 +271,6 @@ takes a marker.
 A bare hand-off is **never a silent copy of a resource** (the double-drop hole is closed in every case)
 and **never a silent move of a `Shared`** you meant to share (a `Shared`'s bare default is retain). This
 is compile-time move tracking with **zero runtime overhead by construction** — a value moved on
-some-but-not-all paths that is still live at scope exit is *rejected*, not tracked with a runtime
+some-but-not-all paths that is still live at scope exit is *rejected*, not tracked with a runtime <!-- xfail: cond_move_live -->
 drop-flag (`Optional<T>` is the explicit escape hatch for genuinely-conditional ownership). The full
 give/copy behavior matrix (every cell backed by a fixture) is in [SPEC.md](SPEC.md).
