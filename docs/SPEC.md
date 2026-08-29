@@ -3499,9 +3499,15 @@ closed and empty, which is why dropping the last `Sender` is how a producer sign
 
 **Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
 sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
-`Shared`/`Weak` over a deeply-immutable type. A `view`, a raw `UnsafePtr`, a bare `contract` value, or
-anything transitively containing one is rejected — with an error naming the offending field, the
-same way the escape check reports. Because it is structural, it cannot be wrong by omission.
+`Shared`/`Weak` over a deeply-immutable type. What is **rejected** is a **non-atomic shared refcount** — a
+`Shared`/`Weak` over a mutable payload, or anything transitively containing one — with an error naming the
+offending field, the same way the escape check reports.
+A `view` and a bare `contract` value need no rule here: neither can be a field at all, so neither ever
+reaches a bundle.
+A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
+bundle is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
+closing brace, or an explicit `h.join()` — is what orders the write against the parent's read. It is the
+primary isolate idiom, not an edge case.
 
 ### Structured concurrency — `scope` ✅
 
