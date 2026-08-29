@@ -30,7 +30,14 @@
 ## NOW — the 1.0 gate
 
 **The tag needs exactly this list and nothing below it.** The gate is: *no source-breaking change left, no
-ordinary safe-kama construct miscompiles or emits invalid C, and the diagnostics can be trusted.*
+ordinary safe-kama construct miscompiles or emits invalid C, the diagnostics can be trusted — and the
+engine can be built on it without reaching outside the language.*
+
+That last clause is why the **engine-unblock** rows are in this list rather than after it. The engine is a
+separate consumer project, but it is the north star that decides whether the surface is actually finished:
+a hot math kernel with no explicit SIMD, or a GUI binary that opens a stray console, is the language coming
+up short, and both are **source-visible** — a SIMD surface and a `subsystem` manifest key are API. That
+makes them 1.0 business by the first clause too.
 
 **Size** is a batching hint, not a commitment: **S** fits beside others in one session · **M** is about a
 session · **L** is several · **XL** wants its own design doc before any code. It is read off the linked
@@ -41,17 +48,9 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 | # | item | size | why it gates the tag | detail |
 |---|---|---|---|---|
 | 1 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
-
-## NEXT — engine unblock
-
-The engine is a **separate consumer project**. Its first phase (math, ECS, windowing, renderer spine) is
-buildable today. These are the kama-side gaps it hits that the tag does not gate.
-
-| # | item | size | bites at | detail |
-|---|---|---|---|---|
-| 2 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
-| 3 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
-| 4 | **Runtime-N task fan-out has no spelling** — a bare `spawn` must be a direct statement of its `scope`, so "one child per work item" is unwritable when N is not static | M | a job graph the pool shape does not fit | [§6](ROADMAP_DETAIL.md#s6) |
+| 2 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | L | the first hot math kernel — and a SIMD surface is API | [§2](ROADMAP_DETAIL.md#s2) |
+| 3 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day, and the manifest key is source-visible | [§2](ROADMAP_DETAIL.md#s2) |
+| 4 | **Runtime-N task fan-out has no spelling** — a bare `spawn` must be a direct statement of its `scope`, so "one child per work item" is unwritable when N is not static | M | a job graph the fixed pool cannot express | [§6](ROADMAP_DETAIL.md#s6) |
 
 ## LATER — stdlib & platform reach
 
