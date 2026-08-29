@@ -12392,17 +12392,58 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         if (!borrowOK || !innermostTaskScope())
             unsupported("only a bare `spawn` inside a `scope { }` may `ref`-borrow (the scope joins the "
                         "child before the local drops); the handle form must take a moved `give` bundle", iso->line);
-        // The argument must be `ref local`. A `give`/`copy` (HandoffNode) or a bare value would not
-        // match the `ref T` parameter; and only a BARE local can be borrowed (a field/element root's
-        // lifetime we don't track), mirroring moveOnlySource's restriction on the move side.
+        // The argument must be `ref <place>`. A `give`/`copy` (HandoffNode) or a bare value would not
+        // match the `ref T` parameter.
+        //
+        // A PLACE, not just a bare local: `ref w.bodies` and `ref w.springs` hand two children two
+        // disjoint fields of one world, which is the shape the ECS/engine work wants and which the
+        // bare-local rule refused outright. It reads as a lifetime question — "how long does that field
+        // live?" — and it is not one, because a field's storage is INSIDE its root's storage. Containment
+        // answers both halves with no inference at all: `w.bodies` is created and destroyed exactly with
+        // `w`, so the escape check below is exactly as strong applied to the root; and two places neither
+        // of which is a prefix of the other cannot overlap, which is `placesConflict` — the same predicate
+        // the view model already ships on. One rule replaces two.
+        //
+        // What `placePath` refuses is refused for free, on its own "not a statically-nameable place"
+        // signal (the empty vector): an ELEMENT (`w.bodies[i]`) has a runtime index no static rule pins
+        // (splitting one buffer by index is `parallel_for`'s job), and a CALL or temporary designates no
+        // place at all.
         bool isRef = argNode && argNode->modifier && argNode->modifier->value && *argNode->modifier->value == "ref";
-        auto* id = argNode ? dynamic_cast<IdentifierNode*>(argNode->expression.get()) : nullptr;
-        if (!isRef || !id || !id->value || (id->qualifier && !id->qualifier->empty())) {
-            unsupported(("`spawn` to `" + fname + "` borrows — pass a bare local by `ref` "
-                         "(e.g. `spawn " + fname + "(b: ref myBundle)`)").c_str(), iso->line);
-            return "";   // `id` may be the null this guard rejected — never fall through and deref it
+        std::vector<std::string> place = (isRef && argNode) ? placePath(argNode->expression)
+                                                           : std::vector<std::string>();
+        if (!isRef || place.empty()) {
+            unsupported(("`spawn` to `" + fname + "` borrows — pass a local or one of its fields by `ref` "
+                         "(e.g. `spawn " + fname + "(b: ref myBundle)` or `ref myWorld.bodies`). An element "
+                         "(`a[i]`) or a call result names no place a static disjointness rule can pin — "
+                         "split a buffer with `parallel_for` instead").c_str(), iso->line);
+            return "";   // the place is empty — never fall through and index it
         }
-        const std::string root = *id->value;
+        const std::string root = place[0];
+
+        // ⚠️ The one thing containment does NOT give: a projection through an indirection leaves the
+        // root's own storage. If `w` is a handle another handle can copy, `a.bodies` and `b.bodies` are
+        // non-prefix places naming ONE cell, and both the lifetime and the disjointness arguments break —
+        // a silent data race in safe kama. (Probed: `ref Shared<T>` as a PARAMETER is already refused
+        // language-wide, so this hazard is created by the relaxation rather than inherited.)
+        //
+        // The ownership model draws the line, and `copyable` is the exact question — can a second handle
+        // name this object? An `Owned<T>` is unique (`copy` on one is refused), so distinct roots ARE
+        // distinct pointees and containment still holds; a `Shared`/`Weak` says outright that someone else
+        // may hold it, which is the premise disjointness has to deny. Keying on copyability rather than on
+        // a list of type names also covers the intrinsic and the library heap-owner families at once.
+        for (ASTNode* n = argNode->expression.get(); ; ) {
+            auto* ma = dynamic_cast<MemberAccessNode*>(n);
+            if (!ma || !ma->expression) break;
+            std::string bc = exprClass(ma->expression);
+            if ((isSmartPtrClass(bc) || !heapOwnerTarget(bc).empty()) && isCopyable(bc)) {
+                unsupported(("`spawn` borrows `" + placeText(place) + "`, a place inside `" + root
+                             + "`'s own storage — but `" + root + "` is a shared handle, and another handle "
+                             "can name the same object, so two children are not provably disjoint. Own it "
+                             "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso->line);
+                return "";
+            }
+            n = ma->expression.get();
+        }
 
         // Escape check: the borrowed root must OUTLIVE the scope's join barrier — i.e. be declared in
         // the task scope itself or an OUTER scope (or be a parameter). A local declared in a block
@@ -12421,22 +12462,42 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
             unsupported(("`spawn` may not borrow `" + root + "` — it is declared inside a block nested in "
                          "the `scope`, so it is destroyed before the scope joins this child; declare it in "
                          "the `scope` itself or an outer scope").c_str(), iso->line);
-        // Can't borrow something already moved into (or given away by) an earlier statement.
-        auto ms = _moveState.find(root);
-        if (ms != _moveState.end() && ms->second != MoveState::NotMoved)
-            unsupported(("cannot borrow `" + root + "` — it was moved (given) away").c_str(), iso->line);
+        // Can't borrow something already moved into (or given away by) an earlier statement. Both keys
+        // matter for a place: moving the ROOT away takes the field with it, and the field can also have
+        // been given away on its own — `_moveState` keys those as "w.bodies", the same shape
+        // `moveOnlySource` builds.
+        for (size_t k = 1; k <= place.size(); ++k) {
+            std::string key = placeText(std::vector<std::string>(place.begin(), place.begin() + k));
+            auto ms = _moveState.find(key);
+            if (ms != _moveState.end() && ms->second != MoveState::NotMoved) {
+                unsupported(("cannot borrow `" + placeText(place) + "` — `" + key
+                             + "` was moved (given) away").c_str(), iso->line);
+                break;
+            }
+        }
         // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
         // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
         // call through `spawn` must not launder it. This path never reaches `checkConstWrite`, which is
         // where every other `ref` argument is caught.
         rejectFrozenWrite(argNode->expression, iso->line);
-        // Same-root disjointness: no two children of one scope may borrow the SAME root (they would race
-        // on it). Distinct roots are statically disjoint; overlapping index-ranges of one buffer are M6.
+        // Disjointness: no two children of one scope may borrow OVERLAPPING places (they would race on the
+        // shared storage). Two places overlap iff one is a prefix of the other — which is the exact
+        // statement, not an approximation, so `w.bodies` and `w.springs` are admitted while `w` beside
+        // either is still caught. Overlapping index-ranges of one buffer remain M6/`parallel_for`.
         // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so
-        // several children borrowing the SAME atomic root is exactly the intended use, not a data race.
-        if (!isAtomicClass(cls) && !innermostTaskScope()->borrowedRoots.insert(root).second)
-            unsupported(("two children in this `scope` both borrow `" + root + "` — a shared mutable borrow "
-                         "across tasks would race; borrow distinct locals, or use an `Atomic<T>` (M6)").c_str(), iso->line);
+        // several children borrowing the SAME atomic place is exactly the intended use, not a data race.
+        if (!isAtomicClass(cls)) {
+            Scope* ts = innermostTaskScope();
+            for (auto& prev : ts->borrowedPlaces)
+                if (placesConflict(prev, place)) {
+                    unsupported(("two children in this `scope` borrow overlapping places (`"
+                                 + placeText(prev) + "` and `" + placeText(place) + "`) — a shared mutable "
+                                 "borrow across tasks would race; borrow disjoint fields or distinct locals, "
+                                 "or use an `Atomic<T>` (M6)").c_str(), iso->line);
+                    break;
+                }
+            ts->borrowedPlaces.push_back(place);
+        }
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
         // No heap box, no free, no move (the caller keeps the local and drops it after the join).

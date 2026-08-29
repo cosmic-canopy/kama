@@ -1,0 +1,58 @@
+// M4.2 at PLACE granularity: two children of one `scope` borrow two DISJOINT FIELDS of a single local.
+// This is the ECS/engine shape — one world, one system per component array — and the bare-local rule
+// refused it outright, so the only way to write it was an `unsafe` bundle carrying a raw pointer.
+//
+// It reads as a lifetime question ("how long does that field live?") and is not one. A field's storage is
+// INSIDE its root's storage, so containment answers both halves with no inference: `w.bodies` is created
+// and destroyed exactly with `w`, and two places neither of which is a prefix of the other cannot
+// overlap. That second half is `placesConflict` — the predicate the view model already ships on — so one
+// rule now serves both, which is what GOALS asks for.
+//
+// `ref w` beside either field is still caught (tests/xfail/scope_borrow_nested_prefix), an element is
+// still refused (tests/xfail/scope_borrow_element), and a shared handle's field is refused
+// (tests/xfail/scope_borrow_through_shared). Run under KAMA_TSAN=1: disjoint cells, no sharing.
+import { std::concurrent::Isolate };
+
+type value Acc {
+    public int32 total;
+    int32 lo;
+    int32 hi;
+
+    public ctor range(int32 lo, int32 hi) {
+        this.total = 0;
+        this.lo = lo;
+        this.hi = hi;
+        return this;
+    }
+
+    public fn void run() {
+        int32 i = this.lo;
+        while (i < this.hi) {
+            this.total = this.total + i;
+            i = i + 1;
+        }
+    }
+}
+
+// One world, two component arrays — the fields the two systems own.
+type value World {
+    public Acc bodies;
+    public Acc springs;
+
+    public ctor make() {
+        this.bodies  = Acc.range(lo: 0,  hi: 50);
+        this.springs = Acc.range(lo: 50, hi: 100);
+        return this;
+    }
+}
+
+fn void step(ref Acc a) { a.run(); }   // borrows ONE component array, not the world
+
+fn int32 main() {
+    World w = World.make();
+    scope {
+        spawn step(a: ref w.bodies);    // place {w, bodies}
+        spawn step(a: ref w.springs);   // place {w, springs} — neither is a prefix of the other
+    }                                   // BARRIER: both joined before the totals are read
+    return (w.bodies.total + w.springs.total) % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+}

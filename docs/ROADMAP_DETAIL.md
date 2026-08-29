@@ -659,45 +659,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ## 3. Open design questions (settle before the work they gate)
 
-- **Should `spawn`'s disjointness check move from ROOT granularity to PLACE granularity?** The view
-  model introduced `placePath()` / `placesConflict()` — a place is a base plus its chain of field
-  names, and two places conflict iff one is a prefix of the other. `spawn`'s existing rule
-  (`Scope::borrowedRoots`, pinned by `tests/xfail/scope_borrow_same_root.kama`) compares **roots**.
-  Adopting the place test would unify the two predicates — one rule, which is what [GOALS.md](GOALS.md) §4
-  asks for — and admit the disjoint-field case the ECS/engine shape wants.
-
-  ⚠️ **PROBED 2026-08-27, and this entry's premise was wrong.** It said `w.bodies` and `w.springs` "are
-  rejected as *the same root `w`*". They are not: `spawn` never reaches the root comparison, because it
-  accepts only a **bare local** by `ref` — the argument must be an `IdentifierNode`
-  (`kama.cemit.cpp:11970`), so a field expression is refused outright with a different message
-  (*"`spawn` to `step` borrows — pass a bare local by `ref`"*). The restriction has its own stated reason,
-  which the row never mentioned: *"a field/element root's lifetime we don't track"*.
-
-  So this is **not** a predicate swap. The order is: (1) decide whether a `spawn` borrow may designate a
-  place at all, which is a LIFETIME question about the field's owning root, not a disjointness one;
-  (2) teach the borrow trampoline to pass `&w.bodies` rather than `&local`; only then (3) does
-  `placesConflict` vs `borrowedRoots` matter. **It is a relaxation of a concurrency rule across a thread
-  boundary, and it is not cheap to DO either — the `M?` was read off a mechanism that does not exist.**
-  Settle the design first; do not fold it into a view commit.
-
-  ⚠️ **The restriction it is built on is already bypassable, which is worth knowing before designing the
-  relaxation.** `spawn`'s `ref` path refuses a field *because* "a field/element root's lifetime we don't
-  track" — but the **moved-bundle** path carries a raw `UnsafePtr` with no lifetime check of any kind, so
-  the same aliasing walks straight through. This compiles clean today:
-
-  ```
-  scope {
-      { int32 victim = 0;
-        Payload p = Payload.make(dst: ref victim);   // Payload holds UnsafePtr<int32>
-        spawn worker(p: give p); }                   // victim dies at this brace
-  }                                                  // join is HERE — child writes into dead stack
-  ```
-
-  That is intended in the sense that `unsafe` is the seam and the author carries the obligation (it is the
-  `isolate_basic` idiom, and SPEC no longer claims a structural check over it — see the sendability
-  paragraph). But it means the careful `ref` restriction guards one door in a room with two, so a design
-  that only tightens the `ref` path buys less than it appears to.
-
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
   types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that

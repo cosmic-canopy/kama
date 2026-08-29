@@ -1,7 +1,11 @@
-// M4.2 same-root disjointness (the no-footgun guard): two children of one `scope` may not `ref`-borrow
-// the SAME root local — they would race on that cell. M4 guarantees LIFETIME (join-before-drop), not
-// EXCLUSIVITY, so the compiler forbids the overlap outright rather than trusting the programmer. Distinct
-// locals are fine (see scope_borrow_disjoint); splitting one buffer by index is M6's `splitAt`. Must fail.
+// M4.2 disjointness (the no-footgun guard): two children of one `scope` may not `ref`-borrow OVERLAPPING
+// places — they would race on that cell. M4 guarantees LIFETIME (join-before-drop), not EXCLUSIVITY, so
+// the compiler forbids the overlap outright rather than trusting the programmer.
+//
+// Borrowing the same root twice is the degenerate case: a place is a prefix of itself. Two DISJOINT
+// fields of one local are admitted (scope_borrow_disjoint_fields), and `ref w` beside `ref w.bodies` is
+// still caught because `{w}` is a prefix of `{w, bodies}` (scope_borrow_nested_prefix). Distinct locals
+// are fine (scope_borrow_disjoint); splitting one buffer by index is `parallel_for`. Must fail.
 import { std::concurrent::Isolate };
 
 type value Acc {

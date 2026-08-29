@@ -1,0 +1,23 @@
+// M4.2: a place is a base plus a chain of FIELD names. An ELEMENT (`xs[0]`) is not one — its index is a
+// runtime value, so no static rule can decide whether two children's indices overlap. `placePath` reports
+// that by returning the empty path, the same "not a statically-nameable place" signal the view model
+// rejects a borrow host on, and `spawn` refuses it here rather than pretending to a disjointness proof it
+// cannot make. (Rust is conservative about the index projection for the same reason — it is why
+// `split_at_mut` has to exist.)
+//
+// Splitting one buffer across workers is `parallel_for`'s job: it slices a container into K
+// non-overlapping sub-views, which IS the proof this rule cannot supply. Must fail to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray };
+
+type value Acc { public int32 total; public ctor make() { this.total = 0; return this; } }
+
+fn void step(ref Acc a) { a.total = a.total + 1; }
+
+fn int32 main() {
+    DynamicArray<Acc> xs = DynamicArray.empty();
+    xs.add(item: Acc.make());
+    scope {
+        spawn step(a: ref xs[0]);   // ERROR: an element names no static place
+    }
+    return 0;
+}

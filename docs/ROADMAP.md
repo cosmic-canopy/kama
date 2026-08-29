@@ -40,8 +40,7 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 
 | # | item | size | why it gates the tag | detail |
 |---|---|---|---|---|
-| 1 | **`spawn` disjointness: ROOT → PLACE granularity** — ⚠️ probed: `spawn` takes only a bare local, so a field never reaches the root check | L? | the first parallel system. **Settle the design first** — it is a lifetime question before it is a disjointness one | [§3](ROADMAP_DETAIL.md#s3) |
-| 2 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
+| 1 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 
 ## NEXT — engine unblock
 
@@ -50,16 +49,17 @@ buildable today. These are the kama-side gaps it hits that the tag does not gate
 
 | # | item | size | bites at | detail |
 |---|---|---|---|---|
-| 3 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
-| 4 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
-| 5 | **Runtime-N task fan-out has no spelling** — a bare `spawn` must be a direct statement of its `scope`, so "one child per work item" is unwritable when N is not static | M | a job graph the pool shape does not fit | [§6](ROADMAP_DETAIL.md#s6) |
+| 2 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | L | the first hot math kernel | [§2](ROADMAP_DETAIL.md#s2) |
+| 3 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day | [§2](ROADMAP_DETAIL.md#s2) |
+| 4 | **Runtime-N task fan-out has no spelling** — a bare `spawn` must be a direct statement of its `scope`, so "one child per work item" is unwritable when N is not static | M | a job graph the pool shape does not fit | [§6](ROADMAP_DETAIL.md#s6) |
 
 ## LATER — stdlib & platform reach
 
 | # | item | detail |
 |---|---|---|
-| 6 | **Stdlib parity M2b** — fs + path, io handles + `lines()`, sleep + wall clock, DNS | [§1](ROADMAP_DETAIL.md#s1) |
-| 7 | **Stdlib parity M2c** — `std::random`, `std::encoding` | [§1](ROADMAP_DETAIL.md#s1) |
+| 5 | **Stdlib parity M2b** — fs + path, io handles + `lines()`, sleep + wall clock, DNS | [§1](ROADMAP_DETAIL.md#s1) |
+| 6 | **Stdlib parity M2c** — `std::random`, `std::encoding` | [§1](ROADMAP_DETAIL.md#s1) |
+| 7 | **Modular / opt-in stdlib** — whether emit-on-instantiation + `--gc-sections` pruning scales, or explicit per-module opt-in / dead-function elimination is wanted before the stdlib grows | [§3](ROADMAP_DETAIL.md#s3) |
 | 8 | **`std::io` transform adapters** — compression et al., composing with serde and net | [§1](ROADMAP_DETAIL.md#s1) |
 | 9 | **`std::net`** — IPv6, UDP multicast | [§2](ROADMAP_DETAIL.md#s2) |
 | 10 | **`std::process`** — live/streaming child-stream reads | [§1](ROADMAP_DETAIL.md#s1) |

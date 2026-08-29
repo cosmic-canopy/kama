@@ -1,0 +1,53 @@
+// M4.2: the ECS shape with the world behind a HANDLE rather than on the frame — which is how a real
+// engine holds it. A place may project through an indirection exactly when that handle is UNIQUE.
+//
+// `Owned<T>` is unique by construction (`copy` on one is refused), so distinct roots really are distinct
+// pointees and the containment argument that licenses field places still holds. A `Shared`/`Weak` says
+// outright that someone else may hold the same object — the premise disjointness has to deny — and is
+// refused (tests/xfail/scope_borrow_through_shared). The check keys on COPYABILITY rather than a list of
+// type names, which is the exact question ("can a second handle name this?") and covers the intrinsic and
+// library heap-owner families at once. Run under KAMA_TSAN=1.
+import { std::concurrent::Isolate };
+
+type value Acc {
+    public int32 total;
+    int32 lo;
+    int32 hi;
+
+    public ctor range(int32 lo, int32 hi) {
+        this.total = 0;
+        this.lo = lo;
+        this.hi = hi;
+        return this;
+    }
+
+    public fn void run() {
+        int32 i = this.lo;
+        while (i < this.hi) {
+            this.total = this.total + i;
+            i = i + 1;
+        }
+    }
+}
+
+type value World {
+    public Acc bodies;
+    public Acc springs;
+
+    public ctor make() {
+        this.bodies  = Acc.range(lo: 0,  hi: 50);
+        this.springs = Acc.range(lo: 50, hi: 100);
+        return this;
+    }
+}
+
+fn void step(ref Acc a) { a.run(); }
+
+fn int32 main() {
+    Owned<World> w = new World.make();   // heap, but a UNIQUE handle
+    scope {
+        spawn step(a: ref w.bodies);
+        spawn step(a: ref w.springs);
+    }
+    return (w.bodies.total + w.springs.total) % 256;   // 4950 % 256 = 86
+}

@@ -1,0 +1,33 @@
+// M4.2: a place may project through an indirection only when the handle is UNIQUE. This is the one thing
+// containment does NOT give — a field of a heap object is inside the OBJECT's storage, not inside the
+// handle's, so two distinct handle roots can name one cell.
+//
+// Here `b = copy a`, so `{a, bodies}` and `{b, springs}` are non-prefix places over ONE World: the prefix
+// test would call them disjoint and the two children would race. `Owned<T>` is refused a `copy`, so for a
+// unique handle distinct roots really are distinct pointees and the field places are admitted
+// (tests/scope_borrow_owned_fields). A `Shared` says outright that someone else may hold the same object,
+// which is exactly the premise disjointness must deny.
+//
+// This hazard is CREATED by place granularity rather than inherited: `ref Shared<T>` as a parameter is
+// already refused language-wide, so the root rule never had a way to reach it. Must fail to compile.
+import { std::concurrent::Isolate };
+
+type value Acc { public int32 total; public ctor make() { this.total = 0; return this; } }
+
+type value World {
+    public Acc bodies;
+    public Acc springs;
+    public ctor make() { this.bodies = Acc.make(); this.springs = Acc.make(); return this; }
+}
+
+fn void step(ref Acc a) { a.total = a.total + 1; }
+
+fn int32 main() {
+    Shared<World> a = new World.make();
+    Shared<World> b = copy a;              // a SECOND handle to the same World
+    scope {
+        spawn step(a: ref a.bodies);       // ERROR: `a` is a shared handle
+        spawn step(a: ref b.springs);      // ERROR: so is `b` — and they are the same object
+    }
+    return 0;
+}

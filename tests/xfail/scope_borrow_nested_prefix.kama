@@ -1,0 +1,29 @@
+// M4.2 disjointness at PLACE granularity: admitting `ref w.bodies` must NOT admit `ref w` beside it.
+// `{w}` is a PREFIX of `{w, bodies}`, so the two children would share storage — the whole-world child
+// writes the very field the other is accumulating into.
+//
+// The prefix test is the exact statement of the disjointness argument, not an approximation, which is
+// what lets `w.bodies` and `w.springs` through (tests/scope_borrow_disjoint_fields) while catching this.
+// A place is also a prefix of itself, which is how the same-root case falls out of the same rule
+// (tests/xfail/scope_borrow_same_root). Must fail to compile.
+import { std::concurrent::Isolate };
+
+type value Acc { public int32 total; public ctor make() { this.total = 0; return this; } }
+
+type value World {
+    public Acc bodies;
+    public Acc springs;
+    public ctor make() { this.bodies = Acc.make(); this.springs = Acc.make(); return this; }
+}
+
+fn void step(ref Acc a)    { a.total = a.total + 1; }
+fn void reset(ref World w) { w.bodies.total = 0; }   // touches the very field `step` is given
+
+fn int32 main() {
+    World w = World.make();
+    scope {
+        spawn reset(w: ref w);            // place {w}
+        spawn step(a: ref w.bodies);      // ERROR: {w} is a prefix of {w, bodies} — they overlap
+    }
+    return 0;
+}

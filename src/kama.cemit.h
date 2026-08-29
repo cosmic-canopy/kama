@@ -1359,11 +1359,14 @@ private:
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
-                   // ALL before dropping any local (join-before-drop), on every exit path. `borrowedRoots`
-                   // are the root locals its children `ref`-borrow (M4.2) — a second child borrowing the
-                   // same root is rejected (the same-root disjointness rule: no two tasks share a cell).
+                   // ALL before dropping any local (join-before-drop), on every exit path. `borrowedPlaces`
+                   // are the places its children `ref`-borrow (M4.2) — a second child borrowing an
+                   // OVERLAPPING place is rejected (no two tasks share a cell). A place, not a root, so
+                   // two children may take two disjoint fields of one local; overlap is the same prefix
+                   // test the view model uses (`placesConflict`), which is why this is a vector and not a
+                   // set — membership is not the question, conflict is.
                    bool isTaskScope = false; std::vector<std::string> taskChildren;
-                   std::set<std::string> borrowedRoots;
+                   std::vector<std::vector<std::string>> borrowedPlaces;
                    // `borrow h.mint() as v { … }` — the host PLACE, frozen for the extent of the block.
                    // A view is live over that storage, so growing or reseating it would leave the alias
                    // dangling. Conflict is the same prefix test the rest of the model uses, which is what

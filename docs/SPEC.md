@@ -3542,6 +3542,31 @@ block. That matches the coarse-isolate model above: roughly one isolate per core
 item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
 and per-item work over a container is `parallel_for`.
 
+#### What a child may borrow
+
+A child borrows a **place** — a local, or a chain of field names on one: `spawn step(a: ref w.bodies)`
+beside `spawn step(a: ref w.springs)` gives two children two disjoint fields of one world.
+<!-- test: scope_borrow_disjoint_fields --> Two children may not borrow **overlapping** places, and
+two places overlap exactly when one is a prefix of the other, so `ref w` beside `ref w.bodies` is
+refused <!-- xfail: scope_borrow_nested_prefix --> and so is the same local twice.
+<!-- xfail: scope_borrow_same_root --> An `Atomic<T>` is exempt — it is the sanctioned shared-mutable
+cell, so several children may share one.
+
+This needs no lifetime analysis, and that is the point. A field's storage is **inside** its root's
+storage, so it is created and destroyed exactly with the root; bounding the root bounds the field.
+The prefix test is the same `placesConflict` the `borrow` window uses, so one rule serves both.
+
+Two shapes are refused because they are not places. An **element** (`ref xs[0]`) has a runtime index
+no static rule can pin <!-- xfail: scope_borrow_element --> — splitting a buffer across workers is
+`parallel_for`'s job, which supplies the proof this rule cannot. A **call result** designates no
+place at all.
+
+A place may project through an indirection only when the handle is **unique**. An `Owned<T>` is —
+nothing can copy one — so distinct roots really are distinct objects and its fields are borrowable.
+<!-- test: scope_borrow_owned_fields --> A `Shared`/`Weak` is not: another handle may name the same
+object, so `a.bodies` and `b.springs` could be one cell under two non-prefix names, and it is
+refused. <!-- xfail: scope_borrow_through_shared -->
+
 ### Data parallelism — `parallel_for` ✅
 
 `parallel_for (ref T e in coll) { … }` splits `coll` into K non-overlapping sub-`View`s, one per
