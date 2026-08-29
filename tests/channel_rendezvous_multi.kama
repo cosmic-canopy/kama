@@ -1,0 +1,75 @@
+// M3: a RENDEZVOUS channel (capacity 0) with FOUR producers and a consumer that QUITS EARLY — the case
+// the endpoint counts alone do not fix, in the only shape that exposes it.
+//
+// A rendezvous `send` must block until its OWN item is taken. The test for that used to be `count == 0`,
+// which several senders make ambiguous: the receiver takes A's item and signals, B wins the lock and
+// places ITS item, and A wakes to `count != 0`. While the receiver is alive A merely waits again and is
+// right by luck. The wrong answer needs the receiver to DROP in that window: A then exits on
+// `!recv_open` with `taken == false` and hands back an array the receiver already owns — a double free —
+// while the `count = 0` disown strands B's array with no owner. A per-take sequence number is
+// unambiguous, because only a take bumps it, so each sender waits on its own hand-off.
+//
+// ⚠️ Three things had to be true before this fixture could fail at all, each measured against the broken
+// logic before it was believed:
+//   * the payload must be HEAP-OWNING — a wrongly `Undelivered` `int32` has no destructor, so the double
+//     ownership is invisible and the fixture passes;
+//   * the consumer must quit EARLY — draining to completion makes A wait again and get the right answer;
+//   * there must be SEVERAL senders — with two, nobody is placed in the window often enough.
+// Even so the race is scheduling-dependent: this catches a regression in roughly 1 run in 4 (6/25
+// measured), and does so as an abort or an ASan double-free, not a wrong count. KAMA_SAN=1 is the leg
+// that matters. With the sequence number it is 25/25 clean. TSan-clean too.
+import {
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::concurrent::Isolate,
+    std::concurrent::SendResult,
+    std::collections::DynamicArray,
+};
+
+// Push until the consumer is gone. `Undelivered` hands the array BACK — we own it again and drop it here,
+// which is precisely the ownership claim the broken logic violates.
+fn void producer(Sender<DynamicArray<int32>> tx) {
+    bool going = true;
+    int32 i = 0;
+    while (going && i < 40) {
+        DynamicArray<int32> a = DynamicArray.empty();
+        a.add(item: 20);
+        SendResult<DynamicArray<int32>> r = tx.send(item: give a);
+        match (r) {
+            case Sent:                    { }                  // the queue owns it now
+            case Undelivered(item: back): { going = false; }   // `back` owns it; freed at arm-end
+        };
+        i = i + 1;
+    }
+}
+
+fn int32 main() {
+    Channel<DynamicArray<int32>> ch = Channel.bounded(capacity: 0);   // rendezvous: synchronous hand-off
+    Sender<DynamicArray<int32>> t0 = ch.sender();
+    Sender<DynamicArray<int32>> t1 = ch.sender();
+    Sender<DynamicArray<int32>> t2 = ch.sender();
+    Sender<DynamicArray<int32>> t3 = ch.sender();   // four senders over one channel
+    int32 total = 0;
+    scope {
+        spawn producer(tx: give t0);
+        spawn producer(tx: give t1);
+        spawn producer(tx: give t2);
+        spawn producer(tx: give t3);
+        {
+            // Take exactly 8 and leave. The drop closes the receiver side mid-hand-off, which is the
+            // window the sequence number exists for.
+            Receiver<DynamicArray<int32>> rx = ch.receiver();
+            int32 n = 0;
+            while (n < 8) {
+                Optional<DynamicArray<int32>> v = rx.recv();
+                match (v) {
+                    case Some(value: a): { total = total + a[0]; }   // `a` owns it; frees once at arm-end
+                    case None:           { n = 8; }                  // cannot happen: senders outlast us
+                };
+                n = n + 1;
+            }
+        }
+    }
+    return total % 256;   // exactly 8 arrays x 20 = 160
+}

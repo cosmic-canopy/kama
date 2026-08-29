@@ -18,21 +18,46 @@
 #include "kama_runtime.h"   /* kama_panic, kama_string_lit */
 
 // A bounded (ring-buffer) channel. `cap` is the buffer capacity in elements; `elemSize` the bitwise
-// size of the moved value T. `count`/`head`/`tail` drive the ring. `senderLive`/`receiverLive` are
-// the endpoint-liveness flags (both start 1); the last endpoint to drop frees the whole struct.
+// size of the moved value T. `count`/`head`/`tail` drive the ring.
+//
+// Endpoints are COUNTED, not flagged. They were two booleans, which silently assumed an invariant the
+// API never enforced: `Channel.sender()`/`.receiver()` mint endpoints without limit, so a second one on
+// either side made the first to drop believe it was last — it drained the ring and freed the struct out
+// from under a peer still parked in pthread_cond_wait. A side is closed when its count reaches zero, so
+// any number of Senders/Receivers is now correct rather than corrupt; this mirrors how a Shared<T>
+// control block already works, with the count moving exactly where ownership does.
+//
+// ⚠️ A side is also OPEN BEFORE IT IS EVER CLAIMED, which is why `claimed` exists beside each count. A
+// channel is born open on both sides (the flags started at 1), and programs depend on it: a worker that
+// receives the Channel itself and mints its Sender inside the isolate races main's first recv(), which
+// must BLOCK rather than see "zero senders, closed" and return None. Giving the Channel handle its own
+// share instead would break the opposite case — channel_close leaves `ch` alive in main for the whole
+// run while close must come from the producer's Sender drop.
 typedef struct {
     pthread_mutex_t mu;
-    pthread_cond_t  notEmpty;   /* a blocked recv waits here; a send / sender-drop signals it */
-    pthread_cond_t  notFull;    /* a blocked send waits here; a recv / receiver-drop signals it */
+    pthread_cond_t  notEmpty;   /* a blocked recv waits here; a send / last-sender-drop signals it */
+    pthread_cond_t  notFull;    /* a blocked send waits here; a recv / last-receiver-drop signals it */
     unsigned char*  buf;        /* cap * elemSize bytes */
     size_t          elemSize;
     size_t          cap;
     size_t          count;
     size_t          head;       /* next slot to read  */
     size_t          tail;       /* next slot to write */
-    int             senderLive;
-    int             receiverLive;
+    int             senders;         /* live Sender endpoints   */
+    int             receivers;       /* live Receiver endpoints */
+    int             senderClaimed;   /* has sender()   ever been called (see the "born open" note) */
+    int             receiverClaimed; /* has receiver() ever been called */
+    unsigned long   takenSeq;        /* rendezvous only: bumped each time a receiver takes the slot */
 } kama_channel_t;
+
+// "The sender side can still deliver" — a live sender exists, or none has been claimed yet. Callers hold
+// `mu`. The recv-side twin is what tells a blocked `send` whether anyone is left to receive.
+static inline int kama_channel_send_open(kama_channel_t* ch) {
+    return ch->senders > 0 || !ch->senderClaimed;
+}
+static inline int kama_channel_recv_open(kama_channel_t* ch) {
+    return ch->receivers > 0 || !ch->receiverClaimed;
+}
 
 // Create a bounded channel over T (elemSize bytes) with `cap` buffered elements (cap >= 1 for M3.1).
 // Returns an opaque handle held by kama as an `UnsafePtr`. Panics on allocation failure (spawn-like: not a
@@ -48,9 +73,28 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     ch->elemSize = elemSize;
     ch->cap = cap;
     ch->count = ch->head = ch->tail = 0;
-    ch->senderLive = 1;
-    ch->receiverLive = 1;
+    ch->senders = ch->receivers = 0;
+    ch->senderClaimed = ch->receiverClaimed = 0;   /* unclaimed == open; see the struct's note */
+    ch->takenSeq = 0;
     return ch;
+}
+
+// Register one more endpoint on a side. Called by `Channel.sender()` / `.receiver()` BEFORE the handle
+// is wrapped, so the count is up before the endpoint can be moved to another isolate and dropped there.
+static inline void kama_channel_add_sender(void* h) {
+    kama_channel_t* ch = (kama_channel_t*)h;
+    pthread_mutex_lock(&ch->mu);
+    ch->senders++;
+    ch->senderClaimed = 1;
+    pthread_mutex_unlock(&ch->mu);
+}
+
+static inline void kama_channel_add_receiver(void* h) {
+    kama_channel_t* ch = (kama_channel_t*)h;
+    pthread_mutex_lock(&ch->mu);
+    ch->receivers++;
+    ch->receiverClaimed = 1;
+    pthread_mutex_unlock(&ch->mu);
 }
 
 // Free the queue + its buffer + sync primitives. Precondition: called by the LAST endpoint to close
@@ -77,24 +121,30 @@ static inline int kama_channel_send(void* h, const void* elem) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     if (ch->cap == 0) {                                       /* rendezvous */
-        while (ch->count != 0 && ch->receiverLive)           /* wait for a free slot (prior hand-off done) */
+        while (ch->count != 0 && kama_channel_recv_open(ch)) /* wait for a free slot (prior hand-off done) */
             pthread_cond_wait(&ch->notFull, &ch->mu);
-        if (!ch->receiverLive) { pthread_mutex_unlock(&ch->mu); return -1; }
+        if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
         memcpy(ch->buf, elem, ch->elemSize);
         ch->count = 1;
+        /* ⚠️ Wait for MY item to be taken, not merely for the slot to be free again. `count == 0` was the
+           test, and with a second sender it is ambiguous: the receiver takes my item and signals, a peer
+           wins the lock and places ITS item, and I wake to `count == 1` and conclude mine was NOT taken —
+           disowning a value the receiver already owns, which is a double free. The sequence is
+           unambiguous because only a take bumps it. */
+        unsigned long mySeq = ch->takenSeq;
         pthread_cond_signal(&ch->notEmpty);                  /* offer it to a receiver */
-        while (ch->count != 0 && ch->receiverLive)           /* block until the receiver takes it */
+        while (ch->takenSeq == mySeq && kama_channel_recv_open(ch))
             pthread_cond_wait(&ch->notFull, &ch->mu);
-        int taken = (ch->count == 0);
+        int taken = (ch->takenSeq != mySeq);
         if (!taken) ch->count = 0;                           /* receiver died: DISOWN the stale copy in buf[0] —
                                                                 the caller keeps ownership (SendResult::Undelivered),
                                                                 so teardown-drain must not drop it too (double-free) */
         pthread_mutex_unlock(&ch->mu);
         return taken ? 0 : -1;                               /* receiver died before taking → not delivered */
     }
-    while (ch->count == ch->cap && ch->receiverLive)
+    while (ch->count == ch->cap && kama_channel_recv_open(ch))
         pthread_cond_wait(&ch->notFull, &ch->mu);
-    if (!ch->receiverLive) { pthread_mutex_unlock(&ch->mu); return -1; }
+    if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
     memcpy(ch->buf + ch->tail * ch->elemSize, elem, ch->elemSize);
     ch->tail = (ch->tail + 1) % ch->cap;
     ch->count++;
@@ -109,13 +159,17 @@ static inline int kama_channel_send(void* h, const void* elem) {
 static inline int kama_channel_recv(void* h, void* out) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
-    while (ch->count == 0 && ch->senderLive)
+    while (ch->count == 0 && kama_channel_send_open(ch))
         pthread_cond_wait(&ch->notEmpty, &ch->mu);
-    if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }   /* drained + sender gone */
+    if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }   /* drained + senders gone */
     if (ch->cap == 0) {                                       /* rendezvous: take from the single slot */
         memcpy(out, ch->buf, ch->elemSize);
         ch->count = 0;
-        pthread_cond_signal(&ch->notFull);                   /* release the blocked sender (hand-off done) */
+        ch->takenSeq++;                                      /* THIS is what tells the sender its item landed */
+        /* broadcast, not signal: senders park on `notFull` under two different predicates here — "a slot
+           is free" (before placing) and "my sequence moved" (after) — and a signal may wake the wrong
+           one, which then re-waits while the sender that could proceed never runs. */
+        pthread_cond_broadcast(&ch->notFull);
         pthread_mutex_unlock(&ch->mu);
         return 0;
     }
@@ -142,31 +196,33 @@ static inline int kama_channel_try_pop(void* h, void* out) {
     return 1;
 }
 
-// Close the sender endpoint: mark the sender side closed and wake any receiver parked in recv (so it
-// re-checks liveness and returns None once drained). Returns 1 if this was the LAST endpoint (the
-// receiver is already gone) — the caller must then drain any buffered items (kama-side, running each
-// element's ~dtor) and call kama_channel_free. Returns 0 otherwise (the receiver frees later). The
-// liveness flag is set and the other side is read under one lock hold, so the two endpoints can never
-// both observe "last": whichever closes second sees the other's flag already down → exactly one frees.
+// Drop one sender endpoint. The sender SIDE closes only when the last one goes, and that is when any
+// receiver parked in recv is woken (to re-check and return None once drained). Returns 1 if this was the
+// last endpoint on BOTH sides — the caller must then drain any buffered items (kama-side, running each
+// element's ~dtor) and call kama_channel_free. Returns 0 otherwise (someone else frees later).
+//
+// The decrement and the other side's state are read under one lock hold, so no two endpoints can both
+// observe "last": whichever closes second sees the first's count already at zero → exactly one frees.
 static inline int kama_channel_close_sender(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
-    ch->senderLive = 0;
-    pthread_cond_broadcast(&ch->notEmpty);
-    int last = !ch->receiverLive;
+    ch->senders--;
+    /* Broadcast — not signal: EVERY blocked receiver must observe the closure, or the ones not woken
+       park forever on a channel that will never deliver again. That is the whole point of a worker pool. */
+    if (ch->senders == 0) pthread_cond_broadcast(&ch->notEmpty);
+    int last = (ch->senders == 0) && !kama_channel_recv_open(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
 }
 
-// Close the receiver endpoint: mark the receiver side closed and wake any sender parked in send (so it
-// re-checks liveness and returns -1). Returns 1 if this was the LAST endpoint (same drain+free contract
-// as kama_channel_close_sender), 0 otherwise.
+// Drop one receiver endpoint. Symmetric: the receiver SIDE closes when the last one goes, waking any
+// sender parked in send (so it re-checks and returns -1). Same drain+free contract.
 static inline int kama_channel_close_receiver(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
-    ch->receiverLive = 0;
-    pthread_cond_broadcast(&ch->notFull);
-    int last = !ch->senderLive;
+    ch->receivers--;
+    if (ch->receivers == 0) pthread_cond_broadcast(&ch->notFull);
+    int last = (ch->receivers == 0) && !kama_channel_send_open(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
 }

@@ -1,0 +1,37 @@
+// M3: a `Channel<T>` is itself a move-only `resource`, so it can be moved INTO an isolate whose worker
+// then mints its own `Sender` there. Two things ride on this fixture.
+//
+// (1) BORN OPEN — the reason the endpoint counts carry a `claimed` flag. Here main calls `recv()` while
+// the child may not have minted its sender yet. A channel whose sender count is simply zero at that
+// moment reads as "closed and drained", and `recv` would return `None` immediately for a return of 0. A
+// side is open until it has been claimed at least once, so `recv` BLOCKS, which is what the pre-count
+// behaviour was (the liveness flags started at 1) and what this fixture pins.
+//
+// (2) It is why no `clone()` exists on the endpoints. "Get another sender" already has two spellings —
+// mint from the factory before spawning, or move the `Channel` itself to whoever needs to mint — so a
+// third would be a second way to do the same thing. Run under KAMA_TSAN=1.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
+
+fn void producer(Channel<int32> ch) {
+    Sender<int32> tx = ch.sender();   // minted on the CHILD's thread, after main may already be blocked
+    int32 i = 0;
+    while (i < 10) { tx.send(item: i); i = i + 1; }
+}
+
+fn int32 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 4);
+    Receiver<int32> rx = ch.receiver();
+    int32 got = 0;
+    scope {
+        spawn producer(ch: give ch);   // the factory itself crosses into the isolate
+        bool going = true;
+        while (going) {
+            Optional<int32> v = rx.recv();   // must BLOCK, not see "no senders yet" and give up
+            match (v) {
+                case Some(value: x): { got = got + 1; }
+                case None:           { going = false; }
+            };
+        }
+    }
+    return got;   // 10 iff the receiver waited for a sender that did not exist yet
+}

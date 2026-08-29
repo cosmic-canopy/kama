@@ -1,0 +1,59 @@
+// M3: a fixed POOL of worker isolates over ONE channel — two `Receiver`s, one `Sender`. This is the
+// shape a job system is built from, and before endpoints were counted it HUNG: the two receivers shared a
+// single `receiverLive` boolean, so the first to finish believed it was the last endpoint, drained the
+// ring and freed the queue underneath its peer, which was parked in pthread_cond_wait on the destroyed
+// condvar.
+//
+// The assertion is the strong one: each worker tallies what IT received into its own cell, and main sums
+// them. 20 proves every item was delivered EXACTLY once — 40 would mean duplication, under 20 loss.
+// Run under KAMA_TSAN=1; the join is what orders each worker's write against main's read.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
+
+type resource Worker {
+    Receiver<int32> rx;
+    UnsafePtr<int32> tally;   // this worker's own cell — disjoint from its peer's
+
+    public unsafe ctor make(Receiver<int32> rx, ref int32 tally) {
+        this.rx = give rx;
+        this.tally = addr(of: tally);
+        return this;
+    }
+
+    // Drain until the sender side closes, then publish this worker's count into its own cell.
+    public unsafe fn void run() {
+        int32 got = 0;
+        bool going = true;
+        while (going) {
+            Optional<int32> v = this.rx.recv();
+            match (v) {
+                case Some(value: x): { got = got + 1; }
+                case None:           { going = false; }   // all senders dropped AND drained
+            };
+        }
+        this.tally[0] = got;
+    }
+}
+
+fn void worker(Worker w) { w.run(); }
+
+fn int32 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 4);
+    int32 t0 = 0;
+    int32 t1 = 0;
+    Receiver<int32> r0 = ch.receiver();
+    Receiver<int32> r1 = ch.receiver();      // a SECOND receiver on the same channel
+    Worker w0 = Worker.make(rx: give r0, tally: ref t0);
+    Worker w1 = Worker.make(rx: give r1, tally: ref t1);
+    scope {
+        spawn worker(w: give w0);
+        spawn worker(w: give w1);
+        {
+            // The sender lives in a nested block so it DROPS here, closing the sender side and waking
+            // BOTH parked receivers — a signal would wake one and strand the other.
+            Sender<int32> tx = ch.sender();
+            int32 i = 0;
+            while (i < 20) { tx.send(item: i); i = i + 1; }
+        }
+    }                                        // BARRIER: both workers joined before the tallies are read
+    return t0 + t1;                          // 20 iff every item reached exactly one worker
+}

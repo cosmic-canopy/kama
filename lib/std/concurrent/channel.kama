@@ -27,6 +27,8 @@ extern fn UnsafePtr   kama_channel_new(usize elemSize, usize cap);
 extern fn int32 kama_channel_send(UnsafePtr ch, UnsafePtr elem);
 extern fn int32 kama_channel_recv(UnsafePtr ch, UnsafePtr dst);
 extern fn int32 kama_channel_try_pop(UnsafePtr ch, UnsafePtr dst);         // non-blocking pop, for teardown drain
+extern fn void  kama_channel_add_sender(UnsafePtr ch);               // register one more endpoint on a side
+extern fn void  kama_channel_add_receiver(UnsafePtr ch);
 extern fn int32 kama_channel_close_sender(UnsafePtr ch);             // returns 1 if this endpoint is the last
 extern fn int32 kama_channel_close_receiver(UnsafePtr ch);           // returns 1 if this endpoint is the last
 extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the last endpoint after draining
@@ -38,8 +40,9 @@ extern fn void  kama_channel_free(UnsafePtr ch);                     // called b
 // `Undelivered` — the same shape as `Optional<T>`'s `None`/`Some`, but named so a match reads clearly.)
 type enum SendResult<T> { Sent, Undelivered(T item) }
 
-// The send endpoint. Move-only; SPSC in M3 (multi-producer `clone()` is a follow-up). Dropping it
-// closes the sender side and wakes a blocked receiver, so `recv` returns `None` once drained.
+// The send endpoint. Move-only. Any number may share one channel (`Channel.sender()` registers each);
+// dropping the LAST one closes the sender side and wakes every blocked receiver, so `recv` returns `None`
+// once drained.
 type resource Sender<T> {
     UnsafePtr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
@@ -89,7 +92,9 @@ type resource Sender<T> {
     }
 }
 
-// The receive endpoint. Move-only. Dropping it closes the receiver side and wakes a blocked sender.
+// The receive endpoint. Move-only. Any number may share one channel — that is a worker pool, and each
+// item goes to exactly one of them. Dropping the LAST one closes the receiver side and wakes every
+// blocked sender.
 type resource Receiver<T> {
     UnsafePtr handle;   // the shared queue; null once moved-from
 
@@ -134,9 +139,14 @@ type resource Receiver<T> {
 }
 
 // The channel factory. `bounded(capacity:)` creates the queue (capacity >= 1 is a ring buffer). The
-// queue's lifetime is governed SOLELY by the two endpoint-liveness flags — the last of the Sender /
-// Receiver to drop frees it — so a `Channel` is a thin factory: its own drop does NOT touch the queue
-// (its handle is a non-owning copy). Extract both endpoints before discarding it.
+// queue's lifetime is governed SOLELY by the endpoint COUNTS — the last Sender/Receiver to drop frees it
+// — so a `Channel` is a thin factory: its own drop does NOT touch the queue (its handle is a non-owning
+// copy), and it deliberately holds no share of its own. Extract the endpoints before discarding it.
+//
+// `sender()` / `receiver()` may each be called any number of times: every call registers another endpoint,
+// which is what makes a fixed pool of worker isolates over one channel correct. The `Channel` itself is a
+// move-only `resource`, so it can also be moved INTO an isolate whose worker then mints its own endpoint
+// (tests/channel_mint_in_isolate) — which is why no separate `clone()` is needed on the endpoints.
 type resource Channel<T> {
     UnsafePtr handle;
 
@@ -144,8 +154,17 @@ type resource Channel<T> {
         this.handle = kama_channel_new(elemSize: sizeof(T), cap: capacity);
     }
 
-    public unsafe fn Sender<T>   sender()   { return Sender::<T>.make(handle: this.handle); }
-    public unsafe fn Receiver<T> receiver() { return Receiver::<T>.make(handle: this.handle); }
+    // Register before wrapping: the endpoint may be moved to another isolate and dropped there, and a
+    // drop that outran its own registration would decrement a count it was never counted in.
+    public unsafe fn Sender<T> sender() {
+        kama_channel_add_sender(ch: this.handle);
+        return Sender::<T>.make(handle: this.handle);
+    }
+
+    public unsafe fn Receiver<T> receiver() {
+        kama_channel_add_receiver(ch: this.handle);
+        return Receiver::<T>.make(handle: this.handle);
+    }
 
     ~Channel() { }   // no-op: the endpoints own the queue's lifetime (last-dropper-frees)
 }

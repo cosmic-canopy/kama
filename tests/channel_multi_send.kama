@@ -1,0 +1,36 @@
+// M3: the mirror of channel_pool_recv — TWO producers, one consumer. Before endpoints were counted this
+// hung the same way from the other side: the two senders shared one `senderLive` boolean, so the first
+// producer to finish closed the whole sender side, and main's `recv` returned `None` while the second
+// producer was still pushing into a queue the receiver was about to free.
+//
+// 100 proves both producers were fully drained (50 items each) — an early close would land well under it.
+// Run under KAMA_TSAN=1.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
+
+fn void producer(Sender<int32> tx) {
+    int32 i = 0;
+    while (i < 50) { tx.send(item: i); i = i + 1; }
+}                                    // ~Sender drops ONE share here — the side stays open for the peer
+
+fn int32 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 4);
+    Sender<int32> t0 = ch.sender();
+    Sender<int32> t1 = ch.sender();   // a SECOND sender on the same channel
+    int32 got = 0;
+    scope {
+        spawn producer(tx: give t0);
+        spawn producer(tx: give t1);
+        {
+            Receiver<int32> rx = ch.receiver();
+            bool going = true;
+            while (going) {
+                Optional<int32> v = rx.recv();
+                match (v) {
+                    case Some(value: x): { got = got + 1; }
+                    case None:           { going = false; }   // BOTH senders dropped, and drained
+                };
+            }
+        }
+    }                                 // BARRIER: both producers joined here
+    return got;                       // 100 iff neither producer's items were cut short
+}
