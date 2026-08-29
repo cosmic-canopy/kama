@@ -643,10 +643,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   runtime linkage took exactly that question and answered it with a `TargetSpec` field, a `kama.json`
   target key, and a CLI flag that wins over it (`runtime` / `--dynamic-runtime`, `kama.driver.cpp`;
   [targets.md](targets.md) § *Runtime linkage*). A `subsystem` key beside it is the obvious spelling.
-  What is genuinely undecided is only the **default**, and unlike runtime linkage there is no
-  can't-lose answer: console-by-default surprises GUI apps with a stray window, windows-by-default
-  makes every `print` vanish. Pairs with the long-path item above — both are "what shape is a Windows
-  application, as opposed to a Windows console tool".
+  The **default** was the last open piece, and ROADMAP.md's row now records the answer — `console`, with
+  `AttachConsole` on the GUI path — so this paragraph no longer calls it undecided (the row and this
+  section disagreed from the split in `8fa7a21` until 2026-08-29). It resolves the dilemma rather than
+  picking a side of it: `console` keeps every console tool, the CI legs and `kama` itself behaving exactly
+  as they do now, opting a GUI app in explicitly; and `AttachConsole(ATTACH_PARENT_PROCESS)` on that path
+  means a GUI binary launched *from* a terminal still prints there, which is the half that made
+  windows-by-default unacceptable. ⚠️ **`AttachConsole` alone is not enough** — the CRT's `stdout`/`stderr`
+  are already bound by then, so the GUI path must also reopen them (`freopen("CONOUT$", …)`) or `print`
+  still goes nowhere. That is the specific thing to verify on a real Windows host, because it is the one
+  part of this row a cross-build cannot check.
+
+  ⚠️ **The rest of it needs no Windows machine** — measured 2026-08-29 on an arm64 Mac:
+  `-Wl,--subsystem,windows` through the real build path flips `file` from
+  `PE32+ executable (console)` to `PE32+ executable (GUI)`, so the guard is a cross-build plus a `file`
+  assertion. [platforms/windows.md](platforms/windows.md) carries the three toolchain gotchas that finding
+  cost (`zig cc` is the cross compiler and supplies the `lld` that accepts `--subsystem`; `--cc` suppresses
+  the target triple; `kama: built` does not prove an output file exists).
+
+  Pairs with the long-path item above — both are "what shape is a Windows application, as opposed to a
+  Windows console tool".
 - **UBSan's `function` check is disabled suite-wide, for a REASON — not an oversight** (`run_tests.sh:60`).
   It is a false-positive suppression, not a masked bug: kama's dispatch stores every slot as
   `Ret (*)(void* self, …)` and calls the concrete `Ret C__m(C* self, …)` through it. That type-erased
@@ -809,6 +825,19 @@ event-loop scheduler are libraries** on them (Go/Erlang-style block-on-channel, 
   [kama_isolate.h](../include/kama_isolate.h) (`sysconf`, `pthread_num_processors_np`,
   `emscripten_num_logical_cores`, 1 on bare metal) and `parallel_for` already calls it — but no kama
   program can ask. The job system below needs it, and so does the engine for partitioning.
+
+  Verified 2026-08-29 that the binding is the ordinary FFI one and returns the true count (10 on the
+  measuring host, matching `sysctl -n hw.logicalcpu`), so this half is a stdlib addition and not a
+  compiler change. The shape it wants, in `std::concurrent`, is a private `unsafe` wrapper behind a SAFE
+  public function — the call has to sit in an `unsafe fn` because every `extern fn` call does, but a core
+  count names no raw memory, so the public surface should not be one of the 30% that reads
+  `public unsafe fn`:
+
+  ```kama
+  extern fn int32 kama_parfor_workers();
+  unsafe fn int32 rawCpuCount() { return kama_parfor_workers(); }
+  public fn int32 cpuCount() { return rawCpuCount(); }   // safe callers, and they work today
+  ```
 
   **(b) K `spawn`s means K typed statements.** A bare `spawn` must be a direct statement of its `scope`
   (`tests/xfail/spawn_in_nested_block.kama`) — a deliberate rule, kept — so a pool of workers is a

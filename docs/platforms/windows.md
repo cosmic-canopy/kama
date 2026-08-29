@@ -199,6 +199,30 @@ list; neither is a regression:
 - **Console subsystem** — every emitted binary is CONSOLE subsystem, so a GUI program opens a console
   it never asked for. `-mwindows` suppresses it but then `print`/`eprintln` go nowhere, so it needs an
   explicit choice rather than a new default.
+
+  ⚠️ **This one does NOT need a Windows machine to build or to guard** — measured 2026-08-29 on an
+  arm64 Mac, which is worth knowing before anyone schedules it around hardware:
+
+  ```sh
+  kama build prog.kama -o prog.exe --target WINDOWS      # -> PE32+ executable (console) Aarch64
+  # …and with -Wl,--subsystem,windows reaching the linker:
+  file prog.exe                                          # -> PE32+ executable (GUI) Aarch64
+  ```
+
+  `file` reads the PE subsystem field directly, so the guard is "build both ways, assert the word in
+  parentheses" — no execution, no Windows host. Three things make that work, and each cost a wrong turn:
+
+  * **`zig cc` is the cross toolchain.** The driver resolves it for any non-host target
+    (`resolveCCompiler`, `kama.driver.cpp`), and it brings its own `lld`, which is what accepts
+    `--subsystem`. Apple's `ld` does not — a hand-rolled `clang --target=aarch64-windows-gnu` fails with
+    `unknown options: -Bdynamic`, which looks like a flag problem and is a *linker* problem.
+  * ⚠️ **`--cc <override>` suppresses the target triple.** The driver assumes an explicitly named compiler
+    knows its own target, so an override must supply `-target <triple>` itself. A wrapper script is the
+    practical way to inject a link flag today: `exec zig cc -target aarch64-windows-gnu -Wl,… "$@"`.
+  * ⚠️ **`kama: built <path>` does not prove a file exists.** The driver reports success on the C
+    compiler's exit status without stat-ing its own output, so a `--cc` that silently produces nothing
+    still prints "built". Any guard that goes through `--cc` must assert on `file` output, never on the
+    build message.
 - **Long paths** — the temp-path builder assumes `MAX_PATH`-class lengths. Surfaces only on a deep
   working directory.
 
