@@ -1,0 +1,42 @@
+// M4: the sanctioned spelling for a CONDITIONAL child. A bare `spawn` must be a direct statement of its
+// `scope { }` (see tests/xfail/spawn_in_nested_block.kama), so the condition goes OUTSIDE the scope rather
+// than around the spawn. The scope is then entered only when the work is wanted, and its brace still joins
+// every child it owns.
+//
+// This is the shape that replaces `scope { if (c) { spawn … } }`, and it reads better: the barrier covers
+// exactly the children that exist. Run under KAMA_TSAN=1 — one child, one disjoint cell, no sharing.
+import { std::concurrent::Isolate };
+
+type value Acc {
+    public int32 total;
+    int32 lo;
+    int32 hi;
+
+    public ctor range(int32 lo, int32 hi) {
+        this.total = 0;
+        this.lo = lo;
+        this.hi = hi;
+        return this;
+    }
+
+    public fn void run() {
+        int32 i = this.lo;
+        while (i < this.hi) {
+            this.total = this.total + i;
+            i = i + 1;
+        }
+    }
+}
+
+fn void accumulate(ref Acc a) { a.run(); }
+
+fn int32 main() {
+    Acc acc = Acc.range(lo: 0, hi: 100);
+    int32 enabled = 1;
+    if (enabled == 1) {
+        scope {
+            spawn accumulate(a: ref acc);   // a direct statement of ITS scope — the `if` is outside
+        }                                   // BARRIER: joined here, before `acc` is read
+    }
+    return acc.total % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+}

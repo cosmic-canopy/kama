@@ -1,7 +1,13 @@
-// M4.2 escape check: a child may only `ref`-borrow a local that OUTLIVES the scope's join barrier — the
-// scope itself or an outer scope. Here `tmp` is declared in an INNER block nested in the scope, so it is
-// destroyed at the inner block's close, BEFORE the scope joins the child — the borrowed pointer would
-// dangle. The structural root-trace rejects it (no lifetime inference). This must fail to compile.
+// M4.2: a child may only `ref`-borrow a local that OUTLIVES the scope's join barrier. Here `tmp` is
+// declared in an INNER block nested in the scope, so it is destroyed at the inner block's close, BEFORE
+// the scope joins the child — the borrowed pointer would dangle. This must fail to compile.
+//
+// The hazard is unchanged; the rule that catches it moved one step EARLIER. A bare `spawn` must now be a
+// direct statement of its `scope { }`, so this program is refused for its shape before the borrow is ever
+// examined — and that rule is why the borrow can no longer escape at all: a name visible to a direct
+// statement of the scope is declared at scope level or outer, hence outlives the barrier. `isolatePrep`'s
+// own escape check is kept as the guard that would catch this again if a nested `spawn` were ever
+// readmitted. See tests/xfail/spawn_in_nested_block.kama for the shape rule itself.
 import { std::concurrent::Isolate };
 
 type value Acc {

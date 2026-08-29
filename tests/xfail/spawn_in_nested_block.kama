@@ -1,0 +1,29 @@
+// M4: a bare `spawn` is a child of its `scope { }`, and it must be a DIRECT statement of that scope. The
+// handle is declared at the spawn's own depth while the barrier joins at the scope's brace, so a spawn in
+// a nested block declared a handle the join could not name — this program emitted invalid C ("use of
+// undeclared identifier '__kama_iso0'") in fully safe kama with no `unsafe` anywhere.
+//
+// Hoisting the declaration would not have saved it: one variable holds one handle while this loop starts
+// THREE, so the barrier would join only the last child and orphan the other two. A scope's children are
+// the `spawn`s written directly in it. Per-item work is `parallel_for`; a conditional child puts the `if`
+// outside the `scope` (see tests/scope_spawn_conditional.kama). This MUST fail to compile.
+import { std::concurrent::Isolate };
+
+type resource Job {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; return this; }
+}
+
+fn void run(Job j) { }   // the bundle is consumed here; the body is irrelevant to the rule under test
+
+fn int32 main() {
+    int32 i = 0;
+    scope {
+        while (i < 3) {
+            Job j = Job.make(n: i);
+            spawn run(j: give j);   // ERROR: not a direct statement of the `scope`
+            i = i + 1;
+        }
+    }
+    return 0;
+}

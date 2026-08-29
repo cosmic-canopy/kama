@@ -489,7 +489,7 @@ ref_through_weak	ref_through_weak.kama:3 ref_through_weak.kama:6 ref_through_wea
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3
 refreturn_local	refreturn_local.kama:5
-scope_borrow_escape	scope_borrow_escape.kama:21
+scope_borrow_escape	scope_borrow_escape.kama:27
 scope_borrow_same_root	scope_borrow_same_root.kama:21
 scope_op_on_ctor	scope_op_on_ctor.kama:10
 scope_op_on_value	scope_op_on_value.kama:14
@@ -516,6 +516,7 @@ slot_never_filled	slot_never_filled.kama:5
 slot_one_arm	slot_one_arm.kama:5
 slot_read_before_assign	slot_read_before_assign.kama:7
 slot_with_initializer	slot_with_initializer.kama:5
+spawn_in_nested_block	spawn_in_nested_block.kama:24
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15
 static_call_nonstatic	static_call_nonstatic.kama:8
 static_on_generic_needs_turbofish	static_on_generic_needs_turbofish.kama:8

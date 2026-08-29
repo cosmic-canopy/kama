@@ -12407,6 +12407,14 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         // Escape check: the borrowed root must OUTLIVE the scope's join barrier — i.e. be declared in
         // the task scope itself or an OUTER scope (or be a parameter). A local declared in a block
         // NESTED inside the scope drops before the barrier → it would dangle. Structural, no lifetimes.
+        //
+        // ⚠️ CURRENTLY UNREACHABLE, and deliberately kept. emitIsolate now requires a bare `spawn` to be a
+        // DIRECT statement of its task scope, so `ti` is `_scopes.size() - 1` by the time we get here and
+        // `findScopeDeclaring` cannot return anything greater — a visible name is necessarily declared at
+        // scope level or outer. (The handle form never reaches this arm at all: borrowOK is false there.)
+        // It stays because that direct-statement rule is a 1.0-gate simplification, not a permanent one:
+        // the deferred handle-group work would readmit a nested `spawn` and make this check live again on
+        // the same day. Deleting it would mean reinventing it then.
         int di = findScopeDeclaring(root);
         int ti = innermostTaskScopeIndex();
         if (di >= 0 && di > ti)
@@ -12479,16 +12487,30 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 }
 
 // `spawn worker(p: give x);` — a bare `spawn` STATEMENT, which is a **deferred-join child of the
-// enclosing `scope { }`** (M4). It is legal ONLY inside a scope (which owns the join); outside a scope
-// use the handle form `Isolate h = spawn worker(...)`. Generated C: heap the moved bundle and spawn now,
-// declaring the `kama_isolate_t` handle at the scope's block level; the join is emitted by the scope's
-// closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
+// enclosing `scope { }`** (M4). It is legal ONLY as a DIRECT statement of a scope (which owns the join);
+// outside a scope use the handle form `Isolate h = spawn worker(...)`. Generated C: heap the moved bundle
+// and spawn now, declaring the `kama_isolate_t` handle at the scope's block level; the join is emitted by
+// the scope's closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
 void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
     if (!innermostTaskScope()) {
         unsupported("a bare `spawn` must appear inside a `scope { }` (which owns the join) — outside a "
                     "scope use the handle form `Isolate h = spawn worker(...)`", iso->line);
         return;   // there is no scope to register the handle into; the tail would deref that same null
+    }
+    // ...and it must be a DIRECT statement of that scope, not buried in a nested block. The handle is
+    // declared at the spawn's own depth while `emitScopeCleanup` joins at the scope's brace, so a handle
+    // declared inside a sub-block is out of scope at the join — invalid C, which is what a `while`/`if`
+    // body produced. Hoisting the declaration would not save it either: one variable holds one handle
+    // while a loop starts N, so the barrier would join only the last child and orphan the rest. A scope's
+    // children are the `spawn`s written directly in it — which is also what makes them countable by
+    // reading the block, and matches the coarse-isolate model (SPEC: roughly one per core, not one per
+    // work item). Conditional spawning puts the `if` OUTSIDE the `scope`; per-item work is `parallel_for`.
+    if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
+        unsupported("a bare `spawn` must be a direct statement of its `scope { }` — this one is inside a "
+                    "nested block, whose handle the scope's join cannot name. Put the `if` outside the "
+                    "`scope`, or use `parallel_for` for per-item work", iso->line);
+        return;   // registering it would emit a join naming a handle declared in the sub-block
     }
 
     std::string cls, val;
