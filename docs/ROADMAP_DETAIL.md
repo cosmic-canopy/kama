@@ -680,6 +680,24 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   boundary, and it is not cheap to DO either — the `M?` was read off a mechanism that does not exist.**
   Settle the design first; do not fold it into a view commit.
 
+  ⚠️ **The restriction it is built on is already bypassable, which is worth knowing before designing the
+  relaxation.** `spawn`'s `ref` path refuses a field *because* "a field/element root's lifetime we don't
+  track" — but the **moved-bundle** path carries a raw `UnsafePtr` with no lifetime check of any kind, so
+  the same aliasing walks straight through. This compiles clean today:
+
+  ```
+  scope {
+      { int32 victim = 0;
+        Payload p = Payload.make(dst: ref victim);   // Payload holds UnsafePtr<int32>
+        spawn worker(p: give p); }                   // victim dies at this brace
+  }                                                  // join is HERE — child writes into dead stack
+  ```
+
+  That is intended in the sense that `unsafe` is the seam and the author carries the obligation (it is the
+  `isolate_basic` idiom, and SPEC no longer claims a structural check over it — see the sendability
+  paragraph). But it means the careful `ref` restriction guards one door in a room with two, so a design
+  that only tightens the `ref` path buys less than it appears to.
+
 - **Modular / opt-in stdlib — does "pay for what you use" pruning scale?** The **prelude mechanism**
   (`PRELUDE_SRC`) is the seed: a stdlib = more prelude-collected kama modules in a `Std` namespace. Generic
   types emit only when instantiated, and `--gc-sections` prunes unused functions in release. Open: whether that

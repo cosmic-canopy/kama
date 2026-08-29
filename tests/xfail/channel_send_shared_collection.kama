@@ -1,0 +1,24 @@
+// The transitive half of the sendability gate. `channel_send_shared` covers a bare `Shared<Leaf>` FIELD;
+// this covers the same refcount one level deeper, inside a collection — which passed the gate until now.
+//
+// Why it escaped: a library generic keeps its element in its TYPE ARGUMENTS, not in a field a walk can
+// resolve. `DynamicArray<T>` stores `UnsafePtr<T> data`, and a raw pointer is not a class, so the field
+// walk found nothing; and the collection-element arm beside it is gated on `isIntrinsicColl`, which
+// describes the intrinsic collections and the smart-pointer triad — not `DynamicArray`/`Map`, which are
+// ordinary library generic instances.
+//
+// The hazard is identical to the guarded case: two isolates holding handles to one `Leaf` race a
+// non-atomic `Rc` counter, so the pointee is freed twice or never. `channel_send_shared`'s own header
+// already promised "transitively reaches a NON-ATOMIC shared refcount" — this makes that word true.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::memory::Shared, std::collections::DynamicArray };
+
+type value Leaf { int32 v; }
+
+type resource Bad {
+    DynamicArray<Shared<Leaf>> xs;   // the refcount, one indirection down
+}
+
+fn int32 main() {
+    Channel<Bad> ch = Channel.bounded(capacity: 2);   // ERROR: `Bad`'s field `xs` reaches a shared refcount
+    return 0;
+}

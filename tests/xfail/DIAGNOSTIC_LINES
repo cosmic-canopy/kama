@@ -75,6 +75,8 @@ cast_enum_rejected	cast_enum_rejected.kama:16
 cast_to_contract	cast_to_contract.kama:19
 cast_to_struct	cast_to_struct.kama:14
 channel_send_shared	channel_send_shared.kama:15
+channel_send_shared_collection	channel_send_shared_collection.kama:22
+channel_send_shared_variant	channel_send_shared_variant.kama:20
 compilefor_dangling	compilefor_dangling.kama:8
 comptime_assert_false	comptime_assert_false.kama:4
 comptime_assert_generic_false	comptime_assert_generic_false.kama:6

@@ -13275,6 +13275,25 @@ void CEmitter::computeReachesSharedWeak()
                     if (e != _classes.end() && e->second.reachesSharedWeak) r = true;
                 }
             }
+            // A LIBRARY generic's element hides in its type ARGUMENTS, not in its fields. `DynamicArray<T>`
+            // stores `UnsafePtr<T> data` — a raw pointer, which is not a class, so the field walk above
+            // resolves nothing and the element is never seen. The `isIntrinsicColl` arm does not cover it
+            // either: `DynamicArray`/`Map` are library generic instances, not intrinsic collections.
+            //
+            // Without this, `DynamicArray<Shared<Leaf>>` in a sent bundle passed the gate while a bare
+            // `Shared<Leaf>` field was correctly rejected — the same non-atomic refcount, one level of
+            // indirection deeper, and the fixture's own header already promised "transitively reaches".
+            //
+            // Walking the arguments is the general statement of the rule: a container parameterized on an
+            // unsendable type is unsendable. It composes with the M6.2 exemption for free, because a
+            // `Shared<T>` over a deeply-immutable `T` never sets the flag this reads.
+            if (!r && inst) {
+                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+                for (auto& a : gi.typeArgs) {
+                    auto it = _classes.find(cType(a));
+                    if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
+                }
+            }
             if (inst) _typeSubst.clear();
             if (r) { ci.reachesSharedWeak = true; changed = true; }
         }
@@ -14029,16 +14048,33 @@ void CEmitter::checkChannelSendability()
         } else {
             _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
         }
-        std::string culprit;   // "field `name` (of type `T`)"
+        std::string culprit;   // "its field `name` (of type `T`)"
         for (auto& f : ci.fields) {
             std::string fc = cType(f.type);
             auto fi = _classes.find(fc);
-            if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "field `" + f.name + "` (of type `" + fc + "`)"; break; }
+            if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "its field `" + f.name + "` (of type `" + fc + "`)"; break; }
         }
+        // A tagged enum carries its types in variant payloads, not fields, so the loop above finds nothing
+        // and the diagnostic used to fall back to the generic phrasing — for the one shape where the
+        // culprit is most easily named.
+        if (culprit.empty())
+            for (auto& v : ci.variants) {
+                for (auto& f : v.payload) {
+                    std::string fc = cType(f.type);
+                    auto fi = _classes.find(fc);
+                    if (fi != _classes.end() && fi->second.reachesSharedWeak) {
+                        culprit = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`)"; break;
+                    }
+                }
+                if (!culprit.empty()) break;
+            }
         if (inst) _typeSubst.clear();
-        if (culprit.empty()) culprit = "a field";   // reached via a base / variant payload / collection element
+        // ⚠️ The possessive lives INSIDE `culprit`: the fallback used to be spliced into "— its " + culprit,
+        // which rendered "cannot send `E` over a channel — its a field shares …". Reachable today, via an
+        // enum whose variant payload holds the refcount.
+        if (culprit.empty()) culprit = "a field of it";   // reached via a base, or a deeper element
         ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
-        unsupported(("cannot send `" + elem + "` over a channel — its " + culprit + " shares a non-atomic "
+        unsupported(("cannot send `" + elem + "` over a channel — " + culprit + " shares a non-atomic "
                      "refcount across isolates; use `Owned<Y>` (unique) or send the value by copy").c_str(), line);
     }
 }
