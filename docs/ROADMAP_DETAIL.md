@@ -803,30 +803,36 @@ event-loop scheduler are libraries** on them (Go/Erlang-style block-on-channel, 
 `async/await` function-colouring) — see the engine track (§8) and
 [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
-- **Runtime-N task fan-out has no spelling.** A bare `spawn` must be a **direct statement** of its
-  `scope { }` (`tests/xfail/spawn_in_nested_block.kama`), so `foreach (Job j in jobs) { spawn … }` is
-  unwritable. That restriction is what closed a real gate bug — the child handle was declared at the
-  spawn's own depth while the barrier joins at the scope's brace, so a `spawn` in an `if` or a loop emitted
-  invalid C in fully safe kama — and it is a **1.0-gate simplification, not a permanent decision**:
-  reject → accept is not source-breaking, so relaxing it can land after the tag.
+- **A pool cannot be sized to the machine.** Two small gaps that are one piece of work.
 
-  What is already covered, and by what:
-  - **uniform work over a contiguous container** → `parallel_for` (K = core count, disjoint slices);
-  - **N jobs over a fixed pool** → several `Receiver`s on one `Channel`, which is the shape the job system
-    below is built from (`tests/channel_pool_recv.kama`) — this is the doctrinally right answer, because
-    SPEC's isolates are **coarse** (roughly one per core, which is what makes blocking honest);
-  - **a conditional child** → put the `if` outside the `scope` (`tests/scope_spawn_conditional.kama`).
+  **(a) Core count is not exposed.** `kama_parfor_workers()` exists per platform in
+  [kama_isolate.h](../include/kama_isolate.h) (`sysconf`, `pthread_num_processors_np`,
+  `emscripten_num_logical_cores`, 1 on bare metal) and `parallel_for` already calls it — but no kama
+  program can ask. The job system below needs it, and so does the engine for partitioning.
 
-  What is not: a genuinely dynamic child count under **one** barrier. Candidates, in cost order — a
-  growable `kama_isolate_group_t` (new runtime surface across native / emscripten pthreads / bare metal,
-  and it is what the "count them by reading the block" property buys out); `parallel_for` over a
-  materialized array (a copy for a non-contiguous source); or deciding the pool+channel shape is the whole
-  answer and closing this. ⚠️ Note the tension before taking it: a per-work-item isolate is the pattern
-  SPEC's coarse-isolate paragraph names as the anti-pattern, so this row may be a **won't-do** — take it
-  only on a concrete case that the pool shape genuinely cannot express.
+  **(b) K `spawn`s means K typed statements.** A bare `spawn` must be a direct statement of its `scope`
+  (`tests/xfail/spawn_in_nested_block.kama`) — a deliberate rule, kept — so a pool of workers is a
+  hardcoded count. You can write eight; you cannot write "one per core". That is what makes this real
+  rather than ergonomic: the **fixed pool over one channel** is the sanctioned answer for dynamic work
+  (`tests/channel_pool_recv.kama`, unblocked when channel endpoints became counted), and it is also what
+  row *Job system / event-loop scheduler* is built out of — so the library cannot construct itself at the
+  right size.
 
-  *(`isolatePrep`'s scope-escape check is currently unreachable for the same reason and is deliberately
-  kept — relaxing this row makes it live again on the same day.)*
+  ⚠️ **This is NOT "one isolate per work item"** — an earlier version of this row said that, and that shape
+  is the anti-pattern [SPEC.md](SPEC.md#concurrency-) names: isolates are **coarse**, jobs are data flowing
+  through them, and the pool already serves a dynamic job count. What is unserved is a **coarse,
+  runtime-determined** count of long-lived isolates: one per core, per GPU device, per shard.
+
+  **It needs no new machinery, which is why it is small.** `parallel_for` already emits precisely this
+  shape — `kama_isolate_t H[K]` (a VLA, K runtime), spawn into it in a loop, join all at the barrier
+  ([kama.cemit.cpp](../src/kama.cemit.cpp), the `(f)` call-site block). So: no growable handle group, no
+  addition to `include/`, and **no relaxation of the direct-statement rule** — the loop lives in the
+  emitter, not in user source. The open question is only the SPELLING, and it should be answered against
+  *"one way to do a thing"*: a `parallel_for` sibling, or a parameter on the existing construct.
+
+  ⚠️ Head-of-line blocking is a separate matter and is **not** this row: a fixed pool where one job blocks
+  ties up 1/K of capacity no matter how K is chosen. That is scheduler work, and it belongs to the job
+  system row.
 
 - **Deferred (reopen only on a concrete case) — general shared-memory ("hybrid").** Co-equal shared-memory
   threading is *not* planned; it reintroduces the hazard the model removes. Capability is retained (via the

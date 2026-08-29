@@ -50,7 +50,7 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 | 1 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 | 2 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | ? | the first hot math kernel — and a SIMD surface is API | [§2](ROADMAP_DETAIL.md#s2) |
 | 3 | **Windows subsystem knob** — every binary is console-subsystem, so a GUI program opens a stray console. Decided: `subsystem` manifest key + CLI flag, default `console`, `AttachConsole` on the GUI path | S | ship day, and the manifest key is source-visible | [§2](ROADMAP_DETAIL.md#s2) |
-| 4 | **Runtime-N task fan-out has no spelling** — a bare `spawn` must be a direct statement of its `scope`, so "one child per work item" is unwritable when N is not static | M | a job graph the fixed pool cannot express | [§6](ROADMAP_DETAIL.md#s6) |
+| 4 | **A pool cannot be sized to the machine** — core count is not exposed to kama, and K `spawn`s means K typed statements, so a worker pool is a hardcoded number | S+ | the job system and the engine both size their pool at runtime | [§6](ROADMAP_DETAIL.md#s6) |
 
 ## LATER — stdlib & platform reach
 
