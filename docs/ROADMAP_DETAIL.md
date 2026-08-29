@@ -466,20 +466,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   guard and force the claim out of all three. Real expression type checking in the front end is a
   campaign, not a fix.
 
-- **A negative claim in the docs has no guard unless an `xfail` fixture proves it.**
-  `tests/idioms_kama_way.kama` compiles the docs' **positive** examples, which is why
-  [coming-from-other-languages.md](coming-from-other-languages.md) cannot rot — but a sentence of the
-  form *"X is a compile error"* is unverifiable that way, because you cannot put a rejected snippet in
-  a fixture that must compile. SPEC claimed `foreach (char c in s)` "is a type error — the
-  byte/codepoint distinction is enforced" and it was not enforced; the loop walked bytes and bound
-  each to a `char`, yielding mojibake. Nobody noticed because all 17 `foreach`-over-a-string sites in
-  the tree used one of the two *correct* spellings, so the mistake was never typed. Fixed
-  (`tests/xfail/foreach_char_over_string`, `tests/xfail/foreach_elem_type_mismatch`), and a spot-check
-  of 13 more negative claims found no others — but nothing *guarantees* the mapping. There are ~42
-  such claims across SPEC/TYPE_MODEL/coming-from-other-languages against 557 xfail fixtures. Wants a
-  guard that extracts the claims and requires each to name a fixture, which needs a machine-readable
-  link between the two (a `<!-- xfail: name -->` marker beside the claim is the cheap shape).
-
 - **Contract refinement — one under-tested edge (clean workaround).** `type contract Child … implements
   Parent` works for dispatch, but was exercised mainly with scalar-param parents. Remaining: a concrete type
   implementing the child gets **no parent-contract conformance thunk** — pass it where the parent is expected
