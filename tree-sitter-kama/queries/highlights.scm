@@ -52,7 +52,7 @@
 ] @keyword
 
 ["if" "else" "match" "case"] @keyword.control.conditional
-["while" "do" "for" "foreach" "parallel_for"] @keyword.control.repeat
+["while" "do" "for" "foreach" "parallel_for" "parallel_spawn"] @keyword.control.repeat
 ["break" "continue" "return"] @keyword.control.return
 ["spawn" "scope" "borrow"] @keyword.control
 ["new" "try"] @keyword.operator

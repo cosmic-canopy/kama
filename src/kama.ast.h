@@ -612,16 +612,25 @@ public:
     SharedIdentifier type;         // element T
     SharedIdentifier name;         // loop binding `e`
     SharedExpression expression;   // the View<T> or a contiguous container exposing .view()
-    SharedStatement  body;         // a BlockNode (its braces are the join barrier)
+    SharedStatement  body;         // a BlockNode (its braces are the join barrier — unless deferJoin)
+    // `parallel_spawn` rather than `parallel_for`. Same lowering, three differences, and they are what
+    // make it a pool instead of a fork/join: K is `length()` EXACTLY (one isolate per element, never
+    // `min(cores, len)` — a cap would run several per isolate sequentially, and a long-lived worker that
+    // blocks would then never start), and the JOIN belongs to the enclosing `scope { }`, so the children
+    // run alongside the statements after it. `parallel_for` cannot express a pool for that second reason:
+    // it joins at its own brace, so nothing can run concurrently with it.
+    bool deferJoin = false;
     ParallelForNode(CodeGenContext& context, SharedIdentifier type,
                     SharedIdentifier name,
                     SharedExpression expression,
-                    SharedStatement body)
+                    SharedStatement body,
+                    bool deferJoin = false)
     : ASTNode(context),  StatementNode(context)
     , type(type)
     , name(name)
     , expression(expression)
-    , body(body) {}
+    , body(body)
+    , deferJoin(deferJoin) {}
 };
 
 class BreakNode : public StatementNode {

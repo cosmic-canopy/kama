@@ -1,0 +1,37 @@
+// `parallel_spawn`'s K is `length()` EXACTLY — never capped at the core count — and this fixture is why
+// that is a correctness property rather than a tuning choice.
+//
+// Every worker bumps a shared Atomic and then spins until ALL of them have arrived. That completes only
+// if all K really run at once. The array is deliberately 3x the core count, so under any cap the workers
+// would be chunked several-to-an-isolate and run SEQUENTIALLY — worker 2 could not arrive until worker 1
+// returned, which it never does, and the program would deadlock. `parallel_for` DOES cap (K = min(cores,
+// len)) and this exact shape hangs under it; that is the measurement this fixture pins down.
+//
+// A cap is not "skip the extras", it is "run several per isolate in turn", and a pool worker blocks — so
+// a capped worker never starts. Timing out here means someone added a cap.
+import { std::concurrent::Atomic, std::concurrent::cpuCount,
+         std::collections::DynamicArray, std::collections::View };
+
+fn int32 main() {
+    int32 n = cpuCount() * 3;                  // deliberately oversubscribed
+    Atomic<int32> arrived = Atomic.make(value: 0i32);
+    DynamicArray<int32> slots = DynamicArray.empty();
+    int32 i = 0;
+    while (i < n) { slots.add(item: 0); i = i + 1; }
+
+    scope {
+        parallel_spawn (ref int32 s in slots) {
+            arrived.fetchAdd(delta: 1i32);
+            while (arrived.load() < n) { }     // rendezvous: completes only if all n run concurrently
+            s = 1;
+        }
+    }                                          // BARRIER: all n joined here
+
+    // ⚠️ The result must NOT be the count: it is 3 * cpuCount(), which differs per machine and per leg,
+    // and an exit status is taken mod 256 besides. Assert the invariant and return a fixed value.
+    int32 woken = 0;
+    isize j = 0;
+    while (j < slots.length()) { woken = woken + slots[j]; j = j + 1; }
+    if (woken != n) { return 1; }              // someone did not get past the rendezvous
+    return 0;
+}

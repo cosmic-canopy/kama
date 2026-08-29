@@ -1,0 +1,20 @@
+// The same direct-statement rule a bare `spawn` obeys (tests/xfail/spawn_in_nested_block.kama), for the
+// same reason and with a sharper edge: `parallel_spawn` declares a `kama_isolate_t[]` at the SCOPE's own
+// depth so the scope-barrier join can name it. One declared inside a nested block is out of scope at the
+// join — invalid C, in fully safe kama.
+//
+// Hoisting would not save it either: the array's extent is a runtime `length()`, so a single hoisted
+// declaration cannot serve two `parallel_spawn`s in one scope. A scope's children are what is written
+// directly in it, which is also what keeps them countable by reading the block. This MUST fail to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    scope {
+        {
+            parallel_spawn (ref int32 e in a) { e = e + 1; }   // nested — the join cannot name the array
+        }
+    }
+    return 0;
+}

@@ -449,6 +449,7 @@ static struct name_value keywords [] = {
     {"out",         OUT},
     {"override",    OVERRIDE},
     {"parallel_for", PARALLEL_FOR},
+    {"parallel_spawn", PARALLEL_SPAWN},
     {"private",     PRIVATE},
     {"protected",   PROTECTED},
     {"public",      PUBLIC},

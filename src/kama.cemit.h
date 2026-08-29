@@ -1365,7 +1365,11 @@ private:
                    // two children may take two disjoint fields of one local; overlap is the same prefix
                    // test the view model uses (`placesConflict`), which is why this is a vector and not a
                    // set — membership is not the question, conflict is.
-                   bool isTaskScope = false; std::vector<std::string> taskChildren;
+                   // A child is either ONE handle (a bare `spawn`) or a GROUP — a `kama_isolate_t[]`
+                   // plus the count actually spawned into it (`parallel_spawn`, whose K is a runtime
+                   // `length()`). `count` empty means the single-handle form.
+                   struct TaskChild { std::string handle; std::string count; };
+                   bool isTaskScope = false; std::vector<TaskChild> taskChildren;
                    std::vector<std::vector<std::string>> borrowedPlaces;
                    // `borrow h.mint() as v { … }` — the host PLACE, frozen for the extent of the block.
                    // A view is live over that storage, so growing or reseating it would leave the alias

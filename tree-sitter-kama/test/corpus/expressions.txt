@@ -515,3 +515,35 @@ fn void main()
         (identifier)
         (identifier)
         (block)))))
+
+===============================================================================
+parallel_spawn — a worker pool inside a scope
+===============================================================================
+
+fn void main()
+{
+    scope { parallel_spawn (ref Worker w in workers) { w.run(); } }
+}
+
+-------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (scope_statement
+        (block
+          (parallel_spawn_statement
+            (type_name
+              (identifier))
+            (identifier)
+            (identifier)
+            (block
+              (expression_statement
+                (call_expression
+                  (field_expression
+                    (identifier)
+                    (identifier))
+                  (argument_list))))))))))

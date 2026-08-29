@@ -298,7 +298,7 @@ struct kamayystype {
 %token <string> AS CHAR DO ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
-%token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR
+%token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
 %token <string> NEW NULL_LITERAL OPERATOR OUT SIZEOF ALIGNOF TRY ASM
 %token <string> OVERRIDE PRIVATE PROTECTED PUBLIC FRIEND
@@ -366,7 +366,7 @@ struct kamayystype {
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
 %type <statement> break_statement continue_statement return_statement enum_declaration
-%type <statement> marked_type_declaration spawn_statement scope_statement parallel_for_statement arm_value_statement asm_statement
+%type <statement> marked_type_declaration spawn_statement scope_statement parallel_for_statement parallel_spawn_statement arm_value_statement asm_statement
 %type <statement> borrow_statement
 %type <borrowbindinglist> borrow_bindings
 %type <borrowbinding> borrow_binding
@@ -1104,6 +1104,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | parallel_spawn_statement
   | borrow_statement
   | asm_statement
   | comptime_assert_statement   { $$ = $1; }   /* a ClassMemberDeclarationNode IS a StatementNode */
@@ -1170,6 +1171,14 @@ borrow_binding
      the body is a `block` because those braces ARE the barrier (like `scope { }`). */
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(n->name, @5); $$ = n; }
+  ;
+  /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
+     enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements
+     after it. That is the whole difference from `parallel_for`, and it is what makes a worker pool
+     expressible: `parallel_for` spawns and joins in one statement, so nothing can run concurrently with
+     it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
+parallel_spawn_statement
+  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9, /*deferJoin=*/true); STAMP_LOC(n->name, @5); $$ = n; }
   ;
 empty_statement
   : SEMICOLON   {  }

@@ -33,7 +33,7 @@
   "friend" "operator" "ctor" "fn" "fnptr" "extern" "comptime" "when"
   "in" "unsafe" "asm" "static" "const" "default" "slot"
   "if" "else" "match" "case"
-  "while" "do" "foreach" "parallel_for"
+  "while" "do" "foreach" "parallel_for" "parallel_spawn"
   "break" "continue" "return"
   "spawn" "scope" "borrow"
   "new" "try" "cast" "bitcast" "truncate" "sizeof" "alignof"

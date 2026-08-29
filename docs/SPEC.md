@@ -3582,6 +3582,54 @@ parallel_for (ref int32 e in xs) { e = e * 2; }   // closing brace is the barrie
 contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
 non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
 
+**K is `min(cores, length)`**, and elements beyond that are *chunked* — one worker runs several in turn.
+That is right here, because the work is finite and independent: three elements run back to back in the
+same total time. It is also exactly why `parallel_for` cannot build a worker **pool**, which the next
+section covers.
+
+### Worker pools — `parallel_spawn` ✅
+
+`parallel_spawn (ref T w in coll) { … }` starts **one long-lived isolate per element** and hands the join
+to the enclosing `scope { }`. That second half is the whole point: the children run *alongside* the
+statements after it.
+
+```kama
+scope {
+    parallel_spawn (ref Worker w in workers) { w.run(); }   // K = workers.length()
+    {
+        Sender<int32> tx = ch.sender();                     // …and this runs WHILE they run
+        int32 n = 0;
+        while (n < 100) { tx.send(item: n); n = n + 1; }
+    }                                                       // sender drops: every worker wakes and finishes
+}                                                           // BARRIER: all K joined here
+```
+<!-- test: parallel_spawn_pool -->
+
+This is what makes a pool sized to the machine writable — `workers` is built by an ordinary loop, so
+`cpuCount()` elements means `cpuCount()` isolates. A bare `spawn` cannot: it must be a direct statement of
+its scope, so K `spawn`s means K typed statements. `parallel_for` cannot either, for a different reason —
+it spawns *and joins* in one statement, so the producer above would never run and the program would hang.
+
+**Two differences from `parallel_for`, and both are load-bearing:**
+
+- **K is `length()` exactly — never capped at the core count.** A cap does not skip the extras, it runs
+  several per isolate *in turn*, and a pool worker blocks until its channel closes. A capped worker would
+  therefore never start, and it would fail *silently*: the running workers drain the queue, the producer
+  closes, they exit, and only then do the rest begin and immediately see the closed end.
+  <!-- test: parallel_spawn_oversubscribed -->
+- **The join is the `scope`'s brace**, on every exit path, before any local drops — the same
+  join-before-drop guarantee a bare `spawn` gets. So it needs an enclosing `scope`
+  <!-- xfail: parallel_spawn_no_scope --> and must be a direct statement of it.
+  <!-- xfail: parallel_spawn_nested_block -->
+
+⚠️ **The coarse-isolate rule still binds, and this construct makes it easy to break.** An isolate is an OS
+thread (a Web Worker on wasm), so `parallel_spawn` over a container of *work items* is the anti-pattern
+named above — one isolate per item — now spelled in one line. The container should hold **workers**: a
+`cpuCount()`-sized pool, one per GPU device, one per shard. Oversubscription itself is fine and sometimes
+right (blocked workers cost nothing but stack), which is why there is no cap; the cost that bites is stack
+reservation per thread and, on wasm, Worker exhaustion. The compiler cannot tell a worker from a job, so
+this is a rule you keep, not one it checks.
+
 ### The three sharing seams ✅
 
 Cross-isolate state is confined to three greppable seams, the same way raw memory is confined to

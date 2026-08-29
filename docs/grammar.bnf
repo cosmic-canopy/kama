@@ -562,6 +562,7 @@ embedded_statement
   | spawn_statement
   | scope_statement
   | parallel_for_statement
+  | parallel_spawn_statement
   | borrow_statement
   | asm_statement
   | comptime_assert_statement      /* a ClassMemberDeclarationNode IS a StatementNode */
@@ -628,6 +629,14 @@ borrow_binding
      the body is a `block` because those braces ARE the barrier (like `scope `). */
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block
+  ;
+  /* `parallel_spawn (ref T w in workers) ` — one LONG-LIVED isolate per element, joined by the
+     enclosing `scope ` rather than at its own brace, so the children run ALONGSIDE the statements
+     after it. That is the whole difference from `parallel_for`, and it is what makes a worker pool
+     expressible: `parallel_for` spawns and joins in one statement, so nothing can run concurrently with
+     it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
+parallel_spawn_statement
+  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression RPAREN block
   ;
 empty_statement
   : SEMICOLON

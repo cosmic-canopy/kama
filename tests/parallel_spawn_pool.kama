@@ -1,0 +1,58 @@
+// `parallel_spawn` — a pool of long-lived worker isolates, sized to the MACHINE at runtime, draining one
+// channel that the main isolate feeds CONCURRENTLY. This is the shape a job system is built from, and it
+// is the one `parallel_for` cannot express: parallel_for spawns AND joins in one statement, so the
+// producer block below it never runs and the program hangs. Measured before this construct existed.
+//
+// K is `workers.length()` exactly — one isolate per element, never capped at the core count. See
+// tests/parallel_spawn_oversubscribed.kama for why a cap would be a bug rather than a safeguard.
+//
+// The assertion is the strong one: each worker tallies only what IT received, and main sums them after
+// the barrier. 100 proves every item was delivered EXACTLY once — more would mean duplication, less loss.
+// Run under KAMA_TSAN=1; the scope's join is what orders each worker's writes against main's read.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::concurrent::cpuCount, std::collections::DynamicArray, std::collections::View };
+
+type resource Worker {
+    Receiver<int32> rx;
+    int32 got;
+
+    public ctor make(Receiver<int32> rx) { this.rx = give rx; this.got = 0; return this; }
+    public fn int32 tally() { return this.got; }
+
+    // Drain until every sender has dropped, then stop. A worker BLOCKS here — which is exactly why a
+    // chunked pool would deadlock, and why this construct exists.
+    public unsafe fn void run() {
+        bool going = true;
+        while (going) {
+            Optional<int32> v = this.rx.recv();
+            match (v) {
+                case Some(value: x): { this.got = this.got + 1; }
+                case None:           { going = false; }
+            };
+        }
+    }
+}
+
+fn int32 main() {
+    int32 k = cpuCount();                      // one worker per core — unwritable before this construct
+    Channel<int32> ch = Channel.bounded(capacity: 4);
+    DynamicArray<Worker> workers = DynamicArray.empty();
+    int32 i = 0;
+    while (i < k) { workers.add(item: Worker.make(rx: give ch.receiver())); i = i + 1; }
+
+    scope {
+        parallel_spawn (ref Worker w in workers) { w.run(); }   // K = k, deferred join
+        {
+            // The sender lives in a nested block so it DROPS here, closing the sender side and waking
+            // every parked receiver — a signal would wake one and strand the rest.
+            Sender<int32> tx = ch.sender();
+            int32 n = 0;
+            while (n < 100) { tx.send(item: n); n = n + 1; }
+        }
+    }                                          // BARRIER: all k workers joined before the tallies are read
+
+    int32 total = 0;
+    isize j = 0;
+    while (j < workers.length()) { total = total + workers[j].tally(); j = j + 1; }
+    return total;                              // 100 iff every item reached exactly one worker
+}

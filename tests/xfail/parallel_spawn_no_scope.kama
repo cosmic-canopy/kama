@@ -1,0 +1,15 @@
+// `parallel_spawn` hands its join to the enclosing `scope { }`, so there must BE one. It starts
+// long-lived workers that run ALONGSIDE the statements after it — that is the whole difference from
+// `parallel_for` — so something else has to own the barrier, and outside a scope nothing does.
+//
+// The neighbouring construct is not a workaround, it is the right answer for a different job: work that
+// finishes on its own is `parallel_for`, which joins at its own brace and needs no scope. This MUST fail
+// to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    parallel_spawn (ref int32 e in a) { e = e + 1; }   // no `scope { }` to join these
+    return 0;
+}

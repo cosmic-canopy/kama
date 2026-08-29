@@ -4053,7 +4053,17 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
     // from every exit path — fall-through here, and the return/break/continue unwinds (emitUnwindAll /
     // emitUnwindToLoop both call this) — so a borrowed scope-local is guaranteed to outlive its child on
     // ALL paths (join-before-drop). Join order among siblings is irrelevant: the joins are independent.
-    for (auto& h : s.taskChildren) { indent(depth); *_out << "kama_isolate_join(" << h << ");\n"; }
+    // A `parallel_spawn` group joins over the count it actually spawned, not over the array's extent:
+    // the two differ if the container was empty, and joining an unwritten handle is undefined.
+    for (auto& c : s.taskChildren) {
+        indent(depth);
+        if (c.count.empty()) { *_out << "kama_isolate_join(" << c.handle << ");\n"; }
+        else {
+            std::string j = "__kama_pj" + std::to_string(_tempCounter++);
+            *_out << "for (int " << j << " = 0; " << j << " < " << c.count << "; ++" << j << ") "
+                  << "kama_isolate_join(" << c.handle << "[" << j << "]);\n";
+        }
+    }
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
         auto ms = _moveState.find(it->cVar);
         if (ms != _moveState.end()) {
@@ -4395,13 +4405,37 @@ SharedIdentifier CEmitter::parforViewType(SharedIdentifier elem)
 //   (f) at the call site: split into K disjoint slices, spawn K, join all at the brace.
 void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 {
+    // One function serves both constructs; `deferJoin` is the whole difference. Diagnostics name the
+    // spelling the user actually wrote, or every `parallel_spawn` error would talk about `parallel_for`.
+    const std::string KW = pf->deferJoin ? "parallel_spawn" : "parallel_for";
+
     line(pf->line);
-    rejectIfNoHeap("parallel_for heaps a per-worker argument bundle", pf->line);   // no-heap gate
+    rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
+
+    // `parallel_spawn` hands its join to the enclosing `scope { }`, so there has to be one — and it has
+    // to be a DIRECT statement of it, for exactly the reason a bare `spawn` does (the handle array is
+    // declared at the scope's own depth so the barrier can name it; one declared in a nested block is
+    // out of scope at the join, which is invalid C). `parallel_for` owns its join and needs neither.
+    if (pf->deferJoin) {
+        if (!innermostTaskScope()) {
+            unsupported("`parallel_spawn` must appear inside a `scope { }` (which owns the join) — it "
+                        "starts long-lived workers that run ALONGSIDE the statements after it, so "
+                        "something else has to join them. For work that finishes on its own, that is "
+                        "`parallel_for`, which joins at its own brace", pf->line);
+            return;
+        }
+        if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
+            unsupported("`parallel_spawn` must be a direct statement of its `scope { }` — this one is "
+                        "inside a nested block, whose handle array the scope's join cannot name. Put "
+                        "the `if` outside the `scope`", pf->line);
+            return;
+        }
+    }
 
     // The isolate seam header (and its `-lpthread` link + KAMA_PARFOR_WORKERS -D) flows in via
     // `import std::concurrent;`; without it the spawn/join calls would not compile.
     if (!externsHeader("kama_isolate.h"))
-        unsupported("`parallel_for` requires `import std::concurrent;` (the isolate seam)", pf->line);
+        unsupported(("`" + KW + "` requires `import std::concurrent;` (the isolate seam)").c_str(), pf->line);
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
     std::string elemTy = cType(pf->type);
@@ -4409,8 +4443,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     // ── (a) Resolve the iterable to a View<T> (direct, or auto-`.view()` a contiguous container). ─────
     std::string itCls = exprClass(pf->expression);
     if (itCls.empty() || !_classes.count(itCls))
-        unsupported("parallel_for needs a `View<T>` or a contiguous container with `.view()` "
-                    "(DynamicArray/FixedArray) — the operand is not a collection", pf->line);
+        unsupported((KW + " needs a `View<T>` or a contiguous container with `.view()` "
+                    "(DynamicArray/FixedArray) — the operand is not a collection").c_str(), pf->line);
     std::string viewCType, viewExpr;
     if (isViewCType(itCls)) {
         viewCType = itCls;
@@ -4419,13 +4453,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
         if (!viewMi || !viewMi->params.empty()
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
-            unsupported(("parallel_for needs a `View<T>` or a contiguous container with a nullary `.view()` "
+            unsupported((KW + " needs a `View<T>` or a contiguous container with a nullary `.view()` "
                          "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
                          "collection cannot be split into disjoint slices").c_str(), pf->line);
             return;   // `viewMi` may be the null this guard rejected — never fall through and deref it
         }
         if (!declaresViewable(_classes[itCls])) {
-            unsupported(("parallel_for splits a container into disjoint slices, so the container must "
+            unsupported((KW + " splits a container into disjoint slices, so the container must "
                          "declare that its storage is what those slices view; `" + itCls + "` has a "
                          "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
                             .c_str(), pf->line);
@@ -4438,7 +4472,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     MethodInfo* lenMi   = findMethod(viewCI, "length", nullptr);
     MethodInfo* sliceMi = findMethod(viewCI, "slice", nullptr);
     if (!lenMi || !sliceMi)
-        unsupported(("parallel_for: the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf->line);
+        unsupported((KW + ": the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf->line);
 
     // ── (b) Free-variable capture analysis — the one genuinely new pass. ──────────────────────────────
     // Collect enclosing locals/params the body references (skip the loop var + body-local decls). A
@@ -4454,7 +4488,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         bool isLocal = (findScopeDeclaring(nm) >= 0) || _paramNames.count(nm);
         if (!isLocal) {
             if (_currentClass && findFieldOwner(_currentClass, nm))
-                unsupported(("parallel_for body may not access field `" + nm + "` — a worker runs with no "
+                unsupported((KW + " body may not access field `" + nm + "` — a worker runs with no "
                              "receiver (shared-nothing); pass the data in as a local").c_str(), pf->line);
             return;   // a top-level fn / type / enum name — not a capture
         }
@@ -4474,8 +4508,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         } else if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
             if (id->value) noteUse(*id->value, false);
         } else if (dynamic_cast<ThisAccessNode*>(n)) {
-            unsupported("parallel_for body may not access `this`/fields — a worker runs with no receiver "
-                        "(shared-nothing); pass the data in as a local", pf->line);
+            unsupported((KW + " body may not access `this`/fields — a worker runs with no receiver "
+                        "(shared-nothing); pass the data in as a local").c_str(), pf->line);
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
             scanE(ma->expression);                   // the member/method name is not a capture
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
@@ -4573,7 +4607,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         c.className = _localTypes.count(nm)  ? _localTypes[nm]  : "";
         c.cType     = _localCTypes.count(nm) ? _localCTypes[nm] : c.className;
         if (capWrites[nm] && !isAtomicClass(c.className))
-            unsupported(("parallel_for body writes to captured `" + nm + "` — a non-atomic capture is shared "
+            unsupported((KW + " body writes to captured `" + nm + "` — a non-atomic capture is shared "
                          "across all workers and would race; make it an `Atomic<T>`, or write only through the "
                          "loop element `" + loopVar + "`").c_str(), pf->line);
         c.addr = _refParams.count(nm) ? nm : ("&(" + nm + ")");   // a ref-param capture IS already a pointer
@@ -4665,31 +4699,70 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                 H = "__pfh"+sfx, SP = "__pfs"+sfx, W = "__pfw"+sfx, F = "__pff"+sfx,
                 C = "__pfc"+sfx, A = "__pfa"+sfx, J = "__pfj"+sfx;
 
-    indent(depth);   *_out << "{\n";
-    indent(depth+1); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
-    indent(depth+1); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
-    indent(depth+1); *_out << "int " << K << " = KAMA_PARFOR_WORKERS_DEFAULT > 0 ? KAMA_PARFOR_WORKERS_DEFAULT "
-                              ": kama_parfor_workers();\n";
-    indent(depth+1); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
-    indent(depth+1); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
-    indent(depth+1); *_out << "int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";
-    indent(depth+1); *_out << "kama_isolate_t " << H << "[" << K << "];   /* VLA: K = core count, small */\n";
-    indent(depth+1); *_out << "int " << SP << " = 0;\n";
-    indent(depth+1); *_out << "for (int " << W << " = 0; " << W << " < " << K << "; ++" << W << ") {\n";
-    indent(depth+2); *_out << "int32_t " << F << " = " << W << " * " << CH << ";\n";
-    indent(depth+2); *_out << "if (" << F << " >= " << LEN << ") break;\n";
-    indent(depth+2); *_out << "int32_t " << C << " = " << LEN << " - " << F << "; if (" << C << " > " << CH
-                           << ") " << C << " = " << CH << ";\n";
-    indent(depth+2); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
-    indent(depth+2); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-    indent(depth+2); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C << ");\n";
-    for (size_t i = 0; i < caps.size(); ++i) {
-        indent(depth+2); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
+    // `parallel_spawn` declares its state at the SCOPE's own depth — no wrapper block — because the
+    // scope-barrier join has to be able to name the handle array. `parallel_for` owns its join, so it
+    // wraps everything and keeps its temporaries out of the enclosing scope.
+    const int d = pf->deferJoin ? depth : depth + 1;
+    if (!pf->deferJoin) { indent(depth); *_out << "{\n"; }
+
+    indent(d); *_out << viewCType << " " << V << " = " << viewExpr << ";\n";
+    indent(d); *_out << "int32_t " << LEN << " = " << lenMi->cName << "(&" << V << ");\n";
+    if (pf->deferJoin) {
+        // ⚠️ K IS `length()` EXACTLY — one long-lived isolate per element, and capping it at the core
+        // count would be a BUG, not a safeguard. A cap does not skip the extras; it gives one isolate
+        // several elements to run SEQUENTIALLY (the chunk arithmetic below). A pool worker blocks — it
+        // sits on a channel until the far end closes — so a chunked worker never starts, and the failure
+        // is silent rather than a hang: the running workers drain the queue, the producer closes, they
+        // exit, and only then do the rest start and immediately see the closed end. The construct
+        // promises "these K run concurrently"; a cap breaks that promise invisibly. That different
+        // guarantee is exactly what makes this a second construct instead of a knob on `parallel_for`,
+        // whose own cap is right because its work is finite and independent.
+        indent(d); *_out << "int " << K << " = (int)" << LEN << ";   /* one isolate per element — NOT capped at core count */\n";
+        // A zero-length VLA is undefined, and an empty container is a legitimate pool of nobody: floor
+        // the ARRAY at 1 while leaving K at 0, so the spawn loop runs zero times and the barrier — which
+        // joins over the spawned COUNT, not the array extent — joins nothing.
+        indent(d); *_out << "kama_isolate_t " << H << "[" << K << " > 0 ? " << K << " : 1];\n";
+        indent(d); *_out << "int " << SP << " = 0;\n";
+        indent(d); *_out << "for (int " << W << " = 0; " << W << " < " << K << "; ++" << W << ") {\n";
+        indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
+        indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+        // A one-element slice, so the synthesized worker body — a `foreach` over its slice — runs the
+        // body exactly once, for this element. Identical machinery to parallel_for, chunk size 1.
+        indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << W << ", 1);\n";
+        for (size_t i = 0; i < caps.size(); ++i) {
+            indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
+        }
+        indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
+        indent(d); *_out << "}\n";
+        // Hand the join to the enclosing `scope`, which runs it on EVERY exit path (fall-through and the
+        // return/break/continue unwinds) before dropping any local — the same join-before-drop guarantee
+        // a bare `spawn` gets, which is what lets a child borrow a scope-local.
+        innermostTaskScope()->taskChildren.push_back({ H, SP });
+        return;
     }
-    indent(depth+2); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
-    indent(depth+1); *_out << "}\n";
-    indent(depth+1); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
-                           << "kama_isolate_join(" << H << "[" << J << "]);\n";
+
+    indent(d); *_out << "int " << K << " = KAMA_PARFOR_WORKERS_DEFAULT > 0 ? KAMA_PARFOR_WORKERS_DEFAULT "
+                        ": kama_parfor_workers();\n";
+    indent(d); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
+    indent(d); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
+    indent(d); *_out << "int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";
+    indent(d); *_out << "kama_isolate_t " << H << "[" << K << "];   /* VLA: K = core count, small */\n";
+    indent(d); *_out << "int " << SP << " = 0;\n";
+    indent(d); *_out << "for (int " << W << " = 0; " << W << " < " << K << "; ++" << W << ") {\n";
+    indent(d+1); *_out << "int32_t " << F << " = " << W << " * " << CH << ";\n";
+    indent(d+1); *_out << "if (" << F << " >= " << LEN << ") break;\n";
+    indent(d+1); *_out << "int32_t " << C << " = " << LEN << " - " << F << "; if (" << C << " > " << CH
+                       << ") " << C << " = " << CH << ";\n";
+    indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)malloc(sizeof(" << argTy << "));\n";
+    indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+    indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C << ");\n";
+    for (size_t i = 0; i < caps.size(); ++i) {
+        indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
+    }
+    indent(d+1); *_out << H << "[" << SP << "++] = kama_isolate_spawn(&" << trampFn << ", " << A << ");\n";
+    indent(d); *_out << "}\n";
+    indent(d); *_out << "for (int " << J << " = 0; " << J << " < " << SP << "; ++" << J << ") "
+                     << "kama_isolate_join(" << H << "[" << J << "]);\n";
     indent(depth);   *_out << "}\n";
 }
 
@@ -12601,7 +12674,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     }
     // Register into the innermost scope AFTER emission (re-fetch: isolatePrep may have grown _scopes and
     // invalidated an earlier pointer). The scope joins this handle at its closing brace.
-    innermostTaskScope()->taskChildren.push_back(hnd);
+    innermostTaskScope()->taskChildren.push_back({ hnd, "" });
 }
 
 // `Isolate h = isolate worker(p: give x);` — the HANDLE form: spawn now and wrap the (heap-boxed) thread

@@ -617,6 +617,7 @@ module.exports = grammar({
         $.scope_statement,
         $.borrow_statement,
         $.parallel_for_statement,
+        $.parallel_spawn_statement,
         $.asm_statement,
         $.comptime_assert_statement,
       ),
@@ -752,6 +753,22 @@ module.exports = grammar({
     parallel_for_statement: ($) =>
       seq(
         'parallel_for',
+        '(',
+        'ref',
+        field('type', $._type),
+        field('name', $.identifier),
+        'in',
+        field('collection', $._expression),
+        ')',
+        field('body', $.block),
+      ),
+
+    // kama.y — `parallel_spawn` is DELIBERATELY the same tail as `parallel_for`, so the two cannot drift.
+    // The difference is semantic, not syntactic: K is length() exactly, and the enclosing `scope { }`
+    // owns the join, so the children run alongside the statements after it.
+    parallel_spawn_statement: ($) =>
+      seq(
+        'parallel_spawn',
         '(',
         'ref',
         field('type', $._type),
