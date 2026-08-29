@@ -633,36 +633,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   two ways, and the engine only needs one. The **performance invariant** at the top of ROADMAP.md also
   binds here — whatever ships must not slow the existing scalar path.
 
-- **Every Windows binary kama emits is CONSOLE subsystem, including GUI programs.** Double-clicking the
-  native `examples/webgpu` triangle opens TWO windows: the console Windows creates for a console-subsystem
-  PE, and then the actual graphics window GLFW opens on top of it. Verified with `file` — `triangle.exe`
-  and `kama.exe` both report `(console)`. A shipped GUI app is linked `-mwindows`
-  (`-Wl,--subsystem,windows`), which suppresses the console; the cost is that `print`/`eprintln` then go
-  nowhere unless the program attaches one, so it cannot simply be the default. It wants an explicit
-  choice — a manifest field or a build flag — which is now a **solved shape rather than an open one**:
-  runtime linkage took exactly that question and answered it with a `TargetSpec` field, a `kama.json`
-  target key, and a CLI flag that wins over it (`runtime` / `--dynamic-runtime`, `kama.driver.cpp`;
-  [targets.md](targets.md) § *Runtime linkage*). A `subsystem` key beside it is the obvious spelling.
-  The **default** was the last open piece, and ROADMAP.md's row now records the answer — `console`, with
-  `AttachConsole` on the GUI path — so this paragraph no longer calls it undecided (the row and this
-  section disagreed from the split in `8fa7a21` until 2026-08-29). It resolves the dilemma rather than
-  picking a side of it: `console` keeps every console tool, the CI legs and `kama` itself behaving exactly
-  as they do now, opting a GUI app in explicitly; and `AttachConsole(ATTACH_PARENT_PROCESS)` on that path
-  means a GUI binary launched *from* a terminal still prints there, which is the half that made
-  windows-by-default unacceptable. ⚠️ **`AttachConsole` alone is not enough** — the CRT's `stdout`/`stderr`
-  are already bound by then, so the GUI path must also reopen them (`freopen("CONOUT$", …)`) or `print`
-  still goes nowhere. That is the specific thing to verify on a real Windows host, because it is the one
-  part of this row a cross-build cannot check.
-
-  ⚠️ **The rest of it needs no Windows machine** — measured 2026-08-29 on an arm64 Mac:
-  `-Wl,--subsystem,windows` through the real build path flips `file` from
-  `PE32+ executable (console)` to `PE32+ executable (GUI)`, so the guard is a cross-build plus a `file`
-  assertion. [platforms/windows.md](platforms/windows.md) carries the three toolchain gotchas that finding
-  cost (`zig cc` is the cross compiler and supplies the `lld` that accepts `--subsystem`; `--cc` suppresses
-  the target triple; `kama: built` does not prove an output file exists).
-
-  Pairs with the long-path item above — both are "what shape is a Windows application, as opposed to a
-  Windows console tool".
 - **UBSan's `function` check is disabled suite-wide, for a REASON — not an oversight** (`run_tests.sh:60`).
   It is a false-positive suppression, not a masked bug: kama's dispatch stores every slot as
   `Ret (*)(void* self, …)` and calls the concrete `Ret C__m(C* self, …)` through it. That type-erased
@@ -819,45 +789,57 @@ event-loop scheduler are libraries** on them (Go/Erlang-style block-on-channel, 
 `async/await` function-colouring) — see the engine track (§8) and
 [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
-- **A pool cannot be sized to the machine.** Two small gaps that are one piece of work.
+- **A pool cannot be sized to the machine.** `cpuCount()` shipped 2026-08-29 (`std::concurrent`, an
+  ordinary FFI binding over the `kama_parfor_workers()` the isolate seam already had per platform;
+  `tests/cpu_count.kama`). What is left is that you still cannot **spawn** a runtime number of them.
 
-  **(a) Core count is not exposed.** `kama_parfor_workers()` exists per platform in
-  [kama_isolate.h](../include/kama_isolate.h) (`sysconf`, `pthread_num_processors_np`,
-  `emscripten_num_logical_cores`, 1 on bare metal) and `parallel_for` already calls it — but no kama
-  program can ask. The job system below needs it, and so does the engine for partitioning.
+  **PROBED 2026-08-29, and the probe moved the diagnosis.** The row used to say the obstacle was
+  "K `spawn`s means K typed statements". That is true but shallow — kama already HAS a runtime-K isolate
+  fan-out in `parallel_for`. Three measurements on an arm64 Mac (`cpuCount()` = 10) say what is actually
+  missing:
 
-  Verified 2026-08-29 that the binding is the ordinary FFI one and returns the true count (10 on the
-  measuring host, matching `sysctl -n hw.logicalcpu`), so this half is a stdlib addition and not a
-  compiler change. The shape it wants, in `std::concurrent`, is a private `unsafe` wrapper behind a SAFE
-  public function — the call has to sit in an `unsafe fn` because every `extern fn` call does, but a core
-  count names no raw memory, so the public surface should not be one of the 30% that reads
-  `public unsafe fn`:
+  1. `parallel_for (ref Worker w in workers)` over a `DynamicArray` of a `type resource` holding a
+     moved-in `Receiver` **compiles**, and with the work pre-queued and the sender closed first it
+     **runs exactly right** — 100 items, no loss, no duplication.
+  2. But `parallel_for` is a **BARRIER**: it spawns *and joins* in one statement. The natural pool —
+     workers draining a channel the main isolate feeds — **hangs**, because the producer block below the
+     loop never runs. Wrapping it in a `scope` changes nothing; the join is emitted at `parallel_for`'s
+     own closing brace.
+  3. And it **chunks**: `K = min(cores, len)`, so at `len = 3 * cores` a spin barrier across the workers
+     deadlocks — three elements share one isolate and run *sequentially*.
+
+  So the gap is precise: **a runtime-K fan-out whose join belongs to the enclosing `scope`**, so the pool
+  can run alongside a producer. That is `parallel_spawn`, named for the family it joins — `parallel_for`'s
+  shape with the operation swapped, and greppable as `parallel_*`:
 
   ```kama
-  extern fn int32 kama_parfor_workers();
-  unsafe fn int32 rawCpuCount() { return kama_parfor_workers(); }
-  public fn int32 cpuCount() { return rawCpuCount(); }   // safe callers, and they work today
+  scope {
+      parallel_spawn (ref Worker w in workers) { w.run(); }   // K = workers.length(), one isolate each
+      { Sender<int32> tx = ch.sender(); /* feed them */ }     // runs CONCURRENTLY with the workers
+  }                                                          // BARRIER: all K joined here
   ```
 
-  **(b) K `spawn`s means K typed statements.** A bare `spawn` must be a direct statement of its `scope`
-  (`tests/xfail/spawn_in_nested_block.kama`) — a deliberate rule, kept — so a pool of workers is a
-  hardcoded count. You can write eight; you cannot write "one per core". That is what makes this real
-  rather than ergonomic: the **fixed pool over one channel** is the sanctioned answer for dynamic work
-  (`tests/channel_pool_recv.kama`, unblocked when channel endpoints became counted), and it is also what
-  row *Job system / event-loop scheduler* is built out of — so the library cannot construct itself at the
-  right size.
+  ⚠️ **K is `length()` exactly — NOT `min(cores, len)`, and a cap would be a bug, not a safeguard.** A cap
+  does not mean "skip the extras", it means "run several per isolate, sequentially" — measurement 3. Pool
+  workers are long-lived and block, so a capped worker never starts, and the failure is *silent* rather
+  than a hang: the uncapped workers drain the channel, the producer closes, they exit, and the rest then
+  start and immediately see `None`. The construct promises "these K run concurrently"; a cap breaks that
+  promise invisibly. That different guarantee is also what justifies a second construct instead of a knob
+  on `parallel_for`, whose own cap is right for slicing finite independent work.
 
-  ⚠️ **This is NOT "one isolate per work item"** — an earlier version of this row said that, and that shape
-  is the anti-pattern [SPEC.md](SPEC.md#concurrency-) names: isolates are **coarse**, jobs are data flowing
-  through them, and the pool already serves a dynamic job count. What is unserved is a **coarse,
-  runtime-determined** count of long-lived isolates: one per core, per GPU device, per shard.
+  **It needs no new machinery.** `parallel_for` already emits `kama_isolate_t H[K]` (a VLA, K runtime),
+  spawns into it in a loop, and joins in a loop ([kama.cemit.cpp](../src/kama.cemit.cpp), the `(f)`
+  call-site block). Only *where the join is written* moves — to the `scope`'s barrier, which already joins
+  deferred children. So: no growable handle group, no addition to `include/`, and **no relaxation of the
+  direct-statement rule** (the loop is in the emitter, not in user source).
 
-  **It needs no new machinery, which is why it is small.** `parallel_for` already emits precisely this
-  shape — `kama_isolate_t H[K]` (a VLA, K runtime), spawn into it in a loop, join all at the barrier
-  ([kama.cemit.cpp](../src/kama.cemit.cpp), the `(f)` call-site block). So: no growable handle group, no
-  addition to `include/`, and **no relaxation of the direct-statement rule** — the loop lives in the
-  emitter, not in user source. The open question is only the SPELLING, and it should be answered against
-  *"one way to do a thing"*: a `parallel_for` sibling, or a parameter on the existing construct.
+  ⚠️ **The anti-pattern is still one isolate per WORK ITEM**, and this construct makes it one line long.
+  [SPEC.md](SPEC.md#concurrency-) says isolates are coarse — "roughly one per core, or a handful of
+  long-lived service isolates" — because an isolate is an OS thread (a Web Worker on wasm). A
+  `cpuCount()`-sized array of workers is the sanctioned shape; `parallel_spawn (ref Job j in jobs)` over
+  10,000 jobs is the mistake, and the cost is stack reservation (~1 MB each on Windows) and, on wasm,
+  Worker exhaustion — not CPU contention, which is merely time-slicing. Police it in SPEC prose; the
+  compiler cannot tell a worker from a job.
 
   ⚠️ Head-of-line blocking is a separate matter and is **not** this row: a fixed pool where one job blocks
   ties up 1/K of capacity no matter how K is chosen. That is scheduler work, and it belongs to the job
