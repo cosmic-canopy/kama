@@ -1,0 +1,16 @@
+// The machine's core count, exposed to kama. `parallel_for` has always sized its worker fan-out from
+// kama_parfor_workers(); this is the same number, asked for directly, so a program that builds its own
+// pool and one that hands work to `parallel_for` agree about the machine.
+//
+// The assertion has to hold on every leg, and the legs disagree about the answer: native reports the real
+// count (10 on the machine this was written on), wasm reports what the browser/node offers, and bare metal
+// reports 1 by construction. So the fixture asserts the INVARIANT — at least one, and the same answer
+// twice, since a per-call query that drifted would be worse than useless for sizing a pool.
+import { std::concurrent::cpuCount };
+
+fn int32 main() {
+    int32 n = cpuCount();
+    if (n < 1) { return 1; }
+    if (cpuCount() != n) { return 2; }   // stable across calls — a pool is sized from it once
+    return 0;
+}

@@ -1,5 +1,5 @@
 
-export { Isolate };
+export { Isolate, cpuCount };
 
 // The concurrency module: the native isolate seam. The `isolate` statement is a compiler keyword, but
 // importing this module is what makes the seam header (and its `-lpthread` link) available to a program:
@@ -14,6 +14,19 @@ export { Isolate };
 // no memory is shared, which is what makes an isolate data-race-free by construction.
 extern "kama_isolate.h";
 extern fn void kama_isolate_join_boxed(UnsafePtr h);
+extern fn int32 kama_parfor_workers();
+
+// How many isolates this machine can actually run at once — the same number `parallel_for` sizes its
+// worker fan-out from, so a program that builds its own pool and one that hands work to `parallel_for`
+// agree about the machine. `sysconf`/`pthread_num_processors_np`/`emscripten_num_logical_cores` per
+// platform, and 1 on bare metal, where one core IS one isolate.
+//
+// `rawCpuCount` is `unsafe` because EVERY `extern fn` call is — that is the seam's rule, not a statement
+// about this function — and it is left OUT of the export list above, so it is module-private. A core
+// count names no raw memory, so the exported surface is SAFE: `unsafe` marks where the raw operation
+// lives, it does not propagate to callers.
+unsafe fn int32 rawCpuCount() { return kama_parfor_workers(); }
+fn int32 cpuCount() { return rawCpuCount(); }
 
 // An RAII handle to a running isolate. Produced by `Isolate h = isolate worker(...)`; owns the join.
 // `join()` blocks for completion and is idempotent (it nulls the handle, so a second join — including the
