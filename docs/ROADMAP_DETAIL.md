@@ -789,61 +789,11 @@ event-loop scheduler are libraries** on them (Go/Erlang-style block-on-channel, 
 `async/await` function-colouring) — see the engine track (§8) and
 [WEB_FRAMEWORK_READINESS.md](WEB_FRAMEWORK_READINESS.md).
 
-- **A pool cannot be sized to the machine.** `cpuCount()` shipped 2026-08-29 (`std::concurrent`, an
-  ordinary FFI binding over the `kama_parfor_workers()` the isolate seam already had per platform;
-  `tests/cpu_count.kama`). What is left is that you still cannot **spawn** a runtime number of them.
-
-  **PROBED 2026-08-29, and the probe moved the diagnosis.** The row used to say the obstacle was
-  "K `spawn`s means K typed statements". That is true but shallow — kama already HAS a runtime-K isolate
-  fan-out in `parallel_for`. Three measurements on an arm64 Mac (`cpuCount()` = 10) say what is actually
-  missing:
-
-  1. `parallel_for (ref Worker w in workers)` over a `DynamicArray` of a `type resource` holding a
-     moved-in `Receiver` **compiles**, and with the work pre-queued and the sender closed first it
-     **runs exactly right** — 100 items, no loss, no duplication.
-  2. But `parallel_for` is a **BARRIER**: it spawns *and joins* in one statement. The natural pool —
-     workers draining a channel the main isolate feeds — **hangs**, because the producer block below the
-     loop never runs. Wrapping it in a `scope` changes nothing; the join is emitted at `parallel_for`'s
-     own closing brace.
-  3. And it **chunks**: `K = min(cores, len)`, so at `len = 3 * cores` a spin barrier across the workers
-     deadlocks — three elements share one isolate and run *sequentially*.
-
-  So the gap is precise: **a runtime-K fan-out whose join belongs to the enclosing `scope`**, so the pool
-  can run alongside a producer. That is `parallel_spawn`, named for the family it joins — `parallel_for`'s
-  shape with the operation swapped, and greppable as `parallel_*`:
-
-  ```kama
-  scope {
-      parallel_spawn (ref Worker w in workers) { w.run(); }   // K = workers.length(), one isolate each
-      { Sender<int32> tx = ch.sender(); /* feed them */ }     // runs CONCURRENTLY with the workers
-  }                                                          // BARRIER: all K joined here
-  ```
-
-  ⚠️ **K is `length()` exactly — NOT `min(cores, len)`, and a cap would be a bug, not a safeguard.** A cap
-  does not mean "skip the extras", it means "run several per isolate, sequentially" — measurement 3. Pool
-  workers are long-lived and block, so a capped worker never starts, and the failure is *silent* rather
-  than a hang: the uncapped workers drain the channel, the producer closes, they exit, and the rest then
-  start and immediately see `None`. The construct promises "these K run concurrently"; a cap breaks that
-  promise invisibly. That different guarantee is also what justifies a second construct instead of a knob
-  on `parallel_for`, whose own cap is right for slicing finite independent work.
-
-  **It needs no new machinery.** `parallel_for` already emits `kama_isolate_t H[K]` (a VLA, K runtime),
-  spawns into it in a loop, and joins in a loop ([kama.cemit.cpp](../src/kama.cemit.cpp), the `(f)`
-  call-site block). Only *where the join is written* moves — to the `scope`'s barrier, which already joins
-  deferred children. So: no growable handle group, no addition to `include/`, and **no relaxation of the
-  direct-statement rule** (the loop is in the emitter, not in user source).
-
-  ⚠️ **The anti-pattern is still one isolate per WORK ITEM**, and this construct makes it one line long.
-  [SPEC.md](SPEC.md#concurrency-) says isolates are coarse — "roughly one per core, or a handful of
-  long-lived service isolates" — because an isolate is an OS thread (a Web Worker on wasm). A
-  `cpuCount()`-sized array of workers is the sanctioned shape; `parallel_spawn (ref Job j in jobs)` over
-  10,000 jobs is the mistake, and the cost is stack reservation (~1 MB each on Windows) and, on wasm,
-  Worker exhaustion — not CPU contention, which is merely time-slicing. Police it in SPEC prose; the
-  compiler cannot tell a worker from a job.
-
-  ⚠️ Head-of-line blocking is a separate matter and is **not** this row: a fixed pool where one job blocks
-  ties up 1/K of capacity no matter how K is chosen. That is scheduler work, and it belongs to the job
-  system row.
+**The pool the job system is built from can now be sized to the machine** — `cpuCount()` plus
+`parallel_spawn` shipped 2026-08-29 ([SPEC.md](SPEC.md#concurrency-)), so the library can construct itself
+at the right width instead of hardcoding one. What remains for that row is scheduling, not spawning: a
+fixed pool where one job blocks ties up 1/K of capacity no matter how K was chosen, and **head-of-line
+blocking is the job system's problem to solve.**
 
 - **Deferred (reopen only on a concrete case) — general shared-memory ("hybrid").** Co-equal shared-memory
   threading is *not* planned; it reintroduces the hazard the model removes. Capability is retained (via the
