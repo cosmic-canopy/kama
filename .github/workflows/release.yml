@@ -200,7 +200,16 @@ jobs:
         run: |
           npm i -g @vscode/vsce
           cd editor/vscode
-          vsce package --allow-missing-repository -o "../../kama-vscode-${GITHUB_REF_NAME#v}.vsix"
+          # Named for the version a user actually INSTALLS — the one in package.json, which is what
+          # vsce bakes into the manifest and what both marketplace listings show.
+          #
+          # ⚠️ Deliberately NOT the git tag. The extension and the compiler ship on separate clocks
+          # (./VERSION vs editor/vscode/package.json, guarded independently by check-version.sh and
+          # check-ext-version.sh), so naming the file after the tag produced `kama-vscode-0.9.117.vsix`
+          # whose manifest said 0.3.0. That filename was the ONE place the two numbers were mixed, and
+          # it is why they read as coupled when nothing in the build couples them.
+          EXT_VERSION=$(node -p 'require("./package.json").version')
+          vsce package --allow-missing-repository -o "../../kama-vscode-${EXT_VERSION}.vsix"
       - uses: actions/upload-artifact@v6
         with: { name: kama-vsix, path: kama-vscode-*.vsix }
 
