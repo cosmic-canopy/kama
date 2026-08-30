@@ -63,7 +63,7 @@ fi
 # The `cast<int32>(s)` on the return line is a genuine NARROWING and must keep its check — otherwise this
 # guard would also pass against a compiler that stopped checking casts altogether.
 if ! printf '%s\n' "$body" | grep -q 'kama_narrow_chk_'; then
-    echo "check-binding-widen: FAIL — the fixture's narrowing `cast<int32>(s)` lost its runtime check;" >&2
+    echo "check-binding-widen: FAIL — the fixture's narrowing \`cast<int32>(s)\` lost its runtime check;" >&2
     echo "  the cast trap itself has regressed, not just the classifier." >&2
     exit 1
 fi
