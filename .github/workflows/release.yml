@@ -211,18 +211,49 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with: { name: kama-vsix, path: . }
+      # ⚠️ Deliberately NOT `continue-on-error`. Both steps were, under the comment "skips cleanly
+      # until VSCE_PAT is configured" — and they did far more than that: EVERY failure was swallowed,
+      # including the one that actually happens. `vsce package` above takes its version from
+      # editor/vscode/package.json, not from the tag, so a release whose extension was changed without
+      # a version bump is rejected as already-published — and the job went green having published
+      # nothing. A publish step that cannot fail is not a publish step.
+      #
+      # The three outcomes are now told apart, and two of them are VISIBLE rather than silent:
+      #   no token          -> ::warning + skip   (the state the old comment described)
+      #   already published -> ::warning + skip   (legitimate: a kama release that did not touch the
+      #                                            extension; tools/check-ext-version.sh is what keeps
+      #                                            this from meaning "you forgot to bump")
+      #   anything else     -> the job FAILS
       - name: VS Code Marketplace
-        continue-on-error: true   # skips cleanly until VSCE_PAT is configured
         env: { VSCE_PAT: "${{ secrets.VSCE_PAT }}" }
         run: |
+          set -o pipefail
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::warning title=VS Code Marketplace::VSCE_PAT is not set — skipping the publish"
+            exit 0
+          fi
           VSIX=$(ls kama-vscode-*.vsix)
-          npx --yes @vscode/vsce publish --packagePath "$VSIX" -p "$VSCE_PAT"
+          if npx --yes @vscode/vsce publish --packagePath "$VSIX" -p "$VSCE_PAT" 2>&1 | tee vsce.log; then
+            echo "published $VSIX to the VS Code Marketplace"
+          else
+            grep -qiE 'already exists|already published' vsce.log || exit 1
+            echo "::warning title=VS Code Marketplace::this version is already published — nothing to do (bump editor/vscode/package.json to ship a change)"
+          fi
       - name: Open VSX
-        continue-on-error: true   # skips cleanly until OVSX_PAT is configured
         env: { OVSX_PAT: "${{ secrets.OVSX_PAT }}" }
         run: |
+          set -o pipefail
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::warning title=Open VSX::OVSX_PAT is not set — skipping the publish"
+            exit 0
+          fi
           VSIX=$(ls kama-vscode-*.vsix)
-          npx --yes ovsx publish "$VSIX" -p "$OVSX_PAT"
+          if npx --yes ovsx publish "$VSIX" -p "$OVSX_PAT" 2>&1 | tee ovsx.log; then
+            echo "published $VSIX to Open VSX"
+          else
+            grep -qiE 'already exists|already published' ovsx.log || exit 1
+            echo "::warning title=Open VSX::this version is already published — nothing to do (bump editor/vscode/package.json to ship a change)"
+          fi
 
   release:
     name: publish release
