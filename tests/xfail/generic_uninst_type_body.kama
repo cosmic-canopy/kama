@@ -1,6 +1,6 @@
-// The generic-TYPE half. `docs/design/analysis-gap.md` recorded this exact shape as "`kama check` says
-// OK", and it did: the emit walk reached generic FUNCTIONS only, so a library's public generic container
-// could ship green with two errors in a member body nothing in that library instantiated.
+// The generic-TYPE half. `kama check` used to say OK to exactly this shape: the emit walk reached generic
+// FUNCTIONS only, so a library's public generic container could ship green with two errors in a member
+// body nothing in that library instantiated. Fixed in 0.9.38–0.9.43; this fixture is what holds it fixed.
 //
 // It is not one loop away from the function half, which is why the note was worth keeping: handing the
 // template's own `ClassInfo` to `emitClassDefinitions` failed 628 of 641 corpus fixtures, because a
