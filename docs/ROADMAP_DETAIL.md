@@ -273,6 +273,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   per target. If a real case ever appears, the mechanism is the existing `@compileFor` decl-level prune plus a
   tag-type boundary, not a use-site predicate on primitives.
 
+- **An operator call's ARGUMENT TYPE is not checked** — found 2026-08-30 while probing the SIMD row, so
+  it has nothing to do with SIMD. `Mat4` declares one `operator*`, taking a `Mat4`
+  ([lib/std/math/mat.kama](../lib/std/math/mat.kama), vector transform is the named method `transform`).
+  Writing `m * v` with a `Vec4` **passes `kama check` with rc=0** and then fails in the C compiler:
+  `passing 'std__math__Vec4' to parameter of incompatible type 'std__math__Mat4'`. So the operator is
+  selected by name alone; the argument is never unified with the parameter. It is a bad diagnostic rather
+  than a hazard — the program does not build, and C catches it — but "the error comes from C" is exactly
+  what kama's diagnostics exist to prevent, and a type whose operator is overloaded on operand type
+  (SPEC's sanctioned exception, `mat*vec` vs `mat*mat`) is where a wrong pick could become a silent one.
+  Wants a fixture in `tests/xfail/` in the same commit as the fix.
+
 - **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
   (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
   callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
@@ -627,18 +638,26 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
     `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
     so). Lower stakes: it degrades to the unresolved spelling rather than failing.
-- **Explicit SIMD — UNSCOPED, and that is the finding.** The row has carried a size for a long time and
-  this section has never held a word about it (27 bullets, none on SIMD), so that size was read off
-  reasoning that does not exist. It is marked `?` until someone writes the design, and it is now a gate
-  row, so that design is the first work — not a prototype. What it has to answer, at minimum: whether the
-  surface is a **generic vector type** (`Vec<T, const N>` lowering to clang's `ext_vector_type`, which the
-  C backend gets nearly free and which auto-degrades to scalars on a target without the unit) or a set of
-  **intrinsic free functions** per operation; how a shuffle spells its compile-time lane indices given const
-  generics already ship; what happens on a target with no SIMD unit (scalar fallback vs a compile error);
-  and whether `parallel_for` and the `Real`/math contracts need to say anything about it. ⚠️ Weigh it
-  against [GOALS.md](GOALS.md) *"one way to do a thing"* early: a vector type and a bag of intrinsics are
-  two ways, and the engine only needs one. The **performance invariant** at the top of ROADMAP.md also
-  binds here — whatever ships must not slow the existing scalar path.
+- **Explicit SIMD — SCOPED, and the measurement moved it.** The design is
+  **[design/simd.md](design/simd.md)**; read it rather than this bullet. It was written by compiling and
+  reading asm on aarch64, x86-64 and wasm, and what it found is that the row's premise was wrong twice
+  over. **`std::math` does auto-vectorize on native** — `fadd.4s` loops, and clang de-interleaving AoS to
+  SoA so `dot` and `Mat4.transform` run four at a time — and a hand-written explicit-SIMD cross product
+  measured **65% slower** than the scalar source for exactly that reason. So the row is **not** "add a
+  vector type to a language that has no SIMD", and rebuilding `std::math` on a vector type is rejected on
+  measurement (it also breaks `alignof(Vec4)`, and a 3-lane vector is 16 bytes, so `Vec3` cannot be one).
+  What is genuinely missing is smaller and sharper: **wasm gets no SIMD at all** (the release path passes
+  no `-msimd128`; with it, the *already-shipped* code emits v128 — a flag, not a language change), and
+  **a shuffle and a lane mask have no spelling** at any target. Three stages, sized: **S** the wasm flag +
+  a guard, **L** an additive `Simd<T, const N>` intrinsic type emitting `vector_size` through a header
+  seam (⚠️ **not** `ext_vector_type` — gcc ignores it with a warning and silently leaves a one-lane
+  scalar), **S** a derived `SIMD128` `@compileFor` flag so a library can choose an algorithm rather than
+  hope. GOALS' *"one way to do a thing"* is answered by keeping `std::math` (geometry, named lanes, AoS)
+  and `Simd` (interchangeable lanes, shuffles/masks, SoA) as different tools, which the design argues
+  from the measurements. The performance invariant is satisfied by construction: nothing on the existing
+  path changes. ⚠️ The design also argues the row **no longer gates the 1.0 tag** — the only
+  source-breaking option was the `std::math` rewrite, and what is left is additive — but that is the
+  maintainer's call, not this file's.
 
 - **UBSan's `function` check is disabled suite-wide, for a REASON — not an oversight** (`run_tests.sh:60`).
   It is a false-positive suppression, not a masked bug: kama's dispatch stores every slot as

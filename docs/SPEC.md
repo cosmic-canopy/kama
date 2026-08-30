@@ -897,15 +897,23 @@ Methods + operators (one `operator*` per type: matrices/quaternions **compose**,
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
 (`result = M * v`, GPU/WebGPU-native); `perspective`/`orthographic`/`lookAt` target **WebGPU 0..1 depth**,
 right-handed. `Quat` is a unit quaternion (`fromAxisAngle`/`fromEuler`, Hamilton `*`, `rotate`, `slerp`/
-`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). **SIMD** needs no
+`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). **SIMD on a native target** needs no
 explicit vector types or intrinsics: the value types have a **SIMD-ready contiguous layout** (`Vec4` = 16 B,
 `Mat4` = 4×`Vec4`), and in a `--release` build the C backend **auto-vectorizes** the elementwise ops (`Vec4`
-`+`/`-`/scale, `Mat4*Vec4`, `Mat4*Mat4`) to SSE/NEON/wasm128 — landing hot math **at C parity**. This relies on
+`+`/`-`/scale, `Mat4.transform`, `Mat4*Mat4`) to **NEON on aarch64 and SSE on the x86-64 baseline** — landing
+hot math **at C parity**, and often better than a hand-written vector type would: clang de-interleaves the
+array to SoA registers and computes four `dot`s or four transforms at once. This relies on
 the ops **inlining** into the caller, which release builds guarantee (see *Building & debugging* — release
 compiles as one translation unit). Results are bit-identical to the scalar path (the exact-value semantics are
 unchanged; SIMD is a pure throughput property). `Quat`'s Hamilton product is intentionally left scalar — its
 shuffled ± pattern makes a hand-vectorized version *slower* than the 16 pipelined scalar FMAs on measured
-hardware (ARM64).
+hardware (ARM64), which is the same effect that makes the auto-vectorized path win generally.
+
+⚠️ **Two limits, both measured.** A **wasm** build gets **no** vector instructions — the release path does not
+pass `-msimd128`, without which neither this code nor an explicit vector type emits a single v128 op. And an
+**arbitrary shuffle** or a **lane mask as a value** has no spelling in kama at all, at any target: those are
+what an explicit SIMD surface would add, and auto-vectorization cannot produce them from scalar source.
+Both are the subject of [design/simd.md](design/simd.md).
 
 ### Numbers (`std::num`) ✅
 
