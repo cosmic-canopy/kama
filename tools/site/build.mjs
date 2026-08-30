@@ -18,7 +18,13 @@ import { highlight, kamaWords } from './highlight.mjs';
 import { shell, sidebar, toc, template, fill, setVersion } from './layout.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const out = path.join(root, '_site');
+// `_site/` by default — the Cloudflare Pages direct-upload input that `./ops deploy-site` and
+// deploy-site.yml both hand to wrangler. Overridable so tools/check-site.sh can build into its own
+// mktemp: a guard may not write into the worktree, and that guard exists because a docs edit could
+// only break the site build on `main`, where it is far too late to find out.
+const out = process.env.KAMA_SITE_OUT
+  ? path.resolve(process.env.KAMA_SITE_OUT)
+  : path.join(root, '_site');
 const words = kamaWords(root);
 const version = readFileSync(path.join(root, 'VERSION'), 'utf8').trim();
 setVersion(version);
@@ -162,4 +168,4 @@ writeFileSync(path.join(out, 'sitemap.xml'),
   urls.map(([u, m]) => `  <url><loc>${ORIGIN}${u}</loc>${m ? `<lastmod>${m}</lastmod>` : ''}</url>`).join('\n') +
   `\n</urlset>\n`);
 
-console.log(`built _site/ — ${urls.length} pages, v${version}`);
+console.log(`built ${path.relative(root, out) || out}/ — ${urls.length} pages, v${version}`);
