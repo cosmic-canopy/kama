@@ -23,22 +23,40 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
 - `tests/trap/` is **skipped** under `KAMA_SAN`, `KAMA_WASM`, and on Windows/MSYS2 (`run_tests.sh`, the
   `TRAP_OK`/`WASM`/`SAN_FLAGS` gate) — UBSan intercepts the trap and node's abort codes differ.
 - **No leg runs MSan.** MSan-origins catches what ASan and wasm both miss.
-- **An `xfail` fixture never links, so it never reaches ASan** — and re-probing that 2026-08-29 found it
-  is broader than the sentence suggests: **there is no `-fsanitize` anywhere in `Makefile` or `dev`, so
-  the compiler has no sanitized build at all.** `KAMA_SAN=1` sanitizes every positive fixture's EMITTED
-  PROGRAM (`SAN_FLAGS` is a `--cc` override, `run_tests.sh:62`), which answers "does the language produce
-  memory-safe programs" — a different question from "is the compiler memory-safe". So all 582
-  `tests/xfail/` fixtures drive the rejection paths unsanitized, which is where three known
-  diagnose-then-dereference bugs lived. The fix is a sanitized compiler target
-  (`out/<os>-<arch>-asan/kama`) with the xfail corpus run through it; container-only, since macOS has no
-  LeakSanitizer. This is why a campaign about *rejection*
-  cannot take a green suite as its acceptance test: the view-window campaign's findings ④⑤⑥ survived all
-  three legs and 34 guards. The discipline that works is a probe ledger walking every branch of the rule
-  including the ones that must stay SILENT — milestone 6 used a 48-branch one and it caught two bugs a
-  green matrix did not (a `case true:` fixture that was a parse error reading as a pass, and a literal
-  exemption that rejected `int8 a = 2 + 3`).
+- **The compiler is never sanitized — SHIPPED** `0.9.117` (2026-08-29), see *What shipped* below.
+- A campaign about *rejection* cannot take a green suite as its acceptance test: the view-window
+  campaign's findings ④⑤⑥ survived all three legs and 34 guards. The discipline that works is a probe
+  ledger walking every branch of the rule including the ones that must stay SILENT — milestone 6 used a
+  48-branch one and it caught two bugs a green matrix did not (a `case true:` fixture that was a parse
+  error reading as a pass, and a literal exemption that rejected `int8 a = 2 + 3`).
 
 ## What shipped, so it is not re-derived
+
+- **A sanitized compiler — SHIPPED** `0.9.117` (2026-08-29). `make KAMA_ASAN=1 out/<platform>-asan/kama`
+  builds the compiler itself with ASan, and `tools/check-compiler-asan.sh` drives the whole corpus through
+  it in three passes: `check --each` over all 1,252 single-file fixtures (every rejection path),
+  `transpile` over the 670 positives (the emit walk, which `check` never enters — it runs
+  `CEmitter::analyze()` with no output stream), and `tools/check-lsp.sh` re-run with `$KAMA` pointed at the
+  sanitized binary (`kama.lsp.cpp` + `kama.query.cpp` — the only long-lived kama process, so the one where
+  a use-after-free compounds instead of being reclaimed at exit). ~74 s on the host.
+  **The whole corpus came back clean.**
+  - ⚠️ **The compiler does not leak, and the "leak-by-design" reading of it was wrong.** Counting
+    `free`/`delete` sites (13 across 34k lines) measures nothing here: the AST is `std::shared_ptr` end to
+    end (`SharedAST`/`SharedStatement`/… in `kama.forward.h`) with no parent back-pointers, so RAII frees
+    it and no shared_ptr cycle is structurally possible. **Measured** over 80 fixtures on Linux with LSan
+    verified armed (a probe leaking 1234 bytes got reported): **zero leaks**. So `detect_leaks=1` is a real
+    assertion, not noise to suppress, and it is on wherever the platform has LSan. macOS has none, so the
+    guard drops to the use-after-free/overflow assertion there — which is why this is NOT container-only,
+    the way this file previously assumed.
+  - ⚠️ **`exitcode=86` alone does not detect an ASan report.** Darwin's ASan defaults to
+    `abort_on_error=1` and aborts (rc 134) before consulting `exitcode`, so the guard tests rc==86, rc>=128
+    **and** greps for the report text. Keying on any single one of those misses a platform.
+  - The batch is a pre-filter only, as in `run_tests.sh`'s analysis leg: ASan aborts the process, so a bad
+    chunk loses its 32 verdicts and its files are re-run solo to name the one fixture.
+  - ⚠️ **The guard was verified by making it FAIL** — a temporary heap-use-after-free in `CEmitter::analyze`
+    gated on one fixture's name, confirmed to be caught, isolated to `tests/xfail/move_reuse_same_scope.kama`
+    and reported with a symbolized trace, then reverted. A guard written against already-fixed code is the
+    repeat failure in this repo's history; do not believe a green one that has never been seen red.
 
 - **The `fs_raii` wasm hang — DIAGNOSED AND CLOSED** `0.9.83` (2026-08-25). It was a known **node**
   shutdown bug ([nodejs#54918](https://github.com/nodejs/node/issues/54918)) — not kama, not wasm, not

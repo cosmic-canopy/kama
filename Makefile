@@ -75,6 +75,33 @@ ifeq ($(KAMA_INHERITANCE),0)
 BUILD = out/$(PLATFORM)-noinherit
 endif
 
+# A sanitized build of the COMPILER ITSELF (`make KAMA_ASAN=1 out/<platform>-asan/kama`).
+#
+# This is a different question from `KAMA_SAN=1 ./run_tests.sh`, and the two were confused for a long
+# time. That one builds every positive fixture's EMITTED PROGRAM with ASan+UBSan (run_tests.sh's
+# SAN_FLAGS is a `--cc` override) and answers "does kama produce memory-safe programs". Nothing sanitized
+# the compiler, so all 582 tests/xfail/ fixtures drove the REJECTION paths — where three known
+# diagnose-then-dereference bugs lived — with no instrumentation at all.
+#
+# Append rather than assign, so this composes with the -noinherit directory instead of racing it for the
+# name: objects compiled under different flags must never share a build directory. The link rule below
+# reuses CXXFLAGS, so -fsanitize reaches the link too and no LDFLAGS entry is needed.
+#
+# Name the target. A bare `make KAMA_ASAN=1` would also run the `kama:` rule and repoint the root ./kama
+# symlink at the sanitized binary, which every other consumer would then silently pick up.
+KAMA_ASAN ?= 0
+ifeq ($(KAMA_ASAN),1)
+BUILD := $(BUILD)-asan
+CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer
+endif
+# ⚠️ Same refusal as KAMA_INHERIT above, for the same reason: EXTRA_CXXFLAGS is appended earlier and does
+# NOT switch BUILD, so `-fsanitize=address` passed that way mixes sanitized and unsanitized objects into
+# one binary that links clean and behaves unpredictably. CI's only use of EXTRA_CXXFLAGS is `-arch`.
+ifneq (,$(findstring fsanitize,$(EXTRA_CXXFLAGS)))
+$(error set KAMA_ASAN=1 as a make variable — `make KAMA_ASAN=1 $(BUILD)/kama` — not through \
+EXTRA_CXXFLAGS, which does not switch BUILD and would mix sanitized and unsanitized objects)
+endif
+
 # The grammar uses %code/api.pure full, which need bison >= 2.7. macOS ships
 # 2.3, so prefer a Homebrew keg-only bison when present.
 BISON = $(shell [ -x /opt/homebrew/opt/bison/bin/bison ] && echo /opt/homebrew/opt/bison/bin/bison || ([ -x /usr/local/opt/bison/bin/bison ] && echo /usr/local/opt/bison/bin/bison || echo bison))

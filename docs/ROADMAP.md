@@ -46,7 +46,7 @@ purpose:** sizing work nobody has scoped yet would be invention, not estimation.
 
 | # | item | size | why it gates the tag | detail |
 |---|---|---|---|---|
-| 1 | **Test-infra holes** — no MSan leg; an `xfail` never links so never reaches ASan; `tests/trap/` skipped under SAN/WASM/Windows | L | three independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
+| 1 | **Test-infra holes** — no MSan leg; `tests/trap/` skipped under SAN/WASM/Windows | M | two independent holes; what a green suite is allowed to mean | [design/analysis-gap.md](design/analysis-gap.md) |
 | 2 | **Explicit SIMD** — auto-vectorization is all there is; needed for shuffles, dot/cross, packed compare/select | ? | the first hot math kernel — and a SIMD surface is API | [§2](ROADMAP_DETAIL.md#s2) |
 
 ## LATER — stdlib & platform reach
