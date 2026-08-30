@@ -107,6 +107,24 @@ export function renderDoc(md, srcFile, { root, words, page = {} }) {
     },
   });
 
+  // Strip the claim→fixture markers BEFORE parsing. `tools/check-doc-claims.sh` requires a
+  // `<!-- xfail: name -->` (or `<!-- test: name -->`) beside every negative claim in the docs, tying
+  // the claim to the fixture that proves it — 151 of them across SPEC, KEYWORDS, TYPE_MODEL and the
+  // tour. They are internal cross-references, never page content, so the site drops them.
+  //
+  // ⚠️ Done HERE and not in the `html` renderer below, for two reasons the obvious fix gets wrong:
+  //   - a marker at the START of a line makes marked tokenize the WHOLE PARAGRAPH as block HTML
+  //     (SPEC.md:3504 is one), so the token also holds real prose — returning '' would delete it;
+  //   - one marker sits INSIDE a code fence (SPEC.md:3036), where it would otherwise render as
+  //     literal noise in a displayed code sample.
+  // Matching check-doc-claims.sh's own pattern rather than stripping comments generally keeps the
+  // raw-HTML ban below at full strength: any OTHER HTML comment still reaches marked and still throws.
+  // The lookbehind takes the space BEFORE a marker only when real text precedes it, so
+  // `…is enforced <!-- xfail: n -->.` closes up to `…is enforced.` instead of leaving a space before
+  // the period. A marker that starts its line keeps that line's indentation, which several inside
+  // list items depend on.
+  md = md.replace(/(?<=\S)[ \t]*<!--\s*(?:xfail|test):[^>]*-->|<!--\s*(?:xfail|test):[^>]*-->/g, '');
+
   const html = marked.parse(md);
 
   // Every doc opens with a single H1 and an abstract paragraph; that paragraph is the blurb

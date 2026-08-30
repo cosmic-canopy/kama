@@ -3500,8 +3500,8 @@ closed and empty, which is why dropping the last `Sender` is how a producer sign
 **Endpoints are counted, so a channel is many-to-many.** `sender()` and `receiver()` may each be
 called any number of times; every call registers another endpoint, and a *side* closes only when its
 last endpoint drops. Several `Receiver`s over one channel is a **worker pool** — each item goes to
-exactly one of them <!-- test: channel_pool_recv --> — and several `Senders` is a fan-in
-<!-- test: channel_multi_send -->, rendezvous included <!-- test: channel_rendezvous_multi -->. The
+exactly one of them <!-- test: channel_pool_recv --> — and several `Senders` is a fan-in,
+<!-- test: channel_multi_send --> rendezvous included <!-- test: channel_rendezvous_multi -->. The
 count moves exactly where ownership does, the same way a `Shared<T>` control block works, so the
 last endpoint to drop is the one that frees the queue. There is no `clone()` on an endpoint and none
 is needed: a `Channel<T>` is itself a move-only `resource`, so it can be moved *into* an isolate
