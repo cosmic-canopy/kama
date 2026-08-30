@@ -1,69 +1,74 @@
-# kama — VSCode extension
+# kama for VS Code
 
-Syntax highlighting, bracket/comment support, breakpoint debugging, and live
-diagnostics (a language server) for the [kama](../../README.md) language (`.kama`).
+Syntax highlighting, a language server (live diagnostics, go-to-definition, rename, completion)
+and zero-config breakpoint debugging for the [kama](https://kama-lang.org) language (`.kama`).
 
-## Install
+## Requirements
 
-From this folder (install the JS deps first — the language client is an npm dep):
-
-```sh
-npm install
-# symlink into your VSCode extensions (dev install)
-ln -s "$(pwd)" ~/.vscode/extensions/kama-0.2.0
-# then reload VSCode
-```
-
-Or package + install (`vsce package` bundles `node_modules`, so run `npm install` first):
+This extension drives the **kama compiler** — install it first:
 
 ```sh
-npm install
-npm i -g @vscode/vsce
-vsce package
-code --install-extension kama-0.2.0.vsix
+curl -fsSL https://kama-lang.org/install.sh | sh          # macOS / Linux
+irm https://kama-lang.org/install.ps1 | iex                # Windows (PowerShell)
 ```
 
-Using a different editor? See **[docs/editors.md](../../docs/editors.md)** — the same server, `kama lsp`,
-serves Neovim, Vim, Emacs, Sublime Text, Helix and Kate too.
+The extension finds it via **`kama.path`** if you set it, else a workspace-local
+`out/<os>-<arch>/kama` or `./kama`, else your `PATH`.
 
-## Live diagnostics (language server)
+> **The binary must be native to your OS.** The extension runs `kama lsp` as a normal host
+> process, so a container-built Linux `./kama` sitting in a macOS checkout will not launch.
 
-On opening a `.kama`, the extension starts the kama language server (`kama lsp`,
-a JSON-RPC server over stdio built into the compiler) and provides, as you type
-(no build required):
+[CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) is installed
+automatically as an extension-pack member — it is what actually runs the debugger.
 
-- **live diagnostics** — including semantic errors, not just parse errors
+## What you get
+
+On opening a `.kama` the extension starts `kama lsp` — a JSON-RPC server built into the compiler —
+and gives you, as you type and with **no build required**:
+
+- **live diagnostics**, including semantic errors, not just parse errors
 - **hover** (kind + name) and **go-to-definition** (F12)
-- **find-references** (Shift-F12) and **rename** (F2), which refuses symbols the
-  project does not own; renaming a parameter also rewrites its argument labels
+- **find-references** (Shift-F12) and **rename** (F2), which refuses symbols the project does not
+  own; renaming a parameter also rewrites its argument labels
 - **completion** and **signature help**
 - the **document outline** (Ctrl-Shift-O / breadcrumbs) and **workspace symbols** (Ctrl-T)
-- **semantic highlighting**, layered over the TextMate grammar — the resolver knows
-  which names are types, fields, locals or parameters, which a regex cannot
+- **semantic highlighting** layered over the TextMate grammar — the resolver knows which names are
+  types, fields, locals or parameters, which a regex cannot
 
-It uses the same `kama` binary as the debugger: **`kama.path`** if you set it, else a
-workspace-local `out/<os>-<arch>/kama` or `./kama`, else `PATH`.
+## Debugging (breakpoints, call stack, locals)
+
+kama compiles to C with `#line` directives back to your `.kama`, and locals keep their kama names —
+so a debug build is breakpoint-debuggable like any native program.
+
+1. Open a `.kama` file and set a breakpoint in the gutter.
+2. Press **F5** (or run *"kama: Debug Current File"*). The build task runs
+   `kama build ${file} -o …` (debug default: `-g -O0`), then CodeLLDB launches it.
+3. Execution stops **in the `.kama` source**; Variables shows locals and params, and the Call Stack
+   shows kama frames.
+
+Object fields appear as `self->field` and `this` as `self` — the C lowering, fully inspectable.
+For the browser target, build with `--target wasm` and debug in the browser via the emitted source maps.
 
 ## Build configuration (the status bar)
 
-The server analyzes the program a plain `kama build` in that project builds — the resolved
-target's derived flags, `BUILD_TYPE=DEBUG`, and the manifest's default flags — so the editor
-and the compiler cannot disagree about which `@compileFor` declarations exist.
+The server analyzes the program a plain `kama build` builds in that project — the resolved target's
+derived flags, `BUILD_TYPE=DEBUG`, and the manifest's default flags — so the editor and the compiler
+cannot disagree about which `@compileFor` declarations exist.
 
-The **status bar** (bottom right, on a `.kama`) shows what it resolved — `⚙ HOST · DEBUG` —
-with the manifest, triple and active flags in its tooltip. Click it, or run
-*"kama: Select Build Configuration"*, to switch any single-select group the project
-declares: `TARGET`, `BUILD_TYPE`, `OUTPUT`, and any group of your own.
+The **status bar** (bottom right, on a `.kama`) shows what it resolved — `⚙ HOST · DEBUG` — with the
+manifest, triple and active flags in its tooltip. Click it, or run *"kama: Select Build
+Configuration"*, to switch any single-select group the project declares: `TARGET`, `BUILD_TYPE`,
+`OUTPUT`, and any group of your own.
 
-The picker **writes `kama.local.json`** (the gitignored sibling of `kama.json`) rather than an
-editor setting. That is deliberate and worth knowing: it is the same file `kama build` merges,
-so the editor, the CLI and F5 debugging cannot get out of step, and a Neovim user overrides
-configuration exactly the way you do. Saving it re-analyzes every open buffer — no restart.
+The picker **writes `kama.local.json`** (the gitignored sibling of `kama.json`) rather than an editor
+setting. That is deliberate: it is the same file `kama build` merges, so the editor, the CLI and F5
+debugging cannot get out of step, and a Neovim user overrides configuration exactly the way you do.
+Saving it re-analyzes every open buffer — no restart.
 
-> **One configuration per server process**, pinned by the first file that resolved a manifest.
-> Open a second project in the same window and it is analyzed under the first one's flags —
-> the status-bar tooltip warns when the current file is outside the pinned project. Fix it with
-> *"kama: Restart Language Server"*, or use one window per project.
+> **One configuration per server process**, pinned by the first file that resolved a manifest. Open a
+> second project in the same window and it is analyzed under the first one's flags — the status-bar
+> tooltip warns when the current file is outside the pinned project. Fix it with *"kama: Restart
+> Language Server"*, or use one window per project.
 
 ## Settings
 
@@ -74,31 +79,41 @@ configuration exactly the way you do. Saving it re-analyzes every open buffer �
 
 There is deliberately **no** setting mirroring the build configuration — see above.
 
-> **The `kama` binary must be native to your OS.** The extension runs `kama lsp`
-> as a normal host process, so a container-built `./kama` (e.g. a Linux binary from
-> `tools/cdev make` on macOS) will not launch. Build a host-native `kama` (top-level
-> `README.md` / `CLAUDE.md`) and make sure *that* is what the extension finds.
+## Commands
 
-## Debugging `.kama` (breakpoints, call stack, locals)
+| command | default key |
+|---|---|
+| kama: Debug Current File | <kbd>F5</kbd> |
+| kama: Select Build Configuration | — |
+| kama: Restart Language Server | — |
 
-kama compiles to C with `#line` directives back to your `.kama`, and locals keep
-their kama names — so a debug build is breakpoint-debuggable like any native
-program. This extension uses **[CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)**
-(`vadimcn.vscode-lldb`, installed automatically as an extension pack member).
+## Using a different editor?
 
-1. Open a kama project in VSCode (the repo ships a `.vscode/` with the tasks +
-   launch config — see [`/.vscode`](../../.vscode)).
-2. Open a `.kama` file and set a breakpoint in the gutter.
-3. Press **F5** (or run *"kama: debug current file"*). The **Build Debug** task
-   runs `kama build ${file} -o … ` (default debug: `-g -O0`), then CodeLLDB
-   launches the binary.
-4. Execution stops at your breakpoint **in the `.kama` source**; the Variables
-   panel shows locals/params and the Call Stack shows kama frames.
+The same server, `kama lsp`, serves Neovim, Vim, Emacs, Sublime Text, Helix, Kate and Zed —
+see **[Editor setup](https://kama-lang.org/docs/editors/)**.
 
-Notes:
-- Object fields appear as `self->field` and `this` as `self` (the C lowering);
-  fully inspectable. Prettier formatters are a future nicety.
-- `kama` must be on your `PATH` (build it with `make`, then symlink/copy to a
-  `PATH` dir, or adjust the task's command).
-- For the browser/WASM target, build with `--target wasm` and debug in the
-  browser via the emitted source maps.
+## Links
+
+- [kama-lang.org](https://kama-lang.org) · [Getting started](https://kama-lang.org/docs/getting-started/)
+  · [Language tour](https://kama-lang.org/docs/tour/) · [Specification](https://kama-lang.org/docs/spec/)
+- [Source](https://github.com/cosmic-canopy/kama) · [Issues](https://github.com/cosmic-canopy/kama/issues)
+
+## Contributing
+
+Building this extension from a checkout of the kama repo — the language client is an npm dependency,
+so install it first:
+
+```sh
+cd editor/vscode
+npm install
+ln -s "$(pwd)" ~/.vscode/extensions/kama-dev      # dev install, then reload VS Code
+```
+
+Or package and install it:
+
+```sh
+./dev ext-package                                  # from the repo root
+code --install-extension editor/vscode/kama-*.vsix
+```
+
+MIT licensed. See [LICENSE](https://github.com/cosmic-canopy/kama/blob/main/editor/vscode/LICENSE).
