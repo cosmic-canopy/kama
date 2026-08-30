@@ -77,12 +77,37 @@ fi
 # concurrency seam (a multi-isolate fixture must stay TSan-clean). Native only; mutually exclusive with
 # KAMA_SAN (one -fsanitize set at a time) and KAMA_WASM (wasm has no pthreads). xfail fixtures never link.
 if [ "${KAMA_TSAN:-0}" != "0" ]; then
-    if [ "${KAMA_SAN:-0}" != "0" ] || [ "${KAMA_WASM:-0}" != "0" ]; then
-        echo "error: KAMA_TSAN is mutually exclusive with KAMA_SAN and KAMA_WASM" >&2; exit 2
+    if [ "${KAMA_SAN:-0}" != "0" ] || [ "${KAMA_MSAN:-0}" != "0" ] || [ "${KAMA_WASM:-0}" != "0" ]; then
+        echo "error: KAMA_TSAN is mutually exclusive with KAMA_SAN, KAMA_MSAN and KAMA_WASM" >&2; exit 2
     fi
     SAN_FLAGS=(--cc "clang -fsanitize=thread -fno-omit-frame-pointer -g")
     export TSAN_OPTIONS="halt_on_error=1"
     echo "(thread-sanitizer mode: TSan on native positive fixtures)"
+fi
+
+# Opt-in uninitialized-read pass: KAMA_MSAN=1 builds every positive (and multi-file) fixture with
+# MemorySanitizer + origin tracking and runs it, so a read of uninitialized memory fails the suite.
+# This is the regression floor for `slot` (uninitialized storage) — the one construct in the language
+# whose whole purpose is memory the compiler has NOT initialized, and the one risk surface that both
+# ASan and the wasm leg are blind to. Native only; mutually exclusive with the other -fsanitize sets
+# and with KAMA_WASM. xfail fixtures never link, so they're unaffected.
+#
+# ⚠️ The usual MSan blocker — needing an instrumented libc++, or every reachable library rebuilt —
+# does NOT apply here: an emitted kama program is C, and `kama build` compiles every one of its
+# translation units (the runtime headers included) with exactly these flags. Probed 2026-08-29 in the
+# container on clang 18.1.3: MSan verified armed, then 52 fixtures built and ran clean, including the
+# slot/spawn/channel/isolate/parallel slice most likely to trip on uninstrumented pthread internals.
+#
+# So EXPECT THIS LEG GREEN. That is the point and also the hazard: a green run here proves the floor
+# is in place, not that a bug was found. If it ever needs to be believed, arm it first — a probe that
+# reads an uninitialized `slot` must be REPORTED before a clean corpus means anything.
+if [ "${KAMA_MSAN:-0}" != "0" ]; then
+    if [ "${KAMA_SAN:-0}" != "0" ] || [ "${KAMA_TSAN:-0}" != "0" ] || [ "${KAMA_WASM:-0}" != "0" ]; then
+        echo "error: KAMA_MSAN is mutually exclusive with KAMA_SAN, KAMA_TSAN and KAMA_WASM" >&2; exit 2
+    fi
+    SAN_FLAGS=(--cc "clang -fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g")
+    export MSAN_OPTIONS="halt_on_error=1"
+    echo "(memory-sanitizer mode: MSan + origins on native positive fixtures)"
 fi
 
 # Opt-in wasm pass: KAMA_WASM=1 builds every positive (and multi-file) fixture to wasm via emcc and runs
@@ -373,8 +398,10 @@ hang_evidence() {   # $1 = the fixture's build dir
 # They used to run SERIALLY, right here, before the fan-out — 61s on a 10-core host with nine cores idle.
 # In the pool the block is bounded by its slowest member instead of their sum.
 #
-# KAMA_TSAN is deliberately not a leg of its own: the old predicate was (SAN=0 && WASM=0), so a TSan run
-# has always executed the native guard set. Keep that.
+# KAMA_TSAN and KAMA_MSAN are deliberately not guard legs of their own: the old predicate was
+# (SAN=0 && WASM=0), so a TSan run has always executed the native guard set. Keep that. The guards test
+# the COMPILER and its tooling, and SAN_FLAGS never reach them — so there is nothing a sanitizer set
+# would change about which of them apply, and `native` is the honest answer for all three.
 #
 # `./dev matrix` sets KAMA_SKIP_CHECKS=1 for this leg, because `./dev check` is about to run the same set
 # on the same host. A bare ./run_tests.sh — CI, the container — never sets it and stays complete.

@@ -20,6 +20,8 @@ Test — each task builds first, so it can never run against a stale compiler
   fixture <name>…   build + run JUST these tests/<name>.kama against their .expect  ← ITERATE WITH THIS
   test              native fixture suite            (host)
   test san          ASan/UBSan fixture suite        (container — see below)
+  test tsan         ThreadSanitizer fixture suite   (container — opt-in, see below)
+  test msan         MemorySanitizer fixture suite   (container — opt-in, see below)
   test wasm         wasm/node fixture suite         (container)
   test linux        the CI Linux leg, exactly       (container — opt-in, see below)
   test all          native + san + wasm
@@ -43,6 +45,14 @@ every experiment is where a session's wall-clock goes. Match the rung to the que
   when relevant     `./dev check`           grammar, LSP, docs, packaging
   the whole gate    `./dev matrix`
   closing a campaign `./dev test linux`     the one leg nothing else here reproduces
+                    `./dev test tsan`      data races across isolates — the shared-nothing proof
+                    `./dev test msan`      uninitialized reads — the `slot` regression floor
+
+`tsan`, `msan` and `linux` are opt-in and NOT in `all`/`matrix`, on purpose: each is a container
+round-trip over the whole corpus, and paying three more of them per commit is a tax nobody would keep
+paying. The cost of that choice is that they only assert when someone runs them — which is exactly how
+KAMA_TSAN came to be fully implemented in run_tests.sh and reachable from nothing for months. Run them
+when closing a campaign, and always when the change touched concurrency (`tsan`) or `slot` (`msan`).
 
 The trap this replaces: with no way to run three fixtures, the only honest answer to "did I break
 anything?" was the whole suite — so it got run dozens of times in one session, mostly to learn that one
@@ -53,9 +63,11 @@ dependencies are declared, but a `git stash`/`git checkout` cycle can restore so
 deciding to rebuild, and the result is objects compiled against two different class layouts — a corrupt
 compiler that builds cleanly. A clean rebuild is the fix; the symptom is never a real code bug.
 
-Why `san` and `wasm` are container-only:
+Why `san`, `tsan`, `msan` and `wasm` are container-only:
   - macOS has no LeakSanitizer, so a host KAMA_SAN run reports "detect_leaks is not supported on
     this platform" for every fixture and tells you nothing.
+  - MemorySanitizer does not exist on macOS at all (Linux/FreeBSD only), so `msan` has nowhere else
+    to run.
   - `tools/cdev` does not forward host env, hence the `env KAMA_SAN=1` form used below.
 
 Deploy / publish / provision live in ./ops (they need secrets from .env).
@@ -132,6 +144,12 @@ case "$task" in
     case "${1:-native}" in
       native) build_host;      ./run_tests.sh ;;
       san)    build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh ;;
+      # The other two -fsanitize sets. run_tests.sh has carried the KAMA_TSAN block since the M2
+      # concurrency seam landed — complete, with its own flags, TSAN_OPTIONS and mutual exclusion — and
+      # NOTHING SET IT: this dispatch offered only native|linux|san|wasm|all, so the declared
+      # shared-nothing proof had never once run. Adding the case IS the fix. Same shape for msan.
+      tsan)   build_container; tools/cdev exec env KAMA_TSAN=1 ./run_tests.sh ;;
+      msan)   build_container; tools/cdev exec env KAMA_MSAN=1 ./run_tests.sh ;;
       wasm)   build_container; tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
       # The CI Linux leg, run the way CI runs it: plain run_tests.sh on Linux, no KAMA_SAN/KAMA_WASM.
       # NOTHING else here is that. `native` runs it on the host; `san`/`wasm` run a DIFFERENT set on Linux
@@ -144,7 +162,7 @@ case "$task" in
         build_host;      ./run_tests.sh
         build_container; tools/cdev exec env KAMA_SAN=1  ./run_tests.sh
                          tools/cdev exec env KAMA_WASM=1 ./run_tests.sh ;;
-      *) echo "dev test: expected native|linux|san|wasm|all" >&2; exit 2 ;;
+      *) echo "dev test: expected native|linux|san|tsan|msan|wasm|all" >&2; exit 2 ;;
     esac ;;
 
   check)
