@@ -3582,10 +3582,17 @@ parallel_for (ref int32 e in xs) { e = e * 2; }   // closing brace is the barrie
 contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
 non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
 
-**K is `min(cores, length)`**, and elements beyond that are *chunked* — one worker runs several in turn.
-That is right here, because the work is finite and independent: three elements run back to back in the
-same total time. It is also exactly why `parallel_for` cannot build a worker **pool**, which the next
-section covers.
+**K is `min(cores, length)`, so there are usually FEWER workers than elements** — 30 elements on 8 cores is
+8 isolates running 4 elements each, one after another. That is right here, and it is the reason the cap
+exists: the work is finite and independent, so four elements run back to back in the same total time, and
+40,000 elements do not become 40,000 OS threads.
+
+The one thing it asks of the body: **an element may not wait on another element's progress**, since only K
+of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
+the count stalls at K, and the elements queued behind those K never start. Ordinary independent work is
+unaffected. When you genuinely need all N running at once — a pool whose members rendezvous — that is
+`parallel_spawn` below, which is also why `parallel_for` cannot build one.
+<!-- test: parallel_spawn_oversubscribed -->
 
 ### Worker pools — `parallel_spawn` ✅
 
