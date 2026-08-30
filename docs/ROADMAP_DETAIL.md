@@ -186,6 +186,13 @@ Everything else here is library or toolchain work that does **not** gate the tag
    `std::encoding`). The items below are that campaign's contents:
    - **`std::net`** — DNS/`getaddrinfo` (numeric hosts only today). *(UDP and ephemeral-port `getsockname`
      ship — `lib/std/net/udp.kama`; IPv6 and multicast are separate, tracked in §2.)*
+   - **`std::math` has no INTEGER `min`/`max`/`clamp`.** `minf`/`maxf`/`clampf` ship and are `float64`
+     only (`lib/std/math/scalar.kama`), so `min(cpuCount(), xs.length())` — the obvious thing to write for a
+     `parallel_for (…, workers:)` count — has no function behind it and needs a local plus an `if`. Found
+     2026-08-29 while spelling that clause. A generic over the existing `Comparable<T>` contract is the
+     obvious shape, which would also cover `string` and user types; the alternative is a per-width family
+     matching `minf`'s style. Small, and it is the kind of hole that only shows up when someone reaches
+     for it.
    - **`std::fs` / `std::io`** — richer `Metadata` (mtime/perms), path helpers, `mkdir`/`rename`/`exists`,
      `OpenMode.Append`, stdin/stdout/stderr as `Reader`/`Writer` handles, `readLine`/`lines()`.
      *(Buffered readers/writers ship — `BufReader`/`BufWriter` in `lib/std/io/streams.kama`.)*
