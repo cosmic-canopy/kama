@@ -859,39 +859,71 @@ done
 
 # Trap fixtures: tests/trap/<name>.kama MUST build, then ABORT at runtime — a clean trap that guards the
 # "no undefined behavior" guarantee (integer divide-by-zero, INT_MIN/-1, shift-past-width, float->int
-# overflow, signed overflow in a debug build, out-of-bounds index, panic/assert). We assert the process
-# was killed by a signal (exit >= 128; __builtin_trap -> SIGTRAP/SIGILL, abort -> SIGABRT). Optional
+# overflow, signed overflow in a debug build, out-of-bounds index, panic/assert). Optional
 # tests/trap/<name>.msg is a substring the stderr must contain (bounds/panic print "… out of bounds" /
-# "kama: panic: …"; a bare __builtin_trap prints nothing). Skipped under KAMA_SAN (UBSan would intercept
-# the trap) and KAMA_WASM (node/wasm abort exit codes differ), and on Windows/MSYS2 — there __builtin_trap
-# surfaces as a 128+SIGILL exit but abort() does NOT (it exits 127), so the "killed by a signal" assertion
-# is POSIX-only. Native POSIX (Linux/macOS) leg, like xfail is SAN-skipped. `ulimit -c 0` is best-effort
-# core suppression (a pipe core_pattern ignores it, but those cores go unwritten to systemd-coredump anyway).
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_OK=0 ;; *) TRAP_OK=1 ;; esac
-if [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 1 ]; then
-    ulimit -c 0
-    for src in "$TESTS_DIR"/trap/*.kama; do
-        [ -e "$src" ] || continue
-        name="${src##*/}"; name="${name%.kama}"
+# "kama: panic: …"; a bare __builtin_trap prints nothing — 12 of the 18 carry a .msg).
+#
+# ⚠️ These binaries are built WITHOUT $SAN_FLAGS, on every leg, on purpose. What is under test is a
+# runtime TRAP, not memory safety; UBSan would intercept the very fault the fixture exists to cause, and
+# ASan/TSan/MSan have nothing to say about it. That is a reason not to sanitize THESE binaries — it was
+# read for a long time as a reason to skip the leg entirely, which is different and cost the san leg 18
+# assertions it could have been making all along. Same for the exported *SAN_OPTIONS: inert here.
+#
+# THREE targets, three exit conventions, all three now asserted (they were `SKIP` until 2026-08-29):
+#
+#   posix    killed by a signal — exit >= 128 (__builtin_trap -> SIGTRAP/SIGILL, abort -> SIGABRT).
+#   windows  NOT that: MSYS2's __builtin_trap does surface as 128+SIGILL, but abort() exits 127. So the
+#            exit-code assertion weakens to "nonzero" and the .msg carries the weight — which is why it
+#            is still worth running rather than skipping.
+#   wasm     MEASURED 2026-08-29 in the container (emcc + node): all 18 fixtures exit rc=1, in two
+#            classes, each identifiable on stderr — abort() prints its message and then
+#            "Aborted(native code called abort())", while a bare trap raises "RuntimeError: unreachable".
+#            ⚠️ rc=1 ALONE proves nothing: a kama program that simply `return 1`s from main also exits 1
+#            under node, with empty stderr (probed). The RuntimeError is the whole discriminator — assert
+#            both, never just the code. All 12 .msg substrings survive the emscripten stderr path.
+#
+# `ulimit -c 0` is best-effort core suppression (a pipe core_pattern ignores it, but those cores go
+# unwritten to systemd-coredump anyway).
+if [ "$WASM" = 1 ]; then TRAP_STYLE=wasm
+else case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_STYLE=windows ;; *) TRAP_STYLE=posix ;; esac
+fi
+ulimit -c 0
+for src in "$TESTS_DIR"/trap/*.kama; do
+    [ -e "$src" ] || continue
+    name="${src##*/}"; name="${name%.kama}"
+    err="$TMP/trap_$name.err"
+    if [ "$TRAP_STYLE" = wasm ]; then
+        if ! "$KAMA" build "$src" --target wasm --cc "${EMCC:-emcc}" -o "$TMP/trap_$name.js" \
+                >/dev/null 2>"$TMP/trap_$name.builderr"; then
+            echo "FAIL trap/$name (wasm build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
+        fi
+        node --no-concurrent-recompilation "$TMP/trap_$name.js" >/dev/null 2>"$err"; actual=$?
+    else
         if ! "$KAMA" build "$src" -o "$TMP/trap_$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
             echo "FAIL trap/$name (build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
         fi
-        "$TMP/trap_$name" 2>"$TMP/trap_$name.err"; actual=$?
-        if [ "$actual" -lt 128 ]; then
-            echo "FAIL trap/$name (exited $actual, expected a runtime trap)"; fail=$((fail+1)); continue
-        fi
-        msg_file="$TESTS_DIR/trap/$name.msg"
-        if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$TMP/trap_$name.err"; then
-            echo "FAIL trap/$name (trapped, but stderr missing \"$(cat "$msg_file")\")"; head -2 "$TMP/trap_$name.err"; fail=$((fail+1)); continue
-        fi
-        echo "PASS trap/$name (trapped, exit $actual)"; pass=$((pass+1))
-    done
-elif [ "$WASM" = 0 ] && [ ${#SAN_FLAGS[@]} -eq 0 ] && [ "$TRAP_OK" = 0 ]; then
-    for src in "$TESTS_DIR"/trap/*.kama; do
-        [ -e "$src" ] || continue
-        echo "SKIP $(basename "$src" .kama) (trap: POSIX signal-exit convention only)"
-    done
-fi
+        "$TMP/trap_$name" 2>"$err"; actual=$?
+    fi
+    # The exit-code predicate is the ONLY thing that differs between targets; keep it that way.
+    case "$TRAP_STYLE" in
+        posix)
+            [ "$actual" -ge 128 ] || {
+                echo "FAIL trap/$name (exited $actual, expected a runtime trap)"; fail=$((fail+1)); continue; } ;;
+        windows)
+            [ "$actual" -ne 0 ] || {
+                echo "FAIL trap/$name (exited 0, expected a runtime trap)"; fail=$((fail+1)); continue; } ;;
+        wasm)
+            if [ "$actual" -ne 1 ] || ! grep -qE 'Aborted\(native code called abort\(\)\)|RuntimeError: unreachable' "$err"; then
+                echo "FAIL trap/$name (exited $actual with no wasm trap on stderr, expected a runtime trap)"
+                head -2 "$err"; fail=$((fail+1)); continue
+            fi ;;
+    esac
+    msg_file="$TESTS_DIR/trap/$name.msg"
+    if [ -f "$msg_file" ] && ! grep -qF "$(cat "$msg_file")" "$err"; then
+        echo "FAIL trap/$name (trapped, but stderr missing \"$(cat "$msg_file")\")"; head -2 "$err"; fail=$((fail+1)); continue
+    fi
+    echo "PASS trap/$name (trapped, exit $actual)"; pass=$((pass+1))
+done
 
 # Analysis-path agreement: `kama check` must reach the SAME accept/reject verdict as `kama build`.
 #
