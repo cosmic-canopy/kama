@@ -66,6 +66,38 @@ LEAKS=1
 ASAN_OPTIONS="detect_leaks=$LEAKS:exitcode=86"
 export ASAN_OPTIONS
 
+# --- 0. IS THERE AN ASan RUNTIME AT ALL? ------------------------------------------------------------
+# mingw-w64 has no AddressSanitizer. Measured with `pacman -Fl` across all three environments — asan
+# files: 0 everywhere. What `compiler-rt` actually ships is builtins, profile, and the three fuzzer
+# archives (5 files on ucrt64/mingw64, 2 on clangarm64); NO sanitizer runtime of any kind. So this is
+# not a missing package that a `pacman -S` fixes, and the CI install list is not the place to look —
+# clang is not even linked against it (`mingw-w64-ucrt-x86_64-clang` does not depend on compiler-rt).
+# clang accepts `-fsanitize=address` regardless and fails at the LINK, which is why the whole compiler
+# compiled before anything went wrong:
+#
+#   ld: cannot find …/libclang_rt.asan_dynamic.dll.a: No such file or directory
+#
+# That made the Windows leg RED for a guard about memory safety in portable C++ — a fact no Windows
+# machine is needed to check and which the Linux and container legs already assert. So: probe, and skip.
+#
+# ⚠️ The probe LINKS, it does not just compile. `clang++ -fsanitize=address -c` succeeds here; only the
+# link reaches the missing runtime, so a compile-only probe would report ASan as available and hand the
+# failure straight back to `make`. Costs one trivial TU (~0.3 s) on platforms that do have it.
+#
+# `clang++` is spelled out rather than taken from $CXX ON PURPOSE — the Makefile sets `CXX = clang++`
+# with a plain `=`, which OVERRIDES an environment CXX, so honoring $CXX here would probe a compiler
+# the build is not going to use and answer for the wrong toolchain.
+echo 'int main(void){return 0;}' >"$tmp/probe.cpp"
+if ! clang++ -fsanitize=address "$tmp/probe.cpp" -o "$tmp/probe" >"$tmp/probe.log" 2>&1; then
+    echo "SKIP check-compiler-asan (no AddressSanitizer runtime for this toolchain on $(uname -s) — \
+mingw-w64 ships no sanitizer runtime at all; the Linux and container legs assert this)"
+    # Say WHY, always. A skip is indistinguishable from a pass in the tally, so on a platform that is
+    # SUPPOSED to have ASan this line is the only thing standing between a missing libclang-rt-dev and a
+    # guard that quietly stopped running. Do not remove it to tidy the output.
+    sed -n '1p' "$tmp/probe.log" | sed 's/^/  probe: /'
+    exit 0
+fi
+
 # --- 1. BUILD ---------------------------------------------------------------------------------------
 echo "check-compiler-asan: building the compiler with -fsanitize=address ..."
 if ! make -j"$JOBS" KAMA_ASAN=1 "$ASAN" >"$tmp/build.log" 2>&1; then

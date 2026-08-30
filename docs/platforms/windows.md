@@ -179,6 +179,21 @@ Worth knowing before debugging, because each of these produced a confident wrong
   library without the blast radius of a blanket `-static` (which would also re-bind `-lglfw3` and
   break `--webgpu`). This is what `kama build` now does for its own runtime; `docs/targets.md`
   § *Runtime linkage* is the user-facing half.
+- **There is no AddressSanitizer, and no sanitizer runtime of any kind.** mingw-w64's `compiler-rt`
+  package ships `builtins`, `profile`, and the three `fuzzer` archives — measured with `pacman -Fl`,
+  asan files: **0** on all three of ucrt64 / mingw64 / clangarm64. It is not a package you forgot: the
+  clang package does not even depend on `compiler-rt`, and adding it to the CI install list changes
+  nothing. ⚠️ **clang accepts `-fsanitize=address` anyway and fails at the LINK**, so a whole project
+  compiles before the first sign of trouble, and a compile-only probe reports the sanitizer as
+  *available*. Anything probing for it must link:
+
+  ```
+  ld: cannot find .../libclang_rt.asan_dynamic.dll.a: No such file or directory
+  ```
+
+  This is why `tools/check-compiler-asan.sh` skips here rather than failing. The guard asserts memory
+  safety in portable C++ that no Windows machine is needed to check, and the Linux and container legs
+  assert it — but it went in without a probe, and the Windows leg was red for it.
 - **git does not create real symlinks** without `core.symlinks` (needs Developer Mode or elevation);
   it writes a text file containing the target path instead. Do not commit symlinks.
 - **A `.exe` suffix is load-bearing** in any path comparison against a running binary — and in any
