@@ -20,9 +20,30 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
 
 ## 2. Test-infra holes
 
-- `tests/trap/` is **skipped** under `KAMA_SAN`, `KAMA_WASM`, and on Windows/MSYS2 (`run_tests.sh`, the
-  `TRAP_OK`/`WASM`/`SAN_FLAGS` gate) — UBSan intercepts the trap and node's abort codes differ.
-- **No leg runs MSan.** MSan-origins catches what ASan and wasm both miss.
+- `tests/trap/` (18 fixtures) is **skipped** under `KAMA_SAN`, `KAMA_WASM`, and on Windows/MSYS2
+  (`run_tests.sh:843`, the `TRAP_OK`/`WASM`/`SAN_FLAGS` gate). Three separate causes, each with its own
+  answer, so this is three small jobs rather than one: UBSan **intercepts** the trap (build the trap
+  fixtures without `SAN_FLAGS` — they assert runtime trap semantics, not memory safety, so the sanitizer
+  is not what is under test); node/wasm **abort codes differ** (assert the emscripten abort code rather
+  than `>=128`); and on Windows `abort()` **exits 127**, not `128+SIGABRT`, so the "killed by a signal"
+  assertion is POSIX-only (assert nonzero + the `.msg` there).
+- **No leg runs MSan.** MSan-origins catches uninitialized reads that ASan and wasm both miss — which is
+  precisely the risk surface of `slot` (uninitialized storage).
+  **⚠️ Feasibility PROBED 2026-08-29, and the row's implied risk is not real:** the usual MSan blocker is
+  needing an instrumented libc++, and it does not apply, because an emitted kama program is **C**. Measured
+  in the container (clang 18.1.3): MSan verified armed on a probe, then **52 fixtures built and ran with
+  `--cc "clang -fsanitize=memory -fsanitize-memory-track-origins=2"` — 0 build failures, 0 reports**,
+  including the `slot`/`spawn`/`channel`/`isolate`/`parallel` slice most likely to trip on uninstrumented
+  pthread internals. So this is **plumbing, not a bug hunt**: a `KAMA_MSAN=1` leg mirroring the
+  `KAMA_TSAN` block at `run_tests.sh:77` (same `SAN_FLAGS` shape, same mutual exclusion) plus a `./dev`
+  task. Expect it to land green; its value is the regression floor, not a finding.
+- **⚠️ `KAMA_TSAN` is implemented but UNREACHABLE — a fourth hole, found 2026-08-29.** The block at
+  `run_tests.sh:77` is complete (flags, `TSAN_OPTIONS`, mutual exclusion with `KAMA_SAN`/`KAMA_WASM`) and
+  is the declared shared-nothing PROOF for the M2 concurrency seam — but `./dev` offers only
+  `native|linux|san|wasm|all`, so **nothing ever sets it** and no leg has ever run it. Same family as the
+  rest of this section: infrastructure that exists, is believed, and asserts nothing. The fix is one line
+  in `dev` beside the `san`/`wasm` cases, and it should land with the MSan leg since they are the same
+  edit twice.
 - **The compiler is never sanitized — SHIPPED** `0.9.117` (2026-08-29), see *What shipped* below.
 - A campaign about *rejection* cannot take a green suite as its acceptance test: the view-window
   campaign's findings ④⑤⑥ survived all three legs and 34 guards. The discipline that works is a probe
