@@ -1,0 +1,16 @@
+// `parallel_for` requires an explicit `workers:` count. There is no default, and that is deliberate:
+// kama has no optional parameters — a user `fn` cannot declare one (`int32 b = 5` is a parse error) — so a
+// built-in construct must not have one either, or the language grants itself a privilege user code cannot
+// have. The old implicit `min(cores, length)` is now written `workers: cpuCount()`.
+//
+// The payoff is greppability. How many isolates a loop splits into used to be invisible in the source,
+// which is exactly what made a chunked `parallel_for` surprising; now `grep 'workers:'` finds every
+// parallelism-width decision in a codebase. This MUST fail to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    parallel_for (ref int32 e in a) { e = e * 2; }   // no `workers:` — the count must be stated
+    return 0;
+}

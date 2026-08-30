@@ -23,6 +23,7 @@ import {
     std::collections::DynamicArray,
     std::collections::SlotMap,
     std::collections::View,
+    std::concurrent::cpuCount
 };
 
 // ── components: plain data ───────────────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ fn void integrate(View<Transform> xs, float32 dt) {
 
 // ── the same system, PARALLEL: disjoint sub-views, one worker each, no locks ─────────────────
 fn void integratePar(View<Transform> xs, float32 dt) {
-    parallel_for (ref Transform t in xs) {
+    parallel_for (ref Transform t in xs, workers: cpuCount()) {
         t.x = t.x + t.vx * dt;
         t.y = t.y + t.vy * dt;
     }

@@ -4412,6 +4412,48 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     line(pf->line);
     rejectIfNoHeap((KW + " heaps a per-worker argument bundle").c_str(), pf->line);   // no-heap gate
 
+    // The isolate count. `parallel_for` REQUIRES it and `parallel_spawn` FORBIDS it, and both halves are
+    // the same rule seen from two sides: **the number of isolates is always the number of jobs you hand
+    // the construct.** A bare `spawn` is one job. `parallel_spawn`'s jobs are the container's elements, so
+    // its count is already stated — `workers:` there would be a second, conflicting answer. `parallel_for`'s
+    // jobs are SLICES of one buffer, and how finely to slice is the one thing the data cannot say, so it
+    // has to be written.
+    //
+    // There is deliberately NO DEFAULT. kama has no optional parameters — a user `fn` cannot have one
+    // (`int32 b = 5` is a parse error), so a built-in must not either, or the language grants itself a
+    // privilege user code cannot have. The old implicit `min(cores, length)` is now written `cpuCount()`,
+    // which only became expressible when cpuCount() shipped; before that a mandatory clause would have
+    // needed a magic sentinel (`workers: 0`), which is the implicit-over-explicit trade GOALS refuses.
+    // The payoff is that `grep 'workers:'` finds every parallelism-width decision in a codebase — those
+    // decisions used to be invisible, which is precisely what made a chunked `parallel_for` surprising.
+    if (pf->deferJoin && pf->workers) {
+        unsupported("`parallel_spawn` takes no `workers:` — its isolate count IS the container's length, "
+                    "one per element. Size the container to say how many you want (`cpuCount()` for one "
+                    "per core); a second count here could only contradict it", pf->line);
+        return;
+    }
+    if (!pf->deferJoin && !pf->workers) {
+        unsupported("`parallel_for` requires an explicit `workers:` count — write "
+                    "`parallel_for (ref T e in c, workers: cpuCount())` for one slice per core (the old "
+                    "implicit behaviour), or any other count. It is stated rather than defaulted because "
+                    "how finely to slice is the one thing the data cannot say, and a silent count is what "
+                    "makes a chunked loop surprising", pf->line);
+        return;
+    }
+    // A count that is provably nonsense is a compile error rather than a clamp — the point of the clause is
+    // that you get what you asked for. A RUNTIME value is floored at 1 below instead, since the compiler
+    // cannot know it and refusing to build would be worse than running one worker.
+    if (pf->workers) {
+        long long litVal = 0; bool isLit = false;
+        if (auto* i32 = dynamic_cast<Int32Node*>(pf->workers.get())) { litVal = i32->value; isLit = true; }
+        else if (auto* i64 = dynamic_cast<Int64Node*>(pf->workers.get())) { litVal = i64->value; isLit = true; }
+        if (isLit && litVal <= 0) {
+            unsupported(("`workers: " + std::to_string(litVal) + "` asks for no workers at all — the "
+                         "count must be at least 1").c_str(), pf->line);
+            return;
+        }
+    }
+
     // `parallel_spawn` hands its join to the enclosing `scope { }`, so there has to be one — and it has
     // to be a DIRECT statement of it, for exactly the reason a bare `spawn` does (the handle array is
     // declared at the scope's own depth so the barrier can name it; one declared in a nested block is
@@ -4432,7 +4474,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         }
     }
 
-    // The isolate seam header (and its `-lpthread` link + KAMA_PARFOR_WORKERS -D) flows in via
+    // The isolate seam header (and its `-lpthread` link) flows in via
     // `import std::concurrent;`; without it the spawn/join calls would not compile.
     if (!externsHeader("kama_isolate.h"))
         unsupported(("`" + KW + "` requires `import std::concurrent;` (the isolate seam)").c_str(), pf->line);
@@ -4680,7 +4722,6 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
     // ── (e) Arg struct + trampoline (crosses the isolate ABI's single void*). ─────────────────────────
     std::ostringstream helper;
-    helper << "#ifndef KAMA_PARFOR_WORKERS_DEFAULT\n#define KAMA_PARFOR_WORKERS_DEFAULT 0\n#endif\n";
     helper << "typedef struct { " << viewCType << " slice;";
     for (size_t i = 0; i < caps.size(); ++i) helper << " " << caps[i].cType << "* c" << i << ";";
     helper << " } " << argTy << ";\n";
@@ -4741,8 +4782,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         return;
     }
 
-    indent(d); *_out << "int " << K << " = KAMA_PARFOR_WORKERS_DEFAULT > 0 ? KAMA_PARFOR_WORKERS_DEFAULT "
-                        ": kama_parfor_workers();\n";
+    // K is exactly what `workers:` asked for — NOT min'd with the core count. You said a number; silently
+    // substituting a different one is the invisible-K surprise this clause exists to remove, and it is what
+    // every neighbour does too (OpenMP's `num_threads`, .NET's MaxDegreeOfParallelism: neither clamps to
+    // cores). Oversubscription is a mild inefficiency for CPU-bound work and the RIGHT answer for anything
+    // that blocks, so it is the caller's call. Two bounds remain and both are meaningless to exceed:
+    // more workers than elements would leave workers with no slice, and fewer than one is not a loop.
+    indent(d); *_out << "int " << K << " = (int)(" << emitExpression(pf->workers) << ");\n";
     indent(d); *_out << "if (" << K << " > " << LEN << ") " << K << " = " << LEN << ";\n";
     indent(d); *_out << "if (" << K << " < 1) " << K << " = 1;\n";
     indent(d); *_out << "int32_t " << CH << " = (" << LEN << " + " << K << " - 1) / " << K << ";\n";

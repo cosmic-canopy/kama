@@ -3575,21 +3575,31 @@ safe **by disjointness** — two workers never touch the same element — so it 
 borrow checker.
 
 ```kama
-parallel_for (ref int32 e in xs) { e = e * 2; }   // closing brace is the barrier
+parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }   // closing brace is the barrier
 ```
+
+**`workers:` is mandatory — there is no default.** kama has no optional parameters (a user `fn` cannot
+declare one), so a built-in construct does not get one either. Write `workers: cpuCount()` for one slice
+per core, `workers: 4` for a fixed width, or any expression: `workers: cpuCount() - 2` to leave headroom.
+It is *exactly* what you asked for, capped only by `length` (more workers than elements would leave some
+with no slice) — not silently reduced to the core count, since oversubscription is the caller's call.
+A literal `workers: 0` or negative is a compile error. <!-- xfail: parfor_no_workers -->
+
+Stating it is the point: how many isolates a loop splits into used to be invisible, which is what made the
+chunking below surprising. Now `grep 'workers:'` finds every parallelism-width decision in a codebase.
 
 `ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
 contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
 non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
 
-**K is `min(cores, length)`, so there are usually FEWER workers than elements** — 30 elements on 8 cores is
-8 isolates running 4 elements each, one after another. That is right here, and it is the reason the cap
-exists: the work is finite and independent, so four elements run back to back in the same total time, and
-40,000 elements do not become 40,000 OS threads.
+**There are usually FEWER workers than elements** — `workers: 8` over 30 elements is 8 isolates running 4
+elements each, one after another. That is the point of the construct: the work is finite and independent,
+so four elements run back to back in the same total time, and 40,000 elements need not become 40,000 OS
+threads.
 
-The one thing it asks of the body: **an element may not wait on another element's progress**, since only K
-of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
-the count stalls at K, and the elements queued behind those K never start. Ordinary independent work is
+The one thing it asks of the body: **an element may not wait on another element's progress**, since only
+`workers:` of them are ever in flight. A body that blocks until *all* elements have reached some point waits forever —
+the count stalls at `workers:`, and the elements queued behind those never start. Ordinary independent work is
 unaffected. When you genuinely need all N running at once — a pool whose members rendezvous — that is
 `parallel_spawn` below, which is also why `parallel_for` cannot build one.
 <!-- test: parallel_spawn_oversubscribed -->
@@ -3624,6 +3634,8 @@ it spawns *and joins* in one statement, so the producer above would never run an
   therefore never start, and it would fail *silently*: the running workers drain the queue, the producer
   closes, they exit, and only then do the rest begin and immediately see the closed end.
   <!-- test: parallel_spawn_oversubscribed -->
+- **No `workers:` clause** — its count IS the container's length, so a second count could only contradict
+  it. To choose how many, size the container. <!-- xfail: parallel_spawn_workers -->
 - **The join is the `scope`'s brace**, on every exit path, before any local drops — the same
   join-before-drop guarantee a bare `spawn` gets. So it needs an enclosing `scope`
   <!-- xfail: parallel_spawn_no_scope --> and must be a direct statement of it.

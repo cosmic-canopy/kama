@@ -2,13 +2,13 @@
 // shared by pointer across all K workers, so `acc = acc + e` is a data race. The write-through-capture
 // gate rejects it and names the culprit; the fix is an `Atomic<T>` (see parfor_atomic) or writing only
 // through the disjoint loop element `e`.
-import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
 fn int32 main() {
     int32 acc = 0;
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1i32);
-    parallel_for (ref int32 e in a) {
+    parallel_for (ref int32 e in a, workers: cpuCount()) {
         acc = acc + e;                 // rejected: shared mutable capture across workers
     }
     return acc % 256;

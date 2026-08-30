@@ -3,14 +3,14 @@
 // through the `ref int32 e` binding. Because the slices are disjoint and joined at the closing brace, no
 // two workers ever touch the same cell — race-free by construction, deterministic regardless of K. Run
 // under KAMA_TSAN=1 (0 data races) and KAMA_SAN=1.
-import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
     while (i < 10) { a.add(item: i); i = i + 1; }   // [0,1,2,...,9]
 
-    parallel_for (ref int32 e in a) {                // auto .view(); disjoint slices, one per worker
+    parallel_for (ref int32 e in a, workers: cpuCount()) {                // auto .view(); disjoint slices, one per worker
         e = e * 2;                                   // mutate only this slice's element — cannot race
     }                                                // BARRIER: all slices joined here
 

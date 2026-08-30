@@ -620,17 +620,28 @@ public:
     // run alongside the statements after it. `parallel_for` cannot express a pool for that second reason:
     // it joins at its own brace, so nothing can run concurrently with it.
     bool deferJoin = false;
+    // `parallel_for (ref T e in c, workers: N)` — how many isolates to split into. MANDATORY on
+    // `parallel_for` and FORBIDDEN on `parallel_spawn`, whose count is the container's length. There is no
+    // default: kama has no optional parameters, so a built-in must not have one either, and the old
+    // implicit `min(cores, length)` is now written out as `workers: cpuCount()`. `workersLabel` is the
+    // spelling the user actually wrote, kept so a wrong label gets a sentence instead of a syntax error.
+    SharedExpression workers;
+    SharedIdentifier workersLabel;
     ParallelForNode(CodeGenContext& context, SharedIdentifier type,
                     SharedIdentifier name,
                     SharedExpression expression,
                     SharedStatement body,
-                    bool deferJoin = false)
+                    bool deferJoin = false,
+                    SharedExpression workers = nullptr,
+                    SharedIdentifier workersLabel = nullptr)
     : ASTNode(context),  StatementNode(context)
     , type(type)
     , name(name)
     , expression(expression)
     , body(body)
-    , deferJoin(deferJoin) {}
+    , deferJoin(deferJoin)
+    , workers(workers)
+    , workersLabel(workersLabel) {}
 };
 
 class BreakNode : public StatementNode {

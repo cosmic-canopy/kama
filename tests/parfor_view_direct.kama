@@ -1,7 +1,7 @@
 // M6.3: `parallel_for` over an EXPLICIT `View<T>` (the direct-view path, no auto-`.view()`). A view is a
 // non-owning {ptr,len} borrow of the array's buffer; parallel_for splits it into disjoint sub-views and
 // mutates each in place, writing straight back through the borrowed buffer. Deterministic, TSan-clean.
-import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
 fn int32 main() {
     DynamicArray<int32> a = DynamicArray.empty();
@@ -9,7 +9,7 @@ fn int32 main() {
     while (i < 8) { a.add(item: 1i32); i = i + 1; }   // eight 1s
 
     borrow a.view() as v {
-        parallel_for (ref int32 e in v) {             // direct View — no auto-view
+        parallel_for (ref int32 e in v, workers: cpuCount()) {             // direct View — no auto-view
             e = e + 4;                                // each 1 -> 5
         }
     }

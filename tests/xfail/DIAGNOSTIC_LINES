@@ -463,6 +463,8 @@ owned_iface_nonimpl	owned_iface_nonimpl.kama:7
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
+parallel_spawn_workers	parallel_spawn_workers.kama:15
+parfor_no_workers	parfor_no_workers.kama:14
 parfor_noncontiguous	parfor_noncontiguous.kama:9
 parfor_this	parfor_this.kama:11
 parfor_write_capture	parfor_write_capture.kama:11

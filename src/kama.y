@@ -349,7 +349,7 @@ struct kamayystype {
 /* non-terminals */
 %type <token> assignment_operator overloadable_operator handoff_default
 %type <strings> qualifier
-%type <expression> expression expression_opt literal boolean_literal variable_initializer
+%type <expression> expression expression_opt literal boolean_literal variable_initializer parallel_workers_opt
 %type <expression> parenthesized_expression constant_expression boolean_expression for_condition_opt
 %type <expression> for_condition unary_expression variable_reference primary_expression_no_parenthesis array_literal
 %type <expression> postfix_expression cast_expression bitcast_expression sizeof_expression member_access element_access this_access
@@ -1169,8 +1169,21 @@ borrow_binding
      into K non-overlapping sub-Views, one per worker, mutates each in place, and joins them ALL at its
      own closing brace (self-joining barrier). `ref` is mandatory (disjoint mutable is the whole point);
      the body is a `block` because those braces ARE the barrier (like `scope { }`). */
+  /* `, workers: <expr>` — how many isolates to split into. MANDATORY on `parallel_for`; the emitter
+     rejects it on `parallel_spawn`, whose count is the container's length. Grammar-optional so both
+     mistakes get a SENTENCE from the emitter rather than a bison syntax error, which is the same trade
+     `borrow`'s `primary_expression` host makes.
+     The label is validated here rather than lexed as a keyword: `workers` must stay usable as an ordinary
+     identifier (tests/parallel_spawn_pool.kama has a local called exactly that). Same hand-raised yyerror
+     as the `is` check in type_param. */
+parallel_workers_opt
+  : /* empty */                                { $$ = nullptr; }
+  | COMMA IDENTIFIER COLON expression
+      { if (*$2 != "workers") yyerror(&@2, scanner, "expected `workers:` — the only clause a parallel loop takes");
+        $$ = $4; }
+  ;
 parallel_for_statement
-  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(n->name, @5); $$ = n; }
+  : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_workers_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, $8); STAMP_LOC(n->name, @5); $$ = n; }
   ;
   /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -1178,7 +1191,7 @@ parallel_for_statement
      expressible: `parallel_for` spawns and joins in one statement, so nothing can run concurrently with
      it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
 parallel_spawn_statement
-  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9, /*deferJoin=*/true); STAMP_LOC(n->name, @5); $$ = n; }
+  : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_workers_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/true, $8); STAMP_LOC(n->name, @5); $$ = n; }
   ;
 empty_statement
   : SEMICOLON   {  }

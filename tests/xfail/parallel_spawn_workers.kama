@@ -1,0 +1,18 @@
+// `parallel_spawn` FORBIDS `workers:`, which is the same rule as parfor_no_workers.kama seen from the
+// other side: the number of isolates is always the number of jobs you hand the construct. A bare `spawn`
+// is one job. `parallel_spawn`'s jobs are the container's elements, so its count is ALREADY stated — a
+// `workers:` clause could only contradict it, and a contradiction has no right answer.
+//
+// (`parallel_for` is the one that needs it, because its jobs are slices of one buffer and how finely to
+// slice is the one thing the data cannot say.) To choose how many workers, size the container. This MUST
+// fail to compile.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    scope {
+        parallel_spawn (ref int32 e in a, workers: 4) { e = e + 1; }   // the container already said 1
+    }
+    return 0;
+}

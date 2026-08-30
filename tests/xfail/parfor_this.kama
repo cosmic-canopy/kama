@@ -1,14 +1,14 @@
 // M6.3 (reject): a `parallel_for` body may not touch `this`/fields. A worker runs on a fresh isolate with
 // no receiver (shared-nothing by construction, like a `spawn` entry); aliasing the instance across threads
 // would reintroduce shared mutable state. The fix: copy the field into a local before the loop.
-import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
 @generate(of)
 type value Bumper {
     public int32 bias;
 
     public fn void bumpAll(ref DynamicArray<int32> a) {
-        parallel_for (ref int32 e in a) {
+        parallel_for (ref int32 e in a, workers: cpuCount()) {
             e = e + this.bias;         // rejected: `this`/field access inside a worker
         }
     }

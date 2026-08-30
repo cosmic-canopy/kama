@@ -759,6 +759,7 @@ module.exports = grammar({
         field('name', $.identifier),
         'in',
         field('collection', $._expression),
+        optional($.parallel_workers),
         ')',
         field('body', $.block),
       ),
@@ -775,9 +776,16 @@ module.exports = grammar({
         field('name', $.identifier),
         'in',
         field('collection', $._expression),
+        optional($.parallel_workers),
         ')',
         field('body', $.block),
       ),
+
+    // `, workers: <expr>` — MANDATORY on parallel_for, FORBIDDEN on parallel_spawn. Optional in the
+    // grammar for both so each mistake gets a sentence from the compiler rather than a syntax error, and
+    // `workers` stays an ordinary identifier (it is a local in tests/parallel_spawn_pool.kama).
+    parallel_workers: ($) =>
+      seq(',', field('workers_label', $.identifier), ':', field('workers', $._expression)),
 
     break_statement: ($) => seq('break', ';'),
     continue_statement: ($) => seq('continue', ';'),

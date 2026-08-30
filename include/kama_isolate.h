@@ -46,8 +46,8 @@ static inline void kama_isolate_join_boxed(void* h) {
 
 // The default worker count for `parallel_for` (M6.3) when no build-time override is set: the machine's
 // logical-core count. Because a parallel_for's slices are disjoint and joined at a barrier, this only
-// affects speed, never the result — the call site caps it at the collection length. A `KAMA_PARFOR_WORKERS`
-// build override (driver `-DKAMA_PARFOR_WORKERS_DEFAULT=n`, n>0) bypasses this at codegen; n==0 calls here.
+// affects speed, never the result — the call site caps it at the collection length. Reached from kama as
+// `std::concurrent::cpuCount()`, which is what a `parallel_for (…, workers: cpuCount())` calls.
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/threading.h>
 static inline int kama_parfor_workers(void) { int n = emscripten_num_logical_cores(); return n > 0 ? n : 1; }

@@ -9452,15 +9452,10 @@ int main(int argc, char** argv)
             } else {
                 link << "-lpthread ";
             }
-            // M6.3: parallel_for's default worker count. KAMA_PARFOR_WORKERS (build-time) pins K for
-            // deterministic CI; unset => 0 => the emitted code calls kama_parfor_workers() (hw cores) at
-            // runtime. Only a *count* knob — slices are disjoint + joined, so K never changes results.
-            //
-            // This is a COMPILE flag that used to sit in the link tail (after the sources). Harmless
-            // there for one invocation — `-D` is position-independent — but a per-TU `-c` job takes only
-            // the compile flags, so it belongs in `cmd` or the TUs would silently lose the default.
-            const char* pfw = getenv("KAMA_PARFOR_WORKERS");
-            cmd << "-DKAMA_PARFOR_WORKERS_DEFAULT=" << (pfw && *pfw ? pfw : "0") << " ";
+            // (KAMA_PARFOR_WORKERS lived here — a build-time pin for parallel_for's worker count, back
+            // when that count had no spelling in the source. `workers:` is mandatory now, so the override
+            // had nothing left to override: a knob that silently loses to every call site is worse than
+            // no knob. Pin a build by writing the number, or read it from a const.)
         }
         // std::net uses Winsock (kama_os.h). Link ws2_32 when the TARGET is Windows; harmless (and pruned
         // by --gc-sections) for programs that don't open a socket. POSIX sockets need no extra lib.
@@ -9477,8 +9472,8 @@ int main(int argc, char** argv)
         //
         // TWO flags, and they must go to different phases. The linker gets --subsystem; the C compiler
         // gets a -D so kama_args_init() knows to reattach a console (see kama_runtime.h). The -D belongs
-        // in `cmd` and NOT in the link tail for the reason spelled out at KAMA_PARFOR_WORKERS_DEFAULT
-        // above: a per-TU `-c` job takes only the compile flags, so a link-tail -D is silently lost.
+        // in `cmd` and NOT in the link tail: a per-TU `-c` job takes only the compile flags, so a
+        // link-tail -D is silently lost in any multi-TU build.
         if (!wasm && !stopsAtObject && g_target.isWindows() && g_target.subsystem == "windows") {
             link << "-Wl,--subsystem,windows ";
             cmd  << "-DKAMA_SUBSYSTEM_WINDOWS=1 ";
