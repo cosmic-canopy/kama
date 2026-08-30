@@ -8,8 +8,9 @@ the maintenance table at the top of [ROADMAP_DETAIL.md](../ROADMAP_DETAIL.md).*
 values of one type* and *There is no implicit numeric conversion*), [docs/agents.md](../agents.md) and the
 git log. One row still points at this file:
 
-- **ROADMAP row 12 — test-infra holes** (§2 below). Unchanged and still open; it moved into the 1.0 gate
-  2026-08-19, so it is no longer a NEXT-track item.
+- **The test-infra-holes row** (§2 below) — still open, and in the 1.0 gate since 2026-08-19.
+  ⚠️ Cited by TEXT, not by number: rows are renumbered whenever one is deleted, and this pointer named a
+  "row 12" that has been three different items since.
 
 §1 — the uninstantiated-generic gap — **SHIPPED** `0.9.38`–`0.9.43`, and its design doc is deleted with
 this note in its place. A generic nobody instantiates is now fully analyzed — function, type and `enum`
@@ -22,44 +23,15 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
 - `tests/trap/` is **skipped** under `KAMA_SAN`, `KAMA_WASM`, and on Windows/MSYS2 (`run_tests.sh`, the
   `TRAP_OK`/`WASM`/`SAN_FLAGS` gate) — UBSan intercepts the trap and node's abort codes differ.
 - **No leg runs MSan.** MSan-origins catches what ASan and wasm both miss.
-- **`fs_raii` hangs on the wasm leg intermittently, and a HUNG kill cannot say why.** Seen once in a full
-  `./dev matrix` (2026-08-19); the harness captured `state: S (sleeping)`, `wchan: futex_do_wait`,
-  `syscall: 98` (futex), `open fds: 18` — so the fd RAII the fixture exists to test was working, and the
-  process was blocked on a lock, not leaking or spinning on I/O.
-
-  **Pre-existing, and established as unrelated to whatever is in flight** rather than assumed: the fixture
-  ran 40/40 clean under node in isolation, its emitted C never references the shims that changed, and that
-  C was byte-identical before and after. It needs the LOADED leg — ~1160 fixtures fanned across every core
-  plus the leg's background node servers — which is exactly the shape that makes it rare and useless to
-  bisect.
-
-  **The watchdog is now instrumented for the next occurrence**, which is the only useful response to a
-  hang that will not reproduce on demand. On the kill it captures, before any signal:
-
-  - **every thread's** state/wchan/syscall, not just the main one — the question a `futex_do_wait` raises
-    is *a lock is held, by whom*, and under emscripten NODEFS node runs a libuv threadpool, so what
-    matters is whether the workers are idle (main waiting on work that never arrives) or parked too;
-  - **`eu-stack -p`** (elfutils, added to the image) — the frames. It resolves real symbols on a parked
-    node: `FutexEmulation::WaitJs32`, `uv_run`, `uv_cond_wait`, per thread;
-  - on the macOS leg, **`sample`**, trimmed to the call graph — which names the kama source line.
-
-  No capability change was needed: checked first, and the container already ptraces a sibling
-  (`ptrace_scope` is 0, it runs as uid 0). elfutils rather than gdb — a few MB against a hundred-plus —
-  and as the LAST image layer, so the Chromium/Playwright layers stay cached.
-
-  All of it rehearsed end-to-end through `run_tests.sh` against a deliberately hanging fixture, on both
-  legs, rather than reasoned about. That rehearsal found three things wrong with the instrumentation
-  itself: `timeout` does not exist on macOS (so the wrapper silently swallowed the whole `sample` call),
-  `sample`'s `Binary Images:` dump pushed the frames out of the line budget, and `wait "${arr[@]}"` on an
-  empty array aborts the runner under `set -u`. `KAMA_TESTS_DIR` now points the harness at a chosen
-  fixture set: `./dev fixture <name>` already ran one fixture, but on the host only and without the
-  watchdog, so neither the wasm leg nor the hang instrumentation could be exercised on a single fixture.
-
-  Node's own report still cannot cover this shape, and its ABSENCE remains the finding: an idle-but-alive
-  event loop writes one, and a main thread parked in a syscall never reaches the handler. Until the hang
-  is actually diagnosed this is a known watch item, not a green-suite guarantee — the subject of this
-  section.
-- **An `xfail` fixture never links, so it never reaches ASan.** This is why a campaign about *rejection*
+- **An `xfail` fixture never links, so it never reaches ASan** — and re-probing that 2026-08-29 found it
+  is broader than the sentence suggests: **there is no `-fsanitize` anywhere in `Makefile` or `dev`, so
+  the compiler has no sanitized build at all.** `KAMA_SAN=1` sanitizes every positive fixture's EMITTED
+  PROGRAM (`SAN_FLAGS` is a `--cc` override, `run_tests.sh:62`), which answers "does the language produce
+  memory-safe programs" — a different question from "is the compiler memory-safe". So all 582
+  `tests/xfail/` fixtures drive the rejection paths unsanitized, which is where three known
+  diagnose-then-dereference bugs lived. The fix is a sanitized compiler target
+  (`out/<os>-<arch>-asan/kama`) with the xfail corpus run through it; container-only, since macOS has no
+  LeakSanitizer. This is why a campaign about *rejection*
   cannot take a green suite as its acceptance test: the view-window campaign's findings ④⑤⑥ survived all
   three legs and 34 guards. The discipline that works is a probe ledger walking every branch of the rule
   including the ones that must stay SILENT — milestone 6 used a 48-branch one and it caught two bugs a
@@ -67,6 +39,14 @@ instantiation) and in `tests/xfail/generic_*`; the reasoning is in the git log.
   exemption that rejected `int8 a = 2 + 3`).
 
 ## What shipped, so it is not re-derived
+
+- **The `fs_raii` wasm hang — DIAGNOSED AND CLOSED** `0.9.83` (2026-08-25). It was a known **node**
+  shutdown bug ([nodejs#54918](https://github.com/nodejs/node/issues/54918)) — not kama, not wasm, not
+  V8 — and `run_tests.sh` now runs node with `--no-concurrent-recompilation` (`:309`, which says so).
+  ⚠️ kama does **not** depend on node: `kama run` is native-only and the wasm target's real host is a
+  browser, which cannot hit this. The only cost was our own gate's flakiness, so do not over-invest again.
+  This section carried it as an open watch item with a page of watchdog instrumentation for four days
+  after it was answered; pruned 2026-08-29.
 
 Kept only as a pointer, because each cost a cycle to learn and the code no longer shows why:
 
