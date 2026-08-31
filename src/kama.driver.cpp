@@ -1865,6 +1865,23 @@ static std::set<std::string> derivedTargetFlags(const TargetSpec& t, bool nameIs
     f.insert("OS_"   + up(t.os));
     f.insert("ABI_"  + up(t.abi));
     if (t.hosted()) f.insert("HOSTED");
+    // SIMD128 — "this target has 128-bit vector lanes", derived from the triple exactly as the rest are.
+    //
+    // ⚠️ It is NOT "the target can compile a `Simd<T, N>`". Every target can: `vector_size` degrades to
+    // correct scalar code, which is the whole reason kama exposes a type rather than per-ISA intrinsics.
+    // This flag answers the different question a library actually asks — *are the lanes real?* — so that
+    // an author can pick a different ALGORITHM (a `@compileFor(SIMD128)` conformance beside a
+    // `@compileFor(!SIMD128)` one) rather than hoping the fallback is fast enough.
+    //
+    // True where 128-bit vectors are in the target's BASELINE, needing no extra flag: SSE2 is mandatory
+    // in the x86-64 ABI, NEON is mandatory in AArch64, and wasm gets it because the driver passes
+    // `-msimd128` on every wasm build. Anything else — a 32-bit ARM whose NEON is optional, an MCU — is
+    // false, which is the honest answer rather than an optimistic one.
+    //
+    // Gate on THIS, never on a target name: the flag is a fact about capability, and a name is not
+    // (tests/xfail/simd128_target_name).
+    if (t.arch == "x86_64" || t.arch == "aarch64" || t.arch == "wasm32" || t.arch == "wasm64")
+        f.insert("SIMD128");
     return f;
 }
 

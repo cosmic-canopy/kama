@@ -1,0 +1,40 @@
+// `SIMD128` — a derived `@compileFor` flag, in the same family as `ARCH_AARCH64`, `OS_LINUX`, `WASM` and
+// `HOSTED`: read off the resolved target, not declared by the project.
+//
+// ⚠️ It does NOT mean "this target can compile a `Simd<T, N>`". EVERY target can — `vector_size` degrades
+// to correct scalar code, which is the whole reason kama exposes a type rather than per-ISA intrinsics.
+// The flag answers the different question a library actually asks: *are the lanes real?* — so an author
+// can select a different ALGORITHM rather than hoping the fallback is fast enough. That is the same seam
+// `@compileFor` already provides for platform implementations.
+//
+// True where 128-bit vectors are in the target's BASELINE and need no extra flag: SSE2 is mandatory in
+// the x86-64 ABI, NEON in AArch64, and wasm has it because the driver passes `-msimd128` on every build.
+// Verified false for `riscv32-none-elf` and `armv7-none-eabi`, where NEON is optional or absent.
+//
+// This fixture runs on native AND wasm, both of which have it — so it pins the TRUE arm on every leg the
+// harness reaches. The false arm has no leg to run on (the harness builds no MCU target), which is why
+// it is asserted by transpiling rather than by running.
+@compileFor(SIMD128)
+fn int32 laneWidth() { return 128; }
+
+@compileFor(!SIMD128)
+fn int32 laneWidth() { return 0; }
+
+// The flag composes with the type: where the lanes are real, use them.
+@compileFor(SIMD128)
+fn int32 sum4(InlineArray<int32, 4> a) {
+    Simd<int32, 4> v = [a[0], a[1], a[2], a[3]];
+    return v.reduceAdd();
+}
+
+@compileFor(!SIMD128)
+fn int32 sum4(InlineArray<int32, 4> a) {
+    int32 t = 0;
+    foreach (int32 e in a) { t = t + e; }
+    return t;
+}
+
+fn int32 main() {
+    InlineArray<int32, 4> v = [1, 2, 3, 4];
+    return laneWidth() - 128 + sum4(a: v);   // 0 + 10 = 10 on every target the harness runs
+}

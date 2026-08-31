@@ -23596,7 +23596,9 @@ std::string kamaImplKindListText(unsigned mask)
 
 bool kamaIsBuildConfigFlag(const std::string& n)
 {
-    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP") return true;
+    // SIMD128 joins these rather than the namespaced prefixes: it is derived from the triple like an
+    // ARCH_ flag, but it is a CAPABILITY rather than a triple component, so it has no namespace to sit in.
+    if (n == "DEBUG" || n == "RELEASE" || n == "HOSTED" || n == "NOHEAP" || n == "SIMD128") return true;
     return n.compare(0, 3, "OS_")   == 0
         || n.compare(0, 5, "ARCH_") == 0
         || n.compare(0, 4, "ABI_")  == 0;

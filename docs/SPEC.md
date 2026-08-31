@@ -1808,6 +1808,22 @@ float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
   lanes meaning whatever you decide. `std::math`'s `Vec4` is *geometry* — lanes named `x/y/z/w`, meaning
   different things, laid out for a GPU vertex buffer. A `Simd`'s lanes are *interchangeable*.
 
+**`SIMD128` — are the lanes real?** A derived `@compileFor` flag, read off the resolved target like
+`ARCH_AARCH64` / `OS_LINUX` / `HOSTED`. It is **not** "this target can compile a `Simd`" — every target
+can, by degrading to scalars. It says the target has 128-bit vectors *in its baseline* (mandatory SSE2 on
+x86-64, mandatory NEON on AArch64, wasm with `-msimd128`), so a library can pick a different **algorithm**
+rather than hoping the fallback is fast enough (`tests/simd128_flag`):
+
+```kama
+@compileFor(SIMD128)   fn int32 sum4(InlineArray<int32,4> a) { … Simd<int32,4> … }
+@compileFor(!SIMD128)  fn int32 sum4(InlineArray<int32,4> a) { … a scalar loop … }
+```
+
+Prefer it to a target name: `SIMD128` states the capability, and a name only implies it. (Gating on a
+target name is *legal* — names are ordinary flags through the `TARGET` group, and that is how platform
+implementations are selected — so this is guidance about which question you are asking, not a rule the
+compiler enforces.)
+
 The codegen — that this really becomes a machine vector rather than four scalars — is asserted by
 `tools/check-simd-type.sh`, because a value fixture passes just as happily against a scalar fallback.
 
