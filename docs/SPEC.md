@@ -912,7 +912,7 @@ hardware (ARM64), which is the same effect that makes the auto-vectorized path w
 
 ⚠️ **One limit, measured.** An **arbitrary shuffle** or a **lane mask as a value** has no spelling in kama at
 all, at any target: those are what an explicit SIMD surface would add, and auto-vectorization cannot produce
-them from scalar source — the subject of [design/simd.md](design/simd.md). *(The other limit this paragraph
+them from scalar source — see *Explicit SIMD* below. *(The other limit this paragraph
 used to carry — that a wasm build got no vector instructions at all — was real and is fixed: the driver now
 passes `-msimd128` on every wasm build. Both halves of the claim above are held down by guards that read
 real machine code, `tools/check-simd-native.sh` and `tools/check-simd-wasm.sh`; it went wrong twice for

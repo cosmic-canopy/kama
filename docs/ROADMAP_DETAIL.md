@@ -638,30 +638,50 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **Compiler-side** — `PATH_MAX` is `_MAX_PATH` (`src/kama.driver.cpp:59`), and `absolutePath`'s
     `GetFinalPathNameByHandleA` treats an over-long result as a miss and falls back (`:176`, which says
     so). Lower stakes: it degrades to the unresolved spelling rather than failing.
-- **Explicit SIMD — SCOPED, and the measurement moved it.** The design is
-  **[design/simd.md](design/simd.md)**; read it rather than this bullet. It was written by compiling and
-  reading asm on aarch64, x86-64 and wasm, and what it found is that the row's premise was wrong twice
-  over. **`std::math` does auto-vectorize on native** — `fadd.4s` loops, and clang de-interleaving AoS to
-  SoA so `dot` and `Mat4.transform` run four at a time — and a hand-written explicit-SIMD cross product
-  measured **65% slower** than the scalar source for exactly that reason. So the row is **not** "add a
-  vector type to a language that has no SIMD", and rebuilding `std::math` on a vector type is rejected on
-  measurement (it also breaks `alignof(Vec4)`, and a 3-lane vector is 16 bytes, so `Vec3` cannot be one).
-  What is genuinely missing is smaller and sharper. Stage 1 of three — **wasm got no SIMD at all**,
-  because the driver had never passed `-msimd128` — **shipped 2026-08-30** and was never a language
-  change: the flag alone makes the *already-shipped* `std::math` emit v128 (measured 0 → 14 in a real
-  `--release` build). It landed with the two guards the claim had never had, `tools/check-simd-wasm.sh`
-  (the repo's first `# check-legs: wasm` guard — ⚠️ **`./dev check` cannot run it**) and
-  `tools/check-simd-native.sh`, each carrying an internal negative control so a grep that can never match
-  fails instead of passing. What remains is that **a shuffle and a lane mask have no spelling** at any
-  target: **L** an additive `Simd<T, comptime N>` intrinsic type emitting `vector_size` through a header
-  seam (⚠️ **not** `ext_vector_type` — gcc ignores it with a warning and silently leaves a one-lane
-  scalar), plus **S** a derived `SIMD128` `@compileFor` flag so a library can choose an algorithm rather
-  than hope. GOALS' *"one way to do a thing"* is answered by keeping `std::math` (geometry, named lanes, AoS)
-  and `Simd` (interchangeable lanes, shuffles/masks, SoA) as different tools, which the design argues
-  from the measurements. The performance invariant is satisfied by construction: nothing on the existing
-  path changes. ⚠️ The design also argues the row **no longer gates the 1.0 tag** — the only
-  source-breaking option was the `std::math` rewrite, and what is left is additive — but that is the
-  maintainer's call, not this file's.
+- **Explicit SIMD — SHIPPED 2026-08-31**, all three stages. The record of what the surface IS lives in
+  [SPEC.md](SPEC.md) (*Explicit SIMD*); this entry keeps only the MEASUREMENTS behind it, because each one
+  cost real time to obtain and every one of them contradicted an assumption someone held first.
+
+  - ⚠️ **`std::math` already auto-vectorizes on native, and beats hand-written SIMD.** `fadd.4s` loops,
+    and clang de-interleaving AoS to SoA so `dot` and `Mat4.transform` run four at a time. A hand-written
+    explicit-SIMD cross product measured **65% SLOWER** than the scalar source for exactly that reason.
+    So `Simd` is **not** "SIMD for a language that had none", rebuilding `std::math` on it is rejected on
+    measurement, and the docs say so where an author would reach for it.
+  - ⚠️ **`ext_vector_type` is a silent miscompile under gcc** — ignored with a warning, leaving a
+    ONE-LANE scalar. `vector_size` is the only portable spelling; `__builtin_shufflevector` works on
+    both, so only the type ever needed a seam.
+  - ⚠️ **gcc has no `__builtin_elementwise_*`**, and treats the name as an *implicit function
+    declaration* — a warning, the same shape as above. Elementwise ops are written as per-lane loops,
+    which both backends fold to the branchless vector form.
+  - ⚠️ **`-fno-math-errno` is what lets a per-lane libm loop vectorize.** With it, `sqrtf` per lane folds
+    to `fsqrt v0.4s` on gcc and clang; without it neither folds. macOS defaults to it and Linux does not,
+    which is how a host reading came to disagree with the container's. `sqrt`/`floor`/`ceil` are NOT in
+    `kama_runtime.h` for a different reason — it is freestanding, and they need libm.
+  - ⚠️ **UBSan does not instrument vector arithmetic.** Same build, same flags: a scalar `int32 MAX + 1`
+    trapped and the identical addition in a lane wrapped. The overflow check for signed lanes is emitted
+    by the compiler because nothing else supplies it.
+  - ⚠️ **A mask must carry `T`.** A comparison's lane width follows its OPERAND's — f32x4 gives 4-byte
+    lanes, i16x8 gives 2-byte — identically on gcc 13.3 and clang 18, so a bare `Mask<N>` has no C type.
+  - ⚠️ **Probe design, which went wrong three times across two sessions.** A SIMD claim is invisible to
+    exit codes, so the instrument is everything: never measure at an ABI boundary (AAPCS64 passes
+    `struct{float x,y,z,w}` in four separate registers), never let the kernel be constant-foldable or
+    dead, keep every lane of the result live or the compiler deletes the others, and remember that Apple
+    writes `fadd.4s v0, v0, v1` where GNU writes `fadd v0.4s`. The rules live in the headers of
+    [tests/support/simd_probe.kama](../tests/support/simd_probe.kama) and
+    [simd_type_probe.kama](../tests/support/simd_type_probe.kama), beside the probes they constrain.
+  - ⚠️ **A guard's negative control depends on what it measures.** `check-simd-native.sh` can use `-O0`,
+    because it measures AUTO-vectorization. `check-simd-type.sh` cannot: an explicit vector type emits
+    vector instructions at every optimization level, so its control is a scalar-only program the pattern
+    must not match.
+
+  Not built, and each is a decision rather than an omission: **widths above 128 bits** wait for the
+  CPU-tuning knob (§9) — no AOT language ships wider lanes without a build flag, so this is parity, not a
+  gap; **per-ISA intrinsics** are a declared non-goal, being the half every surveyed language keeps
+  `unsafe` or experimental; and **`sqrt`/`floor`/`ceil` on a lane batch** want the `kama_math.h` seam that
+  `lib/std/math/scalar.kama` uses and an intrinsic cannot reach.
+
+  ⚠️ **On the 1.0 tag:** the row is done, so the question it raised is closed — nothing here was
+  source-breaking, and the surface is additive.
 
 - **UBSan's `function` check is disabled suite-wide, for a REASON — not an oversight** (`run_tests.sh:60`).
   It is a false-positive suppression, not a masked bug: kama's dispatch stores every slot as

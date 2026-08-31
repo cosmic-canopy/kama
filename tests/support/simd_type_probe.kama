@@ -4,7 +4,7 @@
 // requires it to analyze clean).
 //
 // ⚠️ ITS SHAPE IS THE WHOLE POINT. Two earlier versions of this file measured wrong, both in ways
-// docs/design/simd.md §1 already warned about, and both looked exactly like a broken compiler:
+// ROADMAP_DETAIL.md §2 already warned about, and both looked exactly like a broken compiler:
 //
 //   1. FIRST ATTEMPT — pointed the guard at tests/simd_basic.kama, whose inputs are all literals. clang
 //      constant-folded the entire computation and the guard reported ZERO vector instructions against a

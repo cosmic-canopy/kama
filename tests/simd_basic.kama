@@ -40,7 +40,7 @@ fn int32 main() {
 
     // ---- The lane work: the operations that have NO scalar spelling at all -------------------------
     // This is what the type exists for. Everything above it, a loop over `Vec4`s already compiles to
-    // SIMD on its own, and often better (design/simd.md §1c). These three cannot be written any other way.
+    // SIMD on its own, and often better (ROADMAP_DETAIL.md §2). These three cannot be written any other way.
 
     // An arbitrary permutation. The lane indices must be COMPILE-TIME constants because the CPU encodes
     // the permutation in the instruction; a runtime pattern spills the vector to the stack.
