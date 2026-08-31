@@ -29,15 +29,24 @@ fn int32 main()
     if ((a + b) / 2ui8 == 22ui8)             { r = r + 4; }
     if ((a + b) % 7ui8 == 2ui8)              { r = r + 4; }
 
-    // Signed, at a different width: int8 100+100 wraps to -56, where C would carry 200.
-    int8 s = 100i8;
-    int8 t = 100i8;
-    if (cast<int32>(s + t) == 0 - 56)        { r = r + 4; }
+    // Signed, at a different width. ⚠️ These two arms used to read `int8 100 + 100 == -56` and
+    // `int16 30000 + 30000 == -5536` — they asserted a SILENT WRAP, which is the very hole SPEC recorded
+    // as a ⚠️ ("a sub-`int` signed type wraps where a wider one aborts") and which now traps like every
+    // other signed width. The closing note below shows the original author already knew the wide types
+    // trap and picked the narrow ones because they did not; that asymmetry is gone.
+    //
+    // The rule is still observable for a signed sub-`int`, through `<<`: a shift takes its type from the
+    // LHS, and a signed left shift into the sign bit is DEFINED (SPEC), so no overflow rule is involved.
+    // C would carry 384 and 49152. The OVERFLOW half of this coverage now lives where it belongs, in
+    // tests/trap/arith_overflow_i8, arith_overflow_i16 and arith_div_i8_min — and those fixtures are
+    // themselves a D-arith test, since a trap against `int8`'s range can only fire if the result type
+    // IS `int8`.
+    int8 s = 3i8;
+    if (cast<int32>(s << 7i8) == 0 - 128)    { r = r + 4; }
 
     // int16, so the rule is not a special case of the byte width.
-    int16 m = 30000i16;
-    int16 n = 30000i16;
-    if (cast<int32>(m + n) == 0 - 5536)      { r = r + 4; }
+    int16 m = 3i16;
+    if (cast<int32>(m << 14i16) == 0 - 16384) { r = r + 4; }
 
     // Bitwise complement is the unary half of the same rule: `~a` on a uint8 is a uint8, so the high
     // bits are not part of the value. C's `~` promotes first and leaves them set.

@@ -1,0 +1,23 @@
+// A sub-`int` SIGNED arithmetic overflow traps in a debug build, exactly as `int32`/`int64` do.
+//
+// It did not, and not because a flag was missing. C promotes `int8` operands to `int`, so `100 + 100` is
+// computed as 200 where `-fsanitize=signed-integer-overflow` sees nothing, and kama's own narrowing back
+// to `int8` is a CONVERSION, which that check does not watch either. The result was -56, silently, while
+// `int32 MAX + 1` trapped — a split SPEC recorded as a ⚠️ instead of the rule being wrong.
+//
+// The operands are runtime-opaque so nothing folds them; a CONSTANT that does not fit is a compile error
+// on a different path (rejectConstOutOfRange).
+//
+// ⚠️ The `+ 100` on the return is load-bearing, not decoration. The harness's posix rule for a trap
+// fixture is `exit >= 128`, and this program's UN-trapped value would land there by itself: the wrapped
+// result is -56 and an exit code is the low byte, so returning it directly exits 200 — indistinguishable
+// from a trap. A fixture that passes whether or not the bug is fixed is worse than no fixture. The offset
+// pulls a non-trapping build to 44, where the harness fails it loudly. Verified by running this fixture
+// against the unfixed compiler.
+import { std::num::int32Max };
+fn int32 main() {
+    int8 a = cast<int8>(int32Max() - int32Max() + 100);   // 100, opaque
+    int8 b = a;
+    int8 r = a + b;                                        // 200 -> does not fit int8 -> trap
+    return cast<int32>(r) + 100;                           // un-trapped: -56 + 100 = 44, never >= 128
+}

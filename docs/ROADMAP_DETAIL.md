@@ -684,6 +684,23 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   type (`mat*vec`, `mat*mat`), matching C++/C#/Rust. Reopen only if a concrete case shows named params can't
   express it.
 
+- ⚠️ **The RELEASE-tier signed-overflow rule depends on which C compiler builds the program.** SPEC says
+  signed `+ - *` overflow traps in debug and **wraps** in release, and the driver implements the release
+  half with `-fwrapv` while still passing `-fsanitize=signed-integer-overflow` (kept for `INT_MIN / -1`,
+  which `-fwrapv` does not define). **Measured 2026-08-31: `-fwrapv` does not suppress that sanitizer on
+  Apple clang 21.0.0, and does on Ubuntu clang 18.1.3 and gcc 13.3.** So `int32 MAX + 1` in a
+  `--release` build **traps on macOS and wraps on Linux**, from one source and one set of driver flags.
+  Neither is a miscompile — both are defined, safe outcomes — but the language promises one of them, and
+  which you get is decided by the host toolchain. Flag order does not change it (probed both ways).
+
+  The fix, if it is wanted, is to stop depending on that flag interaction: drop
+  `-fsanitize=signed-integer-overflow` from the **release** tier so `-fwrapv` alone defines `+ - *`
+  everywhere, and emit the `TYPE_MIN / -1` check explicitly — which the sub-`int` widths already get from
+  `kama_arith_chk`, so it is the same mechanism extended to `int32`/`int64` rather than a new one. Better
+  spelled on the *operands* (`b == -1 && a == TYPE_MIN`) than on the result, since `INT64_MIN / -1`
+  overflows the `long long` a result check would compute in. Wants a fixture per tier and per host, which
+  is what makes it more than a one-liner. Found while closing the sub-`int` overflow hole; unrelated to it.
+
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
   `function_declaration` arms); `method_declaration`'s four `FN` arms and both `CTOR` arms have none, so

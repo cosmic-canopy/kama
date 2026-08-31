@@ -372,6 +372,11 @@ static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long l
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
+    (void)v; (void)lo; (void)hi;
+    kama_panic_handler();
+    for (;;) {}
+}
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
     kama_panic_handler();
@@ -447,6 +452,23 @@ static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long l
     kama_run_panic_hook();
     abort();
 }
+// A sub-`int` SIGNED arithmetic result outside its own type's range. Distinct from kama_narrow_fail_s:
+// a narrowing `cast<int8>(300)` is a conversion the author WROTE, while this is an arithmetic result the
+// author did not — so the message names the operation, not a target.
+static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
+    extern void abort(void);
+    char buf[160]; size_t p = 0;
+    const char* a = "kama: arithmetic overflow -- the result ";  while (*a) buf[p++] = *a++;
+    kama_i64_to_buf(buf, &p, v);
+    const char* b = " does not fit the operand type [";          while (*b) buf[p++] = *b++;
+    kama_i64_to_buf(buf, &p, lo);
+    const char* c = ", ";                                        while (*c) buf[p++] = *c++;
+    kama_u64_to_buf(buf, &p, hi);
+    const char* d = "]\n";                                       while (*d) buf[p++] = *d++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();
+    abort();
+}
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
@@ -486,6 +508,36 @@ static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long lo
     if (v > hi) kama_narrow_fail_u(v, lo, hi);
     return v;
 }
+
+// -- sub-`int` SIGNED arithmetic overflow -------------------------------------------------------------
+//
+// `int32`/`int64` get their overflow trap from `-fsanitize=signed-integer-overflow`. `int8`/`int16` do
+// NOT, and not because the flag is missing: C promotes both operands to `int`, so `100 + 100` is
+// computed as 200 where nothing overflows, and the narrowing back to `int8` is a *conversion*, which
+// that check does not watch. The value silently became -56 while `int32 MAX + 1` trapped, and SPEC
+// documented the split as a ⚠️ rather than the rule being wrong. It is the rule being wrong: 200 is not
+// representable in the type kama says the expression has.
+//
+// The message says OVERFLOW rather than reusing `kama_narrow_fail_s`'s "does not fit": a narrowing
+// `cast<int8>(300)` is a conversion the author asked for, while this is an arithmetic result the author
+// did not. Same clean abort, same overridable hook.
+static inline long long kama_arith_chk(long long v, long long lo, unsigned long long hi) {
+    if (v < lo) kama_arith_fail(v, lo, hi);
+    if (v >= 0 && (unsigned long long)v > hi) kama_arith_fail(v, lo, hi);
+    return v;
+}
+// Signed overflow TRAPS in debug and WRAPS in release — the same two-tier rule `int32`/`int64` get from
+// `-fsanitize=signed-integer-overflow` + `-fwrapv`. `NDEBUG` is the release tier's marker; the driver
+// passes it with `-O3`. The release arm is a plain truncation, which IS the defined two's-complement
+// wrap, so this costs exactly nothing in a release build.
+//
+// ⚠️ NOT used for `/`. The only division that can overflow is `TYPE_MIN / -1`, which SPEC promises traps
+// in EVERY build, so the emitter calls `kama_arith_chk` directly there rather than through this macro.
+#ifdef NDEBUG
+#  define KAMA_ARITH_NARROW(T, LO, HI, V)  ((T)(V))
+#else
+#  define KAMA_ARITH_NARROW(T, LO, HI, V)  ((T)kama_arith_chk((long long)(V), (LO), (HI)))
+#endif
 // The emitter calls a checker DIRECTLY when it knows the source's signedness. When it does not — a type
 // parameter, a `foreach` binding, an intrinsic with no recorded return type — it emits this instead, and
 // C answers the question it could not: `_Generic` selects on the operand's static type and evaluates ONLY

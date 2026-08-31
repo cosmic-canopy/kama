@@ -1,0 +1,12 @@
+// The `int16` half of arith_overflow_i8 — the same promotion hole, one width up. Both sub-`int` signed
+// types share it, and a fixture for only one would leave the other free to regress.
+//
+// This one needs no return offset: un-trapped it yields -32768, whose low byte is 0, so a broken build
+// exits 0 and the harness fails it. Its siblings are not so lucky — see the note in arith_overflow_i8.
+import { std::num::int32Max };
+fn int32 main() {
+    int16 a = cast<int16>(int32Max() - int32Max() + 32767);   // 32767, opaque
+    int16 b = cast<int16>(int32Max() - int32Max() + 1);        // 1, opaque
+    int16 r = a + b;                                           // 32768 -> does not fit int16 -> trap
+    return cast<int32>(r);                                     // un-trapped: -32768 -> exit 0
+}

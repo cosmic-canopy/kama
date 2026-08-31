@@ -1187,12 +1187,19 @@ UB:
   back `Optional<T>`. A widening, a same-type cast, and one whose operand provably fits emit no check at
   all, and where the check remains its bounds are compile-time constants — so the comparison that cannot
   fail folds away.
-- ⚠️ **The signed-overflow trap is a property of `int32`/`int64`, not of every signed type.** `int8 s =
-  100i8; s + s` is `-56`, silently: the operands promote to `int` in the emitted C, where 200 does not
-  overflow, and the rule above then narrows the result — and a narrowing *conversion* is what the trap
-  does not watch. So a sub-`int` signed type wraps where a wider one aborts. This predates the rule above
-  (the same value arrived by the same route when it was the assignment that narrowed); the rule is what
-  makes it worth writing down. `int32` and `int64` trap as stated.
+- **The signed-overflow rule holds at EVERY width** — `int8` and `int16` behave exactly as `int32` and
+  `int64` do. This used to be a documented exception, and it is worth recording why, because the cause is
+  not obvious: C promotes `int8`/`int16` operands to `int`, so `100i8 + 100i8` is computed as 200 where
+  `-fsanitize=signed-integer-overflow` sees nothing at all, and kama's own narrowing of the result back to
+  `int8` (the *D-arith* rule above) is a **conversion**, which the overflow check does not watch either.
+  The value silently became `-56` while `int32 MAX + 1` trapped. The compiler now emits the check the
+  sanitizer cannot: `+ - *` on a signed sub-`int` are range-checked against the operand type, trapping in
+  debug and truncating in release, and `/` is checked in **every** build because the only division that can
+  overflow is `TYPE_MIN / -1`, which the rule above promises unconditionally
+  (`tests/trap/arith_overflow_i8`, `arith_overflow_i16`, `arith_div_i8_min`).
+  **Shifts are deliberately exempt** — `<<` takes its type from the left operand alone and a signed left
+  shift into the sign bit is *defined* (above), so `3i8 << 7i8` is `-128`, not an overflow
+  (`tests/arith_same_type`). **Unsigned is untouched at every width:** wrapping is defined and stays silent.
 
 Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dependency) + `-fwrapv` +
 the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.

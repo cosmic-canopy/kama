@@ -3230,8 +3230,34 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             if (!knownUnsigned)   // unknown type stays on the safe path
                 return open + "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + "))";
         }
-        return open + emitExpression(lhs) + " " + binaryOperator(token) + " "
-                    + emitExpression(rhs) + ")";   // primitives — `open` narrows a sub-`int` result
+        const std::string body = emitExpression(lhs) + " " + binaryOperator(token) + " "
+                               + emitExpression(rhs);
+        // D-arith, the CHECK half. `resT` non-empty means a sub-`int` result, which is exactly where the
+        // language's own overflow rule had a hole: C promotes `int8`/`int16` operands to `int`, so
+        // `100 + 100` is computed as 200 where `-fsanitize=signed-integer-overflow` sees nothing, and the
+        // narrowing above is a CONVERSION, which that check does not watch either. So `int8` silently
+        // produced -56 where `int32 MAX + 1` trapped, and SPEC recorded the split as a ⚠️ rather than the
+        // rule being wrong. It is the rule being wrong — 200 is not representable in the type kama says
+        // the expression has — and this is the missing half.
+        //
+        // `+ - *` follow the WIDE rule exactly: trap in debug, wrap in release. `KAMA_ARITH_NARROW` is
+        // that two-tier split (its release arm is a plain truncation, which IS the defined wrap, so
+        // release codegen is unchanged). `/` traps in EVERY build instead, because the only division that
+        // can overflow is `TYPE_MIN / -1` and SPEC promises that one unconditionally.
+        //
+        // UNSIGNED is untouched: `uint8`/`uint16` wrapping is defined and the language says so. Shifts are
+        // untouched: a signed left shift into the sign bit is DEFINED here (`kama_lshift` above), and a
+        // shift's result type comes from the left operand alone, so `resT` being set does not mean an
+        // overflow happened.
+        const bool arithTok = token == PLUS || token == MINUS || token == STAR;
+        std::string lo, hi;
+        if (!resT.empty() && cNumSigned(resT) && (arithTok || token == SLASH)
+            && cNumRangeText(resT, lo, hi)) {
+            return arithTok
+                 ? "KAMA_ARITH_NARROW(" + resT + ", " + lo + ", " + hi + ", " + body + ")"
+                 : "((" + resT + ")kama_arith_chk((long long)(" + body + "), " + lo + ", " + hi + "))";
+        }
+        return open + body + ")";   // primitives — `open` narrows a sub-`int` result
     }
 
     // Comparison is CONTRACT-driven, not operator-driven. `Equatable` and `Comparable` are the single

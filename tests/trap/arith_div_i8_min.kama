@@ -1,0 +1,16 @@
+// `TYPE_MIN / -1` traps in EVERY build — SPEC states that unconditionally, and the wide types get it from
+// `-fsanitize=signed-integer-overflow`. At sub-`int` width they did not: `int8 -128 / -1` promotes to
+// `int`, computes 128 where nothing overflows, and narrows back to -128 in silence. Unlike the `+ - *`
+// siblings beside it, this one was wrong in RELEASE too, because SPEC promises the division trap in both
+// tiers — so it is the one case here whose check is unconditional rather than debug-only.
+//
+// ⚠️ The `+ 200` on the return is load-bearing — see arith_overflow_i8.kama. Un-trapped this yields -128,
+// whose low byte is 128, which the harness's `exit >= 128` rule would read as a trap. The offset makes a
+// non-trapping build exit 72.
+import { std::num::int32Max };
+fn int32 main() {
+    int8 a = cast<int8>(int32Max() - int32Max() - 128);   // -128, opaque
+    int8 b = cast<int8>(int32Max() - int32Max() - 1);      // -1, opaque
+    int8 r = a / b;                                        // 128 -> does not fit int8 -> trap
+    return cast<int32>(r) + 200;                           // un-trapped: -128 + 200 = 72, never >= 128
+}
