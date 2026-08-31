@@ -2675,9 +2675,11 @@ std::string CEmitter::cType(SharedIdentifier type)
         }
     }
 
-    // InlineArray<T, N> spells `InlineArray_<mangleT>_<N>` (two args — the const size mangles to its value).
-    if (type->genericArg && type->value && *type->value == "InlineArray" && type->genericArgs) {
-        std::string m = "InlineArray";
+    // `InlineArray<T,N>` spells `InlineArray_<mangleT>_<N>`, and `Simd<T,N>` spells `Simd_<mangleT>_<N>` —
+    // the same two-argument shape (the comptime size mangles to its value), so one arm serves both.
+    if (type->genericArg && type->value && type->genericArgs
+        && (*type->value == "InlineArray" || *type->value == "Simd")) {
+        std::string m = *type->value;
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
     }
@@ -5696,9 +5698,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         indent(depth);
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
-                    } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl && !isFixedColl(ty) && isNamedValue(init.get())) {
+                    } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl
+                               && !isFixedColl(ty) && !isSimdColl(ty) && isNamedValue(init.get())) {
                         // a collection move/deep-copy isn't a plain `=` — require a marker. (A
-                        // `Fixed` is a value: the plain `=` above already copied it — no marker.)
+                        // `Fixed` is a value: the plain `=` above already copied it — no marker. A
+                        // `Simd` likewise, and even more plainly: it is a `vector_size` typedef over a
+                        // primitive, so `=` is a register move and there is nothing that could be
+                        // aliased, moved from, or deep-copied.)
                         if (handoff == 0)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
                                          "`" + ty + " v = give …`").c_str(), n->line);
@@ -8704,6 +8710,12 @@ bool CEmitter::isFixedColl(const std::string& cls) const
     return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Fixed;
 }
 
+bool CEmitter::isSimdColl(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Simd;
+}
+
 // The mangling suffix for an element type: primitives use a short stable
 // spelling; a class/enum uses its own name. Array<int32> -> "int32".
 std::string CEmitter::mangleElem(SharedIdentifier elem)
@@ -8896,7 +8908,7 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     // std::memory), not intrinsic collections; they route through registerGenericTypeInst. `InlineArray<T,N>`
     // (the const-generic value array) stays intrinsic.
     return t->genericArg && t->value &&
-           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray");
+           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray" || *t->value == "Simd");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -8925,6 +8937,13 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // InlineArray<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
     if (!isStr && collType->value && *collType->value == "InlineArray") {
         registerFixed(collType);
+        return;
+    }
+
+    // Simd<T, N> — the lane batch. A sibling shape (two args, value semantics) with a different C
+    // lowering: a `vector_size` typedef rather than a struct. See registerSimd.
+    if (!isStr && collType->value && *collType->value == "Simd") {
+        registerSimd(collType);
         return;
     }
 
@@ -9127,6 +9146,108 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     addMethod("set",    { ixSet, val },
               SharedIdentifier(), false);   // the one intrinsic here that writes
     addMethod("length", {}, synthId("isize"), true);   // named, not NULL — see the string `length` above
+    _classes[cName] = ci;
+}
+
+// Register a `Simd<T, N>` instance — the LANE BATCH. Structurally a sibling of registerFixed above and
+// deliberately not a variant of it, because the two differ in the one place that matters: an InlineArray
+// is a `struct { T v[N]; }` and a Simd is a `vector_size` typedef over a primitive. That makes a Simd
+// have NO by-value struct dependency and NO forward declaration, so its `_TYPE` goes out in the early
+// types pass where a Fixed's cannot (see emitCollectionDefs / emitHeaderContent).
+//
+// The element restriction is much tighter than a Fixed's, and both halves are load-bearing:
+//   * the element must be a NUMERIC PRIMITIVE — `vector_size` is a C-level construct over scalars, and a
+//     struct element is not merely unsupported but silently misapplied by some compilers.
+//   * `sizeof(T) * N` must be exactly 16. 128 bits is the only width EVERY kama target has (SSE2 on the
+//     x86-64 baseline, NEON on aarch64, wasm128 since -msimd128), and a wider one needs `-march`, which
+//     is the CPU-tuning knob in ROADMAP_DETAIL §9. This is a `unsupported(...)` here rather than a
+//     `comptime assert` in the prelude declaration, which is what the design first specified: an
+//     intrinsic's prelude declaration has an EMPTY body, so an assert written there would never run.
+void CEmitter::registerSimd(SharedIdentifier simdType)
+{
+    SharedIdentifierList args = simdType->genericArgs;
+    if (!args || args->size() != 2) {
+        unsupported("`Simd<T, N>` takes exactly two arguments — a numeric element type and a comptime "
+                    "lane count (`Simd<float32, 4>`)", simdType->line);
+        return;
+    }
+    SharedIdentifier elem = (*args)[0];
+    SharedIdentifier nArg = (*args)[1];
+    int64_t n;
+    // An unbound `N` inside a generic template is not a concrete instance — skip it silently, exactly as
+    // registerFixed does; the concrete instantiation registers at the use site that chose the arguments.
+    if (!constArgN(nArg, n)) return;
+    if (n <= 0) {
+        unsupported("the lane count of a `Simd<T, N>` must be a positive integer", simdType->line);
+        return;
+    }
+
+    std::string elemCType  = cType(elem);
+    std::string elemMangle = mangleElem(elem);
+
+    // A numeric primitive, and nothing else. `isClass` catches a user type/contract; the width table
+    // catches everything else that reached here without one (`bool`, `char`, `string`, a view).
+    const int bits = cNumBits(elemCType);
+    if (isClass(elemCType) || !bits || elemCType == "bool") {
+        std::string nm = (elem && elem->value) ? *elem->value : elemCType;
+        unsupported(("a `Simd<T, N>` lane must be a numeric primitive — `" + nm + "` is not; a lane batch "
+                     "is a machine vector, so its element is a machine number").c_str(), simdType->line);
+        return;
+    }
+    if ((int64_t)(bits / 8) * n != 16) {
+        unsupported(("a `Simd<T, N>` must be exactly 128 bits — `" + elemMangle + "` x " + std::to_string(n)
+                     + " is " + std::to_string((bits / 8) * n) + " bytes. 128 is the only width every kama "
+                     "target has; wider needs a CPU-tuning flag that does not exist yet").c_str(),
+                    simdType->line);
+        return;
+    }
+
+    std::string cName = "Simd_" + elemMangle + "_" + std::to_string(n);
+    if (_collections.count(cName)) return;    // dedup
+
+    CollectionInfo info;
+    info.kind = CollKind::Simd; info.cName = cName;
+    info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = "";
+    info.constValue = n;
+    _collections[cName] = info;
+    _collectionOrder.push_back(cName);
+
+    // Synthetic ClassInfo. A value, never destructible, with NO `get`/`set`/`length`: those are the
+    // container surface, and a lane batch is one value rather than a row of them. `lane` is the single
+    // read, and it is a method rather than `v[i]` on purpose — indexing would invite the scalar loop the
+    // type exists to replace.
+    ClassInfo ci;
+    ci.name = cName;
+    ci.isIntrinsicColl = true;
+    ci.collKind = CollKind::Simd;
+    ci.collElemClass = "";
+    ci.destructible = false;
+    auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret,
+                         bool isConst) {
+        MethodInfo mi; mi.cName = cName + "__" + mname;
+        mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
+        ci.methods[mname] = mi;
+    };
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+    ParamSig ix; ix.name = "index"; ix.byRef = false; ix.kindCType = "ptrdiff_t";
+    addMethod("lane", { ix }, elem, true);
+    // `toArray` is the way back out to addressable memory, and it is what makes the type usable at all:
+    // lanes go in through a literal and come out through an `InlineArray<T, N>`, which every other part
+    // of the language already knows how to index, iterate and store. Registering the array instance HERE
+    // is what guarantees its `KAMA_FIXED_TYPE` exists — a Simd's `_FUNCS` names it, and the FUNCS pass
+    // runs after the struct bodies, so the ordering holds.
+    SharedIdentifierList arrArgs = std::make_shared<IdentifierList>();
+    arrArgs->push_back(elem);
+    arrArgs->push_back(nArg);
+    SharedIdentifier arrTy = synthId("InlineArray");
+    arrTy->genericArg = elem; arrTy->genericArgs = arrArgs; arrTy->line = simdType->line;
+    registerFixed(arrTy);
+    addMethod("toArray", {}, arrTy, true);
+    // The elementwise ops that need no libm, so this header stays freestanding — see KAMA_SIMD_FUNCS.
+    ParamSig rhs; rhs.name = "rhs"; rhs.byRef = false; rhs.kindCType = cName;
+    addMethod("abs", {}, simdType, true);
+    addMethod("min", { rhs }, simdType, true);
+    addMethod("max", { rhs }, simdType, true);
     _classes[cName] = ci;
 }
 
@@ -10438,16 +10559,19 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     if (tmpl->parameters) for (auto& p : *tmpl->parameters) {
         if (!p || !p->type || !p->type->value) continue;
         const std::string& pty = *p->type->value;
-        // An `InlineArray<ElemT, K>` parameter — infer any type-param element AND the const size K from the
-        // argument's concrete `InlineArray<int32, 4>` type. This is the const-generic half of inference.
-        if (pty == "InlineArray" && p->type->genericArgs && p->type->genericArgs->size() == 2) {
+        // An `InlineArray<ElemT, K>` or `Simd<ElemT, K>` parameter — infer any type-param element AND the
+        // comptime size K from the argument's concrete type. This is the comptime half of inference, and
+        // the two intrinsics share it because they share the shape: two arguments, the second a value.
+        // Without this a generic function over either one cannot be called at all — the size parameter has
+        // nowhere else to come from, since it appears only inside the argument's type.
+        if ((pty == "InlineArray" || pty == "Simd") && p->type->genericArgs && p->type->genericArgs->size() == 2) {
             std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             auto ai = byName.find(pname);
             if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
             SharedIdentifier at = deepSubstType(exprTypeNode(ai->second, localTys));
-            if (!at || !at->value || *at->value != "InlineArray" || !at->genericArgs || at->genericArgs->size() != 2) {
-                unsupported(("cannot infer the generic parameters of `InlineArray<…>` — argument '" + pname +
-                             "' is not an `InlineArray<…>` value").c_str(), line);
+            if (!at || !at->value || *at->value != pty || !at->genericArgs || at->genericArgs->size() != 2) {
+                unsupported(("cannot infer the generic parameters of `" + pty + "<…>` — argument '" + pname +
+                             "' is not a `" + pty + "<…>` value").c_str(), line);
                 return false;
             }
             SharedIdentifier pElem = (*p->type->genericArgs)[0], pN = (*p->type->genericArgs)[1];
@@ -11661,6 +11785,18 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 *_out << "KAMA_FIXED_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
         }
+        else if (info.kind == CollKind::Simd) {
+            // Lane batch: a `vector_size` typedef over a PRIMITIVE. Unlike a Fixed it embeds no struct,
+            // so BOTH halves come from here — the `_TYPE` in the early pass (nothing can depend on it
+            // being ordered after a struct body, because it never names one) and the `_FUNCS` after.
+            if (typesOnly)
+                *_out << "KAMA_SIMD_TYPE(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+            else
+                *_out << "KAMA_SIMD_FUNCS(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName
+                     << ", InlineArray_" << info.elemMangle << "_" << info.constValue << ")\n";
+        }
         else if (info.kind == CollKind::String) {
             // kama_string itself is predefined in the runtime header; only the `.find()` Optional wrapper
             // (which needs the program-specific Optional_usize struct) is emitted here, in the FUNCS phase.
@@ -12003,13 +12139,18 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
 std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
 {
     if (!al) return "0";
+    // An array literal builds either shape of 16-byte value aggregate — an `InlineArray<T,N>` or a
+    // `Simd<T,N>`. One spelling for "N values of T, written out", which is what GOALS asks for; the
+    // difference is only in what C the two lower to, at the two `isSimd` branches below.
+    auto isAggr = [&](const std::string& t) { return isFixedColl(t) || isSimdColl(t); };
     std::string ty = _variantTargetType;
-    if (!isFixedColl(ty)) ty = _matchTargetCType;
-    if (!isFixedColl(ty)) {
-        unsupported("an array literal `[…]` initializes a `Fixed<T, N>` — its type must be known from "
-                    "context (a typed local, return, or assignment)", al->line);
+    if (!isAggr(ty)) ty = _matchTargetCType;
+    if (!isAggr(ty)) {
+        unsupported("an array literal `[…]` initializes an `InlineArray<T, N>` or a `Simd<T, N>` — its "
+                    "type must be known from context (a typed local, return, or assignment)", al->line);
         return "0";
     }
+    const bool isSimd = isSimdColl(ty);
     int64_t n = _collections[ty].constValue;
     // Each element's target type is the Fixed's element type — so a NESTED array literal
     // (`Fixed<Fixed<int32,2>,2> = [[1,2],[3,4]]`) resolves each inner `[…]` to the element Fixed.
@@ -12022,12 +12163,14 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
                          + "` holds " + std::to_string(n)).c_str(), al->line);
             return "0";
         }
-        std::string s = "(" + ty + "){ .v = {";
+        // A Fixed is `struct { T v[N]; }`, so its compound literal designates `.v`; a Simd is a bare
+        // vector typedef with no member to designate. Same braces either side of that.
+        std::string s = isSimd ? ("(" + ty + "){") : ("(" + ty + "){ .v = {");
         // Each element by value — an inline constructor element (`[Point(x:1,y:2), …]`) is
         // materialized into a hoisted temp (ISO C, no statement-expression), like an operator operand.
         for (size_t i = 0; i < al->elements->size(); ++i)
             s += (i ? ", " : " ") + emitOperandByValue((*al->elements)[i]);
-        s += " } }";
+        s += isSimd ? " }" : " } }";
         return s;
     }
     // fill form `[v; count]` — the count must be a constant equal to N.
@@ -12041,7 +12184,9 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
                      + "` holds " + std::to_string(n)).c_str(), al->line);
         return "0";
     }
-    return ty + "__fill(" + emitOperandByValue(al->fillValue) + ")";
+    // `[v; N]` on a lane batch IS a splat — the same literal, and the operation every SIMD API names
+    // separately. One spelling covers both because they mean the same thing: N copies of one value.
+    return ty + (isSimd ? "__splat(" : "__fill(") + emitOperandByValue(al->fillValue) + ")";
 }
 
 // ---- Smart pointers (Owned, Shared) ---------------------------------------
@@ -13276,10 +13421,14 @@ void CEmitter::computeDestructible()
     // ClassInfo carries destructible=true, which this reset must preserve — collections are
     // registered before this pass now).
     // A `Fixed<T,N>` is a value (owns no heap), so — unlike the heap collections — it is NOT
-    // destructible; its element is a `value`, so there is nothing to drop.
+    // destructible; its element is a `value`, so there is nothing to drop. ⚠️ A `Simd<T,N>` is the same
+    // and for a stronger reason: its element is a numeric PRIMITIVE and its C type is a bare
+    // `vector_size` typedef, so there is not even a struct to drop. Both must be excluded here — the
+    // test used to read `!= CollKind::Fixed`, which would have made every lane batch RAII-dropped.
     for (auto& kv : _classes)
         kv.second.destructible = kv.second.hasDtor ||
-            (kv.second.isIntrinsicColl && kv.second.collKind != CollKind::Fixed);
+            (kv.second.isIntrinsicColl && kv.second.collKind != CollKind::Fixed
+                                       && kv.second.collKind != CollKind::Simd);
     bool changed = true;
     while (changed) {
         changed = false;
@@ -24167,15 +24316,18 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
-    // Type gate: value / UnsafePtr / InlineArray only. Reject anything that owns memory or needs teardown (v1 has
-    // no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no heap (collKind Fixed,
-    // a value array) — allow them; reject heap collections, smart pointers, destructible and move-only values.
-    bool isValueArray = _classes.count(ty) && _classes[ty].collKind == CollKind::Fixed;
+    // Type gate: value / UnsafePtr / InlineArray / Simd only. Reject anything that owns memory or needs
+    // teardown (v1 has no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no
+    // heap (collKind Fixed, a value array), and a `Simd<T,N>` owns even less — it is a `vector_size`
+    // typedef over a primitive, so there is no struct, no element dtor and nothing to tear down. Allow
+    // both; reject heap collections, smart pointers, destructible and move-only values.
+    bool isValueArray = _classes.count(ty)
+                     && (_classes[ty].collKind == CollKind::Fixed || _classes[ty].collKind == CollKind::Simd);
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
-        unsupported(("a module `static` must be a value, UnsafePtr, or InlineArray (no destructible resources yet) — `"
-                     + ty + "` owns memory").c_str(), mv->line);
+        unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` (no destructible "
+                     "resources yet) — `" + ty + "` owns memory").c_str(), mv->line);
         return;
     }
     // `@section(".x")` places the static in a named linker section (flash const table, DMA RAM bank,

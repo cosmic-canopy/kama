@@ -611,6 +611,73 @@ static inline NAME   NAME##__fill(T x) {                                        
 #define KAMA_FIXED_DEFINE(T, N, NAME) KAMA_FIXED_TYPE(T, N, NAME) KAMA_FIXED_FUNCS(T, N, NAME)
 
 
+// ---- Simd<T, comptime N> — a LANE BATCH, which is not an array ---------------------------------------
+//
+// `InlineArray<T,N>` above and this are both N values of T in 16 bytes, and they are different tools. An
+// InlineArray is a container: lanes are addressed one at a time, indexing is bounds-checked, and `foreach`
+// is the point. A Simd is a single VALUE the CPU operates on whole — `a + b` is one instruction, lanes are
+// interchangeable, and iterating it scalar-at-a-time is the thing it exists to avoid. So this has no
+// `foreach`, no `operator[]`, and no `set`.
+//
+// ⚠️ `vector_size`, never `ext_vector_type`. gcc IGNORES `ext_vector_type` with a warning and leaves a
+// one-lane scalar, which under `--cc gcc` is a silent miscompile (three of four lanes vanish). Measured on
+// gcc 13.3, clang 18.1.3, Apple clang 21 and emcc: `vector_size` gives sizeof 16 / alignof 16 on all four,
+// with `+ - * /`, compound-literal init, lane subscript, compare-to-mask and `__builtin_shufflevector`
+// behaving identically. That intersection is what this header is allowed to use.
+//
+// A target with no SIMD unit is NOT an error: `vector_size` lowers to scalar operations that are still
+// correct, which is the whole reason kama exposes a type rather than per-ISA intrinsics.
+#define KAMA_SIMD_TYPE(T, N, NAME) typedef T NAME __attribute__((vector_size(sizeof(T) * (N))));
+
+// The lane index is a `ptrdiff_t` (kama's `isize`) and IS bounds-checked, like every other kama index —
+// a vector subscript past the end is UB in C, and "fast but occasionally nonsense" is not a trade kama
+// makes. The check costs nothing where it matters: `v.lane(index: 2)` folds both operands at `-O2` and
+// the branch disappears entirely (measured).
+// ⚠️ Every operation here is written as a PER-LANE LOOP over the vector, and none of them calls libm.
+// Both are deliberate, and both were measured (2026-08-31, gcc 13.3 / clang 18.1.3 / Apple clang 21):
+//
+//   * the loop is not a fallback — the backends fold it to the branchless vector form. `abs` becomes
+//     `fcmlt.4s; fneg.4s; bit.16b` and `min`/`max` become `fcmgt.4s; bif.16b`, identically on all three.
+//     Writing them with per-compiler builtins would buy nothing and cost a seam, because clang has
+//     `__builtin_elementwise_*` and gcc has NO equivalent — and gcc treats the unknown name as an
+//     *implicit function declaration*, a warning, which is the same silent-miscompile shape that
+//     disqualified `ext_vector_type`.
+//   * no libm, because this header is FREESTANDING (stdint/stdbool/stddef/limits only — see the top) and
+//     an MCU target has no `<math.h>`. That is what confines this set to what arithmetic and comparison
+//     can express. `sqrt`/`floor`/`ceil` genuinely need libm and are NOT here for that reason; they want
+//     the `kama_math.h` seam that `lib/std/math/scalar.kama` already uses, which an intrinsic cannot
+//     reach today (ROADMAP_DETAIL §2).
+//     ⚠️ They also need `-fno-math-errno` to vectorize at all: WITH it a per-lane `sqrtf` loop folds to
+//     `fsqrt v0.4s` on both gcc and clang; WITHOUT it neither folds, because the errno side effect makes
+//     the call unsinkable. Measured — do not re-derive.
+#define KAMA_SIMD_FUNCS(T, N, NAME, ARR)                                        \
+static inline NAME NAME##__splat(T x) {                                         \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = x; return r;                    \
+}                                                                               \
+static inline T NAME##__lane(const NAME* self, ptrdiff_t i) {                   \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
+    return (*self)[i];                                                          \
+}                                                                               \
+static inline ARR NAME##__toArray(const NAME* self) {                           \
+    ARR r; for (int i = 0; i < (N); ++i) r.v[i] = (*self)[i]; return r;         \
+}                                                                               \
+static inline NAME NAME##__abs(const NAME* self) {                              \
+    NAME r; for (int i = 0; i < (N); ++i) {                                      \
+        T x = (*self)[i]; r[i] = x < (T)0 ? (T)-x : x;                           \
+    } return r;                                                                 \
+}                                                                               \
+static inline NAME NAME##__min(const NAME* self, NAME o) {                      \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (*self)[i] < o[i] ? (*self)[i] : o[i]; \
+    return r;                                                                   \
+}                                                                               \
+static inline NAME NAME##__max(const NAME* self, NAME o) {                      \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (*self)[i] > o[i] ? (*self)[i] : o[i]; \
+    return r;                                                                   \
+}
+
+#define KAMA_SIMD_DEFINE(T, N, NAME, ARR) KAMA_SIMD_TYPE(T, N, NAME) KAMA_SIMD_FUNCS(T, N, NAME, ARR)
+
+
 // kama `char` is ONE UNICODE CODEPOINT, not a byte and not a number — `s[i]` is a `uint8`, and
 // codepoints are reached only through `.chars()`. Its representation is a 32-bit unsigned integer, but it
 // is a DISTINCT TYPE, and this typedef is what makes that true for kama's own checker.

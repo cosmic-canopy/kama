@@ -1,0 +1,62 @@
+// simd_type_probe.kama — the kernel tools/check-simd-type.sh compiles to prove that an explicit
+// `Simd<T, N>` really lowers to machine vector instructions. NOT a harness fixture: tests/support/ is
+// outside run_tests.sh's four globs, so nothing here runs as a test (check-fixture-reach.sh still
+// requires it to analyze clean).
+//
+// ⚠️ ITS SHAPE IS THE WHOLE POINT. Two earlier versions of this file measured wrong, both in ways
+// docs/design/simd.md §1 already warned about, and both looked exactly like a broken compiler:
+//
+//   1. FIRST ATTEMPT — pointed the guard at tests/simd_basic.kama, whose inputs are all literals. clang
+//      constant-folded the entire computation and the guard reported ZERO vector instructions against a
+//      perfectly working type. That is trap 2: a provably-foldable kernel.
+//   2. SECOND ATTEMPT — took the lanes as four separate `float32` PARAMETERS and returned ONE lane.
+//      That is trap 1, the ABI boundary: AAPCS64 passes floats in s0-s3 as four separate registers, so
+//      there is no vector to begin with, and returning a single lane lets the compiler delete the other
+//      three (dead-lane elimination). Two of the three kernels came out fully scalar — `fcsel`/`fneg`
+//      per lane — and the guard passed on ONE stray instruction from the third.
+//
+// So the rules this file obeys, and must keep obeying:
+//   1. Lanes arrive and leave as an `InlineArray<float32, 4>` — 16 bytes moved as a unit, not four
+//      scalar registers, so the vector is a vector at both ends.
+//   2. EVERY lane of the result is live. Return the whole batch, never one lane.
+//   3. Kernels are `expose`d (KAMA_EXPORT -> visibility("default"),used), so neither the optimizer nor
+//      --gc-sections can delete them.
+//   4. Nothing the optimizer can see the value of — the data is a parameter.
+
+expose fn InlineArray<float32, 4> simdMulAdd(InlineArray<float32, 4> a, float32 s) {
+    Simd<float32, 4> v = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> k = [s; 4];
+    Simd<float32, 4> r = v * k + v;
+    return r.toArray();
+}
+
+expose fn InlineArray<float32, 4> simdMinMax(InlineArray<float32, 4> a, float32 b) {
+    Simd<float32, 4> v = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> k = [b; 4];
+    Simd<float32, 4> lo = v.min(rhs: k);
+    Simd<float32, 4> hi = v.max(rhs: k);
+    Simd<float32, 4> r = hi - lo;
+    return r.toArray();
+}
+
+expose fn InlineArray<float32, 4> simdAbsDiv(InlineArray<float32, 4> a, float32 d) {
+    Simd<float32, 4> v = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> k = [d; 4];
+    Simd<float32, 4> p = v.abs();
+    Simd<float32, 4> r = p / k;
+    return r.toArray();
+}
+
+// `main` seeds real data and checks the result, so a build of this probe is also a correctness test —
+// the same property tests/support/simd_probe.kama has.
+fn int32 main() {
+    InlineArray<float32, 4> src = [1.0f32, 2.0f32, 3.0f32, 4.0f32];
+    InlineArray<float32, 4> m = simdMulAdd(a: src, s: 10.0f32);      // 11, 22, 33, 44
+    InlineArray<float32, 4> x = simdMinMax(a: src, b: 3.0f32);       // |3-1|,|3-2|,0,1 -> 2,1,0,1
+    InlineArray<float32, 4> q = simdAbsDiv(a: src, d: 2.0f32);       // .5, 1, 1.5, 2
+    int32 r = 0;
+    r = r + cast<int32>(m[2]);                                        // 33
+    foreach (float32 e in x) { r = r + cast<int32>(e); }              // 2+1+0+1 = 4   => 37
+    r = r + cast<int32>(q[3]);                                        // 2            => 39
+    return r;
+}

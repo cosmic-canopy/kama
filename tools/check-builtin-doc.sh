@@ -61,7 +61,7 @@ grep -oE '^#define IDENTIFIER_[A-Z0-9]+_VAL' "$ROOT/src/kama.ast.h" \
 # The three that are plain IDENTIFIERS rather than reserved words: `cType` special-cases them by spelling
 # instead of by `builtInVal`, so they carry no `IDENTIFIER_*_VAL` and have to be named here. Each is
 # checked below to still BE special-cased, so this list cannot quietly outlive the code it stands for.
-IDENT_BUILTINS='isize usize UnsafePtr InlineArray BindableFunctionPtr'
+IDENT_BUILTINS='isize usize UnsafePtr InlineArray BindableFunctionPtr Simd'
 for n in $IDENT_BUILTINS; do echo "$n"; done | sort -u >> "$tmp/registered"
 sort -u -o "$tmp/registered" "$tmp/registered"
 

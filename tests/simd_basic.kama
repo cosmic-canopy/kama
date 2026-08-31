@@ -1,0 +1,41 @@
+// `Simd<T, comptime N>` — the lane batch. Values only here; that the emitted C actually reaches the
+// vector spelling is a separate assertion, in tools/check-simd-type.sh, because a value fixture passes
+// just as happily against a scalar fallback and would not notice the difference.
+//
+// Construction is an ARRAY LITERAL, the same spelling `InlineArray` uses: `[a, b, c, d]` writes the
+// lanes out and `[v; N]` splats. One way to spell "N values of T", which is what the two shapes have in
+// common; everything below it differs.
+fn int32 main() {
+    Simd<float32, 4> a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];
+    Simd<float32, 4> t = [10.0f32; 4];                  // splat -> 10,10,10,10
+
+    // Elementwise arithmetic is C's own operator on the vector type — one instruction, not a loop.
+    Simd<float32, 4> m = a * t;                          // 10, 20, 30, 40
+    Simd<float32, 4> s = m + a;                          // 11, 22, 33, 44
+    Simd<float32, 4> d = s - a;                          // 10, 20, 30, 40
+    Simd<float32, 4> q = d / t;                          //  1,  2,  3,  4
+
+    int32 r = 0;
+    r = r + cast<int32>(q.lane(index: 0));               //  1   — a bounds-checked lane read
+    r = r + cast<int32>(q.lane(index: 3));               //  4   => 5
+
+    // abs / min / max: no libm, so they hold on a freestanding target too (see KAMA_SIMD_FUNCS).
+    Simd<float32, 4> neg = [0.0f32 - 3.0f32, 2.0f32, 0.0f32 - 7.0f32, 4.0f32];
+    Simd<float32, 4> one = [1.0f32; 4];
+    r = r + cast<int32>(neg.abs().lane(index: 2));       //  7   => 12
+    r = r + cast<int32>(neg.min(rhs: one).lane(index: 0)); // -3 => 9
+    r = r + cast<int32>(neg.max(rhs: one).lane(index: 1)); //  2 => 11
+
+    // `toArray` is the way back to addressable memory — an `InlineArray<T, N>`, which the rest of the
+    // language already knows how to index and iterate. A Simd itself has NO `foreach` and no `[i]`:
+    // taking a lane batch apart one lane at a time is what it exists to avoid.
+    InlineArray<float32, 4> back = q.toArray();
+    foreach (float32 e in back) { r = r + cast<int32>(e); }   // 1+2+3+4 = 10 => 21
+
+    // A Simd is a plain value: copies by value, owns nothing, has no destructor. (`copy` is a keyword
+    // — the give/copy ownership model — so the binding cannot be named that.)
+    Simd<float32, 4> dup = q;
+    r = r + cast<int32>(dup.lane(index: 1));            //  2   => 23
+
+    return r;
+}

@@ -111,3 +111,21 @@ type value InlineArray<T, comptime N: int32> { }
 // A callable with its receiver bound in. The type argument is a function SIGNATURE rather than a type,
 // which is why it is not an ordinary generic.
 type value BindableFunctionPtr<Sig> { }
+
+// A LANE BATCH: N numbers the CPU operates on as one value. `Simd<float32, 4>` is 16 bytes, and `a + b`
+// on two of them is a single machine instruction.
+//
+// It is not an `InlineArray`, and the distinction is what each is FOR. An `InlineArray` is a container —
+// you index it, iterate it, and its lanes mean whatever you decide. A `Simd`'s lanes are interchangeable
+// and it has no `foreach` and no `[i]`, because taking a lane batch apart one lane at a time is exactly
+// what it exists to avoid. `std::math`'s `Vec4` is a third thing again: geometry, whose lanes are named
+// `x/y/z/w` and mean different things.
+//
+// Reach for it only for what the compiler's auto-vectorizer cannot express on its own — an arbitrary
+// shuffle, a two-vector blend, a lane mask as a value. An ordinary loop over `Vec4`s already compiles to
+// SIMD on every target kama ships, and often *better* than a hand-written lane batch would.
+//
+// `sizeof(T) * N` must be 16: 128 bits is the only width every kama target has. The element must be a
+// numeric primitive. A target with no vector unit is not an error — the operations lower to correct
+// scalar code, which is why this is a type rather than a bag of per-CPU intrinsics.
+type value Simd<T, comptime N: int32> { }

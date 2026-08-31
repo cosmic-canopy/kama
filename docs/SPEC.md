@@ -1747,6 +1747,43 @@ container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-si
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
+### Explicit SIMD — `Simd<T, comptime N>` ✅
+
+A **lane batch**: N numbers the CPU operates on as one value. It is an intrinsic value type, monomorphized
+per `(T, N)`, lowering to a C `vector_size` typedef — so `a + b` is one machine instruction, not a loop.
+
+```kama
+Simd<float32, 4> a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
+Simd<float32, 4> k = [10.0f32; 4];                        // the fill form IS a splat
+Simd<float32, 4> c = a * k + a;                           // elementwise; C's own operators
+float32          x = c.lane(index: 2);                    // a bounds-checked lane read
+Simd<float32, 4> p = c.abs();
+Simd<float32, 4> lo = c.min(rhs: k);                      // also `max(rhs:)`
+InlineArray<float32, 4> back = c.toArray();               // back to addressable memory
+```
+
+- **`sizeof(T) * N` must be exactly 16**, and the element must be a **numeric primitive**. 128 bits is the
+  only width every kama target has — SSE2 on the x86-64 baseline, NEON on aarch64, wasm128 — and wider
+  needs a `-march`-style CPU-tuning flag that does not exist yet. Both are compile errors <!-- xfail: simd_bad_width, simd_bad_elem -->
+  naming the arguments, checked where the instantiation happens.
+- **Construction is the array literal**, the same spelling `InlineArray` uses: one way to write "N values
+  of T". `[v; N]` splats, which is the operation every other SIMD API names separately.
+- **No `foreach`, no `v[i]`, no `set`.** Taking a lane batch apart one lane at a time is what the type
+  exists to avoid; `lane(index:)` is the single read and `toArray()` is the way out to memory.
+- **A target with no vector unit is not an error.** The operations lower to correct scalar code — which is
+  the whole reason kama exposes a *type* rather than per-CPU intrinsics.
+- ⚠️ **Reach for it only for what auto-vectorization cannot express.** An ordinary loop over `Vec4`s
+  already compiles to SIMD on every target kama ships, and *better*: measured, a hand-written lane batch
+  was **65% slower** than the scalar source for a cross product, because the compiler de-interleaves an
+  array of structs and does four at once. `Simd` is for the operations that have no scalar spelling at
+  all — an arbitrary shuffle, a two-vector blend, a lane mask as a value.
+- **`Simd` is not `InlineArray` and not `Vec4`.** An `InlineArray` is a *container* — indexed, iterated,
+  lanes meaning whatever you decide. `std::math`'s `Vec4` is *geometry* — lanes named `x/y/z/w`, meaning
+  different things, laid out for a GPU vertex buffer. A `Simd`'s lanes are *interchangeable*.
+
+The codegen — that this really becomes a machine vector rather than four scalars — is asserted by
+`tools/check-simd-type.sh`, because a value fixture passes just as happily against a scalar fallback.
+
 ### Function pointers — `fnptr` ✅
 
 kama has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**

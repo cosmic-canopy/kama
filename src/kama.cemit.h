@@ -205,7 +205,12 @@ struct MethodInfo {
 // A built-in generic collection / smart-pointer kind. Backed by a C runtime template. Owned<T> is a
 // unique heap-owning pointer kind. (The growable/fixed heap arrays are the pure-kama library types
 // `DynamicArray`/`FixedArray`, not kinds here; `Fixed` is `InlineArray<T,N>`, the const-generic value array.)
-enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed };
+// `Simd` is here rather than beside `Fixed` for one reason worth stating: it is the only kind whose C
+// type is NOT a struct. It lowers to a `vector_size` typedef over a primitive, so it needs no forward
+// `typedef struct`, has no by-value struct dependency, and its `_TYPE` goes out in the EARLY types pass
+// where `Fixed`'s cannot. Every `collKind == Fixed` test in the struct-ordering passes is therefore a
+// test this kind must NOT accidentally join.
+enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd };
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "_F<file>"). Bare names
@@ -1506,7 +1511,8 @@ private:
     bool isCollectionType(SharedIdentifier t) const;
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
-    void registerFixed(SharedIdentifier fixedType);   // Fixed<T,N> — the const-generic value array
+    void registerFixed(SharedIdentifier fixedType);   // InlineArray<T,N> — the comptime-sized value array
+    void registerSimd(SharedIdentifier simdType);     // Simd<T,N> — the lane batch (a `vector_size` typedef)
     // Const generics: the compile-time integer value of a const argument/param expression (an
     // integer literal, or a const-param identifier bound in the current instantiation via _comptimeSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
@@ -1566,6 +1572,7 @@ private:
     // A `Fixed<T,N>` intrinsic instance (a value-semantics collection). Its indexing/foreach reuse the
     // collection machinery, but it is carved out of ownership (never destructible, copies freely).
     bool isFixedColl(const std::string& cls) const;
+    bool isSimdColl(const std::string& cls) const;
     std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
     void registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName = "");   // Owned/Shared/Weak (customName: a library `Box<Contract>` routed here)
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade
