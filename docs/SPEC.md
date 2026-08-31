@@ -1762,6 +1762,12 @@ Simd<float32, 4> lo = c.min(rhs: k);                      // also `max(rhs:)`
 InlineArray<float32, 4> back = c.toArray();               // back to addressable memory
 ```
 
+- **Integer lanes obey kama's arithmetic rules, lane by lane.** A signed `+ - *` overflow **traps in
+  debug and wraps in release**, exactly as the scalar of that type does, and a `<<` into the sign bit is
+  defined the same way. ⚠️ None of that comes from the toolchain: `-fsanitize=signed-integer-overflow`
+  does **not** instrument vector arithmetic, so the compiler emits the check (`tests/trap/simd_lane_overflow`).
+  Unsigned lanes wrap at every width, as unsigned scalars do. Bitwise `& | ^ << >>` are C's own vector
+  operators (`tests/simd_int_lanes`).
 - **`sizeof(T) * N` must be exactly 16**, and the element must be a **numeric primitive**. 128 bits is the
   only width every kama target has — SSE2 on the x86-64 baseline, NEON on aarch64, wasm128 — and wider
   needs a `-march`-style CPU-tuning flag that does not exist yet. Both are compile errors <!-- xfail: simd_bad_width, simd_bad_elem -->

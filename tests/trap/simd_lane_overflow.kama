@@ -1,0 +1,20 @@
+// A signed integer LANE obeys kama's overflow rule exactly as a scalar of that type does: trap in a
+// debug build, wrap in release. Nothing in the toolchain provides this — `-fsanitize=signed-integer-
+// overflow` does NOT instrument vector arithmetic (measured: the scalar add trapped and the lane add
+// wrapped to INT32_MIN, same build, same flags) — so the emitted C carries the check.
+//
+// Without it the language would answer one question two ways depending only on how the numbers were
+// packed, which is the same shape as the sub-`int` promotion hole closed in tests/trap/arith_overflow_i8.
+//
+// ⚠️ `+ 7` on the return, for the reason arith_overflow_i8.kama gives at length: the harness's posix rule
+// for a trap fixture is `exit >= 128`, and the un-trapped value here is INT32_MIN, whose low byte is 0 —
+// which would pass as "exited 0, expected a trap" rather than silently, but the offset makes a broken
+// build exit 7 and say so unambiguously. Verified against the unchecked compiler.
+import { std::num::int32Max };
+fn int32 main() {
+    int32 big = int32Max();                       // runtime-opaque
+    Simd<int32, 4> a = [big, 1, 1, 1];
+    Simd<int32, 4> b = [1; 4];
+    Simd<int32, 4> c = a + b;                     // lane 0 overflows -> trap
+    return c.lane(index: 0) + 7;
+}

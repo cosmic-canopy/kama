@@ -3193,7 +3193,28 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // Keeping arithmetic off a mask is half the reason it is a separate type from `Simd` at all (the
         // other half being that `select` cannot then be handed a data vector), so the rule has to be
         // enforced rather than merely documented.
-        if (isSimdColl(lc) || isSimdColl(rc)) { /* a DATA vector — elementwise operators are the point */ }
+        if (isSimdColl(lc) || isSimdColl(rc)) {
+            // A DATA vector — elementwise operators are the point. But a SIGNED INTEGER lane obeys
+            // kama's overflow rule the same way a scalar of that type does: trap in debug, wrap in
+            // release. Nothing in the toolchain supplies that — `-fsanitize=signed-integer-overflow`
+            // does NOT instrument vector arithmetic (measured: the scalar add trapped and the lane add
+            // wrapped, same build, same flags) — so the emitted C carries the check.
+            const std::string& sc = isSimdColl(lc) ? lc : rc;
+            const CollectionInfo& ci2 = _collections[sc];
+            const bool signedInt = cNumSigned(ci2.elemCType) && !cNumFloat(ci2.elemCType);
+            const char* op = token == PLUS ? "KAMA_SIMD_ADD" : token == MINUS ? "KAMA_SIMD_SUB"
+                           : token == STAR ? "KAMA_SIMD_MUL" : nullptr;
+            if (signedInt && op && lc == rc)
+                return std::string(op) + "(" + sc + ", " + emitOperandByValue(lhs) + ", "
+                     + emitOperandByValue(rhs) + ")";
+            // ⚠️ A signed `<<` must NOT reach `kama_lshift` below: that shim dispatches with `_Generic`,
+            // which cannot see a vector type and type-checks every branch — so a `Simd` operand is a hard
+            // C error ("invalid conversion between vector type and integer type of different size"), not
+            // a fallback. The per-lane `__shl` is the same rule (shift in the unsigned peer, so shifting
+            // into the sign bit stays defined) written where a vector can use it.
+            if (signedInt && token == LTLT && lc == rc)
+                return sc + "__shl(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
+        }
         else if (isMaskColl(lc) || isMaskColl(rc)) {
             unsupported(("`" + binaryOperator(token) + "` is not defined on a `Mask<T, N>` — its lanes are "
                          "all-ones/all-zeros bit patterns, not numbers. Combine masks with `and(rhs:)`, "
@@ -9275,7 +9296,10 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     registerFixed(arrTy);
     addMethod("toArray", {}, arrTy, true);
     // The elementwise ops that need no libm, so this header stays freestanding — see KAMA_SIMD_FUNCS.
-    ParamSig rhs; rhs.name = "rhs"; rhs.byRef = false; rhs.kindCType = cName;
+    // `className` as well as `kindCType`: the argument path threads a target type from `className`, and
+    // that is what lets an array literal be written directly as an operand — `a.greaterThan(rhs: [2; 4])`
+    // rather than forcing a named local first. Without it the literal has no context and is refused.
+    ParamSig rhs; rhs.name = "rhs"; rhs.byRef = false; rhs.kindCType = cName; rhs.className = cName;
     addMethod("abs", {}, simdType, true);
     addMethod("min", { rhs }, simdType, true);
     addMethod("max", { rhs }, simdType, true);
@@ -9323,9 +9347,9 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
             m.params = std::move(ps); m.returnType = ret; m.isIntrinsic = true; m.isConst = true;
             mc.methods[nm] = m;
         };
-        ParamSig t; t.name = "ifTrue";  t.byRef = false; t.kindCType = cName;
-        ParamSig f; f.name = "ifFalse"; f.byRef = false; f.kindCType = cName;
-        ParamSig o; o.name = "rhs";     o.byRef = false; o.kindCType = mName;
+        ParamSig t; t.name = "ifTrue";  t.byRef = false; t.kindCType = cName; t.className = cName;
+        ParamSig f; f.name = "ifFalse"; f.byRef = false; f.kindCType = cName; f.className = cName;
+        ParamSig o; o.name = "rhs";     o.byRef = false; o.kindCType = mName; o.className = mName;
         addM("select",  { t, f }, simdType);
         addM("and",     { o }, mTy);
         addM("or",      { o }, mTy);
@@ -11976,6 +12000,12 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 *_out << "KAMA_SIMD_CMP(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName
                      << ", Mask_" << info.elemMangle << "_" << info.constValue << ")\n";
+                // Only a SIGNED INTEGER lane needs the overflow checkers. A float lane has no overflow
+                // rule to obey (IEEE gives infinities, not a trap) and an unsigned one wraps by
+                // definition at every width, so emitting them there would be dead code in every program.
+                if (cNumSigned(info.elemCType) && !cNumFloat(info.elemCType))
+                    *_out << "KAMA_SIMD_ICHK(" << info.elemCType << ", u" << info.elemCType
+                         << ", " << info.constValue << ", " << info.cName << ")\n";
             }
         }
         else if (info.kind == CollKind::Mask) {
@@ -12646,7 +12676,13 @@ bool CEmitter::ownsByValue(const std::string& cls) const
     if (cls.empty() || isSmartPtrClass(cls)) return false;
     if (isMoveOnlyValue(cls)) return true;
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isIntrinsicColl && !isFixedColl(cls);
+    // ⚠️ `Fixed`, `Simd` and `Mask` are the intrinsics that own NOTHING — a value array and two bare
+    // `vector_size` typedefs. Passing one by value is a register or struct copy, not a transfer, so it
+    // needs no `give`/`copy` marker. This is the most central of the several places the question "is this
+    // an intrinsic that owns something" is asked, and asking it as `!isFixedColl` alone made every
+    // `Simd`/`Mask` argument demand an ownership marker it has no meaning for.
+    return it != _classes.end() && it->second.isIntrinsicColl
+        && !isFixedColl(cls) && !isValueVectorKind(it->second.collKind);
 }
 
 

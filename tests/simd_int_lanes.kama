@@ -1,0 +1,47 @@
+// Integer lane batches. `sizeof(T) * N == 16` admits six signed/unsigned widths beside the floats, and
+// each is claimed here rather than assumed: a width that registers is not a width that works.
+//
+// What integer lanes add over float ones is the BITWISE half — `& | ^ << >>` are C's own operators on a
+// vector type, and they are the reason a mask can be built by hand as well as by comparison.
+fn int32 main() {
+    int32 r = 0;
+
+    // int32 x 4 — the common case.
+    Simd<int32, 4> a = [12, 10, 6, 3];
+    Simd<int32, 4> b = [10; 4];
+    Simd<int32, 4> band = a & b;                 // 8, 10, 2, 2
+    Simd<int32, 4> bor  = a | b;                 // 14, 10, 14, 11
+    Simd<int32, 4> bxor = a ^ b;                 // 6, 0, 12, 9
+    r = r + band.lane(index: 0);                 //  8
+    r = r + bxor.lane(index: 2);                 // 12  => 20
+
+    // Shifts take their count per lane.
+    Simd<int32, 4> one = [1; 4];
+    Simd<int32, 4> two = [2; 4];
+    Simd<int32, 4> sh  = one << two;             // 4, 4, 4, 4
+    r = r + sh.lane(index: 3);                   //  4  => 24
+
+    // The narrow widths. 16 bytes is 16 int8 lanes, 8 int16, 2 int64.
+    Simd<int8, 16> n8  = [3i8; 16];
+    Simd<int16, 8> n16 = [5i16; 8];
+    Simd<int64, 2> n64 = [7i64; 2];
+    r = r + cast<int32>(n8.lane(index: 15));     //  3  => 27
+    r = r + cast<int32>(n16.lane(index: 7));     //  5  => 32
+    r = r + cast<int32>(n64.reduceAdd());        // 14  => 46
+
+    // Unsigned peers. Unsigned wrapping is defined at every width, in a lane exactly as in a scalar.
+    Simd<uint8, 16> u8 = [200ui8; 16];
+    Simd<uint8, 16> u2 = [100ui8; 16];
+    Simd<uint8, 16> uw = u8 + u2;                // 300 wraps to 44 — defined, no trap
+    r = r + cast<int32>(uw.lane(index: 0));      // 44  => 90
+
+    // float64 x 2, the other float width.
+    Simd<float64, 2> d = [1.5, 2.5];
+    r = r + cast<int32>(d.reduceAdd());          //  4  => 94
+
+    // Masks work at every width, and a mask's lane is the signed integer of the ELEMENT's width — which
+    // is why `Mask` carries T. This one is 8 lanes of int16, not 4 of int32.
+    Mask<int16, 8> m = n16.greaterThan(rhs: [4i16; 8]);
+    if (m.allTrue()) { r = r + 6; }              //      => 100
+    return r;
+}

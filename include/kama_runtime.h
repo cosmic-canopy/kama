@@ -377,6 +377,11 @@ static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsi
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
+    (void)lane;
+    kama_panic_handler();
+    for (;;) {}
+}
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
     kama_panic_handler();
@@ -465,6 +470,18 @@ static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsi
     const char* c = ", ";                                        while (*c) buf[p++] = *c++;
     kama_u64_to_buf(buf, &p, hi);
     const char* d = "]\n";                                       while (*d) buf[p++] = *d++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();
+    abort();
+}
+// A signed integer LANE that overflowed. Named separately from kama_arith_fail because the lane index is
+// the thing a reader needs — the other lanes are fine, and "which one" is not otherwise recoverable.
+static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
+    extern void abort(void);
+    char buf[96]; size_t p = 0;
+    const char* a = "kama: arithmetic overflow in Simd lane ";  while (*a) buf[p++] = *a++;
+    kama_i64_to_buf(buf, &p, (long long)lane);
+    const char* b = "\n";                                       while (*b) buf[p++] = *b++;
     (void)kama_raw_write(2, buf, p);
     kama_run_panic_hook();
     abort();
@@ -722,6 +739,55 @@ static inline bool  MNAME##__allTrue(const MNAME* self) {                       
     for (int i = 0; i < (N); ++i) if (!(*self)[i]) return false;                 \
     return true;                                                                \
 }
+
+// ---- signed integer lanes obey kama's OVERFLOW rule, lane by lane -----------------------------------
+//
+// `int32 MAX + 1` traps in a debug build and wraps in release. A `Simd<int32,4>` whose lane 0 does the
+// same arithmetic must behave the same way, or the language has two different answers for one operation
+// depending on how the numbers were packed. Nothing in the toolchain provides this: UBSan's
+// `signed-integer-overflow` check does NOT instrument vector arithmetic (measured — the scalar add
+// trapped and the lane add wrapped to INT32_MIN, same build, same flags), so the check is emitted here.
+//
+// `__builtin_{add,sub,mul}_overflow` is the per-lane test: both gcc and clang have it, it is exact at
+// every width including `int64` (where a widening check has no wider type to use), and it costs nothing
+// in release because the whole thing compiles to the bare vector op there. UNSIGNED lanes are not
+// checked — unsigned wrapping is defined and the language says so at every width.
+#define KAMA_SIMD_ICHK(T, UT, N, NAME)                                          \
+static inline NAME NAME##__chkAdd(NAME a, NAME b) {                             \
+    NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
+        if (__builtin_add_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        r[i] = o; } return r;                                                   \
+}                                                                               \
+static inline NAME NAME##__chkSub(NAME a, NAME b) {                             \
+    NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
+        if (__builtin_sub_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        r[i] = o; } return r;                                                   \
+}                                                                               \
+static inline NAME NAME##__chkMul(NAME a, NAME b) {                             \
+    NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
+        if (__builtin_mul_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        r[i] = o; } return r;                                                   \
+}                                                                               \
+/* A signed left shift INTO the sign bit is UB in C, for a vector lane exactly as for a scalar. kama  */\
+/* defines it (SPEC: "computed in the unsigned type - a defined bit pattern"), and `kama_lshift` does */\
+/* that for scalars via `_Generic` - which cannot see a vector type, and produced a hard C error the  */\
+/* first time a `Simd` met `<<`. This is the same rule, per lane, with the unsigned peer passed in.   */\
+static inline NAME NAME##__shl(NAME a, NAME b) {                                \
+    NAME r; for (int i = 0; i < (N); ++i) r[i] = (T)((UT)a[i] << b[i]);          \
+    return r;                                                                   \
+}
+
+// Debug traps, release wraps — the same two-tier split the scalar types get, and the release arm is the
+// bare vector operator, so a `--release` build's codegen is byte-identical to having no check at all.
+#ifdef NDEBUG
+#  define KAMA_SIMD_ADD(NAME, A, B) ((A) + (B))
+#  define KAMA_SIMD_SUB(NAME, A, B) ((A) - (B))
+#  define KAMA_SIMD_MUL(NAME, A, B) ((A) * (B))
+#else
+#  define KAMA_SIMD_ADD(NAME, A, B) NAME##__chkAdd((A), (B))
+#  define KAMA_SIMD_SUB(NAME, A, B) NAME##__chkSub((A), (B))
+#  define KAMA_SIMD_MUL(NAME, A, B) NAME##__chkMul((A), (B))
+#endif
 
 // The comparisons live with the DATA vector (they are `a.greaterThan(rhs: b)`) but produce the mask, so
 // they need both names. A vector compare already yields the right lane width; the cast names the type.
