@@ -3294,6 +3294,28 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                  ? "KAMA_ARITH_NARROW(" + resT + ", " + lo + ", " + hi + ", " + body + ")"
                  : "((" + resT + ")kama_arith_chk((long long)(" + body + "), " + lo + ", " + hi + "))";
         }
+        // The WIDE half of the same division rule. `resT` is empty for `int32`/`int64` — they are already
+        // their own type in C, so nothing narrows and the arm above cannot see them — but `TYPE_MIN / -1`
+        // overflows at every width, and SPEC promises it traps in EVERY build.
+        //
+        // It used to come from `-fsanitize=signed-integer-overflow`, which the driver passed in release as
+        // well as debug for this one case. That is no longer true (see the driver's own note): the
+        // sanitizer is debug-only now, because Apple clang would not let `-fwrapv` suppress it and a macOS
+        // release build was paying a compare and a branch on every signed add and multiply. Checking here
+        // is what made dropping it safe.
+        //
+        // ⚠️ The check is on the OPERANDS, not the result: `INT64_MIN / -1` overflows the very `long long`
+        // a result-based check would have to compute it in. That is why this cannot reuse `kama_arith_chk`
+        // the way the sub-`int` arm above does.
+        if (token == SLASH) {
+            const std::string dt = typeOfExpr(lhs);
+            if (!dt.empty() && dt == typeOfExpr(rhs) && cNumSigned(dt) && !cNumFloat(dt)) {
+                const int w = cNumBits(dt);
+                if (w == 32 || w == 64)
+                    return std::string("kama_sdiv_i") + (w == 32 ? "32" : "64") + "("
+                         + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
+            }
+        }
         return open + body + ")";   // primitives — `open` narrows a sub-`int` result
     }
 

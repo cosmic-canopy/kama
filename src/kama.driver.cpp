@@ -9289,12 +9289,23 @@ int main(int argc, char** argv)
         // sign bit) stays legal. Intentional signed wrap is opt-in (unsigned math, or a `wrapping*` helper).
         cmd << "-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow "
                "-fsanitize-trap=integer-divide-by-zero,shift-exponent,float-cast-overflow ";
-        // Signed overflow: debug TRAPS it; release `-fwrapv`-WRAPS `+`/`-`/`*` (defined). `INT_MIN / -1` is
-        // NOT defined by `-fwrapv`, so we ALSO keep the overflow-trap in release — it wraps the ordinary
-        // ops (trap suppressed by `-fwrapv`) but still traps that one pathological division. Net: no
-        // arithmetic UB in either build.
-        cmd << "-fsanitize=signed-integer-overflow -fsanitize-trap=signed-integer-overflow ";
+        // Signed overflow: debug TRAPS it, release `-fwrapv`-WRAPS `+`/`-`/`*` (defined, zero-cost).
+        //
+        // ⚠️ The sanitizer is DEBUG-ONLY, and it used to be passed in both tiers. The reasoning for that
+        // was sound and the outcome was not: `-fwrapv` does not define `INT_MIN / -1`, so the sanitizer
+        // was kept in release to catch that one case — on the assumption that `-fwrapv` would suppress it
+        // for the ordinary ops. **Measured 2026-08-31: that assumption holds on Ubuntu clang 18.1.3 and
+        // gcc 13.3, and NOT on Apple clang 21.** So a macOS release build traps where a Linux one wraps,
+        // from one source and one set of flags — and pays `adds; b.vs; brk` on every signed add and
+        // `smull; cmp; b.ne; brk` on every multiply, against a bare `add`/`mul` on Linux. That is a
+        // compare and a branch on arithmetic this project's headline invariant calls "at C parity".
+        //
+        // So the release tier drops it, `-fwrapv` alone defines `+ - *` on every toolchain, and the one
+        // case it was buying is checked explicitly instead — `kama_sdiv_i32`/`_i64` in kama_runtime.h,
+        // emitted for a signed division at every width, in every build. One predictable branch per
+        // division (already a 20-40 cycle instruction) buys back the whole release tier.
         if (release) cmd << "-fwrapv ";
+        else         cmd << "-fsanitize=signed-integer-overflow -fsanitize-trap=signed-integer-overflow ";
         // --target embedded: a freestanding, hosted-runtime-free compile that stops at an OBJECT. No libc
         // (`-nostdlib`), no OS/hosting assumptions (`-ffreestanding`), and `-c` so no link is attempted —
         // the crt0/startup + linker script are the user's per-chip link step. `-DKAMA_TARGET_EMBEDDED`

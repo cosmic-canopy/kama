@@ -382,6 +382,10 @@ static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_sdiv_fail(void) {
+    kama_panic_handler();
+    for (;;) {}
+}
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
     kama_panic_handler();
@@ -486,6 +490,16 @@ static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
     kama_run_panic_hook();
     abort();
 }
+// `TYPE_MIN / -1`. Named separately because it can report no value: the result is `-TYPE_MIN`, the one
+// number the type cannot hold, and at 64 bits no wider signed type can hold it either.
+static inline KAMA_NORETURN void kama_sdiv_fail(void) {
+    extern void abort(void);
+    const char* m = "kama: arithmetic overflow -- TYPE_MIN / -1 has no representable result\n";
+    size_t n = 0; while (m[n]) ++n;
+    (void)kama_raw_write(2, m, n);
+    kama_run_panic_hook();
+    abort();
+}
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
@@ -543,13 +557,45 @@ static inline long long kama_arith_chk(long long v, long long lo, unsigned long 
     if (v >= 0 && (unsigned long long)v > hi) kama_arith_fail(v, lo, hi);
     return v;
 }
+// -- TYPE_MIN / -1, the one signed overflow that is NOT `-fwrapv`'s to define ------------------------
+//
+// `-fwrapv` defines signed `+ - *` as two's-complement wrapping, and that is the whole of what it
+// promises — division is not on its list, and `INT32_MIN / -1` stays undefined under it. On aarch64 the
+// hardware quietly yields `INT32_MIN`; on x86 the same expression raises SIGFPE. SPEC says it traps in
+// EVERY build, so it is checked here rather than left to a flag.
+//
+// This is why the driver was passing `-fsanitize=signed-integer-overflow` in RELEASE as well as debug —
+// that one case was the only thing it was buying there. ⚠️ The price was much larger than the purchase:
+// Apple clang 21 does not let `-fwrapv` suppress the sanitizer (Ubuntu clang 18.1.3 and gcc 13.3 do), so
+// a macOS release build carried `adds; b.vs; brk` on every signed add and `smull; cmp; b.ne; brk` on
+// every multiply — a compare and a branch on arithmetic that kama promises is at C parity. Checking the
+// one case explicitly costs one predictable branch per signed DIVISION (already a 20-40 cycle
+// instruction) and lets the release tier drop the sanitizer entirely.
+//
+// The test is on the OPERANDS, not the result: `INT64_MIN / -1` overflows the very `long long` a
+// result-based check would have to compute it in. Divide-by-zero is a separate check and stays on the
+// sanitizer, in every build.
+// ⚠️ It reports NO value, and that is forced rather than lazy: the result of `TYPE_MIN / -1` is
+// `-TYPE_MIN`, which is exactly the one number the type cannot hold — and at 64 bits it cannot be held
+// by `long long` either, so there is no width to pass it in. The first version of this macro computed
+// the bounds inline and made clang warn "overflow in expression" on its own definition, in every
+// program. The message names the operation instead, which is the whole of what a reader needs.
+#define KAMA_SDIV_CHK(NAME, T, TMIN)                                            \
+static inline T NAME(T a, T b) {                                                \
+    if (b == (T)-1 && a == (TMIN)) kama_sdiv_fail();                             \
+    return a / b;                                                               \
+}
+KAMA_SDIV_CHK(kama_sdiv_i32, int32_t, INT32_MIN)
+KAMA_SDIV_CHK(kama_sdiv_i64, int64_t, INT64_MIN)
+
 // Signed overflow TRAPS in debug and WRAPS in release — the same two-tier rule `int32`/`int64` get from
-// `-fsanitize=signed-integer-overflow` + `-fwrapv`. `NDEBUG` is the release tier's marker; the driver
-// passes it with `-O3`. The release arm is a plain truncation, which IS the defined two's-complement
-// wrap, so this costs exactly nothing in a release build.
+// `-fsanitize=signed-integer-overflow` (debug only, since 0.9.125) + `-fwrapv`. `NDEBUG` is the release
+// tier's marker; the driver passes it with `-O3`. The release arm is a plain truncation, which IS the
+// defined two's-complement wrap, so this costs exactly nothing in a release build.
 //
 // ⚠️ NOT used for `/`. The only division that can overflow is `TYPE_MIN / -1`, which SPEC promises traps
-// in EVERY build, so the emitter calls `kama_arith_chk` directly there rather than through this macro.
+// in EVERY build, so the emitter calls `kama_arith_chk` (sub-`int`, where the narrowing catches it) or
+// `kama_sdiv_i32`/`_i64` (above) directly rather than through this macro.
 #ifdef NDEBUG
 #  define KAMA_ARITH_NARROW(T, LO, HI, V)  ((T)(V))
 #else

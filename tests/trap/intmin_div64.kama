@@ -1,0 +1,16 @@
+// The `int64` sibling of intmin_div.kama, and it is not redundant: `INT64_MIN / -1` is the case a
+// RESULT-based overflow check gets wrong, because the result overflows the very `long long` such a check
+// would have to compute it in. kama_sdiv_i64 tests the OPERANDS (`b == -1 && a == INT64_MIN`) for that
+// reason, and this fixture is what proves the 64-bit path is reached rather than only the 32-bit one.
+//
+// It also matters more than it used to. This trap came from `-fsanitize=signed-integer-overflow` until
+// 0.9.125, which the driver passed in BOTH tiers for this one case; the sanitizer is debug-only now and
+// the check is emitted, so this fixture is testing kama's own code rather than a compiler flag.
+// The release half — that it still traps with the sanitizer gone — is asserted by
+// tools/check-release-arith.sh, which builds the same shape with `--release`.
+import { std::num::int64Min };
+fn int32 main() {
+    int64 neg1 = 0i64 - 1i64;
+    int64 q = int64Min() / neg1;              // INT64_MIN / -1 overflows -> trap
+    return cast<int32>(q & 1i64);
+}

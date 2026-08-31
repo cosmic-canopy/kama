@@ -1176,6 +1176,10 @@ UB:
   `wrappingNegI32` (+ the `I64` set) always wrap and never trap (computed in the unsigned type), or just use
   unsigned math directly. **Unsigned overflow always wraps** (as C already defines).
 - **Divide by zero** and **`INT_MIN / -1`** **trap** (a clean abort) in every build — always bugs, never UB.
+  Divide-by-zero comes from the sanitizer; `TYPE_MIN / -1` is **emitted by the compiler**
+  (`kama_sdiv_i32`/`_i64`), because `-fwrapv` does not define it and the release tier no longer carries
+  the signed-overflow sanitizer. The check is on the *operands*, since `INT64_MIN / -1` overflows the
+  width a result check would use (`tests/trap/intmin_div`, `intmin_div64`).
 - **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
   (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
 - **Out-of-range `float → int`** **traps**; in-range truncates toward zero.
@@ -1203,6 +1207,13 @@ UB:
 
 Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dependency) + `-fwrapv` +
 the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.
+⚠️ **`-fsanitize=signed-integer-overflow` is passed in the DEBUG tier only**, and that is load-bearing
+rather than incidental: it is not reliably suppressed by `-fwrapv` (Apple clang does not suppress it;
+Ubuntu clang and gcc do), so passing it in release made overflow trap on one platform and wrap on
+another *and* cost a compare-and-branch on every signed add and multiply — against an invariant that
+calls release arithmetic C-parity. The release tier therefore relies on `-fwrapv` alone, with the one
+case it does not define checked explicitly. `tools/check-release-arith.sh` asserts both the semantics
+and the zero cost, on a tier the fixture suite cannot build.
 
 ```kama
 import { std::math::Vec3, std::math::Mat4 };
