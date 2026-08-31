@@ -2678,7 +2678,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     // `InlineArray<T,N>` spells `InlineArray_<mangleT>_<N>`, and `Simd<T,N>` spells `Simd_<mangleT>_<N>` —
     // the same two-argument shape (the comptime size mangles to its value), so one arm serves both.
     if (type->genericArg && type->value && type->genericArgs
-        && (*type->value == "InlineArray" || *type->value == "Simd")) {
+        && (*type->value == "InlineArray" || *type->value == "Simd" || *type->value == "Mask")) {
         std::string m = *type->value;
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
@@ -3187,6 +3187,20 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         return "0";
     }
     if (!lUser && !rUser) {
+        // A `Mask<T, N>` carries NO operators. Its lanes are all-ones/all-zeros bit patterns rather than
+        // numbers, so `m * n` and `m + n` are nonsense that C would nevertheless compute — a mask is a
+        // raw vector type, so without this it lands on the primitive path below and compiles silently.
+        // Keeping arithmetic off a mask is half the reason it is a separate type from `Simd` at all (the
+        // other half being that `select` cannot then be handed a data vector), so the rule has to be
+        // enforced rather than merely documented.
+        if (isSimdColl(lc) || isSimdColl(rc)) { /* a DATA vector — elementwise operators are the point */ }
+        else if (isMaskColl(lc) || isMaskColl(rc)) {
+            unsupported(("`" + binaryOperator(token) + "` is not defined on a `Mask<T, N>` — its lanes are "
+                         "all-ones/all-zeros bit patterns, not numbers. Combine masks with `and(rhs:)`, "
+                         "`or(rhs:)` and `not()`, test them with `anyTrue()`/`allTrue()`, and use "
+                         "`select(ifTrue:, ifFalse:)` to pick lanes").c_str(), line);
+            return "0";
+        }
         // The operand measurement (C2) goes HERE and nowhere else: this branch is entered only when
         // neither side is a user type, so a user `operator+`, an `Equatable`/`Comparable` lowering, a
         // contract value, a `sig` and `string + string` are all structurally out of reach — they return
@@ -5699,7 +5713,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << nm << ".ctrl->" << (k == CollKind::Weak ? "weak" : "strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl
-                               && !isFixedColl(ty) && !isSimdColl(ty) && isNamedValue(init.get())) {
+                               && !isFixedColl(ty) && !isValueVectorKind(_classes[ty].collKind)
+                               && isNamedValue(init.get())) {
                         // a collection move/deep-copy isn't a plain `=` — require a marker. (A
                         // `Fixed` is a value: the plain `=` above already copied it — no marker. A
                         // `Simd` likewise, and even more plainly: it is a `vector_size` typedef over a
@@ -8716,6 +8731,12 @@ bool CEmitter::isSimdColl(const std::string& cls) const
     return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Simd;
 }
 
+bool CEmitter::isMaskColl(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Mask;
+}
+
 // The mangling suffix for an element type: primitives use a short stable
 // spelling; a class/enum uses its own name. Array<int32> -> "int32".
 std::string CEmitter::mangleElem(SharedIdentifier elem)
@@ -8908,7 +8929,7 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     // std::memory), not intrinsic collections; they route through registerGenericTypeInst. `InlineArray<T,N>`
     // (the const-generic value array) stays intrinsic.
     return t->genericArg && t->value &&
-           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray" || *t->value == "Simd");
+           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray" || *t->value == "Simd" || *t->value == "Mask");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -8942,8 +8963,18 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 
     // Simd<T, N> — the lane batch. A sibling shape (two args, value semantics) with a different C
     // lowering: a `vector_size` typedef rather than a struct. See registerSimd.
-    if (!isStr && collType->value && *collType->value == "Simd") {
-        registerSimd(collType);
+    //
+    // `Mask<T, N>` routes here TOO, and deliberately: a mask only ever arises from a comparison on its
+    // data vector, so registerSimd registers the pair together. Spelling `Mask<float32,4>` in a type
+    // annotation without ever mentioning `Simd<float32,4>` is legal and lands in the same place.
+    if (!isStr && collType->value && (*collType->value == "Simd" || *collType->value == "Mask")) {
+        if (*collType->value == "Mask") {
+            SharedIdentifier sTy = std::make_shared<IdentifierNode>(*collType);
+            sTy->value = std::make_shared<std::string>("Simd");
+            registerSimd(sTy);
+        } else {
+            registerSimd(collType);
+        }
         return;
     }
 
@@ -9248,7 +9279,151 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     addMethod("abs", {}, simdType, true);
     addMethod("min", { rhs }, simdType, true);
     addMethod("max", { rhs }, simdType, true);
+    // The lane permutations — the operations that have NO scalar spelling, and the reason this type
+    // exists at all. Registered here so dispatch resolves them; the CALL is intercepted in emitDispatch
+    // and folded to `__builtin_shufflevector`, because the lane indices must be literals.
+    ParamSig pat; pat.name = "pattern"; pat.byRef = false;
+    pat.kindCType = "InlineArray_int32_" + std::to_string(n);
+    addMethod("shuffle", { pat }, simdType, true);
+    addMethod("blend",   { rhs, pat }, simdType, true);
+    // ⚠️ The pattern's `InlineArray<int32, N>` is deliberately NOT registered. The literal is folded to
+    // lane indices at the call and never reaches runtime, so registering it would emit an
+    // `InlineArray_int32_N` struct plus its five bounds-checked accessors into every program that uses a
+    // `Simd` and reference none of them. The ParamSig above names the type for arity/kind matching, which
+    // is all the dispatch path needs before emitSimdShuffle takes over.
+
+    // The MASK partner. Registered here rather than on first use of `Mask<T,N>` because the comparisons
+    // that produce one live on this type, so the pair is always needed together — and because a mask's C
+    // lane width is derived from T, which is known here and nowhere cheaper.
+    const std::string mName = "Mask_" + elemMangle + "_" + std::to_string(n);
+    SharedIdentifier mTy = synthId("Mask");
+    {
+        SharedIdentifierList mArgs = std::make_shared<IdentifierList>();
+        mArgs->push_back(elem); mArgs->push_back(nArg);
+        mTy->genericArg = elem; mTy->genericArgs = mArgs; mTy->line = simdType->line;
+    }
+    if (!_collections.count(mName)) {
+        // A mask's lane is the SIGNED INTEGER of the element's own width — which is exactly what a vector
+        // comparison on that element produces (measured; see KAMA_MASK_TYPE). This is the whole reason a
+        // mask carries `T` rather than just `N`.
+        const char* mElemC = bits == 8 ? "int8_t" : bits == 16 ? "int16_t"
+                           : bits == 32 ? "int32_t" : "int64_t";
+        CollectionInfo mi2;
+        mi2.kind = CollKind::Mask; mi2.cName = mName;
+        mi2.elemCType = mElemC; mi2.elemMangle = elemMangle; mi2.elemClass = "";
+        mi2.constValue = n; mi2.ifacePartner = cName;   // the data vector `select` hands back
+        _collections[mName] = mi2;
+        _collectionOrder.push_back(mName);
+
+        ClassInfo mc;
+        mc.name = mName; mc.isIntrinsicColl = true; mc.collKind = CollKind::Mask;
+        mc.collElemClass = ""; mc.destructible = false;
+        auto addM = [&](const std::string& nm, std::vector<ParamSig> ps, SharedIdentifier ret) {
+            MethodInfo m; m.cName = mName + "__" + nm;
+            m.params = std::move(ps); m.returnType = ret; m.isIntrinsic = true; m.isConst = true;
+            mc.methods[nm] = m;
+        };
+        ParamSig t; t.name = "ifTrue";  t.byRef = false; t.kindCType = cName;
+        ParamSig f; f.name = "ifFalse"; f.byRef = false; f.kindCType = cName;
+        ParamSig o; o.name = "rhs";     o.byRef = false; o.kindCType = mName;
+        addM("select",  { t, f }, simdType);
+        addM("and",     { o }, mTy);
+        addM("or",      { o }, mTy);
+        addM("not",     {},    mTy);
+        addM("anyTrue", {},    synthId("bool"));
+        addM("allTrue", {},    synthId("bool"));
+        _classes[mName] = mc;
+    }
+
+    // The comparisons produce a mask, so they belong to the DATA vector but name the mask type. These
+    // are the second operation with no scalar spelling: a lane mask as a first-class value.
+    addMethod("greaterThan", { rhs }, mTy, true);
+    addMethod("lessThan",    { rhs }, mTy, true);
+    addMethod("atLeast",     { rhs }, mTy, true);
+    addMethod("atMost",      { rhs }, mTy, true);
+    addMethod("equals",      { rhs }, mTy, true);
+    addMethod("notEquals",   { rhs }, mTy, true);
+    // Horizontal reductions — the deliberate collapse to a scalar.
+    addMethod("reduceAdd", {}, elem, true);
+    addMethod("reduceMul", {}, elem, true);
+    addMethod("reduceMin", {}, elem, true);
+    addMethod("reduceMax", {}, elem, true);
     _classes[cName] = ci;
+}
+
+// `v.shuffle(pattern: [3,2,1,0])` and `a.blend(rhs: b, pattern: [0,5,2,7])` -> `__builtin_shufflevector`.
+//
+// The pattern must be a COMPILE-TIME CONSTANT, and that is a hardware fact rather than an implementation
+// shortcut: the lane selection is encoded in the instruction, so a constant `wzyx` becomes two register
+// ops while a runtime pattern spills to the stack and rebuilds the vector one scalar load at a time. Both
+// gcc and clang accept `__builtin_shufflevector` (measured — only the TYPE spelling needed a per-compiler
+// seam, and `vector_size` removed even that), so there is one emission here and no `#if`.
+//
+// Why a value argument rather than `shuffle::<3,2,1,0>()`, which is what the design first specified: a
+// method turbofish does not exist in kama (kama.cemit.cpp — "a method takes no type arguments"), a method
+// cannot take type or comptime parameters at all, and the index COUNT varies with N, which a fixed
+// parameter list cannot express and kama has no variadic generics for. Zig's `@shuffle` and C#'s
+// `Vector128.Shuffle` both take the mask as a value for the same reason.
+std::string CEmitter::emitSimdShuffle(const std::string& cls, const std::string& method,
+                                      const std::string& recvPtr, SharedArgumentList args, int srcLine)
+{
+    const CollectionInfo& info = _collections[cls];
+    const int64_t n = info.constValue;
+    const bool isBlend = (method == "blend");
+
+    SharedExpression patternExpr, rhsExpr;
+    if (args) for (auto& a : *args) {
+        auto* an = dynamic_cast<ArgumentNode*>(a.get());
+        if (!an || !an->name || !an->name->value) continue;
+        if (*an->name->value == "pattern") patternExpr = an->expression;
+        else if (*an->name->value == "rhs")     rhsExpr = an->expression;
+    }
+    if (!patternExpr || (isBlend && !rhsExpr)) {
+        unsupported((isBlend ? "`blend` takes `rhs:` and `pattern:`" : "`shuffle` takes `pattern:`"),
+                    srcLine);
+        return "0";
+    }
+
+    // The pattern is an `InlineArray<int32, N>`, and its elements have to be readable HERE. A literal is
+    // the spelling that always works; a `comptime` constant would need the interpreter's baked value,
+    // which is a separate seam. Anything else is refused by name rather than mis-lowered.
+    auto* lit = dynamic_cast<ArrayLiteralNode*>(patternExpr.get());
+    if (!lit || !lit->elements) {
+        unsupported(("the `pattern:` of `" + method + "` must be a literal list of lane indices — "
+                     "`[3, 2, 1, 0]`. The lane selection is encoded in the machine instruction, so it "
+                     "cannot come from a runtime value").c_str(), srcLine);
+        return "0";
+    }
+    if ((int64_t)lit->elements->size() != n) {
+        unsupported(("this pattern has " + std::to_string(lit->elements->size()) + " lane index(es) but `"
+                     + cls + "` has " + std::to_string(n)).c_str(), srcLine);
+        return "0";
+    }
+    // `blend` draws from TWO vectors, so its index space is 0..2N-1: the low half selects a lane of the
+    // receiver, the high half a lane of `rhs`. `shuffle` passes the receiver twice, so 0..N-1 is all it
+    // may name — an index in the upper half would silently read the same vector again.
+    const int64_t hi = isBlend ? (2 * n) : n;
+    std::string idx;
+    for (auto& e : *lit->elements) {
+        int64_t v;
+        if (!constValue(e, v)) {
+            unsupported(("every lane index in a `" + method + "` pattern must be an integer constant")
+                        .c_str(), srcLine);
+            return "0";
+        }
+        if (v < 0 || v >= hi) {
+            unsupported(("lane index " + std::to_string(v) + " is out of range for `" + method
+                         + "` on `" + cls + "` — valid indices are 0.." + std::to_string(hi - 1)
+                         + (isBlend ? " (0.." + std::to_string(n - 1) + " select this vector, "
+                                      + std::to_string(n) + ".." + std::to_string(2 * n - 1)
+                                      + " select `rhs`)" : "")).c_str(), srcLine);
+            return "0";
+        }
+        idx += ", " + std::to_string(v);
+    }
+    const std::string self  = "(*(" + cls + "*)" + recvPtr + ")";
+    const std::string other = isBlend ? emitOperandByValue(rhsExpr) : self;
+    return "__builtin_shufflevector(" + self + ", " + other + idx + ")";
 }
 
 // Register a smart pointer (Owned/Shared/Weak) as a synthetic ClassInfo backed by
@@ -11792,10 +11967,26 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             if (typesOnly)
                 *_out << "KAMA_SIMD_TYPE(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
-            else
+            else {
                 *_out << "KAMA_SIMD_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName
                      << ", InlineArray_" << info.elemMangle << "_" << info.constValue << ")\n";
+                *_out << "KAMA_SIMD_REDUCE(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+                *_out << "KAMA_SIMD_CMP(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName
+                     << ", Mask_" << info.elemMangle << "_" << info.constValue << ")\n";
+            }
+        }
+        else if (info.kind == CollKind::Mask) {
+            // Same shape as a Simd — a bare vector typedef, both halves from here. Its `_FUNCS` names the
+            // partner DATA vector (`select` hands one back), which `ifacePartner` carries.
+            if (typesOnly)
+                *_out << "KAMA_MASK_TYPE(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+            else
+                *_out << "KAMA_MASK_FUNCS(" << info.constValue << ", " << info.ifacePartner
+                     << ", " << info.cName << ")\n";
         }
         else if (info.kind == CollKind::String) {
             // kama_string itself is predefined in the runtime header; only the `.find()` Optional wrapper
@@ -13428,7 +13619,7 @@ void CEmitter::computeDestructible()
     for (auto& kv : _classes)
         kv.second.destructible = kv.second.hasDtor ||
             (kv.second.isIntrinsicColl && kv.second.collKind != CollKind::Fixed
-                                       && kv.second.collKind != CollKind::Simd);
+                                       && !isValueVectorKind(kv.second.collKind));
     bool changed = true;
     while (changed) {
         changed = false;
@@ -21874,6 +22065,17 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (mi->isIntrinsic && !mi->node && owner && owner->isIntrinsicColl && owner->collKind == CollKind::String)
         recordBuiltinRef("string." + method, site);
 
+    // `Simd`'s lane-permuting methods cannot go through the ordinary call path, and the reason is the
+    // hardware rather than the compiler: `__builtin_shufflevector` requires its lane indices to be
+    // INTEGER CONSTANT EXPRESSIONS, because the CPU encodes the permutation in the instruction itself
+    // (a constant `wzyx` is `rev64.4s; ext.16b`; the same permutation with a runtime pattern spills the
+    // vector to the stack and rebuilds it with four scalar loads). So the pattern is folded HERE, at the
+    // call, into literal arguments — the emitter reads the constant the way `[v; N]`'s count and a
+    // comptime generic argument are already read, and refuses anything it cannot fold.
+    if (mi->isIntrinsic && owner && owner->isIntrinsicColl && owner->collKind == CollKind::Simd
+        && (method == "shuffle" || method == "blend"))
+        return emitSimdShuffle(owner->name, method, recvPtr, args, srcLine);
+
 #if KAMA_INHERITANCE
     if (mi->isVirtual) {
         // Devirtualize when the concrete target is unique for every possible dynamic type: a
@@ -24322,7 +24524,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
     // typedef over a primitive, so there is no struct, no element dtor and nothing to tear down. Allow
     // both; reject heap collections, smart pointers, destructible and move-only values.
     bool isValueArray = _classes.count(ty)
-                     && (_classes[ty].collKind == CollKind::Fixed || _classes[ty].collKind == CollKind::Simd);
+                     && (_classes[ty].collKind == CollKind::Fixed || isValueVectorKind(_classes[ty].collKind));
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {

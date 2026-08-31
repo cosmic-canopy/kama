@@ -1,0 +1,7 @@
+// A lane index outside the vector. `shuffle` names ONE vector, so 0..N-1 is all it may use — an index in
+// `blend`'s upper half (N..2N-1, which selects `rhs`) would silently read the same vector again here.
+fn int32 main() {
+    Simd<float32, 4> a = [1.0f32; 4];
+    Simd<float32, 4> r = a.shuffle(pattern: [0, 1, 2, 9]);
+    return cast<int32>(r.lane(index: 0));
+}

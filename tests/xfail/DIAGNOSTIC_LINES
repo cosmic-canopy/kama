@@ -514,6 +514,9 @@ shadow_param	shadow_param.kama:3
 signflip_local	signflip_local.kama:1
 simd_bad_elem	simd_bad_elem.kama:6 simd_bad_elem.kama:7
 simd_bad_width	simd_bad_width.kama:10 simd_bad_width.kama:9
+simd_mask_arith	simd_mask_arith.kama:10
+simd_shuffle_oob	simd_shuffle_oob.kama:5
+simd_shuffle_runtime	simd_shuffle_runtime.kama:9
 sizeof_const_generic_unfoldable	sizeof_const_generic_unfoldable.kama:13
 sizeof_usize_not_foldable	sizeof_usize_not_foldable.kama:9
 slot_assignment_fill	slot_assignment_fill.kama:8

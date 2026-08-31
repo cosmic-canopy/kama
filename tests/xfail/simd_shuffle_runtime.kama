@@ -1,0 +1,11 @@
+// A shuffle pattern must be a literal. This is a HARDWARE constraint, not an implementation shortcut:
+// `__builtin_shufflevector` requires integer constant expressions because the CPU encodes the
+// permutation in the instruction itself. Measured: a constant `wzyx` is `rev64.4s; ext.16b`, while the
+// same permutation from a runtime pattern spills the vector to the stack and rebuilds it with four
+// scalar loads. Accepting a runtime pattern would silently turn a two-instruction op into that.
+fn int32 main() {
+    Simd<float32, 4> a = [1.0f32; 4];
+    InlineArray<int32, 4> p = [3, 2, 1, 0];
+    Simd<float32, 4> r = a.shuffle(pattern: p);
+    return cast<int32>(r.lane(index: 0));
+}

@@ -1776,7 +1776,28 @@ InlineArray<float32, 4> back = c.toArray();               // back to addressable
   already compiles to SIMD on every target kama ships, and *better*: measured, a hand-written lane batch
   was **65% slower** than the scalar source for a cross product, because the compiler de-interleaves an
   array of structs and does four at once. `Simd` is for the operations that have no scalar spelling at
-  all — an arbitrary shuffle, a two-vector blend, a lane mask as a value.
+  all, which are these three:
+
+```kama
+Simd<float32, 4> rev = a.shuffle(pattern: [3, 2, 1, 0]);        // an arbitrary permutation
+Simd<float32, 4> mix = a.blend(rhs: b, pattern: [0, 5, 2, 7]);  // two vectors: 0..3 from a, 4..7 from b
+Mask<float32, 4> gt  = a.greaterThan(rhs: b);                   // a lane mask, as a VALUE
+Simd<float32, 4> pick = gt.select(ifTrue: a, ifFalse: b);
+float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
+```
+
+- **A shuffle pattern must be a literal**, and that is the hardware talking: `__builtin_shufflevector` <!-- xfail: simd_shuffle_runtime -->
+  needs integer constant expressions because the CPU encodes the permutation *in the instruction*. A
+  constant `wzyx` is two register ops; the same permutation from a runtime value spills the vector to
+  the stack and rebuilds it with four scalar loads.
+- **An out-of-range lane index is an error** — `shuffle` names one vector (`0..N-1`), `blend` names two <!-- xfail: simd_shuffle_oob -->
+  (`0..2N-1`, where the upper half selects `rhs`).
+- **`Mask<T, N>` carries `T`, not just `N`**, because a comparison's lane width follows its *operand's*:
+  a `float32` compare yields 4-byte lanes and an `int16` compare 2-byte ones, identically on gcc and
+  clang. A bare `Mask<4>` would have no C type. Its lanes are all-ones/all-zeros **bit patterns**, so it
+  carries **no arithmetic operators** — combine with `and(rhs:)`/`or(rhs:)`/`not()`, test with <!-- xfail: simd_mask_arith -->
+  `anyTrue()`/`allTrue()`. That, and `select` living on the mask so it cannot be handed a data vector,
+  is why it is a distinct type rather than a `Simd<bool, N>`.
 - **`Simd` is not `InlineArray` and not `Vec4`.** An `InlineArray` is a *container* — indexed, iterated,
   lanes meaning whatever you decide. `std::math`'s `Vec4` is *geometry* — lanes named `x/y/z/w`, meaning
   different things, laid out for a GPU vertex buffer. A `Simd`'s lanes are *interchangeable*.

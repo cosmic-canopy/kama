@@ -678,6 +678,80 @@ static inline NAME NAME##__max(const NAME* self, NAME o) {                      
 #define KAMA_SIMD_DEFINE(T, N, NAME, ARR) KAMA_SIMD_TYPE(T, N, NAME) KAMA_SIMD_FUNCS(T, N, NAME, ARR)
 
 
+// ---- Mask<T, N> — a lane mask as a VALUE, which is the other thing scalars cannot say ----------------
+//
+// ⚠️ A mask must carry its element type `T`, not just the lane count, and that is a MEASURED constraint
+// rather than a stylistic one. A vector comparison yields an integer vector whose lane width follows the
+// OPERAND's — identical on gcc 13.3 and clang 18:
+//
+//     f32x4 > f32x4  ->  4-byte lanes      i16x8 > i16x8  ->  2-byte lanes
+//     f64x2 > f64x2  ->  8-byte lanes
+//
+// So a bare `Mask<4>` has no C type at all: it is one thing from a `float32` compare and another from an
+// `int16` one. `Mask<T, N>` lowers to the signed integer vector of T's own width, which is exactly what
+// the comparison produces. (Rust's portable_simd reached the same conclusion — its mask is parameterised
+// by the element's mask type.)
+//
+// Lanes are all-ones or all-zeros BIT PATTERNS, not booleans, which is why a mask is its own type rather
+// than a `Simd<bool, N>`: `*`, `/` and `reduceAdd` are meaningless on it, and `select` must not accept a
+// data vector by mistake.
+#define KAMA_MASK_TYPE(IT, N, NAME) typedef IT NAME __attribute__((vector_size(sizeof(IT) * (N))));
+
+// `select` is spelled as mask AND/OR rather than the ternary `m ? a : b`, because GCC REJECTS a ternary
+// on vector operands — clang accepts it, and taking clang's spelling would have made `--cc gcc` fail to
+// build rather than silently miscompile, but failing to build is still failing. The memcpy round-trips
+// are how a float lane batch is bit-manipulated without type-punning UB; both compilers fold them to
+// nothing at -O2 (the object is register-sized).
+#define KAMA_MASK_FUNCS(N, NAME, MNAME)                                         \
+static inline NAME MNAME##__select(const MNAME* m, NAME ifTrue, NAME ifFalse) { \
+    MNAME ti, fi, r; NAME out;                                                   \
+    __builtin_memcpy(&ti, &ifTrue,  sizeof(NAME));                               \
+    __builtin_memcpy(&fi, &ifFalse, sizeof(NAME));                               \
+    r = (*m & ti) | (~*m & fi);                                                  \
+    __builtin_memcpy(&out, &r, sizeof(NAME));                                    \
+    return out;                                                                 \
+}                                                                               \
+static inline MNAME MNAME##__and(const MNAME* self, MNAME o) { return *self & o; } \
+static inline MNAME MNAME##__or (const MNAME* self, MNAME o) { return *self | o; } \
+static inline MNAME MNAME##__not(const MNAME* self)          { return ~*self;    } \
+static inline bool  MNAME##__anyTrue(const MNAME* self) {                       \
+    for (int i = 0; i < (N); ++i) if ((*self)[i]) return true;                   \
+    return false;                                                               \
+}                                                                               \
+static inline bool  MNAME##__allTrue(const MNAME* self) {                       \
+    for (int i = 0; i < (N); ++i) if (!(*self)[i]) return false;                 \
+    return true;                                                                \
+}
+
+// The comparisons live with the DATA vector (they are `a.greaterThan(rhs: b)`) but produce the mask, so
+// they need both names. A vector compare already yields the right lane width; the cast names the type.
+#define KAMA_SIMD_CMP(T, N, NAME, MNAME)                                        \
+static inline MNAME NAME##__greaterThan(const NAME* self, NAME o) { return (MNAME)(*self >  o); } \
+static inline MNAME NAME##__lessThan   (const NAME* self, NAME o) { return (MNAME)(*self <  o); } \
+static inline MNAME NAME##__atLeast    (const NAME* self, NAME o) { return (MNAME)(*self >= o); } \
+static inline MNAME NAME##__atMost     (const NAME* self, NAME o) { return (MNAME)(*self <= o); } \
+static inline MNAME NAME##__equals     (const NAME* self, NAME o) { return (MNAME)(*self == o); } \
+static inline MNAME NAME##__notEquals  (const NAME* self, NAME o) { return (MNAME)(*self != o); }
+
+// Horizontal reductions — the one place a lane batch is deliberately collapsed to a scalar. Written as a
+// per-lane fold; the backends turn `reduceAdd` into `faddp`/`addv`-style pair reductions where the ISA
+// has them. This is the ONLY operation here that is cheaper as a scalar loop over memory, which is why
+// `docs/design/simd.md` §1c warns against reaching for `Simd` when a horizontal dot product is the goal.
+#define KAMA_SIMD_REDUCE(T, N, NAME)                                            \
+static inline T NAME##__reduceAdd(const NAME* self) {                           \
+    T a = (*self)[0]; for (int i = 1; i < (N); ++i) a += (*self)[i]; return a;   \
+}                                                                               \
+static inline T NAME##__reduceMul(const NAME* self) {                           \
+    T a = (*self)[0]; for (int i = 1; i < (N); ++i) a *= (*self)[i]; return a;   \
+}                                                                               \
+static inline T NAME##__reduceMin(const NAME* self) {                           \
+    T a = (*self)[0]; for (int i = 1; i < (N); ++i) { T x = (*self)[i]; if (x < a) a = x; } return a; \
+}                                                                               \
+static inline T NAME##__reduceMax(const NAME* self) {                           \
+    T a = (*self)[0]; for (int i = 1; i < (N); ++i) { T x = (*self)[i]; if (x > a) a = x; } return a; \
+}
+
+
 // kama `char` is ONE UNICODE CODEPOINT, not a byte and not a number — `s[i]` is a `uint8`, and
 // codepoints are reached only through `.chars()`. Its representation is a 32-bit unsigned integer, but it
 // is a DISTINCT TYPE, and this typedef is what makes that true for kama's own checker.

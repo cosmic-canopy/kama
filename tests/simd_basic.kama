@@ -37,5 +37,36 @@ fn int32 main() {
     Simd<float32, 4> dup = q;
     r = r + cast<int32>(dup.lane(index: 1));            //  2   => 23
 
+
+    // ---- The lane work: the operations that have NO scalar spelling at all -------------------------
+    // This is what the type exists for. Everything above it, a loop over `Vec4`s already compiles to
+    // SIMD on its own, and often better (design/simd.md §1c). These three cannot be written any other way.
+
+    // An arbitrary permutation. The lane indices must be COMPILE-TIME constants because the CPU encodes
+    // the permutation in the instruction; a runtime pattern spills the vector to the stack.
+    Simd<float32, 4> rev = a.shuffle(pattern: [3, 2, 1, 0]);       // 4, 3, 2, 1
+    r = r + cast<int32>(rev.lane(index: 0));                        //  4  => 27
+
+    // A two-vector blend: lanes 0..3 select from the receiver, 4..7 from `rhs`.
+    Simd<float32, 4> ten = [10.0f32, 20.0f32, 30.0f32, 40.0f32];
+    Simd<float32, 4> mix = a.blend(rhs: ten, pattern: [0, 5, 2, 7]);  // 1, 20, 3, 40
+    r = r + cast<int32>(mix.lane(index: 1));                        // 20  => 47
+
+    // A lane mask as a VALUE. `Mask<T, N>` carries T because a compare's lane width follows its
+    // operand's, so a bare `Mask<4>` would have no C type.
+    Simd<float32, 4> four = [4.0f32; 4];
+    Simd<float32, 4> vals = [1.0f32, 5.0f32, 3.0f32, 7.0f32];
+    Mask<float32, 4> gt = vals.greaterThan(rhs: four);              // F, T, F, T
+    Simd<float32, 4> picked = gt.select(ifTrue: vals, ifFalse: four); // 4, 5, 4, 7
+    r = r + cast<int32>(picked.reduceAdd());                        // 20  => 67
+    if (gt.anyTrue()) { r = r + 1; }                                //      => 68
+    if (gt.allTrue()) { r = r + 100; }                              // not taken
+    Mask<float32, 4> inv = gt.not();
+    if (inv.anyTrue()) { r = r + 1; }                               //      => 69
+
+    // Horizontal reductions — the deliberate collapse to a scalar.
+    r = r + cast<int32>(vals.reduceMax());                          //  7  => 76
+    r = r + cast<int32>(vals.reduceMin());                          //  1  => 77
+
     return r;
 }

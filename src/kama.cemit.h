@@ -205,12 +205,19 @@ struct MethodInfo {
 // A built-in generic collection / smart-pointer kind. Backed by a C runtime template. Owned<T> is a
 // unique heap-owning pointer kind. (The growable/fixed heap arrays are the pure-kama library types
 // `DynamicArray`/`FixedArray`, not kinds here; `Fixed` is `InlineArray<T,N>`, the const-generic value array.)
-// `Simd` is here rather than beside `Fixed` for one reason worth stating: it is the only kind whose C
-// type is NOT a struct. It lowers to a `vector_size` typedef over a primitive, so it needs no forward
+// `Simd` and `Mask` are here rather than beside `Fixed` for one reason worth stating: they are the only
+// kinds whose C type is NOT a struct. It lowers to a `vector_size` typedef over a primitive, so it needs no forward
 // `typedef struct`, has no by-value struct dependency, and its `_TYPE` goes out in the EARLY types pass
 // where `Fixed`'s cannot. Every `collKind == Fixed` test in the struct-ordering passes is therefore a
-// test this kind must NOT accidentally join.
-enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd };
+// test these kinds must NOT accidentally join — and every `!= Fixed` test is one they must not join
+// EITHER, which is what `isValueVectorKind` below is for. A `Mask` is a `Simd` in every structural
+// respect; it is a separate kind so that `select` cannot be handed a data vector.
+enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd, Mask };
+// A `Simd` and a `Mask` are both bare `vector_size` typedefs over a primitive: no struct, no forward
+// declaration, no by-value dependency, no heap, nothing to drop. Every rule that asks "is this an
+// intrinsic collection that owns something" must answer NO for both, and asking it as `!= Fixed` — which
+// several sites did — silently answered yes. Use this instead of naming the kinds.
+inline bool isValueVectorKind(CollKind k) { return k == CollKind::Simd || k == CollKind::Mask; }
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "_F<file>"). Bare names
@@ -1513,6 +1520,11 @@ private:
     void registerCollection(SharedIdentifier collType);
     void registerFixed(SharedIdentifier fixedType);   // InlineArray<T,N> — the comptime-sized value array
     void registerSimd(SharedIdentifier simdType);     // Simd<T,N> — the lane batch (a `vector_size` typedef)
+    // `v.shuffle(pattern: […])` / `a.blend(rhs:, pattern: […])` — folds the pattern to literal lane
+    // indices and emits `__builtin_shufflevector`. Not an ordinary call: the indices must be integer
+    // CONSTANT expressions, because the CPU encodes the permutation in the instruction.
+    std::string emitSimdShuffle(const std::string& cls, const std::string& method,
+                                const std::string& recvPtr, SharedArgumentList args, int srcLine);
     // Const generics: the compile-time integer value of a const argument/param expression (an
     // integer literal, or a const-param identifier bound in the current instantiation via _comptimeSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
@@ -1573,6 +1585,7 @@ private:
     // collection machinery, but it is carved out of ownership (never destructible, copies freely).
     bool isFixedColl(const std::string& cls) const;
     bool isSimdColl(const std::string& cls) const;
+    bool isMaskColl(const std::string& cls) const;
     std::string emitArrayLiteral(ArrayLiteralNode* al);   // `[a,b,c]` / `[v; N]` -> a Fixed value
     void registerSmartPtr(CollKind kind, SharedIdentifier elem, const std::string& customName = "");   // Owned/Shared/Weak (customName: a library `Box<Contract>` routed here)
     void registerOptionalOfShared(SharedIdentifier elem);          // Optional<Shared<elem>> for Weak.tryUpgrade

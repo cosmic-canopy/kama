@@ -1,0 +1,12 @@
+// A `Mask<T, N>` carries NO arithmetic operators, and enforcing that is half the reason it is a separate
+// type from `Simd` rather than the `Simd<bool, N>` the design first considered. Its lanes are
+// all-ones/all-zeros BIT PATTERNS, not numbers, so `m * n` is nonsense — but a mask is a raw vector type
+// in C, so without a rule it lands on the primitive-operator path and compiles in silence.
+//
+// (The other half is that `select` lives on the mask, so it cannot be handed a data vector by mistake.)
+fn int32 main() {
+    Simd<float32, 4> a = [1.0f32; 4];
+    Mask<float32, 4> m = a.greaterThan(rhs: a);
+    Mask<float32, 4> p = m * m;
+    return 0;
+}

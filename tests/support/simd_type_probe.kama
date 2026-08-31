@@ -47,6 +47,30 @@ expose fn InlineArray<float32, 4> simdAbsDiv(InlineArray<float32, 4> a, float32 
     return r.toArray();
 }
 
+
+// The LANE WORK — the three operations with no scalar spelling, which is what the type is for. Same
+// shape rules as above: lanes in and out as an InlineArray, every lane live.
+expose fn InlineArray<float32, 4> simdShuffle(InlineArray<float32, 4> a) {
+    Simd<float32, 4> v = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> r = v.shuffle(pattern: [3, 2, 1, 0]);
+    return r.toArray();
+}
+
+expose fn InlineArray<float32, 4> simdBlend(InlineArray<float32, 4> a, InlineArray<float32, 4> b) {
+    Simd<float32, 4> x = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> y = [b[0], b[1], b[2], b[3]];
+    Simd<float32, 4> r = x.blend(rhs: y, pattern: [0, 5, 2, 7]);
+    return r.toArray();
+}
+
+expose fn InlineArray<float32, 4> simdSelect(InlineArray<float32, 4> a, float32 t) {
+    Simd<float32, 4> v = [a[0], a[1], a[2], a[3]];
+    Simd<float32, 4> k = [t; 4];
+    Mask<float32, 4> m = v.greaterThan(rhs: k);
+    Simd<float32, 4> r = m.select(ifTrue: v, ifFalse: k);
+    return r.toArray();
+}
+
 // `main` seeds real data and checks the result, so a build of this probe is also a correctness test —
 // the same property tests/support/simd_probe.kama has.
 fn int32 main() {
@@ -58,5 +82,12 @@ fn int32 main() {
     r = r + cast<int32>(m[2]);                                        // 33
     foreach (float32 e in x) { r = r + cast<int32>(e); }              // 2+1+0+1 = 4   => 37
     r = r + cast<int32>(q[3]);                                        // 2            => 39
+
+    InlineArray<float32, 4> sh = simdShuffle(a: src);                 // 4, 3, 2, 1
+    InlineArray<float32, 4> bl = simdBlend(a: src, b: m);             // 1, 22, 3, 44
+    InlineArray<float32, 4> se = simdSelect(a: src, t: 2.5f32);       // 2.5, 2.5, 3, 4
+    r = r + cast<int32>(sh[0]);                                       // 4            => 43
+    r = r + cast<int32>(bl[1]);                                       // 22           => 65
+    r = r + cast<int32>(se[3]);                                       // 4            => 69
     return r;
 }
