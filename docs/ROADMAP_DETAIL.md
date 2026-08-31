@@ -684,6 +684,40 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   type (`mat*vec`, `mat*mat`), matching C++/C#/Rust. Reopen only if a concrete case shows named params can't
   express it.
 
+- **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
+  `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
+  `function_declaration` arms); `method_declaration`'s four `FN` arms and both `CTOR` arms have none, so
+  `fn T widen<T>()` inside a type is a *parse error*, not a diagnosed restriction. A generic **type**'s
+  members are unaffected — they monomorphize per the enclosing type's parameters, which is the common case.
+  What is out of reach is a member introducing a parameter the receiver does not have.
+
+  **The idiom is a free function with bounds**, and the stdlib uses it throughout:
+  `fn void sortWith<T, C: Order<T>>(View<T> items, ref C by)`
+  ([lib/std/collections/sort.kama](../lib/std/collections/sort.kama)) is a free function precisely because
+  `C` is a second parameter `View<T>` cannot introduce. The method form *is* expressible — take
+  `ref Order<T> by`, a contract borrow — at the cost of dynamic dispatch where the free function
+  monomorphizes to a direct inlinable call. So this costs **ergonomics, not capability or performance**,
+  which is the same profile as the `fnptr` entry above and the same reason it waits. Note also that the
+  turbofish's absence on a method is *not* an extra restriction: `3c9b441` removed the one receiver
+  turbofish (`r.deserialize::<T>()`, sugar for a `__kamaDeserialize<T>` free trampoline), and with no
+  generic methods a method turbofish has nothing to name. Reopen if a real API cannot be spelled either way.
+
+- **A `comptime` generic parameter must be an INTEGRAL type** ([kama.y](../src/kama.y), the
+  `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
+  is where a user-writable "this argument must be compile-time constant" would come from, and it is
+  deferred with its own design doc: [design/comptime-params.md](design/comptime-params.md), ROADMAP row 16.
+  ⚠️ **Rust has shipped const generics since 2021 and still restricts them to integers, `bool` and `char`**,
+  because a composite value in a parameter list has to be encoded into a mangled symbol name. That is the
+  constraint, not an oversight to fix. The compiler can still *require* a constant argument for its own
+  intrinsics — `Simd`'s `shuffle(pattern:)` does — the same by-name knowledge it has of `InlineArray`'s
+  `get`/`set`/`length`.
+
+- **A non-constant turbofish argument reports the wrong thing.** `shifted::<runtime>(x: 2)`, where
+  `shifted` *is* a generic function, says *"turbofish type arguments are only valid on a generic function"*
+  — which is false and points away from the real problem, that `runtime` is not a compile-time constant.
+  A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
+  is exactly what kama's diagnostics exist to prevent. Wants an `xfail` fixture in the same commit as the fix.
+
 <a id="s3"></a>
 
 ## 3. Open design questions (settle before the work they gate)
