@@ -897,10 +897,11 @@ Methods + operators (one `operator*` per type: matrices/quaternions **compose**,
 are named methods — no overloading). Matrices are **column-major** with the **column-vector** convention
 (`result = M * v`, GPU/WebGPU-native); `perspective`/`orthographic`/`lookAt` target **WebGPU 0..1 depth**,
 right-handed. `Quat` is a unit quaternion (`fromAxisAngle`/`fromEuler`, Hamilton `*`, `rotate`, `slerp`/
-`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). **SIMD on a native target** needs no
+`nlerp`, `toMat3`/`toMat4`). All literals are `f32`-suffixed (a bare `1.0` is float64). **SIMD** needs no
 explicit vector types or intrinsics: the value types have a **SIMD-ready contiguous layout** (`Vec4` = 16 B,
 `Mat4` = 4×`Vec4`), and in a `--release` build the C backend **auto-vectorizes** the elementwise ops (`Vec4`
-`+`/`-`/scale, `Mat4.transform`, `Mat4*Mat4`) to **NEON on aarch64 and SSE on the x86-64 baseline** — landing
+`+`/`-`/scale, `Mat4.transform`, `Mat4*Mat4`) to **NEON on aarch64, SSE on the x86-64 baseline, and v128 on
+wasm** (the wasm build passes `-msimd128`; see [targets.md](targets.md) *Platform notes*) — landing
 hot math **at C parity**, and often better than a hand-written vector type would: clang de-interleaves the
 array to SoA registers and computes four `dot`s or four transforms at once. This relies on
 the ops **inlining** into the caller, which release builds guarantee (see *Building & debugging* — release
@@ -909,11 +910,13 @@ unchanged; SIMD is a pure throughput property). `Quat`'s Hamilton product is int
 shuffled ± pattern makes a hand-vectorized version *slower* than the 16 pipelined scalar FMAs on measured
 hardware (ARM64), which is the same effect that makes the auto-vectorized path win generally.
 
-⚠️ **Two limits, both measured.** A **wasm** build gets **no** vector instructions — the release path does not
-pass `-msimd128`, without which neither this code nor an explicit vector type emits a single v128 op. And an
-**arbitrary shuffle** or a **lane mask as a value** has no spelling in kama at all, at any target: those are
-what an explicit SIMD surface would add, and auto-vectorization cannot produce them from scalar source.
-Both are the subject of [design/simd.md](design/simd.md).
+⚠️ **One limit, measured.** An **arbitrary shuffle** or a **lane mask as a value** has no spelling in kama at
+all, at any target: those are what an explicit SIMD surface would add, and auto-vectorization cannot produce
+them from scalar source — the subject of [design/simd.md](design/simd.md). *(The other limit this paragraph
+used to carry — that a wasm build got no vector instructions at all — was real and is fixed: the driver now
+passes `-msimd128` on every wasm build. Both halves of the claim above are held down by guards that read
+real machine code, `tools/check-simd-native.sh` and `tools/check-simd-wasm.sh`; it went wrong twice for
+want of them.)*
 
 ### Numbers (`std::num`) ✅
 

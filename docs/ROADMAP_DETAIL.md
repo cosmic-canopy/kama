@@ -646,13 +646,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   measured **65% slower** than the scalar source for exactly that reason. So the row is **not** "add a
   vector type to a language that has no SIMD", and rebuilding `std::math` on a vector type is rejected on
   measurement (it also breaks `alignof(Vec4)`, and a 3-lane vector is 16 bytes, so `Vec3` cannot be one).
-  What is genuinely missing is smaller and sharper: **wasm gets no SIMD at all** (the release path passes
-  no `-msimd128`; with it, the *already-shipped* code emits v128 — a flag, not a language change), and
-  **a shuffle and a lane mask have no spelling** at any target. Three stages, sized: **S** the wasm flag +
-  a guard, **L** an additive `Simd<T, const N>` intrinsic type emitting `vector_size` through a header
+  What is genuinely missing is smaller and sharper. Stage 1 of three — **wasm got no SIMD at all**,
+  because the driver had never passed `-msimd128` — **shipped 2026-08-30** and was never a language
+  change: the flag alone makes the *already-shipped* `std::math` emit v128 (measured 0 → 14 in a real
+  `--release` build). It landed with the two guards the claim had never had, `tools/check-simd-wasm.sh`
+  (the repo's first `# check-legs: wasm` guard — ⚠️ **`./dev check` cannot run it**) and
+  `tools/check-simd-native.sh`, each carrying an internal negative control so a grep that can never match
+  fails instead of passing. What remains is that **a shuffle and a lane mask have no spelling** at any
+  target: **L** an additive `Simd<T, const N>` intrinsic type emitting `vector_size` through a header
   seam (⚠️ **not** `ext_vector_type` — gcc ignores it with a warning and silently leaves a one-lane
-  scalar), **S** a derived `SIMD128` `@compileFor` flag so a library can choose an algorithm rather than
-  hope. GOALS' *"one way to do a thing"* is answered by keeping `std::math` (geometry, named lanes, AoS)
+  scalar), plus **S** a derived `SIMD128` `@compileFor` flag so a library can choose an algorithm rather
+  than hope. GOALS' *"one way to do a thing"* is answered by keeping `std::math` (geometry, named lanes, AoS)
   and `Simd` (interchangeable lanes, shuffles/masks, SoA) as different tools, which the design argues
   from the measurements. The performance invariant is satisfied by construction: nothing on the existing
   path changes. ⚠️ The design also argues the row **no longer gates the 1.0 tag** — the only

@@ -9228,6 +9228,21 @@ int main(int argc, char** argv)
         // dynamic symbol table, so a host `dlopen`+`dlsym`s exactly the declared entry points. `used`
         // also keeps them past -dead_strip/--gc-sections. (native-only — rejected with --target wasm.)
         if (outShared) cmd << "-fPIC -shared -fvisibility=hidden ";
+        // wasm SIMD (v128) is OPT-IN in emscripten, and without this flag NOTHING on the wasm target
+        // vectorizes — not the auto-vectorized std::math path, not an explicit vector type. Measured
+        // 2026-08-30: a `--release --target wasm` build held ZERO v128 instructions, and the SAME
+        // generated C through `emcc -msimd128` held 18. That is not a language gap; kama had simply
+        // never passed the flag, while SPEC.md claimed the ops vectorized "to SSE/NEON/wasm128".
+        //
+        // BOTH TIERS on purpose. Debug and release stay on one instruction set, so there is no
+        // "vectorizes only in release" class of bug report — and -Oz still vectorizes (measured: 14
+        // v128 ops at -Oz vs 38 at -O3), so the size tier loses nothing by it.
+        //
+        // No baseline to gate on: wasm SIMD is in every current browser and in node >= 16 (this repo's
+        // container runs node 22). See docs/targets.md, *Platform notes*.
+        // Guarded by tools/check-simd-wasm.sh, which greps a real .wasm — and which runs ONLY on the
+        // container wasm leg, never in `./dev check`.
+        if (wasm) cmd << "-msimd128 ";
         if (release) {
             // Optimized, no debug info, asserts off. Native uses -O3 (max speed — matches Rust's release
             // default); wasm uses -Oz (size — download cost dominates). -ffunction/data-sections +

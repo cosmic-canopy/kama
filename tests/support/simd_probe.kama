@@ -1,0 +1,64 @@
+// simd_probe.kama — the kernel `check-simd-native.sh` and `check-simd-wasm.sh` compile to prove that
+// kama's math actually vectorizes. NOT a harness fixture: `tests/support/` is outside run_tests.sh's
+// four globs, so nothing here runs as a test (check-fixture-reach.sh still requires it to analyze
+// clean). It is a probe, and its SHAPE is the whole point.
+//
+// ⚠️ Three ways to write this so it reports "no SIMD" against a perfectly vectorized compiler — all
+// three were in the probe that produced this repo's earlier FALSE finding (docs/design/simd.md §1d):
+//
+//   1. NEVER measure a single op in its own function. AAPCS64's HFA rule passes `struct{float x,y,z,w}`
+//      in s0-s3 as four SEPARATE registers, so an isolated `a + b` is scalar for ABI reasons that have
+//      nothing to do with the vectorizer. Measure a LOOP OVER MEMORY.
+//   2. NEVER let the kernel be provably dead. File-static arrays that nothing seeds and nothing reads
+//      back get constant-folded and dead-stored; three of five kernels in the original probe compiled
+//      to a bare `ret`. Here the buffers arrive as PARAMETERS and the kernel is `expose`d
+//      (KAMA_EXPORT -> visibility("default"),used), so neither the optimizer nor --gc-sections can
+//      delete it and the compiler cannot see the values.
+//   3. The grep is the guards' problem, not this file's, but it belongs with the other two: Apple's
+//      assembler writes `fadd.4s v0, v0, v1`, NOT `fadd v0.4s`.
+//
+// `main` seeds real data and checks the result, so a build of this probe is also a correctness test
+// of the thing being measured — a vectorized kernel that computes the wrong answer fails here rather
+// than passing a grep.
+import { std::math::Vec4, std::collections::FixedArray, std::collections::View };
+
+// THE KERNEL. Elementwise `dst[i] = a[i] + b[i]` over borrowed memory — the exact shape measured in
+// docs/design/simd.md §1a, which compiles to a 16-byte-per-iteration NEON loop (`fadd.4s`) on native
+// and, with -msimd128, to `f32x4.add` on wasm. The View bounds checks and the operator's
+// compound-literal convention all disappear at -O3.
+expose fn void simdProbeAddAll(View<Vec4> dst, View<Vec4> a, View<Vec4> b) {
+    isize n = dst.length();
+    isize i = 0;
+    while (i < n) {
+        dst[i] = a[i] + b[i];
+        i = i + 1;
+    }
+}
+
+fn int32 main() {
+    isize n = 256;
+    FixedArray<Vec4> a = FixedArray.make(size: n);
+    FixedArray<Vec4> b = FixedArray.make(size: n);
+    FixedArray<Vec4> c = FixedArray.make(size: n);
+
+    isize i = 0;
+    while (i < n) {
+        float32 f = cast<float32>(i);
+        a[i] = Vec4.splat(s: f);
+        b[i] = Vec4.splat(s: 1.0f32);
+        i = i + 1;
+    }
+
+    borrow c.view() as vc {
+        borrow a.view() as va {
+            borrow b.view() as vb {
+                simdProbeAddAll(dst: vc, a: va, b: vb);
+            }
+        }
+    }
+
+    // Read the result back so the kernel cannot be elided, and check it: lane w of element 255 is 256.
+    if (c[255].w != 256.0f32) { return 1; }
+    if (c[0].x   != 1.0f32)   { return 2; }
+    return 0;
+}

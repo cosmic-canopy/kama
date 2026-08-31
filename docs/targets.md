@@ -349,7 +349,11 @@ beside the source. `out/` is a project's concept, and one file is not a project.
   [Runtime linkage](#runtime-linkage). `WINDOWS` targets the **mingw-w64** ABI (`-gnu`), which zig covers. An MSVC-ABI build
   (`x86_64-windows-msvc`) needs the MSVC headers and libraries, so build it on Windows.
 - **→ wasm**: uses Emscripten (`emcc`), not zig — it emits an `.html` + `.js` + `.wasm` harness, and
-  `$EMCC` or `--cc` overrides which `emcc`.
+  `$EMCC` or `--cc` overrides which `emcc`. Builds pass **`-msimd128`** (both debug and release, so the
+  two tiers share one instruction set), which is what makes `std::math` vectorize here as it does on
+  native — without it a `.wasm` holds no vector instruction at all. That sets the **runtime baseline**:
+  wasm SIMD needs **node ≥ 16** or any current browser. It is the one place kama does not target the
+  bare generic baseline, and it is deliberate: every engine that can run a 2026 `.wasm` has it.
 - **→ bare metal**: for the host arch, nothing extra. For a real board, name its triple and give it a
   `cc` (`arm-none-eabi-gcc`, or `zig cc`). See [mcu.md](mcu.md) for the full firmware flow.
 

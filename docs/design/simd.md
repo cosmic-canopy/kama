@@ -1,7 +1,12 @@
-# Explicit SIMD — design (ROADMAP row 1)
+# Explicit SIMD — design
 
 *In-flight design doc. **Delete this file when the work ships**, once [SPEC.md](../SPEC.md) carries the
 record — see the maintenance rule at the top of [ROADMAP.md](../ROADMAP.md).*
+
+> **Status: stage 1 of 3 has SHIPPED** (2026-08-30) — `-msimd128` on wasm, plus the two guards, §5. So
+> §1b below is now a record of what *was* true, not of what is: a `--release --target wasm` build
+> vectorizes. Stages 2–3 (the `Simd<T, const N>` type and the derived `SIMD128` flag) are what ROADMAP
+> row 1 now tracks, and everything else here still stands.
 
 > ### ►► The measurement reframes the row. Read this first.
 >
@@ -274,33 +279,40 @@ re-opened.
 
 | stage | what | size |
 |---|---|---|
-| **1** | **`-msimd128` on the wasm target** (D1) + a guard that greps a `--release --target wasm` build for v128 and fails if it disappears — the instrument this claim has never had | **S** |
+| **1** | ✅ **SHIPPED 2026-08-30.** `-msimd128` on the wasm target (D1), both tiers, at the wasm arm just above the release/debug split in [kama.driver.cpp](../../src/kama.driver.cpp). Measured after: 0 → **14** v128 ops in a real `--release --target wasm` build. It landed with **two** guards, not one — [check-simd-wasm.sh](../../tools/check-simd-wasm.sh) (the repo's first `# check-legs: wasm` guard; ⚠️ `./dev check` cannot run it) and [check-simd-native.sh](../../tools/check-simd-native.sh), because the *native* half of §1a was equally uninstrumented and had been measured wrong once already. Each compiles the same probe a second way — `-O0` native, `emcc` without the flag — and requires **zero** hits there, so a pattern that can never match fails instead of passing. Probe: [tests/support/simd_probe.kama](../../tests/support/simd_probe.kama), whose header carries the three probe-design traps | **S** |
 | **2** | **`Simd<T, const N>`** (D2/D3/D4/D5): the intrinsic type, `include/kama_simd.h`, elementwise operators, `splat`/`of`/`toArray`, `lane`, `shuffle`, `Mask<N>` + compare + `select`, `reduceAdd`. Fixtures on native + san + wasm asserting **values**, plus one asserting the emitted C reaches the vector spelling | **L** |
 | **3** | **derived `SIMD128` flag** (D6) — a small addition to target-flag derivation, plus an `xfail` for gating on a target name instead | **S** |
 
-Stage 1 is independent and should land first regardless of what happens to 2 and 3: it is the measured
-gap, and it is a flag.
+Stage 1 was independent and landed first, as planned: it was the measured gap, and it was a flag. Its
+lasting contribution is not the flag but the two guards — the claim "kama vectorizes" now has an
+instrument on every tier kama ships, which is what it lacked when it went wrong twice.
 
 ### Does this still gate the 1.0 tag?
 
 [ROADMAP.md](../ROADMAP.md) says it must, because "a SIMD surface is API". The evidence weakens that:
 the only source-breaking option was rebuilding `std::math`, and D7 rejects it on measurement. Stage 1
 is not API. Stages 2–3 are **purely additive** — a new type and a new derived flag break nothing that
-compiles today, so they are legal 1.x work. **Recommendation: row 1 no longer gates the tag**, and
-stage 1 should land before it simply because a released compiler that silently ships scalar wasm is a
-bad first impression. The tag is the maintainer's call; this is the reasoning, not the decision.
+compiles today, so they are legal 1.x work. **Recommendation: row 1 no longer gates the tag.** The one
+part that was a bad first impression regardless — a released compiler silently shipping scalar wasm —
+has now shipped, so nothing here is time-pressured against the tag. The tag is the maintainer's call;
+this is the reasoning, not the decision.
 
 ---
 
-## 6. Doc corrections this design lands with
+## 6. Doc corrections — all landed
 
-- [ENGINE_READINESS.md:66](../ENGINE_READINESS.md#L66) and [:111](../ENGINE_READINESS.md#L111) — the
-  "SIMD ✅ / auto-vectorizes at -O3" claim is **true on native** and **false on wasm**; and "no explicit
-  vector types or intrinsics needed" is true only for elementwise math, not for shuffles or masks.
-- [SPEC.md](../SPEC.md) *Math* — says the ops vectorize "to SSE/NEON/**wasm128**". The wasm128 half is
-  false today (§1b).
-- [ROADMAP_DETAIL.md §2](../ROADMAP_DETAIL.md#s2) — the "UNSCOPED, and that is the finding" bullet is
-  replaced by a pointer here plus the staged sizes; [ROADMAP.md](../ROADMAP.md) row 1 loses its `?`.
+The design landed the first round (native ✅ / wasm ❌, and "no explicit vector types needed" being true
+only for elementwise math); **stage 1 then landed the second round**, because shipping the flag made the
+wasm half true rather than merely acknowledged:
+
+- [ENGINE_READINESS.md:66](../ENGINE_READINESS.md#L66) and [:111](../ENGINE_READINESS.md#L111) — now
+  **native ✅, wasm ✅**, each naming the guard behind it. The shuffle/lane-mask gap stays.
+- [SPEC.md](../SPEC.md) *Math* — "to SSE/NEON/**wasm128**" is true again; the ⚠️ paragraph drops from two
+  limits to one.
+- [targets.md](../targets.md) *Platform notes* — the wasm bullet now states the `-msimd128` runtime
+  baseline (node ≥ 16 / any current browser), the one place kama does not target the generic baseline.
+- [ROADMAP_DETAIL.md §2](../ROADMAP_DETAIL.md#s2) — the staged sizes, with stage 1 marked shipped;
+  [ROADMAP.md](../ROADMAP.md) lost the wasm row entirely and renumbered.
 
 ## 7. Left open for the implementation
 
