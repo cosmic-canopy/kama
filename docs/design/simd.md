@@ -189,7 +189,7 @@ Simd<float32, 4> a = Simd::<float32, 4>.splat(s: 1.0f32);
 Simd<float32, 4> b = Simd::<float32, 4>.of(v: [1.0f32, 2.0f32, 3.0f32, 4.0f32]);   // from an InlineArray
 Simd<float32, 4> c = a + b;                       // elementwise, C's own operator
 Simd<float32, 4> d = c.shuffle::<3, 2, 1, 0>();   // const-generic lane indices
-Mask<4>          m = c.greaterThan(r: b);         // a lane mask IS a value
+Mask<float32, 4> m = c.greaterThan(r: b);         // a lane mask IS a value (§7 — it carries T)
 Simd<float32, 4> e = m.select(ifTrue: c, ifFalse: b);
 float32          s = c.lane::<2>();               // compile-time lane read
 float32          t = c.reduceAdd();               // the one horizontal op worth having
@@ -205,10 +205,20 @@ member swizzles are out (only clang has them); `__builtin_shufflevector` is in, 
 A compiler that has neither spelling gets a scalar-struct fallback in the same header — the macro seam
 is what makes that possible at all, and it is why the ops are macros rather than inline C operators.
 
-### D4 — N is what the target actually has: 128 bits, checked by `comptime assert`
+### D4 — N is what the target actually has: 128 bits, checked at registration
 
-`comptime assert(cond: sizeof(T) * N == 16, …)` in the type body — the `Fixed<B, const F>` pattern
-([SPEC.md](../SPEC.md) *Const generic parameters*). 128 bits is the only width **every** kama target
+`sizeof(T) * N == 16`, rejected with a kama diagnostic when it does not hold.
+
+⚠️ **Corrected 2026-08-30.** This originally said `comptime assert(cond: sizeof(T) * N == 16, …)` in the
+type body, "the `Fixed<B, const F>` pattern". That does not transfer: `Fixed` is **kama source** with a
+real body ([lib/std/num/fixed.kama:28](../../lib/std/num/fixed.kama#L28)), while an intrinsic's prelude
+declaration is documentation-only with an **empty** body — `type value InlineArray<T, const N: int32> { }`
+([prelude/builtin.kama:109](../../prelude/builtin.kama#L109)). A `comptime assert` in there would never
+run. The check belongs in the **registration function**, as the `unsupported(...)` diagnostic
+`registerFixed` already uses for `n <= 0` and for a non-`value` element
+([kama.cemit.cpp:9047](../../src/kama.cemit.cpp#L9047)). It wants an `xfail` fixture, per the house rule.
+
+128 bits is the only width **every** kama target
 has: SSE2 on x86-64 baseline, NEON on aarch64, wasm128 with D1. Wider widths are not portable and are
 not free — they need `-march`, which is the CPU-tuning knob in
 [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9) — so they wait for it and enter as a relaxed assert, not
@@ -316,9 +326,22 @@ wasm half true rather than merely acknowledged:
 
 ## 7. Left open for the implementation
 
-- Whether `Mask<N>` is its own type or `Simd<bool, N>`. Its own type is the leaning — a mask's lanes are
-  all-ones/all-zeros bit patterns of the *element width*, not booleans, and C's comparison operators
-  already return an integer vector of matching width.
+- ~~Whether `Mask<N>` is its own type or `Simd<bool, N>`.~~ **Settled 2026-08-30, by measurement: its
+  own type, and it must carry `T`** — `Mask<T, N>`, not `Mask<N>`. The leaning was right for the right
+  reason (a mask's lanes are all-ones/all-zeros bit patterns of the *element width*, not booleans), and
+  that reason is exactly what rules out the bare `Mask<N>` spelling. Measured on **clang 18 (host and
+  container) and gcc 13, identically** — a vector comparison's lane width follows its operand's:
+
+  | operand | `a > b` lane size | total |
+  |---|---|---|
+  | `f32x4` | 4 B | 16 |
+  | `f64x2` | 8 B | 16 |
+  | `i16x8` | 2 B | 16 |
+
+  So `Mask<4>` has no single C type: it is `int32x4` from a `float32` compare and `int16x8` from an
+  `int16` one. `Mask<T, N>` (or an associated type off `Simd<T,N>`) is what can be lowered. Still open
+  underneath it: whether the two type parameters are worth the surface, or whether the mask should be
+  spelled as a member type so the pairing cannot be got wrong.
 - Whether `Simd<T,N>` gets `foreach`. `InlineArray` has it; iterating a lane batch scalar-at-a-time is
   the shape the type exists to avoid, so the leaning is no.
 - Integer lane types beyond `float32`/`int32` — the assert in D4 admits `float64`×2, `int16`×8,
