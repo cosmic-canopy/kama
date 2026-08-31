@@ -4,7 +4,7 @@
 // Same family as constparam_shadow_foreach.kama: these two binders sit outside kama's general
 // shadowing ban, which is harmless for an ordinary name and silently wrong for a const param.
 type enum Tag { A(int32 v), B }
-fn int32 f<const F: int32>(Tag t) {
+fn int32 f<comptime F: int32>(Tag t) {
     return match (t) {
         case A(v: F): F;   // ERROR: the payload binding shadows the const generic param `F`
         case B: 0;

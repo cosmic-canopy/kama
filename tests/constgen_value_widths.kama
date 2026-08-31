@@ -1,20 +1,20 @@
 // A const param's DECLARED integral type is honored when the param is read as a value. The grammar
-// used to drop it — `const N: int8` and `const N: int64` were indistinguishable, and the value was
+// used to drop it — `comptime N: int8` and `comptime N: int64` were indistinguishable, and the value was
 // folded as int64 either way. That was harmless while a const param could only be a size; reading it
 // as a value makes the width observable, so it is carried on the AST and spelled in the emitted C.
 //
-// A bare integer literal would NOT do: `8` is a C `int`, so a `const F: uint32` would compare signed
-// and a `const F: int8` would not behave as an int8 local does. The value is emitted cast to the type
+// A bare integer literal would NOT do: `8` is a C `int`, so a `comptime F: uint32` would compare signed
+// and a `comptime F: int8` would not behave as an int8 local does. The value is emitted cast to the type
 // the author wrote, which makes it act like a real local of that type under every promotion rule.
 //
 // The negative case is also the guard for the mangling: `-` is not a C identifier character, so
 // `neg8::<(-1)>()` used to mangle to `_F<file>__neg8__-1` and die in the C compiler with no kama
 // diagnostic. A negative value now spells its sign as `n`.
-fn int32  neg8  <const F: int8>()   { return cast<int32>(F); }
-fn int32  small <const F: int16>()  { return cast<int32>(F); }
-fn bool   big32 <const F: uint32>() { return F > 2147483647ui32; }   // above INT32_MAX: unsigned, not negative
-fn int64  wide64<const F: int64>()  { return F; }
-fn bool   u64hi <const F: uint64>() { return F == 18446744073709551615ui64; }   // the full 64-bit range
+fn int32  neg8  <comptime F: int8>()   { return cast<int32>(F); }
+fn int32  small <comptime F: int16>()  { return cast<int32>(F); }
+fn bool   big32 <comptime F: uint32>() { return F > 2147483647ui32; }   // above INT32_MAX: unsigned, not negative
+fn int64  wide64<comptime F: int64>()  { return F; }
+fn bool   u64hi <comptime F: uint64>() { return F == 18446744073709551615ui64; }   // the full 64-bit range
 
 fn int32 main() {
     int32 n = 0;

@@ -190,8 +190,8 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
     auto mc = _moduleConsts.find(qualify(*id->value));
     if (mc != _moduleConsts.end()) { asInt(mc->second); return true; }
-    auto cs = _constSubst.find(*id->value);
-    if (cs != _constSubst.end()) { asInt(cs->second.value); return true; }
+    auto cs = _comptimeSubst.find(*id->value);
+    if (cs != _comptimeSubst.end()) { asInt(cs->second.value); return true; }
     auto lv = _constLocalVals.find(*id->value);
     if (lv != _constLocalVals.end()) { asInt(lv->second); return true; }
     return false;
@@ -251,7 +251,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
         // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
         return ctFail(("unknown identifier `" + (id->value ? *id->value : std::string("?"))
-                       + "` — a compile-time expression reads only `comptime` constants, const generic "
+                       + "` — a compile-time expression reads only `comptime` constants, comptime "
                          "parameters, and (inside a `comptime fn`) that function's params and locals").c_str(), e->line);
     }
 

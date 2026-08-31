@@ -2,7 +2,7 @@
 // `Fx<40>` is not, from one assert written once. The `[with F = 40]` in the diagnostic is load-bearing:
 // the assert's own line is identical for every instance, so without the bindings the message would say
 // what broke but never which use site broke it.
-type value Fx<const F: int32> {
+type value Fx<comptime F: int32> {
     comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit an int32 backing");
     public int32 raw;
     public ctor of(int32 raw) { this.raw = raw; }

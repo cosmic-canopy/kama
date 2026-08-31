@@ -2300,7 +2300,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // (`_genericTypeParams`); a generic FUNCTION keeps its params on the AST node alone, and `_typeSubst`
     // is empty here, so without this every `T` in every generic signature would be reported as unknown.
     std::set<std::string> tp;
-    // The const generic params of that same declaration (`constParams` is a SUBSET of `typeParams`, so
+    // The comptime params of that same declaration (`comptimeParams` is a SUBSET of `typeParams`, so
     // `tp` holds these names too — this says which of them bind a VALUE rather than a type).
     //
     // A const param is resolved by `emitExpression` ahead of every runtime name (see the identifier
@@ -2335,7 +2335,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     };
     auto constParamShadow = [&](const char* kind, const SharedIdentifier& id) {
         if (!id || !id->value || !cp.count(*id->value)) return;
-        unsupported((std::string(kind) + " `" + *id->value + "` shadows the const generic parameter of "
+        unsupported((std::string(kind) + " `" + *id->value + "` shadows the comptime parameter of "
                      "the same name, which binds a compile-time value for this whole declaration and "
                      "outranks every runtime name — rename it").c_str(), id->line);
     };
@@ -2351,7 +2351,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         // HEAD reaches here: `checkTypeResolves` bails on `genericArg`, so `InlineArray<int32, N>` — the
         // legitimate ARGUMENT position — is untouched.
         if (cp.count(*t->value)) {
-            unsupported(("`" + *t->value + "` is a const generic parameter — a value, not a type — so "
+            unsupported(("`" + *t->value + "` is a comptime parameter — a value, not a type — so "
                          + what + " cannot name it").c_str(), t->line);
             return;
         }
@@ -2402,7 +2402,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
     // per-symbol alias and a `using` all count as visible — and via the Impl form, because recording a
     // reference from a name that is not a type reference would pollute the LSP index.
     //
-    // A const generic parameter arrives here too — `constParams` is a subset of `typeParams` — and it
+    // A comptime parameter arrives here too — `comptimeParams` is a subset of `typeParams` — and it
     // binds its name just as firmly, so it keeps the same rule and only the noun changes.
     auto bindTypeParams = [&](const SharedStringList& names, const SharedStringList& constNames,
                               int line, const char* what) {
@@ -2415,7 +2415,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             std::string k = resolveUserNameImpl(*n, SharedStringList());
             if (_classes.count(k) || _enums.count(k) || _interfaces.count(k)
                 || _genericTypes.count(k) || _genericContracts.count(k))
-                unsupported(((cp.count(*n) ? "const generic parameter `" : "type parameter `") + *n
+                unsupported(((cp.count(*n) ? "comptime parameter `" : "type parameter `") + *n
                              + "` of " + what + " shadows the type of the same "
                              "name, which is then unreachable in this declaration — rename the parameter")
                                 .c_str(), line);
@@ -2438,7 +2438,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 // working as designed (tests/callback_qsort.d), so the check stops at it.
                 if (isExtern(fn)) continue;
                 ownerExported = fn->name && fn->name->value && _exported.count(qualify(*fn->name->value));
-                bindTypeParams(fn->typeParams, fn->constParams,
+                bindTypeParams(fn->typeParams, fn->comptimeParams,
                                fn->name ? fn->name->line : fn->line, "a function");
                 check(fn->returnType, "a return type");
                 checkParams(fn->parameters, "a parameter");
@@ -2448,7 +2448,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                 const bool typeExported =
                     cd->name && cd->name->value && _exported.count(qualify(*cd->name->value));
                 ownerExported = false;
-                bindTypeParams(cd->typeParams, cd->constParams,
+                bindTypeParams(cd->typeParams, cd->comptimeParams,
                                cd->name ? cd->name->line : cd->line, "a type");
                 if (cd->members) for (auto& m : *cd->members) {
                     if (auto* fld = dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
@@ -2492,7 +2492,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
                 ownerExported = ed->identifier && ed->identifier->value
                              && _exported.count(qualify(*ed->identifier->value));
-                bindTypeParams(ed->typeParams, ed->constParams,
+                bindTypeParams(ed->typeParams, ed->comptimeParams,
                                ed->identifier ? ed->identifier->line : ed->line, "an enum");
                 if (ed->body) for (auto& mem : *ed->body)
                     if (mem) checkParams(mem->payload, "an enum variant payload");
@@ -3657,7 +3657,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                              + nm + "`); `::` resolves modules and types").c_str(), v->line);
             }
         }
-        // A const generic parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
+        // A comptime parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
         // with its declared width. A compile-time binder outranks every runtime name, so this arm sits
         // ahead of the ref-param, field and local paths — and nothing else may bind the name, which is
         // what makes that outranking safe rather than silent. The three rejections that hold it up:
@@ -5129,7 +5129,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     }
 
     // `comptime assert(cond:, msg:)` (M7) — checked here, emits no runtime code. Inside a generic body this
-    // runs once per instantiation, with `_constSubst`/`_typeSubst` already bound by emitGenericInst.
+    // runs once per instantiation, with `_comptimeSubst`/`_typeSubst` already bound by emitGenericInst.
     if (auto* ca = dynamic_cast<ComptimeAssertNode*>(n)) {
         emitComptimeAssert(ca);
         return;
@@ -8194,7 +8194,7 @@ bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
     }
 }
 
-// The compile-time integer value of a const generic argument expression: an integer literal (any
+// The compile-time integer value of a comptime argument expression: an integer literal (any
 // width), or a const-param identifier bound to a value in the current instantiation (`N` -> 4). This
 // is the value half of the monomorphization — the parallel of resolving a bound type-param.
 // The inclusive range of a fixed-width integral type, in the int64 the const folder works in.
@@ -8402,8 +8402,8 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         return false;
     }
     if (arg->value && !arg->genericArg) {
-        auto it = _constSubst.find(*arg->value);
-        if (it != _constSubst.end()) { out = it->second.value; return true; }
+        auto it = _comptimeSubst.find(*arg->value);
+        if (it != _comptimeSubst.end()) { out = it->second.value; return true; }
         // 6b-2: a function-local `const` bound to a folded integer (`const int32 CAP = 8;` then
         // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
         auto lv = _constLocalVals.find(*arg->value);
@@ -8451,10 +8451,10 @@ void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifi
       : (sz)               ? "`sizeof` folds only for fixed-width scalars (`int8`..`int64`, `uint8`..`uint64`, "
                              "`char`, `float32`, `float64`) — `usize`/`isize`, `bool`, `string` and user types "
                              "have target- or layout-dependent size"
-                           : "it must be an integer literal, a const parameter, a `comptime` constant, or "
+                           : "it must be an integer literal, a comptime parameter, or "
                              "arithmetic over those";
     // Phrased to read after the "unsupported " prefix `unsupported()` prints.
-    unsupported(("const generic argument for `" + param + "` — it does not fold to a compile-time integer; "
+    unsupported(("comptime argument for `" + param + "` — it does not fold to a compile-time integer; "
                  + why).c_str(), arg->constArgValue->line);
 }
 
@@ -8622,11 +8622,11 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
         // const name has to be skipped here or it prints twice — once with no type to render.
         std::string binds;
         for (auto& kv : _typeSubst) {
-            if (_constSubst.count(kv.first) || !kv.second) continue;
+            if (_comptimeSubst.count(kv.first) || !kv.second) continue;
             std::string t = qualifiedName(kv.second);
             if (!t.empty()) binds += (binds.empty() ? "" : ", ") + kv.first + " = " + t;
         }
-        for (auto& kv : _constSubst)
+        for (auto& kv : _comptimeSubst)
             binds += (binds.empty() ? "" : ", ") + kv.first + " = " + std::to_string(kv.second.value);
         ctFail(("assertion failed: " + (condText.empty() ? std::string("<condition>") : condText)
                 + (message.empty() ? std::string() : " — " + message)
@@ -8650,16 +8650,16 @@ void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdenti
                               const std::vector<SharedIdentifier>& args)
 {
     _typeSubst.clear();
-    _constSubst.clear();
+    _comptimeSubst.clear();
     if (!params) return;
     for (size_t i = 0; i < params->size() && i < args.size(); ++i) {
         if (!(*params)[i]) continue;
         const std::string& pn = *(*params)[i];
         // `constTypes` is parallel to `params` and non-null exactly on a const param — the same fact
-        // `constParams` carries as a name subset, but positional, so the declared width comes with it.
+        // `comptimeParams` carries as a name subset, but positional, so the declared width comes with it.
         SharedIdentifier ct = (constTypes && i < constTypes->size()) ? (*constTypes)[i] : SharedIdentifier();
         int64_t v;
-        if (ct && constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = ct->builtInVal; _constSubst[pn] = b; }
+        if (ct && constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = ct->builtInVal; _comptimeSubst[pn] = b; }
         else { if (ct) rejectUnfoldableConstArg(pn, args[i]);   // a const param whose VALUE arg won't fold
                _typeSubst[pn] = args[i]; }
     }
@@ -8678,7 +8678,7 @@ void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector
     for (size_t i = 0; i < ps.size() && i < args.size() && i < cts.size(); ++i) {
         if (!cts[i]) continue;                       // a type param — already bound in _typeSubst
         int64_t v;
-        if (constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; _constSubst[ps[i]] = b; }
+        if (constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; _comptimeSubst[ps[i]] = b; }
         else rejectUnfoldableConstArg(ps[i], args[i]);
     }
 }
@@ -8688,8 +8688,8 @@ void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector
 // where a real `int8` local does — the value has to behave as the declared type under every promotion.
 std::string CEmitter::constParamCValue(const std::string& name)
 {
-    auto it = _constSubst.find(name);
-    if (it == _constSubst.end()) return "";
+    auto it = _comptimeSubst.find(name);
+    if (it == _comptimeSubst.end()) return "";
     const ConstBinding& b = it->second;
     std::string lit = std::to_string(b.value);
     // The literal has to be REPRESENTABLE before the cast can apply, so the 64-bit kinds keep a suffix.
@@ -8709,7 +8709,7 @@ bool CEmitter::isFixedColl(const std::string& cls) const
 std::string CEmitter::mangleElem(SharedIdentifier elem)
 {
     if (!elem) return "void";
-    // const generic ARGUMENT: a literal value (`Fixed<T,4>`) or a const-param identifier bound in
+    // comptime ARGUMENT: a literal value (`Fixed<T,4>`) or a const-param identifier bound in
     // this instantiation (`Fixed<T,N>` with N=4) mangles to the integer itself (`_4`), symmetric to
     // a type arg's name. Consulted before the type-param path since a const arg has no `value`.
     // A NEGATIVE value spells its sign as `n`: `-` is not a C identifier character, so `f::<(-1)>()`
@@ -9797,8 +9797,8 @@ std::string CEmitter::scanPrimKeyOf(SharedExpression e)
         if (!id->value) return "";
         auto it = _scanLocalTys.find(*id->value);
         if (it == _scanLocalTys.end()) {
-            auto cs = _constSubst.find(*id->value);
-            if (cs == _constSubst.end()) return "";
+            auto cs = _comptimeSubst.find(*id->value);
+            if (cs == _comptimeSubst.end()) return "";
             std::string ck = primKey(primTypeNode(cs->second.kind));
             return isScalarPrimKey(ck) ? ck : std::string();
         }
@@ -10001,7 +10001,7 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanTypeForCollections(cd->type);
         // 6b-2: gather a foldable integer const so a LATER const-generic size in this body resolves it
         // (`InlineArray<T,(CAP)>`). Statement-order walk = declared-before-use; runs in both the
-        // no-binding pre-pass and registerInstColls (where `_constSubst` lets `const CAP = N+1;` fold).
+        // no-binding pre-pass and registerInstColls (where `_comptimeSubst` lets `const CAP = N+1;` fold).
         if (cd->variables) for (auto& v : *cd->variables)
             if (v && v->name && v->name->value && v->initializer) {
                 int64_t cv; if (constValue(v->initializer, cv)) _constLocalVals[*v->name->value] = cv;
@@ -10181,10 +10181,10 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
         if (!id->value) return nullptr;
         auto it = localTys.find(*id->value);
         if (it != localTys.end()) return it->second;
-        // A bound const generic param is a value of its DECLARED integral type. Answered with a
+        // A bound comptime param is a value of its DECLARED integral type. Answered with a
         // synthesized node (not the declaration's own), so the reference index stays clean.
-        auto cs = _constSubst.find(*id->value);
-        return cs != _constSubst.end() ? primTypeNode(cs->second.kind) : nullptr;
+        auto cs = _comptimeSubst.find(*id->value);
+        return cs != _comptimeSubst.end() ? primTypeNode(cs->second.kind) : nullptr;
     }
     if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) return oc->type;
     if (auto* c  = dynamic_cast<CastNode*>(n))           return c->type;
@@ -10392,9 +10392,9 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     std::set<std::string> tps;
     for (auto& tp : *tmpl->typeParams) if (tp) tps.insert(*tp);
     std::set<std::string> cps;
-    if (tmpl->constParams) for (auto& cp : *tmpl->constParams) if (cp) cps.insert(*cp);
+    if (tmpl->comptimeParams) for (auto& cp : *tmpl->comptimeParams) if (cp) cps.insert(*cp);
 
-    // synthesize a const generic ARGUMENT node carrying an integer value (so a bound const param
+    // synthesize a comptime ARGUMENT node carrying an integer value (so a bound const param
     // travels through mangleElem / GenericInst::typeArgs uniformly with a type argument).
     auto constArgNode = [&](int64_t v) -> SharedIdentifier {
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
@@ -10469,13 +10469,13 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             if (pN && pN->value && cps.count(*pN->value)) {
                 int64_t v;
                 if (!constArgN(aN, v)) {
-                    unsupported(("cannot infer const parameter '" + *pN->value + "' — argument '" + pname +
+                    unsupported(("cannot infer comptime parameter '" + *pN->value + "' — argument '" + pname +
                                  "' has no statically-known size").c_str(), line);
                     return false;
                 }
                 auto b = bind.find(*pN->value);
                 if (b != bind.end()) { int64_t pv; if (constArgN(b->second, pv) && pv != v) {
-                    unsupported(("cannot unify const parameter '" + *pN->value + "' (" + std::to_string(pv) +
+                    unsupported(("cannot unify comptime parameter '" + *pN->value + "' (" + std::to_string(pv) +
                                  " vs " + std::to_string(v) + ")").c_str(), line);
                     return false; } }
                 bind[*pN->value] = constArgNode(v);
@@ -10872,7 +10872,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     if (cit != _genericCtx.end()) _nsCtx = cit->second;
 
     // Bind each parameter to its argument: a const param (`const N: int`) binds a VALUE in
-    // _constSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`, and the body can READ `N`);
+    // _comptimeSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`, and the body can READ `N`);
     // a type param binds a type in _typeSubst. Both are cleared identically at the end.
     bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
 
@@ -10880,7 +10880,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     else               emitFunction(tmpl, &gi.mangledName);
 
     _typeSubst.clear();
-    _constSubst.clear();
+    _comptimeSubst.clear();
     _nsCtx = savedCtx;
 }
 
@@ -11041,8 +11041,8 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
     // (`<T, C: Order<T>>`), and `Order<T>` cannot mangle to an instance until `T` is something to mangle.
     for (size_t i = 0; i < typeParams->size(); ++i) {
         SharedString p = (*typeParams)[i];
-        bool isConstParam = constTypes && i < constTypes->size() && (*constTypes)[i];
-        if (!p || isConstParam) { names.push_back(std::string()); continue; }   // a const param stands for a VALUE
+        bool isComptimeParam = constTypes && i < constTypes->size() && (*constTypes)[i];
+        if (!p || isComptimeParam) { names.push_back(std::string()); continue; }   // a const param stands for a VALUE
         std::string on = "__opq_" + templateKey + "_" + *p;
         ClassInfo ci;
         ci.name          = on;
@@ -11381,7 +11381,7 @@ void CEmitter::registerInstColls()
         scanStmtForCollections(tmpl->block);
     }
     _typeSubst.clear();
-    _constSubst.clear();
+    _comptimeSubst.clear();
     _nsCtx = savedCtx;
 }
 
@@ -16053,7 +16053,7 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
     return false;
 }
 
-// A body-level binder may not take a const generic parameter's name. `emitExpression` resolves a const
+// A body-level binder may not take a comptime parameter's name. `emitExpression` resolves a const
 // param ahead of every runtime name, so the binder is not shadowing it — it is being silently discarded,
 // and the reads inside it quietly become the const. Measured, before this rule: a `foreach (int32 F in
 // [1,2,3])` summing `F` gave 48 rather than 6, and a `case A(v: F): F` arm gave 16 rather than the 3 in
@@ -16061,7 +16061,7 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
 //
 // The parameter and field spellings are rejected earlier, at the declaration (`checkDeclaredTypes`), so
 // an uninstantiated generic is covered. A binder lives in a body, and a body is walked per instantiation
-// — which is exactly where `_constSubst` is bound, so this is the right and only place for it.
+// — which is exactly where `_comptimeSubst` is bound, so this is the right and only place for it.
 //
 // Note this is narrower than kama's general shadowing ban: `foreach` and `match` binders are exempt from
 // that ban today, and for an ordinary name the exemption is harmless (the inner binding wins, which is
@@ -16069,8 +16069,8 @@ bool CEmitter::isConstFieldWrite(SharedExpression target)
 // general ban to these two binders is a separate question and deliberately not answered here.
 void CEmitter::checkConstParamBinder(const std::string& nm, const char* kind, int srcLine)
 {
-    if (nm.empty() || !_constSubst.count(nm)) return;
-    unsupported((std::string(kind) + " `" + nm + "` shadows a const generic parameter — rename it").c_str(),
+    if (nm.empty() || !_comptimeSubst.count(nm)) return;
+    unsupported((std::string(kind) + " `" + nm + "` shadows a comptime parameter — rename it").c_str(),
                 srcLine);
 }
 
@@ -16102,13 +16102,13 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     // path there is. Independent of the const arms below, so a write that is both gets both sentences.
     rejectFrozenWrite(target, srcLine);
     std::string root = rootBinding(target);
-    // A const generic parameter is a compile-time value, not storage — `F = 3` used to emit
+    // A comptime parameter is a compile-time value, not storage — `F = 3` used to emit
     // `((int32_t)16) = 3` and die in clang against generated code. Reported here rather than through
     // `_constLocals` so the message fits an integer binder (the deep-const wording below is about
     // reaching THROUGH a binding, which this one has no inside to reach) — and because this one helper
     // is on every write path there is: assignment, compound assignment, `++`/`--`, and `ref`/`out` args.
-    if (!root.empty() && _constSubst.count(root))
-        unsupported(("cannot assign to `" + root + "` — it is a const generic parameter, a compile-time "
+    if (!root.empty() && _comptimeSubst.count(root))
+        unsupported(("cannot assign to `" + root + "` — it is a comptime parameter, a compile-time "
                      "value fixed at instantiation").c_str(), srcLine);
     else if (rootIsConst(root))
         unsupported(("cannot write to `const " + root + "` (const is deep — neither the "
@@ -21085,7 +21085,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     _nsCtx = _genericTypeInstCtx.count(gi.mangledName) ? _genericTypeInstCtx[gi.mangledName]
                                                        : _genericTypeCtx[gi.templateKey];
     _typeSubst.clear();
-    _constSubst.clear();
+    _comptimeSubst.clear();
     const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
     for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
     bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
@@ -21102,7 +21102,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     else { emitClassInterfaceVtables(ci); emitClassDefinitions(ci); }   // `static` C__as_I vtables (e.g. List<int32> as Serialize)
     _emitStaticClass = false;
     _typeSubst.clear();
-    _constSubst.clear();
+    _comptimeSubst.clear();
     _nsCtx = savedCtx;
 }
 
@@ -22678,7 +22678,7 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
-        if (id->value) { auto cs = _constSubst.find(*id->value); if (cs != _constSubst.end()) return cType(primTypeNode(cs->second.kind)); }
+        if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return cType(primTypeNode(cs->second.kind)); }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -22718,7 +22718,7 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
     ASTNode* n = e.get();
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
-        if (id->value) { auto cs = _constSubst.find(*id->value); if (cs != _constSubst.end()) return primTypeNode(cs->second.kind); }
+        if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
     } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {

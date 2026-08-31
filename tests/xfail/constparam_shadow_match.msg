@@ -1,1 +1,1 @@
-`match` binding `F` shadows a const generic parameter
+`match` binding `F` shadows a comptime parameter

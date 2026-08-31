@@ -1230,12 +1230,12 @@ private:
     std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
     std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
-    // A bound const generic param: its folded value AND the integral type it was DECLARED with. The two
+    // A bound comptime param: its folded value AND the integral type it was DECLARED with. The two
     // travel together in one map on purpose — the value alone was enough while a const param could only
     // be a size, but reading it as a value needs the width, and a second parallel map would be one
     // missed `clear()` away from a stale binding silently retyping an unrelated name.
     struct ConstBinding { int64_t value = 0; int kind = 0; };   // kind = the declared type's builtInVal
-    std::map<std::string, ConstBinding>             _constSubst;    // const-param name (`const N: int`) -> binding (parallel to _typeSubst)
+    std::map<std::string, ConstBinding>             _comptimeSubst;    // const-param name (`const N: int`) -> binding (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
     // Build a type node the PARSER never saw (`Chars`, `Split`, a fallible ctor's `Optional<T>`), tagged
@@ -1253,7 +1253,7 @@ private:
     std::map<std::string, SharedBoundsList>   _genericTypeBounds;   // template name -> per-param contract bounds
     std::map<std::string, std::vector<SharedIdentifier>> _genericTypeDefaults; // template name -> per-param default type (null entry = required, no default)
     // template name -> per-param DECLARED integral type for a `const N: int32` param (null entry = a
-    // type param). The first reader of ClassDeclarationNode/EnumDeclarationNode::constParams' data:
+    // type param). The first reader of ClassDeclarationNode/EnumDeclarationNode::comptimeParams' data:
     // both nodes carried const-param info that nothing consumed, which is why a const param on a TYPE
     // was parse-only plumbing while the same spelling on a function worked.
     std::map<std::string, std::vector<SharedIdentifier>> _genericTypeConstTypes;
@@ -1508,7 +1508,7 @@ private:
     void registerCollection(SharedIdentifier collType);
     void registerFixed(SharedIdentifier fixedType);   // Fixed<T,N> — the const-generic value array
     // Const generics: the compile-time integer value of a const argument/param expression (an
-    // integer literal, or a const-param identifier bound in the current instantiation via _constSubst).
+    // integer literal, or a const-param identifier bound in the current instantiation via _comptimeSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
     bool scalarByteSize(SharedIdentifier type, int64_t& out);  // `sizeof(T)` for a fixed-width scalar T
@@ -1551,11 +1551,11 @@ private:
     void rejectUnfoldableConstArg(const std::string& param, SharedIdentifier arg);  // a VALUE arg that won't fold
     std::set<const void*> _badConstArgs;   // arg nodes already reported — binding is re-run per discovery pass
     // Bind one instantiation's parameters: a const param binds a VALUE (+ its declared width) in
-    // _constSubst, every other param binds a type in _typeSubst. Clears both first — this IS the
+    // _comptimeSubst, every other param binds a type in _typeSubst. Clears both first — this IS the
     // binding, not an addition to one. `constTypes` is parallel to `params` (null = a type param).
     void bindInstParams(const SharedStringList& params, const SharedIdentifierList& constTypes,
                         const std::vector<SharedIdentifier>& args);
-    // ADD a generic TYPE/enum instantiation's const params to _constSubst. Additive on purpose: a
+    // ADD a generic TYPE/enum instantiation's const params to _comptimeSubst. Additive on purpose: a
     // generic type keeps EVERY param in _typeSubst, which mangleElem hops through and deepSubstType /
     // argCarriesUnboundParam walk — moving const params out of it would break all three.
     void bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args);
@@ -2427,7 +2427,7 @@ private:
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     void        checkConstPlaceReturn(bool isConst, bool isRef, const std::string& m, int line);
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the
-    // name of a const generic param bound in this instantiation — see the definition for why.
+    // name of a comptime param bound in this instantiation — see the definition for why.
     void        checkConstParamBinder(const std::string& nm, const char* kind, int srcLine);
     bool        isConstReceiver(SharedExpression receiver) const;       // const-call restriction
     // Never-null definite assignment for `Owned`/`Shared` fields (Stage 1): each must be set before the

@@ -3,7 +3,7 @@
 // this file compiled CLEAN and `f::<16>(F: 3)` returned 16, not 3.
 //
 // Caught in `checkDeclaredTypes`, so an UNinstantiated generic is covered too.
-fn int32 f<const F: int32>(int32 F) {   // ERROR: the parameter shadows the const generic param `F`
+fn int32 f<comptime F: int32>(int32 F) {   // ERROR: the parameter shadows the const generic param `F`
     return F;
 }
 fn int32 main() { return f::<16>(F: 3); }

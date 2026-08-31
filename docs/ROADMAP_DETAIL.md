@@ -126,7 +126,7 @@ miscompile above and an honest instrument, never 220 silent numeric rules.*
 | mixed arithmetic | **not a gap** — milestone 6 makes mixed operands an *error*, so there is no type to invent | 0 |
 | value-producing `match` at check time | **closed** `0.9.37` | −204 lines |
 | type parameter | **closed** `0.9.40`–`0.9.43` — an opaque type parameter gives `T` a type that promises what its bounds promise, so an expression typed by `T` resolves at the declaration | ~24 |
-| const-generic parameter | open — the residue of that work: a `const N: int32` stands for a VALUE, and a probe has none to invent without deciding the template's own `comptime assert`. Concentrated in `lib/std/num/fixed.kama` | ~19 |
+| comptime parameter | open — the residue of that work: a `comptime N: int32` stands for a VALUE, and a probe has none to invent without deciding the template's own `comptime assert`. Concentrated in `lib/std/num/fixed.kama` | ~19 |
 | intrinsic / `extern fn` with no recorded return type | open, small — the `string.length()` class the isize campaign fixed one instance of | ~5 |
 | a user **operator overload**'s result | open, small — **the table's missing row**, found 2026-08-18 by probe while writing the conformance fixtures: `(n + 3)` is `?` even though `operator+` declares `-> int32`. The operator-heavy files (`math/vec`, `quat`, `num/fixed`) are blind mostly for the *generic* reason above, so this is its own small bucket, not their cause | ~5 |
 
@@ -312,7 +312,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     `std::math`'s `Real` is, and [scalar.kama](../lib/std/math/scalar.kama) says so in prose. The
     genuine remainder is a per-type body for a user type you do **not** own, and unlocking that is the
     thing we do not want.
-  - **Nothing depends on it.** Const generics' three blockers are all const-generics-on-types issues;
+  - **Nothing depends on it.** Comptime parameters' three blockers are all comptime-parameters-on-types issues;
     the view-escape check is independent; no site in `lib/`, `prelude/`, `tests/`, `examples/` or
     `bench/` needs it.
 
@@ -556,13 +556,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   Fix = let the pre-pass DEFER an unresolvable argument instead of diagnosing it, and diagnose only what
   is still unbound after the fixpoint settles. Clean diagnostic, not silent, so it is a limitation rather
   than a hazard — but it blocks the ordinary "thin generic wrapper" shape. Found while checking whether
-  a const generic param could be passed to a generic call; it fails identically for a type param, so it
-  is the general gap, not a const-generic one.
+  a comptime param could be passed to a generic call; it fails identically for a type param, so it
+  is the general gap, not a comptime one.
 
-- **A generic `enum` cannot declare members or contracts.** `type enum Tag<const N: int32> { A; public fn
+- **A generic `enum` cannot declare members or contracts.** `type enum Tag<comptime N: int32> { A; public fn
   int32 bump() { return N; } }` is rejected — "a generic enum is a monomorphization template, so each
   instance would need its own conformance". Clean diagnostic and a real limitation: it is why
-  `EnumDeclarationNode`'s const-param data still has no reader after the const-generics campaign, since a
+  `EnumDeclarationNode`'s const-param data still has no reader after the comptime-parameters campaign, since a
   const param can only be READ inside a body and a generic enum has none. Whoever lifts this should add
   the const-param fixture that could not be written (`tests/constgen_value_type.kama` records the gap).
 
@@ -588,7 +588,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `undeclared identifier` against generated code. What is still unchecked is a type name *inside* a generic
   argument — `DynamicArray<Bogos>` — because `checkTypeResolves` early-returns on `type->genericArg`.
   Recursing into `genericArgs` (as `addTypeRef` does in kama.query.cpp) is the natural phase 2, but it
-  widens the surface onto const-generic size expressions, defaulted allocator args and bounds, so it wants
+  widens the surface onto comptime size expressions, defaulted allocator args and bounds, so it wants
   its own sweep. Guarded today by `tests/xfail/unknown_type_{local,param,return,field,method_param,
   variant_payload}` + `unimported_type_param`, and by `tests/decl_type_check_guards.kama` for the three
   shapes the pass must NOT reject (a generic free fn's own params, `This`, a `sig` used before its file).
@@ -653,7 +653,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (the repo's first `# check-legs: wasm` guard — ⚠️ **`./dev check` cannot run it**) and
   `tools/check-simd-native.sh`, each carrying an internal negative control so a grep that can never match
   fails instead of passing. What remains is that **a shuffle and a lane mask have no spelling** at any
-  target: **L** an additive `Simd<T, const N>` intrinsic type emitting `vector_size` through a header
+  target: **L** an additive `Simd<T, comptime N>` intrinsic type emitting `vector_size` through a header
   seam (⚠️ **not** `ext_vector_type` — gcc ignores it with a warning and silently leaves a one-lane
   scalar), plus **S** a derived `SIMD128` `@compileFor` flag so a library can choose an algorithm rather
   than hope. GOALS' *"one way to do a thing"* is answered by keeping `std::math` (geometry, named lanes, AoS)
@@ -723,7 +723,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
   is where a user-writable "this argument must be compile-time constant" would come from, and it is
   deferred with its own design doc: [design/comptime-params.md](design/comptime-params.md), ROADMAP row 16.
-  ⚠️ **Rust has shipped const generics since 2021 and still restricts them to integers, `bool` and `char`**,
+  ⚠️ **Rust has shipped comptime parameters since 2021 and still restricts them to integers, `bool` and `char`**,
   because a composite value in a parameter list has to be encoded into a mangled symbol name. That is the
   constraint, not an oversight to fix. The compiler can still *require* a constant argument for its own
   intrinsics — `Simd`'s `shuffle(pattern:)` does — the same by-name knowledge it has of `InlineArray`'s

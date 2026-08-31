@@ -7,7 +7,7 @@
 //  * the bindings name the TYPE argument too. Only `_constSubst` was reported, so the reader got
 //    `[with F = 16]` and was left to work out which `T` it had been paired with — which, at a use site
 //    several files from the declaration, is the expensive half.
-type value W<T, const F: int32> {
+type value W<T, comptime F: int32> {
     comptime assert(cond: F > 0 && F < cast<int32>(sizeof(T)) * 8, msg: "a width check");
     public T v;
     public ctor of(T v) { this.v = v; }

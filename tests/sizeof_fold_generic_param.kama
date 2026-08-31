@@ -1,6 +1,6 @@
 // M6: `sizeof(T)` folds through a BOUND type parameter inside a generic instance — the operand is resolved
 // through _typeSubst before its width is read, the same hop cType and mangleElem make. This is the shape
-// M9's `Fixed<B: FixedBacking<B>, const F: int32>` needs: `sizeof(B) * 8` is how a generic checks that its
+// M9's `Fixed<B: FixedBacking<B>, comptime F: int32>` needs: `sizeof(B) * 8` is how a generic checks that its
 // backing type is wide enough for its own fraction bits.
 type value Box<T> {
     public T v;

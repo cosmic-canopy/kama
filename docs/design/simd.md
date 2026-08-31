@@ -5,7 +5,7 @@ record — see the maintenance rule at the top of [ROADMAP.md](../ROADMAP.md).*
 
 > **Status: stage 1 of 3 has SHIPPED** (2026-08-30) — `-msimd128` on wasm, plus the two guards, §5. So
 > §1b below is now a record of what *was* true, not of what is: a `--release --target wasm` build
-> vectorizes. Stages 2–3 (the `Simd<T, const N>` type and the derived `SIMD128` flag) are what ROADMAP
+> vectorizes. Stages 2–3 (the `Simd<T, comptime N>` type and the derived `SIMD128` flag) are what ROADMAP
 > row 1 now tracks, and everything else here still stands.
 
 > ### ►► The measurement reframes the row. Read this first.
@@ -178,7 +178,7 @@ starts vectorizing on the one target where it does not (§1b). Runtime support i
 container. Debug builds get it too: keeping the two tiers on the same instruction set avoids a
 "vectorizes only in release" class of bug report.
 
-### D2 — The explicit surface is a **type**, not intrinsics: `Simd<T, const N>`
+### D2 — The explicit surface is a **type**, not intrinsics: `Simd<T, comptime N>`
 
 A value type, monomorphized per `(T, N)` exactly as `InlineArray<T,N>` already is, lowering to a C
 typedef. The survey says type; the C backend makes it nearly free; and a bag of intrinsic free
@@ -188,7 +188,7 @@ functions would collide with GOALS *"one way to do a thing"* the moment the type
 Simd<float32, 4> a = Simd::<float32, 4>.splat(s: 1.0f32);
 Simd<float32, 4> b = Simd::<float32, 4>.of(v: [1.0f32, 2.0f32, 3.0f32, 4.0f32]);   // from an InlineArray
 Simd<float32, 4> c = a + b;                       // elementwise, C's own operator
-Simd<float32, 4> d = c.shuffle::<3, 2, 1, 0>();   // const-generic lane indices
+Simd<float32, 4> d = c.shuffle::<3, 2, 1, 0>();   // comptime lane indices
 Mask<float32, 4> m = c.greaterThan(r: b);         // a lane mask IS a value (§7 — it carries T)
 Simd<float32, 4> e = m.select(ifTrue: c, ifFalse: b);
 float32          s = c.lane::<2>();               // compile-time lane read
@@ -212,7 +212,7 @@ is what makes that possible at all, and it is why the ops are macros rather than
 ⚠️ **Corrected 2026-08-30.** This originally said `comptime assert(cond: sizeof(T) * N == 16, …)` in the
 type body, "the `Fixed<B, const F>` pattern". That does not transfer: `Fixed` is **kama source** with a
 real body ([lib/std/num/fixed.kama:28](../../lib/std/num/fixed.kama#L28)), while an intrinsic's prelude
-declaration is documentation-only with an **empty** body — `type value InlineArray<T, const N: int32> { }`
+declaration is documentation-only with an **empty** body — `type value InlineArray<T, comptime N: int32> { }`
 ([prelude/builtin.kama:109](../../prelude/builtin.kama#L109)). A `comptime assert` in there would never
 run. The check belongs in the **registration function**, as the `unsupported(...)` diagnostic
 `registerFixed` already uses for `n <= 0` and for a non-`value` element
@@ -290,7 +290,7 @@ re-opened.
 | stage | what | size |
 |---|---|---|
 | **1** | ✅ **SHIPPED 2026-08-30.** `-msimd128` on the wasm target (D1), both tiers, at the wasm arm just above the release/debug split in [kama.driver.cpp](../../src/kama.driver.cpp). Measured after: 0 → **14** v128 ops in a real `--release --target wasm` build. It landed with **two** guards, not one — [check-simd-wasm.sh](../../tools/check-simd-wasm.sh) (the repo's first `# check-legs: wasm` guard; ⚠️ `./dev check` cannot run it) and [check-simd-native.sh](../../tools/check-simd-native.sh), because the *native* half of §1a was equally uninstrumented and had been measured wrong once already. Each compiles the same probe a second way — `-O0` native, `emcc` without the flag — and requires **zero** hits there, so a pattern that can never match fails instead of passing. Probe: [tests/support/simd_probe.kama](../../tests/support/simd_probe.kama), whose header carries the three probe-design traps | **S** |
-| **2** | **`Simd<T, const N>`** (D2/D3/D4/D5): the intrinsic type, `include/kama_simd.h`, elementwise operators, `splat`/`of`/`toArray`, `lane`, `shuffle`, `Mask<N>` + compare + `select`, `reduceAdd`. Fixtures on native + san + wasm asserting **values**, plus one asserting the emitted C reaches the vector spelling | **L** |
+| **2** | **`Simd<T, comptime N>`** (D2/D3/D4/D5): the intrinsic type, `include/kama_simd.h`, elementwise operators, `splat`/`of`/`toArray`, `lane`, `shuffle`, `Mask<N>` + compare + `select`, `reduceAdd`. Fixtures on native + san + wasm asserting **values**, plus one asserting the emitted C reaches the vector spelling | **L** |
 | **3** | **derived `SIMD128` flag** (D6) — a small addition to target-flag derivation, plus an `xfail` for gating on a target name instead | **S** |
 
 Stage 1 was independent and landed first, as planned: it was the measured gap, and it was a flag. Its

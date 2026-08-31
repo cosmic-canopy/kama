@@ -106,7 +106,7 @@ type value UnsafePtr<T> { }
 
 // The const-generic value array: `struct { T v[N]; }`, sized at compile time. It owns no heap, copies by
 // value and has no destructor, which is what makes it — unlike every other container — a `value`.
-type value InlineArray<T, const N: int32> { }
+type value InlineArray<T, comptime N: int32> { }
 
 // A callable with its receiver bound in. The type argument is a function SIGNATURE rather than a type,
 // which is why it is not an ordinary generic.

@@ -17,13 +17,13 @@ type value Box<T> {
     public fn int32 two() { return 2; }
 }
 
-type value Shift<const F: int32> {
+type value Shift<comptime F: int32> {
     public int32 v;
     public ctor of(int32 v) { this.v = v; }
     public fn int32 shifted() { return this.v << F; }
 }
 
-type value Both<T, const F: int32> {
+type value Both<T, comptime F: int32> {
     public T v;
     public ctor of(T v) { this.v = v; }
     public fn int32 bits() { return F; }

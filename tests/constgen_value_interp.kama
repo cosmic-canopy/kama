@@ -2,7 +2,7 @@
 // holeBuiltinType, which asks receiverTypeNode for the hole's type — a path that knew about locals and
 // fields but not about a bound const param, so a formatted hole reported "base specifier `:x` applies
 // only to an integer hole" about something that plainly was one.
-fn int32 widths<const F: int32>() {
+fn int32 widths<comptime F: int32>() {
     string d = "${F}";
     string h = "${F:x}";
     int32 n = 0;

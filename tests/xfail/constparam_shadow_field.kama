@@ -1,7 +1,7 @@
 // A field may not take a const generic parameter's name. Without this, `exprClass`'s bare-field path
 // and the const arm in `emitExpression` disagree about what `F` means — this file compiled CLEAN and
 // `get()` returned 16 rather than the 3 the ctor stored.
-type value Fx<const F: int32> {
+type value Fx<comptime F: int32> {
     public int32 F;                              // ERROR: the field shadows the const generic param `F`
     public ctor of(int32 v) { this.F = v; }
     public fn int32 get() { return F; }

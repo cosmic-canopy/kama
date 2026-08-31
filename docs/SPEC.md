@@ -1011,7 +1011,7 @@ divide widen through `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFlo
 
 Both halves of the format are parameters. `B` is the **backing integer**, bounded by the `FixedBacking<B>`
 contract (`int8`/`int16`/`int32`; `int64` cannot be one, because `wide()` widens *into* an `int64` and there
-is no `int128`), and `F` is the fraction count as a **const generic parameter** — so `Fixed<int32, 16>` is
+is no `int128`), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32, 16>` is
 the classic Q16.16 and `Fixed<int16, 8>` is Q8.8. The backing is *passed*, not computed from a bit count:
 kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
 explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8, 16>`)
@@ -1106,7 +1106,7 @@ int8 n = match (big()) { case Some(value: c): c; case None: 0i8; };  // error, n
 ```
 
 Where kama cannot be certain of a type it still says nothing rather than guessing — a type parameter, a
-const-generic parameter, an `extern fn` result, an intrinsic with no declared return type, and a
+comptime parameter, an `extern fn` result, an intrinsic with no declared return type, and a
 value-producing `match` seen before its arms are bound. Silence there is deliberate: a rule built on a
 classifier that confuses "this is a primitive" with "I have no idea" is either silent on every primitive or
 fires on every unresolved name.
@@ -1646,7 +1646,7 @@ be written **in the language** rather than baked into the compiler. Three builti
   DMA buffers / register-block layout asserts. **`sizeof` folds to a compile-time constant for a
   fixed-width scalar** — `int8`…`int64`, `uint8`…`uint64`, `char`, `float32`, `float64`, including through
   a bound type parameter (`sizeof(T) * 8` inside a generic) — so it can drive a `comptime` initializer or a
-  const-generic argument. It does **not** fold for anything whose size the target decides rather than the
+  comptime argument. It does **not** fold for anything whose size the target decides rather than the
   language: `usize`/`isize` (C `size_t` — 4 bytes on wasm32/thumbv6m, 8 on x86_64), `bool`, `string`, and
   user aggregates, whose layout belongs to the C compiler. **`alignof` never folds** — alignment is an ABI
   choice, not a language guarantee (1 on AVR; `_Alignof(double)` is 4 on i386). Both keep working
@@ -2185,7 +2185,7 @@ is compile-time evaluation; see *Compile-time constants*.) It appears in exactly
 | `const T x` / `const ref T x` parameter | a **read-only** argument; `const ref` is a read-only borrow |
 | `const UnsafePtr<T> p` parameter | lowers to C `const T*`, for const-correct FFI |
 | `const fn` on a method | the method does not mutate its receiver |
-| `const N: int32` type parameter | a **const generic** — a compile-time value, an unrelated feature |
+| `comptime N: int32` type parameter | a **comptime parameter** — a compile-time value, an unrelated feature |
 
 A free function has no receiver, so `const fn` does not apply to one; nor to a `ctor`, a destructor, or an
 `operator` member. The qualifier follows the modifiers: `public unsafe const fn` parses, `const public fn`
@@ -2731,7 +2731,7 @@ type value Palette {
 
 fn void demo() {
     comptime int32 N = 8;                            // local (function or block scope)
-    InlineArray<int32, (N)> a = [0; (N)];            // drives a const-generic size and fill
+    InlineArray<int32, (N)> a = [0; (N)];            // drives a comptime size and fill
     InlineArray<int32, (Palette::SIZE)> b = [0; (Palette::SIZE)];
 }
 ```
@@ -2753,7 +2753,7 @@ fn void demo() {
   runtime init point, so `comptime` is the only named-constant form.
 - **Lowering — real storage, baked references.** A `comptime` emits a genuine `static const T` symbol, so it
   is addressable and `@section`/flash-placeable (an MCU `.rodata` table). But a reference from *another*
-  constant's initializer (`CAP2 = CAP + 1`) or a const-generic size is **baked to a literal** in the emitted
+  constant's initializer (`CAP2 = CAP + 1`) or a comptime size is **baked to a literal** in the emitted
   C. That sidesteps C's "initializer element is not constant" rule and, more importantly, means **there is no
   static-initialization-order dependency** — Kama has no dynamic global init to order (the C++ init-order
   fiasco cannot occur here). Constant references resolve in **declaration order**; a forward or cyclic
@@ -2786,7 +2786,7 @@ type value Palette {
 ```
 
 - **Comptime-only.** A `comptime fn` is a compile-time symbol; it is **never emitted as C**. It may be
-  *called* only from a comptime context — a `comptime` constant initializer, a const-generic argument, or
+  *called* only from a comptime context — a `comptime` constant initializer, a comptime argument, or
   another `comptime fn`. A runtime-position call is a clean error pointing at the `comptime` constant form.
   (This is a strict subset of a future dual-use / `constexpr`-style relaxation, so it can widen later without
   breaking anything.)
@@ -2818,7 +2818,7 @@ holds costs nothing, and one that fails is a build error rather than a trap.
 ```kama
 comptime assert(cond: sizeof(int32) * 8 == 32, msg: "int32 must be 32 bits");   // module scope
 
-type value Fixed<const F: int32> {
+type value Fixed<comptime F: int32> {
     comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit the backing");
 }
 
@@ -2838,7 +2838,7 @@ fn void render() {
   expression. The reason is the second lowering below, whose message has to be a literal; one rule for
   both beats a rule that changes with the predicate.
 - **One surface, two lowerings.** Which one applies is decided by the predicate, not by the author:
-  - **kama answers it** when the predicate folds — literals, `comptime` constants, const generic
+  - **kama answers it** when the predicate folds — literals, `comptime` constants, comptime
     parameters, `sizeof` of a fixed-width scalar, and arithmetic/comparison/logic over those. The failure
     is an ordinary kama diagnostic, so **`kama check` and the LSP report it**.
   - **The C compiler answers it** when the predicate turns on a layout fact kama deliberately does not
@@ -3040,16 +3040,16 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   converts nothing and needs no such promise. That is the idiom to reach for; `Atomic<T>` is written that
   way throughout, and its element restriction — a lock-free machine word — is enforced by the compiler at
   the use site, being likewise unspellable as a bound.
-- **Const generic parameters** — a parameter may be a **value** instead of a type: `const N: int32`, in the
+- **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime N: int32`, in the
   same parameter list, supplied at the same use sites. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:
   ```kama
-  type value Fixed<B: FixedBacking<B>, const F: int32> {          // storage AND fraction, both parameters
+  type value Fixed<B: FixedBacking<B>, comptime F: int32> {          // storage AND fraction, both parameters
       comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8, msg: "…");
       public B raw;
       public fn int32 toInt() { return cast<int32>(this.raw.wide() / (1i64 << F)); }   // F is a value here
   }
-  fn int32 shifted<const S: int32>(int32 x) { return x << S; }
+  fn int32 shifted<comptime S: int32>(int32 x) { return x << S; }
 
   Fixed<int32, 16> q = Fixed::<int32, 16>.one();   // Q16.16; `Fixed<int8, 16>` is a compile error <!-- xfail: fixed_bad_pairing -->
   int32 y = shifted::<3>(x: 2);                    // a turbofish carries a const argument too

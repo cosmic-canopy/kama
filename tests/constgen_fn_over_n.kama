@@ -1,11 +1,11 @@
 // A function generic over a const size N: inferred from a InlineArray argument, or given via turbofish
 // `f::<N>()`. `headOf` is generic over BOTH the element type T and the size N.
-fn int32 sumN<const N: int32>(InlineArray<int32, N> a) {
+fn int32 sumN<comptime N: int32>(InlineArray<int32, N> a) {
     int32 t = 0;
     foreach (int32 e in a) { t = t + e; }
     return t;
 }
-fn T headOf<T, const N: int32>(InlineArray<T, N> a) {
+fn T headOf<T, comptime N: int32>(InlineArray<T, N> a) {
     return a[0];
 }
 fn int32 main() {

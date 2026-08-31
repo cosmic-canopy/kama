@@ -12,7 +12,7 @@
 // cannot declare members at all ("a generic enum is a monomorphization template, so each instance would
 // need its own conformance"), so a const param there can never be read as a value. EnumDeclarationNode
 // carries the same const-param data and it stays unread until that limitation lifts.
-type value Fx<const F: int32> {
+type value Fx<comptime F: int32> {
     public int32 raw;
     public ctor of(int32 raw)      { this.raw = raw; }
     public ctor whole(int32 units) { this.raw = units << F; }   // the const param inside a ctor BODY
@@ -21,7 +21,7 @@ type value Fx<const F: int32> {
     public static fn int32 shift() { return F; }                // no `this` in scope
 }
 
-type value Buf<T, const N: int32> {
+type value Buf<T, comptime N: int32> {
     public InlineArray<T, N> a;                                 // the size comes from the const param
     public ctor make(InlineArray<T, N> a) { this.a = a; }
     public fn int32 size() { return N; }

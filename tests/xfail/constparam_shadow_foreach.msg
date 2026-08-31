@@ -1,1 +1,1 @@
-`foreach` variable `F` shadows a const generic parameter
+`foreach` variable `F` shadows a comptime parameter

@@ -1,1 +1,1 @@
-cannot assign to `F` — it is a const generic parameter
+cannot assign to `F` — it is a comptime parameter

@@ -25,7 +25,7 @@
 // alternative (they clamp to the representable range). Model twin: std::time::Duration.
 export { Fixed };
 
-type value Fixed<B: FixedBacking<B>, const F: int32> implements Equatable<This>, Comparable<This> {
+type value Fixed<B: FixedBacking<B>, comptime F: int32> implements Equatable<This>, Comparable<This> {
     comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8,
                     msg: "a Q-format's fractional bits must fit its backing and leave the sign bit");
 

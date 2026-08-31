@@ -1,1 +1,1 @@
-parameter `F` shadows the const generic parameter
+parameter `F` shadows the comptime parameter

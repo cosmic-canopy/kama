@@ -320,11 +320,11 @@ public:
     SharedIdentifierList genericArgs;  // all type args for Pair<A,B> etc.; genericArg mirrors [0]
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
-    bool isConstParam = false;         // const generic PARAMETER (`const N: int`) — a value, not a type
+    bool isComptimeParam = false;         // comptime PARAMETER (`const N: int`) — a value, not a type
     // The declared integral type of that parameter (`int32` in `const N: int32`). Carried because the
     // param is READ as a value in the body: a bare literal would be a C `int`, so `const N: uint32` or
     // `int8` would promote and compare differently from a real local of the type the author wrote.
-    SharedIdentifier constType;
+    SharedIdentifier comptimeType;
     // `<T is This>` on a `type contract` — the parameter is PINNED to the implementing type. `is` is an
     // identity constraint, which is why it is not a `bounds` entry: a bound list holds contracts, and
     // admitting a non-contract there would need an exception plus a hand-rejection of `This + Contract`.
@@ -335,7 +335,7 @@ public:
     // contracts (index-aligned). Empty = unconditional. Multiple = AND (the impl holds only when all do).
     SharedIdentifierList whenParams;
     SharedIdentifierList whenBounds;
-    SharedExpression constArgValue;    // const generic ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
+    SharedExpression constArgValue;    // comptime ARGUMENT that is a literal (`4` in `Fixed<T,4>`)
     SharedIdentifier defaultArg;       // type-PARAMETER default (`H: BuildHasher = DefaultHasher`) — the default type; null if none
     SharedString argName;              // use-site type-ARGUMENT named override (`A:` in `Map<int32, A: Arena>`); null = positional
     // `Box::<int32>::tag()` — type args riding the QUALIFIER (the owning type), not this name. Distinct
@@ -385,7 +385,7 @@ public:
     SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
-    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     bool isRef = false;            // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller (mirrors the method form)
     bool isComptime = false;       // `comptime fn …` — a compile-time-only function (const-eval 6b-3); never emitted as C
@@ -941,7 +941,7 @@ public:
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
-    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typeDefaults; // per-param default type (`= DefaultHasher`) parallel to typeParams; null entry = no default
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
@@ -977,7 +977,7 @@ public:
 // module, type-member and statement scope, which is why it derives from ClassMemberDeclarationNode:
 // that already IS a StatementNode, so one node reaches all three positions.
 //
-// Inside a generic it is checked once per instantiation (with `_constSubst`/`_typeSubst` bound), so a
+// Inside a generic it is checked once per instantiation (with `_comptimeSubst`/`_typeSubst` bound), so a
 // failure names the use site. Two lowerings under one surface: a predicate that folds is answered by
 // kama; a pure layout predicate over an aggregate's `sizeof`/`alignof` — which kama deliberately
 // cannot fold — becomes a C11 `_Static_assert` and clang answers it.
@@ -1165,7 +1165,7 @@ public:
     // concrete arg (mirror of ClassDeclarationNode); empty for a non-generic enum.
     SharedStringList typeParams;
     SharedBoundsList typeBounds;
-    SharedStringList constParams;  // names of const generic params (`const N: int`); subset of typeParams order
+    SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default

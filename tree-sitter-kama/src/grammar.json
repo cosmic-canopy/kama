@@ -728,7 +728,7 @@
           "members": [
             {
               "type": "STRING",
-              "value": "const"
+              "value": "comptime"
             },
             {
               "type": "FIELD",

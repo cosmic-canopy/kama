@@ -4,7 +4,7 @@
 // with no kama diagnostic at all. The negative half lives in tests/xfail/sizeof_const_generic_unfoldable.
 // (Parens are the one spelling for a computed const argument, as in `InlineArray<T, (N+1)>`; the bare
 // `::<sizeof(int32)>` form stays a parse error deliberately.)
-fn int32 idN<const N: int32>() { return N; }
+fn int32 idN<comptime N: int32>() { return N; }
 
 fn int32 main() {
     int32 a = idN::<(sizeof(int32))>();            // 4

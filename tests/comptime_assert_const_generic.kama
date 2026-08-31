@@ -9,12 +9,12 @@
 // the diagnostic names WHICH instance failed (`[with F = 40]`) — the assert's own line is identical for
 // every instance, so without the bindings the message would not locate the use site.
 
-fn int32 idN<const N: int32>() {
+fn int32 idN<comptime N: int32>() {
     comptime assert(cond: N > 0 && N < 64, msg: "N must be a positive shift amount");
     return N;
 }
 
-type value Fx<const F: int32> {
+type value Fx<comptime F: int32> {
     // The invariant a generic `Fixed<B, const F>` needs (M8/M9): a Q-format's fractional bits must fit
     // its backing width. Stated once, checked per instantiation.
     comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit an int32 backing");
@@ -24,7 +24,7 @@ type value Fx<const F: int32> {
 }
 
 // A const param and a type param in one list — the assert must not disturb the type binding beside it.
-type value Buf<T, const N: int32> {
+type value Buf<T, comptime N: int32> {
     comptime assert(cond: N > 0, msg: "a buffer needs at least one slot");
     public InlineArray<T, N> a;
     public ctor make(InlineArray<T, N> a) { this.a = a; }

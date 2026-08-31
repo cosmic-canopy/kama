@@ -13,7 +13,7 @@ fn int32 main()
     int32 r = 0;
 
     // A SHIFT's right operand is a count, not a co-operand — the two types need not agree. This is the
-    // shape `lib/std/num/fixed.kama` uses eight times (an int64 shifted by a `const F: int32`).
+    // shape `lib/std/num/fixed.kama` uses eight times (an int64 shifted by a `comptime F: int32`).
     int64 wide  = 1i64;
     int32 count = 3;
     if ((wide << count) == 8i64)                 { r = r + 4; }

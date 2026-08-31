@@ -230,7 +230,7 @@ and `cast<int8>(300)` are errors, not 44.
 
 Where kama is not certain of a type it still says nothing, so the same caveat applies as for kinds: a
 green `check` proves none of the errors kama can see are there, not that there are none. The places it
-is deliberately silent are a type parameter, a const-generic parameter, a `foreach` binding, a `borrow`
+is deliberately silent are a type parameter, a comptime parameter, a `foreach` binding, a `borrow`
 alias, an `extern fn` result, and arithmetic mixing two types.
 
 Both halves are pinned by `tools/check-query.sh` **and** `tools/check-agents.sh`, so neither can rot.

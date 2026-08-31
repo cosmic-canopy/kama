@@ -5,7 +5,7 @@
 // Only the type HEAD is rejected: `checkTypeResolves` bails on a node with generic arguments, so the
 // legitimate ARGUMENT position — `InlineArray<int32, N>` in tests/constgen_fn_over_n.kama — is
 // untouched by this rule.
-fn int32 f<const N: int32>(N x) {   // ERROR: `N` is a value, not a type
+fn int32 f<comptime N: int32>(N x) {   // ERROR: `N` is a value, not a type
     return 1;
 }
 fn int32 main() { return f::<16>(x: 1); }

@@ -49,7 +49,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | # | item | size | detail |
 |---|---|---|---|
-| 1 | **Explicit SIMD surface** — an additive `Simd<T, const N>` for what auto-vectorization cannot spell: shuffles, a lane mask as a value; plus a derived `SIMD128` flag | L | [§2](ROADMAP_DETAIL.md#s2) |
+| 1 | **Explicit SIMD surface** — an additive `Simd<T, comptime N>` for what auto-vectorization cannot spell: shuffles, a lane mask as a value; plus a derived `SIMD128` flag | L | [§2](ROADMAP_DETAIL.md#s2) |
 | 2 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | 3 | **Stdlib parity M2b** — fs + path, io handles + `lines()`, sleep + wall clock, DNS | — | [§1](ROADMAP_DETAIL.md#s1) |
 | 4 | **Stdlib parity M2c** — `std::random`, `std::encoding` | — | [§1](ROADMAP_DETAIL.md#s1) |

@@ -438,7 +438,7 @@ type_param
   | IDENTIFIER IDENTIFIER type_name
 
   | IDENTIFIER COLON bound_list type_param_default_opt
-  | CONST IDENTIFIER COLON integral_type type_param_default_opt      /* `const N: int` — a compile-time value param */
+  | COMPTIME IDENTIFIER COLON integral_type type_param_default_opt      /* `comptime N: int` — a compile-time value param */
   ;
 /* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
 type_param_default_opt

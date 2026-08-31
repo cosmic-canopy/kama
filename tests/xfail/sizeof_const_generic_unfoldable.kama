@@ -8,6 +8,6 @@
 // tests/sizeof_fold_const_generic.kama). It is that the OPERAND must be a fixed-width scalar.
 type value Blk { public uint64 wide; public uint8 narrow; }
 
-fn int32 idN<const N: int32>() { return N; }
+fn int32 idN<comptime N: int32>() { return N; }
 
 fn int32 main() { return idN::<(sizeof(Blk))>(); }

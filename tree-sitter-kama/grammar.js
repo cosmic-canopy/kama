@@ -245,9 +245,9 @@ module.exports = grammar({
           optional(seq(':', field('bounds', $.bound_list))),
           optional($._type_parameter_default),
         ),
-        // `const N: int32` — a compile-time VALUE parameter.
+        // `comptime N: int32` — a compile-time VALUE parameter.
         seq(
-          'const',
+          'comptime',
           field('name', $.identifier),
           ':',
           field('type', $.primitive_type),
