@@ -792,7 +792,88 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     resize, focus or gamepad on either target; and the surface is configured at a hardcoded 512×512 with
     no way to learn the drawable size. A size accessor is a few lines. Whether the input *library* above
     that seam is kama's or an engine's is the more arguable half, but a window seam that polls events and
-    throws them away is not finished.
+    throws them away is not finished. **Now split across two rows** — the size accessor and the handle
+    RAII ride the safe-wrapper row, and input is its own (`std::input`, a peer of `std::gpu`). ⚠️ The
+    arguable half has an answer now: the first engine built on kama **derives its own window** and
+    duplicates ~60 lines of surface-derivation out of `kama_gpu.c` to get keyboard and mouse, which is
+    the outcome a seam that throws its events away forces on everybody.
+
+- **The docs taught a `@compileFor` spelling that silently deleted code — FIXED 2026-09-01.** Kept as a
+  record because it is the house rule's own failure mode, caught by a user rather than by us.
+  [SPEC.md](SPEC.md) and [KEYWORDS.md](KEYWORDS.md) both taught `@compileFor(NATIVE)` / `(WASM)` /
+  `(EMBEDDED)` / `(WINDOWS)` — **four sites, one more than was reported** — and not one of those is a
+  flag: a built-in target NAME deliberately does not become one, because gating on it would gate on how
+  the build was *spelled*. A manifest build rejects the name; a **loose** build reads no manifest and
+  treats an undeclared flag as inactive, so the documented spelling compiles clean and the declaration
+  is **gone**, with the only symptom a missing symbol somewhere else — or nothing at all if both sides
+  were gated. ⚠️ **`tools/check-compilefor.sh` §4b already proved the COMPILER rejects such a name,
+  which is precisely why the docs drifting was invisible**; the guard now greps the docs too (§7, and
+  it was arming-tested against an unfixed doc before being believed). Same commit dropped
+  `a.byteLen()`, documented twice beside `dataPtr()` and — verified across every commit in the repo —
+  **never implemented at all**; write `cast<usize>(a.length()) * sizeof(T)`.
+
+- **The audio-seam cluster — found by the first external project, 2026-09-01.** Ten gaps hit designing
+  one audio device seam, recorded together because they are one story and because every citation was
+  re-read against this tree before it was filed. The stake in their words: their engine says *"the
+  platform split is one mechanism throughout — a `type contract` with `@compileFor`-gated
+  implementations"*, and **that is not true today and cannot be made true** — the first two below are
+  exactly why, and their shipped platform seam had to push its split down into C `#ifdef`s instead.
+  ⚠️ **Every claim here was verified against the compiler, and two of their three "small wins" are
+  small while the third is not** — sizing a user's report is our job, not theirs.
+
+  - **ROW 1a — `@compileFor` cannot gate `extern "h";` or `extern fn`.** [kama.y](../src/kama.y)'s
+    `EXTERN STRING_LITERAL SEMICOLON` and `EXTERN FN …` arms carry no `attribute_list`, while the plain
+    `fn … block` arm does, so the `#include` is emitted for every unit on every target and two platform
+    backends cannot each own their own C header. `pruneInactiveDecls` already drops a gated top-level
+    decl generically, so the fix really is the grammar arms plus deciding which attributes are legal
+    there. `FNPTR` and the place-returning `fn ref T` arms lack it too. **S.**
+  - **ROW 1b — no attribute can go on a method, ctor, dtor or operator.** None of `method_declaration`'s
+    arms takes an `attribute_list` though `field_declaration` does, so every real-time entry point must
+    be a free `fn` — against the grain of the type model, where the natural spelling is `synth.fill(…)`.
+    ⚠️ **Not "add one arm":** it admits *every* attribute on a method, most meaningless there, so it
+    needs the per-site rejection `declAttrPrefix` already does for a module `static`. **S.**
+  - **ROW 1c — `InlineArray<T, N>` has no `dataPtr()` or `view()`** while `FixedArray` and
+    `DynamicArray` both do. So the one container that is stack-allocated, fixed-size and
+    allocation-free — exactly what an audio buffer or a `@noheap` region wants — is the only one that
+    cannot be handed to C without `addr(of: a[0])` inside an `unsafe fn`. **S**, and a plain
+    consistency hole rather than a design question.
+  - **ROW 2 — `@noheap` is not transitive, and this one is worse than it was reported.** ⚠️ **Measured:**
+    an `@noheap` fn calling an un-annotated kama helper that does `new` **compiles clean**. The
+    emitter has exactly five `_noHeapActive` references — a gate and a per-body save/restore in
+    `emitFunction` — and no callee check at all. SPEC's carve-out excuses only allocation "in library C
+    the emitter can't see"; this is plain kama, plainly visible, and whole-program `--no-heap` flags
+    that very line. So [SPEC.md](SPEC.md)'s *"guarantees … a real-time audio callback allocates
+    nothing"* is **false after one level of indirection**, which makes this a doc-promises-a-proof
+    defect of the same class the house rule exists for, not only an ergonomic gap. The machinery is all
+    there; what is missing is propagation, a rule for what counts as provably non-allocating, and
+    `@noheap` on the stdlib entry points a callback reaches. **M.**
+  - **ROW 3 — a package compiles every `.kama` under its source root**, whatever the import graph, so a
+    native-only file still compiles on the wasm leg even once ROW 1a lands. `packageSourceFiles` →
+    `collectKamaFiles` recurses the whole root, and a per-target block accepts no `modules` or `source`
+    key. ⚠️ **This is the one that is NOT a small win.** Both candidate fixes are semantic changes:
+    compiling only import-reachable files changes what a manifest *means* (today the manifest alone is
+    what proves there is no unreachable module), and a per-target `modules` exclusion is new manifest
+    surface. **Decide first, then build. M.**
+  - **ROW 5 — no way to run kama on a foreign OS thread.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
+    native and wasm, so a thread created by a C library — an audio device callback, a completion port,
+    an RTOS ISR — sees fresh zero-initialised module statics, and a mixer buffer would silently be a
+    different, empty buffer inside the callback. The per-isolate design is right and simply has no
+    escape hatch. Wants a `kama_isolate_attach()`/`detach()` pair or a `@foreignEntry` attribute that
+    emits the prologue. **Not audio-specific — every callback-driven C API meets it. L.**
+  - **ROW 22 — kama's unconditional `-fsanitize` blocks `-sWASM_WORKERS`**, and with it AudioWorklet and
+    Wasm Workers generally, so there is no audio thread in the browser at all. The driver emits
+    `-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow` plus the matching
+    `-fsanitize-trap` on **every target and tier**; emscripten refuses `WASM_WORKERS` whenever any
+    `-fsanitize` is present. ⚠️ **Their analysis is sharp and worth acting on:** kama passes
+    `-fsanitize-trap`, which lowers to `__builtin_trap` with **no sanitizer runtime**, so the refusal is
+    over-broad for trap-only mode. Best fix is upstream to emscripten; otherwise lower those traps in
+    the emitted C on wasm, or a documented per-target opt-out. (Wasm Workers also need
+    SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
+  - **Not scheduled, recorded so they are not re-triaged.** A panic in a real-time callback kills the
+    process (`kama_bounds_fail` is `KAMA_NORETURN`, the panic hook deliberately process-global) — wants
+    a per-region policy so a mixer glitches instead of aborting; and `@noheap` is not part of a `fnptr`
+    type, so a callback slot cannot *require* non-allocating of what is bound to it. Both depend on
+    rows 2 and 5 landing first.
 
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
