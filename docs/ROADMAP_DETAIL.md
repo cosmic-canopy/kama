@@ -821,7 +821,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   ⚠️ **Every claim here was verified against the compiler, and two of their three "small wins" are
   small while the third is not** — sizing a user's report is our job, not theirs.
 
-  - **ROW 1 — SHIPPED `0.9.131`.** `@compileFor` gates `extern "<h>";`, `extern fn` and `fnptr`;
+  - **THE PLATFORM SEAM (`@compileFor` on `extern`; attributes on members; `InlineArray` bridges) — SHIPPED `0.9.131`.** `@compileFor` gates `extern "<h>";`, `extern fn` and `fnptr`;
     `@noheap` marks a method, `ctor`, destructor or operator; `InlineArray<T,N>` has `dataPtr()` and
     `view()`. Record in [SPEC.md](SPEC.md) (*Conditional compilation*, *No-heap subset*, the container
     section). Three findings worth keeping, none of them in the row as written:
@@ -831,19 +831,19 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       (`attribute_list plain_function_declaration`, `attribute_list plain_class_member`) gave all
       eleven forms attributes at once and DELETED both duplicated twins. Bison still reports exactly
       the one dangling-`else` conflict `%expect 1` accounts for.
-    - ⚠️ **ROW 1c was mis-sized here as "S … a plain consistency hole rather than a design question".**
+    - ⚠️ **The `InlineArray` bridges were mis-sized here as "S … a plain consistency hole rather than a design question".**
       `dataPtr()` was one line; `view()` was not. It needed the `View<T>` instance force-registered, C
       emitted from the emitter (a runtime macro cannot name the program-specific `View_<T>`), the
       `Viewable<View<T>>` grant on the synthetic ClassInfo, and — the part no reading predicted — a
       PASS rather than a line in `registerFixed`, because whether `std::collections::View` existed yet
       depended on the user's unrelated imports. It also exposed `mintReturnTypeNode` having no route to
       an intrinsic receiver, so a `borrow` alias over an `InlineArray` came out untyped.
-    - ⚠️ **The trap that would have made ROW 1a a silent no-op:** `CEmitter::emit` (the single-TU
+    - ⚠️ **The trap that would have made the `extern` gate a silent no-op:** `CEmitter::emit` (the single-TU
       `transpile` path) ran `emitIncludes` BEFORE `collectProgram`, i.e. before `pruneInactiveDecls`,
       while `emitProgram` had the order right. Reproduced before fixing; `check-compilefor.sh` now
       asserts it on that same path, and the guard was confirmed to FAIL against the unfixed compiler.
 
-  - **ROW 2 — `@noheap` is not transitive, and this one is worse than it was reported.** ⚠️ **Measured:**
+  - **`@noheap` IS NOT TRANSITIVE, and this one is worse than it was reported.** ⚠️ **Measured:**
     an `@noheap` fn calling an un-annotated kama helper that does `new` **compiles clean**. The
     emitter has exactly five `_noHeapActive` references — a gate and a per-body save/restore in
     `emitFunction` — and no callee check at all. SPEC's carve-out excuses only allocation "in library C
@@ -853,8 +853,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     defect of the same class the house rule exists for, not only an ergonomic gap. The machinery is all
     there; what is missing is propagation, a rule for what counts as provably non-allocating, and
     `@noheap` on the stdlib entry points a callback reaches. **M.**
-  - **ROW 3 — a package compiles every `.kama` under its source root**, whatever the import graph, so a
-    native-only file still compiles on the wasm leg even once ROW 1a lands. `packageSourceFiles` →
+  - **A PACKAGE COMPILES EVERY `.kama` UNDER ITS SOURCE ROOT**, whatever the import graph, so a
+    native-only file still compiles on the wasm leg even now that the `extern` gate has landed. `packageSourceFiles` →
     `collectKamaFiles` recurses the whole root, and a per-target block accepts no `modules` or `source`
     key. ⚠️ **This is the one that is NOT a small win.**
 
@@ -882,13 +882,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     in one token and costs nothing. **Measure a grammar question at the position the rule will occupy.**
 
     Still **M**, still unstarted. **
-  - **ROW 5 — no way to run kama on a foreign OS thread.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
+  - **NO WAY TO RUN KAMA ON A FOREIGN OS THREAD.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
     native and wasm, so a thread created by a C library — an audio device callback, a completion port,
     an RTOS ISR — sees fresh zero-initialised module statics, and a mixer buffer would silently be a
     different, empty buffer inside the callback. The per-isolate design is right and simply has no
     escape hatch. Wants a `kama_isolate_attach()`/`detach()` pair or a `@foreignEntry` attribute that
     emits the prologue. **Not audio-specific — every callback-driven C API meets it. L.**
-  - **ROW 22 — kama's unconditional `-fsanitize` blocks `-sWASM_WORKERS`**, and with it AudioWorklet and
+  - **KAMA'S UNCONDITIONAL `-fsanitize` BLOCKS `-sWASM_WORKERS`**, and with it AudioWorklet and
     Wasm Workers generally, so there is no audio thread in the browser at all. The driver emits
     `-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow` plus the matching
     `-fsanitize-trap` on **every target and tier**; emscripten refuses `WASM_WORKERS` whenever any
@@ -901,7 +901,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     process (`kama_bounds_fail` is `KAMA_NORETURN`, the panic hook deliberately process-global) — wants
     a per-region policy so a mixer glitches instead of aborting; and `@noheap` is not part of a `fnptr`
     type, so a callback slot cannot *require* non-allocating of what is bound to it. Both depend on
-    rows 2 and 5 landing first.
+    the `@noheap`-transitivity and foreign-OS-thread entries above landing first.
 
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
@@ -924,7 +924,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **A `comptime` generic parameter must be an INTEGRAL type** ([kama.y](../src/kama.y), the
   `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
   is where a user-writable "this argument must be compile-time constant" would come from. **Decided
-  2026-08-31 and now ROADMAP row 3:** compile-time values leave the generic list for a trailing
+  2026-08-31 (the `#(…)` migration row):** compile-time values leave the generic list for a trailing
   `comptime(…)` at definitions and `#(…)` at use sites, and the admissible set widens to Rust's —
   integers plus `bool` and `char`. The design of record, including the ladder of types deliberately left
   for later and the ~300-site migration surface, is
