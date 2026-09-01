@@ -959,9 +959,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
   - **Not scheduled, recorded so they are not re-triaged.** A panic in a real-time callback kills the
     process (`kama_bounds_fail` is `KAMA_NORETURN`, the panic hook deliberately process-global) — wants
-    a per-region policy so a mixer glitches instead of aborting; and `@noheap` is not part of a `fnptr`
-    type, so a callback slot cannot *require* non-allocating of what is bound to it. Both depend on
-    the `@noheap`-transitivity and foreign-OS-thread entries above landing first.
+    a per-region policy so a mixer glitches instead of aborting. (It depends on the foreign-OS-thread
+    entry above landing first.) ⚠️ **The `fnptr` half is no longer in this bucket — it is a ROADMAP row.**
+    `@noheap` transitivity shipped, which both discharged its dependency and made it urgent: a `fnptr` is
+    a blind seam the proof cannot cross, so the call is a HARD ERROR inside a no-heap region and there is
+    currently no way to say "this slot only accepts non-allocating callbacks" — which is exactly the
+    shape an audio callback wants.
 
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
