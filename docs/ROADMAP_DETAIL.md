@@ -798,6 +798,60 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     duplicates ~60 lines of surface-derivation out of `kama_gpu.c` to get keyboard and mouse, which is
     the outcome a seam that throws its events away forces on everybody.
 
+- **The first consumer's second audit (2026-09-01), triaged against this tree.** Everything below was
+  REPRODUCED here before being scheduled — their report names the symptom, and three times running the
+  shape underneath it has been different. Their doc is `../friendly-fire-department/docs/KAMA_GAPS.md`;
+  they renumber it between audits, so find an entry by its text, never by a remembered KG number. They
+  pin `0.9.132` and have verified `@noheap` transitivity by behaviour in their own tree.
+
+  - **A contract member returning a type declared BESIDE the contract cannot be implemented from another
+    file in the module.** The implementer is told *"`Thing` is declared in host.kama and this file does
+    not import it — add `import { Thing };`"* when line 1 of that file is exactly that import. Bounded by
+    measurement, and the boundaries are what point at the cause: a member returning `int32` is fine, the
+    same three declarations in ONE file are fine, and moving the type to a THIRD file both import is fine.
+    So it is the contract's signature being resolved in the IMPLEMENTER's scope rather than the declaring
+    file's. ⚠️ **A second defect rides along**: the diagnostic names `impl.kama`'s path with `host.kama`'s
+    LINE NUMBER (line 9 is the contract member; `impl.kama:9` is a closing brace), and the summary line
+    names a third file again — which is what made it expensive to locate rather than expensive to fix.
+  - **A module `comptime` cannot be INTERPOLATED.** `"${WIDTH}"` on a `comptime int32 WIDTH = 1280;` is
+    `error: method call on unresolved receiver` at **line 1, column 0** — line 1 is the constant, the
+    interpolation is on line 5, and the message names neither it nor the constant. Binding to a local
+    first works. Interpolation lowers to a method call on the value and a module `comptime` is not a
+    first-class receiver there — the same surface hole KB-3 had for `export`, which suggests looking for
+    the remaining positions a module `comptime` is not quite a name rather than fixing this one.
+    ⚠️ **The diagnostic is the more valuable half**: it cost the reporter ~40 minutes of bisection, and
+    any unresolved-receiver error that names neither the receiver nor its line will do that again.
+  - **A `fnptr` in a FIELD or a module `static` cannot be CALLED**, which rules out installing a handler
+    now and invoking it later. ⚠️ **Filed as four failures; two of them no longer reproduce.** Measured
+    on `0.9.132`: binding works in both places (`this.h = dbl`, `g_h = dbl`), and only the CALL fails —
+    `r.h(x: 1)` gives `` `Reg` has no method `h` `` and `g_h(x: 1)` gives `call to unknown function`. So
+    it is one defect, not four: `emitInvocation`'s `fnptr` arm matches a bare LOCAL of sig type
+    (`_localTypes[name]`), and a field or static is neither, so it falls through to method dispatch and
+    then to the unknown-function path. Sizing it off the original report would have been wrong.
+  - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
+    the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
+    stall tolerance IS latency, and the two cannot be traded. A macOS session logged **326 underruns** at
+    a 170 ms queue; deepening it to 683 ms fixed occlusion outright and still left **~290 during window
+    drags**, because `glfwPollEvents` blocks inside a nested run loop for the whole drag while the
+    producer never runs. The audio thread keeps running throughout — that is *how* the underruns were
+    counted. Their conclusion, and it looks right: moving the synth into the device callback "fixes the
+    case completely, and nothing else does", which needs the foreign-thread row to be safe at all, the
+    `@noheap` transitivity that shipped for the guarantee to be real, and the panic-policy row before it
+    can ship — a bounds miss in a mixer currently aborts the process from a thread nobody can see.
+  - **Build settings, now two rows.** `cflags`/`ldflags`/`link` being ignored on a dependency is a BUG
+    (they reclassified it as one and that is right): the consumer repeats the block in two packages, and
+    also copies kama's own macOS/Linux window and framework link flags out of the driver, because kama
+    adds them only for a program that externs its own `kama_gpu.h` — so a project with its own seam rots
+    silently when that list changes. The genuine GAP beside it is that a project cannot hand its own
+    C/C++ sources to the build at all; their tree drives C, C++ and a third-party cmake project from an
+    out-of-band Makefile, and M6's whisper.cpp is the same shape. `--js-library` has the same problem
+    with a sharper edge: it is smuggled through per-target `cflags`, and the stdlib's own
+    `-sEXPORTED_RUNTIME_METHODS` is emitted AFTER those, so it wins a collision unless the project uses
+    `ldflags` instead.
+  - **Declared NOT ours, and they agree** — the audio backend, WebGPU binding breadth, their RFC6455
+    framing, module statics being per-isolate (correct behaviour), and a PATH entry that is a directory
+    breaking `make` in the emscripten image. Their `ENGINE_TODO.md` holds those.
+
 - **The docs taught a `@compileFor` spelling that silently deleted code — FIXED 2026-09-01.** Kept as a
   record because it is the house rule's own failure mode, caught by a user rather than by us.
   [SPEC.md](SPEC.md) and [KEYWORDS.md](KEYWORDS.md) both taught `@compileFor(NATIVE)` / `(WASM)` /
@@ -957,14 +1011,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     over-broad for trap-only mode. Best fix is upstream to emscripten; otherwise lower those traps in
     the emitted C on wasm, or a documented per-target opt-out. (Wasm Workers also need
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
-  - **Not scheduled, recorded so they are not re-triaged.** A panic in a real-time callback kills the
-    process (`kama_bounds_fail` is `KAMA_NORETURN`, the panic hook deliberately process-global) — wants
-    a per-region policy so a mixer glitches instead of aborting. (It depends on the foreign-OS-thread
-    entry above landing first.) ⚠️ **The `fnptr` half is no longer in this bucket — it is a ROADMAP row.**
-    `@noheap` transitivity shipped, which both discharged its dependency and made it urgent: a `fnptr` is
-    a blind seam the proof cannot cross, so the call is a HARD ERROR inside a no-heap region and there is
-    currently no way to say "this slot only accepts non-allocating callbacks" — which is exactly the
-    shape an audio callback wants.
+  - **This bucket is EMPTY — both items are ROADMAP rows now**, and what emptied it is worth keeping,
+    because both were parked on a dependency rather than on a judgement. The bucket said they waited on
+    `@noheap` transitivity and the foreign-thread entry; transitivity shipped, which discharged half of
+    that immediately. **`@noheap` on a `fnptr` type** then went from nice-to-have to needed by the very
+    campaign that unblocked it: a `fnptr` is a blind seam the proof cannot cross, so the call is now a
+    HARD ERROR in a no-heap region with nothing an author can write to permit it. **A per-region panic
+    policy** was promoted by measurement rather than by argument — see the consumer's underrun numbers
+    above; it is what has to land before a mixer can run on a real audio thread without a bounds miss
+    aborting the process from a thread nobody can see. ⚠️ **A "not scheduled" bucket whose reason is a
+    dependency needs re-reading every time that dependency ships**, or it silently becomes a list of
+    things nobody will look at again.
 
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
