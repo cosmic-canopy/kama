@@ -1,0 +1,9 @@
+// The window rule reaches an InlineArray's view too: a view LOCAL must root in a `borrow` window or a
+// by-value view parameter. Sibling of view_escape_inline_array — that one covers the return path, this
+// one the local. (`tests/inline_array_view.kama` shows both accepted spellings.)
+import { std::collections::View };
+fn int32 main() {
+    InlineArray<int32, 3> a = [1, 2, 3];
+    View<int32> v = a.view();     // nothing holds `a` still for the view's lifetime
+    return v.length() == 3 ? 0 : 1;
+}

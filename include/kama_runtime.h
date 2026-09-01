@@ -668,6 +668,11 @@ static inline T*     NAME##__at(NAME* self, ptrdiff_t i) {                      
     return &self->v[i];                                                         \
 }                                                                               \
 static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (ptrdiff_t)(N); } \
+/* The safe InlineArray->pointer bridge, matching FixedArray/DynamicArray: OBTAINING the buffer      \
+   pointer is safe, DEREFERENCING it needs an `unsafe fn` — a rule that falls out of the `*`-suffixed \
+   return type, not from anything special-cased here. This is the one container that is stack-        \
+   allocated, fixed-size and allocation-free, so it is what a `@noheap` region has to hand to C.     */\
+static inline T*     NAME##__dataPtr(NAME* self) { return self->v; }                            \
 static inline NAME   NAME##__fill(T x) {                                        \
     NAME r; for (size_t i = 0; i < (size_t)(N); ++i) r.v[i] = x; return r;      \
 }

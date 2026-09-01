@@ -821,22 +821,28 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   ⚠️ **Every claim here was verified against the compiler, and two of their three "small wins" are
   small while the third is not** — sizing a user's report is our job, not theirs.
 
-  - **ROW 1a — `@compileFor` cannot gate `extern "h";` or `extern fn`.** [kama.y](../src/kama.y)'s
-    `EXTERN STRING_LITERAL SEMICOLON` and `EXTERN FN …` arms carry no `attribute_list`, while the plain
-    `fn … block` arm does, so the `#include` is emitted for every unit on every target and two platform
-    backends cannot each own their own C header. `pruneInactiveDecls` already drops a gated top-level
-    decl generically, so the fix really is the grammar arms plus deciding which attributes are legal
-    there. `FNPTR` and the place-returning `fn ref T` arms lack it too. **S.**
-  - **ROW 1b — no attribute can go on a method, ctor, dtor or operator.** None of `method_declaration`'s
-    arms takes an `attribute_list` though `field_declaration` does, so every real-time entry point must
-    be a free `fn` — against the grain of the type model, where the natural spelling is `synth.fill(…)`.
-    ⚠️ **Not "add one arm":** it admits *every* attribute on a method, most meaningless there, so it
-    needs the per-site rejection `declAttrPrefix` already does for a module `static`. **S.**
-  - **ROW 1c — `InlineArray<T, N>` has no `dataPtr()` or `view()`** while `FixedArray` and
-    `DynamicArray` both do. So the one container that is stack-allocated, fixed-size and
-    allocation-free — exactly what an audio buffer or a `@noheap` region wants — is the only one that
-    cannot be handed to C without `addr(of: a[0])` inside an `unsafe fn`. **S**, and a plain
-    consistency hole rather than a design question.
+  - **ROW 1 — SHIPPED `0.9.131`.** `@compileFor` gates `extern "<h>";`, `extern fn` and `fnptr`;
+    `@noheap` marks a method, `ctor`, destructor or operator; `InlineArray<T,N>` has `dataPtr()` and
+    `view()`. Record in [SPEC.md](SPEC.md) (*Conditional compilation*, *No-heap subset*, the container
+    section). Three findings worth keeping, none of them in the row as written:
+    - ⚠️ **The row was a GRAMMAR-SHAPE problem, not eleven missing features.** `attribute_list` had
+      exactly two arms — a twin of the `fn … block` free function and a twin of `field_declaration` —
+      so every other form simply had no attributed twin. Hoisting the prefix to one arm each
+      (`attribute_list plain_function_declaration`, `attribute_list plain_class_member`) gave all
+      eleven forms attributes at once and DELETED both duplicated twins. Bison still reports exactly
+      the one dangling-`else` conflict `%expect 1` accounts for.
+    - ⚠️ **ROW 1c was mis-sized here as "S … a plain consistency hole rather than a design question".**
+      `dataPtr()` was one line; `view()` was not. It needed the `View<T>` instance force-registered, C
+      emitted from the emitter (a runtime macro cannot name the program-specific `View_<T>`), the
+      `Viewable<View<T>>` grant on the synthetic ClassInfo, and — the part no reading predicted — a
+      PASS rather than a line in `registerFixed`, because whether `std::collections::View` existed yet
+      depended on the user's unrelated imports. It also exposed `mintReturnTypeNode` having no route to
+      an intrinsic receiver, so a `borrow` alias over an `InlineArray` came out untyped.
+    - ⚠️ **The trap that would have made ROW 1a a silent no-op:** `CEmitter::emit` (the single-TU
+      `transpile` path) ran `emitIncludes` BEFORE `collectProgram`, i.e. before `pruneInactiveDecls`,
+      while `emitProgram` had the order right. Reproduced before fixing; `check-compilefor.sh` now
+      asserts it on that same path, and the guard was confirmed to FAIL against the unfixed compiler.
+
   - **ROW 2 — `@noheap` is not transitive, and this one is worse than it was reported.** ⚠️ **Measured:**
     an `@noheap` fn calling an un-annotated kama helper that does `new` **compiles clean**. The
     emitter has exactly five `_noHeapActive` references — a gate and a per-body save/restore in
@@ -850,10 +856,32 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **ROW 3 — a package compiles every `.kama` under its source root**, whatever the import graph, so a
     native-only file still compiles on the wasm leg even once ROW 1a lands. `packageSourceFiles` →
     `collectKamaFiles` recurses the whole root, and a per-target block accepts no `modules` or `source`
-    key. ⚠️ **This is the one that is NOT a small win.** Both candidate fixes are semantic changes:
-    compiling only import-reachable files changes what a manifest *means* (today the manifest alone is
-    what proves there is no unreachable module), and a per-target `modules` exclusion is new manifest
-    surface. **Decide first, then build. M.**
+    key. ⚠️ **This is the one that is NOT a small win.**
+
+    **RULED 2026-09-01 (design only — nothing built): a FILE-LEVEL `@compileFor` gate, spelled
+    `file @compileFor(!ARCH_WASM32);` as a unit's first line.** Neither candidate this entry originally
+    listed was taken. Compiling only import-reachable files changes what a manifest *means* — today the
+    manifest ALONE proves there is no unreachable module ([kama.driver.cpp:2532](../src/kama.driver.cpp))
+    — and silently stops checking a file nobody imports. A per-target `modules` exclusion is new manifest
+    surface that states the platform split in a SECOND place, beside the gates already in the file. The
+    file gate adds neither: it is the `@compileFor` primitive already used for the seam, applied to the
+    unit, living with the code it gates. `file` is a **contextual** keyword — one only as a unit's first
+    token, an ordinary identifier everywhere else, as `value`/`view`/`try`/`copy` already are (and
+    `std::fs` uses `file` as a name).
+
+    ⚠️ **The ordering was MEASURED, not argued, and the measurement reversed the intuition twice.**
+    Attribute-first (`@compileFor(X) file;`) reads more consistently with every other attribute site and
+    was the preferred spelling. Prototyped at TOP-LEVEL DECLARATION position all three candidates cost
+    exactly one conflict, i.e. nothing — which looked like a green light. Prototyped at the position a
+    file gate actually occupies (a new first slot in `compilation_unit`, before `import_directives_opt`),
+    attribute-first costs **2 conflicts against `%expect 1`**, and so does the bare `@compileFor(X);`.
+    Bison's counterexample says why: on seeing `@` at unit start the parser must choose IMMEDIATELY
+    between shifting into the gate and reducing three ε-productions to begin a declaration's attribute
+    list, and the token that distinguishes them (`file` vs `type`/`fn`/`static`) sits arbitrarily far
+    away past the whole attribute list. That is more than one token of lookahead. Leading `file` decides
+    in one token and costs nothing. **Measure a grammar question at the position the rule will occupy.**
+
+    Still **M**, still unstarted. **
   - **ROW 5 — no way to run kama on a foreign OS thread.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
     native and wasm, so a thread created by a C library — an audio device callback, a completion port,
     an RTOS ISR — sees fresh zero-initialised module statics, and a mixer buffer would silently be a
@@ -896,7 +924,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 - **A `comptime` generic parameter must be an INTEGRAL type** ([kama.y](../src/kama.y), the
   `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
   is where a user-writable "this argument must be compile-time constant" would come from. **Decided
-  2026-08-31 and now ROADMAP row 1:** compile-time values leave the generic list for a trailing
+  2026-08-31 and now ROADMAP row 3:** compile-time values leave the generic list for a trailing
   `comptime(…)` at definitions and `#(…)` at use sites, and the admissible set widens to Rust's —
   integers plus `bool` and `char`. The design of record, including the ladder of types deliberately left
   for later and the ~300-site migration surface, is

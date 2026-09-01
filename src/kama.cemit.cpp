@@ -4471,9 +4471,15 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // emitted call direct.
             MethodInfo* vmi = findMethod(&_classes[hostCls], mint, nullptr);
             if (!vmi || !vmi->params.empty()) {
-                unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
-                             "window — a `borrow` host must be a container that can hand out a view")
-                                .c_str(), bn->line);
+                // Same fixable cause as at the method-dispatch site: an intrinsic collection's `view()`
+                // exists only when the program has a `std::collections::View` to mint.
+                if (mint == "view" && viewTemplateKey().empty() && _classes[hostCls].isIntrinsicColl)
+                    unsupported(("`" + hostCls + "` can open a window, but this program has no `View<T>` "
+                                 "to mint — add `import { std::collections::View };`").c_str(), bn->line);
+                else
+                    unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
+                                 "window — a `borrow` host must be a container that can hand out a view")
+                                    .c_str(), bn->line);
                 continue;
             }
             if (!grantedMint(_classes[hostCls], mint)) {
@@ -8983,6 +8989,108 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
     return true;
 }
 
+// Split a mangled template key (`std__collections__View`) back into a qualified type node — value `View`,
+// qualifier ["std", "collections"]. Named separately because the split is the non-obvious half: the key is
+// the only handle registerFixedViews has on the stdlib's View, and the two consumers want opposite halves
+// of it (cType wants the mangle, inference wants the bare name).
+SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
+{
+    std::vector<std::string> segs;
+    size_t start = 0;
+    for (size_t i = 0; (i = tmplKey.find("__", start)) != std::string::npos; start = i + 2)
+        segs.push_back(tmplKey.substr(start, i - start));
+    segs.push_back(tmplKey.substr(start));
+    auto n = synthId(segs.back());
+    if (segs.size() > 1) {
+        auto q = std::make_shared<StringList>();
+        for (size_t i = 0; i + 1 < segs.size(); ++i) q->push_back(std::make_shared<std::string>(segs[i]));
+        n->setQualifier(q);
+    }
+    return n;
+}
+
+// Give every registered `InlineArray<T,N>` its `view()` and the `Viewable<View<T>>` grant that makes the
+// mint legitimate. A PASS rather than a line in registerFixed, and the reason is ordering: registerFixed
+// runs while units are still being collected, so whether `std::collections::View` existed yet depended on
+// the user's unrelated imports — `FixedArray` drags View in through its own module, a prelude builtin
+// drags in nothing. `a.view()` therefore resolved or not according to which other containers the file
+// happened to mention. Running once, after every unit is collected, makes View's availability a settled
+// fact instead of a race.
+//
+// If the program has no `View` at all, `view()` is simply not registered and `a.view()` is an ordinary
+// "no such method" — deterministic, and the honest answer: `View<T>` is a stdlib type, so a program that
+// never imports it does not have one. `dataPtr()` is unaffected and always present.
+void CEmitter::registerFixedViews()
+{
+    const std::string viewTmpl = viewTemplateKey();
+    if (viewTmpl.empty()) return;
+    auto vwTmpl = _genericContractParams.find("Viewable");
+    // Collect first: registerGenericTypeInst can register further collections, and mutating
+    // `_collections` while iterating it would invalidate the iterator.
+    std::vector<std::string> fixed;
+    for (auto& kv : _collections)
+        if (kv.second.kind == CollKind::Fixed && kv.second.elem
+            && _classes.count(kv.first) && !_classes[kv.first].methods.count("view"))
+            fixed.push_back(kv.first);
+
+    for (auto& name : fixed) {
+        SharedIdentifier elem = _collections[name].elem;
+        auto viewArgs = std::make_shared<IdentifierList>();
+        viewArgs->push_back(elem);
+        registerGenericTypeInst(viewTmpl, viewArgs);
+        // The return node is spelled as a QUALIFIED reference — `std::collections::View<T>` — not as the
+        // pre-mangled key. Both resolve to the same C type, but only this one carries the bare name `View`
+        // in `value`, and generic-argument INFERENCE matches a `View<T>` parameter by that name: with the
+        // mangled spelling, `sortUnstable(items: v)` could not infer `T` from a view an InlineArray minted,
+        // while the identical call over a FixedArray's view inferred it fine. Qualifying also makes the
+        // reference independent of the calling file's imports, which a bare `View` would not be.
+        auto viewRet = viewQualifiedNode(viewTmpl);
+        viewRet->genericArg  = elem;
+        viewRet->genericArgs = std::make_shared<IdentifierList>();
+        viewRet->genericArgs->push_back(elem);
+
+        ClassInfo& ci = _classes[name];
+        MethodInfo mi; mi.cName = name + "__view";
+        mi.returnType = viewRet; mi.isIntrinsic = true; mi.isConst = false;
+        ci.methods["view"] = mi;
+
+        // The grant. `Viewable<V>` is a generic contract, so its instance must be registered before it can
+        // be named — the same two-step `synthConformanceName` does for `Deserialize<T>` — and the instance
+        // name is the one registerGenericContractInst computes: template + mangled args. `borrow` and
+        // `parallel_for` read this to prove the host IS the thing being viewed rather than a type
+        // forwarding somebody else's view, and here it states a fact: an `InlineArray` is
+        // `struct { T v[N]; }`, so a view minted from it views that struct's own bytes.
+        if (vwTmpl != _genericContractParams.end()) {
+            auto vwArgs = std::make_shared<IdentifierList>();
+            vwArgs->push_back(viewRet);
+            registerGenericContractInst("Viewable", vwArgs);
+            ci.interfaces.push_back("Viewable_" + mangleElem(viewRet));
+        }
+    }
+}
+
+// The template key of the stdlib's `type view View<T>` — `std__collections__View`, not the bare `View`.
+//
+// It cannot be resolved by name from registerFixed, which is the caller that needs it: resolveUserName
+// answers under the ctx of whatever unit is being collected, and a program that never imports `View`
+// (the common case — `InlineArray` is a prelude builtin) would resolve it to nothing. Nor is the path
+// hardcoded: the stdlib may move it. It is IDENTIFIED instead, by the two facts that define it — a
+// single-parameter generic whose bare tail is `View` and whose template shape is a `type view`
+// (`isBorrow`). Cached because it is asked once per `InlineArray<T,N>` instantiation.
+const std::string& CEmitter::viewTemplateKey()
+{
+    if (!_viewTmplKey.empty() || _viewTmplLookedUp) return _viewTmplKey;
+    _viewTmplLookedUp = true;
+    for (auto& kv : _genericTypeParams) {
+        const std::string& k = kv.first;
+        bool tailIsView = (k == "View") || (k.size() > 6 && k.compare(k.size() - 6, 6, "__View") == 0);
+        if (!tailIsView || kv.second.size() != 1) continue;
+        auto gt = _genericTypes.find(k);
+        if (gt != _genericTypes.end() && gt->second.isBorrow) { _viewTmplKey = k; break; }
+    }
+    return _viewTmplKey;
+}
+
 bool CEmitter::allTypeParamsDefaulted(const std::string& tmpl) const
 {
     auto p = _genericTypeParams.find(tmpl);
@@ -9293,7 +9401,33 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     addMethod("set",    { ixSet, val },
               SharedIdentifier(), false);   // the one intrinsic here that writes
     addMethod("length", {}, synthId("isize"), true);   // named, not NULL — see the string `length` above
+
+    // `dataPtr()` -> `UnsafePtr<T>`, the same safe-to-obtain / unsafe-to-deref bridge FixedArray and
+    // DynamicArray carry. It needs no rule of its own: the raw-pointer containment check reads the
+    // `*`-suffixed return C TYPE at the acquisition-by-call site, so a caller outside an `unsafe fn` is
+    // rejected exactly as it is for `FixedArray.dataPtr()`.
+    auto ptrRet = synthId("UnsafePtr");
+    ptrRet->genericArg  = elem;
+    ptrRet->genericArgs = std::make_shared<IdentifierList>();
+    ptrRet->genericArgs->push_back(elem);
+    addMethod("dataPtr", {}, ptrRet, false);
+
+    // `view()` -> `View<T>`, mirroring `string.find` -> `Optional<usize>` above: force-register the
+    // generic instance so its C struct exists, give the method that return type, and emit the tiny
+    // wrapper (emitFixedView) — a runtime macro cannot name the program-specific `View_<T>`.
+    //
+    // Without this, InlineArray was the ONE container locked out of `borrow`, `parallel_for` and every
+    // View-taking algorithm in the stdlib (`sortUnstable` and friends) — while being the only container
+    // a `@noheap` region is allowed to use. `Viewable<View<T>>` goes on `interfaces` below because
+    // `borrow`/`parallel_for` read that grant to prove the host is the thing being viewed, and here it
+    // states a fact: an InlineArray is `struct { T v[N]; }`, so it genuinely owns the bytes handed out.
+    // `view()` is NOT registered here — see registerFixedViews, which runs once every unit is collected.
+    // Doing it from this function made the method's existence depend on whether `std::collections::View`
+    // happened to be collected before the first `InlineArray<T,N>` in the program, which is an ordering
+    // race: `FixedArray` pulls View in transitively through its own module, a prelude builtin pulls in
+    // nothing, so `a.view()` resolved or not according to the user's unrelated imports.
     _classes[cName] = ci;
+    _collections[cName].elem = elem;   // for registerFixedViews, below
 }
 
 // Register a `Simd<T, N>` instance — the LANE BATCH. Structurally a sibling of registerFixed above and
@@ -10628,6 +10762,14 @@ SharedIdentifier CEmitter::exprTypeNode(SharedExpression e, std::map<std::string
     return nullptr;
 }
 
+// One intrinsic instance's method return type, or null. Split out only so mintReturnTypeNode's intrinsic
+// fallback stays a single line next to the two lookups it parallels.
+SharedIdentifier CEmitter::findMethodReturn(ClassInfo& ci, const std::string& member)
+{
+    MethodInfo* mi = findMethod(&ci, member, nullptr);
+    return (mi && mi->returnType) ? mi->returnType : SharedIdentifier();
+}
+
 // The type a `borrow` alias names: the mint's declared return type, with the HOST's generic arguments
 // substituted in (`DynamicArray<int32>.view()` -> `View<int32>`).
 //
@@ -10663,6 +10805,15 @@ SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
     } else {
         auto c = _classes.find(base);
         if (c != _classes.end()) shape = &c->second;
+    }
+    // An INTRINSIC collection resolves by neither route: `InlineArray<int32,4>` has no template in
+    // `_genericTypes` and no `_classes` entry under the bare name — only the monomorphized instance
+    // `InlineArray_int32_4` exists, because registerFixed synthesizes the instance directly. Its C type IS
+    // that instance name, so ask for it. Without this an `InlineArray` alias came out of `borrow` untyped
+    // and `sortUnstable(items: v)` could not infer `T`, while the same call on a `FixedArray` alias could.
+    if (!shape) {
+        auto c = _classes.find(cType(recvTy));
+        if (c != _classes.end() && c->second.isIntrinsicColl) return findMethodReturn(c->second, mint);
     }
     if (!shape) return nullptr;
     MethodInfo* mi = findMethod(shape, mint, nullptr);
@@ -11979,6 +12130,25 @@ void CEmitter::emitStringFind(const CollectionInfo& info)
           << "}\n";
 }
 
+// `InlineArray<T,N>.view()` -> `View<T>`, the wrapper KAMA_FIXED_FUNCS cannot supply: a runtime macro has
+// no way to name the program-specific `View_<T>` struct. Sibling of emitStringFind, and the same shape —
+// a static inline that builds the generic instance's struct literal directly.
+//
+// It mints the view WITHOUT going through `View.over`, deliberately: that ctor is private (the mint rule),
+// and the privacy check is a SOURCE-level rule about which kama type may call it. An intrinsic has no
+// source to check, and its ClassInfo carries the `Viewable<View<T>>` grant that makes the mint legitimate
+// — so the two-field literal here IS the grant, discharged in C.
+void CEmitter::emitFixedView(const CollectionInfo& info)
+{
+    auto mi = _classes[info.cName].methods.find("view");
+    if (mi == _classes[info.cName].methods.end()) return;      // no stdlib View -> `view()` unregistered
+    const std::string vt = cType(mi->second.returnType);
+    if (!isViewCType(vt)) return;                              // registration failed; nothing to emit
+    *_out << "static inline " << vt << " " << info.cName << "__view(" << info.cName << "* self) {\n"
+          << "    return (" << vt << "){ .data = self->v, .len = (ptrdiff_t)(" << info.constValue << ") };\n"
+          << "}\n";
+}
+
 // Emit the KAMA_*_{TYPE,FUNCS}(...) macro line per registered instantiation.
 // An allocator-aware INTERFACE smart ptr (M11d) whose fat handle embeds `A alloc` BY VALUE — so, like
 // `Fixed<T,N>`, its TYPE typedef must be laid out AFTER the allocator struct (in unifiedStructOrder),
@@ -12075,9 +12245,11 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             // Value array: `struct { T v[N]; }` + bounds-checked get/set/at/length/fill. It embeds T
             // by value, so its `_TYPE` is emitted in the by-value struct-body order (emitHeaderContent),
             // NOT in this early types pass — only the `_FUNCS` half comes from here.
-            if (!typesOnly)
+            if (!typesOnly) {
                 *_out << "KAMA_FIXED_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
+                emitFixedView(info);   // ...and the `View<T>` mint the macro cannot name
+            }
         }
         else if (info.kind == CollKind::Simd) {
             // Lane batch: a `vector_size` typedef over a PRIMITIVE. Unlike a Fixed it embeds no struct,
@@ -22235,6 +22407,16 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             return emitDispatch(tgt, derefed, method, args, srcLine, site);
         }
         if (rejectUnprovenBound(clsName, method, srcLine)) return "0";   // the BOUND, not the type
+        // `view()` on an intrinsic collection is the one method whose absence has a fixable CAUSE rather
+        // than being a typo: it is registered only when the program contains `std::collections::View`,
+        // and unlike `FixedArray` — which drags View in through its own module — a prelude builtin drags
+        // in nothing. Without this the user is told the method does not exist, which is true and useless.
+        if (method == "view" && viewTemplateKey().empty()
+            && _classes.count(clsName) && _classes[clsName].isIntrinsicColl) {
+            unsupported(("`" + clsName + "` can hand out a view, but this program has no `View<T>` to hand "
+                         "out — add `import { std::collections::View };`").c_str(), srcLine);
+            return "0";
+        }
         unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
     }
     if (!mi->isIntrinsic) canAccess(owner, mi->visibility, method, srcLine);
@@ -24148,6 +24330,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         for (auto& decl : *u->codeDeclarationList)
             if (auto* ii = dynamic_cast<IntrinsicImplNode*>(decl.get())) applyIntrinsicImpl(ii);
     }
+    // Every unit is collected by here, so whether the program HAS a `std::collections::View` is settled —
+    // and generic-instantiation discovery is still AHEAD, which is the other half of the constraint:
+    // `View<T>.swap` calls the generic `relocate`, and a View instance minted after registerInstGenerics
+    // never gets the per-instantiation walk that resolves it (the symptom is an unresolved `relocate`
+    // reported inside the stdlib's own view.kama).
+    registerFixedViews();
+
     // discover generic-function instantiations after collections (a specialization may use
     // one) and before the destructibility fixpoint. Runs with _typeSubst empty (concrete mangles).
     for (auto& u : units)
@@ -24158,6 +24347,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                            // comptime fns are registered — before const-generic sizes so a baked scalar can size an array.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
+    registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
+                           // one that already has `view`), so this only does work for a const-param-derived
+                           // size whose ELEMENT type no other InlineArray in the program already used.
     computeDestructible();
     // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
     // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)

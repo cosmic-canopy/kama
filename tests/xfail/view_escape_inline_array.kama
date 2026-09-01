@@ -1,0 +1,11 @@
+// An `InlineArray` is a STACK value, so a view minted from one is exactly the dangle the view model
+// exists to catch. It needed no new rule: the escape checks key on the VIEW, not on where the buffer
+// lives, so a stack container is bounded by the same three rules a heap `FixedArray` is. This fixture
+// proves that as an OUTCOME rather than by reading the rules — nothing had ever minted a view from a
+// compiler-synthesized intrinsic before.
+import { std::collections::View };
+fn View<int32> leak() {
+    InlineArray<int32, 3> a = [1, 2, 3];
+    return a.view();        // the storage dies at the closing brace; the view would outlive it
+}
+fn int32 main() { return 0; }

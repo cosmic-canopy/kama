@@ -1799,6 +1799,24 @@ container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-si
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
+**Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view -->
+returns an `UnsafePtr<T>` for C (safe to obtain, `unsafe` to dereference), and `view()` returns a
+`View<T>` for kama — which is what reaches `borrow`, `parallel_for` and every `View<T>`-taking algorithm
+in the stdlib (`sort`, `sortWith`, `binarySearch`). This matters most for `InlineArray<T, N>`, the one
+container that is stack-allocated, fixed-size and allocation-free — so the one a `@noheap` region is
+obliged to use, and until it carried these two it was the one locked out of all of the above.
+`view()` is also what lets a single signature serve every size: `N` is part of an
+`InlineArray<T, N>`'s type (and of any `contract` that mentions one), while a `View<T>` carries its
+length as a value, so `fn void fill(View<float32> block)` works for a 480-frame call and a 512-frame
+call alike.
+
+⚠️ **A view over an `InlineArray` is bounded by the same rules as any other**, and needs no extra
+care despite the storage being on the stack: the escape checks key on the **view**, not on where the
+buffer lives. Returning one over a local is rejected, and a view local still needs a `borrow` window <!-- xfail: view_escape_inline_array, view_local_inline_array -->
+(`tests/inline_array_view.kama` shows both accepted spellings). `View<T>` is a stdlib type, so a
+program that never imports it has no view to mint — the diagnostic says exactly that rather than
+claiming the method does not exist. `dataPtr()` is unconditional.
+
 ### Explicit SIMD — `Simd<T, comptime N>` ✅
 
 A **lane batch**: N numbers the CPU operates on as one value. It is an intrinsic value type, monomorphized

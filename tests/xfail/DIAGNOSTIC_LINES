@@ -597,8 +597,10 @@ view_ctor_over_byval_param	view_ctor_over_byval_param.kama:19
 view_ctor_over_local	view_ctor_over_local.kama:10
 view_ctor_public	view_ctor_public.kama:10
 view_dtor	view_dtor.kama:2
+view_escape_inline_array	view_escape_inline_array.kama:9
 view_field	view_field.kama:3
 view_local_from_method	view_local_from_method.kama:16
+view_local_inline_array	view_local_inline_array.kama:7
 view_local_ternary_root	view_local_ternary_root.kama:10
 view_local_unbounded	view_local_unbounded.kama:9
 view_optional_field	view_optional_field.kama:3
