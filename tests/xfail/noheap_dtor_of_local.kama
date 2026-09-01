@@ -1,0 +1,10 @@
+// RAII is what runs at the end of a real-time scope, so the proof has to model it: `tick`'s own source
+// contains no call at all, and it still allocates — the destructor of the local it owns does. The edge is
+// recorded from the OWNERSHIP rather than from the ~20 places the emitter writes a `T__dtor(&x)`, because
+// an edge duplicated across twenty sites fails open the moment one is missed.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+type resource Noisy { int32 id; public ctor make(int32 id) { this.id = id; } ~Noisy() { int32 u = helper(x: 1); } }
+@noheap fn int32 tick(int32 n) { Noisy z = Noisy.make(id: 1); return n; }
+fn int32 main() { return tick(n: 7); }

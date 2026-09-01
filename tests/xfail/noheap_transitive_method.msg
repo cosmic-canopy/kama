@@ -1,0 +1,1 @@
+`Mixer::fill` is `@noheap`, but this call reaches heap allocation (new)

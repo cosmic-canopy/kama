@@ -48,7 +48,13 @@ note() { echo "check-doc-claims: FAIL — $1" >&2; fail=1; }
 # are historical rationale about a decision, not a rule a fixture can pin.
 DOCS="docs/SPEC.md docs/KEYWORDS.md docs/TYPE_MODEL.md docs/coming-from-other-languages.md docs/tour.md"
 
-CLAIM='is an error|is a compile error|is a type error|is rejected|does not compile|is refused|is forbidden|is not allowed|is a hard error'
+# Every spelling of "the compiler rejects this". The last two arrived late and are worth their own note:
+# the strongest promise in the whole no-heap section — "make every emitter-visible heap allocation a
+# **compile error**" — matched NONE of the others, because it says "MAKE … a compile error" rather than
+# "IS a compile error". So the one claim in SPEC that a whole roadmap row existed to make true was the one
+# claim this guard could not see, and it went unpinned long enough to become false. A claim pattern that
+# only recognises one grammatical voice is a claim pattern with a blind spot.
+CLAIM='is an error|is a compile error|is a type error|is rejected|does not compile|is refused|is forbidden|is not allowed|is a hard error|a compile error|may not call'
 
 for rel in $DOCS; do
     [ -f "$ROOT/$rel" ] || {

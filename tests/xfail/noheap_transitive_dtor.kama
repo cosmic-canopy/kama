@@ -1,0 +1,11 @@
+// A destructor is what runs at the end of a real-time scope, and it is the one member body that does not
+// route through emitMethodOrCtorBody — so it is the body most likely to be missed by a check like this.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+type resource Device {
+    int32 id;
+    public ctor open(int32 id) { this.id = id; }
+    @noheap ~Device() { int32 unused = helper(x: 1); }
+}
+fn int32 main() { Device d = Device.open(id: 1); return 0; }

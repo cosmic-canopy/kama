@@ -1,0 +1,1 @@
+it may not call through a `fnptr`

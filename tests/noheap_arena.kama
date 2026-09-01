@@ -1,0 +1,15 @@
+// The idiom the design exists to protect. The SAME container call that is rejected against the global
+// allocator (tests/xfail/noheap_container_growth.kama) is legal here, because `A` is a type parameter:
+// `DynamicArray<int32, BumpAllocator>` is a different monomorph reaching a different `allocate`, and a
+// bump allocator over a pre-owned arena touches no heap. Monomorphization gives the analysis its
+// precision for free — nothing here is annotated, and nothing had to be.
+import { std::collections::DynamicArray, std::collections::Arena, std::collections::BumpAllocator };
+@noheap fn int32 tick(DynamicArray<int32, BumpAllocator> l, int32 n) {
+    l.add(item: n);
+    return cast<int32>(l.length()) + n;
+}
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 65536);
+    DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: arena.handle());
+    return tick(l: a, n: 16);   // 1 + 16
+}

@@ -1,0 +1,10 @@
+// The same rule with the stdlib playing the part of the allocating destructor, and the reason `free`
+// counts as heap traffic and not merely `malloc`: a real-time callback that returns a block to libc can
+// block on the allocator's lock exactly as one that takes a block can. Nothing here grows the container —
+// merely OWNING it in the region is the defect, because dropping it calls `GlobalAllocator.deallocate`.
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(int32 n) {
+    DynamicArray<int32> l = DynamicArray.empty();
+    return n;
+}
+fn int32 main() { return tick(n: 7); }

@@ -1,0 +1,6 @@
+// A `fnptr` slot may be bound to anything, so a proof cannot step over it. Allowing the call would
+// quietly reduce `@noheap` to "allocates nothing, except where we stopped looking".
+fnptr int32 Op(int32 x);
+fn int32 dbl(int32 x) { return x + x; }
+@noheap fn int32 tick(int32 n) { Op f = dbl; return f(x: n); }
+fn int32 main() { return tick(n: 7); }

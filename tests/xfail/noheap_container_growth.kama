@@ -1,0 +1,6 @@
+// THE canonical real-time bug: `malloc` in the audio callback, reached through a container rather than
+// through `new`. A collection does not allocate with `new` — it goes through its `A: Allocator` — so
+// until the analysis knew `GlobalAllocator` was the leaf, this compiled clean inside a proven region.
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(DynamicArray<int32> l, int32 n) { l.add(item: n); return cast<int32>(l.length()); }
+fn int32 main() { DynamicArray<int32> a = DynamicArray.empty(); return tick(l: a, n: 7); }

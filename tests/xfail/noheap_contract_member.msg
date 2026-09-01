@@ -1,0 +1,1 @@
+a contract member not declared `@noheap`

@@ -843,16 +843,52 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       while `emitProgram` had the order right. Reproduced before fixing; `check-compilefor.sh` now
       asserts it on that same path, and the guard was confirmed to FAIL against the unfixed compiler.
 
-  - **`@noheap` IS NOT TRANSITIVE, and this one is worse than it was reported.** ⚠️ **Measured:**
-    an `@noheap` fn calling an un-annotated kama helper that does `new` **compiles clean**. The
-    emitter has exactly five `_noHeapActive` references — a gate and a per-body save/restore in
-    `emitFunction` — and no callee check at all. SPEC's carve-out excuses only allocation "in library C
-    the emitter can't see"; this is plain kama, plainly visible, and whole-program `--no-heap` flags
-    that very line. So [SPEC.md](SPEC.md)'s *"guarantees … a real-time audio callback allocates
-    nothing"* is **false after one level of indirection**, which makes this a doc-promises-a-proof
-    defect of the same class the house rule exists for, not only an ergonomic gap. The machinery is all
-    there; what is missing is propagation, a rule for what counts as provably non-allocating, and
-    `@noheap` on the stdlib entry points a callback reaches. **M.**
+  - **`@noheap` IS TRANSITIVE — SHIPPED `0.9.132`.** A `@noheap` body may not call anything that
+    allocates, at any depth; the diagnostic names the chain. The rule is one sentence: **infer where the
+    compiler can see the callee, require a declaration where it cannot.** So an ordinary un-annotated
+    helper is fine exactly when it is allocation-free (nothing in `lib/std` needed marking, and nothing
+    was marked), while a `fnptr`, a bound function pointer, a contract member and a `virtual` slot are
+    blind seams that must carry `@noheap` on the DECLARATION — checked against every implementation, the
+    way `const fn` already is. Record in [SPEC.md](SPEC.md) *No-heap subset*. Four findings worth keeping:
+    - ⚠️ **The detector is the gate, not a walker.** Allocation facts are recorded by `rejectIfNoHeap`
+      itself and call edges by `emitReorderedCall` — the one function every resolved call funnels
+      through — so detection cannot drift from the gate, because it IS the gate. A separate AST pass was
+      the obvious design and is wrong twice: two of the seven allocation sites (boxing a primitive / an
+      error into an owning contract handle) are TYPE-directed and invisible to any walker over source,
+      and a second walker obliged to know every allocating node kind is exactly how `scanExprForGenerics`
+      drifted by three node kinds and began failing open.
+    - ⚠️ **The leaf decides everything, and `GlobalAllocator` is it.** Every chain ends at an `extern fn`,
+      so propagation alone would have proven only "reaches no `new`" — and a container does not allocate
+      with `new`, it goes through its `A: Allocator`. Naming that one leaf is what makes `list.add(x)` in
+      an audio callback an error. It needs no annotation to stay precise: `A` is a type parameter, so
+      `DynamicArray<T, BumpAllocator>` is a different monomorph reaching a different `allocate`, and the
+      arena idiom real-time code actually uses stays legal for free. `deallocate` counts too — `free` can
+      block on the allocator lock exactly as `malloc` can, which is what makes merely OWNING a container
+      in the region a defect.
+    - ⚠️ **The destructor edge is recorded from OWNERSHIP, not from the call.** RAII is what runs at the
+      end of a real-time scope, and a `T__dtor(&x)` is emitted from ~20 places (scope cleanup, condition
+      temps, assignment drops, match subjects, unwind paths). An edge duplicated across twenty sites fails
+      open the moment one is missed, so the edge is taken in `recordDestructibleLocal` instead: declaring
+      a destructible local IS the fact, and where the emitter chooses to run the destructor is a lowering
+      detail the proof does not model. `emitDtorDefinition` also never set `_currentFunc` — harmless for
+      the friend-accessor match it was written for, a silent mis-attribution for anything keyed on it.
+    - ⚠️ **The claim that motivated the whole row was invisible to the claim guard.**
+      `check-doc-claims.sh` matched "IS a compile error" and the SPEC sentence said "MAKE every … a
+      compile error", so the strongest promise in the section carried no fixture and went unpinned long
+      enough to become false. The pattern is widened and the claim is marked. A claim regex that
+      recognises one grammatical voice has a blind spot the size of the other.
+
+    **Still open, and it is the FLAG, not the attribute.** `--no-heap` gates every body, so a callee that
+    allocates fails at its own declaration and needs no propagation — but the `GlobalAllocator` leaf is
+    applied to no body, so a `--no-heap` build still reaches `malloc` through a container. Measured, not
+    assumed: `kama check --no-heap` on a two-line `DynamicArray` program passes today. Applying the leaf
+    program-wide is one line; giving it a usable DIAGNOSTIC is not, and that is the whole remaining
+    problem. Every function in the chain reaches the leaf, so reporting per-body names `DynamicArray.add`
+    and `growTo` — stdlib functions the author did not write — and reporting only the OUTERMOST such
+    function needs a user-code/library distinction the emitter does not have (`diagFile()` falls back to
+    the file being compiled for any prelude body emitted in the header pass, so it cannot supply one).
+    That is the design question, and it is why this half stayed where it was.
+
   - **A PACKAGE COMPILES EVERY `.kama` UNDER ITS SOURCE ROOT**, whatever the import graph, so a
     native-only file still compiles on the wasm leg even now that the `extern` gate has landed. `packageSourceFiles` →
     `collectKamaFiles` recurses the whole root, and a per-target block accepts no `modules` or `source`

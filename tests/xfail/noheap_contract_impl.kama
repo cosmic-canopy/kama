@@ -1,0 +1,8 @@
+// The other half of the same rule: a contract that PROMISES `@noheap` is only worth what its
+// implementations honour, and the implementation is the one place the promise can be broken.
+type contract Sink for value { @noheap fn int32 write(int32 x); }
+type value Counter implements Sink {
+    public ctor make() { return this; }
+    public fn int32 write(int32 x) { return x + 1; }
+}
+fn int32 main() { Counter c = Counter.make(); return c.write(x: 6); }

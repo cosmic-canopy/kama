@@ -571,12 +571,36 @@ the wrong allocator — so an arena-backed box is built with the placement form
 #### No-heap subset ✅ (MCU step 5)
 
 A per-region **`@noheap`** function attribute and a whole-program **`--no-heap`** build flag make every
-emitter-visible heap allocation a **compile error** — `new`/`try new`, `parallel_for`/`spawn` argument
+emitter-visible heap allocation a **compile error** — `new`/`try new`, `parallel_for`/`spawn` argument <!-- xfail: noheap_new, noheap_try_new, noheap_spawn, noheap_error_box, noheap_interp -->
 boxing, error-boxing into `Owned<Error>`, and string interpolation's `Formatter` buffer all funnel through
-one gate. Target-independent (composes with `--target embedded`), so it also guarantees a game-engine frame
-tick or a real-time audio callback allocates nothing. Collection *methods* allocate in library C the
-emitter can't see per-call, so a `@noheap` fn may still call a pre-built growing collection — the guarantee
-covers emitter-visible allocation; build the collection (or size it) outside the no-heap region.
+one gate. Target-independent (composes with `--target embedded`).
+
+**`@noheap` is transitive**, which is what makes it a proof rather than a lint: a `@noheap` body may not <!-- xfail: noheap_transitive_new, noheap_transitive_deep, noheap_transitive_method -->
+call anything that allocates, however many calls away it is, and the diagnostic names the chain
+(`tick -> mix -> grow`). Nothing has to be annotated for this — where the compiler can see the callee it
+**infers**, so an ordinary un-annotated helper is fine exactly when it is allocation-free
+([tests/noheap_chain.kama](../tests/noheap_chain.kama)). Reachability includes **destructors**: owning a <!-- xfail: noheap_dtor_of_local -->
+local whose `~T()` allocates allocates, even though the body contains no call.
+
+The chain ends at libc, and `GlobalAllocator` is the leaf — so a container drawing from it is rejected <!-- xfail: noheap_container_growth, noheap_container_local -->
+inside a no-heap region, including merely *owning* one (dropping it calls `deallocate`; `free` can block
+on the allocator's lock exactly as `malloc` can). The same container over an **arena** is fine and needs no
+annotation: `A` is a type parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching
+a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) — which is the idiom a
+real-time region is expected to use.
+
+Where the compiler **cannot** see the callee, the target must **declare** the promise, and the call is
+otherwise rejected rather than assumed harmless: a `fnptr` or bound function pointer has no knowable <!-- xfail: noheap_fnptr_call, noheap_contract_member -->
+target at all, and a contract member or `virtual` method is dispatched through a slot. Marking the
+**contract member** `@noheap` is what lets the proof cross it — every implementation is then checked <!-- xfail: noheap_contract_impl -->
+against that promise, exactly as `const fn` already works on a contract
+([tests/noheap_contract.kama](../tests/noheap_contract.kama)). A virtual call the compiler devirtualizes
+(a `final` class, a `final fn`, or a method nobody overrides) is a direct call and needs no annotation.
+
+⚠️ One gap remains, and it is the **flag**, not the attribute. `--no-heap` gates every body, so a callee
+that allocates fails at its own declaration and needs no propagation — but the `GlobalAllocator` leaf is
+not applied program-wide, so a `--no-heap` build can still reach `malloc` through a container. Tracked on
+the roadmap.
 
 `@noheap` marks a **body**, so it goes on any declaration that has one: a free `fn`, and equally a <!-- test: noheap_method -->
 **method, `ctor`, destructor or operator**. The member forms matter because a real-time entry point is
@@ -2808,7 +2832,7 @@ way to give it a contract was `implements C for T` — a *retroactive* block rea
 outside. Giving primitives (and enums) a spelling removed that mechanism's whole job rather than fencing
 it, and the block itself is now **gone from the language**. See *The contract model* for the full argument.
 
-**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind
+**Coherence.** Two declarations of the same (contract, type) pair are a compile error, whichever kind <!-- xfail: impl_conflict, intrinsic_dup -->
 declares them — a class's or enum's own `implements` list, or a `type intrinsic` block. When the two
 claims come from different packages the message names **both** — kama's whole-program view makes the
 conflict directly visible, so no orphan rule is needed to forbid legal-but-unusual cases in order to
@@ -3571,8 +3595,8 @@ declare, and a file whose declarations are
 nameless but program-wide — a `type intrinsic` conformance on a primitive, or the `extern` seam that
 `spawn`/`parallel_for` require.
 
-Two consequences, both deliberate and both pre-1.0: a compile error in a sibling file nothing imports no
-longer fails the build, and a conformance that was arriving only because the whole directory loaded must
+Two consequences, both deliberate and both pre-1.0: a defect the compiler would report in a sibling file
+nothing imports no longer fails the build, and a conformance that was arriving only because the whole directory loaded must
 now be reachable. `KAMA_NO_PRUNE=1` restores whole-directory loading; `KAMA_PRUNE_TRACE=1` reports each
 import's decision and `=2` names the reference that retained each file.
 

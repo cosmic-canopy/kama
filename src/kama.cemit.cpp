@@ -4298,6 +4298,18 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
     // suppresses the source's scope-drop, and a use-after-move is caught). A never-`give`n collection/
     // string stays NotMoved → drops normally, exactly as before.
     if (ownsByValue(className)) _moveState[cVar] = MoveState::NotMoved;
+    // The DESTRUCTOR edge for the no-heap proof. RAII is what runs at the end of a real-time scope — SPEC
+    // says so in the sentence that motivates `@noheap` on a destructor — so a body owning a local whose
+    // dtor allocates allocates, even though its own source contains no call at all.
+    //
+    // Recorded from the OWNERSHIP, not from the ~20 places a `T__dtor(&x)` is emitted. Those are scattered
+    // across scope cleanup, condition-temp drops, assignment drops, match-subject drops and unwind paths,
+    // and an edge duplicated across twenty sites fails open the moment one is missed — which is precisely
+    // how this hole existed in the first place. Declaring a destructible local IS the fact; where the
+    // compiler chooses to run the destructor is a lowering detail the proof does not need to model.
+    auto ci = _classes.find(className);
+    if (ci != _classes.end() && ci->second.destructible)
+        recordCallEdge(className + "__dtor", _curLine);
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -7153,6 +7165,11 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         if (bad) rejectThis(*md->name->value, md->line);
                         ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst,
                                               modHas(md->modifiers, "static"), md->name});
+                        // `@noheap` on a contract member. It parsed and was silently DISCARDED before this
+                        // — the attribute reached `ClassMemberDeclarationNode::attributes` and nothing ever
+                        // read it here, so a contract could promise a real-time guarantee that no
+                        // implementation was ever checked against.
+                        ii.methods.back().noHeap = hasNoHeapAttr(md->attributes);
                     }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
@@ -7763,6 +7780,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 mi.whenBounds.push_back(b && b->value ? *b->value : "Copyable");
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
+                        mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
                         // A `view`'s CONSTRUCTOR is always private — the mint rule. A view is a
                         // bidirectional relationship: it does not exist without a type to view, so it may
@@ -14803,6 +14821,15 @@ void CEmitter::checkOverrideSignatures()
             // where the `override` marker is validated, and saying it twice helps no one.
             if (!bmi || !baseOwner) continue;
             const int at = mi.node ? mi.node->line : mi.opDecl ? mi.opDecl->line : ci.declLine();
+            // `@noheap` travels down a hierarchy for the same reason it travels across a contract: a
+            // virtual call is dispatched through a slot, so the base's promise is only worth what the most
+            // derived override honours. Checked here rather than folded into the signature comparison
+            // because it is not a signature — `reportSigMismatch` renders a type mismatch, and an override
+            // that merely dropped an attribute would be described as having the wrong shape.
+            if (bmi->noHeap && !mi.noHeap)
+                unsupported(("`" + ci.name + "." + mkv.first + "` overrides `" + baseOwner->name + "."
+                             + mkv.first + "`, which is `@noheap` — mark this override `@noheap` too, or a "
+                               "no-heap caller dispatching through the base loses the guarantee").c_str(), at);
             reportSigMismatch(implSigOf(*baseOwner, baseOwner, bmi), implSigOf(ci, &ci, &mi),
                               "`" + ci.name + "` overrides `" + baseOwner->name + "." + mkv.first
                                   + "`, but its `" + mkv.first + "` ",
@@ -15822,6 +15849,18 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                                         const std::vector<ParamSig>& params,
                                         SharedArgumentList args, int srcLine)
 {
+    // THE call-graph hook. Every resolved call in the language funnels through this one function, which
+    // is why the edge is recorded here rather than at the fifteen sites that reach it — the same argument
+    // the member-attribute handling makes one screen up in emitMethodOrCtorBody: a check duplicated per
+    // site fails OPEN when one site is missed, and a missed call edge reads exactly like a callee that
+    // legitimately allocates nothing.
+    //
+    // `cName` is a plain C identifier for a STATICALLY resolved callee, and an expression for the four
+    // indirect forms (`(*f)`, a bindable's `((T)x.fn)`, `(r).vtbl->m`, `vptr->m`). Those are the calls
+    // whose target is not knowable here, so they are not edges; each is gated at its own site, where the
+    // member being dispatched is still in hand. Telling them apart by shape is exact, not a heuristic:
+    // an identifier is precisely what a direct C call is.
+    recordCallEdge(cName, srcLine);
     std::map<std::string, ArgumentNode*> byName;
     size_t named = 0;
     if (args)
@@ -18051,6 +18090,7 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
                                          SharedArgumentList args, int line)
 {
     const SigInfo& sig = _sigs.at(_classes[cls].collElemClass);
+    rejectNoHeapIndirect("through a bound function pointer", line);   // no-heap gate: unresolvable target
     std::string plist;
     for (size_t i = 0; i < sig.params.size(); ++i)
         plist += (i ? ", " : "") + sig.params[i].className + (sig.params[i].byRef ? "*" : "");
@@ -19313,6 +19353,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isSigType(_localTypes[name])) {
         const SigInfo& sig = _sigs.at(_localTypes[name]);
+        rejectNoHeapIndirect("through a `fnptr`", call->line);   // no-heap gate: unresolvable target
         std::string callee = _refParams.count(name) ? ("(*" + name + ")") : name;
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
     }
@@ -19765,21 +19806,168 @@ bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
 // — `new`/`try new`, the parallel_for/isolate/enum boxing, and string interpolation's Formatter buffer —
 // so the guarantee is one gate, not a dozen scattered checks. `unsupported()` makes it a hard compile
 // error (the driver's error count fails the build). `what` names the construct for the diagnostic.
-// NOTE: collection *methods* (e.g. `DynamicArray.add` growth) allocate in library C the emitter can't see
-// per-call, so a `@noheap` fn may still call a pre-built collection that grows — the guarantee covers
-// emitter-visible allocation. Build the collection outside the no-heap region (or use a fixed capacity).
+//
+// This gate answers for ONE body. What a `@noheap` region reaches through its CALLEES is answered by
+// checkNoHeapTransitive, which is fed from here — see the record below.
+//
+// (A note stood here saying collection methods "allocate in library C the emitter can't see per-call", so
+// a `@noheap` fn could still call a growing collection. It was stale in its reasoning and then wrong in
+// its conclusion: the collections have been ordinary kama for some time, and a container reaches the heap
+// through its `A: Allocator`, which the emitter can see all the way down to `GlobalAllocator.allocate`.
+// That is now the analysis's leaf, so `list.add(x)` inside a `@noheap` region IS rejected — while the same
+// call on an arena-backed `DynamicArray<T, BumpAllocator>` is not, because `A` is monomorphized.)
 void CEmitter::rejectIfNoHeap(const char* what, int line)
 {
-    if (!_noHeapProgram && !_noHeapActive) return;
     // A PROBE emits nothing. `--no-heap` is a promise about the code a build actually produces, and a
     // template nobody instantiates produces none — so a library type that allocates somewhere in its API
     // must not fail a no-heap program that merely has it in scope. (`SortedMap` allocates in three
     // methods; before this, importing the module was enough.) A real instantiation reaches this gate
     // through the ordinary path, where the allocation is real.
+    //
+    // Checked BEFORE the record below as well as before the rejection: a probe body must not teach the
+    // transitivity analysis that a function allocates, for the same reason it must not fail the build.
     if (_probingTemplate) return;
+    // RECORD FIRST, GATE SECOND — and note the record is unconditional, taken whether or not this body
+    // is `@noheap`. That is the whole point: the function that actually allocates is almost never the
+    // annotated one, so the analysis needs the allocation facts for EVERY body, not just the gated ones.
+    // First site per function wins; a function that allocates twice is no more allocating than one that
+    // allocates once, and the first is the one the diagnostic should point at.
+    if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
+        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile() };
+    if (!_noHeapProgram && !_noHeapActive) return;
     unsupported((std::string("heap allocation (") + what + ") is forbidden here — this code is "
                  "`@noheap`/`--no-heap`; use a stack value, a fixed buffer, or a fixed-capacity arena "
                  "with no dynamic growth").c_str(), line);
+}
+
+// The no-heap gate's other half: a call whose target the compiler cannot see. `@noheap` is a PROOF, and a
+// proof cannot step over a call it cannot resolve — a `fnptr` slot may be bound to anything, so allowing it
+// would silently reduce the guarantee to "allocates nothing, except where we stopped looking". That is the
+// exact fail-open shape the transitivity defect had.
+//
+// Recorded into `_allocSites` like an allocation, which is what makes it transitive for free: a `@noheap`
+// fn that calls a helper that dispatches through a callback slot is caught by the same walk, with the same
+// chain, and needs no second mechanism. The rendering differs because the defect does.
+//
+// A `fnptr` type cannot yet CARRY `@noheap` (ROADMAP has the row) — when it can, that becomes the escape
+// hatch, and this gate is what makes it necessary rather than decorative.
+void CEmitter::rejectNoHeapIndirect(const char* what, int line)
+{
+    if (_probingTemplate) return;
+    if (!_currentFunc.empty() && !_allocSites.count(_currentFunc))
+        _allocSites[_currentFunc] = AllocSite{ what, line, diagFile(), /*indirect=*/true };
+    if (!_noHeapProgram && !_noHeapActive) return;
+    unsupported((std::string("this code is `@noheap`/`--no-heap`, so it may not call ") + what
+                 + " — the compiler cannot see the target, so it cannot prove the call allocates nothing. "
+                   "Call a named function instead, or move the dispatch outside the no-heap region").c_str(),
+                line);
+}
+
+// One call edge out of the body being emitted. Only a plain C identifier is an edge: see the hook in
+// emitReorderedCall for why an indirect call is not one, and where each is gated instead.
+void CEmitter::recordCallEdge(const std::string& callee, int srcLine)
+{
+    if (_probingTemplate) return;                     // a probe emits no code, so it makes no edges
+    if (_currentFunc.empty() || callee.empty()) return;
+    if (callee == _currentFunc) return;               // direct recursion adds nothing to reachability
+    for (char c : callee)
+        if (!(isalnum((unsigned char)c) || c == '_')) return;   // an expression, not a callee
+    _callEdges[_currentFunc].emplace(callee, CallEdge{ srcLine });
+}
+
+// `@noheap` is transitive: prove that no function reachable from an annotated body allocates.
+//
+// Runs after ALL emission on BOTH entry points, which is the ordering that matters — the facts it reads
+// are produced by emission itself, so there is nothing to check until every body has been walked. (The
+// last campaign shipped a gate that was a silent no-op on exactly one of these two paths because
+// `emitIncludes` ran before `collectProgram` on the single-TU path and after it on the other. Two entry
+// points, one order, asserted by a guard.)
+//
+// Note this is a check about the ATTRIBUTE only. Whole-program `--no-heap` needs no propagation: it gates
+// every body in the program, so a callee that allocates is rejected where it is written, and transitivity
+// is a property of the flag by construction.
+void CEmitter::checkNoHeapTransitive()
+{
+    if (_noHeapFns.empty()) return;
+
+    // Which functions allocate, transitively. Seed with the ones that allocate DIRECTLY and walk the call
+    // graph BACKWARDS to every caller — a reverse-reachability fixpoint, the same shape computeDestructible
+    // uses over field types, and cheaper than the forward closure because it visits each function once.
+    std::map<std::string, std::vector<std::string>> callers;
+    for (auto& kv : _callEdges)
+        for (auto& e : kv.second) callers[e.first].push_back(kv.first);
+
+    std::set<std::string> allocates;
+    std::vector<std::string> work;
+    for (auto& kv : _allocSites) { allocates.insert(kv.first); work.push_back(kv.first); }
+    while (!work.empty()) {
+        const std::string f = work.back(); work.pop_back();
+        auto it = callers.find(f);
+        if (it == callers.end()) continue;
+        for (const std::string& c : it->second)
+            if (allocates.insert(c).second) work.push_back(c);
+    }
+
+    for (auto& kv : _noHeapFns) {
+        const std::string& root = kv.first;
+        if (!allocates.count(root)) continue;
+        // A body that allocates DIRECTLY already has its diagnostic, issued by the gate as the allocation
+        // was emitted — and that one is better, because it names the construct and points at the line.
+        // Reporting it again here as a zero-hop chain would be a second rendering of a defect the reader
+        // has already been told about, which is the mistake `unsupported`'s own header warns against.
+        if (_allocSites.count(root)) continue;
+
+        // Breadth-first for the SHORTEST chain. A depth-first walk finds *a* path, and on a call graph
+        // that includes the stdlib that path can be absurd — the reader is being asked to follow it, so
+        // it should be the shortest one that exists.
+        std::map<std::string, std::string> parent;
+        std::vector<std::string> queue{ root };
+        std::set<std::string> seen{ root };
+        std::string hit;
+        for (size_t qi = 0; qi < queue.size() && hit.empty(); ++qi) {
+            auto it = _callEdges.find(queue[qi]);
+            if (it == _callEdges.end()) continue;
+            for (auto& e : it->second) {
+                if (!allocates.count(e.first) || !seen.insert(e.first).second) continue;
+                parent[e.first] = queue[qi];
+                if (_allocSites.count(e.first)) { hit = e.first; break; }
+                queue.push_back(e.first);
+            }
+        }
+        if (hit.empty()) continue;   // reachable but no path survives — nothing honest to say
+
+        std::vector<std::string> chain;
+        for (std::string n = hit; !n.empty(); n = (parent.count(n) ? parent[n] : std::string()))
+            chain.push_back(n);
+        std::string path;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+
+        const AllocSite& site = _allocSites[hit];
+        // A position only when there is an honest one to give — see the leaf's record for the case that
+        // has none, where the chain's last link already names the culprit.
+        const std::string where = site.file.empty() ? std::string()
+                                : (" at " + site.file + ":" + std::to_string(site.line));
+        // Point at the FIRST HOP's call site: it is inside the annotated body, so it is the line the
+        // author can actually act on, and it is in the annotated function's own file.
+        const int at = _callEdges[root].count(chain[chain.size() - 2])
+                     ? _callEdges[root][chain[chain.size() - 2]].line : kv.second.line;
+        ScopedStr _f(_emitDeclFile, kv.second.file);
+        // Two defects share the walk, so they share the sentence up to the verb and no further: one says
+        // the chain ALLOCATES, the other says the chain stops being provable. Telling a reader their audio
+        // callback allocates when what it really does is dispatch through a callback slot would send them
+        // hunting for a `new` that is not there.
+        const std::string claim = site.indirect
+            ? ("dispatches " + site.what + ", so what it allocates cannot be proven")
+            : ("reaches heap allocation (" + site.what + ")" + where);
+        unsupported((std::string("`") + kv.second.display + "` is `@noheap`, but this call " + claim
+                     + " through " + path
+                     + (site.indirect ? " — call a named function instead, or move the dispatch outside "
+                                        "the no-heap region"
+                                      : " — make the callee allocation-free, or move the allocation "
+                                        "outside the no-heap region")).c_str(),
+                    at, kv.second.display);
+    }
 }
 
 #if !KAMA_INHERITANCE
@@ -19909,7 +20097,13 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 
     _returnIsPlace = fn->isRef;
     bool prevNoHeap = _noHeapActive;
-    if (fnHasNoHeap(fn)) _noHeapActive = true;   // `@noheap`: gate every allocation in this body
+    if (fnHasNoHeap(fn)) {
+        _noHeapActive = true;   // `@noheap`: gate every allocation in this body...
+        // ...and register the body, so the transitivity pass can walk out from it once every call edge
+        // in the program is known. Registered even when the flag is already on from an enclosing body:
+        // the diagnostic should name the function the author actually annotated.
+        if (!_probingTemplate) _noHeapFns[name] = NoHeapFn{ demangleForDisplay(name), fn->line, diagFile() };
+    }
     if (fn->block) {
         checkDefiniteAssignment(fn->block, fn->parameters);   // owning LOCAL read-before-assign + `out` params (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
@@ -20274,6 +20468,16 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                              + "', which declares it `const fn` — declare it `const fn` here too")
                                 .c_str(),
                             mi->node ? mi->node->line : ci.declLine());
+            // …and `@noheap` is part of it for exactly the same reason, one the const case only hints at:
+            // dispatch goes through a slot, so the implementation is the only place the promise can be
+            // broken — and here it is a promise a real-time caller is relying on. Same one direction: an
+            // implementation may be `@noheap` when the member does not ask, which constrains only itself.
+            if (m.noHeap && !mi->noHeap)
+                unsupported(("method '" + m.name + "' implements contract '" + ii.name
+                             + "', which declares it `@noheap` — declare it `@noheap` here too, so a "
+                               "no-heap caller dispatching through the contract still gets the guarantee")
+                                .c_str(),
+                            mi->node ? mi->node->line : ci.declLine());
             // Same argument, one level down: a `const ref T` MEMBER promises the caller its argument comes
             // back untouched. The caller can only read the member, so an implementation that borrows the
             // same parameter mutably silently revokes that promise for everyone bound by the contract.
@@ -20398,6 +20602,13 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
     for (auto& m : it->second.methods) {
         if (m.name != method) continue;
         recordNodeRef(site, m.nameId.get());   // M6 B3c: a fat-pointer call references the CONTRACT's method
+        // The no-heap gate for a contract call. The slot is the blind seam: which implementation runs is a
+        // runtime fact, so the proof crosses only where the CONTRACT declared it may. A member that does
+        // carry `@noheap` has had every implementation checked against it (see checkConformanceSignatures),
+        // so the call is provable and nothing is recorded.
+        if (!m.noHeap)
+            rejectNoHeapIndirect(("`" + iface + "." + method + "`, a contract member not declared "
+                                  "`@noheap`").c_str(), srcLine);
         std::vector<ParamSig> params = paramSigsOf(m.params);
         return emitReorderedCall("(" + recv + ").vtbl->" + method, "(" + recv + ").obj",
                                  params, args, srcLine);
@@ -20471,6 +20682,14 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
                                        ci.dtorNode ? ci.dtorNode->line : 0, AttrSite::Member);
     ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(dtorAttrs));
     _currentClass = &ci;
+    // A destructor body is a function body, and until the transitivity analysis needed to know WHICH
+    // function was being emitted, nothing here had to say so: this path set `_currentClass` and left
+    // `_currentFunc` holding the previously-emitted function's name. Harmless for the friend-accessor
+    // match it was written for (a dtor is never one), and a silent mis-attribution for anything keyed on
+    // it — an allocation in a dtor would have been recorded against whatever body happened to precede it.
+    _currentFunc = ci.name + "__dtor";
+    if (hasNoHeapAttr(dtorAttrs) && !_probingTemplate)
+        _noHeapFns[_currentFunc] = NoHeapFn{ "~" + ci.name, ci.dtorNode ? ci.dtorNode->line : 0, diagFile() };
     // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
     // exactly like any other body.
     _inUnsafe = ci.dtorNode && modHas(ci.dtorNode->modifiers, "unsafe");
@@ -20566,6 +20785,35 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(attrs));
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
+    // Register an annotated member for the transitivity pass, exactly as emitFunction does for a free fn.
+    if (hasNoHeapAttr(attrs) && !_probingTemplate)
+        _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile() };
+
+    // THE ALLOCATION LEAF, and the one piece of by-name knowledge the analysis needs. Every chain ends at
+    // an `extern fn`, which has no body and so cannot be analysed — and `GlobalAllocator.allocate` is the
+    // one that ends at libc `malloc`. Without this, propagation would prove only that a `@noheap` fn
+    // reaches no `new`, and `list.add(x)` in an audio callback — the canonical real-time bug — would keep
+    // compiling clean, because a container does not allocate with `new`: it goes through its `A: Allocator`.
+    //
+    // Naming it here rather than inventing a `@heap` attribute is deliberate on two counts. The compiler
+    // already privileges this exact type (it is the default `A` for `Owned<T, A>` and for every container),
+    // so this adds no surface a reader has to learn. And it needs no annotation ANYWHERE to be precise:
+    // `A` is a type parameter, so `DynamicArray<T, BumpAllocator>.add` is a different monomorph reaching a
+    // different `allocate`, and an arena-backed container stays legal inside a `@noheap` region while the
+    // heap-backed one does not. That is the idiom real-time code actually uses, and it falls out for free.
+    //
+    // Recorded, never rejected here. Routing it through `rejectIfNoHeap` would fire while the PRELUDE's own
+    // body is being emitted, so every `--no-heap` build would fail pointing at a line in the prelude that
+    // the author did not write. The fact belongs to the analysis; the diagnostic belongs at the call.
+    if (!_probingTemplate && owner.name == "GlobalAllocator" && memberName
+        && (std::string(memberName) == "allocate" || std::string(memberName) == "deallocate")
+        && !_allocSites.count(cName))
+        // No file/line: this body is the PRELUDE's, emitted in the header pass where `diagFile()` has no
+        // unit to name and falls back to the file being compiled — which would point the reader at an
+        // innocent line of their own program. The chain already ends at `GlobalAllocator::allocate`, so
+        // the position adds nothing the message does not already say.
+        _allocSites[cName] = AllocSite{ "a container or box drawing from `GlobalAllocator`, which is libc "
+                                        "malloc/free", 0, std::string() };
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
     _inUnsafe = isUnsafe;         // `unsafe` is the FUNCTION now — the whole body is the relaxed region
     // THE MINT GRANT. A `type view`'s ctor is private (see collectClasses), so the one way an outside type
@@ -22456,6 +22704,14 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         bool monomorphic = sc.isFinalClass || mi->isFinal
                          || !_overriddenSlots.count(std::make_pair(sc.vtableRoot, method));
         if (!monomorphic) {
+            // The no-heap gate for a virtual call, and note where it sits: AFTER devirtualization. A call
+            // the compiler proved has exactly one possible target is a direct call — it fell through to the
+            // ordinary path below, where the edge is recorded and the callee analysed like any other. Only
+            // a genuinely dynamic slot is a blind seam, so `final`, a `final fn` and a virtual method
+            // nobody overrides all stay usable inside a `@noheap` region without an annotation.
+            if (!mi->noHeap)
+                rejectNoHeapIndirect(("`" + clsName + "." + method + "`, a virtual method not declared "
+                                      "`@noheap`").c_str(), srcLine);
             // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
             const std::string& root = sc.vtableRoot;
             std::string slotOwner = owner->name;
@@ -25197,6 +25453,8 @@ int CEmitter::emit(SharedCompilationUnit unit)
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
+                                      // not run against a half-built call graph either.
     return _unsupported;
 }
 
@@ -25230,5 +25488,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
         emitModuleContent(units[i]);
     }
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
+                                      // not run against a half-built call graph either.
     return _unsupported;
 }

@@ -1,0 +1,11 @@
+// The declared half of the proof. A contract member marked `@noheap` is a promise every implementation
+// is checked against (see tests/xfail/noheap_contract_impl.kama), which is what lets the guarantee cross
+// a vtbl slot the compiler cannot see through — the same shape `const fn` already has on a contract.
+type contract Sink for value { @noheap fn int32 write(int32 x); }
+type value Counter implements Sink {
+    int32 seed;
+    public ctor make(int32 seed) { this.seed = seed; }
+    @noheap public fn int32 write(int32 x) { return this.seed + x; }
+}
+@noheap fn int32 tick(Sink s, int32 n) { return s.write(x: n); }
+fn int32 main() { Counter c = Counter.make(seed: 12); return tick(s: c, n: 6); }

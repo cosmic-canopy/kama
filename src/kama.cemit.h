@@ -162,6 +162,10 @@ struct MethodInfo {
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in kama_runtime.h, not AST
     bool                         isConst = false;     // `const fn …` — non-mutating
+    bool                         noHeap = false;      // `@noheap …` — see InterfaceMethod::noHeap. On a
+                                                      // VIRTUAL method it is the same promise across the
+                                                      // same kind of blind slot, so an override inherits
+                                                      // the obligation exactly as it inherits `const`.
     bool                         isUnsafe = false;    // `unsafe fn …` — the BODY may touch raw memory (C#'s
                                                       // meaning). Calling one is unrestricted; it is the
                                                       // signature, not the marker, that bounds the danger.
@@ -496,7 +500,15 @@ struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedPa
                          bool isStatic = false;
                          // The declaration's NAME identifier, for the reference index (M6 B3c). Null for
                          // the operator arm, which has no name node — as MethodInfo::node already is.
-                         SharedIdentifier nameId; };
+                         SharedIdentifier nameId;
+                         // `@noheap` on the member. Signature-level for the same reason `isConst` is, and
+                         // for a sharper one: a contract call is dispatched through a vtbl slot, so the
+                         // compiler cannot see which implementation runs. Inference stops at that slot.
+                         // Declaring it is what lets the proof cross — the contract PROMISES the member
+                         // allocates nothing, every implementation is checked against that promise, and a
+                         // `@noheap` caller may then dispatch through it. Last in the struct so the two
+                         // brace-initialised push_backs keep working; set explicitly beside them.
+                         bool noHeap = false; };
 // The kinds that may `implements` a contract — its `for` clause (`type contract C for value, view`).
 // A BITMASK, not a set<string>: the gate is a test in the inner loop of a `_classes × interfaces`
 // sweep, the domain is CLOSED at five, and the clause has to render back into a diagnostic in a
@@ -1294,6 +1306,39 @@ private:
     bool                                      _noHeapProgram = false;    // `--no-heap`: reject every heap allocation program-wide
     bool                                      _release = false;          // `--release`: strip `debugAssert`
     bool                                      _noHeapActive  = false;    // inside a `@noheap` fn: reject heap allocation in this body
+
+    // --- `@noheap` transitivity -------------------------------------------------------------------
+    // `@noheap` used to gate ONE body and stop, so an `@noheap` fn calling an un-annotated kama helper
+    // that did `new` compiled clean and SPEC's "a real-time audio callback allocates nothing" was false
+    // after one level of indirection. The proof is now transitive, and these three maps are how.
+    //
+    // They are filled DURING emission, on purpose. The detector is `rejectIfNoHeap` itself — the same
+    // gate that rejects a direct allocation also records one — so detection can never drift from the
+    // gate, because it IS the gate. A separate AST walker was the obvious alternative and is the wrong
+    // shape twice over: two of the seven allocation sites (boxing a primitive / an error into an owning
+    // contract handle) are TYPE-directed, not syntactic, so no walker over the source can see them; and
+    // a second walker obliged to know every allocating node kind is exactly how `scanExprForGenerics`
+    // drifted by three node kinds and started failing open.
+    //
+    // Everything is keyed by the mangled C name, which is what makes the analysis precise for free:
+    // a generic instance is its own node, so `DynamicArray<int32, BumpAllocator>.add` and the
+    // `GlobalAllocator` one are different functions, and an arena-backed container stays legal inside a
+    // `@noheap` region while a heap-backed one does not. Monomorphization is doing the work a
+    // whole-program analysis would otherwise have to approximate.
+    struct AllocSite { std::string what; int line = 0; std::string file; bool indirect = false; };
+    struct CallEdge  { int line = 0; };
+    struct NoHeapFn  { std::string display; int line = 0; std::string file; };
+    std::map<std::string, AllocSite> _allocSites;   // C name -> why it allocates DIRECTLY
+    // caller -> callee -> the FIRST call site. A map rather than a list so a body that calls the same
+    // helper fifty times contributes one edge, and so iteration order is the callee name — the walk below
+    // reports a chain, and a chain that changed between builds would be a diagnostic nobody could pin.
+    std::map<std::string, std::map<std::string, CallEdge>> _callEdges;
+    std::map<std::string, NoHeapFn>  _noHeapFns;   // C name -> every `@noheap` body seen
+    // Record one call edge out of the body being emitted. A no-op outside a body, and self-edges are
+    // dropped (direct recursion cannot make a function allocate that did not already).
+    void recordCallEdge(const std::string& callee, int line);
+    // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
+    void checkNoHeapTransitive();
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an
@@ -2576,6 +2621,7 @@ private:
     bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
     bool hasNoHeapAttr(const SharedAttributeList& attrs) const;          // ...same question, node-free
     void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
+    void rejectNoHeapIndirect(const char* what, int line);              // ...and its half for an unresolvable call
 #if !KAMA_INHERITANCE
     void rejectInheritance(const char* what, int line);                 // the ONE gate for KAMA_INHERITANCE=0
 #endif

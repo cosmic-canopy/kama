@@ -1,0 +1,11 @@
+// The real-time entry point is naturally a method (`synth.fill(…)`), so the transitive check has to
+// start from one — the member forms carry `@noheap` and must carry the proof with it.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+type value Mixer {
+    int32 gain;
+    public ctor make(int32 gain) { this.gain = gain; }
+    @noheap public fn int32 fill(int32 n) { return helper(x: n + this.gain); }
+}
+fn int32 main() { Mixer m = Mixer.make(gain: 1); return m.fill(n: 6); }

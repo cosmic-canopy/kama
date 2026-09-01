@@ -1,0 +1,1 @@
+heap allocation (spawn heaps the moved argument bundle)

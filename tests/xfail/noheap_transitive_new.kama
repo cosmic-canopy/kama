@@ -1,0 +1,7 @@
+// `@noheap` is TRANSITIVE. `tick` allocates nothing itself, and that used to be the whole check — so an
+// un-annotated helper one call away reintroduced the heap into a region the docs called proven.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+@noheap fn int32 tick(int32 n) { return helper(x: n); }
+fn int32 main() { return tick(n: 7); }

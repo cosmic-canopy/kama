@@ -1,0 +1,13 @@
+// Boxing a concrete error into an `Owned<Error>` handle allocates, and it is the gate site least likely
+// to look like an allocation in the source: there is no `new` here, only a `Result::Err`. The other of
+// the two gate sites that had no `@noheap` fixture until now.
+type enum TickErr implements Error {
+    TooLoud;
+
+    public const fn string message() { return "too loud"; }
+}
+@noheap fn Result<int32, Owned<Error>> tick(int32 n) {
+    if (n > 10) { return Result::Err(error: TickErr::TooLoud); }
+    return Result::Ok(value: n);
+}
+fn int32 main() { return match (tick(n: 3)) { case Ok(value: v): v; case Err(error: e): 0 - 1; }; }

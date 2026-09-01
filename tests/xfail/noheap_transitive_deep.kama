@@ -1,0 +1,9 @@
+// The proof is a REACHABILITY question, not a one-level peek: the allocation is three calls away, and
+// the diagnostic names the whole chain so the reader does not have to rediscover it.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 c(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+fn int32 b(int32 x) { return c(x: x); }
+fn int32 a(int32 x) { return b(x: x); }
+@noheap fn int32 tick(int32 n) { return a(x: n); }
+fn int32 main() { return tick(n: 7); }

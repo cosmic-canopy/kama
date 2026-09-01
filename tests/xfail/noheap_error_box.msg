@@ -1,0 +1,1 @@
+heap allocation (boxing an error into an `Owned<Error>` handle)

@@ -1,0 +1,9 @@
+// Contract dispatch goes through a vtbl slot, so which implementation runs is a runtime fact. The proof
+// crosses only where the CONTRACT declared it may — an un-annotated member is a blind seam.
+type contract Sink for value { fn int32 write(int32 x); }
+type value Counter implements Sink {
+    public ctor make() { return this; }
+    public fn int32 write(int32 x) { return x + 1; }
+}
+@noheap fn int32 tick(Sink s, int32 n) { return s.write(x: n); }
+fn int32 main() { Counter c = Counter.make(); return tick(s: c, n: 6); }

@@ -1,0 +1,16 @@
+// `spawn` heaps the moved argument bundle, so it is one of the constructs the gate funnels through —
+// and until now no `@noheap` fixture drove it, only `new`, `try new` and interpolation. A gate with no
+// fixture is a gate nobody has watched fail.
+import { std::concurrent::Isolate };
+type resource Acc {
+    int32 total;
+    public ctor zero() { this.total = 0; return this; }
+    public fn void run() { this.total = this.total + 1; }
+}
+fn void accumulate(Acc a) { a.run(); }
+@noheap fn int32 tick() {
+    Acc acc = Acc.zero();
+    scope { spawn accumulate(a: give acc); }
+    return 0;
+}
+fn int32 main() { return tick(); }

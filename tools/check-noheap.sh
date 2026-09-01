@@ -9,6 +9,12 @@
 #   4. MANIFEST  — a project says it once as a `no-heap` key instead of remembering the flag every time,
 #      and a target may say "not this one". The key is what makes the rule reliable: the FLAG fails
 #      silently when forgotten — the build simply succeeds with allocation allowed.
+#   5. TRANSITIVE — the flag and the attribute must agree about a program whose allocation is one call
+#      away. They reach that agreement by DIFFERENT routes, which is the point of asserting it here: the
+#      attribute propagates along the call graph, while the flag gates every body and so rejects the
+#      helper at its own declaration, needing no propagation at all. Until this row, the two legs never
+#      met — the xfail corpus drove only the attribute and this guard only the flag — and the fact that
+#      `@noheap` stopped at the first callee was invisible to the whole suite.
 # `@noheap` (the per-region attribute) is exercised by tests/xfail/noheap_* instead. Fails (exit 1) with a
 # diagnostic if any property breaks. Run standalone or from run_tests.sh.
 set -eu
@@ -132,4 +138,36 @@ if ! "$KAMA" build "$badsrc" -o "$tmp/f.out" >/dev/null 2>"$tmp/stc.err"; then
     sed 's/^/  /' "$tmp/stc.err" >&2; exit 1
 fi
 
-echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean)"
+# 5. TRANSITIVE — an allocation one call away from `main`, and the control proving the flag is the cause.
+transrc="$tmp/trans.kama"
+cat > "$transrc" <<'EOF'
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
+fn int32 main() { return helper(x: 3); }
+EOF
+if "$KAMA" build --no-heap "$transrc" -o "$tmp/g.out" >/dev/null 2>"$tmp/tr.err"; then
+    echo "check-noheap: FAIL — '--no-heap' accepted a program whose allocation is one call away" >&2; exit 1
+fi
+if ! grep -qF "heap allocation (new) is forbidden" "$tmp/tr.err"; then
+    echo "check-noheap: FAIL — the transitive program was rejected, but not by the no-heap gate:" >&2
+    sed 's/^/  /' "$tmp/tr.err" >&2; exit 1
+fi
+if ! "$KAMA" build "$transrc" -o "$tmp/h.out" >/dev/null 2>"$tmp/trc.err"; then
+    echo "check-noheap: FAIL — the transitive program does not build even WITHOUT '--no-heap':" >&2
+    sed 's/^/  /' "$tmp/trc.err" >&2; exit 1
+fi
+# ...and the SAME source, gated by the ATTRIBUTE instead of the flag, must be rejected by the propagation
+# rather than at the helper. Asserted on the message, because "it failed" is what a guard that has stopped
+# testing anything also reports.
+attrsrc="$tmp/attr.kama"
+sed 's/^fn int32 main/@noheap fn int32 main/' "$transrc" > "$attrsrc"
+if "$KAMA" build "$attrsrc" -o "$tmp/i.out" >/dev/null 2>"$tmp/at.err"; then
+    echo "check-noheap: FAIL — '@noheap' accepted a program whose allocation is one call away" >&2; exit 1
+fi
+if ! grep -qF "is \`@noheap\`, but this call reaches heap allocation (new)" "$tmp/at.err"; then
+    echo "check-noheap: FAIL — '@noheap' rejected the transitive program, but not by the propagation:" >&2
+    sed 's/^/  /' "$tmp/at.err" >&2; exit 1
+fi
+
+echo "PASS no-heap (--no-heap rejects heap allocation, composes with --target embedded, drops the allocating sort; the kama.json 'no-heap' key does the same, is per-target overridable, and refuses a non-boolean; flag and attribute agree on a transitive allocation)"
