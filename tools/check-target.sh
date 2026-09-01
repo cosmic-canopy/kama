@@ -527,8 +527,13 @@ printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/
 ( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>"$tmp/od1.err" || {
     echo "check-target: FAIL — project build failed:" >&2; sed 's/^/  /' "$tmp/od1.err" >&2; exit 1; }
 HOSTTRIPLE=$(ls "$od/out")
-[ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
-    echo "check-target: FAIL — no binary at out/$HOSTTRIPLE/debug/app; tree was:" >&2
+# ⚠️ The binary is `od` — the project's NAME — not `app`, the entry file's stem. This guard asserted
+# `app` until 0.9.127, which was the bug rather than the contract: the default output used to take the
+# stem of the alphabetically first SOURCE file, so adding a file that sorted earlier silently renamed
+# the shipped executable. The subject here is the out/ layout (triple + build type), and the binary's
+# name is incidental to it — but a guard that encodes the old name would re-assert the bug.
+[ -x "$od/out/$HOSTTRIPLE/debug/od" ] || {
+    echo "check-target: FAIL — no binary at out/$HOSTTRIPLE/debug/od; tree was:" >&2
     find "$od/out" -type f | sed 's/^/  /' >&2; exit 1; }
 
 # The source tree must be untouched — no stray binary, no generated .c beside the source. This is the
@@ -539,13 +544,13 @@ stray=$(find "$od/src" -type f ! -name '*.kama' | head -5)
 
 # debug and release coexist rather than overwrite
 ( cd "$od" && "$KAMA" build kama.json --release ) >/dev/null 2>&1
-[ -x "$od/out/$HOSTTRIPLE/release/app" ] && [ -x "$od/out/$HOSTTRIPLE/debug/app" ] || {
+[ -x "$od/out/$HOSTTRIPLE/release/od" ] && [ -x "$od/out/$HOSTTRIPLE/debug/od" ] || {
     echo "check-target: FAIL — a release build did not coexist with the debug one" >&2; exit 1; }
 
 # the manifest's `out` key relocates the root
 printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "out": "artifacts", "modules": { ".": { "visibility": "internal" } } }\n' > "$od/kama.json"
 ( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>&1
-[ -x "$od/artifacts/$HOSTTRIPLE/debug/app" ] || {
+[ -x "$od/artifacts/$HOSTTRIPLE/debug/od" ] || {
     echo "check-target: FAIL — the manifest \"out\" key did not relocate the output root" >&2; exit 1; }
 
 # -o still wins over both

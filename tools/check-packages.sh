@@ -1077,4 +1077,65 @@ grep -q "does not declare it" "$tmp/mm.out" \
          sed 's/^/  /' "$tmp/mm.out" >&2; exit 1; }
 
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
+# ---- the output is named for the PROJECT, and dep links are RELATIVE (KB-1, KB-6) --------------------
+# KB-1: the default output took the stem of the alphabetically FIRST source file, ignoring `name` and
+# `entry` entirely. A project named `tests` with `entry: src/main.kama` built a binary called
+# `engine_test`, and adding a file that sorted earlier silently RENAMED the shipped executable — a
+# published artifact changing name because someone added `assets.kama`. Libraries had it too.
+nm="$tmp/nm"
+mkdir -p "$nm/src"
+cat > "$nm/kama.json" <<'JSON'
+{ "name": "namedproj", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'export { hv };\nfn int32 hv() { return 3; }\n'                    > "$nm/src/zz_last.kama"
+printf 'import { namedproj::hv };\nfn int32 main() { return hv(); }\n'    > "$nm/src/main.kama"
+"$KAMA" build "$nm/kama.json" >"$tmp/nm.out" 2>&1 \
+    || { echo "check-packages: FAIL — the named project does not build:" >&2
+         sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
+grep -q '/namedproj$' "$tmp/nm.out" \
+    || { echo "check-packages: FAIL — the output is not named for the project (expected .../namedproj):" >&2
+         sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
+# ...and a file that sorts BEFORE the entry must not rename it. This is the regression itself.
+printf 'export { av };\nfn int32 av() { return 0; }\n' > "$nm/src/aaa_first.kama"
+rm -rf "$nm/out"
+"$KAMA" build "$nm/kama.json" >"$tmp/nm.out" 2>&1 \
+    || { echo "check-packages: FAIL — rebuild after adding a source failed:" >&2
+         sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
+grep -q '/namedproj$' "$tmp/nm.out" \
+    || { echo "check-packages: FAIL — adding an alphabetically-EARLIER source renamed the output." >&2
+         echo "                 The binary is named for the project, not for whichever file sorts first." >&2
+         sed 's/^/  /' "$tmp/nm.out" >&2; exit 1; }
+
+# KB-6: a path dependency's view link must be RELATIVE, so one resolved tree is valid under every mount
+# point at once (host and container share this repo). An absolute link dangles the moment the tree moves,
+# and the resulting error blames the manifest, which is correct. The STORE stays absolute — it is
+# machine-global and does not travel with the tree — which the git/registry cases above already cover.
+rl="$tmp/rl"
+mkdir -p "$rl/dep/src" "$rl/app/src"
+cat > "$rl/dep/kama.json" <<'JSON'
+{ "name": "rldep", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
+JSON
+printf 'export { dv };\nfn int32 dv() { return 4; }\n' > "$rl/dep/src/rldep.kama"
+cat > "$rl/app/kama.json" <<'JSON'
+{ "name": "rlapp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "rldep": { "path": "../dep" } } }
+JSON
+printf 'import { rldep::dv };\nfn int32 main() { return dv(); }\n' > "$rl/app/src/app.kama"
+"$KAMA" pkg install "$rl/app/kama.json" >/dev/null 2>&1
+lnk=$(readlink "$rl/app/.kama/deps/rldep" || true)
+case "$lnk" in
+    /*) echo "check-packages: FAIL — a path dependency was linked ABSOLUTELY ($lnk)." >&2
+        echo "                 A resolved tree must be relocatable: relative links are correct under" >&2
+        echo "                 every mount point at once, absolute ones dangle on the first move." >&2; exit 1 ;;
+    "") echo "check-packages: FAIL — no dependency link at $rl/app/.kama/deps/rldep" >&2; exit 1 ;;
+esac
+# The real assertion is not the string — it is that the tree still builds somewhere else.
+mv "$rl" "$tmp/rl-moved"
+"$KAMA" build "$tmp/rl-moved/app/kama.json" >"$tmp/rl.out" 2>&1 \
+    || { echo "check-packages: FAIL — the resolved tree does not build after being MOVED:" >&2
+         sed 's/^/  /' "$tmp/rl.out" >&2; exit 1; }
+
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"

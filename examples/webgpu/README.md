@@ -38,21 +38,29 @@ is created against.
 | async `RequestAdapter`/`RequestDevice` callbacks | Kama `fnptr`; state via the `userdata` `UnsafePtr` |
 | the frame loop (browser-driven) | [`std::app`](../../lib/std/app/app.kama)'s `run(tick, state)` |
 
-## Notes / honest limitations surfaced by this example
+## Notes on binding a C API from kama
 
-Two Kama ergonomic gaps showed up (both have clean workarounds here; tracked in
-[docs/ROADMAP.md](../../docs/ROADMAP.md)):
+Binding a callback-based C API means handing a kama `fnptr` to a C callback field, which the C compiler
+flags as an incompatible-function-pointer type (kama lowers enums to `int` and handles to `void*`). The
+compiler demotes that to a warning at the `extern` boundary (the sanctioned unsafe seam), so it links —
+you'll see the warning at build time.
 
-1. **No aggregate initializer for `type extern value`.** A field-wise call like `WGPUColor(r: 1.0, …)`
-   silently zero-inits instead of setting fields, so the code uses `T x = T(); x.field = …;`. Verbose for
-   WebGPU's many-field descriptors.
-2. **No mutable globals yet.** App state lives on the heap (`calloc`) and is passed through the WebGPU
-   `userdata` pointer into the callbacks rather than a module-level variable.
-
-Also: binding a callback-based C API means handing a Kama `fnptr` to a C callback field, which the C
-compiler flags as an incompatible-function-pointer type (Kama lowers enums to `int` and handles to `void*`).
-The compiler now demotes that to a warning at the `extern` boundary (the sanctioned unsafe seam), so it
-links — you'll see the warning at build time.
+> ⚠️ **This section used to list three limitations that no longer exist**, and they were load-bearing for
+> how a reader structures a renderer — one project reported nearly building an asset-embedding step to
+> work around the string one. All three are gone, and each has a fixture:
+>
+> - **Aggregate init for `type extern value` works** — `WGPUColor(r: 1.0, …)` sets fields rather than
+>   silently zero-initing (`tests/extern_value_init.kama`, [SPEC.md](../../docs/SPEC.md) *extern types*).
+>   The `T x = T(); x.field = …;` pattern below is legacy, not a workaround.
+> - **Multi-line string literals work** — `triangleWgsl()` is now written as one, plus `stripIndent"…"`
+>   for dedenting (`tests/tag_strip_indent.kama`).
+> - **Module-level mutable globals work** — `static int32 g_frames;`. This example still threads state
+>   through the WebGPU `userdata` pointer, which remains the better choice here (a module `static` is
+>   per-isolate and takes value/`UnsafePtr`/`InlineArray`/`Simd` only), but it is a choice now rather
+>   than a workaround.
+>
+> Kept as a note rather than deleted, because "the example says X is impossible" is exactly the kind of
+> claim that costs someone a design cycle, and it did.
 
 ## Native (Mac / Linux / Windows)
 

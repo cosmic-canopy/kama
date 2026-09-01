@@ -118,10 +118,24 @@ type value App {
 }
 
 // The whole triangle: two entry points in one WGSL module, positions baked in
-// (no vertex buffer). A uniform `uAngle` spins it in the vertex shader. One
-// logical line so it needs no multi-line string literal.
+// (no vertex buffer). A uniform `uAngle` spins it in the vertex shader.
+//
+// Written as a MULTI-LINE STRING, which is what shader source wants. This used to be one enormous
+// logical line, with a comment saying kama had no multi-line literal — it does, and a reader who
+// believed that comment would go and build an asset-embedding step to work around it. `stripIndent`
+// (std::fmt) dedents a tagged literal if you want the source indented to match its surroundings.
 fn string triangleWgsl() {
-    return "@group(0) @binding(0) var<uniform> uAngle: f32; @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f { var p = array<vec2f,3>(vec2f(0.0,0.5), vec2f(-0.5,-0.5), vec2f(0.5,-0.5)); let c = cos(uAngle); let s = sin(uAngle); let v = p[i]; return vec4f(v.x*c - v.y*s, v.x*s + v.y*c, 0.0, 1.0); } @fragment fn fs() -> @location(0) vec4f { return vec4f(1.0, 0.4, 0.1, 1.0); }";
+    return "@group(0) @binding(0) var<uniform> uAngle: f32;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    var p = array<vec2f,3>(vec2f(0.0,0.5), vec2f(-0.5,-0.5), vec2f(0.5,-0.5));
+    let c = cos(uAngle);
+    let s = sin(uAngle);
+    let v = p[i];
+    return vec4f(v.x*c - v.y*s, v.x*s + v.y*c, 0.0, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4f {
+    return vec4f(1.0, 0.4, 0.1, 1.0);
+}";
 }
 
 // Build the render pipeline for the triangle (device is ready; format is the surface's).

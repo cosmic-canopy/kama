@@ -152,17 +152,32 @@ same name. A monorepo directory may be called anything: it has no name in any fi
 Everything a build generates goes under one root, so ignoring it is one line rather than a hunt:
 
 ```
-myapp/out/aarch64-macos-none/debug/app
-myapp/out/aarch64-macos-none/release/app
-myapp/out/wasm32-emscripten-none/debug/app.html
+myapp/out/aarch64-macos-none/debug/myapp
+myapp/out/aarch64-macos-none/release/myapp
+myapp/out/wasm32-emscripten-none/debug/myapp.html
 ```
 
 The root defaults to `out` and the `"out"` key moves it. It is scoped by **target triple** and by
 **build type** because those vary independently, and a collision between them is silent — you would get
 yesterday's binary and no diagnostic. `-o` still overrides everything.
 
+**The artifact is named for the project** — the manifest's `name` (a `@scope/` prefix stripped, so it is
+filename-safe), or `entry`'s stem for a manifest with no name. Until 0.9.127 it took the stem of the
+alphabetically *first source file*, so `name` and `entry` were both ignored: a project named `tests` with
+`entry: src/main.kama` built a binary called `engine_test`, and adding a source that sorted earlier
+silently **renamed the shipped executable**. A library is `lib<name>.a` by the same rule.
+
 A loose `.kama` file with **no manifest** is unchanged: `kama build hello.kama` still writes `./hello`
-beside it. `out/` is a project's concept, and one file is not a project.
+beside it. `out/` is a project's concept, and one file is not a project — and with no manifest to name
+it, the file's own stem is the honest answer.
+
+**A path dependency's view link is relative.** `.kama/deps/<name>` points at `../../../<dir>` rather than
+an absolute path, so **one resolved tree is valid under every mount point at once** — the same checkout
+served from a host and a container, a second worktree, CI with a different root. An absolute link dangles
+on the first move, and the error it produces blames the manifest (`declares no dependency named …`),
+which is the wrong place to look. Re-running `kama pkg install` per environment is not an alternative:
+each run overwrites the other's links. The content-addressed store (`~/.kama/store`) stays absolute — it
+is machine-global and does not travel with the tree.
 
 ## Telling the tooling what your project contains — `source`
 

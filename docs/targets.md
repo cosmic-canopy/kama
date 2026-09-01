@@ -326,9 +326,9 @@ out/<triple>/<debug|release>/
 ```
 
 ```sh
-kama build src/app.kama                          # out/aarch64-macos-none/debug/app
-kama build src/app.kama --release                # out/aarch64-macos-none/release/app
-kama build src/app.kama --target WASM            # out/wasm32-emscripten-none/debug/app.html
+kama build kama.json                             # out/aarch64-macos-none/debug/myapp
+kama build kama.json --release                   # out/aarch64-macos-none/release/myapp
+kama build kama.json --target WASM               # out/wasm32-emscripten-none/debug/myapp.html
 ```
 
 Scoped by **both** axes deliberately. They vary independently, and a collision between them is silent —

@@ -4399,14 +4399,39 @@ static bool makeDirs(const std::string& path)
 // Symlink a directory `linkPath` -> `target` (absolute). Windows: a directory junction (mklink /J).
 // Replaces an existing link. This is how the per-project view points at a store/path source (pnpm
 // model) — zero-copy, no duplication.
+//
+// ⚠️ A target INSIDE the user's own tree is linked RELATIVELY; only the machine-global store stays
+// absolute. The distinction is what makes a resolved tree relocatable: an absolute
+// `game/.kama/deps/engine -> /Users/me/proj/engine` dangles the moment the same repo is mounted
+// anywhere else — a container at /work, CI with a different checkout root, a second worktree — and the
+// resulting error ("declares no dependency named `engine`") blames the manifest, which is correct.
+// A relative `../../../engine` is right under every mount point simultaneously, so one resolved tree
+// serves host and container at once. Re-running `pkg install` per environment is not an alternative:
+// each run overwrites the other's links, so the two fight. (Reported from a real port —
+// friendly-fire-department KAMA_GAPS KB-6, which had to post-process the links to work around it.)
+//
+// The store is deliberately exempt. `~/.kama/store/<pkg>-<hash>` is content-addressed and machine-global,
+// not part of any repo, so a relative path to it would be both longer and more fragile — and it does not
+// travel with the tree anyway.
 static bool linkDir(const std::string& target, const std::string& linkPath)
 {
 #ifdef _WIN32
+    // A junction stores an absolute path by definition, so there is nothing to relativize here.
     runCmd("cmd /c rmdir \"" + linkPath + "\" 2>nul");
     return runCmd("cmd /c mklink /J \"" + linkPath + "\" \"" + target + "\"") == 0;
 #else
+    std::string linkTarget = target;
+    const std::string store = storeDir();
+    if (store.empty() || target.compare(0, store.size(), store) != 0) {
+        // ⚠️ Resolve the link's PARENT, not the link. `absolutePath` is realpath(), and the link does not
+        // exist yet — resolving it yields nothing, `dirName("")` is "", and the relative path comes back
+        // unusable, leaving the absolute target silently in place. The parent is `.kama/deps`, which the
+        // installer has already created.
+        std::string rel = relativePath(absolutePath(dirName(linkPath)), target);
+        if (!rel.empty()) linkTarget = rel;
+    }
     unlink(linkPath.c_str());
-    return symlink(target.c_str(), linkPath.c_str()) == 0;
+    return symlink(linkTarget.c_str(), linkPath.c_str()) == 0;
 #endif
 }
 
@@ -8394,6 +8419,8 @@ int main(int argc, char** argv)
     // spelling produced, named by the manifest rather than by whichever file the caller happened to pick.
     // Not for `query`, whose manifest operand sets the SCOPE while the `.kama` operand stays the thing
     // being asked about; it widens its own unit set further down.
+    // The project's own name, for the DEFAULT output path. Empty for a bare file operand.
+    std::string manifestOutStem;
     if (!manifestOperand.empty() && subcommand != "query") {
         std::vector<std::string> srcs;
         packageSourceFiles(dirName(manifestOperand), srcs);   // false is unreachable: the operand IS the manifest
@@ -8403,10 +8430,26 @@ int main(int argc, char** argv)
             return 2;
         }
         inputs = srcs;
+        // ⚠️ ...but the project's own NAME, not `inputs[0]`, is what the output is called. `srcs` is a
+        // sorted glob, so the default output used to take the stem of the ALPHABETICALLY FIRST source
+        // file: a project named `tests` with `entry: src/main.kama` built a binary called `engine_test`,
+        // and adding a file that sorts earlier silently RENAMED the shipped executable. Libraries had it
+        // too — a package `lib` with modules `a`/`b` produced `liba.a`.
+        //
+        // The manifest already answers this. `name` first (what the project calls itself, `@scope/`
+        // stripped by importNameOf so it is filename-safe), then `entry`'s stem for a manifest with no
+        // name, and only then the old behaviour — which still applies to a bare file operand, where
+        // there is no manifest and the input IS the answer.
+        manifestOutStem = manifestModulesCached(manifestOperand).projectName;
+        if (manifestOutStem.empty()) {
+            std::string entryRel, eerr;
+            if (loadManifestEntry(manifestOperand, entryRel, eerr) && !entryRel.empty())
+                manifestOutStem = stripExtension(baseName(entryRel));
+        }
     }
 
     if (inputs.empty()) { fprintf(stderr, "kama: no input file\n"); usage(); return 2; }
-    const std::string& input = inputs[0];   // first input drives default output naming
+    const std::string& input = inputs[0];   // first input drives COMPILATION order
 
     // The CLI wins over the manifest's `runtime`, exactly as --target wins over a `"default": true`.
     // Set after resolveBuildConfig because that is what assigns g_target.
@@ -9113,9 +9156,14 @@ int main(int argc, char** argv)
         // wasm -> an HTML harness (emcc also emits the .js + .wasm alongside it). Inside a project the
         // stem moves to projectOutDir (see above); outside one it stays beside the input, as it always has.
         const char* sharedExt = g_target.sharedLibExt();
+        // `manifestOutStem` is the project's own name when one was given; it falls back to the input's
+        // stem for a bare file operand, which is where that behaviour is actually right.
+        const std::string outBase = manifestOutStem.empty() ? baseName(stripExtension(input))
+                                                            : manifestOutStem;
         const std::string stem = projectOutDir.empty()
-                               ? stripExtension(input)
-                               : projectOutDir + "/" + baseName(stripExtension(input));
+                               ? (manifestOutStem.empty() ? stripExtension(input)
+                                                          : dirName(stripExtension(input)) + "/" + outBase)
+                               : projectOutDir + "/" + outBase;
         std::string defaultOut = wasm      ? (stem + ".html")
                                : outStatic ? (dirName(stem) + "/lib" + baseName(stem) + ".a")
                                : outObject ? (stem + ".o")
