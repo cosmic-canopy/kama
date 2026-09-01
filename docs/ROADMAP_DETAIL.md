@@ -719,6 +719,49 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   it. `tools/check-release-arith.sh` now asserts the semantics *and* the zero cost in a real release
   build.
 
+- **Found by the first external project on kama** (a game port, 2026-08-31). Four of its reports are
+  fixed — a multi-module library not being consumable as a dependency, the output being named after the
+  alphabetically first source file, absolute dependency symlinks, and three stale claims in the WebGPU
+  example. These are the ones still open, kept together because their provenance is the point: every one
+  was found by someone *using* the language rather than by the corpus, and none of them had a fixture
+  that could have caught it.
+
+  - **A module-scope `comptime` constant cannot be exported.** [SPEC.md](SPEC.md) says a module
+    `comptime` is "a module-level named constant (subject to the module `export { }` surface)", and
+    naming one in `export { }` is rejected — "no such top-level declaration in this module". Dropping it
+    from the list compiles, so the constant works; it is invisible to the export surface only. ⚠️ **This
+    needs a DECISION, not a patch.** A doc/compiler disagreement has two resolutions and the corpus
+    decides which — the same shape as the one that made a previous campaign reject seven fixtures after
+    "fixing" a mismatch the wrong way. The consequence if the doc is right: a library cannot publish
+    named constants at module scope, and every key code and tuning constant has to hang off a carrier
+    type. (The reporter notes the carrier-type form reads better anyway, which is evidence for the other
+    resolution.)
+  - **`examples/webgpu/triangle.kama` has an unbounded-allocation frame loop.** When
+    `wgpuSurfaceGetCurrentTexture` yields no texture the example reconfigures the swapchain and returns
+    **without presenting** — and vsync, its only throttle, applies only to a presented frame. So the path
+    runs at unbounded rate, allocating a swapchain per iteration. ⚠️ The trigger is trivial and permanent:
+    `Occluded` (a wgpu-native extension the example never consults, not one of `webgpu.h`'s six statuses)
+    is returned with a NULL texture whenever the window is not visible — another window in front is
+    enough. The reporter reached 15.6 GB resident and took a machine down through the kernel watchdog,
+    twice. Fix: sleep on every path that returns without presenting, reconfigure only on
+    `Outdated`/`Lost`, treat `Occluded`/`Timeout` as skip-the-frame. ⚠️ **The language half is the larger
+    point:** nothing in kama could have caught this. The allocation is inside wgpu-native, reached through
+    `UnsafePtr` handles carrying no RAII, so there is no kama object, no destructor, and nothing for
+    `@noheap` to see. That is a concrete argument that the "thin safe `std::gpu` binding wrapper
+    (handles→RAII)" [ENGINE_READINESS.md](ENGINE_READINESS.md) calls optional stdlib polish would have
+    made the leak *structurally impossible*.
+  - **Build settings do not propagate from a dependency.** `cflags`, `ldflags` and `link` are all
+    **ignored on a dependency**, so every consumer must repeat the block and drift between them is
+    silent. That half is a bug rather than ergonomic friction. The other half — no way to hand project
+    C/C++ sources to the build at all, so compiling your own C needs an out-of-band Makefile — is a
+    genuine gap; a `csources` key is the shape suggested.
+  - **The `std::gpu` seam is half-built.** `kama_gpu_pump` calls `glfwPollEvents()` and **discards the
+    queue** (the web pump is `{ return 1; }`), so there is no keyboard, mouse, wheel, pointer-lock,
+    resize, focus or gamepad on either target; and the surface is configured at a hardcoded 512×512 with
+    no way to learn the drawable size. A size accessor is a few lines. Whether the input *library* above
+    that seam is kama's or an engine's is the more arguable half, but a window seam that polls events and
+    throws them away is not finished.
+
 - **A METHOD and a CTOR cannot take type or `comptime` parameters** — only a free function can. The
   `type_params_opt` slot appears in exactly three grammar rules ([kama.y](../src/kama.y), the
   `function_declaration` arms); `method_declaration`'s four `FN` arms and both `CTOR` arms have none, so
