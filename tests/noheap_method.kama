@@ -1,0 +1,22 @@
+// `@noheap` on a MEMBER. A real-time entry point is naturally a method — `synth.fill(…)` — and until
+// the attribute reached members it had to be a free `fn`, against the grain of the type model.
+// All four member kinds carry it: method, `ctor`, operator and destructor.
+type value Mixer {
+    public int32 gain;
+    @noheap public ctor make(int32 gain) { this.gain = gain; }
+    @noheap public fn int32 fill(int32 n) { int32 acc = 0; int32 i = 0; while (i < n) { acc = acc + this.gain; i = i + 1; } return acc; }
+    @noheap public Mixer operator+(Mixer rhs) { return Mixer.make(gain: this.gain + rhs.gain); }
+}
+type resource Device {
+    int32 id;                        // a `resource` field is always private
+    public ctor open(int32 id) { this.id = id; }
+    public const fn int32 handle() { return this.id; }
+    @noheap ~Device() { }   // teardown at the end of a real-time scope allocates nothing either
+}
+fn int32 main() {
+    Device d = Device.open(id: 1);
+    Mixer a = Mixer.make(gain: 2);
+    Mixer b = Mixer.make(gain: 2);
+    Mixer c = a + b;                 // gain 4
+    return c.fill(n: 5) + d.handle();  // 4*5 + 1 = 21
+}

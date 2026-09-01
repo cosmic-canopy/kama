@@ -362,6 +362,7 @@ struct kamayystype {
 %type <expression> conditional_expression conditional_or_expression
 %type <expressionlist> expression_list
 %type <statement> compilation_unit code_declaration type_declaration function_declaration statement
+%type <statement> plain_function_declaration
 %type <statement> declaration_statement local_variable_declaration embedded_statement local_constant_declaration
 %type <statement> empty_statement selection_statement iteration_statement jump_statement if_statement
 %type <statement> while_statement do_statement for_statement foreach_statement
@@ -409,7 +410,7 @@ struct kamayystype {
 %type <intrinsictargets> intrinsic_target_list
 %type <statement> marked_intrinsic_declaration
 %type <classbasedecl> class_base_opt class_base
-%type <classmemberdecl> class_member_declaration constant_declaration field_declaration method_declaration friend_declaration comptime_assert_statement
+%type <classmemberdecl> class_member_declaration plain_class_member constant_declaration field_declaration method_declaration friend_declaration comptime_assert_statement
 %type <classmemberdecl> operator_declaration constructor_declaration destructor_declaration
 %type <classmemberdecllist> class_body class_member_declarations_opt class_member_declarations
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
@@ -855,7 +856,23 @@ function_modifier_opt
                               Functions 
 ------------------------------------------------------------------------------*/
 
+/* An attribute prefix is factored into ONE arm rather than duplicated per form. It used to be a twin of
+   the `fn … block` arm alone — 24 lines of copied action — which is why `extern "h";`, `extern fn`,
+   `fnptr` and the place-returning `fn ref T` could not be gated with `@compileFor` at all: nothing was
+   wrong with those forms, they simply had no attributed twin and nobody was going to write four more.
+   Hoisting it here gives every form attributes at once and DELETES the copy. Which attributes are legal
+   on which form is the emitter's call (an include has no body, so `@noheap` is meaningless on one) —
+   a rejection can name the reason, where a parse error cannot. */
 function_declaration
+  : plain_function_declaration   { $$ = $1; }
+  | attribute_list plain_function_declaration   {
+      if (auto fn = std::dynamic_pointer_cast<FunctionDeclarationNode>($2)) fn->attributes = $1;
+      else if (auto inc = std::dynamic_pointer_cast<IncludeNode>($2)) inc->attributes = $1;
+      $$ = $2;
+   }
+  ;
+
+plain_function_declaration
   : EXTERN STRING_LITERAL SEMICOLON   {
       $$ = std::make_shared<IncludeNode>(SCANNER_CODEGENCONTEXT, $2);   /* extern "<header.h>"; (FFI #include) */
    }
@@ -890,29 +907,6 @@ function_declaration
           fn->comptimeParams = std::make_shared<StringList>();
           fn->constTypes  = std::make_shared<IdentifierList>();
           for (auto& p : *$6) if (p && p->value) {
-              fn->typeParams->push_back(p->value);
-              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
-              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
-              fn->constTypes->push_back(p->isComptimeParam ? p->comptimeType : SharedIdentifier());
-              if (p->isComptimeParam) fn->comptimeParams->push_back(p->value);
-          }
-      }
-      $$ = fn;
-  }
-  | attribute_list function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
-      /* `@interrupt`/`@section(".x")` fn — MCU codegen attributes (mirrors the attributed-TYPE form). */
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $2, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $11 );
-      STAMP_LOC(fn->name, @6);
-      fn->attributes = $1;
-      fn->isUnsafe = ($3 != nullptr);
-      rejectFnTypeParamDefault($7, &@7, scanner);
-      if ($7 && !$7->empty()) {
-          fn->typeParams = std::make_shared<StringList>();
-          fn->typeBounds = std::make_shared<BoundsList>();
-          fn->typePins  = std::make_shared<IdentifierList>();
-          fn->comptimeParams = std::make_shared<StringList>();
-          fn->constTypes  = std::make_shared<IdentifierList>();
-          for (auto& p : *$7) if (p && p->value) {
               fn->typeParams->push_back(p->value);
               fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
               fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
@@ -1811,7 +1805,19 @@ class_member_declarations
   | error   { $$ = std::make_shared<ClassMemberDeclarationList>(); }
   | class_member_declarations error   { $$ = $1; }
   ;
+/* Same hoist as `function_declaration` above, and for the same reason: an attribute prefix as ONE arm
+   over the whole member set, rather than a duplicated twin per member kind. `field_declaration` used to
+   own the only attributed arm, which is why `@noheap` could not mark a method, ctor, dtor or operator —
+   a real-time entry point had to be a free `fn`, against the grain of the type model where the natural
+   spelling is `synth.fill(…)`. Nine twins would each have needed a copy of their arm's action AND would
+   have reintroduced the `CONST`/`COMPTIME` shift/reduce conflicts the comments below describe; one arm
+   over `plain_class_member` leaves the decision structure inside it exactly as it was. */
 class_member_declaration
+  : plain_class_member   { $$ = $1; }
+  | attribute_list plain_class_member   { if ($2) $2->attributes = $1; $$ = $2; }
+  ;
+
+plain_class_member
   : constant_declaration   { $$ = $1; }
     /* `comptime assert(…)` as a type member (M7). The `modifiers_opt` prefix is NOT decoration: every
        other member arm starts with it, so without it the parser must choose between reducing an empty
@@ -1829,9 +1835,10 @@ constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON   { $$ = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); }
   | modifiers_opt COMPTIME type constant_declarators SEMICOLON   { auto k = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); k->isComptime = true; $$ = k; }   /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
   ;
+/* `@field … type name;` no longer needs an arm here — `class_member_declaration` attaches the attribute
+   list for every member kind, this one included. */
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
-  | attribute_list modifiers_opt type variable_declarators SEMICOLON   { auto f = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $2, $3, $4); f->attributes = $1; $$ = f; }   /* `@field … type name;` */
   ;
 method_declaration
   : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(m->name, @5); m->isComptime = true; $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */

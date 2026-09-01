@@ -1,0 +1,5 @@
+// `@noheap` marks a BODY — it gates the allocations emitted inside one. A module `static` has no body,
+// so there is nothing for it to gate. (The rule predates members carrying attributes; it had no fixture
+// until the member work made the "where does @noheap go" claim worth proving on both sides.)
+@noheap static int32 counter;
+fn int32 main() { return counter; }

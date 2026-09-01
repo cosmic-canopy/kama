@@ -1,0 +1,16 @@
+// `@compileFor(FLAG)` on the `extern` forms — the half of the platform seam that was missing. Without
+// it a backend's `#include` was emitted for EVERY build, so two platform backends could not each own
+// their own C header and the split had to be pushed down into C `#ifdef`s.
+// Both `extern "<h>";` and `extern fn` are gated here, against a plain-kama fallback on the
+// complementary flag, so every build resolves `absolute` and exactly one header is included:
+//   default (debug) build -> libc's abs, via <stdlib.h>     `--release` build -> the kama fallback
+// tools/check-compilefor.sh proves the DROP on the emitted C (a gated-out header emits no directive).
+@compileFor(DEBUG)  extern "stdlib.h";
+@compileFor(DEBUG)  extern fn int32 abs(int32 v);
+@compileFor(!DEBUG) fn int32 abs(int32 v) { return v < 0 ? 0 - v : v; }
+
+// Calling an `extern fn` needs an `unsafe fn` (the C boundary is the seam), and calling an unsafe fn
+// from safe code is allowed — so the gate is invisible to `main` on both tiers.
+unsafe fn int32 absolute(int32 v) { return abs(v: v); }
+
+fn int32 main() { return absolute(v: 0 - 42); }

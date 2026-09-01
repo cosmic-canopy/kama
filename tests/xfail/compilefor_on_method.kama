@@ -1,0 +1,11 @@
+// `@compileFor` on a member is a HARD ERROR rather than a no-op, and that is the whole point:
+// pruneInactiveDecls walks TOP-LEVEL declarations only, so a member's gate is never evaluated and never
+// stripped. Accepting it would leave a conditional that silently fails open on every build — the same
+// shape as the `@compileFor(NATIVE)` spelling that silently deleted code in a loose build.
+// Gating the enclosing `type` already drops every member with it.
+type value Probe {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    @compileFor(DEBUG) public fn int32 trace() { return 251; }
+}
+fn int32 main() { return 0; }

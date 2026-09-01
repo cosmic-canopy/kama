@@ -51,6 +51,39 @@ if [ "$rc" != 7 ]; then
     exit 1
 fi
 
+# 3b. THE EXTERN FORMS — a gated `extern "<h>";` must emit NO `#include`, which is the half of the
+#     platform seam that lets two backends each own their own C header. Asserted on the transpiled C
+#     rather than the exit code because the failure mode is silent: the program links and runs either
+#     way, and the only symptom is a header pulled into a build that cannot have it (an emscripten
+#     build reaching for <CoreAudio/CoreAudio.h>).
+#
+#     ⚠️ This checks `kama transpile`, i.e. the SINGLE-TU CEmitter::emit path, deliberately. That path
+#     used to run emitIncludes BEFORE collectProgram — and therefore before pruneInactiveDecls — so the
+#     gate was a no-op on it while working correctly on the multi-file path. Reproduced before it was
+#     fixed: a DEBUG build emitted BOTH headers. Keep the assertion on this path.
+efix="$ROOT/tests/compilefor_extern.kama"
+[ -f "$efix" ] || { echo "check-compilefor: missing $efix" >&2; exit 1; }
+"$KAMA" transpile --no-line "$efix" -o "$tmp/ext_dbg.c" >/dev/null
+"$KAMA" transpile --no-line --release "$efix" -o "$tmp/ext_rel.c" >/dev/null
+if ! grep -q 'include "stdlib.h"' "$tmp/ext_dbg.c"; then
+    echo "check-compilefor: FAIL — DEBUG build dropped the @compileFor(DEBUG) extern header <stdlib.h>" >&2
+    exit 1
+fi
+if grep -q 'include "stdlib.h"' "$tmp/ext_rel.c"; then
+    echo "check-compilefor: FAIL — RELEASE build STILL emits the @compileFor(DEBUG) extern header:" >&2
+    echo "  a gated-out \`extern \"<h>\";\` must emit no #include (this is the emitIncludes/prune ORDER bug)" >&2
+    exit 1
+fi
+# ...and the gated `extern fn` with it: RELEASE defines its own `abs`, DEBUG calls libc's bare symbol.
+if ! grep -q '_Fcompilefor_extern__abs(' "$tmp/ext_rel.c"; then
+    echo "check-compilefor: FAIL — RELEASE build is missing the @compileFor(!DEBUG) kama fallback for abs" >&2
+    exit 1
+fi
+if grep -q '_Fcompilefor_extern__abs(' "$tmp/ext_dbg.c"; then
+    echo "check-compilefor: FAIL — DEBUG build kept the kama fallback; the gated \`extern fn\` did not win" >&2
+    exit 1
+fi
+
 # 4. STRICT VALIDATION — a `kama.json` manifest DECLARES the valid flag universe, so an undeclared
 #    `@compileFor(...)` flag is a hard error (typo protection), not a silent drop. Self-contained in a
 #    temp dir so it doesn't leave a manifest next to the shared xfail fixtures.

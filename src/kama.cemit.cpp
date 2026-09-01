@@ -229,7 +229,13 @@ namespace { struct ScopedStr { std::string& s; std::string prev;
 // Its boolean sibling, for a flag that must be restored on every exit from a pass.
 struct ScopedFlag { bool& b; bool prev;
     ScopedFlag(bool& b_) : b(b_), prev(b_) { b = true; }
-    ~ScopedFlag() { b = prev; } }; }
+    ~ScopedFlag() { b = prev; } };
+// ScopedFlag's conditional twin: raise the flag only when `on`, and restore on EVERY exit. The
+// restore-on-exit is what makes it safe in a function with early returns, where the hand-written
+// save/set/restore pair it replaces would leak the flag into whatever is emitted next.
+struct ScopedNoHeap { bool& b; bool prev;
+    ScopedNoHeap(bool& b_, bool on) : b(b_), prev(b_) { if (on) b = true; }
+    ~ScopedNoHeap() { b = prev; } }; }
 
 const std::string& CEmitter::diagFile() const
 {
@@ -14946,7 +14952,7 @@ void CEmitter::emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed)
         emitMethodOrCtorBody(eci.name + "__" + *md->name->value, ret.c_str(),
                              md->params, md->body, eci, md->isConst,
                              modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                             modHas(md->modifiers, "unsafe"), md->name->value->c_str());
+                             modHas(md->modifiers, "unsafe"), md->name->value->c_str(), md->attributes);
         _returnIsPlace = false;
     }
 }
@@ -19462,9 +19468,11 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
 // `__attribute__((...))` prefix. `fn` is the function node (null for a module static, which only
 // accepts `@section`). Emits ONLY where the programmer annotated a declaration — un-annotated code
 // is byte-identical to before. Returns "" when there are no attributes.
-std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line)
+std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line,
+                                     AttrSite site)
 {
     if (!attrs || attrs->empty()) return "";
+    const bool onMember = (site == AttrSite::Member);
     std::vector<std::string> parts;
     for (auto& at : *attrs) {
         if (!at || !at->name) continue;
@@ -19474,7 +19482,14 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // `@interrupt("VECTOR")` → `ISR(VECTOR)` macro is a later step.) `used` keeps it from
             // being dropped by `--gc-sections`; the vector table references it by symbol.
             if (!fn) {
-                unsupported("`@interrupt` applies only to a function, not a `static`", line);
+                // A member is rejected for a reason of its own, not for being "not a function": an ISR is
+                // reachable only under its BARE symbol (the vector table has no other way to name it), and
+                // a method's C name is mangled and carries a leading `self` the hardware will not supply.
+                unsupported(onMember
+                    ? "`@interrupt` applies only to a free function, not to a member — a vector table "
+                      "reaches its handler by bare symbol name, and a member's C name is mangled and takes "
+                      "a receiver. Make the ISR an `expose fn` that calls the member"
+                    : "`@interrupt` applies only to a function, not a `static`", line);
                 continue;   // every check below is about the function; `fn` is the null just rejected
             }
             if (at->args && !at->args->empty())
@@ -19505,15 +19520,26 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             // heap allocation (activated per-body in emitFunction via `_noHeapActive`). Contributes NO
             // `__attribute__`. Function-only, no args. Guarantees this region (an ISR, a game-engine frame
             // tick, a real-time audio callback) allocates nothing.
-            if (!fn)
+            if (!fn && !onMember)
                 unsupported("`@noheap` applies only to a function, not a `static`", line);
             if (at->args && !at->args->empty())
                 unsupported("`@noheap` takes no arguments", line);
             // no parts.push_back — emits nothing
         } else if (an == "compileFor") {
             // `@compileFor(FLAG)` is consumed by the conditional-compilation prune pass
-            // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here means a
-            // kept decl still carries it (defensive). It is a build-time gate, not a C attribute: no parts.
+            // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here from a
+            // top-level decl means one still carries it (defensive). It is a build-time gate, not a C
+            // attribute: no parts.
+            //
+            // On a MEMBER it is a hard error, and the reason is the one thing a defensive no-op cannot
+            // be here: pruneInactiveDecls walks TOP-LEVEL declarations only, so a member's `@compileFor`
+            // is never evaluated and never stripped — it would reach this branch on every build and do
+            // nothing at all, silently. A gate that silently fails open is the worst shape a conditional
+            // can take, and it is exactly what the first external project hit with `@compileFor(NATIVE)`.
+            if (onMember)
+                unsupported("`@compileFor` gates a whole top-level declaration, and a member is not one — "
+                            "the gate would be silently ignored here. Gate the enclosing `type` instead "
+                            "(which drops every member with it), or split the member into two types", line);
         } else if (an == "align" || an == "packed") {
             // Layout control is a property of a TYPE, not of one declaration — so there is one way to
             // align an object rather than two, which is the call Rust makes as well (`#[repr(align(N))]`
@@ -19523,8 +19549,19 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          "type and declare this with that type: `@" + an
                          + (an == "align" ? "(N) type value Buf { … }" : " type value Buf { … }")
                          + "` then `static Buf …;`").c_str(), line);
+        } else if (onMember && (an == "generate" || an == "viewable")) {
+            // Both state something about a whole TYPE — what to synthesize for it, and that it mints a
+            // view. Named rather than swept into the catch-all for the same reason `@align` is: the user
+            // asked for something kama HAS, one level down from where it belongs.
+            unsupported(("`@" + an + "` marks a `type`, not a member of one — put it on the enclosing "
+                         "type declaration").c_str(), line);
+        } else if (onMember && (an == "field" || an == "skip" || an == "bits")) {
+            unsupported(("`@" + an + "` marks a FIELD (it is serialization metadata), not a method, `ctor`, "
+                         "destructor or operator").c_str(), line);
         } else {
-            unsupported(("unknown attribute `@" + an + "` here — expected `@interrupt`, `@section(\"...\")`, or `@noheap`").c_str(), line);
+            unsupported(("unknown attribute `@" + an + "` here — expected "
+                         + (onMember ? "`@noheap` or `@section(\"...\")`"
+                                     : "`@interrupt`, `@section(\"...\")`, or `@noheap`")).c_str(), line);
         }
     }
     if (parts.empty()) return "";
@@ -19534,13 +19571,21 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
     return out;
 }
 
+// Does this attribute list carry `@noheap`? (Activates the per-body no-heap gate.) Node-free, because a
+// METHOD carries the same attribute on a different node — the question is about the list, never about
+// which declaration kind happens to hold it.
+bool CEmitter::hasNoHeapAttr(const SharedAttributeList& attrs) const
+{
+    if (!attrs) return false;
+    for (auto& at : *attrs)
+        if (at && at->name && *at->name == "noheap") return true;
+    return false;
+}
+
 // Does this function carry `@noheap`? (Activates the per-body no-heap gate.)
 bool CEmitter::fnHasNoHeap(FunctionDeclarationNode* fn) const
 {
-    if (!fn || !fn->attributes) return false;
-    for (auto& at : *fn->attributes)
-        if (at && at->name && *at->name == "noheap") return true;
-    return false;
+    return fn && hasNoHeapAttr(fn->attributes);
 }
 
 // The ONE no-heap gate (MCU step 5): reject an emitter-visible heap allocation under `--no-heap`
@@ -20245,6 +20290,14 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
 void CEmitter::emitDtorDefinition(ClassInfo& ci)
 {
     line(ci.dtorNode ? ci.dtorNode->line : (ci.declLine()));
+    // A destructor is the one member body that does NOT route through emitMethodOrCtorBody, so it needs
+    // its own copy of the member-attribute handling — and it is the body that most wants `@noheap`, since
+    // a dtor is what runs at the end of a real-time scope. Missing this was invisible: an allocating
+    // `@noheap ~R()` simply compiled.
+    SharedAttributeList dtorAttrs = ci.dtorNode ? ci.dtorNode->attributes : SharedAttributeList();
+    _memberAttrPrefix = declAttrPrefix(dtorAttrs, nullptr,
+                                       ci.dtorNode ? ci.dtorNode->line : 0, AttrSite::Member);
+    ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(dtorAttrs));
     _currentClass = &ci;
     // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
     // exactly like any other body.
@@ -20265,7 +20318,8 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
 
-    *_out << (_emitStaticClass ? "static inline " : "") << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
+    *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix
+          << "void " << ci.name << "__dtor(" << ci.name << "* self)\n{\n";
 
     // a discriminated union drops ONLY the active variant's owning payload fields (switch on tag).
     if (ci.isVariant) {
@@ -20327,8 +20381,17 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
 void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retType,
                                     SharedParameterList params, SharedBlock body,
                                     ClassInfo& owner, bool isConstMethod, bool isStatic,
-                                    bool isUnsafe, const char* memberName)
+                                    bool isUnsafe, const char* memberName, SharedAttributeList attrs)
 {
+    // `@…` on a member. Validated and lowered HERE, not at each of the five call sites, for the reason
+    // the no-heap gate below makes concrete: a check duplicated per site fails OPEN when one site is
+    // missed, and a missed `@noheap` reads exactly like a body that legitimately allocates nothing.
+    // `_memberAttrPrefix` is consumed by the signature line further down.
+    _memberAttrPrefix = declAttrPrefix(attrs, nullptr, body ? body->line : 0, AttrSite::Member);
+    // `@noheap` on a method/ctor/dtor/operator, with the same save/set/restore shape emitFunction uses
+    // for a free `fn` — the flag is inherited, never cleared, so an inner emission cannot silently
+    // escape an enclosing no-heap region.
+    ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(attrs));
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
@@ -20394,7 +20457,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         }
     }
 
-    *_out << (_emitStaticClass ? "static inline " : "") << retType << " " << cName
+    *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
           << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
                                owner.isScalarRecv) << ")\n{\n";   // static: no self
 
@@ -20507,7 +20570,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             std::string ret = cType(mi.returnType) + (mi.isPlaceReturn ? "*" : "");
             _returnIsPlace = mi.isPlaceReturn;
             emitMethodOrCtorBody(mi.cName, ret.c_str(), operatorParamList(d), mi.opDecl->body, ci, false,
-                                 mi.arity == 2, mi.isUnsafe);
+                                 mi.arity == 2, mi.isUnsafe, nullptr, mi.opDecl->attributes);
             _returnIsPlace = false;
             continue;
         }
@@ -20529,7 +20592,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // being built, so const fields written on it (`r.id = id`) must be allowed. Flag it. #M8d.2
         _inNamedCtorBody = mi.isCtor;
         emitMethodOrCtorBody(mi.cName, ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
-                             mi.isUnsafe, kv.first.c_str());
+                             mi.isUnsafe, kv.first.c_str(), mi.node->attributes);
         _inNamedCtorBody = false;
         _returnIsPlace = false;
     }
@@ -23776,6 +23839,11 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         if (auto* c = dynamic_cast<ClassDeclarationNode*>(d))      return &c->attributes;
         if (auto* e = dynamic_cast<EnumDeclarationNode*>(d))       return &e->attributes;
         if (auto* m = dynamic_cast<ModuleVariableDeclaration*>(d)) return &m->attributes;
+        // `extern "<h>";` — an FFI include. Unlike every entry above it names no symbol, so `nameOf`
+        // stays silent for one: there is nothing for the export-manifest check to reconcile. Dropping the
+        // node here is the WHOLE mechanism — emitIncludes re-derives the `#include` set by walking this
+        // very list, so a gated-out header emits no directive and contributes no driver link hint.
+        if (auto* i = dynamic_cast<IncludeNode*>(d))               return &i->attributes;
         return nullptr;
     };
 
@@ -23797,6 +23865,23 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
             filtered->push_back(at);
         }
         *ap = filtered;   // null when `@compileFor` was the only attribute (declAttrPrefix tolerates null)
+        // A BODYLESS declaration — `extern "<h>";`, `extern fn`, `fnptr` — accepts `@compileFor` and
+        // nothing else, and this is the only pass that sees one: `declAttrPrefix` runs from the two
+        // function EMITTERS, and none of these three reaches either (an extern emits no prototype at
+        // all, a fnptr becomes a `_sigs` typedef). Without the check here a stray `@noheap extern "h";`
+        // is accepted in silence. The rule is not a list of banned names but a property: `@noheap` gates
+        // allocation IN A BODY, `@interrupt`/`@section` attach to EMITTED CODE, and a form with no body
+        // has neither — so naming the reason is more useful than naming the attribute.
+        if (filtered) {
+            const char* what = nullptr;
+            if (dynamic_cast<IncludeNode*>(decl.get())) what = "`extern \"<header>\";`";
+            else if (auto* f = dynamic_cast<FunctionDeclarationNode*>(decl.get()))
+                if (!f->block) what = isExtern(f) ? "an `extern fn`" : "a `fnptr`";
+            if (what)
+                unsupported((std::string("`@") + *(*filtered)[0]->name + "` needs a body to apply to, and "
+                             + what + " has none — `@compileFor(FLAG)` is the only attribute a declaration "
+                             "without a body accepts").c_str(), decl->line);
+        }
         kept.push_back(decl);
     }
     unit->codeDeclarationList->swap(kept);
@@ -24638,7 +24723,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
                 emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                      md->params, md->body, *e.target, md->isConst,
                                      modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                                     modHas(md->modifiers, "unsafe"), md->name->value->c_str());
+                                     modHas(md->modifiers, "unsafe"), md->name->value->c_str(), md->attributes);
                 _returnIsPlace = false;
             }
         }
@@ -24823,7 +24908,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             emitMethodOrCtorBody(implMethodCName(*e.target, *md->name->value), ret.c_str(),
                                  md->params, md->body, *e.target, md->isConst,
                                  modHas(md->modifiers, "static") || md->isCtor,   // a `ctor` is static (no `self`)
-                                 modHas(md->modifiers, "unsafe"), md->name->value->c_str());
+                                 modHas(md->modifiers, "unsafe"), md->name->value->c_str(), md->attributes);
             _returnIsPlace = false;
         }
     }
@@ -24909,8 +24994,14 @@ int CEmitter::emit(SharedCompilationUnit unit)
     *_out << "#include \"kama_runtime.h\"\n";
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
-    emitIncludes({unit});           // FFI #include directives
+    // collectProgram FIRST: it runs pruneInactiveDecls, and emitIncludes re-derives the `#include` set by
+    // walking the decl list, so a `@compileFor`-gated `extern "<h>";` is only dropped if the prune has
+    // already removed the node. This used to be the other way round, which made the gate a silent no-op on
+    // exactly this path — `kama transpile` and every single-file build — while emitProgram (multi-file)
+    // had it right. Nothing in collectProgram reads `_externedHeaders`, which is what emitIncludes
+    // populates, so the swap is safe; the six `externsHeader(...)` call sites all run later still.
     collectProgram({unit});
+    emitIncludes({unit});           // FFI #include directives
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build

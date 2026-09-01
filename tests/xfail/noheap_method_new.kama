@@ -1,0 +1,10 @@
+// `@noheap` on a METHOD gates its body exactly as it gates a free `fn`'s — this is the whole point of
+// letting the attribute reach a member, so a real-time entry point can be `synth.fill(…)`.
+import { std::memory::Owned };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
+type value Mixer {
+    public int32 gain;
+    public ctor make(int32 gain) { this.gain = gain; }
+    @noheap public fn int32 fill() { Owned<Box> b = new Box.make(v: 1); return b.get(); }
+}
+fn int32 main() { Mixer m = Mixer.make(gain: 1); return m.fill(); }

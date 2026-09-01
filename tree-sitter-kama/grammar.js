@@ -379,10 +379,13 @@ module.exports = grammar({
     reference_return_type: ($) => seq('ref', $._type),
 
     // `extern "<stdio.h>";` and `extern fn T name(...);`
+    // Both arms take an `attribute_list`, mirroring kama.y's `attribute_list plain_function_declaration`
+    // hoist: `@compileFor(FLAG)` gates a backend's own C header.
     extern_declaration: ($) =>
       choice(
-        seq('extern', field('header', $.string_literal), ';'),
+        seq(optional($.attribute_list), 'extern', field('header', $.string_literal), ';'),
         seq(
+          optional($.attribute_list),
           'extern',
           'fn',
           field('return_type', $._function_return_type),
@@ -394,6 +397,7 @@ module.exports = grammar({
 
     fnptr_declaration: ($) =>
       seq(
+        optional($.attribute_list),
         'fnptr',
         field('return_type', $._function_return_type),
         field('name', $.identifier),
@@ -446,8 +450,11 @@ module.exports = grammar({
         ';',
       ),
 
+    // Every member kind takes an `attribute_list` (kama.y: `attribute_list plain_class_member`), which
+    // is what lets `@noheap` mark a real-time entry point written as a method rather than a free `fn`.
     method_declaration: ($) =>
       seq(
+        optional($.attribute_list),
         repeat($.modifier),
         choice(seq('comptime', 'fn'), seq(optional('const'), 'fn')),
         field('return_type', $._function_return_type),
@@ -465,6 +472,7 @@ module.exports = grammar({
 
     operator_declaration: ($) =>
       seq(
+        optional($.attribute_list),
         repeat($.modifier),
         choice(
           // `ref T operator[](usize i)` — the place-returning index operator.
@@ -490,6 +498,7 @@ module.exports = grammar({
 
     constructor_declaration: ($) =>
       seq(
+        optional($.attribute_list),
         repeat($.modifier),
         choice(
           // The classic form: `Name(params) : base(args) { }`
@@ -515,6 +524,7 @@ module.exports = grammar({
 
     destructor_declaration: ($) =>
       seq(
+        optional($.attribute_list),
         repeat($.modifier),
         '~',
         field('name', $.identifier),

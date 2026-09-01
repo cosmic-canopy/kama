@@ -400,7 +400,20 @@ function_modifier_opt
                               Functions
 ------------------------------------------------------------------------------*/
 
+/* An attribute prefix is factored into ONE arm rather than duplicated per form. It used to be a twin of
+   the `fn … block` arm alone — 24 lines of copied action — which is why `extern "h";`, `extern fn`,
+   `fnptr` and the place-returning `fn ref T` could not be gated with `@compileFor` at all: nothing was
+   wrong with those forms, they simply had no attributed twin and nobody was going to write four more.
+   Hoisting it here gives every form attributes at once and DELETES the copy. Which attributes are legal
+   on which form is the emitter's call (an include has no body, so `@noheap` is meaningless on one) —
+   a rejection can name the reason, where a parse error cannot. */
 function_declaration
+  : plain_function_declaration
+  | attribute_list plain_function_declaration
+
+  ;
+
+plain_function_declaration
   : EXTERN STRING_LITERAL SEMICOLON
 
   | EXTERN FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
@@ -408,8 +421,6 @@ function_declaration
   | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
   | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
-
-  | attribute_list function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
   | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
 
@@ -1197,7 +1208,19 @@ class_member_declarations
   | error
   | class_member_declarations error
   ;
+/* Same hoist as `function_declaration` above, and for the same reason: an attribute prefix as ONE arm
+   over the whole member set, rather than a duplicated twin per member kind. `field_declaration` used to
+   own the only attributed arm, which is why `@noheap` could not mark a method, ctor, dtor or operator —
+   a real-time entry point had to be a free `fn`, against the grain of the type model where the natural
+   spelling is `synth.fill(…)`. Nine twins would each have needed a copy of their arm's action AND would
+   have reintroduced the `CONST`/`COMPTIME` shift/reduce conflicts the comments below describe; one arm
+   over `plain_class_member` leaves the decision structure inside it exactly as it was. */
 class_member_declaration
+  : plain_class_member
+  | attribute_list plain_class_member
+  ;
+
+plain_class_member
   : constant_declaration
     /* `comptime assert(…)` as a type member (M7). The `modifiers_opt` prefix is NOT decoration: every
        other member arm starts with it, so without it the parser must choose between reducing an empty
@@ -1215,9 +1238,10 @@ constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON
   | modifiers_opt COMPTIME type constant_declarators SEMICOLON      /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
   ;
+/* `@field … type name;` no longer needs an arm here — `class_member_declaration` attaches the attribute
+   list for every member kind, this one included. */
 field_declaration
   : modifiers_opt type variable_declarators SEMICOLON
-  | attribute_list modifiers_opt type variable_declarators SEMICOLON      /* `@field … type name;` */
   ;
 method_declaration
   : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block      /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */

@@ -2189,7 +2189,11 @@ private:
                               SharedParameterList params, SharedBlock body,
                               ClassInfo& owner, bool isConstMethod = false,
                               bool isStatic = false, bool isUnsafe = false,
-                              const char* memberName = nullptr);
+                              const char* memberName = nullptr,
+                              SharedAttributeList attrs = SharedAttributeList());
+    // The `__attribute__((...))` a member attribute lowers to, computed by emitMethodOrCtorBody and
+    // consumed by the signature line inside it. A member is not on declAttrPrefix's two function paths.
+    std::string _memberAttrPrefix;
     // Bring zero-inited storage of class `ty` (named `nm` in C) up to a valid empty state — field
     // initializers, each field's `default` ctor, and the vtable pointer. Shared by the bare class-local
     // declaration path and by a `ctor`'s implicit `this` storage, which must agree exactly.
@@ -2550,10 +2554,17 @@ private:
     // carries no marker of its own. No scalar exemption: see the definition.
     void gateExternCall(const FuncSig& sig, const std::string& name, int line);
 
+    // Where an attribute was written. It used to be inferred from `fn` being null, which could say only
+    // "function or static" — a member has no FunctionDeclarationNode either, so it would have been read
+    // as a static and rejected with the wrong noun. The site is named explicitly instead.
+    enum class AttrSite { Function, ModuleStatic, Member };
+
     // MCU step 4: lower `@interrupt` / `@section(".x")` to a C `__attribute__((...))` prefix.
-    // `fn` is null for a module static (which accepts `@section` only).
-    std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line);
+    // `fn` is null at every site but Function (it carries `@interrupt`'s return/param/expose probes).
+    std::string declAttrPrefix(const SharedAttributeList& attrs, FunctionDeclarationNode* fn, int line,
+                               AttrSite site = AttrSite::Function);
     bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
+    bool hasNoHeapAttr(const SharedAttributeList& attrs) const;          // ...same question, node-free
     void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
 #if !KAMA_INHERITANCE
     void rejectInheritance(const char* what, int line);                 // the ONE gate for KAMA_INHERITANCE=0

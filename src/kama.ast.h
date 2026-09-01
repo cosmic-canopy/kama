@@ -126,6 +126,11 @@ public:
 class IncludeNode : public StatementNode {
 public:
     SharedString header;   // the raw string, e.g. <stdlib.h> or math.h
+    // `@compileFor(FLAG)` — the ONLY attribute legal here (an include has no body, so `@noheap`/
+    // `@interrupt`/`@section` are meaningless on one). Read by pruneInactiveDecls, which drops the
+    // whole node before emitIncludes walks the decl list, so a gated-out header emits no `#include`
+    // and contributes no driver link hint.
+    SharedAttributeList attributes;
     IncludeNode(CodeGenContext& context, SharedString header)
         : ASTNode(context),  StatementNode(context), header(header) { }
 };
@@ -970,6 +975,12 @@ public:
 
 class ClassMemberDeclarationNode : public StatementNode {
 public:
+    // `@…` on ANY member — field, method, ctor, dtor, operator. It lives on the base rather than on
+    // each member node because the grammar attaches it in ONE place (`attribute_list plain_class_member`),
+    // which is what keeps a member attribute from needing an arm — and a duplicated action — per member
+    // kind. Which attributes are actually LEGAL on which member is decided in the emitter
+    // (declAttrPrefix), not here: a rejection can explain itself, where a parse error cannot.
+    SharedAttributeList attributes;
     ClassMemberDeclarationNode(CodeGenContext& context) : ASTNode(context),  StatementNode(context) { }
 };
 
@@ -1027,7 +1038,8 @@ public:
     SharedModifierList modifiers;
     SharedIdentifier type;
     SharedVariableDeclaratorList declarators;
-    SharedAttributeList attributes;  // `@field`/`@skip`/`@bits(...)` (null when none); serialization metadata
+    // `attributes` (`@field`/`@skip`/`@bits(...)`) lives on ClassMemberDeclarationNode now — declaring it
+    // here too would SHADOW the base's, so the grammar would fill one and the emitter read the other.
     ClassFieldDeclarationNode(CodeGenContext& context, SharedModifierList modifiers,
             SharedIdentifier type,
             SharedVariableDeclaratorList declarators)

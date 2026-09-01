@@ -25,6 +25,7 @@ asm_outside_unsafe	asm_outside_unsafe.kama:4
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7
 assign_str_bare	assign_str_bare.kama:2
 atomic_nonscalar	atomic_nonscalar.kama:12
+attr_on_extern	attr_on_extern.kama:5
 bad_type_kind	bad_type_kind.kama:2
 base_bypasses_private	base_bypasses_private.kama:26
 base_class_no_ctor	base_class_no_ctor.kama:5
@@ -78,6 +79,7 @@ channel_send_shared	channel_send_shared.kama:15
 channel_send_shared_collection	channel_send_shared_collection.kama:22
 channel_send_shared_variant	channel_send_shared_variant.kama:20
 compilefor_dangling	compilefor_dangling.kama:8
+compilefor_on_method	compilefor_on_method.kama:9
 comptime_assert_false	comptime_assert_false.kama:4
 comptime_assert_generic_false	comptime_assert_generic_false.kama:6
 comptime_assert_layout_false	-
@@ -309,6 +311,7 @@ interp_spec_float_width	interp_spec_float_width.kama:5
 interp_spec_kind_mismatch	interp_spec_kind_mismatch.kama:5
 interp_spec_user_type	interp_spec_user_type.kama:11
 interp_spec_width_base	interp_spec_width_base.kama:4
+interrupt_on_method	interrupt_on_method.kama:9
 interrupt_on_static	interrupt_on_static.kama:2
 intfloat_local	intfloat_local.kama:1
 intrinsic_direct_call	intrinsic_direct_call.kama:10
@@ -429,7 +432,9 @@ no_ctor_resource	no_ctor_resource.kama:6
 no_ctor_try_new	no_ctor_try_new.kama:5
 no_ctor_value	no_ctor_value.kama:6
 noheap_interp	noheap_interp.kama:2
+noheap_method_new	noheap_method_new.kama:8
 noheap_new	noheap_new.kama:4
+noheap_on_static	noheap_on_static.kama:4
 noheap_try_new	noheap_try_new.kama:4
 noheap_try_new_return	noheap_try_new_return.kama:5
 null_check_safe	null_check_safe.kama:4

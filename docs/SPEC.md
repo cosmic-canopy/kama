@@ -578,8 +578,19 @@ tick or a real-time audio callback allocates nothing. Collection *methods* alloc
 emitter can't see per-call, so a `@noheap` fn may still call a pre-built growing collection — the guarantee
 covers emitter-visible allocation; build the collection (or size it) outside the no-heap region.
 
+`@noheap` marks a **body**, so it goes on any declaration that has one: a free `fn`, and equally a <!-- test: noheap_method -->
+**method, `ctor`, destructor or operator**. The member forms matter because a real-time entry point is
+naturally a method — `synth.fill(…)` — and a destructor is what runs at the end of a real-time scope.
+It is rejected where there is no body to gate: on a module `static`, and on the bodyless `extern`/`fnptr` <!-- xfail: noheap_on_static, attr_on_extern -->
+forms. `@interrupt` stays free-function-only (a vector table reaches its handler by **bare** symbol, and
+a member's C name is mangled and takes a receiver); `@section(".name")` is legal on both.
+
 ```kama
 @noheap fn int32 tick(int32 n) { /* new / "${x}" / spawn here is a compile error */ ... }
+
+type value Mixer {                                     // ...and the same gate on a member
+    @noheap public fn int32 fill(int32 n) { ... }      // the natural spelling for an audio callback
+}
 ```
 
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
@@ -1601,8 +1612,18 @@ document's own examples until 2026-09-01, and the first external project nearly 
 these pages; `tools/check-compilefor.sh` now greps the docs for them, because the half of that guard
 which proves the *compiler* rejects such a name is exactly what made the docs drifting invisible.
 
-- **Where** — any top-level decl: `fn`, `type`, `enum`, module `static`. (Class methods / `implements`
-  blocks individually are a later stage; gating a whole `type` already drops everything inside it.)
+- **Where** — any top-level decl: `fn`, `type`, `enum`, module `static`, and the three **bodyless** forms <!-- test: compilefor_extern -->
+  — `extern "<header.h>";`, `extern fn` and `fnptr`. Gating the extern pair is what lets two platform
+  backends each own their own C header: a gated-out `extern "<h>";` emits **no `#include`** and
+  contributes no driver link hint (`-lm`, `--js-library`), so an emscripten build never reaches for
+  `<CoreAudio/CoreAudio.h>`. A bodyless form accepts `@compileFor` and **nothing else** — `@noheap` <!-- xfail: attr_on_extern -->
+  gates allocation *in a body* and `@interrupt`/`@section` attach to *emitted code*, and a declaration
+  with no body has neither.
+  ⚠️ **A class member is NOT a gate site, and saying so is a hard error** — not a silent no-op. The <!-- xfail: compilefor_on_method -->
+  prune pass walks top-level declarations only, so a member's `@compileFor` would never be evaluated
+  and never stripped: the conditional would fail *open* on every build. Gate the whole `type` (which
+  drops every member with it), or split the member into two types. (Per-member and per-`implements`
+  gating is a later stage.)
 - **Logic** — flag-set membership, a leading `!` (negation), and comma = AND. Full `&&`/`||`/parens are
   deliberately out (this is *tagging*, not an expression language).
 - **Drop is literal** — a gated-out decl's symbol never exists; **no `#ifdef` reaches the emitted C**,

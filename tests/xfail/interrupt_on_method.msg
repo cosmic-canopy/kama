@@ -1,0 +1,1 @@
+applies only to a free function, not to a member

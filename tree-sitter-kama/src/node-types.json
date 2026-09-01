@@ -2505,6 +2505,10 @@
       "required": false,
       "types": [
         {
+          "type": "attribute_list",
+          "named": true
+        },
+        {
           "type": "constructor_initializer",
           "named": true
         },
@@ -2568,6 +2572,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        },
         {
           "type": "modifier",
           "named": true
@@ -3229,6 +3237,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3457,6 +3475,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -5023,6 +5051,10 @@
       "required": false,
       "types": [
         {
+          "type": "attribute_list",
+          "named": true
+        },
+        {
           "type": "modifier",
           "named": true
         },
@@ -5216,6 +5248,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        },
         {
           "type": "modifier",
           "named": true

@@ -1,0 +1,11 @@
+// `@interrupt` stays free-function-only even now that members carry attributes. A vector table can only
+// name its handler by BARE symbol, and a member's C name is mangled and takes a receiver the hardware
+// will not supply — so the diagnostic names that route (`expose fn` calling the member) rather than
+// just refusing. Same shape as layout_attr_on_static: the user asked for something kama HAS, in the
+// wrong place.
+type value Timer {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    @interrupt public fn void tick() { }
+}
+fn int32 main() { return 0; }
