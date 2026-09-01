@@ -1473,7 +1473,8 @@ fn int32 caller(UnsafePtr<int32> p) {
 }
 
 FixedArray<float32> verts = ...;
-UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule); usize n = verts.byteLen();
+UnsafePtr<float32> data = verts.dataPtr();   // SAFE to obtain (Rust as_ptr rule)
+usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there is no `byteLen()`
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
@@ -1527,7 +1528,7 @@ contrast, is a contract with the *caller* — and since safe code may call an `u
 would hand every caller a hole full of uninitialized stack. A raw fill still counts: `addr(of: dst)` marks
 its target assigned, which is how a type-erased C call satisfies the rule.
 
-`a.dataPtr()`/`a.byteLen()` bridge a collection's buffer to C (safe to call; the returned `UnsafePtr` is valid only
+`a.dataPtr()` bridges a collection's buffer to C (safe to call; the returned `UnsafePtr` is valid only
 while the collection is alive + unmodified, and dereferencing it requires an `unsafe fn`). An unlowered construct
 (including a safety-gate violation) is a **hard build error** — kama never emits incomplete C and claims
 success.
@@ -1578,13 +1579,27 @@ unsafe fn void idle() {
 
 Tag a whole **declaration**; the compiler keeps or drops it for the active build. There is **no
 in-body branching** — no `static if`, no `#ifdef`/`comptime-if` soup. Build-mode (`DEBUG`/`RELEASE`)
-and platform (`WASM`/`NATIVE`/`WINDOWS`/…) are the **same primitive**: a decl-level keep/drop gate.
+and platform (`OS_WINDOWS`/`ARCH_WASM32`/…) are the **same primitive**: a decl-level keep/drop gate.
 
 ```kama
 @compileFor(DEBUG)   fn void traceState(int32 s) { ... }   // gone entirely in a release build
 @compileFor(!RELEASE) static int32 assertsRun;             // present in any non-release build
-@compileFor(WINDOWS, TELEMETRY) fn void ping() { ... }     // comma = AND (both flags active)
+@compileFor(OS_WINDOWS, TELEMETRY) fn void ping() { ... }  // comma = AND (both flags active)
 ```
+
+⚠️ **A platform flag is DERIVED FROM THE TRIPLE, and a built-in target NAME is not a flag.** The
+derived set is `ARCH_<arch>`, `OS_<os>`, `ABI_<abi>`, the synthesized `HOSTED` and `SIMD128`, plus the
+name of a target the *project* declared. So `NATIVE`, `WASM`, `EMBEDDED` and `WINDOWS` are **not gates
+— they are undeclared flags**, and this is deliberate: `EMBEDDED` is a
+shortcut for a triple family, so gating on it would gate on how the build was *spelled* and would
+silently stop applying the moment a real board triple (`xtensa-none-elf`) was used instead.
+`OS_NONE` is the fact, and it holds for both. ⚠️ **Getting this wrong fails silently in a loose
+build**, which reads no manifest and treats an undeclared flag as simply inactive — so the
+declaration is dropped and the only symptom is a missing symbol somewhere else, or nothing at all if
+both sides were gated. A manifest build rejects the name outright. These four spellings were in this
+document's own examples until 2026-09-01, and the first external project nearly shipped them off
+these pages; `tools/check-compilefor.sh` now greps the docs for them, because the half of that guard
+which proves the *compiler* rejects such a name is exactly what made the docs drifting invisible.
 
 - **Where** — any top-level decl: `fn`, `type`, `enum`, module `static`. (Class methods / `implements`
   blocks individually are a later stage; gating a whole `type` already drops everything inside it.)
@@ -1599,9 +1614,14 @@ and platform (`WASM`/`NATIVE`/`WINDOWS`/…) are the **same primitive**: a decl-
 
 ```kama
 type contract Clock for value { fn int32 tick(); }
-@compileFor(NATIVE) type value NativeClock implements Clock { ... }   // native build keeps this
-@compileFor(WASM)   type value WasmClock   implements Clock { ... }   // wasm build keeps this
+@compileFor(!ARCH_WASM32) type value NativeClock implements Clock { ... }   // native build keeps this
+@compileFor(ARCH_WASM32)  type value WasmClock   implements Clock { ... }   // wasm build keeps this
 ```
+
+A flag and its negation, rather than two positive names, because that is what makes the pair both
+**exhaustive and mutually exclusive** — exactly one impl survives on every target, including ones
+nobody has built yet. (`HOSTED` would not serve here: emscripten has a libc, so it is hosted too.)
+The working fixture is [`tests/compilefor_platform.kama`](../tests/compilefor_platform.kama). <!-- test: compilefor_platform -->
 
 **Flags** are reproducible — from the explicit build invocation, never ambient environment. They come
 from two places: **single-select groups** (pick one value; its name becomes a flag) and the

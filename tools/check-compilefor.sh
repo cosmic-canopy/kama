@@ -244,4 +244,38 @@ if ! grep -q 'gated' "$localc"; then
 fi
 rm -f "$proj/kama.local.json"
 
-echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe)"
+# 7. THE DOCS DO NOT TEACH A RETIRED FLAG NAME.
+#
+# ⚠️ This half exists because §4b above — proving the COMPILER rejects a reserved/undeclared flag — is
+# exactly what made the docs drifting invisible. `docs/SPEC.md` and `docs/KEYWORDS.md` both taught
+# `@compileFor(NATIVE)` / `(WASM)` / `(EMBEDDED)` / `(WINDOWS)`, and none of those is a flag: a built-in
+# target NAME deliberately does not become one (see derivedTargetFlags in kama.driver.cpp). A manifest
+# build rejects the name, but a LOOSE build reads no manifest and treats an undeclared flag as simply
+# inactive — so the documented spelling compiles clean and the declaration is silently GONE. The first
+# external project on kama nearly shipped it, off our own examples.
+#
+# The live platform gates are the derived ones (`ARCH_*`/`OS_*`/`ABI_*`, plus `HOSTED`/`SIMD128`), which
+# is what tests/compilefor_platform.kama uses.
+# ⚠️ Scanned over FENCED ```kama BLOCKS ONLY, not the whole document — the same split
+# check-doc-spelling.sh makes, and for the same reason. Prose that WARNS about a retired name has to be
+# able to spell it (SPEC.md and ROADMAP_DETAIL.md both do); what costs a reader a build cycle is a
+# copyable example. Scanning everything meant this guard rejected its own fix, which is how you end up
+# with a waiver list, and a guard with a waiver list is a guard nobody trusts.
+bad=$(for f in $(find "$ROOT/docs" "$ROOT/agents" "$ROOT/seed" -name '*.md' 2>/dev/null | sort); do
+        awk -v rel="${f#"$ROOT"/}" '
+            /^[[:space:]]*```kama/ { inblk = 1; next }
+            /^[[:space:]]*```/     { inblk = 0; next }
+            # The boundary class is why this is not a plain substring match: `OS_WINDOWS` and
+            # `ARCH_WASM32` are the CORRECT spellings and both contain a retired name.
+            inblk && /@compileFor\(([^)]*[(!,[:space:]])?(NATIVE|WASM|EMBEDDED|WINDOWS|MACOS|LINUX)[,)]/ { print rel ":" NR ":" $0 }
+        ' "$f"
+      done)
+if [ -n "$bad" ]; then
+    echo "check-compilefor: FAIL — a kama code block teaches a @compileFor flag that does not exist." >&2
+    printf '%s\n' "$bad" | sed 's/^/  /' >&2
+    echo "  A built-in TARGET name is not a flag; in a loose build the decl is silently DROPPED." >&2
+    echo "  Use the derived gates: ARCH_WASM32 / OS_WINDOWS / OS_NONE / HOSTED (tests/compilefor_platform.kama)." >&2
+    exit 1
+fi
+
+echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe;\n  and no kama block teaches a retired target-name flag)"
