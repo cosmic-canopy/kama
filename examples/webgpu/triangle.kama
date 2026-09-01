@@ -24,6 +24,7 @@ extern "kama_gpu.h";
 extern fn UnsafePtr   kama_gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafePtr<int8> title);
 extern fn void  kama_gpu_present(UnsafePtr surface);
 extern fn int32 kama_gpu_pump(UnsafePtr device);
+extern fn void  kama_gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT present — see frameTick
 
 // ----- libc -----
 extern fn UnsafePtr calloc(usize count, usize size);
@@ -115,6 +116,11 @@ type value App {
     public UnsafePtr device;   public UnsafePtr queue;      public UnsafePtr pipeline;
     public UnsafePtr uniformBuf; public UnsafePtr bindGroup;
     public int32 ready;  public int32 frame;
+    // Frame-loop health (see frameTick). `needsConfigure` makes reconfiguring a response to an
+    // invalidation rather than something the loop does speculatively; `failStreak` is the backstop
+    // for a status that will never clear on its own; `occluded` keeps the "window hidden" log to one
+    // line per episode instead of one per frame.
+    public int32 needsConfigure;  public int32 failStreak;  public int32 occluded;
 }
 
 // The whole triangle: two entry points in one WGSL module, positions baked in
@@ -173,9 +179,11 @@ unsafe fn UnsafePtr makePipeline(UnsafePtr device, int32 format) {
     return wgpuDeviceCreateRenderPipeline(device: device, descriptor: addr(of: pd));
 }
 
-// (Re)configure the surface for the device. Called once when the device is ready, and again
-// whenever wgpuSurfaceGetCurrentTexture reports the surface is out of date (native swapchains go
-// stale — e.g. after the first present, or on resize — and must be reconfigured to recover).
+// (Re)configure the surface for the device. Called once when the device is ready, and thereafter
+// only when a frame has been INVALIDATED — `Outdated` or `Lost` from wgpuSurfaceGetCurrentTexture,
+// which is what a native swapchain reports after a resize or a device loss. ⚠️ Note what is NOT on
+// that list: any other reason for a missing texture. Reconfiguring on all of them is an unbounded
+// allocation loop (see frameTick), because each call allocates a fresh set of full-screen textures.
 unsafe fn void configureSurface(UnsafePtr device, UnsafePtr surface) {
     WGPUSurfaceConfiguration cfg = WGPUSurfaceConfiguration();
     cfg.device = device;
@@ -233,14 +241,34 @@ unsafe fn void onAdapter(int32 status, UnsafePtr adapter, WGPUStringView message
 }
 
 // One frame: acquire the swapchain texture, clear it to an animated colour, submit.
+//
+// ⚠️ EVERY PATH THAT RETURNS WITHOUT PRESENTING MUST SLEEP. The loop's only throttle is vsync, and
+// vsync applies only to a frame that is actually presented — so a path that bails out early runs at
+// unbounded rate. This example used to bail out by reconfiguring the swapchain, which allocates a
+// fresh set of full-screen textures each time; the first project that copied it reached 15.6 GB
+// resident and panicked the machine through the kernel watchdog (watchdogd starved of CPU, not a GPU
+// fault), twice. Hence the two rules encoded below: sleep on every early return, and reconfigure
+// only when something actually invalidated the surface.
 unsafe fn int32 frameTick(UnsafePtr state) {
     int32 keep = 1;   // 1 = keep looping; native pump flips it to 0 on window close
     UnsafePtr<App> st = cast<UnsafePtr<App>>(state);
-    if (st[0].ready == 0) { return 1; }         // still initialising
+    if (st[0].ready == 0) {
+        // Still waiting on the async adapter -> device handshake. Pump so the window stays
+        // responsive, then sleep — without this the handshake spins a core for its whole duration.
+        keep = kama_gpu_pump(device: null);
+        kama_gpu_sleep_ms(ms: 8);
+        return keep;
+    }
 
     UnsafePtr surface = st[0].surface;
     int32 frame = st[0].frame;
     st[0].frame = frame + 1;
+
+    // Reconfigure at most once per invalidation, never speculatively per frame.
+    if (st[0].needsConfigure != 0) {
+        configureSurface(device: st[0].device, surface: surface);
+        st[0].needsConfigure = 0;
+    }
 
     // Spin the triangle: push the current angle into the uniform buffer.
     float32 angle = cast<float32>(frame) * 0.03;
@@ -251,11 +279,45 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     wgpuSurfaceGetCurrentTexture(surface: surface, surfaceTexture: addr(of: surfTex));
     UnsafePtr tex = surfTex.texture;
     if (tex == null) {
-        // Surface out of date (native swapchains go stale after present/resize) — reconfigure and
-        // retry next frame. Still pump so the window stays responsive.
-        configureSurface(device: st[0].device, surface: surface);
+        int32 status = surfTex.status;
+
+        // OCCLUDED IS NOT AN ERROR, and getting this wrong is what took a machine down.
+        //
+        // 0x00030001 (196609) is `WGPUSurfaceGetCurrentTextureStatus_Occluded` — a wgpu-native
+        // EXTENSION declared in webgpu/wgpu.h, not one of the six values in the standard webgpu.h
+        // enum, which is why code that only reads webgpu.h never thinks to handle it. It means the
+        // window simply is not visible: covered by another window, minimized, or on another Space.
+        // Nothing is wrong and there is nothing to draw. Treating it as "the swapchain is stale" and
+        // reconfiguring gives an unbounded allocation loop for as long as the window stays covered —
+        // and putting a terminal in front of the window is enough to trigger it.
+        if (status == 196609) {
+            if (st[0].occluded == 0) { println(s: "triangle: window occluded — skipping frames"); }
+            st[0].occluded = st[0].occluded + 1;
+            keep = kama_gpu_pump(device: st[0].device);
+            kama_gpu_sleep_ms(ms: 32);   // an invisible window has no deadline
+            return keep;
+        }
+
+        // Outdated(4) and Lost(5) genuinely need the swapchain rebuilt — flag it, and the rebuild
+        // happens once at the top of the next tick. Timeout(3) is transient and Error(6) is
+        // deterministic; rebuilding on either would be the same runaway under a different name, so
+        // both just skip the frame and the streak backstop below catches a status that never clears.
+        if (status == 4 || status == 5) { st[0].needsConfigure = 1; }
+
+        st[0].failStreak = st[0].failStreak + 1;
+        if (st[0].failStreak > 600) {
+            println(s: "triangle: no surface texture for 600 consecutive frames (status ${status}) — stopping");
+            return 0;
+        }
         keep = kama_gpu_pump(device: st[0].device);
+        kama_gpu_sleep_ms(ms: 8);
         return keep;
+    }
+    st[0].failStreak = 0;
+    if (st[0].occluded != 0) {
+        int32 n = st[0].occluded;
+        println(s: "triangle: window visible again after ${n} occluded frames");
+        st[0].occluded = 0;
     }
 
     UnsafePtr view = wgpuTextureCreateView(texture: tex, descriptor: null);

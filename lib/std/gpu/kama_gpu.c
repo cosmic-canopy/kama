@@ -12,6 +12,10 @@
 #include "kama_gpu.h"
 #include <webgpu/wgpu.h>          // wgpu-native extensions (wgpuDevicePoll)
 #include <stddef.h>
+#if !defined(_WIN32)
+#include <time.h>                 // nanosleep — kama_gpu_sleep_ms
+#include <errno.h>
+#endif
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -78,6 +82,27 @@ int32_t kama_gpu_pump(WGPUDevice device) {
     glfwPollEvents();
     if (device) wgpuDevicePoll(device, 0, NULL);   // wgpu-native: run queued callbacks / reclaim resources
     return (g_window && !glfwWindowShouldClose(g_window)) ? 1 : 0;
+}
+
+// Throttle a frame the loop is not going to present. See the contract in kama_gpu.h for WHY this is
+// a seam function rather than a caller's convenience.
+//
+// ⚠️ A plain unconditional sleep, deliberately — NOT glfwWaitEventsTimeout. That call looks like the
+// better fit (it sleeps *and* stays responsive, returning the moment an event arrives) and it is the
+// wrong tool here for exactly that reason: a window delivering a steady event stream would wake it
+// immediately every time, and a throttle that can return early is not a throttle. This function
+// exists because a frame loop lost its only throttle; it must not be able to lose this one too.
+// Events wait for the next tick's kama_gpu_pump, at most 8-32 ms later.
+void kama_gpu_sleep_ms(int32_t ms) {
+    if (ms <= 0) return;
+#if defined(_WIN32)
+    Sleep((DWORD)ms);          // windows.h arrives via GLFW_EXPOSE_NATIVE_WIN32 / glfw3native.h
+#else
+    struct timespec ts;
+    ts.tv_sec  = (time_t)(ms / 1000);
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) { }   // finish the nap across a signal
+#endif
 }
 
 #endif  // !__EMSCRIPTEN__

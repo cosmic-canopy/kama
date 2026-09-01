@@ -34,6 +34,16 @@
 //     event queue + polls the device and returns 0 once the window is asked to close; on the web a
 //     no-op that always returns 1 (the host drives the loop). Fits std::app's `while(tick())`.
 //
+//   void kama_gpu_sleep_ms(int32_t ms)
+//     Throttle a frame the loop is NOT going to present. ⚠️ This is a platform split, not a
+//     convenience: a native frame loop's only throttle is vsync, and vsync applies only to a
+//     PRESENTED frame — so every early return from a tick must sleep or the loop spins a core and,
+//     if it also reconfigures the swapchain, allocates without bound. (That is exactly what happened
+//     to the first project built on this example: 15.6 GB resident and a kernel-watchdog panic,
+//     twice, just from covering the window.) On the web it MUST be a no-op: the browser owns the
+//     loop through requestAnimationFrame, already throttles a hidden page, and blocking the main
+//     thread is never the right answer there.
+//
 // Web bodies are `static inline` here (no separate TU); native bodies are declared here and defined
 // in kama_gpu.c.
 
@@ -60,12 +70,17 @@ static inline void kama_gpu_present(WGPUSurface surface) { (void)surface; }
 
 static inline int32_t kama_gpu_pump(WGPUDevice device) { (void)device; return 1; }
 
+// A no-op by design, not by omission — see the contract above. The browser throttles rAF for a
+// hidden page, so a skipped frame costs nothing here; blocking the main thread would cost plenty.
+static inline void kama_gpu_sleep_ms(int32_t ms) { (void)ms; }
+
 #else
 // ---- native: bodies in kama_gpu.c (compiled + linked by the driver under native --webgpu) ----
 
 WGPUSurface kama_gpu_surface(WGPUInstance instance, uint32_t width, uint32_t height, const char* title);
 void        kama_gpu_present(WGPUSurface surface);
 int32_t     kama_gpu_pump(WGPUDevice device);
+void        kama_gpu_sleep_ms(int32_t ms);
 
 #endif  // __EMSCRIPTEN__
 #endif  // KAMA_GPU_H
