@@ -872,6 +872,30 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       a destructible local IS the fact, and where the emitter chooses to run the destructor is a lowering
       detail the proof does not model. `emitDtorDefinition` also never set `_currentFunc` — harmless for
       the friend-accessor match it was written for, a silent mis-attribution for anything keyed on it.
+    - ⚠️ **An intrinsic is invisible to the walk, and `string` is the one that mints.** A `string` method
+      has no AST body, so it contributes neither an edge nor a fact — `"${a}${b}"` was rejected in a
+      no-heap region while `a + b` was accepted, the same allocation with two answers. Derived from the
+      RETURN TYPE (an intrinsic string method returning a new owned value allocates) rather than a list of
+      names, so a method added later is covered the day it is added. ⚠️ Scoped to `String` deliberately:
+      the smart-pointer intrinsics also return an owning value — `Shared.downgrade` hands back a `Weak<T>`
+      — and allocate NOTHING, so a bare `ownsByValue(return)` rule would have rejected them.
+    - ⚠️ **`T__copy(&(x))` was spelled at TWELVE sites; it is one `copyCall` now.** A deep copy of an owning
+      type allocates by definition, and `foreach (string s in xs)` allocates once per element with nothing
+      in the body that looks like an allocation (the iterator deep-copies to yield by value; `foreach (ref
+      string …)` borrows and is legal). ⚠️ The refactor was proved codegen-neutral by diffing the emitted
+      `.c` of every fixture across it — 680 files, zero differences — rather than by reading it.
+    - ⚠️ **A prelude body can fail a `--no-heap` build the author never wrote.** Gating the string copy
+      program-wide broke a program that sorts three integers, because `Template.part`/`hole` in the PRELUDE
+      do `return copy this._parts[at]` and every prelude body is emitted. The stdlib's escape for exactly
+      this (`@compileFor(!NOHEAP)`, as on `sort`) **cannot be spelled on a member**. So the copy fact is
+      recorded for the analysis but rejected only under the ATTRIBUTE — a second concrete instance of why
+      the flag half below is not a one-line change.
+    - ⚠️ **A dead special case, caught by writing the fixture.** Smart-pointer drops were given a
+      hand-written fact on the assumption their destructors are runtime C. They are not: `Owned<T>__dtor`
+      is EMITTED and calls `GlobalAllocator.deallocate`, so the ordinary edge already reached the leaf and
+      gave the better diagnostic. The real bug was elsewhere — a by-value smart-ptr PARAMETER is pushed
+      onto the root scope through `_pendingParamDtors` and never reached `recordDestructibleLocal`, so
+      `@noheap fn consume(Owned<Node> o)` compiled while a `DynamicArray` local one line away did not.
     - ⚠️ **The claim that motivated the whole row was invisible to the claim guard.**
       `check-doc-claims.sh` matched "IS a compile error" and the SPEC sentence said "MAKE every … a
       compile error", so the strongest promise in the section carried no fixture and went unpinned long

@@ -582,12 +582,23 @@ call anything that allocates, however many calls away it is, and the diagnostic 
 ([tests/noheap_chain.kama](../tests/noheap_chain.kama)). Reachability includes **destructors**: owning a <!-- xfail: noheap_dtor_of_local -->
 local whose `~T()` allocates allocates, even though the body contains no call.
 
-The chain ends at libc, and `GlobalAllocator` is the leaf — so a container drawing from it is rejected <!-- xfail: noheap_container_growth, noheap_container_local -->
-inside a no-heap region, including merely *owning* one (dropping it calls `deallocate`; `free` can block
-on the allocator's lock exactly as `malloc` can). The same container over an **arena** is fine and needs no
+The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop -->
+rejected inside a no-heap region, including merely *owning* one (dropping it frees; `free` can block on the
+allocator's lock exactly as `malloc` can). The same container over an **arena** is fine and needs no
 annotation: `A` is a type parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching
 a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) — which is the idiom a
 real-time region is expected to use.
+
+`string` is the one **intrinsic** that mints heap, and it is immutable, so every method that "changes" one <!-- xfail: noheap_string_concat, noheap_string_method, noheap_string_copy, noheap_foreach_copy -->
+returns a NEW owned string: `a + b`, `concat`, `substring`, `trim*`, `replace`, `toLower`/`toUpper`,
+`truncate`, `split` and a deep `copy` are all rejected in a no-heap region. So is `foreach (string s in xs)`,
+which yields each element **by value** and deep-copies to do it — `foreach (ref string s in xs)` borrows and
+is legal. Reading a string is always legal (`length`, indexing, the predicates), and a string **literal** is
+a borrowed view that allocates nothing, so `string tag = "voice";` belongs in a real-time body.
+
+[tests/noheap_realtime_ok.kama](../tests/noheap_realtime_ok.kama) is the standing control for all of this:
+a literal, an `InlineArray<T, N>` with a `borrow` window and an in-place `sortUnstable`, and a borrowed heap
+object — the whole of it legal, with no annotation anywhere but the one attribute.
 
 Where the compiler **cannot** see the callee, the target must **declare** the promise, and the call is
 otherwise rejected rather than assumed harmless: a `fnptr` or bound function pointer has no knowable <!-- xfail: noheap_fnptr_call, noheap_contract_member -->

@@ -1,0 +1,11 @@
+// `foreach (string s in xs)` yields each element BY VALUE, and the iterator deep-copies to do it — so this
+// loop allocates once per element with nothing in the body that looks like an allocation. The `foreach`
+// protocol calls are emitted straight to C rather than through the ordinary call path, so they needed
+// their own edges. Its control is `tests/noheap_foreach_ref.kama`: `foreach (ref string …)` borrows.
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(ref DynamicArray<string> a) {
+    int32 n = 0;
+    foreach (string s in a) { n = n + cast<int32>(s.length()); }
+    return n;
+}
+fn int32 main() { DynamicArray<string> x = DynamicArray.empty(); return tick(a: ref x); }

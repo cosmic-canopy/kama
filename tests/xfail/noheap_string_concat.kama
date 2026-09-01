@@ -1,0 +1,5 @@
+// `"${a}${b}"` was rejected inside a `@noheap` region and `a + b` was not — one allocation, two answers.
+// `+` on strings is `concat` written as an operator and mints the same new buffer; it needs its own gate
+// because the operator is lowered straight to the runtime call and never reaches method dispatch.
+@noheap fn int32 tick(ref string a, ref string b) { string c = a + b; return cast<int32>(c.length()); }
+fn int32 main() { string x = "ab"; string y = "cd"; return tick(a: ref x, b: ref y); }

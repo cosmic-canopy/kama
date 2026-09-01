@@ -1,0 +1,1 @@
+heap allocation (`string.trim` returns a NEW owned string)

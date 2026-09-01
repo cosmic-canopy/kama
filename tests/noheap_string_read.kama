@@ -1,0 +1,10 @@
+// The control for the two string fixtures beside it: a `@noheap` region may still READ a string. Only the
+// methods that mint a new owned one allocate — `length`, indexing and the predicates hand back a scalar
+// and are as legal here as integer arithmetic. Without this, "reject every string method" would look
+// exactly like the rule that shipped.
+@noheap fn int32 tick(ref string a) {
+    int32 n = cast<int32>(a.length());
+    if (a.startsWith(prefix: "h")) { n = n + 10; }
+    return n + cast<int32>(a.get(index: 0));
+}
+fn int32 main() { string x = "hi"; return tick(a: ref x); }   // 2 + 10 + 'h'(104) = 116

@@ -1,0 +1,15 @@
+// The control for tests/xfail/noheap_foreach_copy.kama, and the reason the rule is worth its precision:
+// the SAME loop over the SAME collection is allocation-free when it BORROWS each element instead of
+// taking it by value. A rule that rejected both would be telling a real-time author that iterating a
+// string collection is impossible, which is false.
+import { std::collections::DynamicArray };
+@noheap fn int32 tick(ref DynamicArray<string> a) {
+    int32 n = 0;
+    foreach (ref string s in a) { n = n + cast<int32>(s.length()); }
+    return n;
+}
+fn int32 main() {
+    DynamicArray<string> x = DynamicArray.empty();
+    x.add(item: "abc"); x.add(item: "de");
+    return tick(a: ref x);   // 3 + 2
+}

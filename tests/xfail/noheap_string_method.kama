@@ -1,0 +1,6 @@
+// An intrinsic has no AST body, so it contributes no call edge and no allocation fact — it is invisible
+// to the transitivity walk. `string` is the one intrinsic family whose methods MINT heap: it is immutable,
+// so every method that "changes" it returns a NEW owned string. Derived from the RETURN TYPE, so a string
+// method added later is covered the day it is added, rather than from a list of names that would drift.
+@noheap fn int32 tick(ref string a) { string c = a.trim(); return cast<int32>(c.length()); }
+fn int32 main() { string x = " hi "; return tick(a: ref x); }

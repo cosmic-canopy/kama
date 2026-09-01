@@ -3238,7 +3238,14 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             std::string t = hoistStringTemp(e);
             return t.empty() ? emitOperandByValue(e) : t;
         };
-        if (token == PLUS)  return "kama_string__concat(" + ptrOf(lhs) + ", " + valOf(rhs) + ")";
+        // `a + b` on strings is `concat` written as an operator, and it allocates the same new buffer.
+        // It needs its own gate because it never reaches emitDispatch: the operator is lowered straight to
+        // the runtime call here, so the intrinsic gate there cannot see it. Without this, `"${a}${b}"` was
+        // rejected inside a `@noheap` region and `a + b` was not — one allocation, two answers.
+        if (token == PLUS) {
+            rejectIfNoHeap("`string + string` builds a NEW owned string", line);
+            return "kama_string__concat(" + ptrOf(lhs) + ", " + valOf(rhs) + ")";
+        }
         if (token == EQEQ)  return "kama_string__equals(" + ptrOf(lhs) + ", " + valOf(rhs) + ")";
         if (token == NOTEQ) return "(!kama_string__equals(" + ptrOf(lhs) + ", " + valOf(rhs) + "))";
         unsupported(("operator '" + binaryOperator(token) + "' is not defined for `string` "
@@ -4307,9 +4314,26 @@ void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::strin
     // and an edge duplicated across twenty sites fails open the moment one is missed — which is precisely
     // how this hole existed in the first place. Declaring a destructible local IS the fact; where the
     // compiler chooses to run the destructor is a lowering detail the proof does not need to model.
+    noteDestructibleOwner(className);
+}
+
+// The no-heap fact that a destructible local carries, shared by the two ways one is registered: an
+// ordinary declaration (above) and a by-value smart-pointer PARAMETER, which the callee owns and drops at
+// function exit. The parameter path pushes straight onto the root scope through `_pendingParamDtors` and
+// so never reached `recordDestructibleLocal` — which is how `@noheap fn consume(Owned<Node> o)` kept
+// compiling while a `DynamicArray` local one line away did not.
+void CEmitter::noteDestructibleOwner(const std::string& className)
+{
     auto ci = _classes.find(className);
-    if (ci != _classes.end() && ci->second.destructible)
-        recordCallEdge(className + "__dtor", _curLine);
+    if (ci == _classes.end() || !ci->second.destructible) return;
+    // NOTE what is deliberately NOT special-cased here. A smart pointer's destructor looks like runtime C,
+    // and an earlier version of this recorded its free as a direct fact on that assumption. It is not:
+    // `Owned<T>__dtor` is an EMITTED function that calls `GlobalAllocator.deallocate`, so the ordinary edge
+    // already reaches the leaf and produces the better diagnostic — it names the chain instead of asserting
+    // the conclusion. The special case was dead code and is gone. (`string` is the genuine exception, and
+    // it is handled at the COPY rather than the drop: `kama_string__dtor` frees only when `cap != 0`, and a
+    // string literal is a borrowed view with `cap == 0`, so `string tag = "voice";` allocates nothing.)
+    recordCallEdge(className + "__dtor", _curLine);
 }
 
 // --- Blocks ----------------------------------------------------------------
@@ -4326,7 +4350,10 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
     if (functionRoot && !_pendingParamDtors.empty()) {
-        for (auto& l : _pendingParamDtors) _scopes.back().locals.push_back(l);
+        for (auto& l : _pendingParamDtors) {
+            _scopes.back().locals.push_back(l);
+            noteDestructibleOwner(l.className);   // the callee OWNS it and drops it — see the helper
+        }
         _pendingParamDtors.clear();
     }
 
@@ -5862,7 +5889,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
                                              "or use `give` to move)").c_str(), n->line);
-                            else { indent(depth); *_out << nm << " = " << ty << "__copy(&(" << emitExpression(init) << "));\n"; }
+                            else { indent(depth); *_out << nm << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer.
                         else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
@@ -5881,7 +5908,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
-                        if (doCopy) { indent(depth); *_out << nm << " = " << ty << "__copy(&(" << emitExpression(init) << "));\n"; }
+                        if (doCopy) { indent(depth); *_out << nm << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         else { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }
                     }
                     // A value/primitive: the plain `=` above IS the hand-off — `copy` and `give` are both
@@ -6377,7 +6404,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     flushHoisted(depth);
                     indent(depth); *_out << et << " " << tv << " = "
-                                         << (doCopy ? (et + "__copy(&(" + src + "))") : src) << ";\n";
+                                         << (doCopy ? copyCall(et, src) : src) << ";\n";
                     std::string place = emitPlace(as->unaryExpression);
                     indent(depth); *_out << et << "* " << sp << " = &(" << place << ");\n";
                     indent(depth); *_out << et << "__dtor(" << sp << ");\n";           // release the old element
@@ -6417,7 +6444,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // `copy` of an owning collection/`string` into the raw slot deep-copies (`__copy`), so the
                 // slot and the source own separate buffers (the source survives). Otherwise blit.
                 if (marked && !give && ownsByValue(rc) && !isMoveOnlyValue(rc)) {
-                    indent(depth); *_out << b << " = " << rc << "__copy(&(" << src << "));\n";
+                    indent(depth); *_out << b << " = " << copyCall(rc, src) << ";\n";
                     return;
                 }
                 indent(depth); *_out << b << " = " << src << ";\n";
@@ -6525,7 +6552,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 line(n->line);
                 if (!bMoved && _classes.count(lty) && _classes[lty].destructible)             // free the old value (if it owns anything)
                     { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
-                indent(depth); *_out << b << " = " << (doCopy ? (lty + "__copy(&(" + src + "))") : src) << ";\n";
+                indent(depth); *_out << b << " = " << (doCopy ? copyCall(lty, src) : src) << ";\n";
                 if (!mv.empty()) markMoved(mv);
                 return;
             }
@@ -6600,7 +6627,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
                         line(n->line);
                         indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
-                        indent(depth); *_out << b << " = " << lty << "__copy(&(" << src << "));\n";
+                        indent(depth); *_out << b << " = " << copyCall(lty, src) << ";\n";
                         return;
                     }
                     // give = move: relocate the struct, then null the source so its scope-drop is a no-op.
@@ -12500,6 +12527,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             if (!requirePlaceOperand()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+            recordCallEdge(iterMi->cName, fe->line);
             iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
         } else {   // the operand IS the mutable iterator (used by value — an rvalue materializes into `__it`)
             iterCType = container; ic = cc;
@@ -12515,6 +12543,12 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
                          "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
         }
+        // The `foreach` protocol calls are emitted straight to C here, not through
+        // emitReorderedCall, so they need their own edges — an allocating `next()` (a
+        // `DynamicArray<string>` iterator deep-copies each element it yields) is otherwise
+        // invisible to the no-heap walk.
+        recordCallEdge(hasNextMi->cName, fe->line);
+        recordCallEdge(nextMi->cName, fe->line);
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
         actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `ref T next()` -> T
@@ -12525,6 +12559,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (iterMi) { if (!requirePlaceOperand()) return;
                       iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+                      recordCallEdge(iterMi->cName, fe->line);
                       iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
@@ -12542,6 +12577,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                          "in a `foreach`").c_str(), fe->line); *_out << "\n"; return;
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
+        recordCallEdge(nextMi->cName, fe->line);
         nextCall = nextMi->cName + "(&" + it + ")";
         // `Optional<T> next()` -> T, read off the monomorphized Optional's `Some` payload rather than
         // re-deriving it from the return type's generic argument: this is the very field the binding is
@@ -16317,7 +16353,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                         unsupported(("`copy` of a `" + p.className + "` needs copyable elements — its elements "
                                      "own resources but aren't `Copyable`; use `give` to move").c_str(), srcLine);
-                    s += p.className + "__copy(&(" + val + "))";
+                    s += copyCall(p.className, val);
                 } else {                                             // give = move: relocate + null source
                     std::string t = "__kama_carg" + std::to_string(_tempCounter++);
                     std::string blit = p.className + " " + t + " = (" + val + "); ("
@@ -16338,7 +16374,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     doCopy = cpy;
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
-                if (doCopy) s += argCls + "__copy(&(" + val + "))";
+                if (doCopy) s += copyCall(argCls, val);
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); s += val; }
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !p.className.empty()
                        && _classes.count(p.className) && _classes[p.className].kind == TypeKind::Value) {
@@ -18164,7 +18200,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
                             doCopy = cpy; }
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
-        if (doCopy) { indent(depth); *_out << dst << " = " << rc << "__copy(&(" << emitExpression(v) << "));\n"; }
+        if (doCopy) { indent(depth); *_out << dst << " = " << copyCall(rc, emitExpression(v)) << ";\n"; }
         else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
@@ -18174,7 +18210,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             auto ci = _collections.find(dstCType);
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                 unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
-            else { indent(depth); *_out << dst << " = " << dstCType << "__copy(&(" << emitExpression(v) << "));\n"; }
+            else { indent(depth); *_out << dst << " = " << copyCall(dstCType, emitExpression(v)) << ";\n"; }
         } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops.
@@ -19098,7 +19134,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     doCopy = cpy;
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[argCls].bareDefault == COPY;
-                if (doCopy) field = argCls + "__copy(&(" + val + "))";
+                if (doCopy) field = copyCall(argCls, val);
                 else { std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv); field = val; }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
                        && !isFixedColl(argCls) && handoff) {
@@ -19115,7 +19151,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                         unsupported(("`copy` of a `" + argCls + "` needs copyable elements — use `give` to "
                                      "move it").c_str(), srcLine);
-                    else field = argCls + "__copy(&(" + val + "))";
+                    else field = copyCall(argCls, val);
                 }
                 else if (!_hoistOK)
                     unsupported("moving a collection into a variant here needs a statement slot — bind the "
@@ -19861,6 +19897,44 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
                  + " — the compiler cannot see the target, so it cannot prove the call allocates nothing. "
                    "Call a named function instead, or move the dispatch outside the no-heap region").c_str(),
                 line);
+}
+
+// `T__copy(&(x))` — a DEEP copy, and the ONE way the emitter is allowed to spell one. It used to be
+// written out at twelve sites; they are all this call now, for the reason the destructor edge is taken
+// from ownership rather than from its ~20 emission sites: a deep copy of an owning type allocates by
+// definition, and a fact duplicated across twelve sites fails open the moment the thirteenth is written.
+// Routing it through one function means a copy site added later records its edge without anyone
+// remembering to. The generated C is unchanged — asserted by diffing every fixture's emitted `.c` across
+// the refactor, byte for byte.
+std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue)
+{
+    // An INTRINSIC owning collection's `__copy` is a runtime C function, not an emitted kama body, so it
+    // has no facts of its own and an edge to it would point at nothing. `kama_string__copy` calls
+    // `kama_alloc` outright — that is what deep-copying an immutable heap string means — so the fact is
+    // recorded here instead. This is the same reason `GlobalAllocator` had to be named: every chain ends
+    // in C, and the leaf is wherever the C is known to allocate.
+    auto ci = _classes.find(cls);
+    if (ci != _classes.end() && ci->second.isIntrinsicColl && ownsByValue(cls)) {
+        // ⚠️ Gated on the ATTRIBUTE, not the program flag, and this is measured rather than cautious: the
+        // PRELUDE deep-copies a string in `Template.part`/`Template.hole` (`return copy this._parts[at]`),
+        // which is the honest implementation of "hand back an owned copy of a borrowed byte range". Those
+        // bodies are emitted into every build, so rejecting under `--no-heap` failed a program that sorts
+        // three integers, pointing at a prelude line the author never wrote — and the stdlib's escape for
+        // exactly this (`@compileFor(!NOHEAP)`, as on `sort`) cannot be spelled on a MEMBER.
+        //
+        // So the fact is still recorded, which is what `@noheap` transitivity reads, and the immediate
+        // rejection is limited to a body whose author asked for it. That leaves the whole-program flag
+        // where it already was on the `GlobalAllocator` leaf — see the roadmap entry, which is the same
+        // open question and now has a second, concrete instance of why it is not a one-line change.
+        if (_noHeapActive) rejectIfNoHeap((std::string("a deep `copy` of `") + demangleForDisplay(cls)
+                                           + "` allocates a new buffer").c_str(), _curLine);
+        else if (!_probingTemplate && !_currentFunc.empty() && !_allocSites.count(_currentFunc))
+            _allocSites[_currentFunc] = AllocSite{ "a deep `copy` of `" + demangleForDisplay(cls)
+                                                   + "` allocates a new buffer", _curLine, diagFile() };
+    } else {
+        recordCallEdge(cls + "__copy", _curLine);
+    }
+    return cls + "__copy(&(" + lvalue + "))";
 }
 
 // One call edge out of the body being emitted. Only a plain C identifier is an edge: see the hook in
@@ -22690,6 +22764,26 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     // vector to the stack and rebuilds it with four scalar loads). So the pattern is folded HERE, at the
     // call, into literal arguments — the emitter reads the constant the way `[v; N]`'s count and a
     // comptime generic argument are already read, and refuses anything it cannot fold.
+    // The no-heap gate for an INTRINSIC method. An intrinsic has no AST body, so it contributes no call
+    // edge and no allocation fact — it is invisible to the transitivity walk, and `string` is the one
+    // intrinsic family whose methods MINT heap: `concat`, `substring`, `trim*`, `replace`, `toLower`
+    // /`toUpper`, `truncate` and `split` each return a NEW owned value and leave the receiver alone
+    // (`string` is immutable — the same sentence that motivates them explains why they allocate). So
+    // `a + b` inside a `@noheap` region was accepted while `"${a}${b}"` was rejected, which is the same
+    // allocation twice with two different answers.
+    //
+    // Derived from the RETURN TYPE rather than from a list of method names, so a string method added
+    // later is covered the day it is added. Scoped to `String` deliberately: the smart-pointer intrinsics
+    // also return an owning value (`Shared.downgrade` hands back a `Weak<T>`) and allocate NOTHING — they
+    // hand out a handle to memory that already exists, and a `Shared`'s own allocation happens at `new`,
+    // which the gate already covers. A bare `ownsByValue(return)` rule would reject those.
+    //
+    // Recorded against the CALLER, which is the honest attribution: the intrinsic has no body to blame,
+    // and the caller is what a `@noheap` region reaches. That also makes it transitive for free.
+    if (mi->isIntrinsic && owner && owner->collKind == CollKind::String && mi->returnType
+        && ownsByValue(cType(mi->returnType)))
+        rejectIfNoHeap((std::string("`string.") + method + "` returns a NEW owned string").c_str(), srcLine);
+
     if (mi->isIntrinsic && owner && owner->isIntrinsicColl && owner->collKind == CollKind::Simd
         && (method == "shuffle" || method == "blend"))
         return emitSimdShuffle(owner->name, method, recvPtr, args, srcLine);

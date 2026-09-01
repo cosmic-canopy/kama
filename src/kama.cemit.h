@@ -1337,6 +1337,8 @@ private:
     // Record one call edge out of the body being emitted. A no-op outside a body, and self-edges are
     // dropped (direct recursion cannot make a function allocate that did not already).
     void recordCallEdge(const std::string& callee, int line);
+    // The ONE spelling of a deep copy (`T__copy(&(x))`), so its call edge is recorded in one place.
+    std::string copyCall(const std::string& cls, const std::string& lvalue);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
@@ -2344,6 +2346,8 @@ private:
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     void emitUnwindAll(int depth);                             // return: innermost..function root
     void recordDestructibleLocal(const std::string& cVar, const std::string& className);
+    // The no-heap fact a destructible local carries — shared with the by-value smart-ptr PARAMETER path.
+    void noteDestructibleOwner(const std::string& className);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     static bool bodyDiverges(SharedStatement s);               // body ends in return/break/continue
     void emitDtorDefinition(ClassInfo& ci);

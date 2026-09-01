@@ -438,11 +438,16 @@ noheap_contract_member	noheap_contract_member.kama:8
 noheap_dtor_of_local	noheap_dtor_of_local.kama:9
 noheap_error_box	noheap_error_box.kama:10
 noheap_fnptr_call	noheap_fnptr_call.kama:5
+noheap_foreach_copy	noheap_foreach_copy.kama:8
 noheap_interp	noheap_interp.kama:2
 noheap_method_new	noheap_method_new.kama:8
 noheap_new	noheap_new.kama:4
 noheap_on_static	noheap_on_static.kama:4
+noheap_owned_drop	noheap_owned_drop.kama:6
 noheap_spawn	noheap_spawn.kama:13
+noheap_string_concat	noheap_string_concat.kama:4
+noheap_string_copy	noheap_string_copy.kama:5
+noheap_string_method	noheap_string_method.kama:5
 noheap_transitive_deep	noheap_transitive_deep.kama:8
 noheap_transitive_dtor	noheap_transitive_dtor.kama:9
 noheap_transitive_method	noheap_transitive_method.kama:9

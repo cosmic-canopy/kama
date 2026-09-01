@@ -1,0 +1,6 @@
+// A deep `copy` of a string allocates a new buffer (`kama_string__copy` calls `kama_alloc`). The emitter
+// used to spell `T__copy(&(x))` at TWELVE sites; they are one `copyCall` now, so the fact is recorded in
+// one place — the same argument the destructor edge makes. NOTE the sibling control: a string LITERAL
+// local is borrowed (`cap == 0`) and allocates nothing, so it stays legal here.
+@noheap fn int32 tick(ref string a) { string c = copy a; return cast<int32>(c.length()); }
+fn int32 main() { string x = "ab"; return tick(a: ref x); }
