@@ -1,0 +1,12 @@
+// Every way a consumer can reach a published constant, in one program: imported by name, named through
+// its module, used where a COMPILE-TIME value is required (an InlineArray size), and addressed — SPEC
+// promises a `comptime` is real `static const` storage, not a macro.
+import { cfg::CAP };
+
+unsafe fn int32 viaAddr() { UnsafePtr<int32> p = addr(of: CAP); return p[0]; }   // 8
+
+fn int32 main() {
+    InlineArray<int32, (CAP)> buf = [1; (CAP)];     // the constant sizes a type, across modules
+    int32 qualified = cfg::CAP;                     // reached without an import
+    return CAP + qualified + cast<int32>(buf.length()) + viaAddr() + cfg::doubled();
+}                                                   // 8 + 8 + 8 + 8 + 16 = 48

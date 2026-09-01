@@ -1,0 +1,13 @@
+// SPEC § Compile-time constants: a module `comptime` is "a module-level named constant (subject to the
+// module `export { }` surface)". This fixture is that sentence's proof, and it exists because the
+// sentence was false in four separate ways at once — reported by the first external project on kama.
+//
+// Naming a `comptime` here was rejected outright ("no such top-level declaration"). Worse, and unseen:
+// a `comptime` lowered to `static const` in its OWN unit's `.c`, so even a sibling file in this same
+// module could not link against it — and `kama check`, which folds the program into one unit, reported
+// every such reference as fine. The corpus could not catch it because no fixture ever put a module
+// constant and a second file in the same build.
+export { CAP, get };
+
+comptime int32 CAP = 8;
+fn int32 get() { return CAP; }

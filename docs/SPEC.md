@@ -2797,7 +2797,11 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
-  `static` is module-private (internal C linkage). A `hardware` static (`static hardware T name`) adds the
+  `static` is **file-private** (internal C linkage): it may not appear in an `export { … }` list, and no <!-- xfail: export_module_static -->
+  other file — not even a sibling in the same module — can name it. Per-isolate storage is why: a second
+  translation unit could only get its own copy, which would be a silent correctness bug rather than
+  sharing. Publish a **`comptime`** if the value is constant, or a function if it is not. A `hardware`
+  static (`static hardware T name`) adds the
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
   `volatile T*` for an `UnsafePtr<T>` handle. *(Destructible statics are a later MCU step.)*
 
@@ -2827,8 +2831,12 @@ fn void demo() {
 }
 ```
 
-- **Where it lives sets how it's reached.** A **module** `comptime` is a module-level named constant
-  (subject to the module `export { }` surface). A **type** `comptime` is read as **`Type::NAME`** — via `::`
+- **Where it lives sets how it's reached.** A **module** `comptime` is a module-level named constant, and
+  it is the one module-scope declaration that **can** be published: name it in `export { … }` and a
+  consumer may `import` it, spell it `mod::NAME`, size a type with it, or take its address — the same
+  file rung a function obeys, so an unexported one stays private to its file. (Contrast the mutable <!-- xfail: export_const_unexported -->
+  `static` above, which is file-private and not exportable at all.) A **type** `comptime` is read as
+  **`Type::NAME`** — via `::`
   (the associated-item operator, like an enum variant `Result::Ok` or a static factory `Deque::withAllocator`);
   `.` stays reserved for constructors and instance access. A type `comptime` obeys **member visibility**
   (`public`/`private`/`protected`, default private for a `value`) — a private one is usable only inside the

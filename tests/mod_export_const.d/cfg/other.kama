@@ -1,0 +1,6 @@
+// The sibling-file rung: same module, so `CAP` still has to be exported by cfg.kama and imported here
+// (visibility is per FILE, not per module). This is the case that used to fail in the C compiler.
+import { CAP };
+export { doubled };
+
+fn int32 doubled() { return CAP + CAP; }   // 16

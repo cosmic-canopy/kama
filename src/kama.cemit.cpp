@@ -2140,6 +2140,7 @@ std::string CEmitter::declFileOf(const std::string& key) const
     auto s  = _sigs.find(key);              if (s  != _sigs.end())              return s->second.declFile;
     auto f  = _funcs.find(key);
     if (f  != _funcs.end())             return isExtern(f->second.node) ? std::string() : f->second.declFile;
+    auto mv = _moduleVarFile.find(key);     if (mv != _moduleVarFile.end())     return mv->second;
     return std::string();
 }
 
@@ -2606,6 +2607,58 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
         if (_funcs.count(cand)) return cand;
     }
     return name;
+}
+
+// Does this module-variable declaration publish any of its names? One declaration may bind several
+// (`comptime int32 A = 1, B = 2;`), and the two emission sites need a single yes/no, so any exported
+// name carries the whole declaration into the header. Over-inclusion is harmless: an unexported name
+// sitting there is still refused at the file rung, which is where visibility is decided.
+bool CEmitter::moduleVarExported(ModuleVariableDeclaration* mv)
+{
+    if (!mv || !mv->variables) return false;
+    for (auto& d : *mv->variables)
+        if (d && d->name && d->name->value && _exported.count(qualify(*d->name->value))) return true;
+    return false;
+}
+
+// A module-scope `static`/`comptime` name -> its qualified C symbol, or "" if nothing of that name is
+// in reach. The same three lookups `resolveFuncImpl` does — a per-symbol import alias, an explicit
+// qualifier (or namespace alias), then this file's own scope and its `using`s — because a module
+// constant is reached exactly the way a module function is. It used to be a bare `qualify(name)`, which
+// consulted neither the qualifier nor the import aliases: an imported or qualified constant resolved to
+// the *importing* file's scope, emitted an unqualified name, and failed in the C compiler.
+std::string CEmitter::resolveModuleVar(const std::string& name, SharedStringList qualifier)
+{
+    if (!qualifier || qualifier->empty()) {
+        auto sa = _nsCtx.symbolAliases.find(name);   // per-symbol `import a::b::{CAP}` (or `as`)
+        if (sa != _nsCtx.symbolAliases.end() && _moduleStatics.count(sa->second)) return sa->second;
+    }
+    SharedStringList q = qualifier;                  // `global::…` — see resolveUserNameImpl
+    bool rooted = q && !q->empty() && *(*q)[0] == "global";
+    if (rooted) {
+        auto rest = std::make_shared<StringList>();
+        for (size_t i = 1; i < q->size(); ++i) rest->push_back((*q)[i]);
+        q = rest;                                    // empty => `global::CAP`, the bare spelling below
+    }
+    if (q && !q->empty()) {
+        std::string nsMangled;
+        if (!rooted && q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
+            nsMangled = _nsCtx.aliases[*(*q)[0]];
+        else {
+            std::string path;
+            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
+            nsMangled = mangleNs(path);
+        }
+        std::string cand = nsMangled + "__" + name;
+        return _moduleStatics.count(cand) ? cand : std::string();
+    }
+    std::string own = qualify(name);
+    if (_moduleStatics.count(own)) return own;
+    for (auto& u : _nsCtx.usings) {
+        std::string cand = u + "__" + name;
+        if (_moduleStatics.count(cand)) return cand;
+    }
+    return std::string();
 }
 
 // ---------------------------------------------------------------------------
@@ -3754,7 +3807,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             auto fit = _funcs.find(resolveFunc(nm, v->qualifier));
             if (fit != _funcs.end()) return fit->second.cName;
             // A bare name that is a module-level `static` (MCU step 1) → its qualified C symbol.
-            if (_moduleStatics.count(qualify(nm))) return qualify(nm);
+            // The file rung applies here exactly as it does to a type or a call: a module-scope name
+            // reaches another file only through that file's `export { … };`. Without this the reference
+            // resolved silently and failed in the C compiler instead — see _moduleVarFile.
+            const std::string key = resolveModuleVar(nm, v->qualifier);
+            if (!key.empty()) {
+                if (!v->synthesized)
+                    checkReach(key, nm, "this reference", v->line, refFilePath(),
+                               v->qualifier && !v->qualifier->empty());
+                return key;
+            }
         }
         checkNotMoved(nm, v->line);   // reject reading a moved-from `resource` value
         recordRef(bindingKeyOf(nm), v);   // a local, a param, or an unindexed name (empty key => dropped)
@@ -6759,6 +6821,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                 for (auto& d : *mv->variables)
                     if (d && d->name && d->name->value) {
                         _moduleStatics[qualify(*d->name->value)] = mv->type;
+                        _moduleVarFile[qualify(*d->name->value)] = _collectingUnitPath;   // the file rung's key
                         // A `comptime` static emits as C `static const`, so anything that takes its ADDRESS
                         // must take a `const` one — see the const-correct foreach lowering. Recorded for
                         // every comptime static, not just the foldable ones, since constness is a property
@@ -8472,10 +8535,14 @@ bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
         // `InlineArray<T,(CAP)>` / `[v;(CAP)]`). Consulted after the generic-param binding.
         auto lv = _constLocalVals.find(*arg->value);
         if (lv != _constLocalVals.end()) { out = lv->second; return true; }
-        // 6b-2: a module `comptime NAME` (qualified in the current scope). Same-module bare refs
-        // resolve via `qualify`; `_nsCtx` is set per unit/generic so the key matches its registration.
-        auto mc = _moduleConsts.find(qualify(*arg->value));
-        if (mc != _moduleConsts.end()) { out = mc->second; return true; }
+        // 6b-2: a module `comptime NAME`. Through `resolveModuleVar`, not a bare `qualify`, so an
+        // IMPORTED or module-QUALIFIED constant can size an `InlineArray` too — publishing a constant
+        // is only useful if a consumer can then use it where a constant is required.
+        const std::string mk = resolveModuleVar(*arg->value, arg->qualifier);
+        if (!mk.empty()) {
+            auto mc = _moduleConsts.find(mk);
+            if (mc != _moduleConsts.end()) { out = mc->second; return true; }
+        }
     }
     return false;
 }
@@ -24077,7 +24144,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             if (!name) continue;
             std::string q = qualify(*name);
             bool exists = _classes.count(q) || _enums.count(q) || _interfaces.count(q) || _funcs.count(q)
-                       || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
+                       || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q)
+                       || _constStatics.count(q);   // a module `comptime` — SPEC: "subject to the module
+                                                    // `export { }` surface". It is a named constant, so it
+                                                    // publishes like a function; see emitHeaderContent.
+            // A MUTABLE module `static` is a different answer, and it deserves its own sentence rather
+            // than the phantom "there is no such top-level declaration" — the declaration is right there.
+            if (!exists && _moduleStatics.count(q)) {
+                size_t which = (size_t)(&name - &(*u->exportList)[0]);
+                unsupported(("a module `static` is not exportable — `" + *name + "` has internal C linkage "
+                             "and per-isolate storage, so no other file can name it. Make it `comptime` if "
+                             "it is a constant, or expose it through a function").c_str(),
+                            which < u->exportListPos.size() ? u->exportListPos[which].line : 0);
+                continue;
+            }
             if (!exists && !_prunedNames.count(*name)) {
                 // The location used to be the `namespace` declaration's line, which is gone. The export
                 // list's own span is the better answer anyway: it points at the block being validated.
@@ -24133,7 +24213,8 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 // bare "call to unknown function" at the use site. Name the real reason instead.
                 const std::string q = mod + "__" + *sym->identifier->value;
                 bool live = _funcs.count(q) || _classes.count(q) || _enums.count(q) || _interfaces.count(q)
-                         || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q);
+                         || _genericTypes.count(q) || _genericContracts.count(q) || _sigs.count(q)
+                         || _constStatics.count(q);   // a module `comptime` is importable by name
                 if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
                                  " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
@@ -24420,6 +24501,35 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (any) *_out << "\n";
 
+    // Module-scope `comptime` constants, DEFINED here rather than in the declaring unit's body.
+    //
+    // ⚠️ This is what makes a module constant reachable at all beyond its own file. A build emits one C
+    // translation unit per module, and a `comptime` lowers to `static const` — so defining it in the
+    // declaring unit's `.c` left every other TU with nothing, and a perfectly ordinary sibling-file
+    // reference failed as a clang "use of undeclared identifier". `kama check` saw none of it (it folds to
+    // one unit), so the corpus could not catch it either. A function does not have this problem because
+    // it is prototyped here — that is the shape being matched.
+    //
+    // `static const` in a header gives every TU its own copy, which is exactly right for an immutable
+    // compile-time value: it stays addressable (SPEC promises `@section`-placeable storage) and there is
+    // no one-definition rule to violate. A MUTABLE `static` cannot come along — per-TU copies of mutable
+    // state would be a silent correctness bug, not a fix — so it stays in its unit and is rejected at the
+    // export list instead.
+    // Only an EXPORTED one comes here. A constant its own file keeps private is reachable from nowhere
+    // else (the file rung sees to that), so it stays in its unit — which matters for a `comptime fn`
+    // table: a 256-byte `.rodata` aggregate has no business being copied into every translation unit of
+    // an MCU build to serve one file.
+    bool anyConst = false;
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList || u == _preludeUnit) continue;
+        _nsCtx = _unitCtx[u.get()];
+        ScopedStr _edf(_emitDeclFile, u->name ? *u->name : std::string());   // diagnostics land on the DECLARING file
+        for (auto& decl : *u->codeDeclarationList)
+            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get()))
+                if (mv->isComptime && moduleVarExported(mv)) { emitModuleStaticDecl(mv); anyConst = true; }
+    }
+    if (anyConst) *_out << "\n";
+
     // Non-generic global-prelude free functions (e.g. `unwrapPtr`): the prelude is collect-only, so — like
     // its types/impl blocks below — no module emits their bodies. Emit prototype + definition `static inline`
     // in the header HERE (before the generic-fn/collection instances that call them), so a helper the
@@ -24670,7 +24780,10 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
     {
         std::ostream* svd = _out; _out = &moduleStatics;
         for (auto& decl : *unit->codeDeclarationList)
-            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) emitModuleStaticDecl(mv);
+            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get()))
+                if (!mv->isComptime || !moduleVarExported(mv)) emitModuleStaticDecl(mv);
+                    // an EXPORTED `comptime` is defined in the shared header instead, so that other
+                    // translation units can see it at all — see emitHeaderContent
         _out = svd;
     }
     // vtable instances + interface vtables first (referenced by ctor bodies).

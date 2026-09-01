@@ -182,14 +182,28 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
         auto tc = _typeConsts.find(key);
         if (tc != _typeConsts.end() && tc->second.hasValue) { asInt(tc->second.value); return true; }
+        // …and if it is not a type-associated constant, it may be a MODULE one reached by its module
+        // path (`cfg::CAP`). The two spellings are indistinguishable here — both are a qualifier and a
+        // name — so the type reading is tried first and this is the fallback, not a competing arm.
+        const std::string qk = resolveModuleVar(*id->value, id->qualifier);
+        if (!qk.empty()) {
+            auto qv = _comptimeConstVals.find(qk);
+            if (qv != _comptimeConstVals.end()) { out = qv->second; return true; }
+            auto qm = _moduleConsts.find(qk);
+            if (qm != _moduleConsts.end()) { asInt(qm->second); return true; }
+        }
         return false;
     }
 
-    // Bare name.
-    auto cv = _comptimeConstVals.find(qualify(*id->value));
+    // Bare name. Through `resolveModuleVar` so a per-symbol `import { m::cfg::CAP }` resolves to the
+    // DECLARING module's key rather than this file's scope, where nothing of that name exists.
+    const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+    auto cv = _comptimeConstVals.find(mk.empty() ? qualify(*id->value) : mk);
     if (cv != _comptimeConstVals.end()) { out = cv->second; return true; }
-    auto mc = _moduleConsts.find(qualify(*id->value));
-    if (mc != _moduleConsts.end()) { asInt(mc->second); return true; }
+    if (!mk.empty()) {
+        auto mc = _moduleConsts.find(mk);
+        if (mc != _moduleConsts.end()) { asInt(mc->second); return true; }
+    }
     auto cs = _comptimeSubst.find(*id->value);
     if (cs != _comptimeSubst.end()) { asInt(cs->second.value); return true; }
     auto lv = _constLocalVals.find(*id->value);

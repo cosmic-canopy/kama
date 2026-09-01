@@ -1,0 +1,3 @@
+// No import, and none would help: `cfg.kama` never offered `CAP`. Before the file rung reached module
+// variables this compiled clean through `kama check` and then failed in the C compiler instead.
+fn int32 main() { return cfg::CAP; }

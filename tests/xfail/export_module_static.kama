@@ -1,0 +1,11 @@
+// A MUTABLE module `static` is file-private and cannot be published. It has internal C linkage and
+// per-isolate storage, so a second translation unit could only ever get its OWN copy — which would be a
+// silent correctness bug dressed as sharing, not the sharing the author asked for.
+//
+// This used to be diagnosed as "there is no such top-level declaration in this module", which is a
+// phantom: the declaration is right there on the next line. The export machinery simply could not see
+// module-scope declarations at all (see ROADMAP_DETAIL §2, the KB-3 entry).
+export { COUNT };
+
+static int32 COUNT = 5;
+fn int32 main() { return COUNT; }

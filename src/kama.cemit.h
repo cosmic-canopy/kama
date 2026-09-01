@@ -1363,6 +1363,8 @@ private:
                             const IdentifierNode* site = nullptr);                      // function ref
     std::string resolveUserNameImpl(const std::string& value, SharedStringList qualifier);  // the search itself
     std::string resolveFuncImpl(const std::string& name, SharedStringList qualifier);       // the search itself
+    std::string resolveModuleVar(const std::string& name, SharedStringList qualifier);      // module `static`/`comptime`
+    bool moduleVarExported(ModuleVariableDeclaration* mv);   // does it publish any name? (header vs unit)
     bool isNamespace(const std::string& name) const;             // a known public namespace (or alias)
 
     // RAII scope stack: live destructible locals per lexical scope.
@@ -2348,6 +2350,12 @@ private:
     std::map<std::string, int64_t> _constLocalVals;           // 6b-2: local `const` name -> folded int (comptime uses: sizes/fills)
     std::map<std::string, int64_t> _moduleConsts;             // 6b-2: module `comptime` qualified name -> folded int
     std::set<std::string> _constStatics;                      // qualified names emitted as C `static const` (every `comptime` static)
+    // THE FILE RUNG FOR MODULE-SCOPE VARIABLES. Qualified name -> the file that declared it. Without this
+    // `declFileOf` returns "" for a module `comptime`/`static`, so `checkReach` waves through every
+    // cross-file reference and the mistake only surfaces as a clang "use of undeclared identifier" — a
+    // check/build divergence, and the reason KB-3 read as "a comptime cannot be exported" when the real
+    // state was that module-scope variables had never been wired into the module system at all.
+    std::map<std::string, std::string> _moduleVarFile;
     // 6b-2: a type-associated `comptime` constant (`Type::NAME`). Keyed "<qualifiedClass>::<name>".
     struct TypeConstInfo { bool hasValue; int64_t value; Visibility visibility; std::string owner; std::string cName; SharedIdentifier type; SharedExpression initializer; int line; };
     std::map<std::string, TypeConstInfo> _typeConsts;

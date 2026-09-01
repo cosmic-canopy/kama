@@ -1,0 +1,1 @@
+a module `static` is not exportable

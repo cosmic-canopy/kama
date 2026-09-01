@@ -1,0 +1,7 @@
+// `CAP` is not on this file's surface. `mod_export_const.d` proves an EXPORTED module constant is
+// reachable four ways; this proves an unexported one is reachable none of them — the file rung applies
+// to a constant exactly as it does to a function.
+export { get };
+
+comptime int32 CAP = 8;
+fn int32 get() { return CAP; }

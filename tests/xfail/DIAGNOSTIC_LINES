@@ -186,8 +186,10 @@ enum_recursive	enum_recursive.kama:1
 enum_unknown_contract	enum_unknown_contract.kama:4
 enum_variant_arity	enum_variant_arity.kama:4
 error_downcast_owned	error_downcast_owned.kama:12 error_downcast_owned.kama:13 error_downcast_owned.kama:14 error_downcast_owned.kama:6
+export_const_unexported	main.kama:3
 export_leak_field	export_leak_field.kama:8
 export_leak_return	export_leak_return.kama:12
+export_module_static	export_module_static.kama:8
 export_qualified_ref	export_qualified_ref.kama:17 export_qualified_ref.kama:18
 export_qualified_ref_local	export_qualified_ref_local.kama:15
 expose_bad_abi	expose_bad_abi.kama:2
