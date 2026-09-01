@@ -42,10 +42,14 @@ first stable release ships with the reach to match.
 ⚠️ **Row 2 is the one source-breaking item outstanding, and its cost only rises.** Everything else in
 this list is additive and can land in any 1.x; moving compile-time values out of `<…>` cannot. Decided
 2026-08-31, so what is left is a migration ([design/comptime-params.md](design/comptime-params.md)).
-Row 1 sits above it deliberately: it is what the first external project is **blocked on**, and a
-blocked user outranks a migration with no deadline. That is the only reason row 2 slipped, and it
-should not slip again. (The other two blockers have shipped: the platform seam in `0.9.131`, and
-`@noheap` transitivity in `0.9.132`.)
+⚠️ **The reason it kept slipping has now expired, and that is a decision to take rather than inherit.**
+Row 2 was outranked by "a blocked user outranks a migration with no deadline" — but the first external
+project is **no longer blocked by anything**: the platform seam shipped in `0.9.131`, `@noheap`
+transitivity in `0.9.132`, and their second audit records that row 1 "turned out not to be blocking"
+(both backend files still compile on every leg, but every declaration in them is gated, so they emit
+nothing — the residual cost is discipline, not a wall). They shipped two milestones on those compilers.
+So nothing on this list is holding a user up, and row 2 has no competing claim left except the three
+reproduced bugs below it, which are small. **Ordering rows 1-11 is the maintainer's call.**
 
 **Size** is a batching hint, not a commitment: **S** fits beside others in one session · **M** is about a
 session · **L** is several · **XL** wants its own design doc before any code. It is read off the linked
