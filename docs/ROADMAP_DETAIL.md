@@ -719,37 +719,69 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   it. `tools/check-release-arith.sh` now asserts the semantics *and* the zero cost in a real release
   build.
 
-- **Found by the first external project on kama** (a game port, 2026-08-31). Four of its reports are
-  fixed — a multi-module library not being consumable as a dependency, the output being named after the
-  alphabetically first source file, absolute dependency symlinks, and three stale claims in the WebGPU
-  example. These are the ones still open, kept together because their provenance is the point: every one
-  was found by someone *using* the language rather than by the corpus, and none of them had a fixture
-  that could have caught it.
+- **Found by the first external project on kama** (a game port, 2026-08-31). Six of its reports are now
+  fixed: a multi-module library not being consumable as a dependency, the output being named after the
+  alphabetically first source file, absolute dependency symlinks, three stale claims in the WebGPU
+  example, and — in `0.9.128` — the two recorded below. They are kept together because their provenance
+  is the point: every one was found by someone *using* the language rather than by the corpus, and not
+  one of them had a fixture that could have caught it. ⚠️ **Two of the six turned out to be bigger than
+  their report** (the `comptime` export was a whole unwired subsystem; the frame loop was a seam gap, not
+  an example typo), which is the argument for probing a user's report rather than patching its sentence.
 
-  - **A module-scope `comptime` constant cannot be exported.** [SPEC.md](SPEC.md) says a module
-    `comptime` is "a module-level named constant (subject to the module `export { }` surface)", and
-    naming one in `export { }` is rejected — "no such top-level declaration in this module". Dropping it
-    from the list compiles, so the constant works; it is invisible to the export surface only. ⚠️ **This
-    needs a DECISION, not a patch.** A doc/compiler disagreement has two resolutions and the corpus
-    decides which — the same shape as the one that made a previous campaign reject seven fixtures after
-    "fixing" a mismatch the wrong way. The consequence if the doc is right: a library cannot publish
-    named constants at module scope, and every key code and tuning constant has to hang off a carrier
-    type. (The reporter notes the carrier-type form reads better anyway, which is evidence for the other
-    resolution.)
-  - **`examples/webgpu/triangle.kama` has an unbounded-allocation frame loop.** When
+  - **A module-scope `comptime` constant could not be exported — FIXED 0.9.128.** Kept as a record
+    because probing it found something much larger than the report, and the shape recurs. KB-3 was
+    filed as "naming a `comptime` in `export { }` is rejected", and the plan was to decide between
+    fixing the doc and fixing the compiler. ⚠️ **Neither resolution was available: the probe found the
+    subsystem had never been wired at all, and returned FIVE different answers for one declaration.**
+    Same file: works. Sibling file in the same module: `kama check` says OK, `kama build` emits invalid
+    C. Another module, qualified: same — check OK, clang fails. `import`: "does not export". `export`:
+    "no such top-level declaration".
+    - **The cause.** `declFileOf` and the export/import membership tests consulted seven registries,
+      none of which hold a module-scope declaration — so the file rung could not see a module variable
+      and waved through every cross-file reference. And a `comptime` lowered to `static const` in its
+      declaring unit's own `.c`, so no other translation unit had anything to link against. Both halves
+      were invisible to `kama check`, which folds the program into one unit.
+    - **The fix.** A module `comptime` is now emitted into the shared header (`static const` — one
+      addressable copy per TU, which is right for an immutable value and violates no ODR), joins the
+      export/import membership sets, and resolves through `resolveModuleVar` — the same alias/qualifier
+      search `resolveFuncImpl` does — at all three of its use sites, so an imported or module-qualified
+      constant can also size an `InlineArray` and be addressed. A mutable module `static` is now
+      **rejected at the export list with its own sentence** and gets the file rung too, which turns the
+      remaining silent miscompile into a diagnostic.
+    - **One nuance left open, unprobed.** Only an *exported* constant moves to the header, so a private
+      `comptime fn` table still lives in one unit — but an exported one is `static const` in every TU
+      that includes the header. An ordinary constant is dead-stripped where unused; a `@section`-placed
+      one on an MCU may not be. No fixture exercises that combination and no user has hit it. If one
+      does, the answer is a single definition with `extern` declarations, not a retreat from the header.
+    - ⚠️ **The lesson, which is the reason this entry stays.** The report named the narrowest visible
+      symptom. Had it been taken at face value — add the name to one membership set — the export would
+      have been accepted and the program would still have failed in the C compiler, and the fixture
+      proving the fix would have been a single file, which is exactly the shape that could not catch
+      any of this. **A cross-file claim needs a cross-file fixture** (`tests/mod_export_const.d/`).
+  - **`examples/webgpu/triangle.kama` had an unbounded-allocation frame loop — FIXED 0.9.128.** The
+    example now reads `surfTex.status`, treats `Occluded`/`Timeout` as skip-the-frame, reconfigures only
+    once per `Outdated`/`Lost` invalidation, stops on a 600-frame failure streak, and **sleeps on every
+    path that returns without presenting** — through a new `kama_gpu_sleep_ms` on the `std::gpu` seam
+    (native sleep, web no-op, because the browser owns the rAF loop). The seam function is deliberately
+    an unconditional sleep rather than `glfwWaitEventsTimeout`: a throttle that can return early on an
+    event is not a throttle, and this function exists because a loop lost its only throttle. The record
+    of what went wrong, kept because the shape is general: when
     `wgpuSurfaceGetCurrentTexture` yields no texture the example reconfigures the swapchain and returns
     **without presenting** — and vsync, its only throttle, applies only to a presented frame. So the path
     runs at unbounded rate, allocating a swapchain per iteration. ⚠️ The trigger is trivial and permanent:
     `Occluded` (a wgpu-native extension the example never consults, not one of `webgpu.h`'s six statuses)
     is returned with a NULL texture whenever the window is not visible — another window in front is
     enough. The reporter reached 15.6 GB resident and took a machine down through the kernel watchdog,
-    twice. Fix: sleep on every path that returns without presenting, reconfigure only on
-    `Outdated`/`Lost`, treat `Occluded`/`Timeout` as skip-the-frame. ⚠️ **The language half is the larger
-    point:** nothing in kama could have caught this. The allocation is inside wgpu-native, reached through
-    `UnsafePtr` handles carrying no RAII, so there is no kama object, no destructor, and nothing for
-    `@noheap` to see. That is a concrete argument that the "thin safe `std::gpu` binding wrapper
-    (handles→RAII)" [ENGINE_READINESS.md](ENGINE_READINESS.md) calls optional stdlib polish would have
-    made the leak *structurally impossible*.
+    twice. ⚠️ **The language half is the larger point, and it promoted a row** — see the safe `std::gpu`
+    wrapper in [§8](#s8). Nothing in kama could have caught this: the allocation is inside wgpu-native,
+    reached through `UnsafePtr` handles carrying no RAII, so there is no kama object, no destructor and
+    nothing for `@noheap` to see. ⚠️ **But be precise about which half would have caught it** — the
+    reporter's framing, and this entry's first draft, both said RAII, and that is wrong. RAII would not
+    have helped: the leak is wgpu-native's swapchain, triggered by ignoring an untyped `status` int. What
+    prevents *this* bug is a **typed acquire result** whose error enum names `Occluded`. RAII prevents
+    the *other* leak in the same file — five hand-written `wgpu*Release` calls per frame, all on the
+    happy path, which any later early `return` would leak. Two halves, two different bugs, and a wrapper
+    wants both.
   - **Build settings do not propagate from a dependency.** `cflags`, `ldflags` and `link` are all
     **ignored on a dependency**, so every consumer must repeat the block and drift between them is
     silent. That half is a bug rather than ergonomic friction. The other half — no way to hand project
@@ -782,8 +814,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 - **A `comptime` generic parameter must be an INTEGRAL type** ([kama.y](../src/kama.y), the
   `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
-  is where a user-writable "this argument must be compile-time constant" would come from, and it is
-  deferred with its own design doc: [design/comptime-params.md](design/comptime-params.md), ROADMAP row 16.
+  is where a user-writable "this argument must be compile-time constant" would come from. **Decided
+  2026-08-31 and now ROADMAP row 1:** compile-time values leave the generic list for a trailing
+  `comptime(…)` at definitions and `#(…)` at use sites, and the admissible set widens to Rust's —
+  integers plus `bool` and `char`. The design of record, including the ladder of types deliberately left
+  for later and the ~300-site migration surface, is
+  [design/comptime-params.md](design/comptime-params.md).
   ⚠️ **Rust has shipped comptime parameters since 2021 and still restricts them to integers, `bool` and `char`**,
   because a composite value in a parameter list has to be encoded into a mangled symbol name. That is the
   constraint, not an oversight to fix. The compiler can still *require* a constant argument for its own
@@ -1026,9 +1062,25 @@ near-native runtime.
 A portable lightweight **WebGPU** game engine — a product built *on* kama, **not** part of the language. Tiers:
 **math types** (shipped) → buffers/bindings → first triangle (shipped, browser + native, `examples/webgpu`) →
 scene/material. Depends on the 1.x systems (file I/O for assets, serialization for scenes). The kama-scoped
-remainder is at most a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h` seam (optional stdlib
-polish); the engine *spine* (buffer/pipeline/binding libraries, renderer) is the engine product. See
+remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h` seam; the engine *spine*
+(buffer/pipeline/binding libraries, renderer) is the engine product. See
 [ENGINE_READINESS.md](ENGINE_READINESS.md).
+
+- **Safe `std::gpu` binding wrapper — no longer "optional polish".** `lib/std/gpu` holds a C seam and *no
+  kama at all*. The wrapper is the missing kama file, shaped like `std::net`'s `type resource TcpStream
+  { isize fd; }`: `Device`, `Surface`, `Buffer`, `Texture`, `TextureView`, `RenderPipeline`, `BindGroup`,
+  `CommandEncoder`, each an `UnsafePtr` handle whose destructor calls the matching `wgpu*Release`. Plus a
+  `Result<SurfaceTexture, SurfaceError>` acquire whose error enum **names `Occluded`**, and the two seam
+  holes below (drawable size; the discarded event queue).
+  - **Why it was promoted.** The first external project's KB-5 — an unbounded-allocation frame loop that
+    reached 15.6 GB and took a machine down twice. ⚠️ **Be precise about which half would have caught it:**
+    RAII would *not* have. That allocation is inside wgpu-native, triggered by ignoring an untyped status
+    int; what prevents it is the **typed acquire result**. RAII prevents the *other* leak in the same file
+    — `examples/webgpu/triangle.kama` hand-writes **five** `wgpu*Release` calls per frame, all on the happy
+    path, so any early `return` added later leaks them. Two different bugs, two different halves.
+  - **Scope line.** Exactly the handles the seam and the triangle already touch, and nothing above them.
+    Buffers/bindings/pipelines *as an engine renderer* stay out; the same things *as released handles* are
+    in. Bindings *breadth* is the engine's job, not the language's.
 
 - **Dev-loop hot-reload — a *library* on two small compiler primitives that already ship.**
   - **Compiler primitives (ship — see SPEC *Exposing to a host*):** `kama build --shared` (`.so`/`.dylib`/`.dll`)
