@@ -383,6 +383,16 @@ kama: note: add to libs/net/kama.json: "dependencies": { "config": { "path": "..
 An import that *nothing* declares is also an error, as it always was. A single-package project never meets
 this rule at all: an import resolved through your own directory needs no declaration.
 
+**A package importing its own modules is exempt**, and that exemption is what makes a multi-module
+library usable. A library's files reach across its own modules by spelling its own package name —
+`lib/src/b/b.kama` importing `lib::a::av` — and no `dependencies` entry ever contains the package itself,
+so the rule above would demand a line nobody can write. It only ever bit when the library was *consumed*,
+because that is when its sources arrive through the dependency view rather than through the file's own
+directory; standalone it built fine. So a multi-module library shipped, and then failed the first time
+anything depended on it, with a diagnostic whose premise the previous command had disproved. Fixed in
+0.9.126; the guard is `tools/check-packages.sh`, which also asserts that the free-ride rule still fires
+for anyone *else's* undeclared package.
+
 Your **editor** is not held to it. `kama lsp` (and the `kama query` CLI that mirrors it) reports the same
 thing but keeps analyzing — refusing would strip cross-module hover and go-to-definition over a manifest
 problem, when the code itself is fine and resolves.

@@ -1004,4 +1004,77 @@ grep -q "app/out/" "$tmp/out.out" \
     || { echo "check-packages: FAIL — used the CWD's manifest instead of the input file's own project:" >&2
          sed 's/^/  /' "$tmp/out.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"
+# ---- a MULTI-MODULE library, consumed as a dependency (KB-4) -----------------------------------------
+# A library whose own files import across its own modules built standalone and then failed the moment
+# anything depended on it. The free-ride rule below — a sibling must declare what it imports, or it
+# builds where it sits and fails alone — never exempted a package importing ITSELF, and a file reaching
+# across its own package's modules spells its own package name. It only fired when CONSUMED, because
+# that is when the library's sources arrive through the dependency view rather than the file's own
+# directory; standalone, the whole block is skipped. The suggested remedy was a package depending on
+# itself, and the diagnostic's premise ("this package will not build on its own") was disproved by the
+# command before it.
+#
+# ⚠️ Nothing could have caught it: `tests/mod_dir_module.d` has the multi-module shape but is an
+# EXECUTABLE, so nothing ever consumes it. It takes two packages, which is why this lives here rather
+# than in a `.d` fixture. Reported from a real project port (friendly-fire-department, KAMA_GAPS KB-4).
+mm="$tmp/mm"
+mkdir -p "$mm/lib/src/a" "$mm/lib/src/b" "$mm/app/src"
+cat > "$mm/lib/kama.json" <<'JSON'
+{ "name": "mmlib", "version": "0.1.0", "kind": "library",
+  "modules": { ".": { "visibility": "public" }, "a": { "visibility": "public" },
+               "b": { "visibility": "public" } } }
+JSON
+printf 'export { av };\nfn int32 av() { return 1; }\n'                                  > "$mm/lib/src/a/a.kama"
+printf 'import { mmlib::a::av };\nexport { bv };\nfn int32 bv() { return av() + 1; }\n' > "$mm/lib/src/b/b.kama"
+printf 'export { root };\nfn int32 root() { return 0; }\n'                              > "$mm/lib/src/mmlib.kama"
+cat > "$mm/app/kama.json" <<'JSON'
+{ "name": "mmapp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "mmlib": { "path": "../lib" } } }
+JSON
+printf 'import { mmlib::b::bv };\nfn int32 main() { return bv(); }\n' > "$mm/app/src/app.kama"
+
+"$KAMA" build "$mm/lib/kama.json" >"$tmp/mm.out" 2>&1     || { echo "check-packages: FAIL — the multi-module library does not build standalone:" >&2
+         sed 's/^/  /' "$tmp/mm.out" >&2; exit 1; }
+"$KAMA" pkg install "$mm/app/kama.json" >/dev/null 2>&1
+"$KAMA" build "$mm/app/kama.json" >"$tmp/mm.out" 2>&1     || { echo "check-packages: FAIL — the SAME library fails when consumed as a dependency." >&2
+         echo "                 A package importing its own modules is not a free-ride; the" >&2
+         echo "                 undeclared-import rule must exempt a package's own name." >&2
+         sed 's/^/  /' "$tmp/mm.out" >&2; exit 1; }
+mmbin=$(sed -n 's/^kama: built //p' "$tmp/mm.out" | tail -1)
+# ⚠️ `set -e` is on and this binary EXITS 2 on SUCCESS (it returns bv()). Capture the code in an `if`,
+# never as a bare `cmd; [ "$?" -eq 2 ]` — that form kills the guard at the very assertion it is making.
+mmrc=0
+if [ -n "$mmbin" ]; then
+    "$mmbin" >/dev/null 2>&1 || mmrc=$?
+fi
+[ "$mmrc" -eq 2 ] \
+    || { echo "check-packages: FAIL — the consumed multi-module library computed the wrong answer" >&2
+         echo "                 (expected 2 from bv() = av() + 1, got $mmrc)" >&2; exit 1; }
+
+# ...and the rule it relaxes must STILL fire. `mmmid` imports `mmlib` without declaring it, while the
+# app declares both — the genuine free-ride, which builds here and would fail standalone. Exempting a
+# package's OWN name must not exempt anyone else's.
+mkdir -p "$mm/mid/src"
+cat > "$mm/mid/kama.json" <<'JSON'
+{ "name": "mmmid", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
+JSON
+printf 'import { mmlib::b::bv };\nexport { mv };\nfn int32 mv() { return bv() + 1; }\n' > "$mm/mid/src/mmmid.kama"
+cat > "$mm/app/kama.json" <<'JSON'
+{ "name": "mmapp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "mmlib": { "path": "../lib" }, "mmmid": { "path": "../mid" } } }
+JSON
+printf 'import { mmmid::mv };\nfn int32 main() { return mv(); }\n' > "$mm/app/src/app.kama"
+"$KAMA" pkg install "$mm/app/kama.json" >/dev/null 2>&1
+if "$KAMA" build "$mm/app/kama.json" >"$tmp/mm.out" 2>&1; then
+    echo 'check-packages: FAIL — a genuine free-ride was ACCEPTED. mmmid imports mmlib without' >&2
+    echo '                 declaring it, so it cannot build on its own; the KB-4 exemption must' >&2
+    echo '                 cover a package OWN name and nothing else.' >&2; exit 1
+fi
+grep -q "does not declare it" "$tmp/mm.out" \
+    || { echo "check-packages: FAIL — the free-ride was rejected for the wrong reason:" >&2
+         sed 's/^/  /' "$tmp/mm.out" >&2; exit 1; }
+
+
+echo "check-packages: PASS (store+integrity+tamper; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline; scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; duplicate conformance names BOTH packages (and neither, within one); $SIGNOTE)"

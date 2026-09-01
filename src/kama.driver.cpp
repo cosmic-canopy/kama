@@ -1172,6 +1172,9 @@ static std::string moduleKeyOf(const SharedCompilationUnit&, const std::string& 
 
 // Defined once DepSpec exists, beside the manifest loaders it wraps.
 const std::set<std::string>& declaredImportNames(const std::string& packageDir);
+// A package's OWN import name — what its files spell when they reach across its own modules. Empty if
+// the manifest has no `name` or cannot be read.
+const std::string& ownImportName(const std::string& packageDir);
 std::string storeDir();   // the content-addressed package store (~/.kama/store)
 
 // The directory of the nearest `kama.json` at or above `fromDir` — the package that OWNS a file. A
@@ -1419,7 +1422,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (!reserved && !via.empty() && (via == depsView || via == devDepsView)) {
                 std::string owner = owningPackageDir(here);
                 if (!owner.empty() && owner.compare(0, storeRoot.size(), storeRoot) == 0) owner.clear();
-                if (!owner.empty() && !declaredImportNames(owner).count(segs[0])) {
+                // ⚠️ A package importing ITSELF is not a free-ride. A library whose own files reach
+                // across its own modules (`lib/src/b/b.kama` importing `lib::a::av`) spells its own
+                // package name — and no `dependencies` entry ever contains that, so the rule below would
+                // demand a declaration that cannot be written. It only fired when the library was
+                // CONSUMED, because that is when its sources arrive through the dependency view rather
+                // than through the file's own directory; standalone, `via` is the local path and the
+                // whole block is skipped. So a multi-module library built, shipped, and then failed the
+                // first time anyone depended on it, with a diagnostic whose premise ("this package will
+                // not build on its own") the previous command had just disproved. The suggested remedy
+                // was a package depending on itself.
+                const bool selfImport = !owner.empty() && ownImportName(owner) == segs[0];
+                if (!owner.empty() && !selfImport && !declaredImportNames(owner).count(segs[0])) {
                     std::string ownerManifest = owner + "/kama.json";
                     undeclaredImport = true;
                     // M6 A3: pushed EVERY call, outside the warn-once gate below — a squiggle has to be
@@ -3842,6 +3856,23 @@ static bool loadManifestNameVersion(const std::string& path, std::string& nameOu
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
+
+// A package's own import name, cached like `declaredImportNames` and read from the same manifest. Used
+// by the undeclared-import rule to tell an intra-package import from a free-ride: a file reaching across
+// its OWN package's modules spells its own package name, which no `dependencies` entry will ever contain.
+const std::string& ownImportName(const std::string& packageDir)
+{
+    static std::map<std::string, std::string> cache;
+    auto it = cache.find(packageDir);
+    if (it != cache.end()) return it->second;
+    std::string name, version, err;
+    if (loadManifestNameVersion(packageDir + "/kama.json", name, version, err) && !name.empty())
+        name = importNameOf(name);
+    else
+        name.clear();
+    return cache.emplace(packageDir, std::move(name)).first->second;
+}
+
 
 // ---- build configuration resolution ----------------------------------------------------------------
 // The manifest -> target -> flag-set sequence, lifted out of `main`. `kama lsp` returns ~185 lines
