@@ -869,12 +869,37 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **A kama reserved word cannot name a `type extern value` field.** `webgpu.h` uses `type` in
     `WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and
     `WGPUCompilationMessage`; the field is then unreachable, and unlike a function it cannot be wrapped —
-    an extern struct's fields are assigned BY NAME, so renaming emits the wrong C. Confirmed here: it is a
-    parse error (`unexpected TYPE, expecting IDENTIFIER`), i.e. the field name position takes an
-    identifier token and a keyword can never reach it. It blocks explicit bind-group layouts in pure kama,
-    which is real work rather than ergonomics. Wants a raw-identifier or rename spelling; the choice is a
-    language-surface decision, not a bug fix, and it should be made once for extern fields and any other
-    position that has to echo a C name.
+    an extern struct's fields are assigned BY NAME, so renaming emits the wrong C.
+
+    ⚠️ **Sharpened by the consumer's M1-a (2026-09-01), and it is worse than "imprecise".** The omitted
+    field leaves 0, and 0 *is* `WGPUBufferBindingType_BindingNotUsed` / `WGPUSamplerBindingType_BindingNotUsed`
+    — so an explicitly built layout entry for a uniform buffer or a sampler is **inert**, not merely
+    under-specified. `WGPUBindGroupLayoutEntry` embeds both by value, so `deviceCreateBindGroupLayout`
+    cannot express a uniform + sampler + texture group **at all**. Texture entries are unaffected
+    (`sampleType` is spellable). Their only escape is taking the layout from
+    `renderPipelineGetBindGroupLayout`, which is **per pipeline**, so no layout object can be shared
+    between pipelines — M1-a stays under that ceiling by using one pipeline and expressing additive as
+    alpha 0. **The ceiling is reached by the first second pipeline wanting to share group 0**, and their
+    MSDF text stage is the natural trigger.
+
+    **Measured here 2026-09-01 on `0.9.136`, before any design work:**
+    - It fails at **three** positions, not one: the field DECLARATION, and member access on both the read
+      and the write side (`b.type = 1` and `b.type`). Any fix must cover all three.
+    - **Exactly one kama keyword collides across the whole of `webgpu.h`: `type`.** (Every field name in
+      the header, diffed against `kama.l`'s keyword table.) The problem is real and narrow, which argues
+      against a general raw-identifier escape and for a targeted spelling.
+    - **`@cname("type")` on a field ALREADY PARSES** — the grammar attaches an attribute list to a class
+      member, and only the semantic layer rejects it ("unknown field attribute"). So that spelling costs
+      **zero grammar change**; it is a field-attribute table entry, a `cName` slot on `FieldInfo`, and
+      using that slot at the access site.
+    - A `type extern value` **does not emit its own C struct** — it uses the header's (`BufBinding b = {0};`),
+      so the C field name matters only at access sites. That is what makes a rename-plus-`@cname` sound.
+    - There is a structural precedent in the language already: `FieldInfo::serName`, set by
+      `@field(name: "…")`, is exactly "this field's kama name differs from its external name" for the
+      serde wire. `@cname` is the same shape for the C wire.
+    - ⚠️ Field attributes are currently gated behind `@generate(...)` on the type ("field attributes
+      require `@generate(...)`"). `@cname` is meaningful on any extern type, so that gate needs relaxing
+      for it specifically — do not widen it for `@field`/`@skip`.
 
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
