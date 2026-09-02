@@ -28,5 +28,5 @@ repository = "https://github.com/cosmic-canopy/kama"
 # so no PUBLISHED state ever points at something the remote cannot serve.
 [grammars.kama]
 repository = "https://github.com/cosmic-canopy/kama"
-rev = "b4a8b2870916836425793f3db015c7a9d4176e25"
+rev = "7d23caf99f10ba182c5f31520d2afbb42921a9fd"
 path = "tree-sitter-kama"
