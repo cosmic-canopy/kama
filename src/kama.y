@@ -318,7 +318,17 @@ struct kamayystype {
    e.g. "when" / "[" / ":="). Zero runtime cost (the parser isn't in the runtime); the message is built
    only on an error. LAC makes the expected-set exact — its per-token parse cost is negligible next to
    codegen + the C compiler invocation, so it's on. */
-%define parse.error detailed
+/* `custom`, not `detailed`, and the difference is a bug fix. `detailed` hands yyerror a formatted
+   string, and the reserved-word note below has to gate on the parser having WANTED an identifier —
+   which, read off a string, means looking for `IDENTIFIER` inside `expecting …`. bison's formatter
+   prints that clause only when at most FOUR tokens are expected and DROPS IT ENTIRELY past that
+   (yy_syntax_error_arguments gives up when yypcontext_expected_tokens overflows its 5-slot array).
+   So the note fired after a builtin type name, where three tokens are expected, and not after a
+   user-defined one, where many are — `isize out = 1;` explained itself and `Thing out = …` did not,
+   which is most declarations anyone writes. `custom` hands over the expected SET instead, uncapped,
+   so the gate asks the parser rather than parsing its prose. The message text is unchanged: the
+   four-token display limit is reproduced deliberately in yyreport_syntax_error. */
+%define parse.error custom
 %define parse.lac full
 %lex-param   { yyscan_t scanner }
 %parse-param { yyscan_t scanner }
@@ -2507,27 +2517,32 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
  *
  * Gated on the parser having WANTED an identifier, which is what makes the note true. `unexpected ELSE`
  * in a malformed `if` is not a naming mistake, and telling someone `else` is reserved there would be
- * noise. The keyword table is read through kamaKeywordCount/At — the lexer owns it, so this cannot drift
- * (the same reason the LSP's rename validation asks there).
+ * noise. ⚠️ That gate is why this takes the expected-token SET and not bison's message: read off the
+ * string it missed `Thing out = …`, the commonest declaration shape of all, because bison stops
+ * printing `expecting …` past four candidates (see the `parse.error custom` note above). Measured:
+ * relaxing it instead — firing whenever a reserved word appears with no `expecting` clause — misfires
+ * on `1 + else`, `return break` and `for (else;;)`, none of which is a naming mistake.
  *
- * ⚠️ `null` gets no note: its token is NULL_LITERAL, the one keyword whose bison name is not its spelling
- * uppercased. Adding an alias would be the wrong trade — a silent miss on one word costs a sentence, a
- * wrong match costs trust in every message. */
-static std::string reservedWordNote(const char* msg)
+ * The keyword table is read through kamaKeywordCount/At — the lexer owns it, so this cannot drift
+ * (the same reason the LSP's rename validation asks there). The comparison folds case because a token
+ * may carry a string alias (`%token <token> WHEN "when"`), so its bison name is not always its
+ * spelling uppercased.
+ *
+ * ⚠️ `null` still gets no note: its token is NULL_LITERAL, whose name is not its spelling at all.
+ * Adding an alias would be the wrong trade — a silent miss on one word costs a sentence, a wrong
+ * match costs trust in every message. */
+static std::string reservedWordNote(yysymbol_kind_t tok, bool wantedIdentifier)
 {
-    if (!msg) return "";
-    const char* u = std::strstr(msg, "unexpected ");
-    if (!u || !std::strstr(msg, "IDENTIFIER")) return "";
-    u += 11;
-    std::string tok;
-    for (; *u && (std::isupper((unsigned char)*u) || std::isdigit((unsigned char)*u) || *u == '_'); ++u)
-        tok += *u;
-    if (tok.empty()) return "";
+    if (!wantedIdentifier) return "";
+    const char* name = yysymbol_name(tok);
+    if (!name) return "";
+    std::string upper;
+    for (const char* p = name; *p; ++p) upper += (char)std::toupper((unsigned char)*p);
     for (size_t i = 0, n = kamaKeywordCount(); i < n; ++i) {
         const char* w = kamaKeywordAt(i);
         std::string up;
         for (const char* p = w; *p; ++p) up += (char)std::toupper((unsigned char)*p);
-        if (up == tok)
+        if (up == upper)
             return std::string(" — `") + w + "` is a reserved word, so it cannot be used as a name here"
                    " (docs/SPEC.md lists all of them under *kama's keywords*; `copy`, `give`, `truncate`,"
                    " `type` and `slot` are the ones that CAN name a binding)";
@@ -2551,7 +2566,55 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
     // %locations gives the error's precise start (the offending token), better than the lexer counter.
     int line = llocp ? llocp->first_line : data->codeGenContext->line;
     int col  = llocp ? llocp->first_column : data->codeGenContext->col;
-    const std::string full = std::string(msg ? msg : "") + reservedWordNote(msg);
-    return data->codeGenContext->handleError(line, col, "Parse", full.c_str());
+    return data->codeGenContext->handleError(line, col, "Parse", msg ? msg : "");
+}
+
+/* bison calls this instead of formatting a message itself (`%define parse.error custom`). Two jobs:
+ * reproduce the wording `detailed` produced, byte for byte, and answer the reserved-word note's gate
+ * from the expected-token SET rather than from the printed prose.
+ *
+ * ⚠️ The four-token display limit is deliberate, not inherited. `detailed` puts the unexpected token in
+ * slot 0 of a five-slot array and asks for the rest, so it lists at most four candidates and prints no
+ * `expecting …` clause at all beyond that. Reproducing exactly that keeps every existing diagnostic —
+ * and the fixtures asserting them — unchanged, while the GATE reads the full set. Display cap and gate
+ * are different questions, and conflating them is what the bug was. */
+static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
+{
+    const yysymbol_kind_t tok = yypcontext_token(ctx);
+    /* YYNTOKENS is the hard ceiling on the expected set ("guaranteed to be less than YYNTOKENS"), so
+       this never truncates — and so it never returns the 0 that means "more than you asked for". */
+    yysymbol_kind_t expected[YYNTOKENS];
+    int n = yypcontext_expected_tokens(ctx, expected, YYNTOKENS);
+    if (n < 0) n = 0;                       /* YYENOMEM — report what we can */
+
+    /* Did the parser want a NAME here? "IDENTIFIER is expected" alone does not answer it: an identifier
+       also starts an expression, so `1 + else` and `return break` expect one too, and neither is a naming
+       mistake. What separates the two is measured, not guessed — at a binding site the set is
+       `IDENTIFIER SLOT TYPE` plus operators, and at an expression site it is IDENTIFIER plus EVERY
+       literal form. So the discriminator is: a position that admits a name but not a NUMBER is a naming
+       position. (`Thing out` also admits `=`, `.`, `::` and friends, because a leading identifier could
+       still turn out to be an expression statement — which is why the operators cannot be the test and
+       the literal can.) */
+    std::string msg = "syntax error";
+    bool wantedIdentifier = false, wantsLiteral = false;
+    for (int i = 0; i < n; ++i) {
+        if (expected[i] == YYSYMBOL_IDENTIFIER)              wantedIdentifier = true;
+        if (expected[i] == YYSYMBOL_DEC_LITERAL_NO_SUFFIX)   wantsLiteral = true;
+    }
+    wantedIdentifier = wantedIdentifier && !wantsLiteral;
+
+    if (tok != YYSYMBOL_YYEMPTY) {
+        msg += ", unexpected ";
+        msg += yysymbol_name(tok);
+        if (n >= 1 && n <= 4) {             /* the display limit `detailed` had — see above */
+            msg += ", expecting ";
+            for (int i = 0; i < n; ++i) {
+                if (i) msg += " or ";
+                msg += yysymbol_name(expected[i]);
+            }
+        }
+        msg += reservedWordNote(tok, wantedIdentifier);
+    }
+    return yyerror(yypcontext_location(ctx), scanner, msg.c_str());
 }
 
