@@ -7770,6 +7770,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 unsupported("`unsafe` marks a function BODY, and a field has none — declaring "
                                             "an `UnsafePtr<T>` field is safe; it is reading and writing one "
                                             "that requires an `unsafe fn`", fd->line);
+                            // `immutable` is a WHOLE-TYPE qualifier and cannot mean anything per field:
+                            // the guarantee it asserts is what licenses cross-isolate sharing, and one
+                            // mutable field anywhere breaks it — so a per-field spelling would promise
+                            // exactly nothing. It parses only because the modifier list is shared with
+                            // the type declaration (kama.y `modifier`), and it used to be SILENTLY
+                            // DROPPED here, which is the worst answer available: the author wrote a
+                            // guarantee, the compiler agreed, and nothing was checked.
+                            if (*mod->value == "immutable")
+                                unsupported("`immutable` is a TYPE qualifier (`type immutable value T`) "
+                                            "asserting DEEP immutability of the whole type — a single field "
+                                            "cannot carry it, because one mutable field anywhere would break "
+                                            "the guarantee. For a field written once in the constructor and "
+                                            "never again, use `const`", fd->line);
                         }
                     // A `value` picks field visibility PER FIELD (default private, `public` allowed;
                     // `protected` belongs to an extensible `resource`). A `resource` field is always
@@ -7913,6 +7926,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
                                 if (*mod->value == "expose")
                                     unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", md->line);
+                                // See the field arm above: a whole-type qualifier, silently dropped here
+                                // until 0.9.144. `const fn` is the per-method promise it gets mistaken for.
+                                if (*mod->value == "immutable")
+                                    unsupported("`immutable` is a TYPE qualifier (`type immutable value T`) "
+                                                "asserting DEEP immutability of the whole type — a method "
+                                                "cannot carry it. For a method that does not mutate its "
+                                                "receiver, use `const fn`", md->line);
                             }
                         // Construction-model: a named constructor (`ctor name(…)`) is a static factory
                         // returning the enclosing type (infallible — no return type written) or `Result<This,E>`

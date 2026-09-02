@@ -1,0 +1,13 @@
+// The method half of tests/xfail/immutable_on_field.kama — same shared modifier list, same silent drop
+// until `0.9.144`, same reason it cannot mean anything: deep immutability is a property of a whole type,
+// not of one method.
+//
+// `const fn` is the promise this gets mistaken for: non-mutating receiver, the only kind callable on a
+// `const` binding, and ABI-neutral.
+type value Reg {
+    public int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public immutable fn int32 get() { return this.id; }
+}
+
+fn int32 main() { return 0; }

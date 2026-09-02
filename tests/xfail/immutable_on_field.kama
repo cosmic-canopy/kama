@@ -1,0 +1,17 @@
+// `immutable` is a WHOLE-TYPE qualifier, and saying it on a FIELD is a hard error rather than a silent
+// no-op — which is what it was until `0.9.144`.
+//
+// It parses at all only because kama.y's `modifier` list is shared between a type declaration and its
+// members (the usual permissive-grammar/diagnosing-emitter split — the same reason `expose fn` inside a
+// type parses and is answered with a sentence). Nothing read it here, so the author wrote a guarantee,
+// the compiler agreed, and nothing whatsoever was checked.
+//
+// A per-field spelling could not mean anything even in principle: the guarantee `immutable` asserts is
+// DEEP and whole-type — it is what licenses `Shared<T>` to cross an isolate boundary — so one mutable
+// field anywhere breaks it. `const` is the per-field promise (write-once, constructor only).
+type value Reg {
+    public immutable int32 id;
+    public ctor make(int32 id) { this.id = id; }
+}
+
+fn int32 main() { return 0; }

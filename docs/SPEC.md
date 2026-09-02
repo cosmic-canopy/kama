@@ -3991,6 +3991,11 @@ with no interior mutability, so they are as shareable as `int64`. That half went
 wrongly rejected until `0.9.144`: the compiler's own list said "a primitive" while its check read an
 ordered span of builtin type values that `isize`/`usize` are deliberately appended *after*.
 
+It is a **type** qualifier and nothing smaller. `immutable` on a field or a method is a hard error, not <!-- xfail: immutable_on_field, immutable_on_method -->
+a silent no-op: the guarantee is deep and whole-type — one mutable field anywhere breaks it — so a
+per-member spelling could promise nothing. `const` is the per-field promise (write-once, constructor
+only) and `const fn` the per-method one.
+
 A `Shared<T>` over a deeply-immutable `T` is sendable, so any number of isolates can hold and read
 the same asset with no copy. Its control block switches to an atomic refcount only in that case, so
 an ordinary single-isolate `Shared` pays nothing. This is distinct from a `const` binding, which

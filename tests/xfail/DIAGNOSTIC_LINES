@@ -281,6 +281,8 @@ iface_method_private	iface_method_private.kama:6
 iface_ref_concrete	iface_ref_concrete.kama:12
 iface_return	iface_return.kama:4 iface_return.kama:5
 immutable_mutable_field	immutable_mutable_field.kama:5
+immutable_on_field	immutable_on_field.kama:13
+immutable_on_method	immutable_on_method.kama:10
 impl_conflict	impl_conflict.kama:7
 import_alias_claims_global	import_alias_claims_global.kama:6
 import_alias_shadows_project	import_alias_shadows_project.kama:6
