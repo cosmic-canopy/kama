@@ -180,7 +180,12 @@ Everything else here is library or toolchain work that does **not** gate the tag
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN**, briefed in
    [design/stdlib-parity.md](design/stdlib-parity.md) (**M2a shipped**; delete that file when M2c ships).
    The bar is **Rust-`std` parity**: the only no-GC peer, and the only one whose stdlib also stops before
-   regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager. No new language
+   regex/TLS/HTTP/crypto — which is the right line now that kama has a package manager.
+   ⚠️ **So TLS, regex, HTTP and crypto are DECLARED NON-GOALS for `std`, not unscheduled work**, and this
+   is the sentence that says so. Recorded emphatically because the first consumer's queue lists TLS with
+   the status "ROADMAP" and is waiting for it: `wss://` is not coming to `std`, and the answer for a
+   secure socket is a package or terminating TLS at a reverse proxy. A non-goal that reads like a
+   backlog item gets re-triaged forever. No new language
    surface; pure library/codegen. Split M2a (parse · sort · math completion · `char` classification) /
    M2b (fs + path · io handles + `lines()` · sleep + wall clock · DNS) / M2c (`std::random` ·
    `std::encoding`). The items below are that campaign's contents:
