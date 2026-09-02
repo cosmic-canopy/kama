@@ -42,15 +42,17 @@ first stable release ships with the reach to match.
 ⚠️ **Row 2 is the one source-breaking item outstanding, and its cost only rises.** Everything else in
 this list is additive and can land in any 1.x; moving compile-time values out of `<…>` cannot. Decided
 2026-08-31, so what is left is a migration ([design/comptime-params.md](design/comptime-params.md)).
-⚠️ **The reason it kept slipping has now expired, and that is a decision to take rather than inherit.**
-Row 2 was outranked by "a blocked user outranks a migration with no deadline" — but the first external
-project is **no longer blocked by anything**: the platform seam shipped in `0.9.131`, `@noheap`
-transitivity in `0.9.132`, and their second audit records that row 1 "turned out not to be blocking"
-(both backend files still compile on every leg, but every declaration in them is gated, so they emit
-nothing — the residual cost is discipline, not a wall). They shipped two milestones on those compilers.
-So nothing on this list is holding a user up, and row 2 has no competing claim left except the two
-reproduced bugs below it, which are small — the third shipped in `0.9.138`. **Ordering rows 1-10 is the
-maintainer's call.**
+⚠️ **Row 2 is what is being worked on next — taken 2026-09-02, and the reason it kept slipping has
+expired.** It was outranked by "a blocked user outranks a migration with no deadline", and the first
+external project is **no longer blocked by anything**: the platform seam shipped in `0.9.131`, `@noheap`
+transitivity in `0.9.132`, their hot blocker in `0.9.137`, and their last four reproduced bugs in
+`0.9.128`/`0.9.138`/`0.9.140`. They shipped two milestones on those compilers. Nothing on this list holds
+a user up, so the item that gets more expensive by waiting wins.
+
+**Its one precondition is now met.** The design set a gate — *show* the grammar has no conflict rather
+than assert it — and a prototype carrying the whole rule over the full grammar reports exactly the
+baseline's single declared shift/reduce (the dangling `else`, `%expect 1`). Ordering the rows BELOW row 2
+remains the maintainer's call.
 
 **Size** is a batching hint, not a commitment: **S** fits beside others in one session · **M** is about a
 session · **L** is several · **XL** wants its own design doc before any code. It is read off the linked
@@ -60,7 +62,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | # | item | size | detail |
 |---|---|---|---|
 | 1 | **A package compiles every file under its source root** — whatever the import graph, so a native-only file still compiles on the wasm leg. **Ruled:** a file-level gate, `file @compileFor(FLAG);` (bison-measured; the attribute-first spelling costs a conflict) | M | [§2](ROADMAP_DETAIL.md#s2) |
-| 2 | **Compile-time arguments — `#(…)`** — compile-time VALUES leave the generic list; `<…>` becomes types-only. Decided; what remains is a lexer token, grammar arms and a ~300-site migration. **Source-breaking — before the tag** | XL | [design/comptime-params.md](design/comptime-params.md) |
+| 2 | **Compile-time arguments — `#(…)`** — compile-time VALUES leave the generic list; `<…>` becomes types-only. Decided, and the grammar gate is **measured clear: 0 new bison conflicts** over the full grammar (2026-09-02). What remains is a lexer token, the grammar arms and a **~340**-site migration — up from ~300 thirteen days earlier, which is the case for taking it now. **Source-breaking — before the tag** | XL | [design/comptime-params.md](design/comptime-params.md) |
 | 3 | **`--no-heap` does not gate container allocation program-wide** — the `@noheap` ATTRIBUTE now does (`GlobalAllocator` is the analysis's leaf), but the flag applies that leaf to no body, so a `--no-heap` build still reaches `malloc` through a container. The last piece of "no allocation means no allocation", and the one the MCU target wants. Applying the leaf is one line; the open question is the DIAGNOSTIC, which needs a user-code/library distinction the emitter does not have | M | [§2](ROADMAP_DETAIL.md#s2) |
 | 4 | **`@noheap` is not part of a `fnptr` type** — so a callback slot cannot *require* non-allocating of what is bound to it, and since a `fnptr` is a blind seam the call is now a hard error inside a no-heap region with **no escape hatch**. Unblocked: the transitivity it waited on has shipped | M | [§2](ROADMAP_DETAIL.md#s2) |
 | 5 | **Running kama on a foreign OS thread** — module statics are `_Thread_local`, so a thread created by a C library (audio device, completion port, RTOS ISR) sees fresh zero-initialised statics. No escape hatch today. ⚠️ **Now measured, not argued:** the first consumer logged 326 audio underruns because the synth cannot run on the CoreAudio thread, and says moving it there "fixes the case completely, and nothing else does" | L | [§2](ROADMAP_DETAIL.md#s2) |

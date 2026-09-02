@@ -94,8 +94,14 @@ Keeping the group separate is what avoids that.
 - **Use-site `#(…)`** is a postfix on both a type name and a call expression, so it must compose with
   chaining (`shifted(x: 2)#(3).method()`) and nest inside a type argument list
   (`Map<string, InlineArray<int32>#(4)>`, where `genericDepth` governs `>` vs `>>` lexing).
-- ⚠️ **Build the grammar and count bison conflicts.** This file's predecessor set the rule and then
-  broke it: a proposal must *show* the grammar has no conflict, not assert it.
+- **Build the grammar and count bison conflicts — DONE 2026-09-02, and it is CLEAR.** A prototype
+  carrying all of the above over the full grammar reports exactly the baseline's single shift/reduce
+  conflict (the dangling `else`, already declared `%expect 1` at [kama.y:273](../../src/kama.y#L273)) and
+  generates a real 6944-line parser. The measurement also settles **the method slot below**:
+  `comptime(…)` binds before `when [ … ]`. ⚠️ Three traps make this easy to get wrong — `/usr/bin/bison`
+  is 2.3 on macOS and cannot parse this grammar at all (while printing nothing matching `conflict`);
+  `%expect 1` silences bison's default report, so `-Wcounterexamples` is required; and a run that wrote
+  no parser lies the same way. Use the Makefile's bison and check the generated line count.
 
 ## 4. Checked — not a hazard
 
@@ -139,7 +145,10 @@ and the array encoding are owed either way.
 | value-carrying turbofish | 59 |
 | comptime-param declarations | 39 (1 `prelude/`, 1 `lib/std/`, 37 `tests/`) |
 
-**~300 sites (approximate — the categories overlap), plus every user's code.** This is the largest
+**~340 sites (approximate — the categories overlap), plus every user's code.** Re-measured at `0.9.140`:
+`InlineArray` 140, `Simd`/`Mask` 78, `Fixed` 25, value-carrying turbofish 64 of 355, comptime-param
+declarations 34. The `InlineArray` and turbofish rows grew in thirteen days, which is the concrete form of
+"the cost only rises". This is the largest
 source break kama takes before 1.0, and it is payable only before the tag — which is why the row sits
 at the top of the NOW list rather than in the middle of it.
 
