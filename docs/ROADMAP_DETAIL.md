@@ -850,22 +850,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     re-bind in between — now has a spelling ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)), and
     SPEC's `fnptr` section says so.
 
-  - **BUG: a bare integer literal bound to a `const ref T` parameter is a silent wrong answer.** Measured
-    2026-09-01 on `0.9.136`, found while probing the `isize` row and unrelated to it. The call
-    `a.contains(item: 1)` on a `DynamicArray<int64>` emits `int32_t __primtmp0 = 1;` and passes
-    `&__primtmp0` as `int64_t*`, so the callee reads four bytes of adjacent stack as the high half. A
-    `DynamicArray<int64>` genuinely holding 1 and 2 answers `contains(item: 2)` **false** — exit 5 where 7
-    is correct. It reduces below any container: `fn bool eq(const ref int64 a, const ref int64 b)` called
-    as `eq(a: x, b: 2)` shows the same mismatch.
-
-    ⚠️ **The by-value case is fine** — `fn int64 f(int64 v)` called as `f(v: 1)` contextually types the
-    literal — so this is not "literals are int32", it is a hole in the strict-numeric spine at exactly one
-    place: the temp materialised for a `const ref` argument is typed from the literal instead of from the
-    parameter. Two resolutions are open and the corpus decides which (see the doc-claim campaign, where a
-    mismatch that looked like a soundness hole was resolved the other way): either the temp takes the
-    parameter's type, or the call is REJECTED the way `int32 < usize` is. Whichever is chosen, C currently
-    emits only a `-Wincompatible-pointer-types` warning, so nothing in the pipeline stops it today.
-
   - **No way to give an `extern fn` or an `expose fn` a symbol name different from its kama name.**
     `@linkName("…")` — the peer of Rust's `#[link_name]` / `#[export_name]`. Rowed 2026-09-01 while
     closing the reserved-word-field row, because working that one out showed the two are **different

@@ -1,0 +1,12 @@
+// The `const ref` argument position for the codepoint distinction. See tests/xfail/identity_char_literal
+// for the rule: contextual literal typing is about WIDTH, and `65` is an integer standing in for a
+// codepoint rather than the literal written at `char`'s type.
+//
+// Its own fixture for the same reason as tests/xfail/lit_oob_constref_argument: the `ref` path
+// materialises the literal into a temp typed from the PARAMETER (`kama_char`, not the `uint32_t` the arm
+// used to write), and that is only sound because an integer never reaches it.
+fn void takeC(const ref char c) { }
+fn int32 main() {
+    takeC(c: 65);
+    return 0;
+}

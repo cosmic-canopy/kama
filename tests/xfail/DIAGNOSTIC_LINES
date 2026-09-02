@@ -254,6 +254,7 @@ global_absolute_path	global_absolute_path.kama:10
 graph_alloc_iface	graph_alloc_iface.kama:23
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
+identity_char_constref_argument	identity_char_constref_argument.kama:10
 identity_char_literal	identity_char_literal.kama:12 identity_char_literal.kama:13
 identity_char_to_int	identity_char_to_int.kama:14 identity_char_to_int.kama:15 identity_char_to_int.kama:16
 identity_enum_arg_return	identity_enum_arg_return.kama:12 identity_enum_arg_return.kama:17
@@ -354,6 +355,7 @@ lit_negative_into_usize	lit_negative_into_usize.kama:7
 lit_oob_argument	lit_oob_argument.kama:4
 lit_oob_assign	lit_oob_assign.kama:5
 lit_oob_comptime	lit_oob_comptime.kama:6
+lit_oob_constref_argument	lit_oob_constref_argument.kama:9
 lit_oob_field	lit_oob_field.kama:3
 lit_oob_local	lit_oob_local.kama:9
 lit_oob_match_arm	lit_oob_match_arm.kama:6 lit_oob_match_arm.kama:8

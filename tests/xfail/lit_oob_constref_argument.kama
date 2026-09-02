@@ -1,0 +1,11 @@
+// The `const ref` argument position. See tests/xfail/lit_oob_local for the rule.
+//
+// Its own fixture rather than a line in lit_oob_argument, because the two positions do not share an
+// emitter path: a by-value literal is passed straight through, while a `ref` one is materialised into a
+// temp (emitReorderedCall's `__primtmp` arm). That arm takes the PARAMETER's C type, which is only sound
+// because the literal was range-checked against that same type first — this fixture is what says so.
+fn void take(const ref int8 x) { }
+fn int32 main() {
+    take(x: 300);
+    return 0;
+}

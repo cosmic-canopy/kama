@@ -1,0 +1,56 @@
+// A bare literal bound to a `const ref T` parameter is materialised into a temp, because a `ref` needs an
+// address and a literal has none. That temp is the PARAMETER's storage, so it takes the PARAMETER's type:
+// a literal is typed by its destination (SPEC, *Numeric conversions* — `int8 a = 100;`, `float32 f = 3;`),
+// and every other position honours that. This one arm typed it from the LITERAL instead.
+//
+// `a.contains(item: 2)` on a `DynamicArray<int64>` holding 1 and 2 emitted `int32_t __primtmp0 = 2;` and
+// passed `&__primtmp0` where the callee's signature said `int64_t*`. The callee read four bytes of
+// adjacent stack as the high half and answered FALSE — for a value the array genuinely held. C reported
+// only `-Wincompatible-pointer-types`, so nothing in the pipeline stopped it.
+//
+// ⚠️ The corpus could not have caught this. Every `const ref` + bare-literal call site in the tree was at
+// `int32`, where the literal's accidental type happens to equal the parameter's; each bit below is a width
+// or a kind where it does not. That is also why a consumer found it first.
+//
+// Exit code is a bitset of the checks that passed (63 = all six).
+import { std::collections::DynamicArray };
+
+fn bool eq64(const ref int64 a, const ref int64 b) { return a == b; }
+fn bool isThree(const ref float64 v) { return v == 3.0; }
+fn bool isA(const ref char c) { return c == 'a'; }
+
+fn int32 main() {
+    int32 r = 0;
+
+    // 1. The reported shape — a container whose element is wider than a bare literal's default type.
+    DynamicArray<int64> a = DynamicArray.empty();
+    a.add(item: 1i64); a.add(item: 2i64);
+    if (a.contains(item: 2) && a.contains(item: 1)) { r = r + 1; }
+
+    // 2. ...and the absent case, so a `contains` answering false for everything cannot score bit 1.
+    if (!a.contains(item: 3)) { r = r + 2; }
+
+    // 3. Below any container: two `const ref int64` parameters, the second bound to a literal.
+    int64 x = 2i64;
+    if (eq64(a: x, b: 2) && !eq64(a: x, b: 9)) { r = r + 4; }
+
+    // 4. `isize` — the platform-varying width, and the one place the legs disagree: `ptrdiff_t` is 8 bytes
+    //    natively and 4 on wasm32, so this arm was already correct on wasm and wrong on native.
+    DynamicArray<isize> s = DynamicArray.empty();
+    isize s1 = 10; isize s2 = 20;
+    s.add(item: s1); s.add(item: s2);
+    if (s.contains(item: 20) && !s.contains(item: 30)) { r = r + 8; }
+
+    // 5. A literal wider than `int32` at a `const ref int64` — the destination governs the literal here
+    //    exactly as it does in `int64 n = 4294967295;`.
+    int64 w = 4294967295i64;
+    if (eq64(a: w, b: 4294967295)) { r = r + 16; }
+
+    // 6. The two non-integer kinds this arm also materialises: an integer literal at a float parameter
+    //    (`float32 f = 3;` is the literal written at the destination's type, not a conversion), and a
+    //    codepoint at a `const ref char`, whose C spelling is `kama_char` — not the `uint32_t` the arm
+    //    wrote, which was the last place leaking the pre-0.9.104 spelling.
+    if (isThree(v: 3) && isA(c: 'a')) { r = r + 32; }
+
+    return r;
+}

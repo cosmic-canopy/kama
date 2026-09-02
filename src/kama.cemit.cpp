@@ -16226,11 +16226,35 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 }
             }
             // A bare primitive LITERAL to a `ref`-primitive param (`m.get(key: 5)`) has no address —
-            // materialize it into a temp of the literal's C type so the `&temp` below is legal. No drop
-            // (a primitive owns nothing).
+            // materialize it into a temp so the `&temp` below is legal. No drop (a primitive owns nothing).
+            //
+            // The temp is the PARAMETER's storage, so it takes the PARAMETER's type. Typing it from the
+            // LITERAL instead — which is what this arm did, and what the comment above it described as if
+            // it were the design — was a SILENT WRONG ANSWER: a bare `2` is an `Int32Node`, so
+            // `a.contains(item: 2)` on a `DynamicArray<int64>` emitted `int32_t __primtmp0 = 2;` and handed
+            // `&__primtmp0` to a callee whose signature said `int64_t*`, which then read four bytes of
+            // adjacent stack as the high half and answered false for a value the array held. C reports only
+            // `-Wincompatible-pointer-types`, so nothing downstream stopped it.
+            //
+            // A literal is typed by its DESTINATION — SPEC's *Numeric conversions* (`int8 a = 100;`,
+            // `float32 f = 3;`) — and every other position already honours that, which is why the by-value
+            // spelling of the same call was fine. `pKindCType` is the destination, and it is the very value
+            // `rejectValueKindMismatch` was checked against a screen up, so a literal that reaches here has
+            // already been range-checked (`take(x: 300)` at a `const ref int8`) and kind-checked (an
+            // integer at a `const ref char`) against it. The two NEIGHBOURING arms target-type the same
+            // way: the string arm materializes a `kama_string`, and the variant/match arm sets
+            // `_matchTargetCType` to the param's type before emitting.
+            //
+            // The guard is what `litRvalueCType` itself can produce, plus the two target-width types a
+            // parameter can be and a literal cannot (`isize`/`usize` — the case the wasm leg hides, since
+            // `ptrdiff_t` is 4 bytes there and the accident holds). Anything else — a contract parameter,
+            // an unsubstituted `T` in a generic template — keeps the literal's own type rather than
+            // spelling a class name as a temp.
             if (st.empty() && p.byRef && _hoistOK) {
                 std::string lct = litRvalueCType(argExpr.get());
                 if (!lct.empty()) {
+                    if (cNumBits(pKindCType) || cNumTargetWidth(pKindCType) || pKindCType == "bool")
+                        lct = pKindCType;
                     st = "__primtmp" + std::to_string(_tempCounter++);
                     _hoisted.push_back(lct + " " + st + " = " + emitExpression(argExpr) + ";");
                 }

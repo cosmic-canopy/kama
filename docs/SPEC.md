@@ -1109,7 +1109,14 @@ are all conversions. What is **not** a conversion, and needs no cast:
 | a shift, whose count is a count and not a co-operand | `x << someInt32` on an `int64` |
 
 A **named** constant is not a literal: `comptime int32 N = 5;` states a type, so `int8 x = N;` wants a
-cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local -->
+cast. A constant that does not *fit* its destination is rejected for that instead (`int8 a = 300;`). <!-- xfail: lit_oob_local, lit_oob_constref_argument -->
+
+**A `ref` parameter is a destination like any other.** A literal has no address, so one bound to a
+`const ref` is materialised into a temp — and that temp is the parameter's storage, typed by the
+parameter: `a.contains(item: 2)` on a `DynamicArray<int64>` stores an `int64`, and the same call on a
+`DynamicArray<isize>` stores an `isize`. It reads as a detail of the lowering and is not one. Typing the
+temp from the literal instead handed the callee a four-byte slot to read eight bytes out of, and the
+container answered `false` for a value it held (`tests/constref_literal_width.kama`, fixed in `0.9.138`).
 
 ### `isize` is the size type; `usize` is the C ABI
 
