@@ -1580,6 +1580,39 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
+- **tree-sitter accepts 78 of kama's 80 reserved words as a binding name; the compiler accepts 2.**
+  Measured 2026-09-02 across the full keyword table, in both type positions:
+
+  ```kama
+  Thing else = Thing.make();   // tree-sitter: a clean declaration. kama: parse error.
+  isize break = 1;             // same, after a builtin type
+  ```
+
+  The two grammars reserve differently *by construction*, which is why this is a gap and not a typo.
+  `kama.l` consults one table at **every** identifier, so a reserved spelling is refused everywhere.
+  tree-sitter has `word: $.identifier` and extracts keywords **contextually** — a keyword literal is
+  only recognised in states where the grammar expects it, and a binding site expects `$.identifier`,
+  so every reserved word lexes as a name there. The two that agree, `slot` and `type`, agree because
+  the *compiler* accepts them: they are the contextual pair.
+
+  What it costs: every editor on this grammar (Zed, Helix, nvim-treesitter) renders
+  `Thing else = …` as a valid declaration with `else` coloured as a variable, and the compiler then
+  rejects it — the editor is confidently wrong exactly where a beginner is most likely to be.
+
+  ⚠️ **`tools/check-treesitter.sh` cannot see this class, and one fixture hides it.** Oracle 5 asks the
+  compiler only where the two disagree *about files already in the manifest*; detecting "kama raises a
+  parse error but tree-sitter is clean" for the whole corpus needs a compiler run per file (~43 s), which
+  the guard deliberately avoids. And `tests/xfail/reserved_word_as_name.kama` is in
+  `test/parse-errors.txt` and passes — but its ERROR node is at the **use** site
+  (`return cast<int32>(base);`), not the declaration. Delete that second line and the entry fails.
+  Measured; it is the reason this was found at all.
+
+  **Unprobed, and that is the first task, not the fix:** tree-sitter's keyword extraction has no "reserved everywhere" switch, so the
+  fix is either an external scanner (`src/scanner.c` — the grammar has none today, and the `>>` note
+  in its header records not needing one as a virtue) or a negative lookahead over 78 spellings baked
+  into the `identifier` token. Which of those is tolerable is the question to answer first.
+
+
 - **AI/agent tooling — SHIPPED.** `kama query --search NAME` / `--diagnostics` / `--json`, the
   `kama agents` command, and the `AGENTS.md` it writes into a project. Record: [agents.md](agents.md);
   guarded by `tools/check-agents.sh`. Residuals, none blocking:
