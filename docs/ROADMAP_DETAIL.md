@@ -1028,8 +1028,13 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     surface that states the platform split in a SECOND place, beside the gates already in the file. The
     file gate adds neither: it is the `@compileFor` primitive already used for the seam, applied to the
     unit, living with the code it gates. `file` is a **contextual** keyword — one only as a unit's first
-    token, an ordinary identifier everywhere else, as `value`/`view`/`try`/`copy` already are (and
-    `std::fs` uses `file` as a name).
+    token, an ordinary identifier everywhere else, as `value`/`view`/`try`/`copy` already are.
+    ⚠️ **The reason is USER code, not the stdlib.** An earlier draft of this entry said `std::fs` uses
+    `file` as a name; it does not — it uses `File`, and kama is case-sensitive. Measured 2026-09-02: the
+    word `file` appears 186 times in `.kama` sources and **zero** of them are identifiers (185 in
+    comments, one inside a string literal). The corpus would not notice a hard keyword. It stays
+    contextual because `File file = …` is the spelling a user reaches for first — reserving it would
+    break their code, not ours.
 
     ⚠️ **The ordering was MEASURED, not argued, and the measurement reversed the intuition twice.**
     Attribute-first (`@compileFor(X) file;`) reads more consistently with every other attribute site and
@@ -1042,6 +1047,21 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     list, and the token that distinguishes them (`file` vs `type`/`fn`/`static`) sits arbitrarily far
     away past the whole attribute list. That is more than one token of lookahead. Leading `file` decides
     in one token and costs nothing. **Measure a grammar question at the position the rule will occupy.**
+
+    **RE-MEASURED 2026-09-02 on the post-`#(…)` grammar, since that campaign moved the same file.** Both
+    halves are clean against the `%expect 1` baseline:
+
+    | prototype | conflicts | parser |
+    |---|---|---|
+    | baseline (`0.9.142`) | 1 (dangling `else`) | 6943 |
+    | leading `file` gate at the head of `compilation_unit` | **1** | 6958 |
+    | …plus `file` made contextual, mirroring all 11 `SLOT` arms | **1** | 7063 |
+
+    The third row is an UPPER BOUND on the contextual surface — it mirrors every `SLOT` arm mechanically
+    and some are nonsense for `file` (`slot type x;` is the uninitialized-storage form). A real
+    implementation needs fewer arms, and fewer cannot cost more. So the grammar carries no risk left to
+    discover, and the work is the DRIVER half: teaching `packageSourceFiles` to read a unit's gate before
+    deciding whether to compile it, with the flag vocabulary `@compileFor` already evaluates.
 
     Still **M**, still unstarted. **
   - **NO WAY TO RUN KAMA ON A FOREIGN OS THREAD.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
