@@ -2131,6 +2131,30 @@ remain ordinary identifiers everywhere else (`int32 value = 5;`). `enum` is the 
 reserved keyword, for the historical reason that it predates the `type` marker; that costs nothing, since
 nothing else could be spelled there. Only `type` and `enum` are keywords.
 
+**`type` may still NAME a binding** — a field, a local, a module `static`, a parameter or a method — and
+be read, written and passed like any other name. It is a **contextual keyword**: it leads a declaration
+only where a declaration can begin, and is an ordinary identifier everywhere else. That puts it beside
+`copy`/`give`/`truncate`/`default`/`base`, and beside the kind words above.
+
+This exists for the FFI and could not be worked around there: `webgpu.h` calls a field `type` in four
+structs, and **an `extern` struct emits the literal C name**, so unlike a function — whose kama binding is
+simply renamed — the field is assigned BY NAME and renaming it emits the wrong C. Omitting it is not a
+lesser evil: the field then holds 0, and 0 *is* `WGPUBufferBindingType_BindingNotUsed`, so an explicitly
+built bind-group entry for a uniform buffer or a sampler is **inert** rather than under-specified.
+
+```kama
+type extern value WGPUBufferBindingLayout {
+    public UnsafePtr nextInChain;
+    public uint32    type;              // the literal C name — no escape, no rename
+    public uint32    hasDynamicOffset;
+    public uint64    minBindingSize;
+}
+b.type = WGPUBufferBindingType_Uniform;
+
+fn void configure(uint32 type) { … }    // and it reads as an ordinary name everywhere else
+configure(type: WGPUBufferBindingType_Uniform);
+```
+
 ### The contract `for` clause — which kinds may implement it ✅
 
 A `type contract` **must** declare its implementers: `type contract C for <kinds> { … }`. The clause takes

@@ -201,6 +201,9 @@ type_or_value_arg
 
 qualified_identifier_no_generic
   : IDENTIFIER
+    /* Reading a `type`-named binding. This is the production that makes the contextual rule WHOLE: without
+       it you could declare such a name and never read it, which is worse than not allowing it. */
+  | TYPE
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
@@ -480,7 +483,8 @@ parameter_list
   | parameter_list COMMA parameter
   ;
 parameter
-  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
+  : const_opt hardware_opt parameter_modifier_opt type TYPE      /* contextual `type` */
+  | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
   ;
 parameter_modifier_opt
   : /* Nothing */
@@ -512,7 +516,13 @@ variable_declarators
   | variable_declarators COMMA variable_declarator
   ;
 variable_declarator
-  : IDENTIFIER
+    /* `type` is CONTEXTUAL — see the note on `DOT TYPE` in member_access for why the FFI needs it. In the
+       NAME slot it is unambiguous: a declarator is always preceded by a parsed type, and `type` can only
+       ever LEAD a declaration, so one token of lookahead separates them. Field, local and module `static`
+       all reach this rule, so the word behaves identically in every one. Measured: 0 conflicts. */
+  : TYPE
+  | TYPE EQ variable_initializer
+  | IDENTIFIER
   | IDENTIFIER EQ variable_initializer
   ;
 variable_initializer
@@ -884,6 +894,15 @@ member_access
        can answer a bad receiver with a sentence instead of `syntax error, unexpected BASE`.
        Note the receiver is `primary_expression`, NOT `this_access` — the parser must reduce
        `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
+    /* `b.type` — `type` is CONTEXTUAL, for the FFI. A C struct field may legitimately be called `type`
+       (`WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor`,
+       `WGPUCompilationMessage`), and an extern struct's fields are assigned BY NAME — unlike a function
+       it cannot be wrapped or renamed, because "an `extern` struct emits the literal C name". Omitting
+       the field is not a lesser evil: it leaves 0, which IS `WGPUBufferBindingType_BindingNotUsed`, so
+       the entry is INERT rather than under-specified.
+       Same two productions `default` and `base` needed, for the same reason. Measured: 0 conflicts. */
+  | primary_expression DOT TYPE
+  | qualified_identifier_no_generic DOT TYPE
   | primary_expression DOT BASE
   | qualified_identifier_no_generic DOT BASE
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -943,7 +962,11 @@ argument_list
   | argument_list COMMA argument
   ;
 argument
-  : IDENTIFIER COLON expression
+    /* `f(type: x)` — a parameter named `type` must be nameable at the call site too. */
+  : TYPE COLON expression
+  | TYPE COLON REF variable_reference
+  | TYPE COLON OUT variable_reference
+  | IDENTIFIER COLON expression
   | IDENTIFIER COLON REF variable_reference
   | IDENTIFIER COLON OUT variable_reference
   ;
@@ -1269,6 +1292,7 @@ method_name
   | COPY
   | GIVE
   | TRUNCATE        /* the wrapping-conversion keyword; contextual, so a type may still declare one */
+  | TYPE            /* contextual for the FFI; here so the word reads the same in EVERY name position */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

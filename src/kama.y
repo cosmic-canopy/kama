@@ -646,6 +646,9 @@ type_or_value_arg
 
 qualified_identifier_no_generic
   : IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+    /* Reading a `type`-named binding. This is the production that makes the contextual rule WHOLE: without
+       it you could declare such a name and never read it, which is worse than not allowing it. */
+  | TYPE  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
@@ -1010,7 +1013,8 @@ parameter_list
   | parameter_list COMMA parameter   { $1->push_back($3); }
   ;
 parameter
-  : const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
+  : const_opt hardware_opt parameter_modifier_opt type TYPE   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
+  | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   ;
 parameter_modifier_opt
   : /* Nothing */ { $$ = SharedModifier(); }
@@ -1042,7 +1046,13 @@ variable_declarators
   | variable_declarators COMMA variable_declarator   { $1->push_back($3); }
   ;
 variable_declarator
-  : IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
+    /* `type` is CONTEXTUAL — see the note on `DOT TYPE` in member_access for why the FFI needs it. In the
+       NAME slot it is unambiguous: a declarator is always preceded by a parsed type, and `type` can only
+       ever LEAD a declaration, so one token of lookahead separates them. Field, local and module `static`
+       all reach this rule, so the word behaves identically in every one. Measured: 0 conflicts. */
+  : TYPE   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
+  | TYPE EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
+  | IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   ;
 variable_initializer
@@ -1440,6 +1450,15 @@ member_access
        can answer a bad receiver with a sentence instead of `syntax error, unexpected BASE`.
        Note the receiver is `primary_expression`, NOT `this_access` — the parser must reduce
        `this_access -> primary_expression` on lookahead DOT before it can ever see BASE. */
+    /* `b.type` — `type` is CONTEXTUAL, for the FFI. A C struct field may legitimately be called `type`
+       (`WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor`,
+       `WGPUCompilationMessage`), and an extern struct's fields are assigned BY NAME — unlike a function
+       it cannot be wrapped or renamed, because "an `extern` struct emits the literal C name". Omitting
+       the field is not a lesser evil: it leaves 0, which IS `WGPUBufferBindingType_BindingNotUsed`, so
+       the entry is INERT rather than under-specified.
+       Same two productions `default` and `base` needed, for the same reason. Measured: 0 conflicts. */
+  | primary_expression DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -1523,7 +1542,11 @@ argument_list
   | argument_list COMMA argument   { $1->push_back($3); }
   ;
 argument
-  : IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+    /* `f(type: x)` — a parameter named `type` must be nameable at the call site too. */
+  : TYPE COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+  | TYPE COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | TYPE COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   ;
@@ -1871,6 +1894,7 @@ method_name
   | COPY         { $$ = $1; }
   | GIVE         { $$ = $1; }
   | TRUNCATE     { $$ = $1; }   /* the wrapping-conversion keyword; contextual, so a type may still declare one */
+  | TYPE         { $$ = $1; }   /* contextual for the FFI; here so the word reads the same in EVERY name position */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

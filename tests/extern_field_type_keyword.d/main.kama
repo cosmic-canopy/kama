@@ -1,0 +1,66 @@
+// `type` is a CONTEXTUAL keyword: it may NAME a binding — a field, a local, a module `static`, a
+// parameter or a method — and be read, written and passed like any other name. It leads a declaration
+// only where a declaration can begin. That puts it beside `copy`/`give`/`truncate`/`default`/`base`.
+//
+// This exists for the FFI. `webgpu.h` calls a field `type` in `WGPUBufferBindingLayout`,
+// `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and `WGPUCompilationMessage`, and *an `extern`
+// struct emits the literal C name* (SPEC) — so unlike a function, whose kama binding can simply be
+// renamed, the field is assigned BY NAME and renaming it emits the wrong C. Omitting it is not a lesser
+// evil: the field then holds 0, and 0 IS `WGPUBufferBindingType_BindingNotUsed`, so an explicitly built
+// bind-group entry for a uniform buffer or a sampler is INERT rather than under-specified —
+// `deviceCreateBindGroupLayout` cannot express a uniform + sampler + texture group at all.
+//
+// ⚠️ EVERY POSITION IS HERE ON PURPOSE, and the READ positions are the point. A first cut of this change
+// covered only the field and the `.` access, on the untested assumption that a local or a parameter named
+// `type` would conflict in expression position. It does not — all six positions measure 0 bison conflicts.
+// A rule that lets you DECLARE a name but not READ it is the incoherent outcome this fixture rules out.
+//
+// ⚠️ THE C ROUND-TRIP IS THE POINT for the field. Asserting that kama reads back what kama wrote proves
+// nothing about the emitted name — a consistently WRONG name would pass that. `bufKind` is C, compiled
+// from the header, reading `b->type` itself.
+//
+// Exit code is a bitset (127 = all seven).
+extern "binding.h";
+extern fn int32 bufKind(const UnsafePtr<BufBinding> b);
+
+type extern value BufBinding {
+    public int32 type;                 // 1. a FIELD named `type` — the case that blocked a consumer
+    public int32 hasDynamicOffset;
+}
+
+type value Holder {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; return this; }
+    public const fn int32 type() { return this.n; }   // 4. a METHOD named `type`
+}
+
+static int32 type = 100;                              // 5. a module `static`
+
+fn int32 doubled(int32 type) { return type * 2; }     // 6. a PARAMETER, and READ in expression position
+
+unsafe fn int32 viaC(ref BufBinding b) { return bufKind(b: addr(of: b)); }
+
+fn int32 main() {
+    int32 r = 0;
+
+    BufBinding b = BufBinding();
+    b.type = 7;                                       // 2. WRITE through `.`
+    if (b.type == 7) { r = r + 1; }                   // 3. READ through `.`
+    if (b.hasDynamicOffset == 0) { r = r + 2; }       // the neighbouring field is undisturbed
+
+    // The C side reads `b->type` itself — this is what pins the emitted name.
+    if (viaC(b: b) == 7) { r = r + 4; }
+
+    Holder h = Holder.make(n: 5);
+    if (h.type() == 5) { r = r + 8; }
+
+    if (type == 100) { r = r + 16; }                  // module static, read
+
+    int32 type = 5;                                   // 7. a LOCAL, with an initializer
+    type = type + 1;                                  //    written and read
+    if (type == 6) { r = r + 32; }
+
+    if (doubled(type: 21) == 42) { r = r + 64; }      // an argument LABEL
+
+    return r;
+}

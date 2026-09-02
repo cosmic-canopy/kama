@@ -866,40 +866,31 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     parameter's type, or the call is REJECTED the way `int32 < usize` is. Whichever is chosen, C currently
     emits only a `-Wincompatible-pointer-types` warning, so nothing in the pipeline stops it today.
 
-  - **A kama reserved word cannot name a `type extern value` field.** `webgpu.h` uses `type` in
-    `WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and
-    `WGPUCompilationMessage`; the field is then unreachable, and unlike a function it cannot be wrapped —
-    an extern struct's fields are assigned BY NAME, so renaming emits the wrong C.
+  - **No way to give an `extern fn` or an `expose fn` a symbol name different from its kama name.**
+    `@linkName("…")` — the peer of Rust's `#[link_name]` / `#[export_name]`. Rowed 2026-09-01 while
+    closing the reserved-word-field row, because working that one out showed the two are **different
+    problems** and Rust keeps them separate on purpose:
 
-    ⚠️ **Sharpened by the consumer's M1-a (2026-09-01), and it is worse than "imprecise".** The omitted
-    field leaves 0, and 0 *is* `WGPUBufferBindingType_BindingNotUsed` / `WGPUSamplerBindingType_BindingNotUsed`
-    — so an explicitly built layout entry for a uniform buffer or a sampler is **inert**, not merely
-    under-specified. `WGPUBindGroupLayoutEntry` embeds both by value, so `deviceCreateBindGroupLayout`
-    cannot express a uniform + sampler + texture group **at all**. Texture entries are unaffected
-    (`sampleType` is spellable). Their only escape is taking the layout from
-    `renderPipelineGetBindGroupLayout`, which is **per pipeline**, so no layout object can be shared
-    between pipelines — M1-a stays under that ceiling by using one pipeline and expressing additive as
-    alpha 0. **The ceiling is reached by the first second pipeline wanting to share group 0**, and their
-    MSDF text stage is the natural trigger.
+    | problem | Rust | kama |
+    |---|---|---|
+    | "my grammar cannot SPELL this name" | `r#type` | contextual keywords (`type`, `copy`, `give`, `base`, `default`, `truncate`) |
+    | "this SYMBOL is named something else" | `#[link_name]` / `#[export_name]` | **nothing — this row** |
 
-    **Measured here 2026-09-01 on `0.9.136`, before any design work:**
-    - It fails at **three** positions, not one: the field DECLARATION, and member access on both the read
-      and the write side (`b.type = 1` and `b.type`). Any fix must cover all three.
-    - **Exactly one kama keyword collides across the whole of `webgpu.h`: `type`.** (Every field name in
-      the header, diffed against `kama.l`'s keyword table.) The problem is real and narrow, which argues
-      against a general raw-identifier escape and for a targeted spelling.
-    - **`@cname("type")` on a field ALREADY PARSES** — the grammar attaches an attribute list to a class
-      member, and only the semantic layer rejects it ("unknown field attribute"). So that spelling costs
-      **zero grammar change**; it is a field-attribute table entry, a `cName` slot on `FieldInfo`, and
-      using that slot at the access site.
-    - A `type extern value` **does not emit its own C struct** — it uses the header's (`BufBinding b = {0};`),
-      so the C field name matters only at access sites. That is what makes a rename-plus-`@cname` sound.
-    - There is a structural precedent in the language already: `FieldInfo::serName`, set by
-      `@field(name: "…")`, is exactly "this field's kama name differs from its external name" for the
-      serde wire. `@cname` is the same shape for the C wire.
-    - ⚠️ Field attributes are currently gated behind `@generate(...)` on the type ("field attributes
-      require `@generate(...)`"). `@cname` is meaningful on any extern type, so that gate needs relaxing
-      for it specifically — do not widen it for `@field`/`@skip`.
+    A struct field is the first problem, and it is closed: the field name is resolved at compile time and
+    emitted as text, so there is no symbol involved. This row is the second. Today an `extern fn` must be
+    spelled exactly as C names it (SPEC: *"an `extern` keeps a literal name"*), so a C symbol colliding
+    with a kama KEYWORD — not merely with another identifier, which the wrapper convention already
+    handles — has no binding at all; and `expose fn` emits under its bare kama name with no way to choose
+    the exported symbol.
+
+    ⚠️ **Do not name it `@cname`.** kama's only backend is C emission today, so the name would be accurate
+    and would age badly: the 2.0 dual-mode arc puts a bytecode VM behind the same source, and a VM has no
+    C names. Name it for the concept (`@linkName`, `@symbol`), not for one backend.
+
+    Not urgent: no consumer is blocked on it, and no collision of this kind has been hit. It is rowed so
+    the distinction is not re-derived — the reserved-word-field work reached for `@cname` twice before the
+    measurement showed a contextual keyword was both smaller and categorically the right tool.
+
 
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
