@@ -1,0 +1,1 @@
+which is `@noheap` — declare `plain` `@noheap` too

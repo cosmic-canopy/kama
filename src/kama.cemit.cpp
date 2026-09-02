@@ -1902,6 +1902,11 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     rejectConstOutOfRange(dstCType, value, what, false, line);
     rejectNumericConversion(dstCType, value, what, /*isInit*/false, line);   // milestone 6
     rejectTypeIdentityMismatch(dstCType, value, what, /*isInit*/false, line);
+    // Binding a FUNCTION NAME to a `fnptr` destination. The identity rule above cannot see this one:
+    // `typeOfExpr` has no arm for a bare function name, so it answers "" and the rule takes its
+    // documented silent path — which is exactly why every bind position but a local initializer went
+    // unchecked. This is the funnel they all share, and it already has the destination type.
+    checkFnPtrValueBind(dstCType, value, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -6981,6 +6986,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             si.retCType = cType(fn->returnType);
             si.params   = paramSigsOf(fn->parameters);
             si.declFile = _collectingUnitPath;
+            si.noHeap   = hasNoHeapAttr(fn->attributes);   // the declared half of the no-heap proof
             _sigs[si.cName] = si;
             continue;
         }
@@ -18181,17 +18187,31 @@ void CEmitter::resolveFriends()
     }
 }
 
-// bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
-// signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
-std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
+// Resolve WHAT a `fnptr`-typed destination is being bound to — a free function name, an unbound
+// `Type::method`, or another `fnptr` value. Answers only; it emits nothing and reports nothing.
+//
+// THE one resolver, and that is the point. `emitFnPtrBind` emits from what this finds and
+// `checkFnPtrValueBind` judges the same thing, so a bind position cannot be lowered by one path and
+// checked by neither. Until this existed the split was real and silent: only a LOCAL INITIALIZER ran
+// `sigMatches`, because that is the sole caller of `emitFnPtrBind`. Every other bind position — an
+// assignment, a call argument, a return, a field or a module `static` initializer — reached the bare
+// function-name arm of `emitExpression` (the `_funcs` lookup that decays a name to its C symbol), which
+// checks nothing at all. A shape-mismatched function bound there compiled clean and the call through it
+// passed the wrong number of arguments: an indirect call through a mismatched function pointer, the UB
+// class UBSan's `function` check would catch and which is disabled suite-wide for an unrelated reason.
+bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 {
     if (auto* id = dynamic_cast<IdentifierNode*>(init.get())) {
         if (id->value) {
             auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
             if (fit != _funcs.end()) {
-                if (!sigMatches(_sigs.at(sigCName), fit->second))
-                    unsupported(("function '" + *id->value + "' does not match the FunctionPtr signature").c_str(), line);
-                return fit->second.cName;   // the C function name decays to a pointer
+                out.kind    = FnPtrTarget::Function;
+                out.cName   = fit->second.cName;   // the C function name decays to a pointer
+                out.sig     = fit->second;
+                out.display = "function '" + *id->value + "'";
+                out.noHeap  = fnHasNoHeap(fit->second.node);
+                out.name    = *id->value;
+                return true;
             }
             // `Type::method` — an unbound method reference. The method lowers
             // to `Class__method(Class* self, …)`, so it's a function pointer over a
@@ -18204,24 +18224,75 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
                     ClassInfo* owner = nullptr;
                     MethodInfo* mi = findMethod(&_classes[cls], *id->value, &owner);
                     if (mi) {
-                        recordNodeRef(id, mi->node);   // M6 B3a: `Type::m` as a fn pointer references m
-                        FuncSig full;                          // receiver-first signature
-                        full.cName    = mi->cName;
-                        full.retCType = cType(mi->returnType);
-                        full.params.push_back(ParamSig{"self", true, cls});
-                        for (auto& p : mi->params) full.params.push_back(p);
-                        if (!sigMatches(_sigs.at(sigCName), full))
-                            unsupported(("method '" + cls + "::" + *id->value
-                                         + "' does not match the fnptr signature (its first param must be `ref "
-                                         + cls + "`)").c_str(), line);
-                        return mi->cName;   // the method's C name decays to a fn pointer
+                        out.kind    = FnPtrTarget::Method;
+                        out.cName   = mi->cName;   // the method's C name decays to a fn pointer
+                        out.sig.cName    = mi->cName;   // receiver-first signature
+                        out.sig.retCType = cType(mi->returnType);
+                        out.sig.params.push_back(ParamSig{"self", true, cls});
+                        for (auto& p : mi->params) out.sig.params.push_back(p);
+                        out.display      = "method '" + cls + "::" + *id->value + "'";
+                        out.mismatchNote = " (its first param must be `ref " + cls + "`)";
+                        out.noHeap       = mi->noHeap;
+                        out.name         = cls + "::" + *id->value;
+                        out.id           = id;
+                        out.node         = mi->node;
+                        return true;
                     }
                 }
             }
         }
     }
-    if (isSigType(exprClass(init)))         // copy from another FunctionPtr
-        return emitExpression(init);
+    if (isSigType(exprClass(init))) {   // copy from another FunctionPtr
+        out.kind = FnPtrTarget::SigValue;
+        return true;
+    }
+    return false;
+}
+
+// Judge a resolved bind against the signature: the SHAPE, and then the `@noheap` promise.
+//
+// The promise half is the `fnptr` seam's version of what `checkConformanceSignatures` does for a
+// contract member, and deliberately reads the same way: the declaration promises, every implementation
+// is checked against it, and the promise is then what lets a no-heap caller cross the slot. One
+// direction only — a `@noheap` function may be bound to a plain signature, which constrains only itself.
+void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line)
+{
+    if (t.kind == FnPtrTarget::SigValue) return;   // fnptr types are nominal; identity said it already
+    auto sit = _sigs.find(sigCName);
+    if (sit == _sigs.end()) return;
+    if (!sigMatches(sit->second, t.sig)) {
+        unsupported((t.display + " does not match the " + (t.kind == FnPtrTarget::Method ? "fnptr" : "FunctionPtr")
+                     + " signature" + t.mismatchNote).c_str(), line);
+        return;   // a shape mismatch already tells the author to look at this bind; one defect, one message
+    }
+    if (sit->second.noHeap && !t.noHeap)
+        unsupported((t.display + " is bound to `" + demangleForDisplay(sigCName) + "`, which is `@noheap` — "
+                     "declare `" + t.name + "` `@noheap` too, so a no-heap caller calling through the "
+                     "slot still gets the guarantee").c_str(), line);
+}
+
+// A `fnptr`-typed destination in any position OTHER than a local initializer — an assignment, a call
+// argument, a return, a field or module `static` initializer. Reached from `rejectValueKindMismatch`,
+// which is the funnel every one of those already passes through with the destination's C type in hand.
+void CEmitter::checkFnPtrValueBind(const std::string& dstCType, SharedExpression value, int line)
+{
+    if (!value || !isSigType(dstCType)) return;
+    FnPtrTarget t;
+    if (!resolveFnPtrTarget(value, t)) return;   // not a bindable name — the kind rule below judges it
+    checkFnPtrBind(dstCType, t, line);
+}
+
+// bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
+// signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
+std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
+{
+    FnPtrTarget t;
+    if (resolveFnPtrTarget(init, t)) {
+        if (t.kind == FnPtrTarget::SigValue) return emitExpression(init);
+        if (t.id) recordNodeRef(t.id, t.node);   // M6 B3a: `Type::m` as a fn pointer references m
+        checkFnPtrBind(sigCName, t, line);
+        return t.cName;
+    }
     unsupported("a FunctionPtr binds a free function name or another FunctionPtr (and may not be null)", line);
     return "0";
 }
@@ -18281,6 +18352,13 @@ void CEmitter::emitBindableNew(const std::string& nm, const std::string& octy,
     stripped.cName = mi->cName; stripped.retCType = cType(mi->returnType); stripped.params = mi->params;
     if (!sigMatches(_sigs.at(sigCName), stripped))
         unsupported("the method does not match the BindableFunctionPtr signature (the receiver is hidden)", ln);
+    // ...and the same `@noheap` promise the bare `fnptr` bind is held to. A bindable is called through
+    // the identical blind seam, so a signature that promises must be satisfied here too, or binding an
+    // allocating method would launder the guarantee the `fnptr` form refuses to launder.
+    else if (_sigs.at(sigCName).noHeap && !mi->noHeap)
+        unsupported(("method '" + cls + "::" + *mid->value + "' is bound to `" + demangleForDisplay(sigCName)
+                     + "`, which is `@noheap` — declare `" + cls + "::" + *mid->value + "` `@noheap` too, "
+                       "so a no-heap caller calling through the slot still gets the guarantee").c_str(), ln);
 
     bool destr = _classes.count(T) && _classes[T].destructible;
     // The receiver pointer: a library owner exposes it via `deref()` (T*); an intrinsic owner's
@@ -18325,6 +18403,11 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
             if (fit != _funcs.end()) {
                 if (!sigMatches(_sigs.at(sigCName), fit->second))
                     unsupported("function does not match the BindableFunctionPtr signature", init->line);
+                else if (_sigs.at(sigCName).noHeap && !fnHasNoHeap(fit->second.node))
+                    unsupported(("function '" + *id->value + "' is bound to `" + demangleForDisplay(sigCName)
+                                 + "`, which is `@noheap` — declare `" + *id->value + "` `@noheap` too, so a "
+                                   "no-heap caller calling through the slot still gets the guarantee").c_str(),
+                                init->line);
                 indent(depth);
                 *_out << nm << ".obj = NULL; " << nm << ".ctrl = NULL; " << nm << ".fn = (void (*)(void))"
                       << fit->second.cName << "; " << nm << ".elemdtor = NULL;\n";
@@ -18346,7 +18429,10 @@ std::string CEmitter::emitBindableInvoke(const std::string& recv, const std::str
                                          SharedArgumentList args, int line)
 {
     const SigInfo& sig = _sigs.at(_classes[cls].collElemClass);
-    rejectNoHeapIndirect("through a bound function pointer", line);   // no-heap gate: unresolvable target
+    // No-heap gate, and the same escape as the bare `fnptr`: a bindable's `Sig` IS an `fnptr` type, so a
+    // `@noheap` signature has had every promotion and every `obj:`/`method:` bind checked against the
+    // promise, and the call through it is provable.
+    if (!sig.noHeap) rejectNoHeapIndirect("through a bound function pointer", line);
     std::string plist;
     for (size_t i = 0; i < sig.params.size(); ++i)
         plist += (i ? ", " : "") + sig.params[i].className + (sig.params[i].byRef ? "*" : "");
@@ -19615,7 +19701,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
         && _localTypes.count(name) && isSigType(_localTypes[name])) {
         const SigInfo& sig = _sigs.at(_localTypes[name]);
-        rejectNoHeapIndirect("through a `fnptr`", call->line);   // no-heap gate: unresolvable target
+        // No-heap gate: the target is unresolvable, so the proof crosses only where the SIGNATURE
+        // declared it may. A `@noheap fnptr` has had every bind checked against that promise
+        // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
+        // gate existed to make necessary rather than decorative.
+        if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
         std::string callee = _refParams.count(name) ? ("(*" + name + ")") : name;
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
     }
@@ -19632,7 +19722,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (mit != _moduleStatics.end() && mit->second && mit->second->value
             && isSigType(cType(mit->second))) {
             const SigInfo& sig = _sigs.at(cType(mit->second));
-            rejectNoHeapIndirect("through a `fnptr`", call->line);   // no-heap gate: unresolvable target
+            if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             return emitReorderedCall(ms, "", sig.params, call->args, call->line);
         }
     }
@@ -20128,8 +20218,9 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
 // fn that calls a helper that dispatches through a callback slot is caught by the same walk, with the same
 // chain, and needs no second mechanism. The rendering differs because the defect does.
 //
-// A `fnptr` type cannot yet CARRY `@noheap` (ROADMAP has the row) — when it can, that becomes the escape
-// hatch, and this gate is what makes it necessary rather than decorative.
+// The escape hatch is `@noheap` ON THE SIGNATURE — a `@noheap fnptr`, whose every bind is checked against
+// the promise, so the call through it is provable and never reaches here. This gate is what makes that
+// declaration necessary rather than decorative. A contract member and a `virtual` slot have the same pair.
 void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 {
     if (_probingTemplate) return;
@@ -23032,7 +23123,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                         if (isSigType(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
                             const SigInfo& sig = _sigs.at(fc);
-                            rejectNoHeapIndirect("through a `fnptr`", srcLine);   // unresolvable target
+                            if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
                             return emitReorderedCall("(" + recvPtr + ")->" + method, "", sig.params,
                                                      args, srcLine);
                         }
@@ -24755,18 +24846,35 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         // nothing else, and this is the only pass that sees one: `declAttrPrefix` runs from the two
         // function EMITTERS, and none of these three reaches either (an extern emits no prototype at
         // all, a fnptr becomes a `_sigs` typedef). Without the check here a stray `@noheap extern "h";`
-        // is accepted in silence. The rule is not a list of banned names but a property: `@noheap` gates
-        // allocation IN A BODY, `@interrupt`/`@section` attach to EMITTED CODE, and a form with no body
-        // has neither — so naming the reason is more useful than naming the attribute.
+        // is accepted in silence. The rule is not a list of banned names but a property: `@interrupt`
+        // and `@section` attach to EMITTED CODE, and a form with no body has none — so naming the
+        // reason is more useful than naming the attribute.
+        //
+        // `@noheap` on a `fnptr` is THE exception, and it is the property talking rather than a special
+        // case: `@noheap` does not attach to emitted code, it states a promise, and a `fnptr` is the one
+        // bodyless form that declares a TYPE for something else's body to satisfy. The signature carries
+        // the promise, every bind is checked against it (emitFnPtrBind / rejectFnPtrBindNoHeap), and a
+        // call through the slot is then provable — which is what makes the fnptr gate in
+        // rejectNoHeapIndirect a rule with an escape hatch rather than a dead end. It stays rejected on
+        // an `extern fn` and an `extern "<h>";`, whose bodies are C and cannot be checked at all.
         if (filtered) {
             const char* what = nullptr;
+            bool isFnPtr = false;
             if (dynamic_cast<IncludeNode*>(decl.get())) what = "`extern \"<header>\";`";
             else if (auto* f = dynamic_cast<FunctionDeclarationNode*>(decl.get()))
-                if (!f->block) what = isExtern(f) ? "an `extern fn`" : "a `fnptr`";
-            if (what)
-                unsupported((std::string("`@") + *(*filtered)[0]->name + "` needs a body to apply to, and "
-                             + what + " has none — `@compileFor(FLAG)` is the only attribute a declaration "
-                             "without a body accepts").c_str(), decl->line);
+                if (!f->block) { isFnPtr = !isExtern(f); what = isFnPtr ? "a `fnptr`" : "an `extern fn`"; }
+            for (auto& at : *filtered) {
+                if (!at || !at->name) continue;
+                if (isFnPtr && *at->name == "noheap") {
+                    if (at->args && !at->args->empty())
+                        unsupported("`@noheap` takes no arguments", decl->line);
+                    continue;
+                }
+                if (what)
+                    unsupported((std::string("`@") + *at->name + "` needs a body to apply to, and "
+                                 + what + " has none — `@compileFor(FLAG)` is the only attribute a "
+                                 "declaration without a body accepts").c_str(), decl->line);
+            }
         }
         kept.push_back(decl);
     }

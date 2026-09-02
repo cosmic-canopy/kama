@@ -1,0 +1,30 @@
+// The ESCAPE HATCH for the `fnptr` blind seam. A `fnptr` has no knowable target, so a call through one
+// is rejected inside a no-heap region — which left the callback, the very shape a real-time system is
+// built from, with nothing an author could write to make it legal. `@noheap` on the SIGNATURE is that
+// spelling: the type carries the promise, every function bound to it is checked against that promise,
+// and the call is then provable. The same rule the contract member gets, for the same reason, and it
+// reads the same way (`tests/noheap_contract.kama`).
+//
+// It exercises every bind POSITION on purpose. Until this shipped only a local initializer was checked
+// at all — `emitFnPtrBind`'s one caller — while an assignment, a call argument, a field and a module
+// `static` reached the bare function-name arm of `emitExpression`, which checked nothing.
+@noheap fnptr int32 Op(int32 x);
+@noheap fn int32 dbl(int32 x) { return x + x; }
+
+type resource Reg {
+    Op cur;
+    public ctor make(Op h) { this.cur = h; }                            // ...through a ctor ARGUMENT
+    @noheap public fn int32 dispatch(int32 x) { return this.cur(x: x); }   // ...and through a FIELD
+}
+
+static Op g_handler;
+
+@noheap fn int32 tick(Op f, int32 n) { return f(x: n); }             // through a PARAMETER
+@noheap fn int32 viaStatic(int32 n) { return g_handler(x: n); }      // through a module `static`
+
+fn int32 main() {
+    Op local = dbl;              // a local INITIALIZER
+    g_handler = dbl;             // an ASSIGNMENT
+    Reg r = Reg.make(h: dbl);
+    return tick(f: local, n: 3) + tick(f: dbl, n: 4) + viaStatic(n: 5) + r.dispatch(x: 9);
+}   // 6 + 8 + 10 + 18 = 42

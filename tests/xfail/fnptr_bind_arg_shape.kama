@@ -1,0 +1,11 @@
+// Binding a function of the WRONG SHAPE, in a position that was never signature-checked. `emitFnPtrBind`
+// runs `sigMatches` and is called from a local declaration only, so this argument bind reached
+// `emitExpression`'s bare function-name arm instead and was accepted in silence — and the call through
+// the pointer then passed one argument to a two-parameter function. That is an indirect call through a
+// mismatched function-pointer type: undefined behavior, and precisely the class UBSan's `function` check
+// would report, which is disabled suite-wide for an unrelated reason. Neither the C compiler nor the
+// sanitizers were going to catch it here.
+fnptr int32 F(int32 a);
+fn int32 two(int32 a, int32 b) { return a + b; }
+fn int32 run(F f, int32 n) { return f(a: n); }
+fn int32 main() { return run(f: two, n: 1); }

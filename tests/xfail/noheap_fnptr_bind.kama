@@ -1,0 +1,8 @@
+// A `@noheap fnptr` is a PROMISE, so binding something that does not make it must be refused — otherwise
+// the escape hatch launders the guarantee instead of carrying it, and `@noheap` quietly becomes
+// "allocates nothing, except through the slot we stopped looking at". One direction only: a `@noheap`
+// function may be bound to a plain signature, which constrains only itself.
+@noheap fnptr int32 Op(int32 x);
+fn int32 plain(int32 x) { return x + x; }
+@noheap fn int32 tick(int32 n) { Op f = plain; return f(x: n); }
+fn int32 main() { return tick(n: 21); }

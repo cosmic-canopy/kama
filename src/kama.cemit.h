@@ -98,7 +98,9 @@ struct FuncSig {
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
     bool                   isUnsafe = false;       // `unsafe fn …` — the body may touch raw memory
-    FunctionDeclarationNode* node = nullptr;  // decl site (LSP def-site table; unused by emission)
+    // The declaration site. Read by the LSP def-site table, and by `resolveFnPtrTarget` for the one
+    // question a bind needs and `FuncSig` does not otherwise carry: whether the function is `@noheap`.
+    FunctionDeclarationNode* node = nullptr;
     // The unit that DECLARED it. `node` carries a line but no file, so without this a diagnostic about
     // two declarations can only name one of them — which is what made "first declared at line 2" useless
     // once the two `main`s moved into different directories. Same record `ClassInfo::declFile` keeps for
@@ -115,6 +117,29 @@ struct SigInfo {
     std::string            retCType;    // resolved C return type (for the typedef)
     std::vector<ParamSig>  params;      // names (named-arg invoke) + C types (className)
     std::string            declFile;    // the unit that declared it — the file rung's key (see `checkReach`)
+                         // `@noheap` on the `fnptr` declaration. Signature-level for the same reason
+                         // `InterfaceMethod::noHeap` is: a call through the pointer is dispatched to a
+                         // target the compiler cannot see, so inference stops at the slot. Declaring it
+                         // is what lets the proof cross — the signature PROMISES the callee allocates
+                         // nothing, every function bound to it is checked against that promise, and a
+                         // `@noheap` caller may then call through it.
+    bool                   noHeap = false;
+};
+
+// What a `fnptr`-typed destination is being bound to, as resolved by `resolveFnPtrTarget`. One record
+// for the two paths that must agree — `emitFnPtrBind` lowers it, `checkFnPtrValueBind` judges it — so a
+// bind position cannot be lowered by one and checked by neither.
+struct FnPtrTarget {
+    enum Kind { None, Function, Method, SigValue };
+    Kind                    kind = None;
+    std::string             cName;        // the C symbol that decays to the pointer (Function/Method)
+    FuncSig                 sig;          // receiver-first signature, to compare against the fnptr
+    std::string             display;      // "function 'dbl'" / "method 'Vec2::dot'" — diagnostic subject
+    std::string             name;         // the bare spelling, for "declare `dbl` `@noheap` too"
+    std::string             mismatchNote; // the extra clause a METHOD's shape error needs, else ""
+    bool                    noHeap = false;   // the target's own `@noheap` declaration
+    IdentifierNode*         id   = nullptr;   // the name node — LSP reference recording, EMIT path only
+    ASTNode*                node = nullptr;   // ...and the declaration it refers to
 };
 
 // ---- Class model ----------------------------------------------------------
@@ -2562,6 +2587,11 @@ private:
     // the analysis: they start UNASSIGNED, so reading one is an error and every return must have filled it.
     void        checkDefiniteAssignment(SharedBlock body, SharedParameterList params = SharedParameterList());
     std::string emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line);
+    // The one resolver behind every `fnptr` bind, and the two judgements over it. See the block comment
+    // on `resolveFnPtrTarget` for why the split exists (only a local initializer used to be checked).
+    bool resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out);
+    void checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line);
+    void checkFnPtrValueBind(const std::string& dstCType, SharedExpression value, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.
     void        emitBindableNew(const std::string& nm, const std::string& octy,

@@ -608,17 +608,25 @@ against that promise, exactly as `const fn` already works on a contract
 ([tests/noheap_contract.kama](../tests/noheap_contract.kama)). A virtual call the compiler devirtualizes
 (a `final` class, a `final fn`, or a method nobody overrides) is a direct call and needs no annotation.
 
-⚠️ One gap remains, and it is the **flag**, not the attribute. `--no-heap` gates every body, so a callee
-that allocates fails at its own declaration and needs no propagation — but the `GlobalAllocator` leaf is
-not applied program-wide, so a `--no-heap` build can still reach `malloc` through a container. Tracked on
-the roadmap.
+The **`fnptr` seam has the same escape, spelled on the signature**: `@noheap fnptr int32 Op(int32 x);` <!-- test: noheap_fnptr -->
+makes the promise part of the named type, so every function bound to it must itself be `@noheap` — in <!-- xfail: noheap_fnptr_bind, noheap_fnptr_bind_arg -->
+**every** bind position, a local initializer, an assignment, a call argument, a field and a module
+`static` alike — and a call through such a slot is then legal inside a no-heap region
+([tests/noheap_fnptr.kama](../tests/noheap_fnptr.kama)). One direction, as on a contract: a `@noheap`
+function may be bound to a plain signature, which constrains only itself. `BindableFunctionPtr<Sig>`
+inherits it, because its `Sig` *is* an `fnptr` type. Without this a callback — the shape a real-time
+system is built from — had no legal spelling in a `@noheap` region at all.
 
 `@noheap` marks a **body**, so it goes on any declaration that has one: a free `fn`, and equally a <!-- test: noheap_method -->
 **method, `ctor`, destructor or operator**. The member forms matter because a real-time entry point is
 naturally a method — `synth.fill(…)` — and a destructor is what runs at the end of a real-time scope.
-It is rejected where there is no body to gate: on a module `static`, and on the bodyless `extern`/`fnptr` <!-- xfail: noheap_on_static, attr_on_extern -->
-forms. `@interrupt` stays free-function-only (a vector table reaches its handler by **bare** symbol, and
-a member's C name is mangled and takes a receiver); `@section(".name")` is legal on both.
+It is rejected where there is no body to gate: on a module `static`, and on the bodyless `extern` forms <!-- xfail: noheap_on_static, attr_on_extern -->
+— an `extern "<h>";` and an `extern fn`, whose bodies are C and cannot be checked at all. A **`fnptr`** is
+the exception, and by the same property rather than in spite of it: it declares a TYPE for someone else's
+body to satisfy, so the promise has somewhere to land (above). `@interrupt` and `@section` remain rejected <!-- xfail: attr_on_fnptr -->
+on all three, because they attach to emitted code and a `fnptr` emits only a typedef. `@interrupt` stays
+free-function-only (a vector table reaches its handler by **bare** symbol, and a member's C name is
+mangled and takes a receiver); `@section(".name")` is legal on a free `fn` and a member.
 
 ```kama
 @noheap fn int32 tick(int32 n) { /* new / "${x}" / spawn here is a compile error */ ... }
@@ -2016,7 +2024,14 @@ A bare **function name used as a value** is its function pointer (Rust-like), so
 operator — `c = cmp` and `f(cb: cmp)` just work. An `fnptr` can also be a **parameter** (`fn run(Op op, …) {
 op(…) }` — the core callback shape), and it can be **stored and invoked later** — in a field or a module <!-- test: fnptr_stored -->
 `static` — which is the callback-registry shape: install a handler now, dispatch through it on a later
-call ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)).
+call ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)). Binding is checked in **every** one of those <!-- xfail: fnptr_bind_arg_shape -->
+positions, not only in a local's initializer: a shape-mismatched bind elsewhere used to compile, and the
+call through it then passed the wrong number of arguments — an indirect call through a mismatched
+function-pointer type, which is undefined behavior.
+
+A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
+Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
+slot is legal inside a no-heap region — the escape hatch for the blind seam. See *No-heap subset*.
 
 **Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:

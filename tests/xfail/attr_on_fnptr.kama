@@ -1,0 +1,7 @@
+// `@noheap` is the ONE attribute a `fnptr` accepts, and the reason is the property, not a list: it states
+// a promise about a body someone else will write, where `@interrupt` and `@section` attach to EMITTED
+// CODE and a `fnptr` emits only a typedef. `tests/xfail/attr_on_extern.kama` covers the `extern` arm of
+// the same check; this covers the `fnptr` arm, which relaxing that check for `@noheap` could otherwise
+// have opened in silence.
+@interrupt fnptr void Isr();
+fn int32 main() { return 0; }
