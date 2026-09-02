@@ -1,0 +1,21 @@
+// `isize`/`usize` implement neither `Serialize` nor `Deserialize`, ON PURPOSE: they are the only
+// platform-varying types (`ptrdiff_t`/`size_t` — 8 bytes natively, 4 on wasm32), so a field of that type
+// has no wire format. The negative claim lives in prelude/global.kama above the `Serialize` block and in
+// SPEC's `isize` section; this fixture is what holds it down.
+//
+// ⚠️ IT MUST FAIL AS A KAMA ERROR, not as a C one. Until 0.9.136 this exact program produced a clean kama
+// build and an implicit-declaration error from clang — the generator emitted a call to an
+// `isize__serialize` that is never defined. Zero kama diagnostics for a defect kama could see. An xfail
+// that only asserts "this does not build" cannot tell those two apart, which is why the `.msg` beside this
+// pins the wording of the kama diagnostic.
+@generate(Serialize)
+type value Record {
+    @field public isize offset;
+    @field public int32 tag;
+    public ctor make(isize offset, int32 tag) { this.offset = offset; this.tag = tag; return this; }
+}
+
+fn int32 main() {
+    Record r = Record.make(offset: 1, tag: 2);
+    return 0;
+}

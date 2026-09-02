@@ -313,6 +313,13 @@ public:
 #define IDENTIFIER_STRING_VAL 12
 #define IDENTIFIER_VOID_VAL 13
 #define IDENTIFIER_CHAR_VAL 14
+// The two PLATFORM-VARYING integral types (`ptrdiff_t`/`size_t`). APPENDED deliberately: four range
+// checks in kama.cemit.cpp read this block as an ordered span (`INT8..UINT64` = "an integer",
+// `INT8..CHAR` = "a scalar"), and inserting these in the middle would have silently widened all four.
+// Appending keeps every span meaning what it meant; each site that should also cover a size type names
+// them explicitly instead.
+#define IDENTIFIER_ISIZE_VAL 15
+#define IDENTIFIER_USIZE_VAL 16
 
 
 class IdentifierNode : public ExpressionNode {

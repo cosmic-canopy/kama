@@ -1,0 +1,13 @@
+// The read half of the same rule — see serialize_isize_field.kama for why it is a rule. `usize` is used
+// here (and `isize` there) so a fix that only ever ran on one of the two cannot pass both.
+@generate(Deserialize)
+type value Cursor {
+    @field public usize position;
+    @field public bool eof;
+    public ctor make(usize position, bool eof) { this.position = position; this.eof = eof; return this; }
+}
+
+fn int32 main() {
+    Cursor c = Cursor.make(position: 0, eof: false);
+    return 0;
+}

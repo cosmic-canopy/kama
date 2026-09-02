@@ -243,6 +243,11 @@ integral_type
   | INT16
   | INT32
   | INT64
+  /* Platform-varying, so deliberately absent from every FIXED-width rule the emitter keys off this list:
+     `scalarByteSize` and the integral-range fold both refuse them by an explicit case, not by falling
+     through a `default:`. Being integral types here is what gives them the four value conformances. */
+  | ISIZE
+  | USIZE
   ;
 floating_point_type
   : FLOAT32

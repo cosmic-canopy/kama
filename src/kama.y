@@ -305,6 +305,11 @@ struct kamayystype {
 %token <string> REF RETURN SLOT STATIC STRING
 %token <string> THIS TRUE TYPE
 %token <string> UINT8 UINT16 UINT32 UINT64
+/* The two PLATFORM-VARYING integral types (`ptrdiff_t`/`size_t`). Reserved words like every other
+   primitive, which is what lets them appear in a `type intrinsic <…>` conformance list — see the note on
+   `marked_intrinsic_declaration`, whose legal target set falls out of every target's first token being
+   reserved. They were plain IDENTIFIERs until 0.9.136, and every `switch` over a builtin type missed them. */
+%token <string> ISIZE USIZE
 %token <string> UNSAFE VIRTUAL VOID
 %token <string> WHILE
 
@@ -683,6 +688,11 @@ integral_type
   | INT16   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_INT16_VAL); }
   | INT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_INT32_VAL); }
   | INT64   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_INT64_VAL); }
+  /* Platform-varying, so deliberately absent from every FIXED-width rule the emitter keys off this list:
+     `scalarByteSize` and the integral-range fold both refuse them by an explicit case, not by falling
+     through a `default:`. Being integral types here is what gives them the four value conformances. */
+  | ISIZE   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_ISIZE_VAL); }
+  | USIZE   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_USIZE_VAL); }
   ;
 floating_point_type
   : FLOAT32   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_FLOAT32_VAL); }

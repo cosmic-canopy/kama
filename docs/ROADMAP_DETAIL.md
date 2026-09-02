@@ -850,50 +850,22 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     re-bind in between — now has a spelling ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)), and
     SPEC's `fnptr` section says so.
 
-  - **`isize`/`usize` are absent from EVERY intrinsic conformance — reported as "cannot be
-    interpolated", and that is the smallest of six symptoms.** Measured on `0.9.134`: `Map<isize, _>`
-    fails its `Hashable` bound, `DynamicArray<isize>.contains` does not exist (`Equatable`),
-    `sortUnstable` fails its `Comparable` bound, and `${n}` fails `Format`. Only built-in `==` works,
-    because that is not a contract call. AGENTS.md is right that *"`isize` is the size type — every
-    `length()`/`count()`/index is one"*, which makes this the recommended type for every length being the
-    one that cannot be logged, keyed, searched or sorted.
-    ⚠️ **The suggested fix — two more entries beside the existing `type intrinsic <…> implements Format`
-    lines — does not compile**, and the reason is the actual defect: `isize`/`usize` carry no
-    `builtInVal`. They are *"PRIMITIVES spelled as plain names"* (the comment at
-    [kama.cemit.cpp:8970](../src/kama.cemit.cpp)), so they lex as IDENTIFIER, every `switch` over a
-    builtin type misses them, and they cannot appear in an intrinsic-conformance list at all — adding
-    `isize` there is a parse error in the prelude. The same root cause already bit once: `DynamicArray<isize>`
-    "never compiled" until that one site was special-cased.
+  - **BUG: a bare integer literal bound to a `const ref T` parameter is a silent wrong answer.** Measured
+    2026-09-01 on `0.9.136`, found while probing the `isize` row and unrelated to it. The call
+    `a.contains(item: 1)` on a `DynamicArray<int64>` emits `int32_t __primtmp0 = 1;` and passes
+    `&__primtmp0` as `int64_t*`, so the callee reads four bytes of adjacent stack as the high half. A
+    `DynamicArray<int64>` genuinely holding 1 and 2 answers `contains(item: 2)` **false** — exit 5 where 7
+    is correct. It reduces below any container: `fn bool eq(const ref int64 a, const ref int64 b)` called
+    as `eq(a: x, b: 2)` shows the same mismatch.
 
-    **Three candidate shapes, none of them yet ruled — measured 2026-09-01, decide before coding:**
-    1. **Make them real primitive tokens.** Lexer keywords beside `int8`…`uint64`, an
-       `IDENTIFIER_ISIZE_VAL`/`_USIZE_VAL`, and the ~45 `builtInVal` sites in `kama.cemit.cpp`. The most
-       correct and the widest. ⚠️ It reserves two words: 626 uses across the corpus are all TYPE
-       positions and none is a variable NAME, so it looks non-breaking — *looks*, on a grep; prove it
-       with a build. ⚠️ A new keyword touches seven guarded registries (see the MCU keyword campaign).
-    2. **Widen `intrinsic_target_list`** to admit them, then add the prelude conformances. Much smaller.
-       ⚠️ **It is a GRAMMAR change and must be conflict-counted at the position the rule occupies** —
-       measured: `type intrinsic <isize>` and `type intrinsic <int32, isize>` are BOTH parse errors
-       ("unexpected IDENTIFIER"), even though `intrinsic_target_list` is built from `simple_type` and
-       `simple_type` includes `class_type`. The rule's own comment explains why and is worth reading
-       first: *"the legal target set is exactly the primitives: it falls out of the grammar rather than
-       being checked"*, because every target's first token is RESERVED and so cannot collide with the
-       `TYPE modifiers_opt IDENTIFIER` head of an ordinary type declaration. Admitting an IDENTIFIER
-       there is exactly the collision that comment is about.
-    3. **Alias at conformance lookup only** — let `primConformance("isize")` fall back to `int64`'s. No
-       grammar and no prelude change. ⚠️ **Weigh it against the type-identity campaign before choosing
-       it**: `char` was not exempted from strict numeric checking, it was INVISIBLE to it, and an alias
-       that makes `isize` answer as `int64` risks re-opening that class of hole in the one place the
-       language deliberately keeps them distinct.
+    ⚠️ **The by-value case is fine** — `fn int64 f(int64 v)` called as `f(v: 1)` contextually types the
+    literal — so this is not "literals are int32", it is a hole in the strict-numeric spine at exactly one
+    place: the temp materialised for a `const ref` argument is typed from the literal instead of from the
+    parameter. Two resolutions are open and the corpus decides which (see the doc-claim campaign, where a
+    mismatch that looked like a soundness hole was resolved the other way): either the temp takes the
+    parameter's type, or the call is REJECTED the way `int32 < usize` is. Whichever is chosen, C currently
+    emits only a `-Wincompatible-pointer-types` warning, so nothing in the pipeline stops it today.
 
-    Whichever is taken, the conformances wanted are the six `isize`/`usize` are missing from — `Format`,
-    `Hashable`, `Equatable`, `Comparable`, `Serialize`, `Deserialize` — not `Format` alone.
-    **The DIAGNOSTIC half is fixed in `0.9.135`** — the hole now says *"`isize` cannot be interpolated —
-    no `Format` is implemented for `isize`"* at the hole's own line, where it used to be an
-    unresolved-receiver error at line 1 column 0 naming neither. ⚠️ Two of our own defects met there: a
-    synthesized `format` call carried NO line (so every interpolation diagnostic reported at 1:0), and the
-    receiver message added in `0.9.134` asserted "no local … of that name is in reach" about a local one
-    line above. A message is worse than useless when it is confidently wrong.
   - **A kama reserved word cannot name a `type extern value` field.** `webgpu.h` uses `type` in
     `WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and
     `WGPUCompilationMessage`; the field is then unreachable, and unlike a function it cannot be wrapped —

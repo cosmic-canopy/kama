@@ -165,6 +165,7 @@ derived_shadows_base_method	derived_shadows_base_method.kama:34 derived_shadows_
 derived_widens_public	derived_widens_public.kama:20
 deriving_type_not_final	deriving_type_not_final.kama:13
 deserialize_turbofish_bad_method	deserialize_turbofish_bad_method.kama:17
+deserialize_usize_field	deserialize_usize_field.kama:5
 diag_no_mangled_name	diag_no_mangled_name.kama:13
 dot_on_type_field	dot_on_type_field.kama:7
 dot_on_type_instance_method	dot_on_type_instance_method.kama:8
@@ -532,6 +533,7 @@ self_param	self_param.kama:8
 self_returning_static_fn	self_returning_static_fn.kama:8
 ser_field_no_generate	ser_field_no_generate.kama:2
 ser_unmarked_field	ser_unmarked_field.kama:4
+serialize_isize_field	serialize_isize_field.kama:13
 shadow_enclosing	shadow_enclosing.kama:4
 shadow_field	shadow_field.kama:6
 shadow_param	shadow_param.kama:3

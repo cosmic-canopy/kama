@@ -1967,6 +1967,9 @@ private:
     bool        isTransparentValue(const ClassInfo& ci) const;
     void emitEnumSerializeDefinition(ClassInfo& ci);     // externally-tagged {"tag":…[,"value":{…}]}
     void emitEnumDeserializeDefinition(ClassInfo& ci);
+    // True (and diagnosed) for a PRIMITIVE serde field with no wire form — `isize`/`usize`, whose width
+    // is platform-varying. Both directions funnel through it; see the definition for why.
+    bool serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line);
     void emitSerFieldWrite(SharedIdentifier ty, const std::string& access, int depth,
                            const std::string& resultCType);   // resultCType empty => graph-node/void context (sticky only)
     void emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int depth,

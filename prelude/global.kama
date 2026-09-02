@@ -114,10 +114,16 @@ type intrinsic <string> implements Hashable {
 // Every integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend, which is
 // fine: equal values still hash equal; on uint64 the cast is the identity) + scalar `equals` — so every
 // integer type is a universal `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import.
+//
+// `isize`/`usize` belong here as much as any fixed width, and their absence until 0.9.136 was not a choice:
+// they carried no `builtInVal`, so they could not be NAMED in a target list at all. That made the size type
+// — what every `length()`, `count()` and index is — the one type that could not be a `Map` key, be
+// `contains`-searched, be sorted or be interpolated. All four bodies below are width-agnostic (a widening
+// cast or a bare operator), so each takes them by being widened, with no body written.
 // The `Map`'s `Hasher::finish` supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to
 // consecutive slots, which open addressing handles fine, and `FastHasher` can be selected to skip
 // splitmix entirely for such keys.
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Hashable {
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }
 }
 // Floats join the `Equatable` set (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
@@ -125,14 +131,14 @@ type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implem
 // (NaN != NaN, ±0.0), and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add
 // on demand if ever needed via a bit-cast helper. `string` is absent for the opposite reason — its
 // `Equatable` comes free from the built-in `equals`.
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64>
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64>
     implements Equatable<This> {
     public const fn bool equals(const ref This other) { return this == other; }
 }
 // `Comparable` (pure-kama, NO compiler blessing) — every int/float is totally ordered via a three-way
 // `<`/`>` fold to `Ordering`, and `string` is compared lexicographically over its UTF-8 bytes (unsigned
 // `s[i]`, so byte order == codepoint order for ASCII and correct byte-wise order elsewhere).
-type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64> implements Comparable<This> {
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Comparable<This> {
     public const fn Ordering compareTo(const ref This other) {
         if (this < other) { return Ordering::Less; }
         if (this > other) { return Ordering::Greater; }
@@ -296,6 +302,23 @@ type contract Deserialize<T is This> for value, resource, enum, intrinsic {
 // specialization sections. They collapse for real once the writer itself goes generic.
 // Each primitive `serialize` is fallible: write (sticky), then wrap — a sink/format failure surfaces as
 // `Err(SerError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
+//
+// ⚠️ `isize`/`usize` ARE DELIBERATELY ABSENT from this block and from `Deserialize` below, and they are the
+// only primitives that are. They took the four VALUE contracts above (`Format`, `Hashable`, `Equatable`,
+// `Comparable`) in 0.9.136 and stop here on purpose: a platform-varying width has no wire format. A stream
+// is read by a program that is not the one that wrote it, so a field whose width is `ptrdiff_t` would be 8
+// bytes written natively and 4 read on wasm32 — target-dependent behaviour with nothing to diagnose it.
+// Serializing them as a fixed 64 bits instead would have been silently lossy in the other direction.
+//
+// The corpus agrees with the refusal: of the 16 `isize`/`usize` FIELDS in lib/, every one is in-memory
+// state that must never reach a wire — serializer and stream cursors (`pos`, `len`, `cap`, `fill`,
+// `objMark`), a live slot index, an OS wait handle (a pid / a Windows HANDLE), an OS-reported byte count.
+// Not one is a value worth persisting, and no type in the corpus `@generate`s `Serialize` over one.
+//
+// An author who does want one writes `cast<int64>` at the field and has thereby said which width they
+// meant. There is no attribute for this and no need of one: the absence of a conformance IS the gate, and
+// `@generate` now reports it as a kama error naming the field — before 0.9.136 it silently emitted a call
+// to an `isize__serialize` that does not exist and left the failure to the C compiler.
 type intrinsic <int8>    implements Serialize    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI8(v: this);   if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 type intrinsic <int16>   implements Serialize    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI16(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 type intrinsic <int32>   implements Serialize    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeI32(v: this);  if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
@@ -607,14 +630,16 @@ type resource Formatter {
 // Primitive conformances (pure-kama, like the Hashable/Comparable ones above) — every scalar and `string`
 // renders in its natural form, so `<T: Format>` bounds and `"${x}"` compose universally without an import.
 // Narrow integers widen into the widest write (JSON-style: one conversion per signedness), which is what
-// lets each signedness share ONE body across its four widths — on the widest the cast is the identity.
+// lets each signedness share ONE body across its four widths — on the widest the cast is the identity, and
+// on `isize`/`usize` it widens on wasm32 and is the identity natively, which is why the platform-varying
+// pair can ride a fixed-width writer here while `sizeof` and `bitcast` still refuse them.
 // Every other target names a different writer, so it is its own block; see the Serialize note below.
 // `char` renders as its CHARACTER — the same thing the compiler's `writeChar` fast path does for an
 // interpolation hole, so the two agree whether the value arrives directly or through a `<T: Format>` bound.
-type intrinsic <int8, int16, int32, int64> implements Format {
+type intrinsic <int8, int16, int32, int64, isize> implements Format {
     public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this)); }
 }
-type intrinsic <uint8, uint16, uint32, uint64> implements Format {
+type intrinsic <uint8, uint16, uint32, uint64, usize> implements Format {
     public const fn void format(ref Formatter f) { f.writeU64(v: cast<uint64>(this)); }
 }
 type intrinsic <float32> implements Format { public const fn void format(ref Formatter f) { f.writeF32(v: this); } }

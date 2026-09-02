@@ -1,0 +1,75 @@
+// `isize`/`usize` carry the four VALUE contracts — `Format`, `Hashable`, `Equatable`, `Comparable`.
+//
+// They carried none of them before 0.9.136, and not by choice: they were primitives spelled as plain
+// names, carrying no `builtInVal`, so they could not be named in a `type intrinsic <…>` target list at
+// all. That made the size type — what every `length()`, `count()` and index is — the one type that could
+// not be interpolated, be a `Map` key, be `contains`-searched or be sorted. Reported as "cannot be
+// string-interpolated", which was the smallest of the symptoms.
+//
+// Exit code is a bitset of the checks that passed (63 = all six). Each bit is a DIFFERENT contract
+// reached through a DIFFERENT road, because they fail independently: a bound (`Map`'s `K: Hashable`), a
+// conditional method (`DynamicArray.contains` exists only `when [T: Equatable<T>]`), a free function with
+// a bound (`sortUnstable<T: Comparable<T>>`), the interpolation lowering, and the `@generate(Format)`
+// field writer, which is a separate switch in the emitter from the hand-written conformance.
+//
+// ⚠️ Both types, every time. They are separate targets in separate prelude lists, and a fix that reached
+// only the signed one would pass a fixture that only tested `isize`.
+import { std::collections::Map, std::collections::DynamicArray, std::collections::sortUnstable };
+
+@generate(Format)
+type value Span {
+    @field public isize lo;
+    @field public usize n;
+    public ctor make(isize lo, usize n) { this.lo = lo; this.n = n; return this; }
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // 1. Format, through an interpolation hole — the reported symptom, both signednesses.
+    isize i = 0 - 7;
+    usize u = 12;
+    string s = "i=${i} u=${u}";
+    if (s == "i=-7 u=12") { r = r + 1; }
+
+    // 2. Hashable + Equatable, through `Map`'s `K` bound. Both are required to satisfy it, so an
+    //    `isize` key exercises the pair; the `usize` map beside it proves the unsigned target too.
+    Map<isize, int32> mi = Map.empty();
+    Map<usize, int32> mu = Map.empty();
+    isize k = 7;
+    usize j = 9;
+    mi.put(key: k, value: 42);
+    mu.put(key: j, value: 43);
+    int32 vi = match (mi.get(key: k)) { case Some(value: x): x; case None: 0; };
+    int32 vu = match (mu.get(key: j)) { case Some(value: x): x; case None: 0; };
+    if (vi == 42 && vu == 43) { r = r + 2; }
+
+    // 3. Equatable, through a CONDITIONAL method — `contains` exists only `when [T: Equatable<T>]`, so
+    //    before this change it was not a failing bound but a method that did not exist at all.
+    DynamicArray<isize> da = DynamicArray.empty();
+    isize a1 = 10; isize a2 = 20;
+    da.add(item: a1); da.add(item: a2);
+    if (da.contains(item: a2) && da.indexOf(item: a1) == 0) { r = r + 4; }
+
+    // 4. The same for `usize`.
+    DynamicArray<usize> du = DynamicArray.empty();
+    usize b1 = 5;
+    du.add(item: b1);
+    if (du.contains(item: b1)) { r = r + 8; }
+
+    // 5. Comparable, through a free function with a `<T: Comparable<T>>` bound. Turbofish because
+    //    inference through `.view()` does not bind `T` — that is a separate, pre-existing limitation and
+    //    behaves identically at `int64`, so it is not this fixture's subject.
+    DynamicArray<isize> sd = DynamicArray.empty();
+    isize c1 = 3; isize c2 = 1; isize c3 = 2;
+    sd.add(item: c1); sd.add(item: c2); sd.add(item: c3);
+    sortUnstable::<isize>(items: sd.view());
+    if (sd[0] == 1 && sd[1] == 2 && sd[2] == 3) { r = r + 16; }
+
+    // 6. `@generate(Format)` over both — the emitter's own field writer, not the prelude conformance.
+    Span sp = Span.make(lo: 0 - 4, n: 6);
+    string t = "${sp}";
+    if (t == "Span { lo: -4, n: 6 }") { r = r + 32; }
+
+    return r;
+}

@@ -1799,6 +1799,8 @@ std::string CEmitter::spellTypeIn(const std::string& ownerKey, const SharedIdent
             case IDENTIFIER_BOOL_VAL:    return "bool";
             case IDENTIFIER_FLOAT32_VAL: return "float32";
             case IDENTIFIER_FLOAT64_VAL: return "float64";
+            case IDENTIFIER_ISIZE_VAL:   return "isize";
+            case IDENTIFIER_USIZE_VAL:   return "usize";
             default: break;
         }
         if (!id->value) return "";

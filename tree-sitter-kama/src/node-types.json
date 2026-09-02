@@ -8893,6 +8893,10 @@
     "named": false
   },
   {
+    "type": "isize",
+    "named": false
+  },
+  {
     "type": "line_comment",
     "named": true,
     "extra": true
@@ -9024,6 +9028,10 @@
   },
   {
     "type": "unsafe",
+    "named": false
+  },
+  {
+    "type": "usize",
     "named": false
   },
   {

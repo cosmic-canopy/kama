@@ -58,10 +58,16 @@ grep -oE '^#define IDENTIFIER_[A-Z0-9]+_VAL' "$ROOT/src/kama.ast.h" \
     | sed 's/#define IDENTIFIER_//; s/_VAL//' | tr 'A-Z' 'a-z' \
     | grep -v '^none$' | sort -u > "$tmp/registered"
 
-# The three that are plain IDENTIFIERS rather than reserved words: `cType` special-cases them by spelling
+# The ones that are plain IDENTIFIERS rather than reserved words: `cType` special-cases them by spelling
 # instead of by `builtInVal`, so they carry no `IDENTIFIER_*_VAL` and have to be named here. Each is
 # checked below to still BE special-cased, so this list cannot quietly outlive the code it stands for.
-IDENT_BUILTINS='isize usize UnsafePtr InlineArray BindableFunctionPtr Simd'
+#
+# ⚠️ `isize` and `usize` LEFT this list in 0.9.136. They are reserved words now, carrying
+# IDENTIFIER_ISIZE_VAL/IDENTIFIER_USIZE_VAL, so the sweep above already finds them — and the by-name
+# assertion below would be asserting the very special-casing that change deleted. Being on this list was
+# the whole defect: a type the emitter knows only by spelling is invisible to every `switch` over a
+# builtin, which is why they could not appear in a `type intrinsic <…>` conformance list.
+IDENT_BUILTINS='UnsafePtr InlineArray BindableFunctionPtr Simd'
 for n in $IDENT_BUILTINS; do echo "$n"; done | sort -u >> "$tmp/registered"
 sort -u -o "$tmp/registered" "$tmp/registered"
 
@@ -129,7 +135,7 @@ probe() {   # probe <label> <L:C> <expected-line>
 }
 probe "a reserved word in a body (\`string\`)"      2:4  "$(docline string)"
 probe "a reserved word in a body (\`int32\`)"       4:4  "$(docline int32)"
-probe "an identifier-spelled built-in (\`isize\`)"  3:4  "$(docline isize)"
+probe "a platform-varying reserved word (\`isize\`)"     3:4  "$(docline isize)"
 probe "an intrinsic method (\`s.length()\`)"        3:16 "$(docmethodline length)"
 
 # ...and the one thing that must NOT happen: a doc entry is a place to READ, never a symbol of the

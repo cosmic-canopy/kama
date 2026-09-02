@@ -1136,6 +1136,19 @@ already relied on signedness: `operator[]` bounds-checks `i < 0 || i >= len`, a 
 against an unsigned index. Go's `len() -> int`, Swift's `Int`, Python's `Py_ssize_t` (PEP 353) and C++20's
 `std::ssize()` all landed in the same place; the unsigned camp (C, C++, Rust, Zig) predates the lesson.
 
+**They carry the four value contracts, and deliberately not the two wire ones.** `isize`/`usize` implement <!-- xfail: serialize_isize_field, deserialize_usize_field -->
+`Format`, `Hashable`, `Equatable` and `Comparable`, so a length can be interpolated, be a `Map`/`Set` key,
+be `contains`-searched and be sorted — the four a size type needs, given that every `length()`, `count()`
+and index is one. They implement **neither `Serialize` nor `Deserialize`**, and they are the only
+primitives that do not: a stream is read by a program that is not the one that wrote it, so a field whose
+width is `ptrdiff_t` would be 8 bytes written natively and 4 read on wasm32. A platform-varying width has
+no wire format. Give a serialized field a fixed width (`int64`/`uint64`) and `cast` at the boundary;
+`@generate(Serialize)` over an `isize` field is an error naming the field. <!-- xfail: serialize_isize_field -->
+
+The same line divides everything else about them: they refuse `sizeof` folding at compile time and refuse
+`bitcast` (an equal-width reinterpret needs a width), while `Format`'s widening `cast<int64>` needs none.
+**What decides is whether the operation needs to know the width.**
+
 **Bare `int` is not a kama type.** It was an alias for `int32` carrying no information of its own, and a
 reader coming from C or Go would expect a *platform* width from the name — the opposite of what it meant.
 Write `int32` for a fixed 32-bit integer, or `isize` for a size. **`double` is gone the same way** — it
