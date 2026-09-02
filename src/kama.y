@@ -23,6 +23,8 @@
 #include <string>
 #include <cstdlib>
 #include <cerrno>
+#include <cstring>
+#include <cctype>
 #include "kama.parser.hpp"
 #include "kama.ast.h"
 #include "kama.context.h"
@@ -649,6 +651,7 @@ qualified_identifier_no_generic
     /* Reading a `type`-named binding. This is the production that makes the contextual rule WHOLE: without
        it you could declare such a name and never read it, which is worse than not allowing it. */
   | TYPE  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
+  | SLOT  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `slot`, contextual for the same reason */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
@@ -1014,6 +1017,8 @@ parameter_list
   ;
 parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
+  /* contextual `slot` — a parameter may be named `slot` */
+  | const_opt hardware_opt parameter_modifier_opt type SLOT   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   ;
 parameter_modifier_opt
@@ -1051,7 +1056,10 @@ variable_declarator
        ever LEAD a declaration, so one token of lookahead separates them. Field, local and module `static`
        all reach this rule, so the word behaves identically in every one. Measured: 0 conflicts. */
   : TYPE   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
+  /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
+  | SLOT   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | TYPE EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
+  | SLOT EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   ;
@@ -1458,7 +1466,10 @@ member_access
        the entry is INERT rather than under-specified.
        Same two productions `default` and `base` needed, for the same reason. Measured: 0 conflicts. */
   | primary_expression DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  /* reading a `slot`-named member */
+  | primary_expression DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -1544,8 +1555,12 @@ argument_list
 argument
     /* `f(type: x)` — a parameter named `type` must be nameable at the call site too. */
   : TYPE COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+  /* a `slot:` argument label */
+  | SLOT COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | TYPE COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | SLOT COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | TYPE COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | SLOT COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
@@ -1895,6 +1910,7 @@ method_name
   | GIVE         { $$ = $1; }
   | TRUNCATE     { $$ = $1; }   /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   | TYPE         { $$ = $1; }   /* contextual for the FFI; here so the word reads the same in EVERY name position */
+  | SLOT        { $$ = $1; }   /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot
@@ -2332,6 +2348,42 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
   return rtn;
 }
 
+/* bison's message names the TOKEN and never says what the token IS: `unexpected SLOT, expecting
+ * IDENTIFIER or TYPE` reads like a parser fault rather than "you used a reserved word as a name". The
+ * first external project hit that three times — `base`, `type`, `slot` — and reported each as a possible
+ * compiler bug, because nothing in the message suggests the word is spoken for. Two of the three are
+ * contextual keywords now; this is the answer for the other 75.
+ *
+ * Gated on the parser having WANTED an identifier, which is what makes the note true. `unexpected ELSE`
+ * in a malformed `if` is not a naming mistake, and telling someone `else` is reserved there would be
+ * noise. The keyword table is read through kamaKeywordCount/At — the lexer owns it, so this cannot drift
+ * (the same reason the LSP's rename validation asks there).
+ *
+ * ⚠️ `null` gets no note: its token is NULL_LITERAL, the one keyword whose bison name is not its spelling
+ * uppercased. Adding an alias would be the wrong trade — a silent miss on one word costs a sentence, a
+ * wrong match costs trust in every message. */
+static std::string reservedWordNote(const char* msg)
+{
+    if (!msg) return "";
+    const char* u = std::strstr(msg, "unexpected ");
+    if (!u || !std::strstr(msg, "IDENTIFIER")) return "";
+    u += 11;
+    std::string tok;
+    for (; *u && (std::isupper((unsigned char)*u) || std::isdigit((unsigned char)*u) || *u == '_'); ++u)
+        tok += *u;
+    if (tok.empty()) return "";
+    for (size_t i = 0, n = kamaKeywordCount(); i < n; ++i) {
+        const char* w = kamaKeywordAt(i);
+        std::string up;
+        for (const char* p = w; *p; ++p) up += (char)std::toupper((unsigned char)*p);
+        if (up == tok)
+            return std::string(" — `") + w + "` is a reserved word, so it cannot be used as a name here"
+                   " (docs/SPEC.md lists all of them under *kama's keywords*; `copy`, `give`, `truncate`,"
+                   " `type` and `slot` are the ones that CAN name a binding)";
+    }
+    return "";
+}
+
 int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
 {
     LexerInstanceData* data = yyget_extra(scanner);
@@ -2348,6 +2400,7 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
     // %locations gives the error's precise start (the offending token), better than the lexer counter.
     int line = llocp ? llocp->first_line : data->codeGenContext->line;
     int col  = llocp ? llocp->first_column : data->codeGenContext->col;
-    return data->codeGenContext->handleError(line, col, "Parse", msg);
+    const std::string full = std::string(msg ? msg : "") + reservedWordNote(msg);
+    return data->codeGenContext->handleError(line, col, "Parse", full.c_str());
 }
 

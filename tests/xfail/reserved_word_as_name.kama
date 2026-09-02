@@ -1,0 +1,16 @@
+// A reserved word used as a name says so, rather than leaving the reader with a bare token name.
+//
+// bison's own message is `unexpected BASE, expecting IDENTIFIER or SLOT or TYPE` — it names the TOKEN and
+// never says what the token IS, so it reads like a parser fault. The first external project reported
+// three of these (`base`, `type`, `slot`) as possible compiler bugs for exactly that reason. `type` and
+// `slot` are contextual keywords now and name bindings freely; `base` is one of the 75 that do not, and
+// this is the message those get.
+//
+// ⚠️ The note is gated on the parser having WANTED an identifier. `unexpected ELSE` in a malformed `if`
+// is not a naming mistake, and a note there would be noise — so the gate is part of the claim, not an
+// optimisation.
+fn int32 main()
+{
+    isize base = 1;
+    return cast<int32>(base);
+}

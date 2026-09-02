@@ -248,6 +248,23 @@ identifier                  ({letter_char}|"_"){ident_char}*
                                                  SAVE_TOKEN_FROM_BUFFER(2);
                                                  return ISTR_CHUNK;
                                                }
+  /* A raw newline inside a plain string. It MUST come before {single_string_char}, which also matches
+     `\n` — both are one character, so flex breaks the tie by rule order, and without this rule the
+     newline was consumed as ordinary content and the line counter never advanced.
+     That made every diagnostic AFTER a multi-line literal fire that many lines EARLY, and the deficit
+     accumulated over every literal in the file: a parse error 27 lines below a WGSL shader was reported
+     27 lines above the mistake, on a line holding valid code. The column stayed right, which is what
+     made it read as a compiler fault rather than an offset.
+     Multi-line plain strings are a FEATURE, not an accident — `stripIndent"…"` exists to dedent one
+     (SPEC, *Interpolation*), and kama's own WebGPU example holds a ten-line shader — so counting the
+     newline is the fix and rejecting it is not. Every other state that can span lines already had this
+     rule (IN_COMMENT, IN_VERBATIM_STRING, IN_INTERP_HOLE); the plain-string state was the only one
+     without it. Appends `yytext` so the string's VALUE is byte-identical to before. */
+<IN_REGULAR_STRING>{new_line}                  {
+                                                 ++(yyextra->next_line_number);
+                                                 yyextra->next_column_number = KAMA_LEXERINSTANCE_DEFAULT_COLUMN_ONE;
+                                                 yyextra->workString->append(yytext);
+                                               }
 <IN_REGULAR_STRING>{single_string_char}        {
                                                  ++(yyextra->next_column_number);
                                                  yyextra->workString->append(yytext);

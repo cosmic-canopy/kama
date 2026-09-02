@@ -4123,6 +4123,34 @@ One keyword has **reserved surface not yet implemented** — using it is a **har
 registers and single-core ISR↔loop flags — see *Module-level statics* and ROADMAP_DETAIL §5). It is,
 however, **reserved** — see below.
 
+## kama's keywords
+
+**The complete list, and the reason it is printed here**: every one that is not published is found by
+walking into it. The first external project found three that way — `base`, `type`, `slot` — each costing
+a build cycle to a parse error that names the token (`unexpected SLOT`) without saying that the word is
+reserved. `tools/check-keyword-list.sh` holds this list identical to the lexer's table, so it cannot
+drift.
+
+```
+abstract alignof as asm base bitcast bool borrow break case cast char comptime const continue
+copy ctor default do else enum export expose extends extern false final float32 float64 fn
+fnptr for foreach friend give hardware if immutable implements import in int16 int32 int64 int8
+isize match new null operator out override parallel_for parallel_spawn private protected public
+ref return scope sizeof slot spawn static string this true truncate try type uint16 uint32
+uint64 uint8 unsafe usize virtual void when while
+```
+
+**Five of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type` and `slot` may name any binding (a
+field, a local, a parameter, an argument label, a member) and lead a declaration only where a declaration
+can begin. Each was made contextual for the same reason: the word is one a program genuinely wants as a
+name, and admitting it measured **0 bison conflicts** at every name position. `type` is what lets an FFI
+binding emit a C field literally called `type` without inventing a name
+(`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table
+(`tests/contextual_slot.kama`). The kind words `value` / `resource` / `view` / `intrinsic` are not
+keywords at all — they lex as identifiers.
+
+`this` and the primitive type names are keywords like any other: they cannot be redeclared.
+
 ## C's reserved words are reserved in kama
 
 **Every C11 and C23 keyword is a reserved word in kama and cannot be used as a name** — not for a type, a <!-- xfail: int_retired, double_retired -->

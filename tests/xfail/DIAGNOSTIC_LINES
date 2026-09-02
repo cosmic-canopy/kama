@@ -166,6 +166,7 @@ derived_widens_public	derived_widens_public.kama:20
 deriving_type_not_final	deriving_type_not_final.kama:13
 deserialize_turbofish_bad_method	deserialize_turbofish_bad_method.kama:17
 deserialize_usize_field	deserialize_usize_field.kama:5
+diag_line_after_multiline_string	diag_line_after_multiline_string.kama:37
 diag_no_mangled_name	diag_no_mangled_name.kama:13
 dot_on_type_field	dot_on_type_field.kama:7
 dot_on_type_instance_method	dot_on_type_instance_method.kama:8
@@ -523,6 +524,7 @@ ref_through_weak	ref_through_weak.kama:3 ref_through_weak.kama:6 ref_through_wea
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3
 refreturn_local	refreturn_local.kama:5
+reserved_word_as_name	reserved_word_as_name.kama:14 reserved_word_as_name.kama:15
 scope_borrow_element	scope_borrow_element.kama:20
 scope_borrow_escape	scope_borrow_escape.kama:27
 scope_borrow_nested_prefix	scope_borrow_nested_prefix.kama:26

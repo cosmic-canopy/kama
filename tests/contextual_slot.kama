@@ -1,0 +1,39 @@
+// `slot` is a CONTEXTUAL keyword: it may name any binding — a field, a local, a parameter, an argument
+// label, a member read — and it still leads a declaration where a declaration can begin. It joins
+// `type`, `copy`, `give`, `truncate`, `default` and `base`.
+//
+// It was reserved outright until `0.9.140`, which cost the first external project real time: `slot` is an
+// entirely natural name for an index into a table, and that is exactly where they hit it — a texture
+// registry's lookup. The diagnostic named the token ("unexpected SLOT") but not that it was reserved, so
+// it read like a parser fault. `slot` was the THIRD reserved word found by walking into it (`base`,
+// `type`, `slot`), which is why SPEC now publishes the whole list rather than leaving the next one to be
+// discovered the same way.
+//
+// Both halves are load-bearing and this fixture proves them together: the last two statements still use
+// `slot` as the uninitialized-storage KEYWORD, filled through an `out` parameter, in the same function
+// that uses `slot` as a name six times. Measured at 0 bison conflicts at all ten name positions — the
+// same result `type` got, and the reason a contextual keyword is affordable here at all.
+
+type value Reg {
+    public isize slot;
+    public ctor make(isize slot) { this.slot = slot; }
+    public const fn isize doubled() { return this.slot * 2; }
+}
+
+fn isize bump(isize slot) { return slot + 1; }
+fn void fill(out int32 slot) { slot = 7; }
+
+fn int32 main()
+{
+    isize slot = 4;              // a local named `slot`
+    slot = slot + 1;             // ...read and written like any other name
+    Reg r = Reg.make(slot: slot);  // an argument LABEL, and a ctor parameter
+    isize n = r.slot              // a member READ
+            + bump(slot: slot)    // a free-fn parameter
+            + r.doubled();        // 5 + 6 + 10 = 21
+
+    slot int32 filled;           // ...and `slot` still LEADS a declaration
+    fill(slot: out filled);      // filled through an `out` parameter — 7
+
+    return cast<int32>(n) + filled;   // 21 + 7 = 28
+}

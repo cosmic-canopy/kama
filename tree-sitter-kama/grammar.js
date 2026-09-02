@@ -415,7 +415,7 @@ module.exports = grammar({
         optional($.hardware),
         optional(field('mode', choice('ref', 'out'))),
         field('type', $._type),
-        field('name', $.identifier),
+        field('name', $._name),
       ),
 
     // ── Class body ──────────────────────────────────────────────────────────────────────────────────
@@ -469,7 +469,7 @@ module.exports = grammar({
     // kama.y:980 — `copy`/`give` are hand-off markers only in EXPRESSION position, so they may also name a
     // member. This is what lets a `resource` opt into `Copyable` with a method literally named `copy`.
     // A named node, so a query colours it as a function rather than a keyword without pattern ordering.
-    method_name: ($) => choice($.identifier, 'copy', 'give'),
+    method_name: ($) => choice($.identifier, $._slot_name, 'copy', 'give'),
 
     operator_declaration: ($) =>
       seq(
@@ -567,7 +567,7 @@ module.exports = grammar({
 
     attribute_argument: ($) =>
       choice(
-        seq(field('name', $.identifier), ':', $._expression),
+        seq(field('name', $._name), ':', $._expression),
         // `@compileFor(!RELEASE)` — negation is spelled in the attribute, not in the grammar at large.
         seq(optional('!'), $.identifier),
         $.string_literal,
@@ -654,7 +654,7 @@ module.exports = grammar({
 
     variable_declarator: ($) =>
       seq(
-        field('name', $.identifier),
+        field('name', $._name),
         optional(seq('=', field('value', $._variable_initializer))),
       ),
 
@@ -876,6 +876,7 @@ module.exports = grammar({
       choice(
         $._literal,
         $.identifier,
+        $._slot_name,
         $.scoped_identifier,
         $.this_expression,
         $.base_expression,
@@ -924,7 +925,7 @@ module.exports = grammar({
     field_expression: ($) =>
       prec.left(
         PREC.member,
-        seq(field('object', $._expression), '.', field('field', $.identifier)),
+        seq(field('object', $._expression), '.', field('field', $._name)),
       ),
 
     subscript_expression: ($) =>
@@ -1301,6 +1302,16 @@ module.exports = grammar({
     // kama.l:119-121 — ASCII only, no `$`, no Unicode identifiers. A bare `_` is a valid identifier, which
     // is how the match wildcard `case _:` parses.
     identifier: ($) => /[A-Za-z_][A-Za-z0-9_]*/,
+
+    // `slot` is a CONTEXTUAL keyword in the compiler (kama.y): it names any binding — a field, a local, a
+    // parameter, an argument label, a member — and leads a declaration only where a declaration can begin.
+    // `word: $.identifier` promotes every literal string to a keyword token, so without this the word could
+    // only ever be the keyword and `isize slot = 1;` was an ERROR node here while the compiler accepted it.
+    // ALIASED to `identifier` on purpose: every node type, query and highlight stays exactly as it was, so
+    // this is invisible to anything downstream (`copy`/`give` use plain literals in `method_name` and are
+    // therefore coloured as keywords there — a pre-existing wart, not one to copy).
+    _slot_name: ($) => alias('slot', $.identifier),
+    _name: ($) => choice($.identifier, $._slot_name),
 
     line_comment: ($) => token(seq('//', /[^\n]*/)),
 

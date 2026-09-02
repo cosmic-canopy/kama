@@ -204,6 +204,7 @@ qualified_identifier_no_generic
     /* Reading a `type`-named binding. This is the production that makes the contextual rule WHOLE: without
        it you could declare such a name and never read it, which is worse than not allowing it. */
   | TYPE
+  | SLOT     /* ...and `slot`, contextual for the same reason */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
@@ -484,6 +485,8 @@ parameter_list
   ;
 parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE      /* contextual `type` */
+  /* contextual `slot` — a parameter may be named `slot` */
+  | const_opt hardware_opt parameter_modifier_opt type SLOT      /* contextual `type` */
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
   ;
 parameter_modifier_opt
@@ -521,7 +524,10 @@ variable_declarator
        ever LEAD a declaration, so one token of lookahead separates them. Field, local and module `static`
        all reach this rule, so the word behaves identically in every one. Measured: 0 conflicts. */
   : TYPE
+  /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
+  | SLOT
   | TYPE EQ variable_initializer
+  | SLOT EQ variable_initializer
   | IDENTIFIER
   | IDENTIFIER EQ variable_initializer
   ;
@@ -902,7 +908,10 @@ member_access
        the entry is INERT rather than under-specified.
        Same two productions `default` and `base` needed, for the same reason. Measured: 0 conflicts. */
   | primary_expression DOT TYPE
+  /* reading a `slot`-named member */
+  | primary_expression DOT SLOT
   | qualified_identifier_no_generic DOT TYPE
+  | qualified_identifier_no_generic DOT SLOT
   | primary_expression DOT BASE
   | qualified_identifier_no_generic DOT BASE
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -964,8 +973,12 @@ argument_list
 argument
     /* `f(type: x)` — a parameter named `type` must be nameable at the call site too. */
   : TYPE COLON expression
+  /* a `slot:` argument label */
+  | SLOT COLON expression
   | TYPE COLON REF variable_reference
+  | SLOT COLON REF variable_reference
   | TYPE COLON OUT variable_reference
+  | SLOT COLON OUT variable_reference
   | IDENTIFIER COLON expression
   | IDENTIFIER COLON REF variable_reference
   | IDENTIFIER COLON OUT variable_reference
@@ -1293,6 +1306,7 @@ method_name
   | GIVE
   | TRUNCATE        /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   | TYPE            /* contextual for the FFI; here so the word reads the same in EVERY name position */
+  | SLOT           /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

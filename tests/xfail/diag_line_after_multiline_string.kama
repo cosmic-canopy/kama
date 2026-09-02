@@ -1,0 +1,39 @@
+// A diagnostic BELOW a multi-line string literal must name the line the mistake is on.
+//
+// This is the guard that did not exist, and its absence is why the bug survived: `DIAGNOSTIC_LINES`
+// asserts an exact line for all ~615 xfail fixtures, and not one of them had a multi-line literal ahead
+// of its error, so every row agreed with a lexer that could not count. The plain-string state was the
+// only one in kama.l with no `{new_line}` rule — a raw newline was consumed as ordinary content by
+// `single_string_char` and the line counter never moved — so every diagnostic after a literal fired that
+// many lines EARLY, and the deficit accumulated over every literal in the file. The column stayed
+// correct, which made it read as a compiler fault rather than as an offset.
+//
+// The first external project lost real time to it: a parse error in a file holding a WGSL shader named a
+// line 27 above the mistake, and 27 was exactly the newline count of the shader string. Any file holding
+// a shader is exposed by construction.
+//
+// ⚠️ The assertion here is the ROW in DIAGNOSTIC_LINES, not the message — a `.msg` alone would have
+// passed throughout. Two literals, so the row also proves the deficit ACCUMULATES rather than being a
+// one-off off-by-N.
+fn string shaderA()
+{
+    return "
+alpha
+beta
+gamma
+";
+}
+
+fn string shaderB()
+{
+    return "
+delta
+epsilon
+";
+}
+
+fn int32 main()
+{
+    int32 bad = "not a number";
+    return bad;
+}
