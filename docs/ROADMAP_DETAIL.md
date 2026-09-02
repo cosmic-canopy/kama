@@ -876,6 +876,38 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     measurement showed a contextual keyword was both smaller and categorically the right tool.
 
 
+  - **The reserved-word hint misses the commonest declaration shape** — filed by the first consumer as
+    KB-9 the day after the hint shipped, and reproduced here on `0.9.141`:
+
+    ```kama
+    isize out = 1;              // -> the full hint: `out` is reserved, here is the list
+    Thing out = Thing.make();   // -> bare `syntax error, unexpected OUT`
+    ```
+
+    ⚠️ **The cause is NOT the one the report guessed, and the difference decides the fix.** Their reading
+    was that after a user-defined type name the parser "plausibly does not know" a declaration is coming.
+    It does: `Thing x = …` compiles, so IDENTIFIER *is* in the expected set. What fails is the message.
+    `reservedWordNote` ([kama.y](../src/kama.y)) gates on the string `IDENTIFIER` appearing in bison's
+    text, and bison's formatter caps the expected-token list at **`YYARGS_MAX = 5`** — over that,
+    `yy_syntax_error_arguments` returns zero arguments and the whole "expecting …" clause disappears.
+    After a builtin type only three tokens are expected, so the clause prints and the hint fires; after a
+    user type many more are, so it does not. Measured, both halves.
+
+    ⚠️ **The cheap relaxation does not work, and this was measured too.** Firing whenever a reserved word
+    appears with no expecting-clause misfires on `1 + else`, `return break`, `for (else;;)` and
+    `else else` — every one produces a bare `unexpected X` and none is a naming mistake. That is exactly
+    the noise the gate exists to prevent.
+
+    So the honest fix is bison ≥ 3.6's `%define parse.error custom` plus `yypcontext_expected_tokens()`,
+    which returns the full expected set into an array the caller sizes — no cap — and the gate becomes
+    "IDENTIFIER is in the set" rather than "IDENTIFIER is in the string". The cost is that custom mode
+    hands message formatting to the grammar, so the existing wording has to be reproduced exactly or the
+    ~23 parse-error fixtures in `tree-sitter-kama/test/parse-errors.txt` and their `.msg` files move.
+
+    Not blocking — the published keyword list is the primary remedy and this is the second line — but the
+    shape it misses (`SomeType name = …`) is most declarations anyone writes.
+
+
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
     stall tolerance IS latency, and the two cannot be traded. A macOS session logged **326 underruns** at
