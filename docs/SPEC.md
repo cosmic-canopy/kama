@@ -1949,7 +1949,9 @@ int32 r = c(a: 9, b: 2);                        // named invoke through the poin
 
 A bare **function name used as a value** is its function pointer (Rust-like), so binding and passing need no
 operator — `c = cmp` and `f(cb: cmp)` just work. An `fnptr` can also be a **parameter** (`fn run(Op op, …) {
-op(…) }` — the core callback shape).
+op(…) }` — the core callback shape), and it can be **stored and invoked later** — in a field or a module <!-- test: fnptr_stored -->
+`static` — which is the callback-registry shape: install a handler now, dispatch through it on a later
+call ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)).
 
 **Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:

@@ -804,30 +804,47 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   they renumber it between audits, so find an entry by its text, never by a remembered KG number. They
   pin `0.9.132` and have verified `@noheap` transitivity by behaviour in their own tree.
 
-  - **A contract member returning a type declared BESIDE the contract cannot be implemented from another
-    file in the module.** The implementer is told *"`Thing` is declared in host.kama and this file does
-    not import it — add `import { Thing };`"* when line 1 of that file is exactly that import. Bounded by
-    measurement, and the boundaries are what point at the cause: a member returning `int32` is fine, the
-    same three declarations in ONE file are fine, and moving the type to a THIRD file both import is fine.
-    So it is the contract's signature being resolved in the IMPLEMENTER's scope rather than the declaring
-    file's. ⚠️ **A second defect rides along**: the diagnostic names `impl.kama`'s path with `host.kama`'s
-    LINE NUMBER (line 9 is the contract member; `impl.kama:9` is a closing brace), and the summary line
-    names a third file again — which is what made it expensive to locate rather than expensive to fix.
-  - **A module `comptime` cannot be INTERPOLATED.** `"${WIDTH}"` on a `comptime int32 WIDTH = 1280;` is
-    `error: method call on unresolved receiver` at **line 1, column 0** — line 1 is the constant, the
-    interpolation is on line 5, and the message names neither it nor the constant. Binding to a local
-    first works. Interpolation lowers to a method call on the value and a module `comptime` is not a
-    first-class receiver there — the same surface hole KB-3 had for `export`, which suggests looking for
-    the remaining positions a module `comptime` is not quite a name rather than fixing this one.
-    ⚠️ **The diagnostic is the more valuable half**: it cost the reporter ~40 minutes of bisection, and
-    any unresolved-receiver error that names neither the receiver nor its line will do that again.
-  - **A `fnptr` in a FIELD or a module `static` cannot be CALLED**, which rules out installing a handler
-    now and invoking it later. ⚠️ **Filed as four failures; two of them no longer reproduce.** Measured
-    on `0.9.132`: binding works in both places (`this.h = dbl`, `g_h = dbl`), and only the CALL fails —
-    `r.h(x: 1)` gives `` `Reg` has no method `h` `` and `g_h(x: 1)` gives `call to unknown function`. So
-    it is one defect, not four: `emitInvocation`'s `fnptr` arm matches a bare LOCAL of sig type
-    (`_localTypes[name]`), and a field or static is neither, so it falls through to method dispatch and
-    then to the unknown-function path. Sizing it off the original report would have been wrong.
+  - **A contract member returning a type declared BESIDE the contract — FIXED `0.9.134`.** ⚠️ **It was
+    FIVE sites doing the same partial swap, not one bug.** A contract's member signatures are rendered
+    under the CONTRACT's own name-resolution scope — its imports, not the implementing unit's — and five
+    places did that by hand, each moving three of `NsCtx`'s four fields and leaving `unitPath` pointing at
+    the other file. That is not a cosmetic omission: `checkReach` decides the per-file import rung by
+    comparing exactly that path against the file being walked, *precisely so it can tell "these imports
+    belong to a different file"*. A stale path made the two agree, so `Thing` was judged against the
+    contract's own imports — and a file does not import what it declares, so the implementer was told to
+    `import { Thing };` a name its line 1 already imported. Only a member returning a USER type could
+    reach it, which is what made it look like a type-system bug.
+    - ⚠️ **Four of the five were found by fixing the first four.** The repro moved its diagnostic from
+      `impl.kama` to `main.kama` twice as each site was closed — `contractSigOf`, `emitClassInterfaceVtables`,
+      the refinement-thunk loop, `emitInterfaceTypes` (which had no reseat at all) and the
+      contract-value return-type path. Each time the answer was to instrument `checkReach` and read
+      `nsUnit` against `refFile`, never to guess the next one. They are one `ScopedContractNs` now, which
+      also carries the diagnostic file — so a sixth site cannot get it wrong.
+    - ⚠️ **The misattributed diagnostic was the same bug, not a second one.** It named one file's path
+      with another's LINE (`impl.kama:9`, where line 9 of that file is a closing brace and line 9 of the
+      contract's file is the member) — because the scope had moved and the diagnostic file had not. It
+      cost the reporter the bisection; it cost one line to fix.
+  - **A module `comptime` cannot be interpolated — FIXED `0.9.134`, and it was neither of those things.**
+    Reported as comptime-specific and interpolation-specific; it is a MODULE-SCOPE name failing as a
+    method RECEIVER. Interpolation only lowers `${X}` to a method call on the value, so a module `static`
+    failed identically — the half nobody reported — and so did a direct `X.toString()`. One missing
+    lookup: `receiverScalarCType` and `receiverTypeNode` consulted locals and bound `comptime` parameters
+    but never `_moduleStatics`, though a module name resolves the way a module function does
+    (`resolveModuleVar`). A module-scope name now behaves identically to a local at that site, verified by
+    the two producing the same diagnostic for the same mistake.
+    ⚠️ **The line number fixed itself.** "at line 1, column 0" was not a separate defect: resolution
+    failed, so the error came from a node carrying the constant's declaration line. What was worth fixing
+    on its own is the message, which was four words with no subject — it now names the receiver, which is
+    the general rule that stops the next one costing forty minutes.
+  - **A `fnptr` in a field or a module `static` cannot be CALLED — FIXED `0.9.134`.** ⚠️ Filed as four
+    failures; two did not reproduce (binding into both places already worked), so it was one defect with
+    two arms: `emitInvocation` recognised only a bare LOCAL of signature type, so a `static` call fell
+    through to "call to unknown function", and a field call reached METHOD dispatch and was reported as a
+    missing method. Both arms added; the field arm is checked last, after every real method has failed to
+    resolve, so a field can never shadow a method. The callback registry — install now, dispatch later,
+    re-bind in between — now has a spelling ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)), and
+    SPEC's `fnptr` section says so.
+
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
     stall tolerance IS latency, and the two cannot be traded. A macOS session logged **326 underruns** at

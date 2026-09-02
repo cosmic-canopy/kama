@@ -1,0 +1,15 @@
+// A module-scope name as a METHOD RECEIVER. Reported as "a module `comptime` cannot be interpolated",
+// and it is neither comptime-specific nor interpolation-specific: interpolation only lowers `${X}` to a
+// method call on the value, so a module `static` failed identically and so did a direct `X.m()`. One
+// missing lookup — `receiverScalarCType`/`receiverTypeNode` consulted locals and bound comptime
+// parameters but not `_moduleStatics` — with three symptoms.
+comptime int32 WIDTH = 1280;
+comptime int32 HEIGHT = 720;
+static int32 g_frames = 7;
+
+fn int32 main() {
+    string a = "w=${WIDTH} h=${HEIGHT}";      // a module `comptime`, interpolated
+    string b = "f=${g_frames}";               // ...and a module `static`, the half not reported
+    g_frames = g_frames + 1;
+    return cast<int32>(a.length()) + cast<int32>(b.length()) + g_frames;   // 15 + 5 + 8
+}

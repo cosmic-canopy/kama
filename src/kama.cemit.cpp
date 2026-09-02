@@ -233,6 +233,31 @@ struct ScopedFlag { bool& b; bool prev;
 // ScopedFlag's conditional twin: raise the flag only when `on`, and restore on EVERY exit. The
 // restore-on-exit is what makes it safe in a function with early returns, where the hand-written
 // save/set/restore pair it replaces would leak the flag into whatever is emitted next.
+// Install a CONTRACT's own name-resolution scope, for rendering its member signatures under its imports
+// rather than the implementing unit's. Three sites did this by hand and all three moved the same THREE
+// fields of `NsCtx` while leaving the fourth — `unitPath` — pointing at the implementer. That is not a
+// harmless omission: `checkReach` decides the import rung by comparing `_nsCtx.unitPath` against the file
+// being walked, precisely so it can tell "these imports belong to a different file" — and a stale path
+// made the two agree, so a contract member returning a type declared BESIDE the contract was judged
+// against the contract's own imports. A file does not import what it declares, so the implementer was
+// told to import a name its line 1 already imported. One helper, so a fourth site cannot get it wrong.
+//
+// It carries the DIAGNOSTIC file too. A defect found while rendering the contract's signature is at the
+// contract, and reporting it against the implementer paired one file's path with another's line number —
+// the half that made this cost bisection time rather than fix time.
+struct ScopedContractNs {
+    NsCtx& ns; NsCtx savedNs; std::string& diag; std::string savedDiag;
+    ScopedContractNs(NsCtx& ns_, std::string& diag_, const InterfaceInfo& ii)
+        : ns(ns_), savedNs(ns_), diag(diag_), savedDiag(diag_)
+    {
+        if (ii.isGenericInst) return;   // a generic instance gets its scope from ContractSubst instead
+        ns.scope = ii.scope; ns.usings = ii.usings; ns.symbolAliases = ii.symbolAliases;
+        ns.unitPath = ii.declFile;
+        if (!ii.declFile.empty()) diag = ii.declFile;
+    }
+    ~ScopedContractNs() { ns = savedNs; diag = savedDiag; }
+};
+
 struct ScopedNoHeap { bool& b; bool prev;
     ScopedNoHeap(bool& b_, bool on) : b(b_), prev(b_) { if (on) b = true; }
     ~ScopedNoHeap() { b = prev; } }; }
@@ -10466,9 +10491,7 @@ void CEmitter::emitPrimWidenVtables()
         // Render the slot signatures under the CONTRACT's own scope, with a generic-contract instance's
         // type args bound — the same treatment emitInterfaceTypes gives them. Every pinned contract is such
         // an instance, so without this a thunk's parameter comes out as the raw `T`.
-        NsCtx savedNs = _nsCtx;
-        if (!ii->second.isGenericInst) { _nsCtx.scope = ii->second.scope; _nsCtx.usings = ii->second.usings;
-                                        _nsCtx.symbolAliases = ii->second.symbolAliases; }
+        ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii->second);
         ContractSubst _cs(*this, ii->second);
         for (auto& m : ii->second.methods) {
             if (m.isCtor) continue;           // a contract-required ctor has no slot
@@ -10494,7 +10517,6 @@ void CEmitter::emitPrimWidenVtables()
         }
         indent(1); *_out << ".__dtor = (void(*)(void*))0,\n";   // a primitive owns nothing
         *_out << "};\n\n";
-        _nsCtx = savedNs;
     }
 }
 
@@ -14612,8 +14634,7 @@ struct CEmitter::ConfSig {
 CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMethod& m)
 {
     ConfSig s;
-    NsCtx saved = _nsCtx;
-    if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+    ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);
     {
         ContractSubst _cs(*this, ii);
         if (m.returnType) {
@@ -14629,7 +14650,6 @@ CEmitter::ConfSig CEmitter::contractSigOf(InterfaceInfo& ii, const InterfaceMeth
                 s.isOut.push_back(p ? paramIsOut(p.get()) : false);
             }
     }
-    _nsCtx = saved;
     return s;
 }
 
@@ -19394,6 +19414,23 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         return emitReorderedCall(callee, "", sig.params, call->args, call->line);
     }
 
+    // ...and the same call through a module `static`/`comptime` of signature type. A `fnptr` could be
+    // BOUND in a field or a static but never CALLED through one, so the whole install-a-handler-now,
+    // invoke-it-later shape was unreachable: `g_h = dbl;` compiled and `g_h(x: 1)` said "call to unknown
+    // function", because the arm above only recognises a bare LOCAL and a module name is not one. It
+    // resolves the way every other module name does (`resolveModuleVar`), and the C spelling is the
+    // symbol itself — a static of function-pointer type IS the pointer, exactly as the local is.
+    if (!name.empty()) {
+        const std::string ms = resolveModuleVar(name, call->identifier->qualifier);
+        auto mit = _moduleStatics.find(ms);
+        if (mit != _moduleStatics.end() && mit->second && mit->second->value
+            && isSigType(cType(mit->second))) {
+            const SigInfo& sig = _sigs.at(cType(mit->second));
+            rejectNoHeapIndirect("through a `fnptr`", call->line);   // no-heap gate: unresolvable target
+            return emitReorderedCall(ms, "", sig.params, call->args, call->line);
+        }
+    }
+
     // BindableFunctionPtr invoke: a bare local of bindable type → branch on the
     // bound object (call the method with it, or the free fn directly).
     if ((!call->identifier->qualifier || call->identifier->qualifier->empty())
@@ -20462,6 +20499,11 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     // slot ONE self-type — the contract — while the concrete function behind it had bound the implementing
     // type, and the cast between the two was the unsoundness this campaign removed. Its own comment called
     // the slot "dead for that use but must be valid C"; it is now neither dead nor a cast.
+    // The slot TYPES are the contract's own, so render them under the contract's scope — this emission
+    // runs in whatever unit first needs the vtbl struct, which is usually not the contract's file and
+    // need not import what the contract's signatures name. The site had no reseat at all, so a contract
+    // member returning a type declared beside the contract was judged against a THIRD file's imports.
+    ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);
     ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
@@ -20497,8 +20539,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         // sigs under the CONTRACT's own name-resolution scope (its imports) — not the implementing unit's.
         // A non-generic contract carries that scope in `ii`; a generic-contract instance gets it (with T
         // bound) from ContractSubst below, so only reseat here for the non-generic case.
-        NsCtx _savedNs = _nsCtx;
-        if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+        ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);
         // (No `This` binding — see emitInterfaceTypes. The slot signature and the concrete function now
         //  agree because a pinned parameter substitutes identically on both sides.)
         ContractSubst _cs(*this, ii);   // bind T->int32 so a generic-contract slot's sig matches its vtbl
@@ -20574,7 +20615,6 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         if (ci.destructible) *_out << ".__dtor = (void(*)(void*))&" << ci.name << "__dtor,\n";
         else                 *_out << ".__dtor = (void(*)(void*))0,\n";
         *_out << "};\n\n";
-        _nsCtx = _savedNs;   // restore (the non-generic reseat above; ContractSubst restores its own)
     }
 }
 
@@ -22268,11 +22308,9 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
             InterfaceInfo& ii = _interfaces[cls];
             for (auto& m : ii.methods) {
                 if (m.name != method || !m.returnType) continue;
-                NsCtx savedNs = _nsCtx;
-                if (!ii.isGenericInst) { _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases; }
+                ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);
                 std::string rc;
                 { ContractSubst _cs(*this, ii); rc = cType(m.returnType); }   // binds T for a generic-contract instance
-                _nsCtx = savedNs;
                 return rc;
             }
             return "";
@@ -22738,6 +22776,26 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             unsupported(("`" + clsName + "` can hand out a view, but this program has no `View<T>` to hand "
                          "out — add `import { std::collections::View };`").c_str(), srcLine);
             return "0";
+        }
+        // A FIELD of signature type, invoked: `reg.handler(x: 1)`. The other half of the stored-`fnptr`
+        // hole — a handler could be installed in a field but never called through one, so a callback
+        // REGISTRY (install now, invoke later) had no spelling at all. It reads as a method call and is
+        // one syntactically, which is why it landed here and reported the field as a missing method.
+        // Checked last, after every real method has failed to resolve, so a field can never shadow one.
+        if (_classes.count(clsName)) {
+            ClassInfo* fo = findFieldOwner(&_classes[clsName], method);
+            if (fo)
+                for (auto& f : fo->fields)
+                    if (f.name == method && f.type) {
+                        const std::string fc = cTypeInInstance(clsName, f.type);
+                        if (isSigType(fc)) {
+                            canAccess(fo, f.visibility, method, srcLine);
+                            const SigInfo& sig = _sigs.at(fc);
+                            rejectNoHeapIndirect("through a `fnptr`", srcLine);   // unresolvable target
+                            return emitReorderedCall("(" + recvPtr + ")->" + method, "", sig.params,
+                                                     args, srcLine);
+                        }
+                    }
         }
         unsupported(("`" + clsName + "` has no method `" + method + "`").c_str(), srcLine); return "0";
     }
@@ -23750,6 +23808,14 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value && _localCTypes.count(*id->value)) return _localCTypes[*id->value];
         if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return cType(primTypeNode(cs->second.kind)); }
+        // ...and a MODULE-scope name, which neither of the two lookups above can see: they answer for a
+        // local and for a bound `comptime` parameter. A module `static`/`comptime` is reached exactly the
+        // way a module function is, so it resolves the same way. Without this a module-scope name was not
+        // a valid method receiver AT ALL — reported as `${WIDTH}` failing to interpolate, but interpolation
+        // only lowers to a method call on the value, so `WIDTH.toString()` failed identically and so did
+        // every module `static`. One missing lookup, three symptoms.
+        if (id->value) { auto ms = _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier));
+                         if (ms != _moduleStatics.end() && ms->second) return cType(ms->second); }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -23790,6 +23856,8 @@ SharedIdentifier CEmitter::receiverTypeNode(SharedExpression e)
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) { auto it = _localTypeNodes.find(*id->value); if (it != _localTypeNodes.end()) return it->second; }
         if (id->value) { auto cs = _comptimeSubst.find(*id->value); if (cs != _comptimeSubst.end()) return primTypeNode(cs->second.kind); }
+        if (id->value) { auto ms = _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier));   // module `static`/`comptime`
+                         if (ms != _moduleStatics.end() && ms->second) return ms->second; }
     } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         std::string recv = exprClass(ma->expression);
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
@@ -24064,7 +24132,18 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // declared type node, because that is what says whether a compiler change or a source change is
         // what closes this site.
         if (deferUnknownWhileProbing(classifyDeferredReceiver(receiver))) return "0";
-        unsupported("method call on unresolved receiver", call->line);
+        // NAME the receiver. This message used to be four words with no subject, and it was reached by a
+        // module `static`/`comptime` used as one — so a `"${WIDTH}"` five lines down reported "method call
+        // on unresolved receiver" against the CONSTANT's declaration line, naming neither the constant nor
+        // the interpolation that lowered to the call. That cost the reporter ~40 minutes of bisection for
+        // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
+        std::string who;
+        if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
+        unsupported((who.empty()
+                     ? ("cannot resolve the receiver of `" + method + "` — its type is not known here")
+                     : ("cannot resolve `" + who + "`, the receiver of `" + method + "` — no local, "
+                        "parameter, module `static`/`comptime` or type of that name is in reach here")).c_str(),
+                    call->line, who);
         return "0";
     }
     // The other side of that tally: a receiver the probe DID resolve, so this call site is fully checked.

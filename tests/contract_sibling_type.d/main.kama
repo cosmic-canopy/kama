@@ -1,0 +1,7 @@
+import { mk::Impl, mk::Maker };
+
+fn int32 main() {
+    Impl i = Impl.make(seed: 20);
+    Maker m = i;
+    return m.build().n + m.plain();   // 20 + 20
+}

@@ -1,0 +1,28 @@
+// A `fnptr` STORED and later invoked — the install-a-handler-now, invoke-it-later shape. Binding one
+// into a field or a module `static` always worked; CALLING through either did not, so a callback
+// registry had no spelling at all. Two arms were missing, one per place: `emitInvocation` recognised a
+// bare LOCAL of signature type, and a field call reached method dispatch and was reported as a missing
+// method. `tests/fnptr_param.kama` covers the parameter case; nothing covered a stored one.
+fnptr int32 Handler(int32 ev);
+
+fn int32 onFire(int32 ev) { return ev * 2; }
+fn int32 onWater(int32 ev) { return ev + 100; }
+
+type resource Registry {
+    Handler cur;
+    public ctor make(Handler h) { this.cur = h; }
+    public fn void install(Handler h) { this.cur = h; }
+    public fn int32 dispatch(int32 ev) { return this.cur(ev: ev); }   // through a FIELD
+}
+
+static Handler g_default;
+
+fn int32 main() {
+    g_default = onFire;
+    Registry r = Registry.make(h: onFire);
+    int32 a = r.dispatch(ev: 10);      // 20
+    r.install(h: onWater);             // re-bound, and the new one is what runs
+    int32 b = r.dispatch(ev: 10);      // 110
+    int32 c = g_default(ev: 6);        // 12 — through a module `static`
+    return a + b + c;                  // 142
+}

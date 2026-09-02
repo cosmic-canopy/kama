@@ -1,0 +1,22 @@
+// A contract member returning a type declared BESIDE the contract, implemented from another file in the
+// SAME MODULE — which is what makes this reachable at all, since the import rung it trips is per-file
+// and only exists inside a module.
+//
+// The contract's signature is rendered under the CONTRACT's own scope, so its imports are the ones
+// consulted. Three sites did that swap by hand and all three moved three of `NsCtx`'s four fields,
+// leaving `unitPath` pointing at the IMPLEMENTER. `checkReach` decides the rung by comparing exactly
+// that path against the file being walked — precisely so it can tell "these imports belong to another
+// file" — so the stale path made them agree, and `Thing` was judged against host.kama's imports. A file
+// does not import what it declares, so impl.kama was told to import a name its own line 1 imports.
+// Only a member returning a USER type could reach it: `plain()` below is the control.
+export { Thing, Maker };
+
+type value Thing {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+}
+
+type contract Maker for value {
+    fn Thing build();
+    fn int32 plain();
+}

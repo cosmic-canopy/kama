@@ -1,0 +1,9 @@
+import { Thing, Maker };
+export { Impl };
+
+type value Impl implements Maker {
+    public int32 seed;
+    public ctor make(int32 seed) { this.seed = seed; }
+    public fn Thing build() { return Thing.make(n: this.seed); }
+    public fn int32 plain() { return this.seed; }
+}
