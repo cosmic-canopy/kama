@@ -1,0 +1,48 @@
+// `isize` and `usize` are admissible members of an `immutable` type.
+//
+// They were not, and the rejection read as a compiler fault because it was one: the diagnostic said
+// `Bounds` "has a mutable member `n` of type `ptrdiff_t`" while its own list of what IS allowed opened
+// with "a primitive" — which `isize` is. A scalar has no interior mutability; there was never a reason.
+//
+// ⚠️ The cause is the one kama.ast.h warns about at the builtin-value block. `isize`/`usize` are
+// APPENDED after `INT8..CHAR` precisely so the ordered spans that read it keep meaning what they meant,
+// which puts the burden on every site that should ALSO cover a size type to name the two explicitly.
+// `fieldTypeDeeplyImmutable` read the span and stopped. It was wrong before `0.9.136` too — back then
+// the pair had no builtin value at all, so it fell through to "is there a class called `ptrdiff_t`?"
+// and answered no — and the campaign that converted ~13 such sites did not reach this one. A sweep is
+// not a proof; this fixture is.
+//
+// The guarantee itself is unchanged and still enforced, which matters more than the fix:
+// tests/xfail/immutable_mutable_field.kama holds the other side, and it still rejects.
+
+type immutable value Bounds {
+    public isize lo;              // a signed size — the type every length() and index in kama is
+    public usize span;            // the unsigned C-ABI peer
+    public int32 tag;             // an ordinary fixed-width primitive, for contrast
+
+    public ctor make(isize lo, usize span, int32 tag) {
+        this.lo = lo;
+        this.span = span;
+        this.tag = tag;
+    }
+}
+
+// Deep immutability is TRANSITIVE, so a type built out of the one above must be accepted for the same
+// reason — this is what proves the fix reaches the fixpoint pass and not just the leaf test.
+type immutable value Region {
+    public Bounds inner;
+    public isize stride;
+
+    public ctor make(Bounds inner, isize stride) { this.inner = inner; this.stride = stride; }
+}
+
+fn int32 main()
+{
+    Bounds b = Bounds.make(lo: 4, span: 6, tag: 7);
+    Region r = Region.make(inner: b, stride: 2);
+
+    return cast<int32>(r.inner.lo)        // 4
+         + cast<int32>(r.inner.span)      // 6
+         + r.inner.tag                    // 7
+         + cast<int32>(r.stride);         // 2   -> 19
+}

@@ -3986,6 +3986,10 @@ The other way to share safely is to share something that cannot change. `type im
 `type immutable resource T`) marks a type **deeply** immutable, which the compiler verifies: every
 field, base and variant payload must itself be a primitive, a `string`, an `enum`, or another deeply
 immutable type. A mutable member is a compile error naming that member. <!-- xfail: immutable_mutable_field -->
+**A primitive means every primitive**, the platform-varying `isize`/`usize` included — they are scalars <!-- test: immutable_size_types -->
+with no interior mutability, so they are as shareable as `int64`. That half went unenforced and was
+wrongly rejected until `0.9.144`: the compiler's own list said "a primitive" while its check read an
+ordered span of builtin type values that `isize`/`usize` are deliberately appended *after*.
 
 A `Shared<T>` over a deeply-immutable `T` is sendable, so any number of isolates can hold and read
 the same asset with no copy. Its control block switches to an atomic refcount only in that case, so

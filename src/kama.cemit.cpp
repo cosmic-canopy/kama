@@ -14376,6 +14376,19 @@ bool CEmitter::fieldTypeDeeplyImmutable(const SharedIdentifier& type) const
     if (type->builtInVal >= IDENTIFIER_INT8_VAL && type->builtInVal <= IDENTIFIER_CHAR_VAL
         && type->builtInVal != IDENTIFIER_VOID_VAL)
         return true;
+    // ⚠️ NOT in that span — `isize`/`usize` are APPENDED after it in kama.ast.h so the existing ranges
+    // keep meaning what they meant, which puts the burden on each site that should also cover a size
+    // type to name them (the `Atomic<T>` element check does exactly this). THIS site did not, so
+    // `type immutable value P { isize n; }` was rejected as holding "a mutable member of type
+    // `ptrdiff_t`" — a scalar with no interior mutability, described by the error's own list of what IS
+    // allowed ("a primitive"). It read as a compiler fault because it is one.
+    //
+    // It was never right: before 0.9.136 these two were primitives WITHOUT a builtInVal, so they fell
+    // through to `deeplyImmutable(cType)`, found no class named `ptrdiff_t`, and returned false the same
+    // way. That campaign converted ~13 such sites and this one was missed, which is what makes the span
+    // comment in kama.ast.h worth obeying literally rather than trusting a sweep to have been complete.
+    if (type->builtInVal == IDENTIFIER_ISIZE_VAL || type->builtInVal == IDENTIFIER_USIZE_VAL)
+        return true;
     std::string ct = const_cast<CEmitter*>(this)->cType(type);
     if (isEnum(ct)) return true;
     return deeplyImmutable(ct);   // a user class -> its computed flag; an UnsafePtr/Owned/Shared/collection -> false
