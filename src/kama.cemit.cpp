@@ -16083,6 +16083,10 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         // otherwise fall through to the normal path (which rejects an unsupported position cleanly).
         std::string val;
         bool valHoisted = false;   // an earlier branch already materialized `val` into an addressable temp
+        // ...and of those, the ones that materialized a TEMPORARY rather than found a real place. The
+        // distinction is the whole of the rule below, and `valHoisted` cannot carry it: the element-access
+        // arm sets that for `ref a[i]`, which IS a place the callee may legitimately write through.
+        bool argIsTemp = false;
         InvocationNode* ctorIv = dynamic_cast<InvocationNode*>(argExpr.get());
         std::string ctorCls;
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
@@ -16155,6 +16159,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 val = t;
             }
             valHoisted = true;
+            argIsTemp = true;   // a `__ctorarg` temp — see the temporary rule below
         } else if (_hoistOK && handoff == 0 && ctorImplementsParam && !p.byRef
                    && !_classes[ctorCls].isIntrinsicColl) {
             // A3 — an inline STACK ctor of a concrete that implements a BY-VALUE contract parameter
@@ -16259,6 +16264,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     _hoisted.push_back(lct + " " + st + " = " + emitExpression(argExpr) + ";");
                 }
             }
+            if (!st.empty()) argIsTemp = true;   // a `__strtmp`/`__primtmp` temp — see the check below
             if (st.empty() && (argIsVariant || argIsMatch) && !p.className.empty()) {
                 // target-type the union instance / match result to the param's type, then emit
                 std::string pmt = _matchTargetCType, pvt = _variantTargetType;
@@ -16278,6 +16284,34 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                 valHoisted = !st.empty();   // st => a hoisted string/primitive temp; else a bare rvalue
             }
         }
+        // THE TEMPORARY RULE. One of the arms above materialized a TEMPORARY — a literal into `__primtmp`,
+        // a string rvalue into `__strtmp`, an inline constructor into `__ctorarg` — and a temporary is
+        // storage that dies at the end of this statement. Borrowing one READ-ONLY is the whole point of
+        // those arms: it is what lets `m.get(key: 5)`, `readFile(path: "x")` and `useShape(a: Square(3))`
+        // be written without binding a local first (tests/ref_param_rvalue.kama). WRITING one is a silent
+        // no-op, which is exactly what a non-const `ref`/`out` does by definition.
+        //
+        // The rule and its wording already existed — see the `isClass(argCls)` branch below — and it could
+        // reach none of the three, because it is guarded on `!valHoisted` and every arm that materializes
+        // sets that. So it fired only for an rvalue that reached the fallthrough path, and the language
+        // rejected `bump(p: mk())` while accepting `bump(p: Point.make(1, 2))` and `bump(v: 1)`, which lose
+        // the write just as completely. ref_param_rvalue.kama justified the materialization as "the temp is
+        // a read-only borrow here" — true of the call it was written about, assumed of every other,
+        // enforced nowhere until this check.
+        //
+        // ⚠️ It is `argIsTemp`, not `valHoisted`. The element-access arm sets the latter for `ref a[i]`,
+        // which is a real place (`*NAME__at(...)`) that a callee may legitimately write through — reading
+        // "hoisted" as "temporary" would reject the one shape `ref` exists for.
+        //
+        // The diagnostic names BOTH repairs, because which is right is not the caller's to guess: the
+        // callee either genuinely writes (bind a local) or never did and said `ref` out of habit (say
+        // `const ref`). The stdlib was the second case in 94 places.
+        if (argIsTemp && p.byRef && !p.isConst)
+            unsupported(("`" + p.name + "` is a non-const `" + std::string(p.isOut ? "out" : "ref")
+                         + "` parameter, so it cannot take a literal or a temporary — the callee writes "
+                           "into storage that dies at the end of this statement. Bind it to a local first "
+                           "and pass that, or declare the parameter `const ref` if it is only read").c_str(),
+                        srcLine);
         if (handoff && (p.byRef || isInterface(p.className)))
             unsupported("`give`/`copy` transfer ownership by value — they don't apply to a `ref`/`out` "
                         "or contract borrow", srcLine);

@@ -1,0 +1,16 @@
+// The CLASS half of the same rule, and the half that has been enforced the longest — a constructor result
+// is a temporary, and a non-const `ref` writing one loses the write. It went unpinned until `0.9.139`,
+// which is how its guard (`isClass(argCls)`) was able to miss the literal and string arms beside it for as
+// long as it did: nothing here asserted what the rule was about, so nothing noticed it was about a type
+// rather than about temporaries. See tests/xfail/ref_literal_mutable for the primitive half.
+type value Point {
+    public int32 x; public int32 y;
+    public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
+}
+
+fn void bump(ref Point p) { p.x = p.x + 1; }
+
+fn int32 main() {
+    bump(p: Point.make(x: 1, y: 2));
+    return 0;
+}

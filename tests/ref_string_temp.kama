@@ -1,7 +1,11 @@
-// A string RVALUE (literal / concat / call result) binds to a `ref string` borrow: the emitter
+// A string RVALUE (literal / concat / call result) binds to a `const ref string` borrow: the emitter
 // materializes a scope-freed temp so `&temp` is legal C, the callee borrows read-only, no leak.
 // A named lvalue keeps its direct `&`. Returns 16.
-fn isize slen(ref string s) { return s.length(); }
+//
+// The `const` is load-bearing and was not here before `0.9.139`. The temp dies at the end of the
+// statement, so a NON-const `ref` would write into storage nothing can read back — the parameter says
+// which of the two this is, and the compiler now holds it to that (tests/xfail/ref_string_literal_mutable).
+fn isize slen(const ref string s) { return s.length(); }
 fn string mk() { return "abcd"; }
 
 fn int32 main() {

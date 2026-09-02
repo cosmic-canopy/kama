@@ -21,7 +21,7 @@ fn string tag(Band b) {
     };
 }
 
-fn isize slen(ref string s) { return s.length(); }
+fn isize slen(const ref string s) { return s.length(); }
 
 fn int32 main() {
     if (score(b: Band::Low,  n: 0)  != 0)   { return 90; }

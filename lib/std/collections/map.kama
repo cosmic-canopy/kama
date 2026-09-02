@@ -22,7 +22,7 @@ type view MapKeyIter<K: Copyable<K>> implements Iterator<K> {
     }
     // Deep-copy a key through a typed `ref K` borrow — a bare `copy this.keys[p]` on the raw buffer can't
     // (its element class is unknown, so the `copy` marker is dropped and it aliases). Same trick as `get`.
-    fn K cloneKey(ref K k) { return copy k; }
+    fn K cloneKey(const ref K k) { return copy k; }
     public unsafe fn Optional<K> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
         while (this.pos < this.cap) {
@@ -105,7 +105,7 @@ type view MapEntryIter<K: Copyable<K>, V: Copyable<V>> implements Iterator<Entry
     }
     // Deep-copy key/value through typed `ref` borrows — a raw-buffer `copy this.keys[p]` drops the `copy`
     // marker and aliases (unknown element class), so route through `ref K`/`ref V` (see `Map.cloneVal`).
-    fn K cloneKey(ref K k) { return copy k; }
+    fn K cloneKey(const ref K k) { return copy k; }
     const fn V cloneVal(const ref V v) { return copy v; }
     public unsafe fn Optional<Entry<K,V>> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
@@ -231,7 +231,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return this;
     }
 
-    public unsafe const fn Optional<V> get(ref K key) when [V: Copyable<V>] {
+    public unsafe const fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
         isize i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         return Optional::Some(value: this.cloneVal(v: this.vals[i]));   // hand back a copy; map keeps its own
@@ -243,7 +243,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // out of bounds — hence the explicit `getRef` name, not `operator[]` (which would hide the can-fail nature).
     // The returned `ref V` may not escape and dangles if held across a `put` that rehashes — the same borrow
     // boundary as an array `ref` held across `add`→realloc (the deliberate no-borrow-checker tradeoff).
-    public unsafe fn ref V getRef(ref K key) {
+    public unsafe fn ref V getRef(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRef: absent key"); }
         return this.vals[i];
@@ -301,7 +301,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // the slot becomes a tombstone so other keys' probe runs stay intact. Discard the result to just delete —
     // the returned `Optional<V>` drops the value cleanly (a move-out-then-drop, ASan-clean). Reclaiming the
     // value (`match`) hands the caller its ownership, so a Map of move-only values is fully symmetric.
-    public unsafe fn Optional<V> remove(ref K key) {
+    public unsafe fn Optional<V> remove(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { return Optional::None; }
         drop(value: this.keys[i]);         // key dropped (lookup `key` is a borrow, not stored)

@@ -17,16 +17,16 @@ import {
 type resource Tag {
     int32 n;
     public ctor make(int32 n) { this.n = n; }
-    public fn int32 value() { return this.n; }
+    public const fn int32 value() { return this.n; }
 }
 
 // `compareTo` comes from the `Comparable` contract, not from `int32` itself, so it is reached through
 // the contract — here a BOUND, which monomorphizes to the identical direct call.
-fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+fn Ordering cmp<T: Comparable<T>>(const ref T a, const ref T b) { return a.compareTo(other: b); }
 
 type value ByValue implements Order<Tag> {
     public ctor make() { }
-    public fn Ordering compare(ref Tag a, ref Tag b) {
+    public fn Ordering compare(const ref Tag a, const ref Tag b) {
         int32 l = a.value();
         int32 r = b.value();
         return cmp(a: l, b: r);

@@ -15,7 +15,7 @@ export { stripIndent, html, sql, SqlQuery };
 
 // Escape the HTML metacharacters in a single string. Codepoint iteration re-encodes multi-byte UTF-8 faithfully
 // (the specials are all ASCII, so they never collide with a continuation byte).
-fn string htmlEscape(ref string s) {
+fn string htmlEscape(const ref string s) {
     Formatter f = Formatter.make();
     foreach (char c in s.chars()) {
         if (c == '&')       { string e = "&amp;";  f.writeStr(s: ref e); }

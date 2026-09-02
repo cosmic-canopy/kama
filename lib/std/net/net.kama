@@ -47,7 +47,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
     public ctor make(isize fd) { this.fd = fd; }
 
     // Connect to a numeric host:port (e.g. "127.0.0.1"). The stream closes on drop.
-    public unsafe ctor Result<TcpStream, IoError> connect(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpStream, IoError> connect(const ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();
@@ -100,7 +100,7 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
 
     // Begin a non-blocking connect. The returned stream's connection may still be in flight: poll it for
     // writability (see std::net::Poller), then call checkConnected() to learn the outcome. host "" = loopback.
-    public unsafe ctor Result<TcpStream, IoError> connectNonBlocking(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpStream, IoError> connectNonBlocking(const ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();
@@ -148,7 +148,7 @@ type resource TcpListener {
     private ctor make(isize fd) { this.fd = fd; }
 
     // Bind + listen on a numeric host:port. host "" or "0.0.0.0" = all interfaces. SO_REUSEADDR is set.
-    public unsafe ctor Result<TcpListener, IoError> bind(ref string host, uint16 port) {
+    public unsafe ctor Result<TcpListener, IoError> bind(const ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_tcp();

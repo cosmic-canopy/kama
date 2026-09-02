@@ -50,8 +50,8 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // Three-way compare through a `ref K` receiver so a primitive key's scalar intrinsic conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
     const fn Ordering cmpKeys(const ref K a, const ref K b) { return a.compareTo(other: b); }
-    fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
-    fn K cloneKey(ref K k) when [K: Copyable<K>] { return copy k; }
+    fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
+    fn K cloneKey(const ref K k) when [K: Copyable<K>] { return copy k; }
 
     // --- element hand-off helpers (move-only-safe; delegate to the tested DynamicArray ops) ---
     fn void pushKeyVal(K key, V value) { this.keys.add(item: give key); this.vals.add(item: give value); }
@@ -83,7 +83,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         return this.kids[i].contains(key: key);         // descend the rightmost child
     }
 
-    public fn Optional<V> get(ref K key) when [V: Copyable<V>] {
+    public fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -100,7 +100,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // makes a SortedMap of move-only values first-class. PANICS on an absent key (guard with `contains`),
     // like `Map.getRef`. The returned `ref V` chains up through each node's `getRef` (a place-returning call
     // whose receiver roots at `this`); it dangles if held across a structural change, the usual borrow rule.
-    public fn ref V getRef(ref K key) {
+    public fn ref V getRef(const ref K key) {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -211,7 +211,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 
     // Greatest key <= `key` (floor) / least key >= `key` (ceil), None if none. A root-to-leaf descent
     // tracking the best candidate at each level, preferring a closer one found deeper in the subtree.
-    public fn Optional<K> floor(ref K key) when [K: Copyable<K>] {
+    public fn Optional<K> floor(const ref K key) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length(); isize cand = 0 - 1;
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -228,7 +228,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
         if (cand >= 0) { return Optional::Some(value: this.cloneKey(k: this.keys[cand])); }
         return Optional::None;
     }
-    public fn Optional<K> ceil(ref K key) when [K: Copyable<K>] {
+    public fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -352,7 +352,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // Remove `key` from THIS subtree (kept >= B keys by callers, or the root), returning its value moved out
     // (None if absent). CLRS 3-case delete: leaf; internal (replace with predecessor/successor, or merge);
     // descend (fill a thin child first).
-    public fn Optional<V> removeKey(ref K key) {
+    public fn Optional<V> removeKey(const ref K key) {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -405,7 +405,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 
     // In-order collect of the keys in [lo, hi) into `dest` — the ordered range query. Prunes subtrees that
     // can't overlap the window: a child left of a key < lo is skipped, and the walk stops once a key >= hi.
-    public fn void collectRange(ref K lo, ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
+    public fn void collectRange(const ref K lo, const ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering vsHi = this.cmpKeys(a: this.keys[i], b: hi);
@@ -491,8 +491,8 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     public const fn isize length() { return this.len; }
     public const fn bool isEmpty() { return this.len == 0; }
     public const fn bool contains(const ref K key) { return this.root.contains(key: key); }
-    public fn Optional<V> get(ref K key) when [V: Copyable<V>] { return this.root.get(key: key); }
-    public fn ref V getRef(ref K key) { return this.root.getRef(key: key); }
+    public fn Optional<V> get(const ref K key) when [V: Copyable<V>] { return this.root.get(key: key); }
+    public fn ref V getRef(const ref K key) { return this.root.getRef(key: key); }
 
     // Insert or overwrite. Consumes both key and value (the tree owns what it stores). If the root is full,
     // grow the height first: a fresh internal node adopts the old root as child 0 and splits it, so the new
@@ -506,7 +506,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
 
     // Remove the entry for `key`, returning its VALUE moved OUT (`None` when absent) — same ownership contract
     // as `Map.remove`. If the root emptied (a merge pulled its last key down), drop a level in place.
-    public fn Optional<V> remove(ref K key) {
+    public fn Optional<V> remove(const ref K key) {
         Optional<V> r = this.root.removeKey(key: key);
         if (this.root.keyCount() == 0) { if (!this.root.isLeaf()) { this.root.promoteOnlyChild(); } }
         bool removed = match (r) { case Some(value: v): true; case None: false; };
@@ -520,8 +520,8 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
 
     // Greatest key <= `key` / least key >= `key` (None if none) — the ordered nearest-neighbour queries a
     // hash map can't answer (timelines, ranges, floor/ceil lookups). Java NavigableMap's floorKey/ceilingKey.
-    public fn Optional<K> floor(ref K key) when [K: Copyable<K>] { return this.root.floor(key: key); }
-    public fn Optional<K> ceil(ref K key) when [K: Copyable<K>] { return this.root.ceil(key: key); }
+    public fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.root.floor(key: key); }
+    public fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.root.ceil(key: key); }
 
     // Ascending iteration: a fresh `DynamicArray` of key (resp. value) COPIES in sorted-key order — iterate
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
@@ -534,7 +534,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
-    public fn DynamicArray<K> range(ref K from, ref K to) when [K: Copyable<K>] {
+    public fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] {
         DynamicArray<K> acc = DynamicArray.empty(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
     }
 

@@ -87,7 +87,7 @@ unsafe fn ExitStatus statusOf(int32 st) {
 }
 
 // Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free.
-unsafe fn UnsafePtr buildArgv(ref string program, ref DynamicArray<string> args) {
+unsafe fn UnsafePtr buildArgv(const ref string program, ref DynamicArray<string> args) {
     isize n = 1 + args.length();
     UnsafePtr v = kama_argv_new(n: cast<int32>(n));
     kama_argv_set(v: v, i: 0, s: program.cstr());

@@ -1,0 +1,12 @@
+// The string half of tests/xfail/ref_literal_mutable — a separate fixture because it is a separate
+// emitter arm. A string rvalue is materialised by `hoistStringTemp` into a scope-freed `__strtmp`, a
+// primitive literal by the `__primtmp` arm beside it, and a rule that covered only one of them would have
+// left `readFile(path: "x")` legal while `bump(v: 1)` was not — the same defect with two answers.
+//
+// Covering both is also what forced the stdlib's `ref string` family (`fs`, `log`, `fmt::parse`,
+// `net`, `process`) to say `const ref`, which is what those callees always meant.
+fn void take(ref string s) { s = "other"; }
+fn int32 main() {
+    take(s: "literal");
+    return 0;
+}

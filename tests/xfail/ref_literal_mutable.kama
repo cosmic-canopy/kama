@@ -1,0 +1,18 @@
+// A literal bound to a `ref` parameter is materialised into a temp, because a `ref` needs an address and
+// a literal has none (tests/ref_param_rvalue.kama pins that, and it is what lets `m.get(key: 5)` be
+// written without a local first). A temp is storage that dies at the end of the statement, so borrowing
+// one READ-ONLY is sound and writing one is a silent no-op.
+//
+// The rule already existed for a class temporary — `bump(p: Point.make(1, 2))` was rejected with "its
+// mutation would be lost" — but its guard was `isClass`, and a literal has no class. So the language
+// rejected the class spelling and accepted this one, which loses the write just as completely: `v = v + 1`
+// below runs, and nothing anywhere can observe it.
+//
+// The repair is whichever the callee meant, and the diagnostic names both: bind a local if `bump` really
+// writes, or declare the parameter `const ref` if it never did. The stdlib was the second case in 94
+// places, and every one of them now says so.
+fn void bump(ref int64 v) { v = v + 1; }
+fn int32 main() {
+    bump(v: 1);
+    return 0;
+}

@@ -393,7 +393,7 @@ allocator — see "Custom allocators" below). These two key contracts are in the
 
 ```kama
 type contract Hashable  for value, resource, enum, intrinsic { fn uint64 hash(); }
-type contract Equatable<T is This> for value, resource, enum, intrinsic { fn bool equals(ref T other); }
+type contract Equatable<T is This> for value, resource, enum, intrinsic { const fn bool equals(const ref T other); }
 ```
 
 Keys are hashed and compared **by content**, so a lookup key built any way (a concat, a fresh
@@ -408,7 +408,7 @@ cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` c
 in `std::collections`). `string` declares `Equatable` with an empty body, satisfied by its built-in `equals`; each
 integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
-`type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }` (returning the prelude enum
+`type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
 `type intrinsic` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
@@ -848,6 +848,14 @@ slot int32 quotient; slot int32 rem;
 divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
 ```
 
+**`const ref T x` is a read-only borrow, and it is what a literal or a temporary may bind to.** Neither
+has an address, so the compiler materialises one into a temp — which is what lets `m.get(key: 5)`,
+`readFile(path: "some/path")` and `useShape(a: Square(3))` be written without binding a local first. That
+temp dies at the end of the statement, so a **non-`const` `ref`/`out` cannot take one**: the callee's <!-- xfail: ref_literal_mutable, ref_string_literal_mutable, ref_temporary_nonconst -->
+write would land in storage nothing can read back. The repair is whichever the callee meant — bind a
+local if it really writes, or say `const ref` if it never did. Prefer `const ref` for any parameter you
+only read; it is what makes the borrow usable at a call site.
+
 "Every path" is a real flow merge, not "assigned somewhere": an `if`/`else` in which **both** arms assign
 counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join
 and so owes nothing to it.
@@ -972,7 +980,7 @@ Numeric type **limits** as zero-arg functions — `int8Min/Max` … `int64Min/Ma
 `minf`/`maxf`/…, and explicit **wrapping** arithmetic `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
 `wrappingNegI32` (+ `I64`) for intentional overflow. `import { std::num::int32Max, std::num::minI32,
 std::num::wrappingAddI32, … };`. (A generic `min<T: Comparable>` is now expressible: the prelude defines `Comparable`/`Ordering`
-— `fn Ordering compareTo(ref T other)` with `type intrinsic` conformances for every int/float/string — the bound for
+— `const fn Ordering compareTo(const ref T other)` with `type intrinsic` conformances for every int/float/string — the bound for
 `PriorityQueue` + the sorted containers.)
 
 ### Sorting & searching (`std::collections`) ✅
@@ -2860,7 +2868,7 @@ Weighable` would put `.weight()` on every `int32` in the program, including code
 int32 l = 3; int32 r = 7;
 l.compareTo(other: r);                       // ERROR — `compareTo` is Comparable's, not int32's
 
-fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
+fn Ordering cmp<T: Comparable<T>>(const ref T a, const ref T b) { return a.compareTo(other: b); }
 cmp(a: l, b: r);                             // a BOUND — monomorphizes to a direct call, zero cost
 
 Comparable<int32> c = l;
@@ -3311,7 +3319,7 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
 
   ```kama
-  type contract Comparable<T is This> for value, resource, intrinsic { fn Ordering compareTo(ref T other); }
+  type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }
 
   type value Duration implements Comparable<This> { … }     // conformance: always `This`
   fn T maxOf<T: Comparable<T>>(T a, T b) { … }              // bound: the bound's own parameter
@@ -3518,7 +3526,7 @@ The prelude provides two tagged-union types, so error handling needs no exceptio
 - **`Unit`** — a single-variant enum (`Unit::Unit`), the empty value. It is the payload for a fallible
   operation that succeeds with nothing to return: `Result<Unit, E>` (the analogue of Rust's `Result<(), E>`),
   so **one** error convention — always `Result` — covers valued and void operations alike, with no
-  placeholder payload. Example: `fn Result<Unit, IoError> remove(ref string path)` in `std::fs`.
+  placeholder payload. Example: `fn Result<Unit, IoError> remove(const ref string path)` in `std::fs`.
 
 Both are ordinary tagged unions consumed by `match`, so the caller is *forced* to handle the empty/error
 case (exhaustiveness):

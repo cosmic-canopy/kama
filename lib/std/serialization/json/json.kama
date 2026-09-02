@@ -227,7 +227,7 @@ fn Result<string, std::memory::Owned<Error>> encode(Serialize v) {
 // Borrows the token string (`ref` → `kama_string*`): C reads `.data` via strtod and never owns/frees it,
 // so the caller keeps ownership and drops the token. (Passing an owned string BY VALUE to an extern would
 // "transfer ownership" to C, which never frees it — a leak.)
-extern fn float64 kama_parse_f64(ref string s);
+extern fn float64 kama_parse_f64(const ref string s);
 
 // A JSON reader: a recursive-descent parser over an owned source string, implementing Deserializer. It uses
 // a STICKY error flag — a malformed token sets `err` and returns a default, and the caller checks `failed()`

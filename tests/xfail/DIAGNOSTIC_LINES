@@ -515,7 +515,10 @@ ref_arg_overlap_field	ref_arg_overlap_field.kama:13
 ref_arg_overlap_receiver	ref_arg_overlap_receiver.kama:11
 ref_arg_rvalue_mut	ref_arg_rvalue_mut.kama:10 ref_arg_rvalue_mut.kama:8
 ref_handle	ref_handle.kama:5
+ref_literal_mutable	ref_literal_mutable.kama:16
 ref_on_slot	ref_on_slot.kama:12 ref_on_slot.kama:13 ref_on_slot.kama:14
+ref_string_literal_mutable	ref_string_literal_mutable.kama:10
+ref_temporary_nonconst	ref_temporary_nonconst.kama:14
 ref_through_weak	ref_through_weak.kama:3 ref_through_weak.kama:6 ref_through_weak.kama:8
 reffn_byval	reffn_byval.kama:7
 reffn_local	reffn_local.kama:3

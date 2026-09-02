@@ -51,7 +51,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = all interfaces; port 0 = OS-assigned ephemeral
     // (read the actual port back with localAddr()). SO_REUSEADDR is set. The socket closes on drop.
-    public unsafe ctor Result<UdpSocket, IoError> bind(ref string host, uint16 port) {
+    public unsafe ctor Result<UdpSocket, IoError> bind(const ref string host, uint16 port) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_udp();
@@ -67,7 +67,7 @@ type resource UdpSocket implements DatagramSocket {
 
     // Set a default peer (POSIX `connect` on a datagram socket): send/recv then need no address, and recv
     // only delivers datagrams FROM that peer (others get ICMP-refused / dropped).
-    public unsafe fn Result<Unit, IoError> connect(ref string host, uint16 port) {
+    public unsafe fn Result<Unit, IoError> connect(const ref string host, uint16 port) {
         if (kama_connect_inet(fd: this.fd, host: host.cstr(), port: port) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }

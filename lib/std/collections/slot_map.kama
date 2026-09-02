@@ -21,7 +21,7 @@ type view SlotMapValueIter<V: Copyable<V>> implements Iterator<V> {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
-    fn V cloneVal(ref V v) { return copy v; }   // deep-copy through a typed ref (see Map.cloneVal)
+    fn V cloneVal(const ref V v) { return copy v; }   // deep-copy through a typed ref (see Map.cloneVal)
     public unsafe fn Optional<V> next() {
         if (this.modsp[0] != this.modsAt) { panic(msg: "SlotMap modified during iteration"); }
         while (this.pos < this.slotCount) {
@@ -127,7 +127,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
 
     // Deep-copy a stored value through a typed `ref V` (a raw-buffer `copy this.values[i]` would drop the copy
     // marker and alias — see `Map.cloneVal`).
-    fn V cloneVal(ref V v) when [V: Copyable<V>] { return copy v; }
+    fn V cloneVal(const ref V v) when [V: Copyable<V>] { return copy v; }
 
     // Fetch a COPY of the value for `h` (present only for a Copyable value); `None` if the handle is stale.
     public unsafe fn Optional<V> get(Handle handle) when [V: Copyable<V>] {

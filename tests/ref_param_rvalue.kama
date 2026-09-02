@@ -1,6 +1,12 @@
-// A primitive LITERAL or an inline CONSTRUCTOR passed to a `ref` parameter is materialized into a temp
-// (an addressable lvalue) instead of being rejected — so `m.get(key: 5)` / `m.get(key: Point(1,2))` work
-// without binding a local first (a `string` literal already did). The temp is a read-only borrow here.
+// A primitive LITERAL or an inline CONSTRUCTOR passed to a `const ref` parameter is materialized into a
+// temp (an addressable lvalue) instead of being rejected — so `m.get(key: 5)` / `m.get(key: Point(1,2))`
+// work without binding a local first (a `string` literal already did).
+//
+// ⚠️ `const` is the whole licence, and until `0.9.139` this file said "the temp is a read-only borrow
+// here" and nothing checked it. The temp dies at the end of the statement, so a NON-const `ref` writes
+// where nothing can read back; that is now rejected (tests/xfail/ref_literal_mutable). `Map.get`/`getRef`
+// are `const ref K key` for that reason — they hand the key straight to `slotOf(const ref K key)` and
+// never wrote it, which is exactly what the old `ref` spelling failed to say.
 import { std::collections::Map };
 
 type value Point implements Hashable, Equatable<This> {

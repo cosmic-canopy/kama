@@ -57,7 +57,7 @@ unsafe fn bool logEnabled(LogLevel level, string tag) {
 // already built the message, which is exactly the cost the lowering exists to avoid. The enabled-check is
 // inlined against the extern (rather than calling `logEnabled`) so the owned `tag`/`msg` params are only ever
 // read by borrow — a kama->kama by-value forward would transfer ownership.
-unsafe fn void logAt(int32 level, ref string tag, ref string msg) {
+unsafe fn void logAt(int32 level, const ref string tag, const ref string msg) {
     if (kama_log_enabled(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()))) {
         kama_log_dispatch(level: level, tag: tag.cstr(), tagLen: cast<usize>(tag.length()),
                           msg: msg.cstr(), msgLen: cast<usize>(msg.length()));

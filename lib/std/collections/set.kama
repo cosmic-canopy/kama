@@ -40,7 +40,7 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
     public const fn bool contains(const ref K key) { return this.m.contains(key: key); }
     // `Map.remove` now returns the removed VALUE moved out (`Optional<Unit>` here — the payload is nothing).
     // A Set has no value to reclaim, so it reports presence as a `bool`; the `Unit` binds and drops.
-    public fn bool remove(ref K key) {
+    public fn bool remove(const ref K key) {
         Optional<Unit> hit = this.m.remove(key: key);   // bind first — a method call isn't a valid match subject
         return match (hit) { case Some(value: u): true; case None: false; };
     }

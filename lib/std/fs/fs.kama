@@ -58,7 +58,7 @@ type resource File implements Reader, Writer {
     public unsafe fn void close() { if (this.fd >= 0) { int32 rc = kama_close_fd(fd: this.fd); this.fd = -1; } }
 
     // Open a file for reading or writing (Write creates/truncates). The returned `File` closes on drop.
-    public unsafe ctor Result<File, IoError> open(ref string path, OpenMode mode) {
+    public unsafe ctor Result<File, IoError> open(const ref string path, OpenMode mode) {
         int32 fd = match (mode) {
             case Read:  kama_open_read(path: path.cstr());
             case Write: kama_open_create(path: path.cstr());
@@ -143,7 +143,7 @@ type resource File implements Reader, Writer {
 }
 
 // Read an entire file into an owning byte buffer (opens, reads to EOF, closes on drop).
-fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
+fn Result<DynamicArray<uint8>, IoError> readFile(const ref string path) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Read);
     return match (r) {
         case Ok(value: f):  f.readAll();                       // f closes at arm end (RAII)
@@ -152,7 +152,7 @@ fn Result<DynamicArray<uint8>, IoError> readFile(ref string path) {
 }
 
 // Create/truncate a file and write the whole buffer to it.
-fn Result<isize, IoError> writeFile(ref string path, ref DynamicArray<uint8> bytes) {
+fn Result<isize, IoError> writeFile(const ref string path, ref DynamicArray<uint8> bytes) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
     return match (r) {
         case Ok(value: f):  f.writeAll(bytes: bytes);
@@ -161,7 +161,7 @@ fn Result<isize, IoError> writeFile(ref string path, ref DynamicArray<uint8> byt
 }
 
 // Size + directory flag for a path.
-unsafe fn Result<Metadata, IoError> stat(ref string path) {
+unsafe fn Result<Metadata, IoError> stat(const ref string path) {
     uint64 sz = 0ui64;
     int32 isdir = 0;
     int32 rc = kama_path_stat(path: path.cstr(), outSize: addr(of: sz), outIsDir: addr(of: isdir));
@@ -170,13 +170,13 @@ unsafe fn Result<Metadata, IoError> stat(ref string path) {
 }
 
 // Delete a file. Ok on success; Err(NotFound) if the path did not exist.
-unsafe fn Result<Unit, IoError> remove(ref string path) {
+unsafe fn Result<Unit, IoError> remove(const ref string path) {
     if (kama_unlink(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Unit::Unit);
 }
 
 // DynamicArray a directory's entries (excluding "." and ".."), each as an owned string.
-unsafe fn Result<DynamicArray<string>, IoError> readDir(ref string path) {
+unsafe fn Result<DynamicArray<string>, IoError> readDir(const ref string path) {
     UnsafePtr dirp = kama_diropen(path: path.cstr());
     if (dirp == null) { return Result::Err(error: lastError()); }
     DynamicArray<string> names = DynamicArray.empty();
