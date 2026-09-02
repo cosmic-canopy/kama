@@ -845,6 +845,37 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     re-bind in between — now has a spelling ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)), and
     SPEC's `fnptr` section says so.
 
+  - **`isize`/`usize` are absent from EVERY intrinsic conformance — reported as "cannot be
+    interpolated", and that is the smallest of six symptoms.** Measured on `0.9.134`: `Map<isize, _>`
+    fails its `Hashable` bound, `DynamicArray<isize>.contains` does not exist (`Equatable`),
+    `sortUnstable` fails its `Comparable` bound, and `${n}` fails `Format`. Only built-in `==` works,
+    because that is not a contract call. AGENTS.md is right that *"`isize` is the size type — every
+    `length()`/`count()`/index is one"*, which makes this the recommended type for every length being the
+    one that cannot be logged, keyed, searched or sorted.
+    ⚠️ **The suggested fix — two more entries beside the existing `type intrinsic <…> implements Format`
+    lines — does not compile**, and the reason is the actual defect: `isize`/`usize` carry no
+    `builtInVal`. They are *"PRIMITIVES spelled as plain names"* (the comment at
+    [kama.cemit.cpp:8970](../src/kama.cemit.cpp)), so they lex as IDENTIFIER, every `switch` over a
+    builtin type misses them, and they cannot appear in an intrinsic-conformance list at all — adding
+    `isize` there is a parse error in the prelude. The same root cause already bit once: `DynamicArray<isize>`
+    "never compiled" until that one site was special-cased. So the work is to make them first-class
+    primitive tokens, or to teach the intrinsic list to accept them; it is not two lines.
+    **The DIAGNOSTIC half is fixed in `0.9.135`** — the hole now says *"`isize` cannot be interpolated —
+    no `Format` is implemented for `isize`"* at the hole's own line, where it used to be an
+    unresolved-receiver error at line 1 column 0 naming neither. ⚠️ Two of our own defects met there: a
+    synthesized `format` call carried NO line (so every interpolation diagnostic reported at 1:0), and the
+    receiver message added in `0.9.134` asserted "no local … of that name is in reach" about a local one
+    line above. A message is worse than useless when it is confidently wrong.
+  - **A kama reserved word cannot name a `type extern value` field.** `webgpu.h` uses `type` in
+    `WGPUBufferBindingLayout`, `WGPUSamplerBindingLayout`, `WGPUQuerySetDescriptor` and
+    `WGPUCompilationMessage`; the field is then unreachable, and unlike a function it cannot be wrapped —
+    an extern struct's fields are assigned BY NAME, so renaming emits the wrong C. Confirmed here: it is a
+    parse error (`unexpected TYPE, expecting IDENTIFIER`), i.e. the field name position takes an
+    identifier token and a keyword can never reach it. It blocks explicit bind-group layouts in pure kama,
+    which is real work rather than ergonomics. Wants a raw-identifier or rename spelling; the choice is a
+    language-surface decision, not a bug fix, and it should be made once for extern fields and any other
+    position that has to echo a C name.
+
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
     stall tolerance IS latency, and the two cannot be traded. A macOS session logged **326 underruns** at

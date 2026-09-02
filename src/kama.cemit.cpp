@@ -3571,6 +3571,23 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
                          "method that returns a string").c_str(), hole->line);
             return;   // reported; synthesizing the call would add a second error against the synth line
         }
+        // The same question for a PRIMITIVE hole, which took a very different road to a much worse
+        // answer: no class, so the check above did not apply, and the synthesized `format` call fell all
+        // the way through method dispatch to an unresolved-receiver error naming neither the value nor
+        // the interpolation. `isize`/`usize` are the ones that hit it — they are absent from every
+        // `type intrinsic <…> implements …` list in the prelude — and they are exactly the types a
+        // `length()` or an index has, so the recommended type for every length was the one that could
+        // not be logged.
+        if (hc.empty()) {
+            SharedIdentifier htn = receiverTypeNode(hole);
+            const std::string hk = htn ? kamaTypeText(htn) : std::string();
+            const std::string ck = receiverScalarCType(hole);
+            if (!hk.empty() && !ck.empty() && !primConformance(primKeyOfCType(ck)))
+                unsupported(("`" + hk + "` cannot be interpolated — `${…}` renders a value through the "
+                             "`Format` contract, and no `Format` is implemented for `" + hk
+                             + "`. Widen it at the hole (`cast<int64>(…)`) or render it another way").c_str(),
+                            hole->line);
+        }
     }
     // synthesize `<hole>.format(f: ref fv)` so the hole's static type picks the right `format`.
     auto args = std::make_shared<ArgumentList>();
@@ -3578,6 +3595,10 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
                       std::make_shared<ModifierNode>(ctx, std::make_shared<std::string>("ref")), ident(fv)));
     auto call = std::make_shared<InvocationNode>(ctx,
                   std::make_shared<MemberAccessNode>(ctx, ident("format"), hole), args);
+    // Carry the HOLE's line onto the synthesized call. Without it every diagnostic raised while lowering
+    // `${x}` was reported at line 1 column 0 — a synthesized node has no position — so a mistake five
+    // lines down pointed at the top of the file and named neither the hole nor the interpolation.
+    call->line = hole->line;
     // This call is the COMPILER's lowering of `${x}`, not something the author wrote, so the
     // contract-scope gate does not apply to it: the rule is about what a primitive's API looks like in
     // SOURCE, and interpolation is how the language itself reaches `Format`.
@@ -24139,11 +24160,24 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
         std::string who;
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
-        unsupported((who.empty()
-                     ? ("cannot resolve the receiver of `" + method + "` — its type is not known here")
-                     : ("cannot resolve `" + who + "`, the receiver of `" + method + "` — no local, "
-                        "parameter, module `static`/`comptime` or type of that name is in reach here")).c_str(),
-                    call->line, who);
+        // ⚠️ TWO different failures reach this line, and saying the wrong one is worse than saying
+        // nothing. The receiver may be an unknown NAME, or a perfectly good value of a primitive type
+        // that simply has no conformance carrying this method — which is what an `isize` hits, since
+        // `isize`/`usize` are absent from every `type intrinsic <…> implements …` list in the prelude.
+        // Telling someone that `n` is "not in reach" when `n` is the local on the line above sends them
+        // hunting for a scope bug that is not there.
+        const std::string rct = receiverScalarCType(receiver);
+        const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
+        if (!rk.empty())
+            unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
+                         "implemented for `" + rk + "` (an interpolation hole needs `Format`, a `Map` key "
+                         "needs `Hashable`, `sort` needs `Comparable`)").c_str(), call->line, rk);
+        else
+            unsupported((who.empty()
+                         ? ("cannot resolve the receiver of `" + method + "` — its type is not known here")
+                         : ("cannot resolve `" + who + "`, the receiver of `" + method + "` — no local, "
+                            "parameter, module `static`/`comptime` or type of that name is in reach here")).c_str(),
+                        call->line, who);
         return "0";
     }
     // The other side of that tally: a receiver the probe DID resolve, so this call site is fully checked.
