@@ -1,0 +1,13 @@
+// A GATED-OUT FILE IS STILL PARSED, so a syntax error in one is an error on every target.
+//
+// That is deliberate, and it is half of why the file gate was chosen over the alternative design
+// (compiling only the files the import graph reaches): a gate says "do not build this here", not "stop
+// looking at this". A file excluded from every target you happen to build today would otherwise rot in
+// silence, and the first person to add that target would inherit every mistake made in the meantime.
+//
+// The gate below excludes this file from every leg of the suite — `NO_SUCH_FLAG_IS_EVER_ACTIVE` is
+// undeclared, and a loose build treats an undeclared flag as inactive. The parse still runs and still
+// rejects, which is what makes it an error here rather than a file nobody reads.
+file @compileFor(NO_SUCH_FLAG_IS_EVER_ACTIVE);
+
+fn int32 main() { return }

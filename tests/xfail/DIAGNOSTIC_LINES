@@ -208,6 +208,11 @@ extern_undeclared	main.kama:3 main.kama:4
 extern_value_unknown_field	extern_value_unknown_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
+file_gate_after_import	file_gate_after_import.kama:8
+file_gate_bad_attribute	file_gate_bad_attribute.kama:7
+file_gate_module_all_gated	main.kama:8
+file_gate_operand	file_gate_operand.kama:12
+file_gate_still_parsed	file_gate_still_parsed.kama:13
 fixed_backing_int64	fixed_backing_int64.kama:12
 fixed_bad_pairing	-
 float_bare_dot	float_bare_dot.kama:6

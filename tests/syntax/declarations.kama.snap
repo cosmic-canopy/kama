@@ -28,6 +28,23 @@
 >#region folding marker — the lexer DROPS this line (reserved_preprocessor in kama.l)
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.number-sign.kama
 >
+>// The FILE GATE, and the reason `file` is coloured as a keyword at all. It is CONTEXTUAL, so the word
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// is also an ordinary name below — TextMate cannot tell the two apart (it has no parser), which is why
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// this fixture holds both spellings: whatever it does, it must do the same to each, visibly, in the
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// committed snapshot.
+#^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>file @compileFor(DEBUG);
+#^^^^ source.kama keyword.other.modifier.kama
+#    ^ source.kama
+#     ^ source.kama punctuation.definition.annotation.kama
+#      ^^^^^^^^^^ source.kama entity.name.function.decorator.kama
+#                ^ source.kama
+#                 ^^^^^ source.kama entity.name.type.kama
+#                      ^^^ source.kama
+>
 >// `immutable` sits between `type` and the kind word, and `value` is an ordinary IDENTIFIER in kama.y —
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >// nothing but the #declarations rule can colour it, and that rule used to be unreachable.
@@ -87,7 +104,14 @@
 #^^^^ source.kama
 #    ^^^^^ source.kama storage.type.primitive.kama
 #         ^^^^^ source.kama
->    public ctor make(int32 fd) { this.fd = fd; }
+>    int32 file;                  // ...and `file` naming an ordinary field
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^ source.kama
+#          ^^^^ source.kama keyword.other.modifier.kama
+#              ^^^^^^^^^^^^^^^^^^^ source.kama
+#                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>    public ctor make(int32 fd) { this.fd = fd; this.file = fd; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama
 #          ^ source.kama
@@ -100,7 +124,13 @@
 #                                 ^^^^ source.kama variable.language.kama
 #                                     ^^^^ source.kama
 #                                         ^ source.kama keyword.operator.assignment.kama
-#                                          ^^^^^^^ source.kama
+#                                          ^^^^^ source.kama
+#                                               ^^^^ source.kama variable.language.kama
+#                                                   ^ source.kama
+#                                                    ^^^^ source.kama keyword.other.modifier.kama
+#                                                        ^ source.kama
+#                                                         ^ source.kama keyword.operator.assignment.kama
+#                                                          ^^^^^^^ source.kama
 >    public fn int32 raw() { return this.fd; }
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.other.modifier.kama

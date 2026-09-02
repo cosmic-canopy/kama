@@ -1205,6 +1205,14 @@ std::string owningPackageDir(const std::string& fromDir)
 
 
 
+// THE FILE GATE, consulted at each of the three points a unit is admitted to a compilation below.
+// Defined further down, beside the build-flag globals it reads; declared here because loadProgramUnits
+// is the only caller and sits above them.
+enum class FileGate { Active, Inactive, Malformed };
+static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string& path);
+static std::string renderFileGate(const SharedAttributeList& gate);
+static std::string activeTargetLabel();
+
 // `strictImports` decides what an import satisfied by the dependency view but undeclared by the importing
 // file's OWN package does: fail the build (every command that produces something) or merely report it.
 // The LSP and the `query` CLI that mirrors it pass false — refusing to analyze would strip an editor of
@@ -1325,11 +1333,35 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // project still analyses against its module's other files, which is the asymmetry §2g.35 designed —
     // the CLI takes its operand at its word, the editor walks. An open file with no `kama.json` above it
     // degrades to single-file, which is what a file with no module has always got.
+    size_t gatedOut = 0;                 // inputs the file gate excluded — see the report below the loop
     for (size_t ci = 0; ci < cliInputs.size(); ++ci) {
         std::string abs = absolutePath(cliInputs[ci]);
         if (!seen.insert(abs).second) continue;
         SharedCompilationUnit u = parseFile(cliInputs[ci]);
         if (!u) return false;
+        // ADMISSION POINT 1 of 3 — the file gate on an operand. A file the CLI NAMED is a direct
+        // request, so a gate that excludes it is a hard ERROR rather than a quiet nothing: `kama build
+        // audio_native.kama --target wasm32-…` has to say why it produced no binary. A file the build
+        // COLLECTED (a manifest's source root, the LSP's workspace) is skipped silently instead — that
+        // is what collection is for. `g_looseBuild` is exactly that distinction, already recorded:
+        // it is set iff the operands themselves are the compilation (§2i.40).
+        switch (fileGateOf(u, cliInputs[ci])) {
+            case FileGate::Malformed: return false;
+            case FileGate::Inactive:
+                if (g_looseBuild) {
+                    // Pointed at the GATE's own line, not at the file as a whole: the gate is the thing
+                    // to read, and an editor given a bare filename has nowhere to put the squiggle.
+                    const int gl = (*u->fileGate)[0] ? (*u->fileGate)[0]->line : 1;
+                    fprintf(stderr, "kama: error: %s:%d: `file %s;` excludes this file from a %s build,"
+                                    " so there is nothing to compile.\n",
+                            cliInputs[ci].c_str(), gl, renderFileGate(u->fileGate).c_str(),
+                            activeTargetLabel().c_str());
+                    return false;
+                }
+                ++gatedOut;
+                continue;
+            case FileGate::Active: break;
+        }
         units.push_back(u); paths.push_back(abs);
         std::string k = moduleKeyOf(u, abs);
         if (k.empty()) continue;                 // in no module: file-private, it IS its own module
@@ -1343,9 +1375,26 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // ask about, because of a file they did not, would trade one broken command for two.
             SharedCompilationUnit su = parseFile(sib);
             if (!su || moduleKeyOf(su, sabs) != k) continue;
+            // ADMISSION POINT 2 of 3. The module check comes FIRST deliberately: a malformed gate is an
+            // error only in a file this compilation actually wants, and a sibling in another module is
+            // not one — the same line this scan already draws for a sibling that does not parse.
+            switch (fileGateOf(su, sib)) {
+                case FileGate::Malformed: return false;
+                case FileGate::Inactive:  continue;
+                case FileGate::Active:    break;
+            }
             seen.insert(sabs);
             units.push_back(su); paths.push_back(sabs);
         }
+    }
+    // EVERY input gated out. Left alone this surfaces as `clang: error: no input files` — a message
+    // about the wrong tool, for a build that did exactly what its own source told it to. It is reachable
+    // the moment a project's entry file carries a gate, so it gets kama's own sentence.
+    if (units.empty() && gatedOut > 0) {
+        fprintf(stderr, "kama: error: every source file is excluded from a %s build by its own"
+                        " `file @compileFor(...)` gate — there is nothing to compile.\n",
+                activeTargetLabel().c_str());
+        return false;
     }
     for (size_t i = 0; i < units.size(); ++i) {          // grows as imports are discovered (BFS)
         // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
@@ -1490,6 +1539,11 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             const std::vector<std::string>& toLoad = keep.empty() ? files : keep;
             const bool pruned = !keep.empty() && keep.size() < files.size();
 
+            // ADMISSION POINT 3 of 3. A module whose files are ALL gated out resolves to a real
+            // directory holding real sources and still contributes nothing, so it has to be reported
+            // HERE. Left to fall through, the symptom arrives much later and much worse — an
+            // unresolved name in the importer, pointing at code that is not the problem.
+            size_t admitted = 0;
             for (auto& f : toLoad) {
                 std::string abs = absolutePath(f);
                 bool fresh = seen.insert(abs).second;
@@ -1497,6 +1551,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 // parse — and so a file that fails to parse is reported once, by whichever got there first.
                 SharedCompilationUnit mu = indexedUnit(moduleIndex, f);
                 if (!mu) return false;
+                switch (fileGateOf(mu, f)) {
+                    case FileGate::Malformed: return false;
+                    // Stays in `seen`: under a fixed flag set the answer cannot change, so marking it
+                    // processed is what keeps a later import of the same module from re-reading it.
+                    case FileGate::Inactive:  continue;
+                    case FileGate::Active:    break;
+                }
+                ++admitted;
                 if (fresh) { units.push_back(mu); paths.push_back(abs); }
                 std::string mk = moduleKeyOf(mu, abs);
                 if (mk.empty()) continue;
@@ -1506,6 +1568,14 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 // already loaded — the record is about the namespace, not about who loaded the file.
                 if (pruned) for (auto& n : mu->topLevelNames) provided[mk].insert(n);
                 else        providedWhole.insert(mk);
+            }
+            if (admitted == 0) {
+                fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
+                                " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
+                        paths[i].c_str(), (imp ? imp->line : 1), key.c_str(), activeTargetLabel().c_str());
+                fprintf(stderr, "kama: note: a platform split needs BOTH sides — give the module a file"
+                                " gated for this target too, or gate the `import` site's declaration.\n");
+                return false;
             }
         }
     }
@@ -1743,6 +1813,86 @@ static std::set<std::string> g_activeFlags;
 static std::set<std::string> g_declaredFlags;
 static bool g_strictFlags = false;
 
+// ---- the FILE GATE: `file @compileFor(!ARCH_WASM32);` ------------------------------------------
+//
+// A unit's first line gates the WHOLE file, the way `@compileFor` gates one declaration. It is read
+// HERE, in the driver, and deliberately NOT by the emitter that handles declaration gates: a gated-out
+// file must never reach analysis at all, because its declarations may name types, externs and headers
+// that do not exist on this target — which is the entire reason the feature exists. A package build
+// compiles every `.kama` under its source root whatever the import graph, so before this there was no
+// way for a native-only file to sit in a project that also builds for wasm.
+//
+// The unit IS still parsed — that is how the gate is read — so a syntax error in a gated-out file is an
+// error on every target. That is a property worth keeping, not a cost: the alternative design (compile
+// only import-reachable files) was rejected partly because it silently stops checking a file nobody
+// imports.
+//
+// The predicate itself is `kamaCompileForActive` (kama.cemit.cpp), shared with the declaration gate so
+// the two can never come to disagree about what `!FLAG` or `A, B` means.
+
+// The gate as the author wrote it, so a diagnostic can quote the line instead of describing it.
+static std::string renderFileGate(const SharedAttributeList& gate)
+{
+    if (!gate) return std::string();
+    std::string out;
+    for (auto& at : *gate) {
+        if (!at || !at->name) continue;
+        if (!out.empty()) out += " ";
+        out += "@" + *at->name;
+        if (!at->args || at->args->empty()) continue;
+        out += "(";
+        bool first = true;
+        for (auto& arg : *at->args) {
+            if (!arg) continue;
+            if (!first) out += ", ";
+            first = false;
+            if (arg->name && arg->name->value && !arg->expression) { out += *arg->name->value; continue; }
+            if (arg->expression) {
+                auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(arg->expression.get());
+                if (su && su->token == EXCLAMATION && su->expression)
+                    if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
+                        if (id->value) { out += "!" + *id->value; continue; }
+            }
+            out += "…";
+        }
+        out += ")";
+    }
+    return out;
+}
+
+static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string& path)
+{
+    if (!unit || !unit->fileGate || unit->fileGate->empty()) return FileGate::Active;
+
+    // ⚠️ `@compileFor` and NOTHING else, and it is a hard error rather than a silent no-op — the same
+    // rule, for the same reason, that a bodyless `extern` states: `@noheap` gates allocation in a BODY
+    // and `@interrupt`/`@section` attach to EMITTED CODE, and a file is neither. Enforced here rather
+    // than in the grammar so the rejection is a sentence, not a token name.
+    bool malformed = false;
+    for (auto& at : *unit->fileGate) {
+        if (!at) continue;
+        if (!at->name || *at->name != "compileFor") {
+            fprintf(stderr, "kama: error: %s:%d: a file gate takes `@compileFor(...)` and nothing else"
+                            " — `@%s` has no meaning on a whole file (it gates a body or emitted code,"
+                            " and a file is neither).\n",
+                    path.c_str(), at->line, (at->name ? at->name->c_str() : "?"));
+            malformed = true;
+        }
+    }
+    if (malformed) return FileGate::Malformed;
+
+    const int line = (*unit->fileGate)[0] ? (*unit->fileGate)[0]->line : 1;
+    bool bad = false;
+    const bool active = kamaCompileForActive(unit->fileGate, g_activeFlags, g_declaredFlags, g_strictFlags,
+                                             [&](const std::string& m) {
+                                                 fprintf(stderr, "kama: error: %s:%d: %s\n",
+                                                         path.c_str(), line, m.c_str());
+                                                 bad = true;
+                                             });
+    if (bad) return FileGate::Malformed;
+    return active ? FileGate::Active : FileGate::Inactive;
+}
+
 // ---- build configuration: target triples ------------------------------------------------------
 // A target is an `<arch>-<os>-<abi>` triple — Zig's 3-part form, because GNU's `vendor` field is
 // vestigial (`unknown`/`pc`); a 4-part spelling is accepted and its vendor dropped, so pasting a Rust
@@ -1919,6 +2069,18 @@ struct SelectGroup {
 // like the other build config: set in main, read by the compile/link path (targetLinkFlags) and by the
 // emitter setup. Defaults to the host so a bare `kama build` needs no configuration at all.
 static TargetSpec g_target;
+
+// How this build spells the target it is building for — the triple, because a file gate names the
+// DERIVED `ARCH_`/`OS_`/`ABI_` flags, and those are read off the triple rather than off the name.
+// (A built-in catalog name deliberately never becomes a flag; see derivedTargetFlags.)
+static std::string activeTargetLabel()
+{
+    if (g_target.arch.empty()) return "this build";
+    const std::string triple = g_target.arch + "-" + g_target.os + "-" + g_target.abi;
+    if (!g_target.name.empty() && g_target.name != triple) return g_target.name + " (" + triple + ")";
+    return triple;
+}
+
 static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).

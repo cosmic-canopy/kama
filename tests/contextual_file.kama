@@ -1,0 +1,38 @@
+// `file` is a CONTEXTUAL keyword: it leads the FILE GATE (`file @compileFor(FLAG);`) as a unit's first
+// line, and names an ordinary binding everywhere else — a field, a local, a parameter, an argument
+// label, a member read, a method. It joins `copy`, `give`, `truncate`, `type` and `slot`.
+//
+// It is contextual for USER code, not for ours. Measured before the word was reserved at all: `file`
+// appears 186 times across this repo's `.kama` sources and NOT ONE of them is an identifier (185 sit in
+// comments, one inside a string literal) — `std::fs` names its handle `File`, and kama is case
+// sensitive. So the corpus would not have noticed a hard keyword; the reason to spend the grammar arms
+// is that `File file = fs::open(…);` is the spelling a user reaches for first, and reserving the word
+// would break their code rather than ours.
+//
+// Measured at 1 bison conflict — the baseline dangling `else`, i.e. nothing — for the gate and for all
+// ten name positions together. The same result `type` and `slot` got, and the reason a contextual
+// keyword is affordable here at all.
+
+type value Handle {
+    public isize file;
+    public ctor make(isize file) { this.file = file; }
+    public const fn isize doubled() { return this.file * 2; }
+}
+
+fn isize bump(isize file) { return file + 1; }
+fn void fill(out int32 file) { file = 7; }
+
+fn int32 main()
+{
+    isize file = 4;              // a local named `file`
+    file = file + 1;             // ...read and written like any other name
+    Handle h = Handle.make(file: file);   // an argument LABEL, and a ctor parameter
+    isize n = h.file              // a member READ
+            + bump(file: file)    // a free-fn parameter
+            + h.doubled();        // 5 + 6 + 10 = 21
+
+    slot int32 filled;
+    fill(file: out filled);       // a `file:` label on an `out` argument — 7
+
+    return cast<int32>(n) + filled;   // 21 + 7 = 28
+}

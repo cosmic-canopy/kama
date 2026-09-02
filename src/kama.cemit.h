@@ -586,6 +586,19 @@ struct EnumInfo   {
 // Defined in kama.cemit.cpp. See docs/targets.md.
 bool kamaIsBuildConfigFlag(const std::string& name);
 
+// Does a `@compileFor(...)` attribute list hold for this flag set? The whole gate rule — bare `FLAG`,
+// `!FLAG`, comma = AND, strict-mode validation of every name — in one place, because it has two callers
+// on two diagnostic channels: the emitter gating a DECLARATION (CEmitter::compileForActive), and the
+// driver gating a whole FILE (`file @compileFor(FLAG);`, fileGateActive in kama.driver.cpp), which runs
+// before any emitter exists. `report` receives a rejection (an undeclared flag under strict mode, or an
+// argument that is neither `FLAG` nor `!FLAG`); the caller turns it into its own kind of diagnostic.
+// Defined in kama.cemit.cpp.
+bool kamaCompileForActive(const SharedAttributeList& attrs,
+                          const std::set<std::string>& active,
+                          const std::set<std::string>& declared,
+                          bool strict,
+                          const std::function<void(const std::string&)>& report);
+
 class CEmitter {
 public:
     CEmitter(std::ostream& out, const std::string& sourcePath, bool emitLineDirectives);

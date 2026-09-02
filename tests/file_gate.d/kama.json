@@ -1,0 +1,9 @@
+{
+  "name": "filegatedemo",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/app.kama",
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

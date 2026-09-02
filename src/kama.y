@@ -349,6 +349,12 @@ struct kamayystype {
 %token <string> CASE CAST BITCAST TRUNCATE COMPTIME CONST CONTINUE CTOR DEFAULT
 %token <string> AS CHAR DO ELSE ENUM EXPORT EXPOSE EXTERN EXTENDS IMPLEMENTS IMPORT
 %token <string> FALSE FINAL FLOAT32 FLOAT64
+/* `file` — the file gate's leading word. ⚠️ NOT spelled FILE: bison writes every token name into an
+   enum, and <cstdio> already defines FILE as a type. Contextual (see the arms mirroring SLOT).
+   The string alias is load-bearing twice over: without it a diagnostic reads `unexpected FILE_KW`,
+   which names an implementation detail, and reservedWordNote — which matches yysymbol_name against the
+   lexer's keyword table, case-folded — would never recognise the word and would drop its note. */
+%token <string> FILE_KW "file"
 %token <string> FN FNPTR FOR FOREACH HARDWARE IF IMMUTABLE IN
 %token <string> INT8 INT16 INT32 INT64 SPAWN SCOPE PARALLEL_FOR PARALLEL_SPAWN
 %token <string> MATCH
@@ -462,7 +468,7 @@ struct kamayystype {
 %type <argument> argument attr_arg
 %type <argumentlist> argument_list_opt argument_list attr_arg_list
 %type <attribute> attribute
-%type <attributelist> attribute_list
+%type <attributelist> attribute_list file_directive_opt
 %type <enummemberdecl> enum_member_declaration
 %type <enummemberdecllist> enum_member_declarations_opt enum_member_declarations
 %type <enumbody> enum_class_body
@@ -493,7 +499,8 @@ struct kamayystype {
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $1, $2, $3); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $2);
+  : file_directive_opt import_directives_opt export_manifest_opt code_opt  { yyget_extra(scanner)->compilationUnit = CreateCompilationUnit( SCANNER_CODEGENCONTEXT, yyget_extra(scanner)->codeGenContext->getModuleName(), $2, $3, $4); TAKE_SEGS(yyget_extra(scanner)->compilationUnit->exportListPos, $3);
+      yyget_extra(scanner)->compilationUnit->fileGate = $1;
       /* Closure-pruning facts, harvested HERE because this is the one reduction every parse goes through,
          and because it is before any emitter exists to rewrite the decl list (see CompilationUnit). */
       harvestUnitFacts(yyget_extra(scanner)->compilationUnit);
@@ -503,6 +510,26 @@ compilation_unit
       (SCANNER_CODEGENCONTEXT).reportPendingWideLits();
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
                                                                 yyget_extra(scanner)->identTokens.end()); }
+  ;
+
+/* THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, a unit's FIRST line, before `import { … };`.
+   It gates the WHOLE unit the way `@compileFor` gates one declaration: a build the flags exclude never
+   admits the file at all, so a native-only source costs a wasm build nothing.
+
+   ⚠️ Leading `file`, not attribute-first, and the ordering was MEASURED rather than argued. At this
+   position `@compileFor(X) file;` costs TWO conflicts against `%expect 1`: on seeing `@` at unit start
+   the parser must choose immediately between the gate and an ordinary declaration's attribute list, and
+   the token that distinguishes them sits arbitrarily far past the whole list. `file` decides in one
+   token and costs nothing. (At top-level DECLARATION position all three candidates measured clean —
+   which is why the rule is: measure a grammar question at the position it will occupy.)
+
+   The payload is an ordinary `attribute_list`, reused verbatim so no new attribute machinery is owed —
+   `@compileFor(FLAG)`, `(!FLAG)` and `(A, B)` already parse. Restricting it to `@compileFor` is the
+   DRIVER's job (fileGateActive), not the grammar's, for the reason the bodyless `extern` forms give:
+   a shape rejection carries a sentence, a parse error carries a token name. */
+file_directive_opt
+  : /* Nothing */   { $$ = SharedAttributeList(); }
+  | FILE_KW attribute_list SEMICOLON   { $$ = $2; }
   ;
 
 /* The module's PUBLIC SURFACE, declared once at the top: `export { A, B, C };`. A name here must be a
@@ -717,6 +744,7 @@ qualified_identifier_no_generic
        it you could declare such a name and never read it, which is worse than not allowing it. */
   | TYPE  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | SLOT  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `slot`, contextual for the same reason */
+  | FILE_KW  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }   /* ...and `file` — `File file = …` is the spelling a user reaches for first */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER  { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2, $1); STAMP_LOC($$, @2); TAKE_SEGS($$->qualifierPos, $1); }
@@ -1144,6 +1172,8 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }   /* contextual `type` */
+  /* contextual `file` — a parameter may be named `file` */
+  | const_opt hardware_opt parameter_modifier_opt type FILE_KW   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER   { auto p = std::make_shared<FunctionParameterNode>(SCANNER_CODEGENCONTEXT, $3, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5)); p->isConst = ($1 != nullptr); p->isHardware = ($2 != nullptr); STAMP_LOC(p->identifier, @5); $$ = p; }
   ;
 parameter_modifier_opt
@@ -1183,8 +1213,11 @@ variable_declarator
   : TYPE   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
   | SLOT   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
+  /* contextual `file` — `File file = fs::open(…)` is the spelling this exists for */
+  | FILE_KW   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | TYPE EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | SLOT EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
+  | FILE_KW EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedExpression() ); }
   | IDENTIFIER EQ variable_initializer   { $$ = std::make_shared<VariableDeclarator>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3); STAMP_LOC($$->name, @1); }
   ;
@@ -1593,8 +1626,11 @@ member_access
   | primary_expression DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   /* reading a `slot`-named member */
   | primary_expression DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  /* reading a `file`-named member */
+  | primary_expression DOT FILE_KW   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | qualified_identifier_no_generic DOT FILE_KW   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -1718,10 +1754,14 @@ argument
   : TYPE COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   /* a `slot:` argument label */
   | SLOT COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
+  /* a `file:` argument label */
+  | FILE_KW COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | TYPE COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | SLOT COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | FILE_KW COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | TYPE COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | SLOT COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
+  | FILE_KW COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON expression   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), SharedModifier(), $3); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON REF variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
@@ -2072,6 +2112,7 @@ method_name
   | TRUNCATE     { $$ = $1; }   /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   | TYPE         { $$ = $1; }   /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT        { $$ = $1; }   /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
+  | FILE_KW     { $$ = $1; }   /* the file-gate word; contextual, so a type may declare a `file()` member */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot
@@ -2545,7 +2586,7 @@ static std::string reservedWordNote(yysymbol_kind_t tok, bool wantedIdentifier)
         if (up == upper)
             return std::string(" — `") + w + "` is a reserved word, so it cannot be used as a name here"
                    " (docs/SPEC.md lists all of them under *kama's keywords*; `copy`, `give`, `truncate`,"
-                   " `type` and `slot` are the ones that CAN name a binding)";
+                   " `type`, `slot` and `file` are the ones that CAN name a binding)";
     }
     return "";
 }
@@ -2590,7 +2631,7 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
     /* Did the parser want a NAME here? "IDENTIFIER is expected" alone does not answer it: an identifier
        also starts an expression, so `1 + else` and `return break` expect one too, and neither is a naming
        mistake. What separates the two is measured, not guessed — at a binding site the set is
-       `IDENTIFIER SLOT TYPE` plus operators, and at an expression site it is IDENTIFIER plus EVERY
+       `IDENTIFIER FILE_KW SLOT TYPE` plus operators, and at an expression site it is IDENTIFIER plus EVERY
        literal form. So the discriminator is: a position that admits a name but not a NUMBER is a naming
        position. (`Thing out` also admits `=`, `.`, `::` and friends, because a leading identifier could
        still turn out to be an expression statement — which is why the operators cannot be the test and

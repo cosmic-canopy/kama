@@ -203,6 +203,18 @@ searched recursively. It defaults to `"src"`, so most projects never write it:
 Now `examples/`, `tests/` and scratch files beside them are not part of the project, so a rename can
 never reach into them and a same-named type over there can never be confused with yours.
 
+**Every `.kama` under the root is compiled, whatever the import graph** — which is what lets the manifest
+alone prove there is no unreachable module. A file that must not be built for some target says so **in
+the file**, with a gate on its first line:
+
+```kama
+file @compileFor(!ARCH_WASM32);     // src/audio_native.kama is not part of a wasm build
+```
+
+There is deliberately no per-target `modules` or `source` key to exclude it from here: that would state
+the platform split a second time, in a different file from the code it is about, and the two would drift.
+See [SPEC.md](SPEC.md) *Conditional compilation* for the rules.
+
 `source` is also what **importers** resolve through: a package's files are found under its source root
 and nowhere else. Files sitting beside `src/` rather than inside it belong to no project — which is the
 point, and the reason a package whose sources are in the wrong place fails to import rather than

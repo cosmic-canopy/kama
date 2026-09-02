@@ -1,0 +1,10 @@
+{
+  "name": "allgated", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+
+  "flags": { "NEVER_ON": {} },
+
+  "modules": {
+    ".":    { "visibility": "internal" },
+    "geo":  { "visibility": "internal" }
+  }
+}

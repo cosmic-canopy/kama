@@ -1,0 +1,14 @@
+// THE FILE GATE — `file @compileFor(FLAG);` on a unit's first line, and the whole reason it exists.
+//
+// A package build compiles EVERY `.kama` under its source root, whatever the import graph. Before this
+// gate there was no way to keep a native-only source out of a wasm build: `@compileFor` could drop a
+// declaration, but the file itself still had to parse and analyze on every target, so a source built on
+// a platform header, an `extern` over one, or a type that only exists there sank the build for a target
+// that was never going to run the code.
+//
+// This project holds two implementations of the same function, one per platform, each gating ITS OWN
+// FILE — the platform split stated once, in the code it is about, rather than a second time in the
+// manifest. Exactly one is admitted to any build, so both legs of the suite return the same 41.
+import { platformValue };
+
+fn int32 main() { return platformValue() + 1; }

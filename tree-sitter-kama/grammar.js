@@ -125,10 +125,22 @@ module.exports = grammar({
     // whole-corpus oracle have teeth.
     source_file: ($) =>
       seq(
+        optional($.file_gate),
         optional($.import_declaration),
         optional($.export_manifest),
         repeat($._top_level_declaration),
       ),
+
+    // THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, kama.y's `file_directive_opt`. A unit's FIRST
+    // line, ahead of `import`, gating the whole file the way `@compileFor` gates one declaration.
+    // Leading `file` rather than attribute-first because at THIS position the attribute-first spelling
+    // costs the compiler's grammar two conflicts (the deciding token sits past the whole attribute list);
+    // one token of lookahead is what makes it free here too.
+    //
+    // The payload is a plain `attribute_list`, exactly as in kama.y — restricting it to `@compileFor` is
+    // the compiler's job, so a file gate carrying `@noheap` PARSES here and is rejected there. That
+    // asymmetry is deliberate and matches how every other semantic rule is split.
+    file_gate: ($) => seq('file', $.attribute_list, ';'),
 
 
     // ONE `import { … };` block per file, exactly as there is one `export { … };`. Every entry names a
@@ -482,7 +494,7 @@ module.exports = grammar({
     // kama.y:980 — `copy`/`give` are hand-off markers only in EXPRESSION position, so they may also name a
     // member. This is what lets a `resource` opt into `Copyable` with a method literally named `copy`.
     // A named node, so a query colours it as a function rather than a keyword without pattern ordering.
-    method_name: ($) => choice($.identifier, $._slot_name, 'copy', 'give'),
+    method_name: ($) => choice($.identifier, $._slot_name, $._file_name, 'copy', 'give'),
 
     operator_declaration: ($) =>
       seq(
@@ -891,6 +903,7 @@ module.exports = grammar({
         $._literal,
         $.identifier,
         $._slot_name,
+        $._file_name,
         $.scoped_identifier,
         $.this_expression,
         $.base_expression,
@@ -1342,7 +1355,12 @@ module.exports = grammar({
     // this is invisible to anything downstream (`copy`/`give` use plain literals in `method_name` and are
     // therefore coloured as keywords there — a pre-existing wart, not one to copy).
     _slot_name: ($) => alias('slot', $.identifier),
-    _name: ($) => choice($.identifier, $._slot_name),
+    // `file` is contextual for the same reason and by the same mechanism — it leads the file gate above
+    // and names an ordinary binding everywhere else. `File file = fs::open(…)` is the spelling it is
+    // here for: the word appears nowhere as an identifier in this repo's own sources, so this arm is
+    // entirely for user code.
+    _file_name: ($) => alias('file', $.identifier),
+    _name: ($) => choice($.identifier, $._slot_name, $._file_name),
 
     line_comment: ($) => token(seq('//', /[^\n]*/)),
 

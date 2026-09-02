@@ -31,7 +31,7 @@
 [
   "import" "export" "as" "type" "enum" "extends" "implements" "for"
   "friend" "operator" "ctor" "fn" "fnptr" "extern" "comptime" "when"
-  "in" "unsafe" "asm" "static" "const" "default" "slot"
+  "in" "unsafe" "asm" "static" "const" "default" "slot" "file"
   "if" "else" "match" "case"
   "while" "do" "foreach" "parallel_for" "parallel_spawn"
   "break" "continue" "return"

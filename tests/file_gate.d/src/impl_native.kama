@@ -1,0 +1,14 @@
+file @compileFor(!ARCH_WASM32);
+
+// Kept on every NON-wasm build and gone entirely on a wasm one — the file, its `export`, its `import`
+// and every declaration in it.
+//
+// ⚠️ The duplicate name is the PROOF, and it is why this fixture cannot pass on a gate that does
+// nothing. `platformValue` is declared here AND in impl_wasm.kama, and kama has no overloading, so if
+// both files were ever admitted to one build the compiler would reject it — measured, before this fixture
+// was trusted: with the two gate lines deleted, both legs fail with "duplicate function 'platformValue'".
+// An exit-code fixture over a gate that merely DEACTIVATED a file rather than excluding it would still
+// have returned 41 and told us nothing.
+export { platformValue };
+
+fn int32 platformValue() { return 40; }

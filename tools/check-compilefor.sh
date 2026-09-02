@@ -277,6 +277,109 @@ if ! grep -q 'gated' "$localc"; then
 fi
 rm -f "$proj/kama.local.json"
 
+# 6b. THE FILE GATE — `file @compileFor(FLAG);` on a unit's first line.
+#
+# ⚠️ Asserted on the TRANSPILED C, not on an exit code, and for a sharper reason than §1's. A file gate's
+# whole job is that the excluded file is never ADMITTED — not parsed-then-pruned, not compiled-then-
+# discarded. tests/file_gate.d/ proves the selection end-to-end on both legs (two files declaring one
+# function; admit both and the build fails on a duplicate), but an exit code cannot tell "excluded" from
+# "included and happened not to matter". What follows builds ONE project two ways and reads the C.
+#
+# The other three assertions are the rulings that have no other instrument:
+#   - a strict manifest validates a flag named in a FILE gate exactly as it does one on a declaration;
+#   - a file the CLI NAMED and whose gate excludes it is a hard ERROR, while the same file COLLECTED by a
+#     manifest build is skipped silently — the asymmetry is the ruling, so both halves are checked;
+#   - every source gated out reports in kama's own words. That last one is here because it regressed to
+#     `clang: error: no input files` in development: a message about the wrong tool, for a build that did
+#     exactly what its source told it to.
+fg="$tmp/filegate"
+mkdir -p "$fg/src"
+cat > "$fg/kama.json" <<'JSON'
+{ "name": "fgdemo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "NEVER_ON": {} }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$fg/src/app.kama" <<'KAMA'
+import { platformValue };
+fn int32 main() { return platformValue(); }
+KAMA
+cat > "$fg/src/impl_host.kama" <<'KAMA'
+file @compileFor(!ARCH_WASM32);
+export { platformValue };
+fn int32 platformValue() { return 17; }
+KAMA
+cat > "$fg/src/impl_wasm.kama" <<'KAMA'
+file @compileFor(ARCH_WASM32);
+export { platformValue };
+fn int32 platformValue() { return 23; }
+KAMA
+"$KAMA" transpile --no-line "$fg/kama.json" -o "$tmp/fg_host.c" >/dev/null 2>"$tmp/fg.err" || {
+    echo "check-compilefor: FAIL — a host build of the file-gate project did not compile:" >&2
+    sed 's/^/  /' "$tmp/fg.err" >&2; exit 1
+}
+if ! grep -q '= 17;' "$tmp/fg_host.c"; then
+    echo "check-compilefor: FAIL — the host build dropped the @compileFor(!ARCH_WASM32) FILE (expected '= 17;')" >&2
+    exit 1
+fi
+if grep -q '= 23;' "$tmp/fg_host.c"; then
+    echo "check-compilefor: FAIL — the host build STILL contains the @compileFor(ARCH_WASM32) file's body;" >&2
+    echo "  a gated-out FILE must never be admitted to the compilation at all" >&2
+    exit 1
+fi
+"$KAMA" transpile --no-line "$fg/kama.json" --target wasm32-emscripten-none -o "$tmp/fg_wasm.c" >/dev/null 2>&1
+if ! grep -q '= 23;' "$tmp/fg_wasm.c" || grep -q '= 17;' "$tmp/fg_wasm.c"; then
+    echo "check-compilefor: FAIL — a wasm build did not select the complementary file gate" >&2
+    exit 1
+fi
+# ...the same file NAMED on the command line is an ERROR, not a build that quietly produces nothing.
+if "$KAMA" check "$fg/src/impl_wasm.kama" >/dev/null 2>"$tmp/fg_operand.err"; then
+    echo "check-compilefor: FAIL — a gated-out file named as an OPERAND was accepted" >&2
+    exit 1
+fi
+if ! grep -qF "nothing to compile" "$tmp/fg_operand.err"; then
+    echo "check-compilefor: FAIL — a gated-out operand was rejected, but not with the expected diagnostic:" >&2
+    sed 's/^/  /' "$tmp/fg_operand.err" >&2
+    exit 1
+fi
+# ...while the manifest build above, which COLLECTED that same file, skipped it without a word. Proven by
+# the host transpile having succeeded at all — it is the same file, and it holds no error of its own.
+#
+# A file gate is validated like any other: a strict manifest rejects a flag it does not declare.
+cat > "$fg/src/impl_host.kama" <<'KAMA'
+file @compileFor(NEVR_ON);
+export { platformValue };
+fn int32 platformValue() { return 17; }
+KAMA
+if "$KAMA" check "$fg/kama.json" >/dev/null 2>"$tmp/fg_strict.err"; then
+    echo "check-compilefor: FAIL — a strict manifest accepted an undeclared flag in a FILE gate (NEVR_ON)" >&2
+    exit 1
+fi
+if ! grep -qF "undeclared flag" "$tmp/fg_strict.err"; then
+    echo "check-compilefor: FAIL — undeclared flag in a file gate rejected, but with an unexpected diagnostic:" >&2
+    sed 's/^/  /' "$tmp/fg_strict.err" >&2
+    exit 1
+fi
+# EVERY source gated out — kama's own sentence, not the C compiler's.
+allg="$tmp/allgated"
+mkdir -p "$allg/src"
+cat > "$allg/kama.json" <<'JSON'
+{ "name": "allgated2", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "flags": { "NEVER_ON": {} }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$allg/src/app.kama" <<'KAMA'
+file @compileFor(NEVER_ON);
+fn int32 main() { return 0; }
+KAMA
+if "$KAMA" build "$allg/kama.json" -o "$allg/app" >/dev/null 2>"$tmp/fg_empty.err"; then
+    echo "check-compilefor: FAIL — a project whose every file is gated out produced a build" >&2
+    exit 1
+fi
+if ! grep -qF "every source file is excluded" "$tmp/fg_empty.err"; then
+    echo "check-compilefor: FAIL — an all-gated project must say so in kama's own words, not the C" >&2
+    echo "  compiler's (this regressed to \`clang: error: no input files\` once). Got:" >&2
+    sed 's/^/  /' "$tmp/fg_empty.err" >&2
+    exit 1
+fi
+
 # 7. THE DOCS DO NOT TEACH A RETIRED FLAG NAME.
 #
 # ⚠️ This half exists because §4b above — proving the COMPILER rejects a reserved/undeclared flag — is
@@ -311,4 +414,6 @@ if [ -n "$bad" ]; then
     exit 1
 fi
 
-echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe;\n  and no kama block teaches a retired target-name flag)"
+echo "check-compilefor: PASS (@compileFor selects one fn/type in the Kama compiler; no #ifdef in emitted C;
+  the FILE gate selects one whole unit per target, is validated under a strict manifest, errors on a
+  NAMED operand while a COLLECTED file is skipped, and says so itself when every file is gated out;\n  strict manifest rejects undeclared AND reserved flag names; target names/triples resolve and derive\n  ARCH_/OS_/ABI_ flags; select groups pick one value, inherit, and reject duplicates;\n  kama.local.json extends the flag universe;\n  and no kama block teaches a retired target-name flag)"

@@ -1,0 +1,9 @@
+file @compileFor(ARCH_WASM32);
+
+// The exact complement of impl_native.kama: kept on a wasm build, gone everywhere else. A flag and its
+// negation rather than two positive names, because that is what makes the pair both exhaustive and
+// mutually exclusive — exactly one of these two files is admitted to every build, including targets
+// nobody has built yet. It is the same rule the `@compileFor`-gated contract-impl seam follows.
+export { platformValue };
+
+fn int32 platformValue() { return 40; }

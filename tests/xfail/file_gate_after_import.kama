@@ -1,0 +1,10 @@
+// The file gate is a unit's FIRST line — before `import { … };`, which is before `export { … };`.
+//
+// One position, not several, because the gate decides whether the file exists at all for this build:
+// anything written above it would be text the compiler had to make sense of before knowing whether the
+// file was even in the compilation. The grammar puts it at the head of `compilation_unit` and nowhere
+// else, so this is a parse error.
+import { std::io };
+file @compileFor(DEBUG);
+
+fn int32 main() { return 0; }

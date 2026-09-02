@@ -1015,55 +1015,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the file being compiled for any prelude body emitted in the header pass, so it cannot supply one).
     That is the design question, and it is why this half stayed where it was.
 
-  - **A PACKAGE COMPILES EVERY `.kama` UNDER ITS SOURCE ROOT**, whatever the import graph, so a
-    native-only file still compiles on the wasm leg even now that the `extern` gate has landed. `packageSourceFiles` →
-    `collectKamaFiles` recurses the whole root, and a per-target block accepts no `modules` or `source`
-    key. ⚠️ **This is the one that is NOT a small win.**
-
-    **RULED 2026-09-01 (design only — nothing built): a FILE-LEVEL `@compileFor` gate, spelled
-    `file @compileFor(!ARCH_WASM32);` as a unit's first line.** Neither candidate this entry originally
-    listed was taken. Compiling only import-reachable files changes what a manifest *means* — today the
-    manifest ALONE proves there is no unreachable module ([kama.driver.cpp:2532](../src/kama.driver.cpp))
-    — and silently stops checking a file nobody imports. A per-target `modules` exclusion is new manifest
-    surface that states the platform split in a SECOND place, beside the gates already in the file. The
-    file gate adds neither: it is the `@compileFor` primitive already used for the seam, applied to the
-    unit, living with the code it gates. `file` is a **contextual** keyword — one only as a unit's first
-    token, an ordinary identifier everywhere else, as `value`/`view`/`try`/`copy` already are.
-    ⚠️ **The reason is USER code, not the stdlib.** An earlier draft of this entry said `std::fs` uses
-    `file` as a name; it does not — it uses `File`, and kama is case-sensitive. Measured 2026-09-02: the
-    word `file` appears 186 times in `.kama` sources and **zero** of them are identifiers (185 in
-    comments, one inside a string literal). The corpus would not notice a hard keyword. It stays
-    contextual because `File file = …` is the spelling a user reaches for first — reserving it would
-    break their code, not ours.
-
-    ⚠️ **The ordering was MEASURED, not argued, and the measurement reversed the intuition twice.**
-    Attribute-first (`@compileFor(X) file;`) reads more consistently with every other attribute site and
-    was the preferred spelling. Prototyped at TOP-LEVEL DECLARATION position all three candidates cost
-    exactly one conflict, i.e. nothing — which looked like a green light. Prototyped at the position a
-    file gate actually occupies (a new first slot in `compilation_unit`, before `import_directives_opt`),
-    attribute-first costs **2 conflicts against `%expect 1`**, and so does the bare `@compileFor(X);`.
-    Bison's counterexample says why: on seeing `@` at unit start the parser must choose IMMEDIATELY
-    between shifting into the gate and reducing three ε-productions to begin a declaration's attribute
-    list, and the token that distinguishes them (`file` vs `type`/`fn`/`static`) sits arbitrarily far
-    away past the whole attribute list. That is more than one token of lookahead. Leading `file` decides
-    in one token and costs nothing. **Measure a grammar question at the position the rule will occupy.**
-
-    **RE-MEASURED 2026-09-02 on the post-`#(…)` grammar, since that campaign moved the same file.** Both
-    halves are clean against the `%expect 1` baseline:
-
-    | prototype | conflicts | parser |
-    |---|---|---|
-    | baseline (`0.9.142`) | 1 (dangling `else`) | 6943 |
-    | leading `file` gate at the head of `compilation_unit` | **1** | 6958 |
-    | …plus `file` made contextual, mirroring all 11 `SLOT` arms | **1** | 7063 |
-
-    The third row is an UPPER BOUND on the contextual surface — it mirrors every `SLOT` arm mechanically
-    and some are nonsense for `file` (`slot type x;` is the uninitialized-storage form). A real
-    implementation needs fewer arms, and fewer cannot cost more. So the grammar carries no risk left to
-    discover, and the work is the DRIVER half: teaching `packageSourceFiles` to read a unit's gate before
-    deciding whether to compile it, with the flag vocabulary `@compileFor` already evaluates.
-
-    Still **M**, still unstarted. **
   - **NO WAY TO RUN KAMA ON A FOREIGN OS THREAD.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
     native and wasm, so a thread created by a C library — an audio device callback, a completion port,
     an RTOS ISR — sees fresh zero-initialised module statics, and a mixer buffer would silently be a

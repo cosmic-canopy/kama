@@ -24597,19 +24597,28 @@ bool kamaIsBuildConfigFlag(const std::string& n)
 // Under strict mode (a `kama.json` manifest was loaded) every referenced flag must be a build-config
 // name or declared in `flags`/`select` — a typo like `@compileFor(WINODWS)` is then rejected rather than
 // silently dropping the decl.
-bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
+//
+// A FREE function, and `report` is a callback, because the rule has TWO callers with different
+// diagnostic channels: the emitter's `unsupported()` for a declaration gate, and the driver's stderr for
+// a FILE gate (`file @compileFor(FLAG);`), which is read before any emitter exists. One definition, so a
+// file gate and a decl gate can never come to disagree about what `!FLAG` means.
+bool kamaCompileForActive(const SharedAttributeList& attrs,
+                          const std::set<std::string>& active,
+                          const std::set<std::string>& declared,
+                          bool strict,
+                          const std::function<void(const std::string&)>& report)
 {
     if (!attrs) return true;
     auto validate = [&](const std::string& name) {
-        if (!_strictFlags) return;
-        if (kamaIsBuildConfigFlag(name) || _declaredFlags.count(name)) return;
-        unsupported(("`@compileFor` references undeclared flag `" + name +
-                     "` (add it to the `flags` object in kama.json)").c_str(), line);
+        if (!strict) return;
+        if (kamaIsBuildConfigFlag(name) || declared.count(name)) return;
+        report("`@compileFor` references undeclared flag `" + name +
+               "` (add it to the `flags` object in kama.json)");
     };
     for (auto& at : *attrs) {
         if (!at || !at->name || *at->name != "compileFor") continue;
         if (!at->args || at->args->empty()) {
-            unsupported("`@compileFor(...)` requires at least one flag name", line);
+            report("`@compileFor(...)` requires at least one flag name");
             continue;
         }
         for (auto& arg : *at->args) {
@@ -24617,7 +24626,7 @@ bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
             // bare `FLAG` — an identifier name with no value expression.
             if (arg->name && arg->name->value && !arg->expression) {
                 validate(*arg->name->value);
-                if (!_activeFlags.count(*arg->name->value)) return false;
+                if (!active.count(*arg->name->value)) return false;
                 continue;
             }
             // negated `!FLAG` — a unary-not (EXCLAMATION) over an identifier (see kama.y attr_arg).
@@ -24627,16 +24636,22 @@ bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
                     if (auto* id = dynamic_cast<IdentifierNode*>(su->expression.get()))
                         if (id->value) {
                             validate(*id->value);
-                            if (_activeFlags.count(*id->value)) return false;
+                            if (active.count(*id->value)) return false;
                             continue;
                         }
                 }
             }
-            unsupported("`@compileFor(...)` takes bare flag names or `!FLAG` (e.g. "
-                        "`@compileFor(DEBUG)`, `@compileFor(!RELEASE)`)", line);
+            report("`@compileFor(...)` takes bare flag names or `!FLAG` (e.g. "
+                   "`@compileFor(DEBUG)`, `@compileFor(!RELEASE)`)");
         }
     }
     return true;
+}
+
+bool CEmitter::compileForActive(const SharedAttributeList& attrs, int line)
+{
+    return kamaCompileForActive(attrs, _activeFlags, _declaredFlags, _strictFlags,
+                                [&](const std::string& m) { unsupported(m.c_str(), line); });
 }
 
 // Drop every top-level decl whose `@compileFor` gate is inactive (as if never written), and strip

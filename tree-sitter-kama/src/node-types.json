@@ -3738,6 +3738,21 @@
     }
   },
   {
+    "type": "file_gate",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "attribute_list",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "fnptr_declaration",
     "named": true,
     "fields": {
@@ -6517,6 +6532,10 @@
           "named": true
         },
         {
+          "type": "file_gate",
+          "named": true
+        },
+        {
           "type": "fnptr_declaration",
           "named": true
         },
@@ -8874,6 +8893,10 @@
   },
   {
     "type": "false",
+    "named": false
+  },
+  {
+    "type": "file",
     "named": false
   },
   {

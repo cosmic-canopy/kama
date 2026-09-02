@@ -83,9 +83,16 @@ probe '    if (true) { } else else { }'  reject 'a doubled `else`'
 
 # The display half: the note is an ADDITION, never a replacement. bison's own wording has to survive, or
 # every fixture asserting a parse message moves.
+#
+# ⚠️ THIS CLAUSE IS NOW AT THE CEILING. bison prints `expecting …` only while at most FOUR tokens are
+# expected and drops the clause entirely past that (see the `parse.error custom` note in kama.y), and a
+# binding site expects exactly four: IDENTIFIER, `file`, SLOT, TYPE. `file` was the fourth, added with the
+# file gate in 0.9.143. A SIXTH contextual keyword would silently delete this half of every such message —
+# the NOTE would survive, because its gate reads the uncapped expected-token SET rather than the printed
+# prose, which is the whole reason that indirection exists. Expect this assertion to be what tells you.
 printf 'fn int32 main() { isize out = 1; return 0; }\n' > "$tmp/d.kama"
 "$KAMA" check "$tmp/d.kama" > "$tmp/d.log" 2>&1 || true
-if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER or SLOT or TYPE' "$tmp/d.log"; then
+if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER or file or SLOT or TYPE' "$tmp/d.log"; then
     ok "bison's own wording is preserved ahead of the note"
 else
     bad "the base message changed — `parse.error custom` must reproduce `detailed` verbatim"

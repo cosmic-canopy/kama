@@ -12,8 +12,28 @@
 ------------------------------------------------------------------------------*/
 
 compilation_unit
-  : import_directives_opt export_manifest_opt code_opt
+  : file_directive_opt import_directives_opt export_manifest_opt code_opt
 
+  ;
+
+/* THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, a unit's FIRST line, before `import ;`.
+   It gates the WHOLE unit the way `@compileFor` gates one declaration: a build the flags exclude never
+   admits the file at all, so a native-only source costs a wasm build nothing.
+
+   ⚠️ Leading `file`, not attribute-first, and the ordering was MEASURED rather than argued. At this
+   position `@compileFor(X) file;` costs TWO conflicts against `%expect 1`: on seeing `@` at unit start
+   the parser must choose immediately between the gate and an ordinary declaration's attribute list, and
+   the token that distinguishes them sits arbitrarily far past the whole list. `file` decides in one
+   token and costs nothing. (At top-level DECLARATION position all three candidates measured clean —
+   which is why the rule is: measure a grammar question at the position it will occupy.)
+
+   The payload is an ordinary `attribute_list`, reused verbatim so no new attribute machinery is owed —
+   `@compileFor(FLAG)`, `(!FLAG)` and `(A, B)` already parse. Restricting it to `@compileFor` is the
+   DRIVER's job (fileGateActive), not the grammar's, for the reason the bodyless `extern` forms give:
+   a shape rejection carries a sentence, a parse error carries a token name. */
+file_directive_opt
+  : /* Nothing */
+  | FILE_KW attribute_list SEMICOLON
   ;
 
 /* The module's PUBLIC SURFACE, declared once at the top: `export ;`. A name here must be a
@@ -206,6 +226,7 @@ qualified_identifier_no_generic
        it you could declare such a name and never read it, which is worse than not allowing it. */
   | TYPE
   | SLOT     /* ...and `slot`, contextual for the same reason */
+  | FILE_KW     /* ...and `file` — `File file = …` is the spelling a user reaches for first */
     /* The name only, NOT `Ns::Name` — this is the production an `Enum::Member` read or a `mod::fn` call
        reduces through, and rename REPLACES the range: a whole-production span would eat the qualifier. */
   | qualifier IDENTIFIER
@@ -555,6 +576,8 @@ parameter
   : const_opt hardware_opt parameter_modifier_opt type TYPE      /* contextual `type` */
   /* contextual `slot` — a parameter may be named `slot` */
   | const_opt hardware_opt parameter_modifier_opt type SLOT      /* contextual `type` */
+  /* contextual `file` — a parameter may be named `file` */
+  | const_opt hardware_opt parameter_modifier_opt type FILE_KW
   | const_opt hardware_opt parameter_modifier_opt type IDENTIFIER
   ;
 parameter_modifier_opt
@@ -594,8 +617,11 @@ variable_declarator
   : TYPE
   /* contextual `slot` — a local/field may be named `slot` (an index into a table is the natural use) */
   | SLOT
+  /* contextual `file` — `File file = fs::open(…)` is the spelling this exists for */
+  | FILE_KW
   | TYPE EQ variable_initializer
   | SLOT EQ variable_initializer
+  | FILE_KW EQ variable_initializer
   | IDENTIFIER
   | IDENTIFIER EQ variable_initializer
   ;
@@ -978,8 +1004,11 @@ member_access
   | primary_expression DOT TYPE
   /* reading a `slot`-named member */
   | primary_expression DOT SLOT
+  /* reading a `file`-named member */
+  | primary_expression DOT FILE_KW
   | qualified_identifier_no_generic DOT TYPE
   | qualified_identifier_no_generic DOT SLOT
+  | qualified_identifier_no_generic DOT FILE_KW
   | primary_expression DOT BASE
   | qualified_identifier_no_generic DOT BASE
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
@@ -1059,10 +1088,14 @@ argument
   : TYPE COLON expression
   /* a `slot:` argument label */
   | SLOT COLON expression
+  /* a `file:` argument label */
+  | FILE_KW COLON expression
   | TYPE COLON REF variable_reference
   | SLOT COLON REF variable_reference
+  | FILE_KW COLON REF variable_reference
   | TYPE COLON OUT variable_reference
   | SLOT COLON OUT variable_reference
+  | FILE_KW COLON OUT variable_reference
   | IDENTIFIER COLON expression
   | IDENTIFIER COLON REF variable_reference
   | IDENTIFIER COLON OUT variable_reference
@@ -1391,6 +1424,7 @@ method_name
   | TRUNCATE        /* the wrapping-conversion keyword; contextual, so a type may still declare one */
   | TYPE            /* contextual for the FFI; here so the word reads the same in EVERY name position */
   | SLOT           /* the uninitialized-storage keyword; contextual, so `slot` may name a member */
+  | FILE_KW        /* the file-gate word; contextual, so a type may declare a `file()` member */
   ;
 
 /* `const fn …` — an optional const qualifier on a method. A dedicated slot

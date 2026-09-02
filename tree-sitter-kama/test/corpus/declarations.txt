@@ -583,3 +583,68 @@ type intrinsic <int8, int16> implements Tagged
           (block
             (return_statement
               (integer_literal))))))))
+
+================================================================================
+The file gate is a unit's first line, ahead of the import block
+================================================================================
+
+file @compileFor(!ARCH_WASM32);
+
+import { std::io::print };
+
+fn int32 main() { return 0; }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (file_gate
+    (attribute_list
+      (attribute
+        (identifier)
+        (attribute_argument
+          (identifier)))))
+  (import_declaration
+    (import_entry
+      (import_path
+        (identifier)
+        (identifier)
+        (identifier))))
+  (function_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (return_statement
+        (integer_literal)))))
+
+================================================================================
+`file` still names a binding everywhere else
+================================================================================
+
+fn int32 main()
+{
+    isize file = 4;
+    return cast<int32>(file + h.file);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal)))
+      (return_statement
+        (cast_expression
+          (primitive_type)
+          (binary_expression
+            (identifier)
+            (field_expression
+              (identifier)
+              (identifier))))))))

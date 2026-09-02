@@ -1,0 +1,10 @@
+// A platform split needs BOTH sides. `geo` here has only one file and it is gated to a flag no build
+// activates, so the module resolves to a real directory holding real sources and still contributes
+// nothing at all.
+//
+// Left to fall through, the symptom would arrive much later and much worse — an unresolved name in THIS
+// file, pointing at code that is not the problem. The import site is where the fact is known, so the
+// import site is where it is reported.
+import { allgated::geo::area };
+
+fn int32 main() { return area(); }

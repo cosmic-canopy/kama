@@ -1707,6 +1707,43 @@ A flag and its negation, rather than two positive names, because that is what ma
 nobody has built yet. (`HOSTED` would not serve here: emscripten has a libc, so it is hosted too.)
 The working fixture is [`tests/compilefor_platform.kama`](../tests/compilefor_platform.kama). <!-- test: compilefor_platform -->
 
+#### The file gate — `file @compileFor(FLAG);` ✅
+
+The same primitive applied to a whole **compilation unit**, written as its **first line**: <!-- test: file_gate -->
+
+```kama
+file @compileFor(!ARCH_WASM32);     // this file is not part of a wasm build at all
+
+import { std::io::print };
+fn int32 platformValue() { ... }
+```
+
+It exists because a package build compiles **every `.kama` under its `source` root**, whatever the import
+graph — which is what lets the manifest alone prove there is no unreachable module, and what left a
+native-only file with no way to sit in a project that also builds for wasm. Gating declarations was not
+enough: the file still had to *analyze* on every target, so an `extern` over a platform header or a type
+built on one sank a build that was never going to run the code.
+
+- **Excluded, not deactivated** — a gated-out file is never admitted to the compilation. Its declarations,
+  its `export` list, its `import`s and its contribution to its module do not exist for that build. It is
+  still **parsed** (that is how the gate is read), so a *syntax* error in it is an error on every <!-- xfail: file_gate_still_parsed -->
+  target — deliberately, so gating a file does not quietly stop checking it.
+- **First line only**, ahead of `import { … };`. The gate decides whether the file is in the build at all, <!-- xfail: file_gate_after_import -->
+  so nothing may precede it.
+- **`@compileFor` and nothing else** — `file @noheap;` is a hard error, not a silent no-op, for the reason <!-- xfail: file_gate_bad_attribute -->
+  a bodyless `extern` gives: `@noheap` gates allocation in a *body* and `@interrupt`/`@section` attach to
+  *emitted code*, and a file is neither.
+- **A file the CLI names is a direct request** — if its own gate excludes it, that is an error rather than <!-- xfail: file_gate_operand -->
+  a build that quietly produces nothing. A file the build *collected* (a manifest's source root, the
+  language server's workspace) is skipped silently; selecting files is what collection is for.
+- **Both sides, as always.** Gate a file and its complement (`FLAG` / `!FLAG`) so exactly one is admitted
+  on every target. Importing a module whose files are *all* gated out is an error that says so, <!-- xfail: file_gate_module_all_gated -->
+  rather than an unresolved name later in the file that did the importing.
+
+`file` is a **contextual** keyword: one only in this position, an ordinary name everywhere else.
+[`tests/file_gate.d/`](../tests/file_gate.d/) is the working example — two implementations of one
+function, one gated per platform, returning the same value on the native and wasm legs.
+
 **Flags** are reproducible — from the explicit build invocation, never ambient environment. They come
 from two places: **single-select groups** (pick one value; its name becomes a flag) and the
 **multi-select `flags` bag** (any number on at once).
@@ -4133,20 +4170,22 @@ drift.
 
 ```
 abstract alignof as asm base bitcast bool borrow break case cast char comptime const continue
-copy ctor default do else enum export expose extends extern false final float32 float64 fn
+copy ctor default do else enum export expose extends extern false file final float32 float64 fn
 fnptr for foreach friend give hardware if immutable implements import in int16 int32 int64 int8
 isize match new null operator out override parallel_for parallel_spawn private protected public
 ref return scope sizeof slot spawn static string this true truncate try type uint16 uint32
 uint64 uint8 unsafe usize virtual void when while
 ```
 
-**Five of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type` and `slot` may name any binding (a
-field, a local, a parameter, an argument label, a member) and lead a declaration only where a declaration
-can begin. Each was made contextual for the same reason: the word is one a program genuinely wants as a
-name, and admitting it measured **0 bison conflicts** at every name position. `type` is what lets an FFI
-binding emit a C field literally called `type` without inventing a name
+**Six of them are CONTEXTUAL** — `copy`, `give`, `truncate`, `type`, `slot` and `file` may name any
+binding (a field, a local, a parameter, an argument label, a member) and lead a declaration only where a
+declaration can begin. Each was made contextual for the same reason: the word is one a program genuinely
+wants as a name, and admitting it cost **no bison conflicts** at any name position. `type` is what lets an
+FFI binding emit a C field literally called `type` without inventing a name
 (`tests/extern_field_type_keyword.d/`); `slot` is the natural name for an index into a table
-(`tests/contextual_slot.kama`). The kind words `value` / `resource` / `view` / `intrinsic` are not
+(`tests/contextual_slot.kama`); `file` leads the file gate below and is otherwise an ordinary name
+(`tests/contextual_file.kama`) — `File file = …` is the spelling a user reaches for first, and measured,
+the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The kind words `value` / `resource` / `view` / `intrinsic` are not
 keywords at all — they lex as identifiers.
 
 `this` and the primitive type names are keywords like any other: they cannot be redeclared.

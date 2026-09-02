@@ -1,0 +1,14 @@
+// A file the CLI NAMED and that its own gate excludes is a hard ERROR, not a quiet nothing.
+//
+// The asymmetry is deliberate and it is the whole ruling: an operand is a direct request, so `kama
+// build audio_native.kama --target wasm32-…` has to say why it produced no binary. A file the build
+// COLLECTED — a manifest's source root, the language server's workspace — is skipped silently, because
+// selecting files is what collection is for. See tests/file_gate.d/ for the collected half.
+//
+// ⚠️ The flag is one no leg of the suite ever activates, and that is load-bearing. A loose build reads
+// no manifest and treats an undeclared flag as simply INACTIVE, so this file is excluded on native, on
+// the sanitizer legs and on wasm alike. Gating it on `ARCH_WASM32` instead would compile perfectly well
+// on the wasm leg, and this fixture — which must FAIL to build — would fail to fail there.
+file @compileFor(NO_SUCH_FLAG_IS_EVER_ACTIVE);
+
+fn int32 main() { return 0; }

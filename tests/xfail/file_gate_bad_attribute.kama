@@ -1,0 +1,9 @@
+// A file gate takes `@compileFor(...)` and NOTHING else — a hard error, not a silent no-op.
+//
+// The rule is the one a bodyless `extern` already states, for the same reason: `@noheap` gates
+// allocation in a BODY and `@interrupt`/`@section` attach to EMITTED CODE, and a file is neither. It is
+// enforced in the driver rather than in the grammar so the rejection is a sentence naming the attribute
+// and saying why, instead of a parse error naming a token.
+file @noheap;
+
+fn int32 main() { return 0; }

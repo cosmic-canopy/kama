@@ -1,0 +1,10 @@
+// Gated on a flag the manifest DECLARES and no build ever activates (no `"default"`, no `--define`), so
+// this file is excluded on every leg of the suite.
+//
+// ⚠️ Declared, not merely absent. A manifest build is STRICT about flag names — an undeclared one in a
+// file gate is rejected with a different error entirely, which is what this fixture measured first.
+file @compileFor(NEVER_ON);
+
+export { area };
+
+fn int32 area() { return 1; }

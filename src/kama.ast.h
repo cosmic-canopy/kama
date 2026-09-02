@@ -87,6 +87,12 @@ public:
     // for a gated-but-exported decl. Pruning is idempotent under a fixed build-flag set; this makes its
     // by-product idempotent too.
     std::set<std::string> prunedNames;
+    // THE FILE GATE — `file @compileFor(FLAG);` on the unit's first line, or null for the usual file
+    // with no gate. Read by the DRIVER (fileGateActive, kama.driver.cpp) before a unit is admitted to a
+    // compilation at all, not by the emitter: a gated-out file must never reach analysis, which is the
+    // whole point (its declarations may name types that do not exist on this target). The unit is still
+    // PARSED — that is how the gate is read — so a syntax error in it is an error on every target.
+    SharedAttributeList fileGate;
     // ---- closure-pruning facts, harvested at PARSE time (kama.y `compilation_unit`) ----------------
     // A directory-module import loads only the files needed to satisfy its `{…}` symbol list, plus their
     // transitive intra-directory closure (closureOfModule, kama.driver.cpp). These three fields are what

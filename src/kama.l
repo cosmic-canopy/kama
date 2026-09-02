@@ -444,6 +444,10 @@ static struct name_value keywords [] = {
     {"extends",     EXTENDS},
     {"extern",      EXTERN},
     {"false",       FALSE},
+    /* CONTEXTUAL, like `slot`/`type`: it leads the file gate (`file @compileFor(FLAG);`) as a unit's
+       first line, and names an ordinary binding everywhere else. The token is FILE_KW, not FILE,
+       because <cstdio> defines FILE and bison writes the token name into an enum. */
+    {"file",        FILE_KW},
     {"final",       FINAL},
     {"float32",     FLOAT32},
     {"float64",     FLOAT64},

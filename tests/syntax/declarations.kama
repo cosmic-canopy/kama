@@ -14,6 +14,12 @@
 
 #region folding marker — the lexer DROPS this line (reserved_preprocessor in kama.l)
 
+// The FILE GATE, and the reason `file` is coloured as a keyword at all. It is CONTEXTUAL, so the word
+// is also an ordinary name below — TextMate cannot tell the two apart (it has no parser), which is why
+// this fixture holds both spellings: whatever it does, it must do the same to each, visibly, in the
+// committed snapshot.
+file @compileFor(DEBUG);
+
 // `immutable` sits between `type` and the kind word, and `value` is an ordinary IDENTIFIER in kama.y —
 // nothing but the #declarations rule can colour it, and that rule used to be unreachable.
 type immutable value Point {
@@ -24,7 +30,8 @@ type immutable value Point {
 
 type final resource Handle {
     int32 fd;
-    public ctor make(int32 fd) { this.fd = fd; }
+    int32 file;                  // ...and `file` naming an ordinary field
+    public ctor make(int32 fd) { this.fd = fd; this.file = fd; }
     public fn int32 raw() { return this.fd; }
 }
 

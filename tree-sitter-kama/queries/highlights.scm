@@ -48,7 +48,7 @@
 [
   "import" "export" "as" "type" "enum" "extends" "implements" "for"
   "friend" "operator" "ctor" "fn" "fnptr" "extern" "comptime" "when"
-  "in" "unsafe" "asm" "static" "const" "default" "slot"
+  "in" "unsafe" "asm" "static" "const" "default" "slot" "file"
 ] @keyword
 
 ["if" "else" "match" "case"] @keyword.control.conditional

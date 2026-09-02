@@ -11,6 +11,18 @@
           "members": [
             {
               "type": "SYMBOL",
+              "name": "file_gate"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
               "name": "import_declaration"
             },
             {
@@ -36,6 +48,23 @@
             "type": "SYMBOL",
             "name": "_top_level_declaration"
           }
+        }
+      ]
+    },
+    "file_gate": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "file"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "attribute_list"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },
@@ -2207,6 +2236,10 @@
         {
           "type": "SYMBOL",
           "name": "_slot_name"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_file_name"
         },
         {
           "type": "STRING",
@@ -4461,6 +4494,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "_file_name"
+        },
+        {
+          "type": "SYMBOL",
           "name": "scoped_identifier"
         },
         {
@@ -6596,6 +6633,15 @@
       "named": true,
       "value": "identifier"
     },
+    "_file_name": {
+      "type": "ALIAS",
+      "content": {
+        "type": "STRING",
+        "value": "file"
+      },
+      "named": true,
+      "value": "identifier"
+    },
     "_name": {
       "type": "CHOICE",
       "members": [
@@ -6606,6 +6652,10 @@
         {
           "type": "SYMBOL",
           "name": "_slot_name"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_file_name"
         }
       ]
     },
