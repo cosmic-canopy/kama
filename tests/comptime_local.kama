@@ -3,12 +3,12 @@
 // folds opportunistically — see const_local_size — but `comptime` errors at the decl if it can't fold.)
 fn int32 main() {
     comptime int32 N = 3;
-    InlineArray<int32, (N)> a = [2; (N)];              // function scope: 3 twos -> 6
+    InlineArray<int32>#(N) a = [2; (N)];              // function scope: 3 twos -> 6
     int32 t = 0;
     foreach (int32 e in a) { t = t + e; }
     {
         comptime int32 M = N + 1;                      // block scope, references an outer comptime
-        InlineArray<int32, (M)> b = [5; (M)];          // 4 fives -> 20
+        InlineArray<int32>#(M) b = [5; (M)];          // 4 fives -> 20
         foreach (int32 e in b) { t = t + e; }
     }
     return t;                                          // 6 + 20 = 26

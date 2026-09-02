@@ -6,10 +6,10 @@
 // author wrote. It is only a const generic parameter that gets discarded instead of shadowed, because
 // `emitExpression` resolves one ahead of every runtime name. So this rule is about const params, not
 // about widening that ban.
-fn int32 f<comptime F: int32>() {
-    InlineArray<int32, 3> xs = [1, 2, 3];
+fn int32 f() comptime(int32 F) {
+    InlineArray<int32>#(3) xs = [1, 2, 3];
     int32 t = 0;
     foreach (int32 F in xs) { t = t + F; }   // ERROR: the loop variable shadows the const generic param `F`
     return t;
 }
-fn int32 main() { return f::<16>(); }
+fn int32 main() { return f()#(16); }

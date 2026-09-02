@@ -99,12 +99,12 @@ fn void main()
             (identifier)))))))
 
 ================================================================================
-A const-arithmetic generic size is parenthesised
+A const-arithmetic generic size needs no parenthesis
 ================================================================================
 
 fn void main()
 {
-    InlineArray<float64, (N+1)> arr;
+    InlineArray<float64>#(N+1) arr;
 }
 
 --------------------------------------------------------------------------------
@@ -119,7 +119,8 @@ fn void main()
         (type_name
           (identifier)
           (type_arguments
-            (primitive_type)
+            (primitive_type))
+          (comptime_arguments
             (binary_expression
               (identifier)
               (integer_literal))))
@@ -183,3 +184,109 @@ fn void main()
               (type_name
                 (identifier))))
           (argument_list))))))
+
+================================================================================
+Compile-time values are their own list at a declaration and at a use
+================================================================================
+
+type value Buf<T> comptime(int32 N) { }
+
+fn int32 shifted(int32 x) comptime(int32 S) { }
+
+fn void main()
+{
+    InlineArray<int32>#(4) a;
+    Buf#(8) b;
+    Map<string, InlineArray<int32>#(4)> nested;
+    int32 y = shifted(x: 2)#(3);
+    int32 z = Fixed::<int16>#(8).one();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier)
+      (type_parameters
+        (type_parameter
+          (identifier)))
+      (comptime_parameters
+        (comptime_parameter
+          (primitive_type)
+          (identifier))))
+    (class_body))
+  (function_declaration
+    (primitive_type)
+    (identifier)
+    (parameter_list
+      (parameter
+        (primitive_type)
+        (identifier)))
+    (comptime_parameters
+      (comptime_parameter
+        (primitive_type)
+        (identifier)))
+    (block))
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type))
+          (comptime_arguments
+            (integer_literal)))
+        (variable_declarator
+          (identifier)))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (comptime_arguments
+            (integer_literal)))
+        (variable_declarator
+          (identifier)))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type)
+            (type_name
+              (identifier)
+              (type_arguments
+                (primitive_type))
+              (comptime_arguments
+                (integer_literal)))))
+        (variable_declarator
+          (identifier)))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (identifier)
+            (argument_list
+              (argument
+                (identifier)
+                (integer_literal)))
+            (comptime_arguments
+              (integer_literal)))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (turbofish_type_member
+              (turbofish_name
+                (identifier)
+                (type_arguments
+                  (primitive_type)))
+              (comptime_arguments
+                (integer_literal))
+              (identifier))
+            (argument_list)))))))

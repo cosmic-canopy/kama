@@ -259,7 +259,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   motivating cases (a vertex buffer, an `std140` block, an MMIO register block, a wire struct) are all
   `type value`. Reopen when a real wire-format union appears.
 
-- **`Fixed<B, const F>` does not implement `Real`.** A contract requires *every* method, so conformance
+- **`Fixed<B> comptime(int32 F)` does not implement `Real`.** A contract requires *every* method, so conformance
   means writing 21 fixed-point functions including `sin`/`cos`/`atan2`/`exp`/`log`/`cbrt` in Q-format —
   CORDIC and polynomial-approximation work, a numerical-methods project rather than a library chore. It is
   the obvious first customer of the exported `Real` contract (`lib/std/math/scalar.kama`).
@@ -564,7 +564,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   a comptime param could be passed to a generic call; it fails identically for a type param, so it
   is the general gap, not a comptime one.
 
-- **A generic `enum` cannot declare members or contracts.** `type enum Tag<comptime N: int32> { A; public fn
+- **A generic `enum` cannot declare members or contracts.** `type enum Tag comptime(int32 N) { A; public fn
   int32 bump() { return N; } }` is rejected — "a generic enum is a monomorphization template, so each
   instance would need its own conformance". Clean diagnostic and a real limitation: it is why
   `EnumDeclarationNode`'s const-param data still has no reader after the comptime-parameters campaign, since a
@@ -666,7 +666,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     trapped and the identical addition in a lane wrapped. The overflow check for signed lanes is emitted
     by the compiler because nothing else supplies it.
   - ⚠️ **A mask must carry `T`.** A comparison's lane width follows its OPERAND's — f32x4 gives 4-byte
-    lanes, i16x8 gives 2-byte — identically on gcc 13.3 and clang 18, so a bare `Mask<N>` has no C type.
+    lanes, i16x8 gives 2-byte — identically on gcc 13.3 and clang 18, so a bare `Mask#(N)` has no C type.
   - ⚠️ **Probe design, which went wrong three times across two sessions.** A SIMD claim is invisible to
     exit codes, so the instrument is everything: never measure at an ABI boundary (AAPCS64 passes
     `struct{float x,y,z,w}` in four separate registers), never let the kernel be constant-foldable or
@@ -924,7 +924,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   small while the third is not** — sizing a user's report is our job, not theirs.
 
   - **THE PLATFORM SEAM (`@compileFor` on `extern`; attributes on members; `InlineArray` bridges) — SHIPPED `0.9.131`.** `@compileFor` gates `extern "<h>";`, `extern fn` and `fnptr`;
-    `@noheap` marks a method, `ctor`, destructor or operator; `InlineArray<T,N>` has `dataPtr()` and
+    `@noheap` marks a method, `ctor`, destructor or operator; `InlineArray<T>#(N)` has `dataPtr()` and
     `view()`. Record in [SPEC.md](SPEC.md) (*Conditional compilation*, *No-heap subset*, the container
     section). Three findings worth keeping, none of them in the row as written:
     - ⚠️ **The row was a GRAMMAR-SHAPE problem, not eleven missing features.** `attribute_list` had
@@ -1089,21 +1089,18 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   turbofish (`r.deserialize::<T>()`, sugar for a `__kamaDeserialize<T>` free trampoline), and with no
   generic methods a method turbofish has nothing to name. Reopen if a real API cannot be spelled either way.
 
-- **A `comptime` generic parameter must be an INTEGRAL type** ([kama.y](../src/kama.y), the
-  `COMPTIME IDENTIFIER COLON integral_type` arm) — no compile-time float, array or struct parameter. This
-  is where a user-writable "this argument must be compile-time constant" would come from. **Decided
-  2026-08-31 (the `#(…)` migration row):** compile-time values leave the generic list for a trailing
-  `comptime(…)` at definitions and `#(…)` at use sites, and the admissible set widens to Rust's —
-  integers plus `bool` and `char`. The design of record, including the ladder of types deliberately left
-  for later and the ~300-site migration surface, is
-  [design/comptime-params.md](design/comptime-params.md).
+- **A `comptime` parameter's type is an integer, `bool` or `char`** ([kama.y](../src/kama.y),
+  `comptime_param_type`) — no compile-time float, array or struct parameter. This is where a
+  user-writable "this argument must be compile-time constant" would come from. Compile-time values now
+  live in their own list — `comptime(int32 N)` at a definition, `#(4)` at a use — so widening the set
+  further is purely additive; see [SPEC.md](SPEC.md) *Generics*.
   ⚠️ **Rust has shipped comptime parameters since 2021 and still restricts them to integers, `bool` and `char`**,
   because a composite value in a parameter list has to be encoded into a mangled symbol name. That is the
   constraint, not an oversight to fix. The compiler can still *require* a constant argument for its own
   intrinsics — `Simd`'s `shuffle(pattern:)` does — the same by-name knowledge it has of `InlineArray`'s
   `get`/`set`/`length`.
 
-- **A non-constant turbofish argument reports the wrong thing.** `shifted::<runtime>(x: 2)`, where
+- **A non-constant turbofish argument reports the wrong thing.** `shifted(x: 2)#(runtime)`, where
   `shifted` *is* a generic function, says *"turbofish type arguments are only valid on a generic function"*
   — which is false and points away from the real problem, that `runtime` is not a compile-time constant.
   A bad diagnostic rather than a hazard (the program does not build), but "the error names the wrong cause"
@@ -1130,7 +1127,7 @@ drop emitted. See SPEC § *Uninitialized storage*.)*
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
 
-- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T,N>` read; a bare `encode`/`decode` of an
+- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `encode`/`decode` of an
   intrinsic/enum value; generic enums. (A `const` field is a separate general language gap — doesn't parse today.)
 - **Binary backend follow-on (deferred).** `@bits(n)` bit-packing (tighter integers/bools), field-name
   interning, and a schema-locked *positional* mode (needs an emitter change; trades forward-compat for max
@@ -1215,7 +1212,7 @@ across two different targets:
   | **AVR (Harvard) family** *(deferred — Cortex-M/RISC-V first)* | Four AVR-specific pieces: (1) ISR — `@interrupt("VECTOR")` → the `ISR(VECTOR)` macro (`<avr/interrupt.h>`), not the parameterless `__attribute__((interrupt))`; (2) Harvard `PROGMEM` — flash const data needs `PROGMEM` + `pgm_read_*` accessors (a flash pointer can't be plain-deref'd), so `@section` alone doesn't cover it; (3) toolchain — `avr-gcc`-only (clang/zig don't target AVR cleanly); (4) **`-mdouble=64` in the target's `cflags`** — avr-gcc still defaults to a 32-bit `double`, which `kama_runtime.h`'s `_Static_assert` rejects. It is the ONLY target in kama's spectrum that fails those asserts, and the assert is doing its job: without it, `bitcast<uint64>(d)` would pun an 8-byte union member against a 4-byte one and `kama_f64_bits` would `memcpy` 8 bytes out of a 4-byte `double`. A config line, not a language gap. |
 
   **Why kama fits:** no-GC + RAII → deterministic, no hidden pauses; allocation is explicit in the emitted C
-  (greppable no-heap audit); trap lowering is dependency-free; `InlineArray<T,N>`, sized ints, and `unsafe`/`UnsafePtr`
+  (greppable no-heap audit); trap lowering is dependency-free; `InlineArray<T>#(N)`, sized ints, and `unsafe`/`UnsafePtr`
   FFI already exist. **North star: blink an LED** (the embedded "first triangle"). **Start Cortex-M, not AVR**
   (`zig cc`/clang do `thumbv*-none-eabi` cleanly; pico-sdk is tidy; AVR pain comes later).
 

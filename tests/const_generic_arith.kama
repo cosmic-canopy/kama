@@ -1,9 +1,9 @@
 // MCU 6b-1: const arithmetic on a const-generic param folds at instantiation. A generic fn over `const N`
-// declares a local `InlineArray<int32, (N+1)>` — one slot bigger than its input — and a `[v; (N+1)]` fill,
+// declares a local `InlineArray<int32>#(N+1)` — one slot bigger than its input — and a `[v; (N+1)]` fill,
 // both resolving `N+1` via the param binding. Before 6b-1 the `N+1` size silently failed to register
 // (constValue couldn't fold it), surfacing later as an obscure error; now it monomorphizes to size N+1.
-fn int32 padSum<comptime N: int32>(InlineArray<int32, N> a) {
-    InlineArray<int32, (N + 1)> buf = [0; (N + 1)];   // type size AND fill count both fold N+1
+fn int32 padSum(InlineArray<int32>#(N) a) comptime(int32 N) {
+    InlineArray<int32>#(N + 1) buf = [0; (N + 1)];   // type size AND fill count both fold N+1
     int32 i = 0;
     foreach (int32 e in a) { buf[i] = e; i = i + 1; }
     buf[i] = 100;                                     // the extra padding slot
@@ -12,6 +12,6 @@ fn int32 padSum<comptime N: int32>(InlineArray<int32, N> a) {
     return t + cast<int32>(buf.length());             // length() == N+1 — the one real conversion
 }
 fn int32 main() {
-    InlineArray<int32, 3> v = [4, 5, 6];              // N = 3
+    InlineArray<int32>#(3) v = [4, 5, 6];              // N = 3
     return padSum(a: v);                              // (4+5+6+100) + 4 = 119
 }

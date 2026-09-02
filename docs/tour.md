@@ -302,7 +302,7 @@ coincidentally-matching method is not enough: `fn uint64 hashOf<K: Hashable>(K k
 
 ## Collections and strings
 
-`std::collections` carries the usual set — `DynamicArray<T>`, `FixedArray<T>`, `InlineArray<T, N>`,
+`std::collections` carries the usual set — `DynamicArray<T>`, `FixedArray<T>`, `InlineArray<T>#(N)`,
 `Map<K, V>`, `Set<K>`, `Deque<T>`, `PriorityQueue<T>`, sorted maps and sets. All are bounds-checked,
 all are RAII, and all take an optional custom allocator as their last type parameter.
 

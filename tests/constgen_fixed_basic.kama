@@ -1,7 +1,7 @@
-// InlineArray<T,N> — the const-generic safe array: bounds-checked indexing, a fill literal, and .length().
+// InlineArray<T>#(N) — the const-generic safe array: bounds-checked indexing, a fill literal, and .length().
 fn int32 main() {
-    InlineArray<int32, 4> v = [1, 2, 3, 4];
-    InlineArray<int32, 3> f = [7; 3];       // fill: three 7s
+    InlineArray<int32>#(4) v = [1, 2, 3, 4];
+    InlineArray<int32>#(3) f = [7; 3];       // fill: three 7s
     isize n = v.length();             // 4 (the const size)
     return v[0] + v[3] + f[1] + cast<int32>(n);   // 1 + 4 + 7 + 4 = 16
 }

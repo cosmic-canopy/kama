@@ -1,4 +1,5 @@
-// InlineArray takes exactly two arguments: an element type and a const size.
+// `InlineArray` takes one type argument and one compile-time size, and the size is a separate group:
+// `InlineArray<int32>#(2)`. Omitting the group is what this fixture writes.
 fn int32 main() {
     InlineArray<int32> v = [1, 2];
     return v[0];

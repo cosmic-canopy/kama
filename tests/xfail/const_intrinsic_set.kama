@@ -1,5 +1,5 @@
 // The const call gate used to exempt every INTRINSIC method wholesale, so a builtin writer slipped
 // through it. `InlineArray`'s `set` is the one intrinsic in that set that writes; the exemption is gone
 // and each intrinsic now states its own constness (`string`'s are all const — it is immutable).
-fn void bad(const InlineArray<int32, 4> a) { a.set(index: 0, value: 9); }   // -> REJECT
+fn void bad(const InlineArray<int32>#(4) a) { a.set(index: 0, value: 9); }   // -> REJECT
 fn int32 main() { return 0; }

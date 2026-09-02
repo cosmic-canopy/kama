@@ -1,0 +1,40 @@
+// Every SHAPE the `#(…)` compile-time argument list has to take. Each line here is a spelling the
+// grammar admits and that nothing else in the corpus exercises: the group nests inside a `<…>`, it
+// chains into a method call, it rides a name with no type arguments at all, and it can start a line.
+
+type value Buf<T> comptime(int32 N) {
+    public InlineArray<T>#(N) items;
+    public ctor of(InlineArray<T>#(N) items) { this.items = items; }
+    public fn int32 size() { return N; }
+}
+
+// Parameterised by a VALUE ALONE — there is no `<…>` here for a turbofish to ride, which is the case
+// the on-type spelling `Slots#(9).of(…)` exists for.
+type value Slots comptime(int32 K) {
+    public int32 used;
+    public ctor of(int32 used) { this.used = used; }
+    public fn int32 free() { return K - this.used; }
+}
+
+// NESTED: a `#(…)` group inside a type ARGUMENT list. `genericDepth` governs `>` vs `>>`, and it has
+// to be back down by the time the compile-time group is lexed or the `>` here closes the wrong list.
+type value Holder<T> {
+    public T v;
+    public ctor of(T v) { this.v = v; }
+}
+
+fn int32 main() {
+    Holder<InlineArray<int32>#(2)> h = Holder::<InlineArray<int32>#(2)>.of(v: [4, 5]);
+
+    // CHAINED: the compile-time group is the name's last list, and a method call follows it.
+    int32 b = Buf::<int32>#(3).of(items: [7, 8, 9]).size();   // 3
+    int32 s = Slots#(9).of(used: 4).free();                   // 5 — values only, on a bare name
+
+    // ⚠️ `#(` STARTS THE LINE BELOW ON PURPOSE. `kama.l`'s preprocessor rule was `^[ \t]*#.*`, which
+    // would swallow the whole line; it is narrowed to `#region`/`#endregion` precisely so a wrapped
+    // compile-time argument list cannot be eaten. Delete this and nothing else guards it.
+    InlineArray<int32>
+#(3) wrapped = [10, 20, 30];
+
+    return h.v[1] + b + s + wrapped[2];   // 5 + 3 + 5 + 30 = 43
+}

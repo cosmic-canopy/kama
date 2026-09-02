@@ -6,8 +6,8 @@
 // Exercises the whole array subsystem: a fixed-array local (`[0; 256]`), nested loops, narrow-integer wrap
 // on cast, a ternary, and an array-element write `t[i] = …` (the table-fill primitive).
 
-comptime fn InlineArray<uint8, 256> crcTable() {
-    InlineArray<uint8, 256> t = [0; 256];
+comptime fn InlineArray<uint8>#(256) crcTable() {
+    InlineArray<uint8>#(256) t = [0; 256];
     for (int32 i = 0; i < 256; i = i + 1) {
         uint8 c = cast<uint8>(i);
         for (int32 k = 0; k < 8; k = k + 1) {
@@ -18,7 +18,7 @@ comptime fn InlineArray<uint8, 256> crcTable() {
     return t;
 }
 
-comptime InlineArray<uint8, 256> CRC = crcTable();   // baked: static const InlineArray_uint8_256 CRC = {.v={…}};
+comptime InlineArray<uint8>#(256) CRC = crcTable();   // baked: static const InlineArray_uint8_256 CRC = {.v={…}};
 
 fn int32 main() {
     int32 mismatches = 0;

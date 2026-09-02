@@ -1,0 +1,3 @@
+// The compile-time group has its own arity, checked separately from the type group.
+fn int32 tripled(int32 x) comptime(int32 S) { return x * S; }
+fn int32 main() { return tripled(x: 2)#(3, 4); }

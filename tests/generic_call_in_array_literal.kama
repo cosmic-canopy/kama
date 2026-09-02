@@ -6,7 +6,7 @@ fn T ident<T>(T x) { return x; }
 
 fn int32 main()
 {
-    InlineArray<int32, 3> a = [ident::<int32>(x: 3), ident(x: 4), 5];
-    InlineArray<int32, 2> b = [ident::<int32>(x: 10); 2];      // the FILL value is a separate walk
+    InlineArray<int32>#(3) a = [ident::<int32>(x: 3), ident(x: 4), 5];
+    InlineArray<int32>#(2) b = [ident::<int32>(x: 10); 2];      // the FILL value is a separate walk
     return a[0] + a[1] + a[2] + b[0] + b[1];                   // 3 + 4 + 5 + 10 + 10 = 32
 }

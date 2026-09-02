@@ -1,5 +1,5 @@
 
-// The storage seam for fixed-point: what a `Fixed<B, const F>` needs of its backing integer `B`. Three
+// The storage seam for fixed-point: what a `Fixed<B>#(const F)` needs of its backing integer `B`. Three
 // operations, because that is all Q-format arithmetic asks of its storage — widen into an accumulator,
 // narrow back, and narrow back with saturation. Everything else (the scaling, the operators, the
 // comparisons) is written once in `Fixed` and is width-independent.

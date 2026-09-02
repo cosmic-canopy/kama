@@ -13,8 +13,8 @@
 import { std::num::int32Max };
 fn int32 main() {
     int32 big = int32Max();                       // runtime-opaque
-    Simd<int32, 4> a = [big, 1, 1, 1];
-    Simd<int32, 4> b = [1; 4];
-    Simd<int32, 4> c = a + b;                     // lane 0 overflows -> trap
+    Simd<int32>#(4) a = [big, 1, 1, 1];
+    Simd<int32>#(4) b = [1; 4];
+    Simd<int32>#(4) c = a + b;                     // lane 0 overflows -> trap
     return c.lane(index: 0) + 7;
 }

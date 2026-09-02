@@ -1,1 +1,1 @@
-takes exactly two arguments
+takes one type argument and one compile-time size

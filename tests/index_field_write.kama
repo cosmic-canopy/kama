@@ -3,7 +3,7 @@ import { std::collections::DynamicArray };
 @generate(of)
 type value P { public int32 x; public int32 y; }
 fn int32 main() {
-    InlineArray<P, 2> f = [P.of(x: 1, y: 2), P.of(x: 3, y: 4)];
+    InlineArray<P>#(2) f = [P.of(x: 1, y: 2), P.of(x: 3, y: 4)];
     f[1].x = 40;                        // field write through a InlineArray subscript
     DynamicArray<P> l = DynamicArray.empty();
     l.add(item: P.of(x: 5, y: 6));

@@ -10,8 +10,8 @@ type value Squares {
     comptime fn int32 sq(int32 x) { return x * x; }
 
     // public: builds an 8-entry table of squares, calling the private helper per entry (inter-fn calls)
-    public comptime fn InlineArray<int32, 8> table() {
-        InlineArray<int32, 8> t = [0; 8];
+    public comptime fn InlineArray<int32>#(8) table() {
+        InlineArray<int32>#(8) t = [0; 8];
         for (int32 i = 0; i < 8; i = i + 1) { t[i] = Squares::sq(x: i); }
         return t;
     }
@@ -24,7 +24,7 @@ type value Squares {
     }
 }
 
-comptime InlineArray<int32, 8> SQ = Squares::table();   // baked: 0,1,4,9,16,25,36,49
+comptime InlineArray<int32>#(8) SQ = Squares::table();   // baked: 0,1,4,9,16,25,36,49
 comptime int32 SUM7 = Squares::sumTo(n: 7);             // 28
 
 fn int32 main() {

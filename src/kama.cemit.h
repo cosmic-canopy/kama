@@ -1794,12 +1794,18 @@ private:
     SharedIdentifier primTypeNode(int builtInVal);          // cached synthesized primitive type node
     bool isConcreteTypeArg(SharedIdentifier t);             // a primitive/class/enum/collection (not a bare type-param)
     // Unify a generic call's args against the template's params -> a deduped instantiation.
+    // `seed` pre-binds the parameters a use site wrote explicitly, so the rest can still be inferred;
+    // null means infer everything. See explicitGenericInst for who seeds and why.
     bool inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
-                          std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out);
-    // Turbofish: bind a generic function's type params directly from explicit `::<…>` args (bypassing
-    // argument inference — reaches return-only generics inference can't). Arity + bounds are checked.
+                          std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out,
+                          const std::map<std::string, SharedIdentifier>* seed = nullptr);
+    // Turbofish and/or `#(…)`: bind a generic function's params from what the use site wrote explicitly
+    // (bypassing argument inference — reaches return-only generics inference can't). Arity + bounds are
+    // checked PER GROUP, and an omitted-but-inferable group falls through to inferGenericInst.
+    // `nTypeArgs` is the callee name's group split (-1 = synthesized, i.e. every slot written).
     bool explicitGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedIdentifierList typeArgs,
-                             int line, GenericInst& out);
+                             int nTypeArgs, SharedArgumentList callArgs,
+                             std::map<std::string, SharedIdentifier>* localTys, int line, GenericInst& out);
     void emitGenericInst(const GenericInst& gi, bool prototypeOnly);
     void registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
     void registerInstGenerics(); // discover generic-fn calls inside a generic TYPE's members (per instantiation)

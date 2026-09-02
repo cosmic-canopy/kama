@@ -1,7 +1,7 @@
 // A general `fn ref T at(i)` method returns a PLACE (like `operator[]`), used as read/write/compound/
 // a `ref` argument. Composes with the place machinery.
 type value Buf {
-    InlineArray<int32, 4> d;
+    InlineArray<int32>#(4) d;
     public ctor make() { this.d = [0; 4]; }
     public fn ref int32 at(usize i) { return this.d[i]; }
 }

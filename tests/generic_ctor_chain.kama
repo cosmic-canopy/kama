@@ -5,8 +5,8 @@
 // instance, so there was nothing to infer — the receiver simply classed as "" and the call died as
 // "method call on unresolved receiver".
 //
-// It surfaced when std::num::Fixed16_16 became the generic `Fixed<B, const F>`: `Fixed16_16.fromInt(n: 3)
-// .toInt()` had always worked and `Fixed::<int32, 16>.fromInt(n: 3).toInt()` did not, so making a type
+// It surfaced when std::num::Fixed16_16 became the generic `Fixed<B>#(const F)`: `Fixed16_16.fromInt(n: 3)
+// .toInt()` had always worked and `Fixed::<int32>#(16).fromInt(n: 3).toInt()` did not, so making a type
 // generic silently took away a spelling its callers were already using.
 //
 // All three parameter shapes are covered, because the const-parameter ones mangle their instance through
@@ -17,13 +17,13 @@ type value Box<T> {
     public fn int32 two() { return 2; }
 }
 
-type value Shift<comptime F: int32> {
+type value Shift comptime(int32 F) {
     public int32 v;
     public ctor of(int32 v) { this.v = v; }
     public fn int32 shifted() { return this.v << F; }
 }
 
-type value Both<T, comptime F: int32> {
+type value Both<T> comptime(int32 F) {
     public T v;
     public ctor of(T v) { this.v = v; }
     public fn int32 bits() { return F; }
@@ -31,8 +31,8 @@ type value Both<T, comptime F: int32> {
 
 fn int32 main() {
     int32 a = Box::<int32>.of(v: 1).two();          //  2 — a type parameter
-    int32 b = Shift::<3>.of(v: 2).shifted();        // 16 — a const parameter, read in the body
-    int32 c = Both::<int32, 8>.of(v: 1).bits();     //  8 — one of each
+    int32 b = Shift#(3).of(v: 2).shifted();        // 16 — a const parameter, read in the body
+    int32 c = Both::<int32>#(8).of(v: 1).bits();     //  8 — one of each
     // A field access off the same receiver always worked (it does not go through method resolution);
     // keep it here so a regression tells the two paths apart.
     int32 d = Box::<int32>.of(v: 16).v;             // 16

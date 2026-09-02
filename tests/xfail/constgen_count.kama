@@ -1,5 +1,5 @@
 // An array literal's element count must equal the InlineArray size N.
 fn int32 main() {
-    InlineArray<int32, 4> v = [1, 2, 3];   // 3 elements, but the type holds 4
+    InlineArray<int32>#(4) v = [1, 2, 3];   // 3 elements, but the type holds 4
     return v[0];
 }

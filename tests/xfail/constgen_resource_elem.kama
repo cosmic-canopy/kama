@@ -2,6 +2,6 @@
 // per-element dtor) — rejected; wrap it in an owning FixedArray/DynamicArray instead.
 type resource Handle { public int32 fd; public ctor make(int32 fd) { this.fd = fd; } }
 fn int32 main() {
-    InlineArray<Handle, 2> h = [Handle.make(fd: 1), Handle.make(fd: 2)];
+    InlineArray<Handle>#(2) h = [Handle.make(fd: 1), Handle.make(fd: 2)];
     return 0;
 }

@@ -6,7 +6,7 @@ import { cfg::CAP };
 unsafe fn int32 viaAddr() { UnsafePtr<int32> p = addr(of: CAP); return p[0]; }   // 8
 
 fn int32 main() {
-    InlineArray<int32, (CAP)> buf = [1; (CAP)];     // the constant sizes a type, across modules
+    InlineArray<int32>#(CAP) buf = [1; (CAP)];     // the constant sizes a type, across modules
     int32 qualified = cfg::CAP;                     // reached without an import
     return CAP + qualified + cast<int32>(buf.length()) + viaAddr() + cfg::doubled();
 }                                                   // 8 + 8 + 8 + 8 + 16 = 48

@@ -4,8 +4,8 @@
 //
 // The check sits in `checkConstWrite`, which is on every write path there is — so `F += 1`, `F++` and
 // passing `F` to a `ref`/`out` parameter are rejected by the same line.
-fn int32 f<comptime F: int32>(int32 x) {
+fn int32 f(int32 x) comptime(int32 F) {
     F = 3;   // ERROR: `F` is a const generic parameter
     return x;
 }
-fn int32 main() { return f::<16>(x: 1); }
+fn int32 main() { return f(x: 1)#(16); }

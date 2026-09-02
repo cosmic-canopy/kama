@@ -1,4 +1,4 @@
-// A `Simd<T, N>` must be exactly 128 bits. 128 is the only width EVERY kama target has — SSE2 on the
+// A `Simd<T>#(N)` must be exactly 128 bits. 128 is the only width EVERY kama target has — SSE2 on the
 // x86-64 baseline, NEON on aarch64, wasm128 since the driver started passing -msimd128 — and a wider one
 // needs `-march`, a CPU-tuning flag kama does not have yet.
 //
@@ -6,6 +6,6 @@
 // what the design first specified. It cannot go there: an intrinsic's prelude declaration is
 // documentation-only with an EMPTY body, so an assert written in it would never run.
 fn int32 main() {
-    Simd<int32, 3> v = [1, 2, 3];   // 12 bytes, not 16
+    Simd<int32>#(3) v = [1, 2, 3];   // 12 bytes, not 16
     return v.lane(index: 0);
 }

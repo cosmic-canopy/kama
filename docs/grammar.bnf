@@ -180,23 +180,24 @@ qualifier
   | qualifier IDENTIFIER COLONCOLON
   ;
 basic_identifier
-  : IDENTIFIER
-  | IDENTIFIER LT  type_arg_list GT
+  : IDENTIFIER comptime_args_opt
+
+  | IDENTIFIER LT  type_arg_list GT  comptime_args_opt
 
   ;
 /* Comma-separated type arguments: `int32`, `int32, string`, `int32, DynamicArray<int>` — mirrors
    interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
 type_arg_list
-  : type_or_value_arg
-  | type_arg_list COMMA type_or_value_arg
+  : type_arg
+  | type_arg_list COMMA type_arg
   ;
-/* A generic argument is a type, or an integer VALUE for a const param (`InlineArray<float, 4>`). A value
-   arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
-type_or_value_arg
+/* A generic argument is a TYPE — nothing else. It carried an integer value too until compile-time
+   values moved to `#(…)`; `InlineArray<float32, 4>` is now `InlineArray<float32>#(4)`, and the
+   parenthesised form `InlineArray<T, (N+1)>` that the old spelling needed (to keep `>` from closing
+   the list) is spelled `InlineArray<T>#(N + 1)` with no parenthesis owed. */
+type_arg
   : type
   | IDENTIFIER COLON type      /* NAMED override: `A: Arena` skips an earlier default */
-  | literal
-  | LPAREN expression RPAREN      /* MCU 6b-1: const arithmetic size `InlineArray<T, (N+1)>` — parens keep `>`/`>>` unambiguous vs generic close; folded by constValue() at instantiation */
   ;
 
 qualified_identifier_no_generic
@@ -340,11 +341,18 @@ kind_name
   : IDENTIFIER
   | ENUM
   ;
-/* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
-   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */
+/* The NAME + parameter lists in a type DECLARATION — decoupled from the type-USE production
+   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo`, `Foo<K: I + J, V>`, or
+   either of those followed by `comptime(int32 N)`. Serves `type` AND `enum`, so both get the
+   compile-time value list from this one place. The comptime params are APPENDED to `genericArgs`
+   (types first), which is the ordering the declaration splitters and `constTypes` depend on. */
 type_decl_head
-  : IDENTIFIER
-  | IDENTIFIER LT  type_param_list GT
+  : IDENTIFIER comptime_params_opt
+
+    /* ⚠️ The `genericDepth--` is its OWN mid-rule action, not the end action, so it fires on the `>`
+       and not after `comptime(…)`. Left to the end it would keep the lexer in generic mode across a
+       value default, splitting the `>>` in `comptime(int32 N = 1 >> 2)` into two `>`. */
+  | IDENTIFIER LT  type_param_list GT  comptime_params_opt
 
   ;
 
@@ -429,9 +437,9 @@ plain_function_declaration
 
   | COMPTIME FN function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN block
 
-  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block
 
-  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block
+  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block
 
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON
 
@@ -458,18 +466,78 @@ type_param
   | IDENTIFIER IDENTIFIER type_name
 
   | IDENTIFIER COLON bound_list type_param_default_opt
-  | COMPTIME IDENTIFIER COLON integral_type type_param_default_opt      /* `comptime N: int` — a compile-time value param */
+    /* There is no `comptime N: int32` arm here any more. A compile-time VALUE parameter is declared in
+       its own trailing list — `comptime_params_opt`, below — so this list holds types only. */
   ;
-/* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
+/* Optional `= DefaultType` on a trailing type parameter. Its value-side peer is
+   `comptime_param_default_opt`, which takes an expression. */
 type_param_default_opt
   : /* Nothing */
-  | EQ type_or_value_arg
+  | EQ type_arg
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
 bound_list
   : type_name
   | bound_list PLUS type_name
+  ;
+/* Compile-time VALUE parameters — `comptime(int32 N)`. ALWAYS the last list on a declaration: after
+   `<…>` on a type, after the runtime `(…)` on a function. Types and values stopped sharing one pair
+   of angle brackets, so `<…>` holds types only and a value is passed at a use site with `#(…)`.
+   ⚠️ The keyword precedes the paren deliberately — LALR(1) cannot decide `Foo<T>(comptime 4)` at `(`.
+   The node built here is the SAME shape the retired `<…, comptime N: int32>` arm built, and the four
+   declaration splitters append these AFTER the type params. That is what keeps `constTypes` parallel
+   to `typeParams` (a non-null entry ⇔ a value slot) so nothing downstream of the parser changed. */
+comptime_params_opt
+  : /* Nothing */
+  | COMPTIME LPAREN comptime_param_list RPAREN
+  ;
+comptime_param_list
+  : comptime_param
+  | comptime_param_list COMMA comptime_param
+  ;
+comptime_param
+  : comptime_param_type IDENTIFIER comptime_param_default_opt
+
+  ;
+/* The admissible value types: the eight integers plus `bool` and `char` — Rust's set. Trivial to
+   mangle and no identity rules owed. Widening it later is PURELY ADDITIVE (every program that
+   compiles still compiles), which is why floats, strings and structural values stay unbuilt: a float
+   parameter owes an identity rule Rust refused to write (is `#(0.0)` the type `#(-0.0)` is?). */
+comptime_param_type
+  : integral_type
+  | BOOL
+  | CHAR
+  ;
+/* `comptime(int32 N = 4)`. A VALUE default, so it wraps an expression exactly as a use-site argument
+   does — `type_param_default_opt` next door is its type-side peer and takes a TYPE. */
+comptime_param_default_opt
+  : /* Nothing */
+  | EQ expression
+  ;
+/* Compile-time ARGUMENTS — `#(4)`, `#(N + 1)`, `#(sizeof(int32))`. A postfix on a type name and on a
+   call, so it composes with chaining (`f(x: 2)#(3).m()`) and nests inside a type argument list
+   (`Map<string, InlineArray<int32>#(4)>`). No `genericDepth` bookkeeping is needed or wanted: `)`
+   closes the list unambiguously, which is also what retires the parenthesis that the old
+   `InlineArray<T, (N+1)>` spelling needed to keep `>` from closing the generic. */
+comptime_args_opt
+  : /* Nothing */
+  | HASH LPAREN comptime_arg_list RPAREN
+  ;
+comptime_arg_list
+  : comptime_arg
+  | comptime_arg_list COMMA comptime_arg
+  ;
+/* A nameless IdentifierNode carrying the expression — the shape `constArgN`/`constValue` already
+   fold, so a literal, a local `const`, a module `comptime` and arithmetic over them resolve for free.
+   ⚠️ A BARE NAME is passed through as itself instead of being wrapped. `#(N)` in a parameter type
+   (`InlineArray<int32>#(N) a`) has to stay a node whose `value` is `N`: that is the handle the
+   argument-side inference binds against (kama.cemit.cpp, `inferGenericInst`), and it is exactly what
+   the retired `InlineArray<int32, N>` spelling produced, where `N` parsed as a type name. Wrapping it
+   loses the name and the size stops being inferable. */
+comptime_arg
+  : expression
+
   ;
 function_return_type
   : type
@@ -923,28 +991,32 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN
-  | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN
+    /* `shifted(x: 2)#(3)` — a generic fn called WITHOUT a turbofish still takes its compile-time
+       values, and they are the last list. `attachComptimeArgs` puts them on the callee name, where a
+       turbofish's type args would be, so both spellings hand the emitter the same merged vector. */
+  | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN comptime_args_opt
+
     /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
        before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
        comparison-operator clash. The `IDENTIFIER::<…>` prefix is factored into `generic_turbofish_name`
        (shared with the on-type ctor form below) so the genericDepth mid-rule actions aren't duplicated —
        duplicated mid-rule actions become distinct empty nonterminals and reduce/reduce-conflict. */
-  | generic_turbofish_name LPAREN argument_list_opt RPAREN
+  | generic_turbofish_name LPAREN argument_list_opt RPAREN comptime_args_opt
 
     /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
        is generic today). The `::` before `<` disambiguates from `<` as less-than (unlike `.as<T>()`, which
        rides the `as` keyword — `deserialize` is a plain IDENTIFIER). The type args ride the method
        IdentifierNode's `genericArgs`, mirroring the free-fn turbofish above; two receiver forms mirror the
        `.as<T>()`/member_access pair (a bare ident reduces via qualified_identifier_no_generic). */
-  | primary_expression DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+  | primary_expression DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN comptime_args_opt
 
-  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN
+  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT  type_arg_list GT  LPAREN argument_list_opt RPAREN comptime_args_opt
 
     /* On-type turbofish `Map::<int32,int32>.empty()` — the CANONICAL generic-constructor spelling: the
        enclosing type's args ride the RECEIVER (`::<…>` on the type), not the ctor. Reuses the shared
        `generic_turbofish_name` prefix; differs from the free-fn form only in the trailing `DOT IDENTIFIER`.
        The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
-  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
+  | turbofish_type_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN
 
     /* On-type turbofish through `::` — `Box::<int32>::tag()`, a STATIC on a generic type. The sibling of
        the ctor form above, and the one that makes the spelling rule uniform: after a type, `.` is
@@ -953,13 +1025,25 @@ invocation_expression
        not mention `T`, so there is nothing to infer the monomorph from. Builds the SAME shape the plain
        `Type::name(...)` resolver already consumes — a qualified IdentifierNode with a null `expression` —
        with the type args parked in `qualifierGenericArgs`, since `qualifier` is a bare StringList. */
-  | generic_turbofish_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN
+  | turbofish_type_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN
 
   ;
 /* Shared `IDENTIFIER::<type_args>` prefix — a type name (or generic free-fn name) carrying explicit type
    args in turbofish form. Factored out so the genericDepth mid-rule actions live in exactly one place. */
 generic_turbofish_name
   : IDENTIFIER COLONCOLON LT  type_arg_list GT
+
+  ;
+/* `#(…)` riding a turbofish NAME — `Fixed::<int16>#(8).one()`. Deliberately NOT folded into
+   `generic_turbofish_name` above, which every call form shares: there the values would also attach to a
+   generic FUNCTION call (`f::<T>#(3)(x: 2)`), and a function's compile-time values come after its
+   runtime arguments (`f::<T>(x: 2)#(3)`) — one spelling per thing, so the two positions stay apart. */
+turbofish_type_name
+  : generic_turbofish_name comptime_args_opt
+
+    /* `Fx#(16).of(…)` — the same on-type spelling for a type whose ONLY parameters are compile-time
+       values. There is no `<…>` to hang a turbofish on, so the name carries the group directly. */
+  | IDENTIFIER HASH LPAREN comptime_arg_list RPAREN
 
   ;
 argument_list_opt

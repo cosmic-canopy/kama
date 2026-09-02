@@ -6,13 +6,13 @@
 //
 // Covered here: an instance method, a named ctor's body, a `static fn` (which has no `this`, so it must
 // not trip the "a `static` method has no `this`" path), a type param and a const param in one list, and
-// an `InlineArray<T, N>` field whose size comes from the enclosing type's const param.
+// an `InlineArray<T>#(N)` field whose size comes from the enclosing type's const param.
 //
 // NOT covered, because the language does not allow it: the same thing on a generic ENUM. A generic enum
 // cannot declare members at all ("a generic enum is a monomorphization template, so each instance would
 // need its own conformance"), so a const param there can never be read as a value. EnumDeclarationNode
 // carries the same const-param data and it stays unread until that limitation lifts.
-type value Fx<comptime F: int32> {
+type value Fx comptime(int32 F) {
     public int32 raw;
     public ctor of(int32 raw)      { this.raw = raw; }
     public ctor whole(int32 units) { this.raw = units << F; }   // the const param inside a ctor BODY
@@ -21,19 +21,19 @@ type value Fx<comptime F: int32> {
     public static fn int32 shift() { return F; }                // no `this` in scope
 }
 
-type value Buf<T, comptime N: int32> {
-    public InlineArray<T, N> a;                                 // the size comes from the const param
-    public ctor make(InlineArray<T, N> a) { this.a = a; }
+type value Buf<T> comptime(int32 N) {
+    public InlineArray<T>#(N) a;                                 // the size comes from the const param
+    public ctor make(InlineArray<T>#(N) a) { this.a = a; }
     public fn int32 size() { return N; }
 }
 
 fn int32 main() {
-    Fx<16> a = Fx::<16>.of(raw: 65536);      // 1.0 in Q16.16
-    Fx<8>  b = Fx::<8>.of(raw: 512);         // 2.0 in Q8
-    Fx<16> c = Fx::<16>.whole(units: 3);     // ctor reads F: 3 << 16
+    Fx#(16) a = Fx#(16).of(raw: 65536);      // 1.0 in Q16.16
+    Fx#(8)  b = Fx#(8).of(raw: 512);         // 2.0 in Q8
+    Fx#(16) c = Fx#(16).whole(units: 3);     // ctor reads F: 3 << 16
 
-    InlineArray<int32, 3> v = [1, 2, 3];
-    Buf<int32, 3> buf = Buf::<int32, 3>.make(a: v);
+    InlineArray<int32>#(3) v = [1, 2, 3];
+    Buf<int32>#(3) buf = Buf::<int32>#(3).make(a: v);
 
     int32 n = 0;
     if (a.toWhole() == 1)      { n = n + 1; }
@@ -41,7 +41,7 @@ fn int32 main() {
     if (c.toWhole() == 3)      { n = n + 1; }
     if (a.bits() == 16)        { n = n + 1; }   // two instantiations bind their OWN F
     if (b.bits() == 8)         { n = n + 1; }
-    if (Fx::<16>::shift() == 16) { n = n + 1; }
+    if (Fx#(16)::shift() == 16) { n = n + 1; }
     if (buf.size() == 3)       { n = n + 1; }
     if (buf.a.length() == 3)   { n = n + 1; }
     return n;   // 8

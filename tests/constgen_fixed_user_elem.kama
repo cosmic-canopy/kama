@@ -6,7 +6,7 @@ type value Point {
     public int32 y;
 }
 fn int32 main() {
-    InlineArray<Point, 3> pts = [Point.of(x: 1, y: 2), Point.of(x: 3, y: 4), Point.of(x: 5, y: 6)];
+    InlineArray<Point>#(3) pts = [Point.of(x: 1, y: 2), Point.of(x: 3, y: 4), Point.of(x: 5, y: 6)];
     int32 t = 0;
     foreach (Point p in pts) { t = t + p.x + p.y; }   // 3 + 7 + 11 = 21
     return t + pts[2].x;   // 21 + 5 = 26

@@ -85,16 +85,56 @@ static void requireBraced(const SharedStatement& body, YYLTYPE* loc, yyscan_t sc
  * function's type arguments are not written at the use site to begin with — inference reads them off the
  * arguments, or a turbofish spells them. There is nothing for a default to fill in. Zero uses anywhere in
  * the tree. Same shape as `requireBraced` above and the `is` check in type_param: a hand-raised yyerror,
- * because bison's generic "unexpected =" cannot say which parameter or why. */
+ * because bison's generic "unexpected =" cannot say which parameter or why.
+ *
+ * The same holds for a `comptime(int32 N = 4)` parameter, and for the same reason — hence the noun
+ * branches rather than the rule being duplicated. */
 static void rejectFnTypeParamDefault(const SharedIdentifierList& params, YYLTYPE* loc, yyscan_t scanner)
 {
     if (!params) return;
     for (auto& p : *params)
         if (p && p->defaultArg)
-            yyerror(loc, scanner, (std::string("type parameter `") + (p->value ? *p->value : "?")
+            yyerror(loc, scanner, (std::string(p->isComptimeParam ? "compile-time parameter `" : "type parameter `")
+                                   + (p->value ? *p->value : "?")
                                    + "` of a function may not have a default -- a default fills in an "
-                                     "argument the use site omitted, and a function's type arguments come "
-                                     "from inference or a turbofish. Defaults belong on a `type`.").c_str());
+                                     "argument the use site omitted, and a function's arguments come "
+                                     "from inference, a turbofish or `#(...)`. Defaults belong on a `type`.").c_str());
+}
+
+/* Park a use-site `#(...)` group on a callee name written WITHOUT a turbofish (`shifted(x: 2)#(3)`).
+ * The values go where a turbofish's type args would, so both spellings hand the emitter one merged
+ * vector; `nTypeArgs = 0` is what then says "no type argument was written" -- the type parameters, if
+ * any, are still to be inferred from the runtime arguments. Deliberately does NOT touch `genericArg`:
+ * that scalar mirrors the first TYPE argument, and consumers read it as one. */
+static void attachComptimeArgs(const SharedIdentifier& name, const SharedIdentifierList& args)
+{
+    if (!name || !args || args->empty()) return;
+    if (!name->genericArgs) name->genericArgs = std::make_shared<IdentifierList>();
+    if (name->nTypeArgs < 0) name->nTypeArgs = (int)name->genericArgs->size();
+    for (auto& a : *args) name->genericArgs->push_back(a);
+}
+
+/* `<T, K: I + J>` and `comptime(int32 N)` -> the parallel arrays every consumer downstream reads.
+ * TYPES FIRST, values appended: that ordering IS the invariant `constTypes` encodes (entry i non-null
+ * <=> slot i is a value), and it is what lets the use site merge `<...>` ++ `#(...)` positionally. */
+static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
+                          const SharedIdentifierList& types, const SharedIdentifierList& comptimes)
+{
+    bool any = (types && !types->empty()) || (comptimes && !comptimes->empty());
+    if (!any) return;
+    fn->typeParams = std::make_shared<StringList>();
+    fn->typeBounds = std::make_shared<BoundsList>();
+    fn->typePins  = std::make_shared<IdentifierList>();
+    fn->comptimeParams = std::make_shared<StringList>();
+    fn->constTypes  = std::make_shared<IdentifierList>();
+    for (const SharedIdentifierList* list : { &types, &comptimes })
+        if (*list) for (auto& p : **list) if (p && p->value) {
+            fn->typeParams->push_back(p->value);
+            fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
+            fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
+            fn->constTypes->push_back(p->isComptimeParam ? p->comptimeType : SharedIdentifier());
+            if (p->isComptimeParam) fn->comptimeParams->push_back(p->value);
+        }
 }
 
 #define SCANNER_CODEGENCONTEXT *(yyget_extra(scanner)->codeGenContext)
@@ -318,6 +358,7 @@ struct kamayystype {
 /* PUNCTUATION AND SINGLE CHARACTER OPERATORS */
 %token <token> COMMA ","
 %token <token> AT "@"
+%token <token> HASH "#"
 %token <token> LEFT_BRACKET "["
 %token <token> RIGHT_BRACKET "]"
 
@@ -384,10 +425,12 @@ struct kamayystype {
 %type <importdeclaration> import_entry
 %type <importdeclarationlist> import_directives_opt import_entries
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
-%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_or_value_arg generic_turbofish_name
+%type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_arg generic_turbofish_name
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
 %type <identifier> type_param type_param_default_opt type_decl_head enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
+%type <identifier> comptime_param comptime_param_type comptime_param_default_opt comptime_arg turbofish_type_name
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
+%type <identifierlist> comptime_params_opt comptime_param_list comptime_args_opt comptime_arg_list
 %type <modifier> modifier function_modifier_opt parameter_modifier_opt
 %type <modifierlist> modifiers modifiers_opt
 %type <parameter> parameter
@@ -618,15 +661,27 @@ qualifier
   | qualifier IDENTIFIER COLONCOLON { $1->push_back($2); STAMP_SEG($1, @2); }
   ;
 basic_identifier
-  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT   {
-        /* The mid-rule bumped genericDepth on the opening `<` so the lexer splits a nested `>>`
-           close (see kama.l); drop it back now that this `>` closed the list. */
-        yyget_extra(scanner)->genericDepth--;
+  : IDENTIFIER comptime_args_opt   {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
+        if ($2 && !$2->empty()) {   /* `Buf#(4)` — a type whose only parameters are compile-time values */
+            id->genericArgs = $2;
+            id->genericArg  = (*$2)[0];
+            id->nTypeArgs   = 0;
+        }
+        $$ = id;
+    }
+  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } comptime_args_opt   {
+        /* The first mid-rule bumped genericDepth on the opening `<` so the lexer splits a nested `>>`
+           close (see kama.l); the second drops it back on the `>` — BEFORE `#(…)`, so a `>>` inside a
+           compile-time argument (`InlineArray<int32>#(N >> 1)`) still lexes as a shift. */
         /* `Name<A, B, …>` — the type args are a LIST. `genericArg` mirrors [0] so every
            single-arg consumer (UnsafePtr/collections/guards) is untouched; multi-arg sites read genericArgs. */
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
         id->genericArgs = $4;
+        id->nTypeArgs   = (int)$4->size();
+        /* `InlineArray<int32>#(4)` — values are APPENDED, so the merged vector is positionally the
+           same one the declaration's typeParams/constTypes describe. */
+        if ($7) for (auto& a : *$7) id->genericArgs->push_back(a);
         STAMP_LOC(id, @1);   /* the NAME only — rename must not swallow `<A, B, …>` */
         $$ = id;
     }
@@ -634,16 +689,16 @@ basic_identifier
 /* Comma-separated type arguments: `int32`, `int32, string`, `int32, DynamicArray<int>` — mirrors
    interface_type_list. Always length ≥ 1 (the `<…>` syntax requires at least one). */
 type_arg_list
-  : type_or_value_arg   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
-  | type_arg_list COMMA type_or_value_arg   { $1->push_back($3); $$ = $1; }
+  : type_arg   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | type_arg_list COMMA type_arg   { $1->push_back($3); $$ = $1; }
   ;
-/* A generic argument is a type, or an integer VALUE for a const param (`InlineArray<float, 4>`). A value
-   arg is wrapped in an IdentifierNode carrying `constArgValue` (value name is null). */
-type_or_value_arg
+/* A generic argument is a TYPE — nothing else. It carried an integer value too until compile-time
+   values moved to `#(…)`; `InlineArray<float32, 4>` is now `InlineArray<float32>#(4)`, and the
+   parenthesised form `InlineArray<T, (N+1)>` that the old spelling needed (to keep `>` from closing
+   the list) is spelled `InlineArray<T>#(N + 1)` with no parenthesis owed. */
+type_arg
   : type
   | IDENTIFIER COLON type   { $3->argName = $1; $$ = $3; }   /* NAMED override: `A: Arena` skips an earlier default */
-  | literal   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $1; $$ = id; }
-  | LPAREN expression RPAREN   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $2; $$ = id; }   /* MCU 6b-1: const arithmetic size `InlineArray<T, (N+1)>` — parens keep `>`/`>>` unambiguous vs generic close; folded by constValue() at instantiation */
   ;
 
 qualified_identifier_no_generic
@@ -798,14 +853,25 @@ kind_name
   : IDENTIFIER   { $$ = $1; }
   | ENUM         { $$ = $1; }
   ;
-/* The NAME + type-parameter list in a type DECLARATION — decoupled from the type-USE production
-   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo` or `Foo<K: I + J, V>`. */
+/* The NAME + parameter lists in a type DECLARATION — decoupled from the type-USE production
+   (`basic_identifier`, whose `type_arg_list` can't carry bounds). `Foo`, `Foo<K: I + J, V>`, or
+   either of those followed by `comptime(int32 N)`. Serves `type` AND `enum`, so both get the
+   compile-time value list from this one place. The comptime params are APPENDED to `genericArgs`
+   (types first), which is the ordering the declaration splitters and `constTypes` depend on. */
 type_decl_head
-  : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
-  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_param_list GT   {
-        yyget_extra(scanner)->genericDepth--;
+  : IDENTIFIER comptime_params_opt   {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
+        if ($2 && !$2->empty()) id->genericArgs = $2;
+        STAMP_LOC(id, @1);
+        $$ = id;
+    }
+    /* ⚠️ The `genericDepth--` is its OWN mid-rule action, not the end action, so it fires on the `>`
+       and not after `comptime(…)`. Left to the end it would keep the lexer in generic mode across a
+       value default, splitting the `>>` in `comptime(int32 N = 1 >> 2)` into two `>`. */
+  | IDENTIFIER LT { yyget_extra(scanner)->genericDepth++; } type_param_list GT { yyget_extra(scanner)->genericDepth--; } comptime_params_opt   {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
         id->genericArgs = $4;   /* each element is a type_param node carrying its name + bounds */
+        if ($7) for (auto& p : *$7) id->genericArgs->push_back(p);   /* values LAST, always */
         STAMP_LOC(id, @1);      /* the NAME only — without this a rename REPLACES `Box<T>`, eating `<T>` */
         $$ = id;
     }
@@ -905,8 +971,8 @@ plain_function_declaration
       fn->isComptime = true;
       $$ = fn;
   }
-  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $10 );
+  | function_modifier_opt unsafe_opt FN function_return_type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block   {
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $8, $11 );
       STAMP_LOC(fn->name, @5);   /* precise name span */
       /* ...and the DECLARATION's own start, which without this is the end of the previous declaration —
          see STAMP_START. `expose` (RHS 1) is the only non-nullable modifier, so @$ is already right when it
@@ -914,48 +980,24 @@ plain_function_declaration
          ~10 diagnostics and, through `line(fn->line)`, the `#line` directive of every function body read. */
       if (!$1) STAMP_START(fn, $2 ? @2 : @3);
       fn->isUnsafe = ($2 != nullptr);
-      /* Split `<T, K: I + J>` into parallel typeParams (names) + typeBounds (contract lists). */
+      /* Split `<T, K: I + J>` + `comptime(int32 N)` into the parallel typeParams/typeBounds/constTypes. */
       rejectFnTypeParamDefault($6, &@6, scanner);
-      if ($6 && !$6->empty()) {
-          fn->typeParams = std::make_shared<StringList>();
-          fn->typeBounds = std::make_shared<BoundsList>();
-          fn->typePins  = std::make_shared<IdentifierList>();
-          fn->comptimeParams = std::make_shared<StringList>();
-          fn->constTypes  = std::make_shared<IdentifierList>();
-          for (auto& p : *$6) if (p && p->value) {
-              fn->typeParams->push_back(p->value);
-              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
-              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
-              fn->constTypes->push_back(p->isComptimeParam ? p->comptimeType : SharedIdentifier());
-              if (p->isComptimeParam) fn->comptimeParams->push_back(p->value);
-          }
-      }
+      rejectFnTypeParamDefault($10, &@10, scanner);
+      splitFnParams(fn, $6, $10);
       $$ = fn;
   }
-  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN block   {
+  | function_modifier_opt unsafe_opt FN REF type IDENTIFIER type_params_opt LPAREN parameter_list_opt RPAREN comptime_params_opt block   {
       /* `fn ref T f(ref …)` — a place-returning FREE function (mirrors the `fn ref T` method form).
          The returned place must borrow a `ref`/`out` param (a free fn has no `this`); the escape
          check at the ReturnNode place path enforces it. */
-      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $11 );
+      auto fn = std::make_shared<FunctionDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $9, $12 );
       STAMP_LOC(fn->name, @6);
       if (!$1) STAMP_START(fn, $2 ? @2 : @3);   /* same nullable-modifier skew as the arm above */
       fn->isRef = true;
       fn->isUnsafe = ($2 != nullptr);
       rejectFnTypeParamDefault($7, &@7, scanner);
-      if ($7 && !$7->empty()) {
-          fn->typeParams = std::make_shared<StringList>();
-          fn->typeBounds = std::make_shared<BoundsList>();
-          fn->typePins  = std::make_shared<IdentifierList>();
-          fn->comptimeParams = std::make_shared<StringList>();
-          fn->constTypes  = std::make_shared<IdentifierList>();
-          for (auto& p : *$7) if (p && p->value) {
-              fn->typeParams->push_back(p->value);
-              fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
-              fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
-              fn->constTypes->push_back(p->isComptimeParam ? p->comptimeType : SharedIdentifier());
-              if (p->isComptimeParam) fn->comptimeParams->push_back(p->value);
-          }
-      }
+      rejectFnTypeParamDefault($11, &@11, scanner);
+      splitFnParams(fn, $7, $11);
       $$ = fn;
   }
   | FNPTR function_return_type IDENTIFIER LPAREN parameter_list_opt RPAREN SEMICOLON   {
@@ -990,18 +1032,91 @@ type_param
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->pin = $3;
         STAMP_LOC(id, @1); $$ = id; }
   | IDENTIFIER COLON bound_list type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); id->bounds = $3; id->defaultArg = $4; STAMP_LOC(id, @1); $$ = id; }
-  | COMPTIME IDENTIFIER COLON integral_type type_param_default_opt   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2); id->isComptimeParam = true; id->comptimeType = $4; id->defaultArg = $5; STAMP_LOC(id, @2); $$ = id; }   /* `comptime N: int` — a compile-time value param */
+    /* There is no `comptime N: int32` arm here any more. A compile-time VALUE parameter is declared in
+       its own trailing list — `comptime_params_opt`, below — so this list holds types only. */
   ;
-/* Optional `= DefaultType` (or `= literal` for a const param) on a trailing type parameter. */
+/* Optional `= DefaultType` on a trailing type parameter. Its value-side peer is
+   `comptime_param_default_opt`, which takes an expression. */
 type_param_default_opt
   : /* Nothing */   { $$ = SharedIdentifier(); }
-  | EQ type_or_value_arg   { $$ = $2; }
+  | EQ type_arg   { $$ = $2; }
   ;
 /* Contract bounds on a type parameter: `IHashable` or `IHashable + IComparable` (`+` = AND).
    Each bound is a `type_name`, so a generic contract bound (`IFoo<int>`) parses + gets genericDepth. */
 bound_list
   : type_name   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
   | bound_list PLUS type_name   { $1->push_back($3); $$ = $1; }
+  ;
+/* Compile-time VALUE parameters — `comptime(int32 N)`. ALWAYS the last list on a declaration: after
+   `<…>` on a type, after the runtime `(…)` on a function. Types and values stopped sharing one pair
+   of angle brackets, so `<…>` holds types only and a value is passed at a use site with `#(…)`.
+   ⚠️ The keyword precedes the paren deliberately — LALR(1) cannot decide `Foo<T>(comptime 4)` at `(`.
+   The node built here is the SAME shape the retired `<…, comptime N: int32>` arm built, and the four
+   declaration splitters append these AFTER the type params. That is what keeps `constTypes` parallel
+   to `typeParams` (a non-null entry ⇔ a value slot) so nothing downstream of the parser changed. */
+comptime_params_opt
+  : /* Nothing */   { $$ = SharedIdentifierList(); }
+  | COMPTIME LPAREN comptime_param_list RPAREN   { $$ = $3; }
+  ;
+comptime_param_list
+  : comptime_param   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | comptime_param_list COMMA comptime_param   { $1->push_back($3); $$ = $1; }
+  ;
+comptime_param
+  : comptime_param_type IDENTIFIER comptime_param_default_opt   {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $2);
+        id->isComptimeParam = true;
+        id->comptimeType = $1;      /* the param is READ as a value in the body, so it owns a width */
+        id->defaultArg = $3;
+        STAMP_LOC(id, @2);          /* the NAME — a rename must not swallow the type */
+        $$ = id;
+    }
+  ;
+/* The admissible value types: the eight integers plus `bool` and `char` — Rust's set. Trivial to
+   mangle and no identity rules owed. Widening it later is PURELY ADDITIVE (every program that
+   compiles still compiles), which is why floats, strings and structural values stay unbuilt: a float
+   parameter owes an identity rule Rust refused to write (is `#(0.0)` the type `#(-0.0)` is?). */
+comptime_param_type
+  : integral_type
+  | BOOL   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_BOOL_VAL); }
+  | CHAR   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, IDENTIFIER_CHAR_VAL); }
+  ;
+/* `comptime(int32 N = 4)`. A VALUE default, so it wraps an expression exactly as a use-site argument
+   does — `type_param_default_opt` next door is its type-side peer and takes a TYPE. */
+comptime_param_default_opt
+  : /* Nothing */   { $$ = SharedIdentifier(); }
+  | EQ expression   { auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString()); id->constArgValue = $2; STAMP_LOC(id, @2); $$ = id; }
+  ;
+/* Compile-time ARGUMENTS — `#(4)`, `#(N + 1)`, `#(sizeof(int32))`. A postfix on a type name and on a
+   call, so it composes with chaining (`f(x: 2)#(3).m()`) and nests inside a type argument list
+   (`Map<string, InlineArray<int32>#(4)>`). No `genericDepth` bookkeeping is needed or wanted: `)`
+   closes the list unambiguously, which is also what retires the parenthesis that the old
+   `InlineArray<T, (N+1)>` spelling needed to keep `>` from closing the generic. */
+comptime_args_opt
+  : /* Nothing */   { $$ = SharedIdentifierList(); }
+  | HASH LPAREN comptime_arg_list RPAREN   { $$ = $3; }
+  ;
+comptime_arg_list
+  : comptime_arg   { $$ = std::make_shared<IdentifierList>(); $$->push_back($1); }
+  | comptime_arg_list COMMA comptime_arg   { $1->push_back($3); $$ = $1; }
+  ;
+/* A nameless IdentifierNode carrying the expression — the shape `constArgN`/`constValue` already
+   fold, so a literal, a local `const`, a module `comptime` and arithmetic over them resolve for free.
+   ⚠️ A BARE NAME is passed through as itself instead of being wrapped. `#(N)` in a parameter type
+   (`InlineArray<int32>#(N) a`) has to stay a node whose `value` is `N`: that is the handle the
+   argument-side inference binds against (kama.cemit.cpp, `inferGenericInst`), and it is exactly what
+   the retired `InlineArray<int32, N>` spelling produced, where `N` parsed as a type name. Wrapping it
+   loses the name and the size stops being inferable. */
+comptime_arg
+  : expression   {
+        if (auto named = std::dynamic_pointer_cast<IdentifierNode>($1)) { $$ = named; }
+        else {
+            auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, SharedString());
+            id->constArgValue = $1;
+            STAMP_LOC(id, @1);
+            $$ = id;
+        }
+    }
   ;
 function_return_type
   : type
@@ -1481,13 +1596,23 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
-  | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+    /* `shifted(x: 2)#(3)` — a generic fn called WITHOUT a turbofish still takes its compile-time
+       values, and they are the last list. `attachComptimeArgs` puts them on the callee name, where a
+       turbofish's type args would be, so both spellings hand the emitter the same merged vector. */
+  | qualified_identifier_no_generic LPAREN argument_list_opt RPAREN comptime_args_opt   {
+        attachComptimeArgs($1, $5);
+        $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3);
+    }
     /* Turbofish: explicit type arguments on a generic function call — `make::<int32>()`. The `::`
        before `<` is unambiguous (a qualifier is always followed by an identifier, never `<`), so no
        comparison-operator clash. The `IDENTIFIER::<…>` prefix is factored into `generic_turbofish_name`
        (shared with the on-type ctor form below) so the genericDepth mid-rule actions aren't duplicated —
        duplicated mid-rule actions become distinct empty nonterminals and reduce/reduce-conflict. */
-  | generic_turbofish_name LPAREN argument_list_opt RPAREN {
+  | generic_turbofish_name LPAREN argument_list_opt RPAREN comptime_args_opt {
+        /* `f::<T>(x: 2)#(3)` — a generic fn's compile-time VALUES are its last list, after the
+           runtime one. They merge onto the callee name behind its type args, so the emitter reads
+           one positional vector against the fn's typeParams. */
+        if ($5) for (auto& a : *$5) $1->genericArgs->push_back(a);
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3);
     }
     /* Receiver turbofish: `r.deserialize::<T>()` — explicit type args on a member call (only `deserialize`
@@ -1495,16 +1620,20 @@ invocation_expression
        rides the `as` keyword — `deserialize` is a plain IDENTIFIER). The type args ride the method
        IdentifierNode's `genericArgs`, mirroring the free-fn turbofish above; two receiver forms mirror the
        `.as<T>()`/member_access pair (a bare ident reduces via qualified_identifier_no_generic). */
-  | primary_expression DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
+  | primary_expression DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN comptime_args_opt {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
         id->genericArgs = $7;
+        id->nTypeArgs   = (int)$7->size();
+        if ($13) for (auto& a : *$13) id->genericArgs->push_back(a);   /* values LAST */
         STAMP_LOC(id, @3);      /* the method NAME only — not the turbofish */
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, $1);
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
     }
-  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN {
+  | qualified_identifier_no_generic DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN comptime_args_opt {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
         id->genericArgs = $7;
+        id->nTypeArgs   = (int)$7->size();
+        if ($13) for (auto& a : *$13) id->genericArgs->push_back(a);   /* values LAST */
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, id, std::static_pointer_cast<ExpressionNode>($1));
         $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, ma, $11);
     }
@@ -1512,7 +1641,7 @@ invocation_expression
        enclosing type's args ride the RECEIVER (`::<…>` on the type), not the ctor. Reuses the shared
        `generic_turbofish_name` prefix; differs from the free-fn form only in the trailing `DOT IDENTIFIER`.
        The ctor's own turbofish slot (`.make::<…>` above) stays free for a ctor with its OWN generics. */
-  | generic_turbofish_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
+  | turbofish_type_name DOT IDENTIFIER LPAREN argument_list_opt RPAREN {
         auto method = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3);
         STAMP_LOC(method, @3);
         auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, method, std::static_pointer_cast<ExpressionNode>($1));
@@ -1525,7 +1654,7 @@ invocation_expression
        not mention `T`, so there is nothing to infer the monomorph from. Builds the SAME shape the plain
        `Type::name(...)` resolver already consumes — a qualified IdentifierNode with a null `expression` —
        with the type args parked in `qualifierGenericArgs`, since `qualifier` is a bare StringList. */
-  | generic_turbofish_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN {
+  | turbofish_type_name COLONCOLON IDENTIFIER LPAREN argument_list_opt RPAREN {
         auto q = std::make_shared<StringList>();
         q->push_back($1->value);
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, q);
@@ -1540,7 +1669,29 @@ generic_turbofish_name
   : IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } {
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$5)[0]);
         id->genericArgs = $5;
+        id->nTypeArgs   = (int)$5->size();
         STAMP_LOC(id, @1);      /* the NAME only — shared by every turbofish call form */
+        $$ = id;
+    }
+  ;
+/* `#(…)` riding a turbofish NAME — `Fixed::<int16>#(8).one()`. Deliberately NOT folded into
+   `generic_turbofish_name` above, which every call form shares: there the values would also attach to a
+   generic FUNCTION call (`f::<T>#(3)(x: 2)`), and a function's compile-time values come after its
+   runtime arguments (`f::<T>(x: 2)#(3)`) — one spelling per thing, so the two positions stay apart. */
+turbofish_type_name
+  : generic_turbofish_name comptime_args_opt   {
+        if ($2 && !$2->empty()) {
+            for (auto& a : *$2) $1->genericArgs->push_back(a);   /* values LAST — the merged order */
+        }
+        $$ = $1;
+    }
+    /* `Fx#(16).of(…)` — the same on-type spelling for a type whose ONLY parameters are compile-time
+       values. There is no `<…>` to hang a turbofish on, so the name carries the group directly. */
+  | IDENTIFIER HASH LPAREN comptime_arg_list RPAREN   {
+        auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1, std::make_shared<StringList>(), (*$4)[0]);
+        id->genericArgs = $4;
+        id->nTypeArgs   = 0;
+        STAMP_LOC(id, @1);
         $$ = id;
     }
   ;

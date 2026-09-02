@@ -10,7 +10,7 @@
 // so `This` in a parameter position had nothing to resolve against. A `This` RETURN type was fine
 // (operatorResultClass binds it), which is why the failure looked like a declaration-site error.
 //
-// This is also the shape `Fixed<B, const F>` needs: widen through the parameter's contract, do the
+// This is also the shape `Fixed<B>#(const F)` needs: widen through the parameter's contract, do the
 // arithmetic at width, narrow back.
 type contract Widen<T is This> for value, intrinsic {
     fn int64 wide();

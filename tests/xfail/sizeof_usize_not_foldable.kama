@@ -4,6 +4,6 @@
 //
 // This is the line M6 draws: kama folds what the LANGUAGE fixes (a width in the type's name, resting on
 // premises kama_runtime.h asserts) and never what the ABI decides. `isize` is rejected for the same reason.
-fn int32 idN<comptime N: int32>() { return N; }
+fn int32 idN() comptime(int32 N) { return N; }
 
-fn int32 main() { return idN::<(sizeof(usize))>(); }
+fn int32 main() { return idN()#(sizeof(usize)); }

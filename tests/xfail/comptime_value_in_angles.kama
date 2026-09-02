@@ -1,0 +1,6 @@
+// A compile-time VALUE no longer belongs in `<…>`. The angle brackets hold types, full stop, so the
+// retired `InlineArray<int32, 4>` spelling is a parse error at the comma.
+fn int32 main() {
+    InlineArray<int32, 4> v = [1, 2, 3, 4];
+    return v[0];
+}

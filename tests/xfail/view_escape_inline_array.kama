@@ -5,7 +5,7 @@
 // compiler-synthesized intrinsic before.
 import { std::collections::View };
 fn View<int32> leak() {
-    InlineArray<int32, 3> a = [1, 2, 3];
+    InlineArray<int32>#(3) a = [1, 2, 3];
     return a.view();        // the storage dies at the closing brace; the view would outlive it
 }
 fn int32 main() { return 0; }

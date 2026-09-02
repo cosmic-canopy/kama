@@ -330,6 +330,12 @@ public:
     std::vector<SrcRange> qualifierPos;  // one span per qualifier segment (M6 B3f), or empty
     SharedIdentifier genericArg;   // element type for Coll<T> (a full type); == genericArgs[0]
     SharedIdentifierList genericArgs;  // all type args for Pair<A,B> etc.; genericArg mirrors [0]
+    // How many leading `genericArgs` entries came from `<…>`; the rest came from `#(…)`. The parser
+    // MERGES the two lists (types first, values last) so every consumer keeps reading one vector, and
+    // this is the only thing that merge would otherwise lose — which group an argument was written in.
+    // ⚠️ -1 means "not written in source": a node the emitter synthesized (the `Mask` partner of a
+    // `Simd`, an inferred instantiation) has no groups, and every arity check treats it as complete.
+    int nTypeArgs = -1;
     SharedIdentifierList bounds;       // when this node is a type-PARAMETER (`K` in `<K: I + J>`),
                                        // its contract bounds [I, J]; empty/unset otherwise.
     bool isComptimeParam = false;         // comptime PARAMETER (`const N: int`) — a value, not a type

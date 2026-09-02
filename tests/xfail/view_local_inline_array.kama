@@ -3,7 +3,7 @@
 // one the local. (`tests/inline_array_view.kama` shows both accepted spellings.)
 import { std::collections::View };
 fn int32 main() {
-    InlineArray<int32, 3> a = [1, 2, 3];
+    InlineArray<int32>#(3) a = [1, 2, 3];
     View<int32> v = a.view();     // nothing holds `a` still for the view's lifetime
     return v.length() == 3 ? 0 : 1;
 }

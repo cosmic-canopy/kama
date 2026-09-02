@@ -4,7 +4,7 @@ import { std::collections::DynamicArray };
 @generate(of)
 type value P { public int32 x; public int32 y; }
 fn int32 main() {
-    InlineArray<int32, 4> a = [1, 2, 3, 4];
+    InlineArray<int32>#(4) a = [1, 2, 3, 4];
     foreach (ref int32 e in a) { e = e * 10; }        // [10,20,30,40]
     DynamicArray<P> ps = DynamicArray.empty();
     ps.add(item: P.of(x: 1, y: 0));

@@ -3283,7 +3283,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         return "0";
     }
     if (!lUser && !rUser) {
-        // A `Mask<T, N>` carries NO operators. Its lanes are all-ones/all-zeros bit patterns rather than
+        // A `Mask<T>#(N)` carries NO operators. Its lanes are all-ones/all-zeros bit patterns rather than
         // numbers, so `m * n` and `m + n` are nonsense that C would nevertheless compute — a mask is a
         // raw vector type, so without this it lands on the primitive path below and compiles silently.
         // Keeping arithmetic off a mask is half the reason it is a separate type from `Simd` at all (the
@@ -3312,7 +3312,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                 return sc + "__shl(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
         }
         else if (isMaskColl(lc) || isMaskColl(rc)) {
-            unsupported(("`" + binaryOperator(token) + "` is not defined on a `Mask<T, N>` — its lanes are "
+            unsupported(("`" + binaryOperator(token) + "` is not defined on a `Mask<T>#(N)` — its lanes are "
                          "all-ones/all-zeros bit patterns, not numbers. Combine masks with `and(rhs:)`, "
                          "`or(rhs:)` and `not()`, test them with `anyTrue()`/`allTrue()`, and use "
                          "`select(ifTrue:, ifFalse:)` to pick lanes").c_str(), line);
@@ -8562,6 +8562,12 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
     if (auto* v = dynamic_cast<UInt16Node*>(n)) { out = v->value; return true; }
     if (auto* v = dynamic_cast<UInt32Node*>(n)) { out = v->value; return true; }
     if (auto* v = dynamic_cast<UInt64Node*>(n)) { out = (int64_t)v->value; return true; }
+    // `bool` and `char` are admissible comptime VALUE types alongside the eight integers, and they fold
+    // to their integer form: a `bool` param mangles as 0/1 and a `char` as its codepoint. No collision
+    // follows from sharing the integer space, because a slot's declared type is fixed by its
+    // declaration — `#(true)` and `#(1)` can never occupy the same one.
+    if (auto* v = dynamic_cast<BooleanNode*>(n)) { out = v->value ? 1 : 0; return true; }
+    if (auto* v = dynamic_cast<CharNode*>(n))    { out = (int64_t)v->value; return true; }
     if (dynamic_cast<IdentifierNode*>(n)) return constArgN(std::static_pointer_cast<IdentifierNode>(e), out);
 
     // MCU 6b-1: fold const arithmetic when every operand resolves, so a const-generic param can drive a
@@ -9070,6 +9076,17 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
                                    const std::vector<std::string>& params, SharedIdentifierList args,
                                    const std::vector<SharedIdentifier>& bound, int line)
 {
+    // The template's slots split into a TYPE group and a compile-time VALUE group (types first — see
+    // splitFnParams / makeTypeDeclaration). Every count and every noun below has to name the group the
+    // reader actually wrote, or the diagnostic sends them to the wrong pair of brackets: an omitted
+    // `#(4)` used to report "wrong number of TYPE arguments", pointing at `<…>`, which is correct about
+    // nothing except the arity.
+    auto ctIt = _genericTypeConstTypes.find(tmpl);
+    const std::vector<SharedIdentifier>* cts = ctIt != _genericTypeConstTypes.end() ? &ctIt->second : nullptr;
+    auto isValueSlot = [&](size_t i) { return cts && i < cts->size() && (*cts)[i]; };
+    size_t nTypes = 0;
+    for (size_t i = 0; i < params.size(); ++i) if (!isValueSlot(i)) ++nTypes;
+
     size_t pos = 0; bool sawNamed = false;
     if (args) for (auto& a : *args) {
         if (a && a->argName) {
@@ -9092,8 +9109,13 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
     }
     for (size_t i = 0; i < params.size(); ++i)
         if (!bound[i]) {
-            unsupported(("wrong number of type arguments for generic " + std::string(kind) + " `" + tmpl + "` (expected "
-                         + std::to_string(params.size()) + ", missing `" + params[i] + "`)").c_str(), line);
+            if (isValueSlot(i))
+                unsupported(("generic " + std::string(kind) + " `" + tmpl + "` is missing its compile-time argument `"
+                             + params[i] + "` — a compile-time VALUE goes in its own group, `#(…)`, "
+                             "never in `<…>`").c_str(), line);
+            else
+                unsupported(("wrong number of type arguments for generic " + std::string(kind) + " `" + tmpl + "` (expected "
+                             + std::to_string(nTypes) + ", missing `" + params[i] + "`)").c_str(), line);
             return false;
         }
     return true;
@@ -9298,7 +9320,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // Simd<T, N> — the lane batch. A sibling shape (two args, value semantics) with a different C
     // lowering: a `vector_size` typedef rather than a struct. See registerSimd.
     //
-    // `Mask<T, N>` routes here TOO, and deliberately: a mask only ever arises from a comparison on its
+    // `Mask<T>#(N)` routes here TOO, and deliberately: a mask only ever arises from a comparison on its
     // data vector, so registerSimd registers the pair together. Spelling `Mask<float32,4>` in a type
     // annotation without ever mentioning `Simd<float32,4>` is legal and lands in the same place.
     if (!isStr && collType->value && (*collType->value == "Simd" || *collType->value == "Mask")) {
@@ -9444,8 +9466,8 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
 {
     SharedIdentifierList args = fixedType->genericArgs;
     if (!args || args->size() != 2) {
-        unsupported("`InlineArray<T, N>` takes exactly two arguments — an element type and a const size "
-                    "(`InlineArray<float32, 4>`)", fixedType->line);
+        unsupported("`InlineArray<T>#(N)` takes one type argument and one compile-time size, in separate "
+                    "groups -- `InlineArray<float32>#(4)`", fixedType->line);
         return;
     }
     SharedIdentifier elem = (*args)[0];
@@ -9456,7 +9478,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // use site (a caller's typed local / a bound instantiation). A concrete non-const size resolves here.
     if (!constArgN(nArg, n)) return;
     if (n <= 0) {
-        unsupported("the size of an `InlineArray<T, N>` must be a positive integer", fixedType->line);
+        unsupported("the size of an `InlineArray<T>#(N)` must be a positive integer", fixedType->line);
         return;
     }
 
@@ -9468,7 +9490,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // per-element dtor, so a `resource`/interface/destructible element would leak or dangle.
     if (isInterface(elemCType) || (!elemClass.empty() && isMoveOnlyValue(elemClass))) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("an `InlineArray<T, N>` element must be a `value` (it owns nothing) — `" + nm +
+        unsupported(("an `InlineArray<T>#(N)` element must be a `value` (it owns nothing) — `" + nm +
                      "` is a `resource`/contract, which would leak; wrap it in an owning `FixedArray`/"
                      "`DynamicArray` instead").c_str(), fixedType->line);
         return;
@@ -9540,7 +9562,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     _collections[cName].elem = elem;   // for registerFixedViews, below
 }
 
-// Register a `Simd<T, N>` instance — the LANE BATCH. Structurally a sibling of registerFixed above and
+// Register a `Simd<T>#(N)` instance — the LANE BATCH. Structurally a sibling of registerFixed above and
 // deliberately not a variant of it, because the two differ in the one place that matters: an InlineArray
 // is a `struct { T v[N]; }` and a Simd is a `vector_size` typedef over a primitive. That makes a Simd
 // have NO by-value struct dependency and NO forward declaration, so its `_TYPE` goes out in the early
@@ -9558,8 +9580,8 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
 {
     SharedIdentifierList args = simdType->genericArgs;
     if (!args || args->size() != 2) {
-        unsupported("`Simd<T, N>` takes exactly two arguments — a numeric element type and a comptime "
-                    "lane count (`Simd<float32, 4>`)", simdType->line);
+        unsupported("`Simd<T>#(N)` takes one numeric element type and one compile-time lane count, in "
+                    "separate groups -- `Simd<float32>#(4)`", simdType->line);
         return;
     }
     SharedIdentifier elem = (*args)[0];
@@ -9569,7 +9591,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     // registerFixed does; the concrete instantiation registers at the use site that chose the arguments.
     if (!constArgN(nArg, n)) return;
     if (n <= 0) {
-        unsupported("the lane count of a `Simd<T, N>` must be a positive integer", simdType->line);
+        unsupported("the lane count of a `Simd<T>#(N)` must be a positive integer", simdType->line);
         return;
     }
 
@@ -9581,12 +9603,12 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     const int bits = cNumBits(elemCType);
     if (isClass(elemCType) || !bits || elemCType == "bool") {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("a `Simd<T, N>` lane must be a numeric primitive — `" + nm + "` is not; a lane batch "
+        unsupported(("a `Simd<T>#(N)` lane must be a numeric primitive — `" + nm + "` is not; a lane batch "
                      "is a machine vector, so its element is a machine number").c_str(), simdType->line);
         return;
     }
     if ((int64_t)(bits / 8) * n != 16) {
-        unsupported(("a `Simd<T, N>` must be exactly 128 bits — `" + elemMangle + "` x " + std::to_string(n)
+        unsupported(("a `Simd<T>#(N)` must be exactly 128 bits — `" + elemMangle + "` x " + std::to_string(n)
                      + " is " + std::to_string((bits / 8) * n) + " bytes. 128 is the only width every kama "
                      "target has; wider needs a CPU-tuning flag that does not exist yet").c_str(),
                     simdType->line);
@@ -9623,7 +9645,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     ParamSig ix; ix.name = "index"; ix.byRef = false; ix.kindCType = "ptrdiff_t";
     addMethod("lane", { ix }, elem, true);
     // `toArray` is the way back out to addressable memory, and it is what makes the type usable at all:
-    // lanes go in through a literal and come out through an `InlineArray<T, N>`, which every other part
+    // lanes go in through a literal and come out through an `InlineArray<T>#(N)`, which every other part
     // of the language already knows how to index, iterate and store. Registering the array instance HERE
     // is what guarantees its `KAMA_FIXED_TYPE` exists — a Simd's `_FUNCS` names it, and the FUNCS pass
     // runs after the struct bodies, so the ordering holds.
@@ -11053,7 +11075,8 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 // type; a second, conflicting binding, an unresolvable argument, or a return-only (unbound)
 // type parameter each produce a clean diagnostic. Runs with _typeSubst empty (concrete mangles).
 bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
-                                std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out)
+                                std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out,
+                                const std::map<std::string, SharedIdentifier>* seed)
 {
     std::map<std::string, SharedExpression> byName;
     if (args) for (auto& a : *args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
@@ -11073,7 +11096,11 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         return id;
     };
 
+    // Pre-bound from what the use site wrote — `headOf::<int32>(a: v)` fixes `T` here and leaves `N` to
+    // the unification below. A seeded parameter is simply already in `bind`, so every later step (the
+    // conflict check, the "cannot infer" sweep, bounds, mangling) treats it exactly like an inferred one.
     std::map<std::string, SharedIdentifier> bind;
+    if (seed) bind = *seed;
 
     // Structurally unify a parameter's declared type against the argument's concrete type, binding
     // every type parameter that appears anywhere inside it — `View<T>`, `DynamicArray<T>`,
@@ -11155,7 +11182,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             continue;
         }
         // `View<T>` / `DynamicArray<T>` / … — a generic type whose ARGUMENTS mention a type param.
-        // (`InlineArray<T, N>` never reaches here; its branch above binds the const size too.)
+        // (`InlineArray<T>#(N)` never reaches here; its branch above binds the const size too.)
         if (p->type->genericArg) {
             std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             auto ai = byName.find(pname);
@@ -11187,8 +11214,12 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
 
     for (auto& tp : *tmpl->typeParams) {
         if (tp && !bind.count(*tp)) {
-            unsupported(("cannot infer type parameter '" + *tp + "' from the call arguments "
-                         "— pass it explicitly with turbofish, e.g. `f::<T>(...)`").c_str(), line);
+            // A comptime parameter is a VALUE, and values are written in their own group — pointing the
+            // reader at a turbofish would name brackets that can no longer hold one.
+            const bool isValue = cps.count(*tp) != 0;
+            unsupported(((isValue ? "cannot infer compile-time parameter '" : "cannot infer type parameter '")
+                         + *tp + "' from the call arguments — pass it explicitly"
+                         + (isValue ? ", e.g. `f(...)#(4)`" : " with turbofish, e.g. `f::<T>(...)`")).c_str(), line);
             return false;
         }
     }
@@ -11214,13 +11245,54 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     return true;
 }
 
-// Turbofish `f::<A, B>(…)` — bind each type param from the explicit type args in order (no inference).
-// The concrete args are already resolved type nodes from the grammar; check arity + contract bounds.
+// Turbofish `f::<A, B>(…)` and/or compile-time arguments `f(…)#(4)` — bind each parameter from what the
+// use site wrote, in order (no inference). The concrete args are already resolved nodes from the grammar;
+// arity is checked PER GROUP and contract bounds after.
+//
+// The two groups are independent, and either may be omitted when it is inferable — that is the whole
+// point of separating them (`headOf::<int32>(a: v)` writes the type and lets `N` come from the argument;
+// `sumN(a: w)#(2)` does the reverse). An omitted group is NOT an arity error: this seeds what was written
+// and hands the rest to inferGenericInst. `typeParams` is types-then-values (splitFnParams guarantees the
+// order), so a group maps onto a contiguous run of slots and no index bookkeeping is needed beyond the
+// split point. `nTypeArgs < 0` marks a node the emitter synthesized, which has no groups and is complete
+// by construction.
 bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::string& key,
-                                   SharedIdentifierList typeArgs, int line, GenericInst& out)
+                                   SharedIdentifierList typeArgs, int nTypeArgs, SharedArgumentList callArgs,
+                                   std::map<std::string, SharedIdentifier>* localTys, int line, GenericInst& out)
 {
     size_t np = tmpl->typeParams ? tmpl->typeParams->size() : 0;
     size_t na = typeArgs ? typeArgs->size() : 0;
+    size_t nVals = 0;
+    if (tmpl->constTypes) for (auto& ct : *tmpl->constTypes) if (ct) ++nVals;
+    const size_t nTypes = np - nVals;
+
+    if (nTypeArgs >= 0 && na != np) {
+        const size_t written  = (size_t)nTypeArgs;
+        const size_t writtenV = na - written;
+        if (written != 0 && written != nTypes) {
+            unsupported(("generic function '" + key + "' takes " + std::to_string(nTypes) +
+                         " type argument(s), but " + std::to_string(written) + " were given in `::<…>`").c_str(), line);
+            return false;
+        }
+        if (writtenV != 0 && writtenV != nVals) {
+            unsupported(("generic function '" + key + "' takes " + std::to_string(nVals) +
+                         " compile-time argument(s), but " + std::to_string(writtenV) +
+                         " were given in `#(…)`").c_str(), line);
+            return false;
+        }
+        // One group is missing and inferable. Seed the written slots and let inference finish.
+        std::map<std::string, SharedIdentifier> seed;
+        for (size_t i = 0; i < written && i < nTypes; ++i)
+            if ((*tmpl->typeParams)[i]) seed[*(*tmpl->typeParams)[i]] = absolutizeType(deepSubstType((*typeArgs)[i]));
+        for (size_t j = 0; j < writtenV && nTypes + j < np; ++j)
+            if ((*tmpl->typeParams)[nTypes + j])
+                seed[*(*tmpl->typeParams)[nTypes + j]] = absolutizeType(deepSubstType((*typeArgs)[written + j]));
+        // Same deferral as the complete path below: an argument still carrying an unbound parameter means
+        // this is the pre-instantiation scan of a template body, not a real call.
+        for (auto& s : seed) if (argCarriesUnboundParam(s.second)) return false;
+        std::map<std::string, SharedIdentifier> noLocals;
+        return inferGenericInst(tmpl, key, callArgs, localTys ? *localTys : noLocals, line, out, &seed);
+    }
     if (na != np) {
         unsupported(("generic function '" + key + "' takes " + std::to_string(np) + " type argument(s), but "
                      + std::to_string(na) + " were given in `::<…>`").c_str(), line);
@@ -11292,7 +11364,8 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                 GenericInst gi;
                 SharedIdentifierList tfArgs = inv->identifier->genericArgs;   // turbofish `f::<…>` type args
                 if (tfArgs) for (auto& ta : *tfArgs) scanTypeForCollections(ta);   // register List<…>/etc. args
-                bool ok = tfArgs ? explicitGenericInst(git->second, k, tfArgs, inv->line, gi)
+                bool ok = tfArgs ? explicitGenericInst(git->second, k, tfArgs, inv->identifier->nTypeArgs,
+                                                       inv->args, &localTys, inv->line, gi)
                                  : inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi);
                 if (ok) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
@@ -12746,7 +12819,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al)
     std::string ty = _variantTargetType;
     if (!isAggr(ty)) ty = _matchTargetCType;
     if (!isAggr(ty)) {
-        unsupported("an array literal `[…]` initializes an `InlineArray<T, N>` or a `Simd<T, N>` — its "
+        unsupported("an array literal `[…]` initializes an `InlineArray<T>#(N)` or a `Simd<T>#(N)` — its "
                     "type must be known from context (a typed local, return, or assignment)", al->line);
         return "0";
     }
@@ -19459,7 +19532,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             auto git = _generics.find(k);
             if (git != _generics.end()) {
                 GenericInst gi;
-                if (explicitGenericInst(git->second, k, call->identifier->genericArgs, call->line, gi)) {
+                if (explicitGenericInst(git->second, k, call->identifier->genericArgs,
+                                        call->identifier->nTypeArgs, call->args, nullptr, call->line, gi)) {
                     if (!_genericInsts.count(gi.mangledName)) _genericInsts[gi.mangledName] = gi;
                     const FuncSig& tsig = _funcs[k];
                     recordRef(k, call->identifier.get());   // the reference is to the TEMPLATE, as above
@@ -19472,7 +19546,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // A turbofish inside an uninstantiated template forwards the enclosing `T` (`sortWith::<T, C>`), so
         // `explicitGenericInst` deferred it and there is no instantiation to route to — absence, not error.
         if (deferUnknownWhileProbing(DK_Turbofish)) return "0";
-        unsupported(("`" + name + "::<…>` — turbofish type arguments are only valid on a generic function").c_str(), call->line);
+        // Name the group the reader actually wrote. `genericArgs` now merges both, so a call that only
+        // ever carried `#(…)` would otherwise be told about a turbofish it never typed.
+        unsupported((call->identifier->nTypeArgs == 0
+                         ? "`" + name + "#(…)` — compile-time arguments are only valid on a generic function"
+                         : "`" + name + "::<…>` — turbofish type arguments are only valid on a generic function")
+                        .c_str(), call->line);
         return "0";
     }
 

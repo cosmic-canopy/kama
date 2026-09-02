@@ -226,7 +226,7 @@
       ]
     },
     "operators": {
-      "comment": "There were no operator rules at all. Every spelling below is a token in kama.l — note what is NOT here: kama has no `->` (a function is `fn <returnType> name(…)`, C-style, kama.y function_return_type), and bare `:` is deliberately unscoped because in kama it is overwhelmingly the NAMED-ARGUMENT separator (`f(item: x)`), not a ternary arm. `::` covers both qualification and the turbofish `::<T>` (tests/io_streams.kama:44).",
+      "comment": "There were no operator rules at all. Every spelling below is a token in kama.l — note what is NOT here: kama has no `->` (a function is `fn <returnType> name(…)`, C-style, kama.y function_return_type), and bare `:` is deliberately unscoped because in kama it is overwhelmingly the NAMED-ARGUMENT separator (`f(item: x)`), not a ternary arm. `::` covers both qualification and the turbofish `::<T>` (tests/io_streams.kama:44), and `#` opens a compile-time argument list (`InlineArray<int32>#(4)`) -- the preprocessor rule above is `^`-anchored, so it does not swallow one.",
       "patterns": [
         { "name": "keyword.operator.assignment.compound.kama", "match": "(?:<<|>>|[*/+\\-%&|^])=" },
         { "name": "keyword.operator.comparison.kama", "match": "==|!=|<=|>=" },
@@ -237,7 +237,7 @@
         { "name": "keyword.operator.assignment.kama", "match": ":=|=" },
         { "name": "keyword.operator.ternary.kama", "match": "\\?" },
         { "name": "keyword.operator.relational.kama", "match": "[<>]" },
-        { "name": "punctuation.accessor.kama", "match": "::|\\.\\.\\." }
+        { "name": "punctuation.accessor.kama", "match": "::|#|\\.\\.\\." }
       ]
     },
     "functions": {

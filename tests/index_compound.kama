@@ -1,9 +1,9 @@
 // Compound assignment through a subscript mutates the element in place (one bounds-checked lookup).
 fn int32 main() {
-    InlineArray<int32, 3> a = [10, 20, 30];
+    InlineArray<int32>#(3) a = [10, 20, 30];
     a[1] += 5;                          // 25
     a[2] -= 4;                          // 26
-    InlineArray<InlineArray<int32, 2>, 2> m = [[1, 2], [3, 4]];
+    InlineArray<InlineArray<int32>#(2)>#(2) m = [[1, 2], [3, 4]];
     m[1][1] *= 10;                      // nested compound: 40
     return a[1] + a[2] + m[1][1];       // 25 + 26 + 40 = 91
 }

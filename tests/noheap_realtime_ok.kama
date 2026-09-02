@@ -2,7 +2,7 @@
 // the answer to "does this rule leave anything usable?". All of it compiles with no annotation anywhere
 // but the one attribute:
 //   * a string LITERAL local — borrowed bytes, `cap == 0`, so its destructor frees nothing
-//   * `InlineArray<T, N>` — the stack-allocated, fixed-size container SPEC says a no-heap region is
+//   * `InlineArray<T>#(N)` — the stack-allocated, fixed-size container SPEC says a no-heap region is
 //     obliged to use — plus a `borrow` window over it and an in-place `sortUnstable` through the View
 //   * BORROWING a heap object (`ref Node`) rather than owning it, so nothing is freed here
 import { std::collections::View, std::collections::sortUnstable };
@@ -13,7 +13,7 @@ type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } public f
 
 @noheap fn int32 tick(ref Node n) {
     string tag = "voice";
-    InlineArray<int32, 3> a = [3, 1, 2];
+    InlineArray<int32>#(3) a = [3, 1, 2];
     borrow a.view() as v {
         sortUnstable(items: v);
         return v[0] * 100 + v[1] * 10 + v[2] + cast<int32>(tag.length()) + peek(n: n);

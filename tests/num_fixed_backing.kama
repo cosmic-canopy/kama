@@ -1,4 +1,4 @@
-// std::num::FixedBacking — the storage seam `Fixed<B, const F>` widens through, exercised on its own.
+// std::num::FixedBacking — the storage seam `Fixed<B>#(const F)` widens through, exercised on its own.
 // Deliberately does NOT mention `Fixed`: if this fixture went through the type, a bug in the generic
 // could mask a bug in the contract (and vice versa), and the contract is meant to stand alone — a user
 // type may implement it without ever touching `Fixed`.

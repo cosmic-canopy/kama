@@ -1,8 +1,8 @@
-// A `Simd<T, N>` lane must be a numeric primitive. `vector_size` is a C construct over machine scalars;
+// A `Simd<T>#(N)` lane must be a numeric primitive. `vector_size` is a C construct over machine scalars;
 // a struct element is not merely unsupported but silently misapplied by some compilers, which is the
 // same class of hazard that disqualified `ext_vector_type` (gcc ignores it and leaves one scalar lane).
 type value Pair { public int32 a; public int32 b; public ctor make(int32 a, int32 b) { this.a = a; this.b = b; } }
 fn int32 main() {
-    Simd<Pair, 2> v = [Pair.make(a: 1, b: 2), Pair.make(a: 3, b: 4)];
+    Simd<Pair>#(2) v = [Pair.make(a: 1, b: 2), Pair.make(a: 3, b: 4)];
     return v.lane(index: 0).a;
 }

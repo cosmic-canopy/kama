@@ -15,7 +15,7 @@ fn int32 main() {
     match (src()) { case Some(value: v): { s = s + cast<int64>(v); } case None: { } };
 
     // (b) a `foreach` binding — same widening, the other binding form.
-    InlineArray<int32, 3> xs = [5i32; 3];
+    InlineArray<int32>#(3) xs = [5i32; 3];
     foreach (int32 e in xs) { s = s + cast<int64>(e); }
 
     return cast<int32>(s);   // 7 + (5 * 3) = 22

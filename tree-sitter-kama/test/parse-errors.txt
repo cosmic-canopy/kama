@@ -21,6 +21,7 @@ tests/xfail/brace_foreach_bare.kama
 tests/xfail/brace_if_bare.kama
 tests/xfail/brace_if_empty_semi.kama
 tests/xfail/brace_while_bare.kama
+tests/xfail/comptime_value_in_angles.kama
 tests/xfail/enum_bare_spelling.kama
 tests/xfail/expose_on_method.kama
 tests/xfail/float_bare_dot.kama

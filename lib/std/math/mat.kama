@@ -1,14 +1,14 @@
 import { Vec2, Vec3, Vec4 };
 
 // Float32 matrices — column-major (GPU/WebGPU-native), column-vector convention (result = M * v). Storage is
-// `InlineArray<Vec4,4>` columns: `cols[c]` is column c, `cols[c].x/.y/.z/.w` its rows. One `operator*` (matrix
+// `InlineArray<Vec4>#(4)` columns: `cols[c]` is column c, `cols[c].x/.y/.z/.w` its rows. One `operator*` (matrix
 // compose); vector transform is a named method. (Mat2/Mat3 added after Mat4 is proven.)
 export { Mat2, Mat3, Mat4 };
 
 @generate(of)
 type value Mat2 {
-    public InlineArray<Vec2, 2> cols;
-    public ctor fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2, 2> cs = [c0, c1]; return Mat2.of(cols: cs); }
+    public InlineArray<Vec2>#(2) cols;
+    public ctor fromCols(Vec2 c0, Vec2 c1) { InlineArray<Vec2>#(2) cs = [c0, c1]; return Mat2.of(cols: cs); }
     public ctor identity() {
         return Mat2.fromCols(c0: Vec2.of(x: 1.0f32, y: 0.0f32), c1: Vec2.of(x: 0.0f32, y: 1.0f32));
     }
@@ -36,8 +36,8 @@ type value Mat2 {
 
 @generate(of)
 type value Mat3 {
-    public InlineArray<Vec3, 3> cols;
-    public ctor fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3, 3> cs = [c0, c1, c2]; return Mat3.of(cols: cs); }
+    public InlineArray<Vec3>#(3) cols;
+    public ctor fromCols(Vec3 c0, Vec3 c1, Vec3 c2) { InlineArray<Vec3>#(3) cs = [c0, c1, c2]; return Mat3.of(cols: cs); }
     public ctor identity() {
         return Mat3.fromCols(c0: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32),
                               c1: Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32),
@@ -82,10 +82,10 @@ type value Mat3 {
 
 @generate(of)
 type value Mat4 {
-    public InlineArray<Vec4, 4> cols;
+    public InlineArray<Vec4>#(4) cols;
 
     public ctor fromCols(Vec4 c0, Vec4 c1, Vec4 c2, Vec4 c3) {
-        InlineArray<Vec4, 4> cs = [c0, c1, c2, c3];
+        InlineArray<Vec4>#(4) cs = [c0, c1, c2, c3];
         return Mat4.of(cols: cs);
     }
     public ctor identity() {

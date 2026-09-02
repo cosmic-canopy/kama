@@ -99,7 +99,7 @@ new_line                    \n
 white_space_1               " "
 white_space_2               [\t\r]
 
-reserved_preprocessor       ^[ \t]*#.*
+reserved_preprocessor       ^[ \t]*#(region|endregion).*
 
 single_line_comment         "//".*
 multi_line_comment_start    "/*"
@@ -164,7 +164,10 @@ identifier                  ({letter_char}|"_"){ident_char}*
 
 %%
 
-  /* Reserved for preprocessor use. For now we will assume #region and #endregion as in C# to allow IDE folding. */
+  /* #region / #endregion, as in C#, so an IDE can fold. The pattern names those two words on purpose
+     and is NOT the wider `^[ \t]*#.*` it used to be: `#` now opens a compile-time argument list
+     (`buf#(4)`), and a wrapped list can start a line. Flex takes the LONGEST match, so the wide
+     pattern would swallow such a line whole and always beat the `"#"` rule below. */
 {reserved_preprocessor}                        { /* ignore */ }
 {white_space_1}                                { ++(yyextra->next_column_number); }
 {white_space_2}                                { yyextra->next_column_number += 2; }
@@ -380,6 +383,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 "{"     { RETURN_TOKEN(LEFT_BRACE, 1); }
 "}"     { RETURN_TOKEN(RIGHT_BRACE, 1); }
 "@"     { RETURN_TOKEN(AT, 1); }
+"#"     { RETURN_TOKEN(HASH, 1); }
 "!"     { RETURN_TOKEN(EXCLAMATION, 1); }
 "%"     { RETURN_TOKEN(PERCENT, 1); }
 "&"     { RETURN_TOKEN(AMP, 1); }

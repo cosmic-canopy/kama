@@ -1,12 +1,12 @@
 // `foreach (ref …)` over a `comptime` constant must be rejected: a `ref` binding exists to write back,
 // and a constant has no writable element to borrow. Rejected in kama with guidance rather than left for
 // the C compiler to catch as a const-discard on the element pointer.
-comptime fn InlineArray<int32, 4> mk() {
-    InlineArray<int32, 4> t = [0; 4];
+comptime fn InlineArray<int32>#(4) mk() {
+    InlineArray<int32>#(4) t = [0; 4];
     for (int32 i = 0; i < 4; i = i + 1) { t[i] = i; }
     return t;
 }
-comptime InlineArray<int32, 4> TABLE = mk();
+comptime InlineArray<int32>#(4) TABLE = mk();
 
 fn int32 main() {
     foreach (ref int32 v in TABLE) { v = 0; }

@@ -3,7 +3,7 @@
 // now reached through a named local const (`CAP`) instead of a template param.
 fn int32 main() {
     const int32 CAP = 4;
-    InlineArray<int32, (CAP)> buf = [0; (CAP)];   // type size AND fill count both fold CAP -> 4
+    InlineArray<int32>#(CAP) buf = [0; (CAP)];   // type size AND fill count both fold CAP -> 4
     int32 i = 0;
     while (i < CAP) { buf[i] = i + 1; i = i + 1; } // 1, 2, 3, 4
     int32 t = 0;                                   // a sum of `int32` ELEMENTS, so it is an `int32`

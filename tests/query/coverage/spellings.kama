@@ -72,7 +72,7 @@ fn int32 main() {
     int32 dd = doubled(n: 5);               // free-function call + label
 
     int32 total = 0;
-    InlineArray<int32, 3> arr = [1, 2, 3];
+    InlineArray<int32>#(3) arr = [1, 2, 3];
     foreach (int32 e in arr) { total = total + e; }   // foreach BINDING
 
     return a + s + o + f + cv + sv + g + k + dd + total;

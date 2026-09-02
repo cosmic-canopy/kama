@@ -1,3 +1,3 @@
 // A `foreach` binding is a typed value: the element type is MANDATORY in the grammar, two tokens away.
 // This built clean and truncated 300 to 44 until the classifier learned to answer for one.
-fn int32 main() { InlineArray<int64, 2> xs = [300i64; 2]; foreach (int64 x in xs) { int8 n = x; return cast<int32>(n); } return 0; }
+fn int32 main() { InlineArray<int64>#(2) xs = [300i64; 2]; foreach (int64 x in xs) { int8 n = x; return cast<int32>(n); } return 0; }

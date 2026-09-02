@@ -597,7 +597,7 @@ is legal. Reading a string is always legal (`length`, indexing, the predicates),
 a borrowed view that allocates nothing, so `string tag = "voice";` belongs in a real-time body.
 
 [tests/noheap_realtime_ok.kama](../tests/noheap_realtime_ok.kama) is the standing control for all of this:
-a literal, an `InlineArray<T, N>` with a `borrow` window and an in-place `sortUnstable`, and a borrowed heap
+a literal, an `InlineArray<T>#(N)` with a `borrow` window and an in-place `sortUnstable`, and a borrowed heap
 object — the whole of it legal, with no annotation anywhere but the one attribute.
 
 Where the compiler **cannot** see the callee, the target must **declare** the promise, and the call is
@@ -1057,7 +1057,7 @@ stance below). Every predicate is **false** for a non-ASCII codepoint rather tha
 `toLower`/`toUpper` return one unchanged — so they can never corrupt one. Free functions rather than
 methods because `char` and `uint32` share a C type and the conformance registry cannot hold both.
 
-**Fixed-point — `Fixed<B, const F>`.** A signed binary fixed-point `type value` in the same module, for
+**Fixed-point — `Fixed<B> comptime(int32 F)`.** A signed binary fixed-point `type value` in the same module, for
 FPU-less targets and for exact fractional arithmetic: `+ - * /` through operator overloading (multiply and
 divide widen through `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFloat`, and saturating
 `satAdd`/`satSub`/`satMul`. The base operators trap on overflow like every other integer op above; the
@@ -1065,10 +1065,10 @@ divide widen through `int64` and re-scale), `fromInt`/`toInt`/`fromFloat`/`toFlo
 
 Both halves of the format are parameters. `B` is the **backing integer**, bounded by the `FixedBacking<B>`
 contract (`int8`/`int16`/`int32`; `int64` cannot be one, because `wide()` widens *into* an `int64` and there
-is no `int128`), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32, 16>` is
-the classic Q16.16 and `Fixed<int16, 8>` is Q8.8. The backing is *passed*, not computed from a bit count:
+is no `int128`), and `F` is the fraction count as a **comptime parameter** — so `Fixed<int32>#(16)` is
+the classic Q16.16 and `Fixed<int16>#(8)` is Q8.8. The backing is *passed*, not computed from a bit count:
 kama has no type-level computation, and Rust's `fixed` and C++'s `fixed_point<Rep, Exponent>` pass storage
-explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8, 16>`)
+explicitly for the same reason. Pairing a fraction with a backing too narrow to hold it (`Fixed<int8>#(16)`)
 is a compile error, from one [`comptime assert`](#compile-time-assertions--comptime-assert-) in the type's <!-- xfail: fixed_bad_pairing -->
 own body reading `sizeof(B)` — not a rule the compiler knows about this type. See
 [MCU_READINESS.md](MCU_READINESS.md) for the no-FPU story it belongs to.
@@ -1865,11 +1865,11 @@ address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 **Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view -->
 returns an `UnsafePtr<T>` for C (safe to obtain, `unsafe` to dereference), and `view()` returns a
 `View<T>` for kama — which is what reaches `borrow`, `parallel_for` and every `View<T>`-taking algorithm
-in the stdlib (`sort`, `sortWith`, `binarySearch`). This matters most for `InlineArray<T, N>`, the one
+in the stdlib (`sort`, `sortWith`, `binarySearch`). This matters most for `InlineArray<T>#(N)`, the one
 container that is stack-allocated, fixed-size and allocation-free — so the one a `@noheap` region is
 obliged to use, and until it carried these two it was the one locked out of all of the above.
 `view()` is also what lets a single signature serve every size: `N` is part of an
-`InlineArray<T, N>`'s type (and of any `contract` that mentions one), while a `View<T>` carries its
+`InlineArray<T>#(N)`'s type (and of any `contract` that mentions one), while a `View<T>` carries its
 length as a value, so `fn void fill(View<float32> block)` works for a 480-frame call and a 512-frame
 call alike.
 
@@ -1880,19 +1880,19 @@ buffer lives. Returning one over a local is rejected, and a view local still nee
 program that never imports it has no view to mint — the diagnostic says exactly that rather than
 claiming the method does not exist. `dataPtr()` is unconditional.
 
-### Explicit SIMD — `Simd<T, comptime N>` ✅
+### Explicit SIMD — `Simd<T> comptime(int32 N)` ✅
 
 A **lane batch**: N numbers the CPU operates on as one value. It is an intrinsic value type, monomorphized
 per `(T, N)`, lowering to a C `vector_size` typedef — so `a + b` is one machine instruction, not a loop.
 
 ```kama
-Simd<float32, 4> a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
-Simd<float32, 4> k = [10.0f32; 4];                        // the fill form IS a splat
-Simd<float32, 4> c = a * k + a;                           // elementwise; C's own operators
+Simd<float32>#(4) a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
+Simd<float32>#(4) k = [10.0f32; 4];                        // the fill form IS a splat
+Simd<float32>#(4) c = a * k + a;                           // elementwise; C's own operators
 float32          x = c.lane(index: 2);                    // a bounds-checked lane read
-Simd<float32, 4> p = c.abs();
-Simd<float32, 4> lo = c.min(rhs: k);                      // also `max(rhs:)`
-InlineArray<float32, 4> back = c.toArray();               // back to addressable memory
+Simd<float32>#(4) p = c.abs();
+Simd<float32>#(4) lo = c.min(rhs: k);                      // also `max(rhs:)`
+InlineArray<float32>#(4) back = c.toArray();               // back to addressable memory
 ```
 
 - **Integer lanes obey kama's arithmetic rules, lane by lane.** A signed `+ - *` overflow **traps in
@@ -1918,10 +1918,10 @@ InlineArray<float32, 4> back = c.toArray();               // back to addressable
   all, which are these three:
 
 ```kama
-Simd<float32, 4> rev = a.shuffle(pattern: [3, 2, 1, 0]);        // an arbitrary permutation
-Simd<float32, 4> mix = a.blend(rhs: b, pattern: [0, 5, 2, 7]);  // two vectors: 0..3 from a, 4..7 from b
-Mask<float32, 4> gt  = a.greaterThan(rhs: b);                   // a lane mask, as a VALUE
-Simd<float32, 4> pick = gt.select(ifTrue: a, ifFalse: b);
+Simd<float32>#(4) rev = a.shuffle(pattern: [3, 2, 1, 0]);        // an arbitrary permutation
+Simd<float32>#(4) mix = a.blend(rhs: b, pattern: [0, 5, 2, 7]);  // two vectors: 0..3 from a, 4..7 from b
+Mask<float32>#(4) gt  = a.greaterThan(rhs: b);                   // a lane mask, as a VALUE
+Simd<float32>#(4) pick = gt.select(ifTrue: a, ifFalse: b);
 float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
 ```
 
@@ -1931,12 +1931,12 @@ float32 total = a.reduceAdd();     // also reduceMul / reduceMin / reduceMax
   the stack and rebuilds it with four scalar loads.
 - **An out-of-range lane index is an error** — `shuffle` names one vector (`0..N-1`), `blend` names two <!-- xfail: simd_shuffle_oob -->
   (`0..2N-1`, where the upper half selects `rhs`).
-- **`Mask<T, N>` carries `T`, not just `N`**, because a comparison's lane width follows its *operand's*:
+- **`Mask<T>#(N)` carries `T`, not just `N`**, because a comparison's lane width follows its *operand's*:
   a `float32` compare yields 4-byte lanes and an `int16` compare 2-byte ones, identically on gcc and
-  clang. A bare `Mask<4>` would have no C type. Its lanes are all-ones/all-zeros **bit patterns**, so it
+  clang. A bare `Mask#(4)` would have no C type. Its lanes are all-ones/all-zeros **bit patterns**, so it
   carries **no arithmetic operators** — combine with `and(rhs:)`/`or(rhs:)`/`not()`, test with <!-- xfail: simd_mask_arith -->
   `anyTrue()`/`allTrue()`. That, and `select` living on the mask so it cannot be handed a data vector,
-  is why it is a distinct type rather than a `Simd<bool, N>`.
+  is why it is a distinct type rather than a `Simd<bool>#(N)`.
 - **`Simd` is not `InlineArray` and not `Vec4`.** An `InlineArray` is a *container* — indexed, iterated,
   lanes meaning whatever you decide. `std::math`'s `Vec4` is *geometry* — lanes named `x/y/z/w`, meaning
   different things, laid out for a GPU vertex buffer. A `Simd`'s lanes are *interchangeable*.
@@ -1948,8 +1948,8 @@ x86-64, mandatory NEON on AArch64, wasm with `-msimd128`), so a library can pick
 rather than hoping the fallback is fast enough (`tests/simd128_flag`):
 
 ```kama
-@compileFor(SIMD128)   fn int32 sum4(InlineArray<int32,4> a) { … Simd<int32,4> … }
-@compileFor(!SIMD128)  fn int32 sum4(InlineArray<int32,4> a) { … a scalar loop … }
+@compileFor(SIMD128)   fn int32 sum4(InlineArray<int32>#(4) a) { … Simd<int32>#(4) … }
+@compileFor(!SIMD128)  fn int32 sum4(InlineArray<int32>#(4) a) { … a scalar loop … }
 ```
 
 Prefer it to a target name: `SIMD128` states the capability, and a name only implies it. (Gating on a
@@ -2424,7 +2424,7 @@ is compile-time evaluation; see *Compile-time constants*.) It appears in exactly
 | `const T x` / `const ref T x` parameter | a **read-only** argument; `const ref` is a read-only borrow |
 | `const UnsafePtr<T> p` parameter | lowers to C `const T*`, for const-correct FFI |
 | `const fn` on a method | the method does not mutate its receiver |
-| `comptime N: int32` type parameter | a **comptime parameter** — a compile-time value, an unrelated feature |
+| `comptime(int32 N)` parameter list | a **comptime parameter** — a compile-time value, an unrelated feature |
 
 A free function has no receiver, so `const fn` does not apply to one; nor to a `ctor`, a destructor, or an
 `operator` member. The qualifier follows the modifiers: `public unsafe const fn` parses, `const public fn`
@@ -2927,7 +2927,7 @@ handles, ring/DMA buffers, flash tables.
 ```kama
 static uint32 tick = 0;                 // deterministic const init at reset
 static bool     data_ready;             // no initializer → zero-init
-static InlineArray<uint8, 256> rx_buf;  // a zero-initialized buffer
+static InlineArray<uint8>#(256) rx_buf;  // a zero-initialized buffer
 static UnsafePtr<Uart> uart;                  // a peripheral handle (null until assigned)
 
 fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolate
@@ -2974,8 +2974,8 @@ type value Palette {
 
 fn void demo() {
     comptime int32 N = 8;                            // local (function or block scope)
-    InlineArray<int32, (N)> a = [0; (N)];            // drives a comptime size and fill
-    InlineArray<int32, (Palette::SIZE)> b = [0; (Palette::SIZE)];
+    InlineArray<int32>#(N) a = [0; (N)];            // drives a comptime size and fill
+    InlineArray<int32>#(Palette::SIZE) b = [0; (Palette::SIZE)];
 }
 ```
 
@@ -3014,8 +3014,8 @@ compile-time *value*; a `comptime fn` produces one. A comptime function is neces
 runtime `this` to read), so the bare `comptime fn` form is the whole story — no extra marker.
 
 ```kama
-comptime fn InlineArray<uint8, 256> crcTable() {           // top-level compile-time function
-    InlineArray<uint8, 256> t = [0; 256];
+comptime fn InlineArray<uint8>#(256) crcTable() {           // top-level compile-time function
+    InlineArray<uint8>#(256) t = [0; 256];
     for (int32 i = 0; i < 256; i = i + 1) {
         uint8 c = cast<uint8>(i);
         for (int32 k = 0; k < 8; k = k + 1)
@@ -3024,11 +3024,11 @@ comptime fn InlineArray<uint8, 256> crcTable() {           // top-level compile-
     }
     return t;
 }
-comptime InlineArray<uint8, 256> CRC = crcTable();   // baked → static const InlineArray_uint8_256 CRC = {.v={…}};
+comptime InlineArray<uint8>#(256) CRC = crcTable();   // baked → static const InlineArray_uint8_256 CRC = {.v={…}};
 
 type value Palette {
     comptime fn int32 sq(int32 x) { return x * x; }             // private (default) — internal helper
-    public comptime fn InlineArray<int32, 8> squares() { … }    // read `Palette::squares()`
+    public comptime fn InlineArray<int32>#(8) squares() { … }    // read `Palette::squares()`
 }
 ```
 
@@ -3043,7 +3043,7 @@ type value Palette {
   type-associated comptime fn is callable from within its own type's comptime fns.
 - **The subset.** Integer (all widths — narrow-int wrap happens on cast + typed store, so a `uint8` table
   entry wraps at 256 exactly as the emitted C would), `float32`/`float64`, `bool`, `char`, and fixed
-  `InlineArray<T, N>`. Statements: local + `const` decls, `=` assignment, fixed-array element writes
+  `InlineArray<T>#(N)`. Statements: local + `const` decls, `=` assignment, fixed-array element writes
   (`t[i] = …`), `if`/`else`, `for`/`while`/`do`, `foreach` over a fixed array, `return`. Expressions:
   arithmetic / bitwise / comparison / logical (short-circuit) / ternary / cast, array index reads, and
   calls to other comptime fns.
@@ -3065,7 +3065,7 @@ holds costs nothing, and one that fails is a build error rather than a trap.
 ```kama
 comptime assert(cond: sizeof(int32) * 8 == 32, msg: "int32 must be 32 bits");   // module scope
 
-type value Fixed<comptime F: int32> {
+type value Fixed comptime(int32 F) {
     comptime assert(cond: F > 0 && F < 32, msg: "fractional bits must fit the backing");
 }
 
@@ -3287,22 +3287,22 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   converts nothing and needs no such promise. That is the idiom to reach for; `Atomic<T>` is written that
   way throughout, and its element restriction — a lock-free machine word — is enforced by the compiler at
   the use site, being likewise unspellable as a bound.
-- **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime N: int32`, in the
-  same parameter list, supplied at the same use sites. Inside the declaration it reads as an ordinary value
+- **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime(int32 N)`, in its
+  own trailing list, supplied at a use site with `#(4)`. `<…>` holds types; `#(…)` holds values. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:
   ```kama
-  type value Fixed<B: FixedBacking<B>, comptime F: int32> {          // storage AND fraction, both parameters
+  type value Fixed<B: FixedBacking<B>> comptime(int32 F) {          // storage AND fraction, both parameters
       comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8, msg: "…");
       public B raw;
       public fn int32 toInt() { return cast<int32>(this.raw.wide() / (1i64 << F)); }   // F is a value here
   }
-  fn int32 shifted<comptime S: int32>(int32 x) { return x << S; }
+  fn int32 shifted(int32 x) comptime(int32 S) { return x << S; }
 
-  Fixed<int32, 16> q = Fixed::<int32, 16>.one();   // Q16.16; `Fixed<int8, 16>` is a compile error <!-- xfail: fixed_bad_pairing -->
-  int32 y = shifted::<3>(x: 2);                    // a turbofish carries a const argument too
+  Fixed<int32>#(16) q = Fixed::<int32>#(16).one();   // Q16.16; `Fixed<int8>#(16)` is a compile error <!-- xfail: fixed_bad_pairing -->
+  int32 y = shifted(x: 2)#(3);                     // the values are their own list, always last
   ```
   - The parameter's **type is declared** and the argument must be a compile-time constant — a literal or a
-    parenthesized expression, so a negative one is written `f::<(-1)>()`. An argument that does not fit its
+    expression, and it needs no parenthesis of its own — a negative one is simply `f()#(-1)`. An argument that does not fit its
     declared type is an error, not a wrap. <!-- xfail: constgen_oob -->
   - The **name is reserved for the whole declaration**: a parameter, field, local, `foreach` variable or
     `match` binding may not reuse it, and it cannot be assigned to. The value is resolved ahead of every <!-- xfail: constparam_shadow_match, constparam_assign -->

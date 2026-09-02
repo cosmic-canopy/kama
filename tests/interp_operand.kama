@@ -13,7 +13,7 @@ fn int32 main() {
 
     // foreach accumulator: interpolation as the RHS `+` operand of a `string` reassignment
     string acc = "";
-    InlineArray<int32, 3> ns = [1, 2, 3];
+    InlineArray<int32>#(3) ns = [1, 2, 3];
     foreach (int32 i in ns) { acc = acc + "n${i};"; }
     if (acc == "n1;n2;n3;") { r = r + 1; }
 

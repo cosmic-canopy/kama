@@ -7,14 +7,14 @@
 //  * the bindings name the TYPE argument too. Only `_constSubst` was reported, so the reader got
 //    `[with F = 16]` and was left to work out which `T` it had been paired with — which, at a use site
 //    several files from the declaration, is the expensive half.
-type value W<T, comptime F: int32> {
+type value W<T> comptime(int32 F) {
     comptime assert(cond: F > 0 && F < cast<int32>(sizeof(T)) * 8, msg: "a width check");
     public T v;
     public ctor of(T v) { this.v = v; }
 }
 
 fn int32 main() {
-    W<int32, 16> ok  = W::<int32, 16>.of(v: 1i32);   // 16 < 32 — fine
-    W<int8, 16>  bad = W::<int8, 16>.of(v: 1i8);     // 16 < 8 is false
+    W<int32>#(16) ok  = W::<int32>#(16).of(v: 1i32);   // 16 < 32 — fine
+    W<int8>#(16)  bad = W::<int8>#(16).of(v: 1i8);     // 16 < 8 is false
     return cast<int32>(ok.v) + cast<int32>(bad.v);
 }

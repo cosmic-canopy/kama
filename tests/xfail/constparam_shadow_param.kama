@@ -1,9 +1,9 @@
 // A parameter may not take a const generic parameter's name. `emitExpression` resolves a const param
 // ahead of every runtime name, so this was not a second binding — it was a silently discarded one:
-// this file compiled CLEAN and `f::<16>(F: 3)` returned 16, not 3.
+// this file compiled CLEAN and `f(F: 3)#(16)` returned 16, not 3.
 //
 // Caught in `checkDeclaredTypes`, so an UNinstantiated generic is covered too.
-fn int32 f<comptime F: int32>(int32 F) {   // ERROR: the parameter shadows the const generic param `F`
+fn int32 f(int32 F) comptime(int32 F) {   // ERROR: the parameter shadows the const generic param `F`
     return F;
 }
-fn int32 main() { return f::<16>(F: 3); }
+fn int32 main() { return f(F: 3)#(16); }

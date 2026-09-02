@@ -1,7 +1,7 @@
 
 // Signed binary fixed-point — the no-FPU answer for audio / DSP / sensor math on cores without an FPU
 // (Cortex-M0, AVR). A `value` (stack, copied, no alloc) wrapping one backing integer `raw` = the real
-// number * 2^F. `Fixed<int32, 16>` is the classic Q16.16: integer part [-32768, 32767], fractional
+// number * 2^F. `Fixed<int32>#(16)` is the classic Q16.16: integer part [-32768, 32767], fractional
 // resolution 1/65536 (~1.5e-5). Pure library over the shipped operator overloading — no compiler support
 // needed; the emitted C is plain integer arithmetic (no libcalls).
 //
@@ -16,7 +16,7 @@
 //    the scale is `1 << F` here and was a literal `65536` at eight sites in the Fixed16_16 this replaces.
 //
 // The pairing of the two is the part a comment cannot enforce, so it does not have to: the `comptime
-// assert` below is checked once per instantiation, against the backing's own width, and `Fixed<int8, 16>`
+// assert` below is checked once per instantiation, against the backing's own width, and `Fixed<int8>#(16)`
 // is a compile error naming both halves. That check is two general language features composing
 // (`sizeof` folding and `comptime assert`), not a rule about this type.
 //
@@ -25,17 +25,17 @@
 // alternative (they clamp to the representable range). Model twin: std::time::Duration.
 export { Fixed };
 
-type value Fixed<B: FixedBacking<B>, comptime F: int32> implements Equatable<This>, Comparable<This> {
+type value Fixed<B: FixedBacking<B>> comptime(int32 F) implements Equatable<This>, Comparable<This> {
     comptime assert(cond: F > 0 && F < cast<int32>(sizeof(B)) * 8,
                     msg: "a Q-format's fractional bits must fit its backing and leave the sign bit");
 
     public B raw;   // the real value * 2^F
 
     public ctor of(B raw)              { this.raw = raw; }
-    public ctor fromInt(int32 n)       { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(n) << F)); }   // traps if out of range
-    public ctor one()                  { return Fixed::<B, F>.of(raw: B.fromWide(v: 1i64 << F)); }
-    public ctor fromFloat(float64 x)   { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(x * cast<float64>(1i64 << F)))); }
-    public ctor fromFloat32(float32 x) { return Fixed::<B, F>.of(raw: B.fromWide(v: cast<int64>(x * cast<float32>(1i64 << F)))); }
+    public ctor fromInt(int32 n)       { return Fixed::<B>#(F).of(raw: B.fromWide(v: cast<int64>(n) << F)); }   // traps if out of range
+    public ctor one()                  { return Fixed::<B>#(F).of(raw: B.fromWide(v: 1i64 << F)); }
+    public ctor fromFloat(float64 x)   { return Fixed::<B>#(F).of(raw: B.fromWide(v: cast<int64>(x * cast<float64>(1i64 << F)))); }
+    public ctor fromFloat32(float32 x) { return Fixed::<B>#(F).of(raw: B.fromWide(v: cast<int64>(x * cast<float32>(1i64 << F)))); }
 
     // Divide rather than shift: a right shift floors, and `toInt` truncates toward zero, so the two
     // disagree on every negative fraction (-1.5 is -1, not -2).
@@ -45,12 +45,12 @@ type value Fixed<B: FixedBacking<B>, comptime F: int32> implements Equatable<Thi
 
     // Every operator is the same three steps — widen into the accumulator, do the arithmetic at width,
     // narrow back. The narrowing cast inside `fromWide` is the overflow signal.
-    public This operator+(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: this.raw.wide() + r.raw.wide())); }
-    public This operator-(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: this.raw.wide() - r.raw.wide())); }
-    public This operator-()       { return Fixed::<B, F>.of(raw: B.fromWide(v: 0i64 - this.raw.wide())); }
+    public This operator+(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() + r.raw.wide())); }
+    public This operator-(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: this.raw.wide() - r.raw.wide())); }
+    public This operator-()       { return Fixed::<B>#(F).of(raw: B.fromWide(v: 0i64 - this.raw.wide())); }
     // mul/div re-scale as well as widen: a product carries 2F fractional bits, a quotient none.
-    public This operator*(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
-    public This operator/(This r) { return Fixed::<B, F>.of(raw: B.fromWide(v: (this.raw.wide() << F) / r.raw.wide())); }
+    public This operator*(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
+    public This operator/(This r) { return Fixed::<B>#(F).of(raw: B.fromWide(v: (this.raw.wide() << F) / r.raw.wide())); }
 
     // Comparison comes from the contracts, not from `operator==` & co. — `==`/`!=` call `equals`,
     // `<`/`>`/`<=`/`>=` call `compareTo`. Conforming also makes a Fixed a `Map` key (with `Hashable`)
@@ -63,7 +63,7 @@ type value Fixed<B: FixedBacking<B>, comptime F: int32> implements Equatable<Thi
     }
 
     // Saturating variants — never trap: the accumulator is the same, only the narrowing differs.
-    public const fn This satAdd(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() + r.raw.wide())); }
-    public const fn This satSub(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: this.raw.wide() - r.raw.wide())); }
-    public const fn This satMul(This r) { return Fixed::<B, F>.of(raw: B.clampWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
+    public const fn This satAdd(This r) { return Fixed::<B>#(F).of(raw: B.clampWide(v: this.raw.wide() + r.raw.wide())); }
+    public const fn This satSub(This r) { return Fixed::<B>#(F).of(raw: B.clampWide(v: this.raw.wide() - r.raw.wide())); }
+    public const fn This satMul(This r) { return Fixed::<B>#(F).of(raw: B.clampWide(v: (this.raw.wide() * r.raw.wide()) >> F)); }
 }

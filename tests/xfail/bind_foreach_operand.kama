@@ -1,3 +1,3 @@
 // The OPERAND half through the same binding: `x` is an `int64`, `s` an `int32`, and mixing them is a
 // conversion as surely as a hand-off is. Silent while the classifier could not type a loop binding.
-fn int32 main() { InlineArray<int64, 2> xs = [1i64; 2]; int32 s = 0; foreach (int64 x in xs) { if (x + s == 1) { return 1; } } return 0; }
+fn int32 main() { InlineArray<int64>#(2) xs = [1i64; 2]; int32 s = 0; foreach (int64 x in xs) { if (x + s == 1) { return 1; } } return 0; }

@@ -80,6 +80,7 @@ channel_send_shared_collection	channel_send_shared_collection.kama:22
 channel_send_shared_variant	channel_send_shared_variant.kama:20
 compilefor_dangling	compilefor_dangling.kama:8
 compilefor_on_method	compilefor_on_method.kama:9
+comptime_args_arity	comptime_args_arity.kama:3
 comptime_assert_false	comptime_assert_false.kama:4
 comptime_assert_generic_false	comptime_assert_generic_false.kama:6
 comptime_assert_layout_false	-
@@ -92,6 +93,7 @@ comptime_fn_budget	comptime_fn_budget.kama:5
 comptime_fn_impure	comptime_fn_impure.kama:6
 comptime_fn_runtime_call	comptime_fn_runtime_call.kama:6
 comptime_fn_visibility	comptime_fn_visibility.kama:8
+comptime_value_in_angles	comptime_value_in_angles.kama:4
 cond_move_live	cond_move_live.kama:4 cond_move_live.kama:7 cond_move_live.kama:9
 const_addr	const_addr.kama:8
 const_contract_impl	const_contract_impl.kama:9
@@ -103,7 +105,7 @@ const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14
 const_place_return	const_place_return.kama:8
 const_this_write	const_this_write.kama:12 const_this_write.kama:7
-constgen_arity	constgen_arity.kama:3 constgen_arity.kama:4
+constgen_arity	constgen_arity.kama:4 constgen_arity.kama:5
 constgen_count	constgen_count.kama:3
 constgen_oob	constgen_oob.kama:4
 constgen_resource_elem	constgen_resource_elem.kama:3 constgen_resource_elem.kama:5

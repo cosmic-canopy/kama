@@ -4,8 +4,8 @@
 //
 // Unlike the parameter and field spellings, this one is caught in the BODY, and a body is walked per
 // instantiation — so the fixture has to instantiate. That matches the three `shadow_*` guards.
-fn int32 f<comptime F: int32>(int32 x) {
+fn int32 f(int32 x) comptime(int32 F) {
     int32 F = 5;   // ERROR: the local shadows the const generic param `F`
     return F + x;
 }
-fn int32 main() { return f::<16>(x: 1); }
+fn int32 main() { return f(x: 1)#(16); }

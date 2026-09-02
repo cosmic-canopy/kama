@@ -225,7 +225,11 @@ module.exports = grammar({
     // kama.y:277 — the DECLARATION-site head, whose params can carry bounds. Distinct from the USE-site
     // `type_arguments`, which cannot.
     type_declaration_head: ($) =>
-      seq(field('name', $.identifier), optional($.type_parameters)),
+      seq(
+        field('name', $.identifier),
+        optional($.type_parameters),
+        optional($.comptime_parameters),
+      ),
 
     type_parameters: ($) => seq('<', commaSep1($.type_parameter), '>'),
 
@@ -246,17 +250,24 @@ module.exports = grammar({
           optional(seq(':', field('bounds', $.bound_list))),
           optional($._type_parameter_default),
         ),
-        // `comptime N: int32` — a compile-time VALUE parameter.
-        seq(
-          'comptime',
-          field('name', $.identifier),
-          ':',
-          field('type', $.primitive_type),
-          optional($._type_parameter_default),
-        ),
       ),
 
-    _type_parameter_default: ($) => seq('=', $._type_or_value_argument),
+    // kama.y `comptime_params_opt` — compile-time VALUE parameters, `comptime(int32 N)`. Their own
+    // trailing list: `<…>` holds types only. On a function it comes after the runtime parameter list.
+    comptime_parameters: ($) =>
+      seq('comptime', '(', commaSep1($.comptime_parameter), ')'),
+
+    comptime_parameter: ($) =>
+      seq(
+        field('type', $.primitive_type),
+        field('name', $.identifier),
+        optional(seq('=', field('default', $._expression))),
+      ),
+
+    // kama.y `comptime_args_opt` — the USE site, `#(4)`. A postfix on a type name and on a call.
+    comptime_arguments: ($) => seq('#', '(', commaSep1($._expression), ')'),
+
+    _type_parameter_default: ($) => seq('=', $._type_argument),
 
     bound_list: ($) => seq($.type_name, repeat(seq('+', $.type_name))),
 
@@ -367,6 +378,8 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         field('parameters', $.parameter_list),
+        // A function's compile-time values are its LAST list — after the runtime one.
+        optional($.comptime_parameters),
         field('body', $.block),
       ),
 
@@ -586,20 +599,21 @@ module.exports = grammar({
         repeat(seq($.identifier, '::')),
         field('name', $.identifier),
         optional($.type_arguments),
+        // `InlineArray<int32>#(4)`, and `Buf#(8)` for a type parameterised by values alone.
+        optional($.comptime_arguments),
       ),
 
     // The USE-site argument list. This is where `>>` must split; see the header note.
-    type_arguments: ($) => seq('<', commaSep1($._type_or_value_argument), '>'),
+    type_arguments: ($) => seq('<', commaSep1($._type_argument), '>'),
 
-    _type_or_value_argument: ($) =>
+    // TYPES only. A compile-time value goes in `#(…)`, so the literal arm and the parenthesised
+    // const-arithmetic arm (`InlineArray<T, (N+1)>`, whose parens only ever existed to keep `>` from
+    // closing the list) are both gone — that shape is now `InlineArray<T>#(N + 1)`.
+    _type_argument: ($) =>
       choice(
         $._type,
         // A NAMED override, `A: Arena`, skipping an earlier default.
         seq(field('name', $.identifier), ':', $._type),
-        $._literal,
-        // `InlineArray<T, (N+1)>` — parenthesised const arithmetic. The parens are what keep `>`/`>>`
-        // unambiguous against the generic close.
-        seq('(', $._expression, ')'),
       ),
 
     _qualified_name: ($) => seq($.identifier, repeat(seq('::', $.identifier))),
@@ -954,7 +968,14 @@ module.exports = grammar({
     call_expression: ($) =>
       prec.left(
         PREC.call,
-        seq(field('function', $._callable), field('arguments', $.argument_list)),
+        seq(
+          field('function', $._callable),
+          field('arguments', $.argument_list),
+          // `shifted(x: 2)#(3)` — a generic function's compile-time values come after its runtime
+          // arguments, so they hang off the CALL, not off the callee name. (A generic TYPE's values
+          // hang off the name instead; see `turbofish_type_member` and `type_name`.)
+          optional($.comptime_arguments),
+        ),
       ),
 
     // `f::<int32>()` and `Map::<K,V>.empty()` share this prefix (kama.y `generic_turbofish_name`). It stays
@@ -966,8 +987,18 @@ module.exports = grammar({
     // `Map::<K,V>.empty()` — the on-type turbofish, the canonical generic-constructor spelling.
     // `::` is the STATIC form of the same thing (`Box::<int32>::tag()`, kama.y:1200) — leaving it out is
     // what the whole-corpus oracle caught on tests/generic_static.kama and tests/idioms_kama_way.kama.
+    // `Fixed::<int16>#(8).one()` unmixes what used to be one list; `Fx#(16).of(…)` is the same shape for
+    // a type parameterised by VALUES alone, which has no `<…>` to hang a turbofish on (kama.y
+    // `turbofish_type_name`, whose two arms these two `choice` members mirror).
     turbofish_type_member: ($) =>
-      seq($.turbofish_name, choice('.', '::'), field('member', $.identifier)),
+      seq(
+        choice(
+          seq($.turbofish_name, optional($.comptime_arguments)),
+          seq(field('name', $.identifier), $.comptime_arguments),
+        ),
+        choice('.', '::'),
+        field('member', $.identifier),
+      ),
 
     // `r.deserialize::<T>()` — a receiver turbofish. The `::` is what disambiguates from `<` as less-than.
     turbofish_member: ($) =>
@@ -1319,6 +1350,10 @@ module.exports = grammar({
     // newline and `*/`, so an inner `/*` is just two ordinary characters.
     block_comment: ($) => token(seq('/*', /[^*]*\*+([^/*][^*]*\*+)*/, '/')),
 
-    preproc_line: ($) => token(seq('#', /[^\n]*/)),
+    // ⚠️ Folding markers ONLY, and narrower than it looks like it should be. `#` also opens a
+    // compile-time argument list (`buf#(4)`), and a tree-sitter regex has no `^` — this token is not
+    // anchored to the line start the way kama.l's is, so a permissive `#.*` would eat every `#(…)`
+    // anywhere in the file. Same narrowing, same reason, as `reserved_preprocessor` in kama.l.
+    preproc_line: ($) => token(seq('#', /(region|endregion)/, /[^\n]*/)),
   },
 });

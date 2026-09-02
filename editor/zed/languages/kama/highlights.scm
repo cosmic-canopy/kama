@@ -18,7 +18,7 @@
 ; ── punctuation and operators ──────────────────────────────────────────────────────────────────────────
 ["(" ")" "[" "]" "{" "}"] @punctuation.bracket
 ["," ";" "." ":"] @punctuation.delimiter
-[":=" "?" "::"] @operator
+[":=" "?" "::" "#"] @operator
 (binary_expression operator: _ @operator)
 (unary_expression operator: _ @operator)
 (update_expression operator: _ @operator)

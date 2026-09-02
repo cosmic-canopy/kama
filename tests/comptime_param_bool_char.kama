@@ -1,0 +1,18 @@
+// `bool` and `char` are admissible compile-time value types beside the eight integers — Rust's set.
+// They fold to their integer form (a `bool` mangles 0/1, a `char` its codepoint); no collision can
+// follow from sharing that space, because a slot's declared type is fixed by its declaration.
+type value Tagged<T> comptime(bool LOUD) {
+    public T v;
+    public ctor of(T v) { this.v = v; }
+    public fn int32 volume() { if (LOUD) { return 10; } return 1; }
+}
+
+fn int32 codeOf() comptime(char C) { return cast<int32>(C); }
+
+fn int32 main() {
+    Tagged<int32>#(true)  loud  = Tagged::<int32>#(true).of(v: 0);
+    Tagged<int32>#(false) quiet = Tagged::<int32>#(false).of(v: 0);
+    int32 a = codeOf()#('A');          // 65
+    int32 z = codeOf()#('z');          // 122 — a SECOND instantiation, so the mangle must differ
+    return loud.volume() + quiet.volume() + a + z;   // 10 + 1 + 65 + 122 = 198
+}

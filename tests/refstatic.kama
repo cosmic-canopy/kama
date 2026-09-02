@@ -2,7 +2,7 @@
 // (like a free fn), so the place must borrow a `ref` param. Locks the static-method call-site deref
 // (the `Type::m()` path now derefs place returns, closing a pre-existing gap).
 type value Buf {
-    InlineArray<int32, 4> d;
+    InlineArray<int32>#(4) d;
     public ctor make() { this.d = [0; 4]; }
     public static fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
 }

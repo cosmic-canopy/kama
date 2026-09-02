@@ -1,8 +1,8 @@
 #!/bin/sh
-# check-simd-type.sh — a `Simd<T, N>` really lowers to a machine vector, in the emitted C and in the asm.
+# check-simd-type.sh — a `Simd<T>#(N)` really lowers to a machine vector, in the emitted C and in the asm.
 #
 # What it guards, and why a fixture cannot. tests/simd_basic.kama asserts VALUES, and every value it
-# checks is equally correct against a scalar fallback: if `Simd<float32,4>` silently became four separate
+# checks is equally correct against a scalar fallback: if `Simd<float32>#(4)` silently became four separate
 # floats, or `vector_size` were dropped, or a compiler ignored the attribute, that fixture would still
 # exit 23 and the suite would still be green. The whole point of the type is the CODEGEN, so the codegen
 # is what has to be asserted — the same reason check-simd-native.sh exists beside the math fixtures.
@@ -65,8 +65,8 @@ fi
 cat > "$tmp/size.c" <<'EOF'
 #include "kama_runtime.h"
 KAMA_SIMD_TYPE(float, 4, Probe_f32x4)
-_Static_assert(sizeof(Probe_f32x4)  == 16, "a Simd<float32,4> must be 16 bytes");
-_Static_assert(_Alignof(Probe_f32x4) == 16, "a Simd<float32,4> must be 16-byte aligned");
+_Static_assert(sizeof(Probe_f32x4)  == 16, "a Simd<float32>#(4) must be 16 bytes");
+_Static_assert(_Alignof(Probe_f32x4) == 16, "a Simd<float32>#(4) must be 16-byte aligned");
 int main(void) { return 0; }
 EOF
 CC_BIN=${CC:-cc}
@@ -133,10 +133,10 @@ if [ "$ctl" -ne 0 ]; then
     exit 1
 fi
 if [ "$hot" -eq 0 ]; then
-    echo "check-simd-type: FAIL — no $ISA instructions from a Simd<float32,4> at -O3." >&2
+    echo "check-simd-type: FAIL — no $ISA instructions from a Simd<float32>#(4) at -O3." >&2
     echo "                  The type registered and sized correctly (§1/§2), so the attribute is reaching" >&2
     echo "                  the compiler; what is missing is the codegen. Inspect: $tmp/o3.s" >&2
     exit 1
 fi
 
-echo "check-simd-type: PASS (Simd<float32,4> -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s); scalar control 0 — the control holds)"
+echo "check-simd-type: PASS (Simd<float32>#(4) -> vector_size, 16B/16B-aligned, $hot $ISA instruction(s); scalar control 0 — the control holds)"

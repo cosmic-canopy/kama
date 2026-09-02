@@ -1,6 +1,6 @@
 // A `const` receiver's place is read-only: writing through `g[i]` is rejected (const is deep).
 type value G {
-    InlineArray<int32, 4> d;
+    InlineArray<int32>#(4) d;
     public ctor make() { this.d = [0; 4]; }
     public ref int32 operator[](usize i) { return this.d[i]; }
 }

@@ -1,4 +1,4 @@
-// `InlineArray<T, N>.dataPtr()` and `.view()` — the parity that made the ONE allocation-free container
+// `InlineArray<T>#(N).dataPtr()` and `.view()` — the parity that made the ONE allocation-free container
 // usable. It is stack-allocated, fixed-size and heap-free, which is exactly what a `@noheap` region is
 // required to use, and it was the only container locked out of `borrow`, `parallel_for` and every
 // `View<T>`-taking algorithm in the stdlib.
@@ -6,21 +6,21 @@
 // `dataPtr()` is the FFI bridge (safe to obtain, `unsafe` to dereference — the same rule FixedArray and
 // DynamicArray carry, and it falls out of the raw-pointer return type rather than a rule of its own).
 // `view()` is the stdlib bridge: the length travels WITH the buffer, so one `View<float32>` signature
-// serves every N — which a `ref InlineArray<T, N>` parameter cannot, since N joins the type.
+// serves every N — which a `ref InlineArray<T>#(N)` parameter cannot, since N joins the type.
 import { std::collections::View, std::collections::sortUnstable };
 
 fn int32 sum(const View<int32> v) { int32 s = 0; foreach (int32 x in v) { s = s + x; } return s; }
 
 unsafe fn int32 viaPointer() {
-    InlineArray<int32, 3> a = [10, 20, 12];
+    InlineArray<int32>#(3) a = [10, 20, 12];
     UnsafePtr<int32> p = a.dataPtr();          // safe to obtain
     return p[0] + p[1] + p[2];                 // raw read needs `unsafe` — 42
 }
 
 fn int32 main() {
-    InlineArray<int32, 4> b = [4, 2, 3, 1];
+    InlineArray<int32>#(4) b = [4, 2, 3, 1];
     // A `borrow` window: the InlineArray carries the `Viewable<View<T>>` grant, so it may host one.
     borrow b.view() as v { sortUnstable(items: v); }     // stdlib algorithm over a stack array
-    InlineArray<int32, 3> c = [1, 2, 3];
+    InlineArray<int32>#(3) c = [1, 2, 3];
     return viaPointer() + sum(v: c.view()) + b.get(index: 0);   // 42 + 6 + 1 = 49
 }

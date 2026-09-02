@@ -1,5 +1,5 @@
-// `Fixed<B, const F>` takes its storage and its fraction as two independent parameters, so nothing about
-// the SPELLING stops you pairing 16 fractional bits with an 8-bit backing. `Fixed<int8, 16>` would
+// `Fixed<B>#(const F)` takes its storage and its fraction as two independent parameters, so nothing about
+// the SPELLING stops you pairing 16 fractional bits with an 8-bit backing. `Fixed<int8>#(16)` would
 // otherwise compile and then produce garbage at run time: every value would shift its whole magnitude out
 // of the backing.
 //
@@ -9,7 +9,7 @@
 import { std::num::Fixed };
 
 fn int32 main() {
-    Fixed<int32, 16> ok  = Fixed::<int32, 16>.one();   // 16 fractional bits in 32 — fine
-    Fixed<int8, 16>  bad = Fixed::<int8, 16>.one();    // 16 in 8 — the assert fails, naming BOTH halves
+    Fixed<int32>#(16) ok  = Fixed::<int32>#(16).one();   // 16 fractional bits in 32 — fine
+    Fixed<int8>#(16)  bad = Fixed::<int8>#(16).one();    // 16 in 8 — the assert fails, naming BOTH halves
     return ok.raw + cast<int32>(bad.raw);
 }

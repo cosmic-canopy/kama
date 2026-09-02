@@ -1,1 +1,1 @@
-is not defined on a `Mask<T, N>`
+is not defined on a `Mask<T>#(N)`

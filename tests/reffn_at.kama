@@ -2,7 +2,7 @@
 // borrows a `ref` param — a free fn has no `this`, so this is the only sound root; the escape check
 // enforces it. Used as read / write / compound / a `ref` argument, like the method version.
 type value Buf {
-    public InlineArray<int32, 4> d;
+    public InlineArray<int32>#(4) d;
     public ctor make() { this.d = [0; 4]; }
 }
 fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }

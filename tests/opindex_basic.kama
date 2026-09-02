@@ -1,7 +1,7 @@
 // A user type can define a place-returning `ref T operator[]`, so `g[i] = v` / `g[i] += 1` work —
 // the same place semantics as a built-in collection, but written in the language.
 type value Grid3 {
-    InlineArray<int32, 9> cells;
+    InlineArray<int32>#(9) cells;
     public ctor make() { this.cells = [0; 9]; }
     public ref int32 operator[](usize i) { return this.cells[i]; }
 }
