@@ -863,8 +863,31 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     [kama.cemit.cpp:8970](../src/kama.cemit.cpp)), so they lex as IDENTIFIER, every `switch` over a
     builtin type misses them, and they cannot appear in an intrinsic-conformance list at all — adding
     `isize` there is a parse error in the prelude. The same root cause already bit once: `DynamicArray<isize>`
-    "never compiled" until that one site was special-cased. So the work is to make them first-class
-    primitive tokens, or to teach the intrinsic list to accept them; it is not two lines.
+    "never compiled" until that one site was special-cased.
+
+    **Three candidate shapes, none of them yet ruled — measured 2026-09-01, decide before coding:**
+    1. **Make them real primitive tokens.** Lexer keywords beside `int8`…`uint64`, an
+       `IDENTIFIER_ISIZE_VAL`/`_USIZE_VAL`, and the ~45 `builtInVal` sites in `kama.cemit.cpp`. The most
+       correct and the widest. ⚠️ It reserves two words: 626 uses across the corpus are all TYPE
+       positions and none is a variable NAME, so it looks non-breaking — *looks*, on a grep; prove it
+       with a build. ⚠️ A new keyword touches seven guarded registries (see the MCU keyword campaign).
+    2. **Widen `intrinsic_target_list`** to admit them, then add the prelude conformances. Much smaller.
+       ⚠️ **It is a GRAMMAR change and must be conflict-counted at the position the rule occupies** —
+       measured: `type intrinsic <isize>` and `type intrinsic <int32, isize>` are BOTH parse errors
+       ("unexpected IDENTIFIER"), even though `intrinsic_target_list` is built from `simple_type` and
+       `simple_type` includes `class_type`. The rule's own comment explains why and is worth reading
+       first: *"the legal target set is exactly the primitives: it falls out of the grammar rather than
+       being checked"*, because every target's first token is RESERVED and so cannot collide with the
+       `TYPE modifiers_opt IDENTIFIER` head of an ordinary type declaration. Admitting an IDENTIFIER
+       there is exactly the collision that comment is about.
+    3. **Alias at conformance lookup only** — let `primConformance("isize")` fall back to `int64`'s. No
+       grammar and no prelude change. ⚠️ **Weigh it against the type-identity campaign before choosing
+       it**: `char` was not exempted from strict numeric checking, it was INVISIBLE to it, and an alias
+       that makes `isize` answer as `int64` risks re-opening that class of hole in the one place the
+       language deliberately keeps them distinct.
+
+    Whichever is taken, the conformances wanted are the six `isize`/`usize` are missing from — `Format`,
+    `Hashable`, `Equatable`, `Comparable`, `Serialize`, `Deserialize` — not `Format` alone.
     **The DIAGNOSTIC half is fixed in `0.9.135`** — the hole now says *"`isize` cannot be interpolated —
     no `Format` is implemented for `isize`"* at the hole's own line, where it used to be an
     unresolved-receiver error at line 1 column 0 naming neither. ⚠️ Two of our own defects met there: a
