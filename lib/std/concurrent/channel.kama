@@ -166,5 +166,7 @@ type resource Channel<T> {
         return Receiver::<T>.make(handle: this.handle);
     }
 
-    ~Channel() { }   // no-op: the endpoints own the queue's lifetime (last-dropper-frees)
+    // No destructor, deliberately: the endpoints own the queue's lifetime (last-dropper-frees), so a
+    // `Channel` has nothing to tear down. See the note on `Atomic` — an empty dtor is not a comment, it
+    // sets `hasDtor` and makes the type `destructible`.
 }

@@ -154,5 +154,9 @@ type resource Atomic<T> {
                               width: sizeof(T), mo: orderBits(o: order));
     }
 
-    ~Atomic() { }   // owns nothing — the cell is inline; a zero value is drop-safe (INVARIANT #0)
+    // No destructor, deliberately. An `Atomic<T>` owns nothing — the cell is inline and a zero value is
+    // drop-safe (INVARIANT #0) — and kama generates a destructor only for a type that has teardown to do,
+    // transitively, whether or not one is written. An EMPTY `~Atomic() { }` was not documentation: it set
+    // `hasDtor`, which makes the type `destructible`, which means "needs teardown at scope exit" — barring
+    // it from a module `static`, the one place a foreign-thread callback could reach a shared cell.
 }
