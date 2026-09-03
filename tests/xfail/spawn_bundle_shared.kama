@@ -1,0 +1,29 @@
+// The sendability gate on the OTHER crossing: a `spawn` BUNDLE. `channel_send_shared` beside this one
+// pins the same rule for a channel element, and until this fixture existed only that half was checked —
+// `checkChannelSendability` walks `Channel`/`Sender`/`Receiver` instances, so the primary way data enters
+// an isolate faced no gate at all. A bundle holding a `Shared<Leaf>` compiled clean, and two isolates then
+// retained and released one non-atomic control block: torn count, then a double free or a leak.
+//
+// The discriminating twin is `tests/spawn_bundle_immutable.kama`: the SAME shape over a deeply-immutable
+// payload is accepted, because that is the case whose control block switches to an atomic refcount.
+import { std::concurrent::Isolate, std::memory::Shared };
+
+type value Leaf { int32 v; public ctor make(int32 v) { this.v = v; } }
+
+type resource Bad {
+    Shared<Leaf> s;   // a non-atomic shared refcount — not sendable
+    public ctor make(Shared<Leaf> s) { this.s = give s; }
+}
+
+fn void worker(Bad b) { }
+
+unsafe fn int32 run() {
+    Shared<Leaf> s = new Leaf.make(v: 1);
+    Bad b = Bad.make(s: copy s);        // a SECOND handle — this isolate keeps its own
+    scope {
+        spawn worker(b: give b);        // ERROR: `Bad`'s field `s` shares a non-atomic refcount
+    }
+    return 0;
+}
+
+fn int32 main() { return run(); }

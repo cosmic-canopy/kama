@@ -13513,8 +13513,20 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     const ParamSig& p = sig.params[0];
     cls = p.className;
     if (cls.empty())
-        unsupported("`spawn` entry's parameter must be a `value`/`resource` bundle type (not a primitive)", iso->line);
+        // ⚠️ NOT "not a primitive": `className` is empty only when the parameter names no resolvable type
+        // at all. A `ref int32` bundle IS legal and `tests/parfor_in_scope.kama` relies on it — the borrow
+        // mode restricts the LIFETIME (scope-bounded, join-proven) and is free in the type, while the move
+        // mode restricts the TYPE (`isMoveOnlyValue` below) and is free in lifetime. The old wording named
+        // a rule neither mode has.
+        unsupported("`spawn` entry's parameter names no known type — the bundle must be a type this "
+                    "unit can see", iso->line);
     isBorrow = p.byRef;   // a `ref T` param = borrow (M4.2); a by-value param = the moved bundle (M2/M4.1)
+    // The bundle crosses into another isolate exactly as a channel element does, so it faces the same
+    // sendability gate — see checkSpawnBundleSendability for why the fact is recorded rather than tested
+    // here. Recorded for BOTH modes: a moved handle is released by the child, and a borrowed one can be
+    // `copy`'d inside it.
+    if (!_probingTemplate && !cls.empty())
+        _spawnBundles.push_back(SpawnBundle{ cls, iso->line, diagFile() });
 
     auto* argNode = dynamic_cast<ArgumentNode*>((*inv->args)[0].get());
 
@@ -15273,47 +15285,95 @@ void CEmitter::checkChannelSendability()
                          "would race across isolates; send the pointee by value, or use `Owned<X>` (unique)").c_str(), line);
             continue;
         }
-        // Name the first field whose type reaches a shared refcount (resolve the element's fields under its
-        // own binding, like the fixpoint), so the diagnostic points at the culprit.
         ClassInfo& ci = ei->second;
-        bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
-        if (inst) {
-            const GenericTypeInst& egi = _genericTypeInsts[ci.name];
-            _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name] : _genericTypeCtx[egi.templateKey];
-            _typeSubst.clear();
-            const std::vector<std::string>& ps = _genericTypeParams[egi.templateKey];
-            for (size_t i = 0; i < ps.size() && i < egi.typeArgs.size(); ++i) _typeSubst[ps[i]] = egi.typeArgs[i];
-        } else {
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
-        }
-        std::string culprit;   // "its field `name` (of type `T`)"
-        for (auto& f : ci.fields) {
-            std::string fc = cType(f.type);
-            auto fi = _classes.find(fc);
-            if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "its field `" + f.name + "` (of type `" + fc + "`)"; break; }
-        }
-        // A tagged enum carries its types in variant payloads, not fields, so the loop above finds nothing
-        // and the diagnostic used to fall back to the generic phrasing — for the one shape where the
-        // culprit is most easily named.
-        if (culprit.empty())
-            for (auto& v : ci.variants) {
-                for (auto& f : v.payload) {
-                    std::string fc = cType(f.type);
-                    auto fi = _classes.find(fc);
-                    if (fi != _classes.end() && fi->second.reachesSharedWeak) {
-                        culprit = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`)"; break;
-                    }
-                }
-                if (!culprit.empty()) break;
-            }
-        if (inst) _typeSubst.clear();
-        // ⚠️ The possessive lives INSIDE `culprit`: the fallback used to be spliced into "— its " + culprit,
-        // which rendered "cannot send `E` over a channel — its a field shares …". Reachable today, via an
-        // enum whose variant payload holds the refcount.
-        if (culprit.empty()) culprit = "a field of it";   // reached via a base, or a deeper element
         ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
-        unsupported(("cannot send `" + elem + "` over a channel — " + culprit + " shares a non-atomic "
-                     "refcount across isolates; use `Owned<Y>` (unique) or send the value by copy").c_str(), line);
+        unsupported(("cannot send `" + elem + "` over a channel — " + unsendableCulprit(elem)
+                     + " shares a non-atomic refcount across isolates; use `Owned<Y>` (unique) or send the "
+                       "value by copy").c_str(), line);
+    }
+}
+
+// Name the part of `elem` that carries the non-atomic refcount — "its field `s` (of type `Shared<Leaf>`)".
+// Extracted so the two crossings that face this gate say ONE sentence about the culprit: a channel element
+// (above) and a `spawn` bundle (checkSpawnBundleSendability). They asked the same question and only one of
+// them was asking it, which is how the bundle — the PRIMARY isolate entry point — went unchecked.
+//
+// ⚠️ Resolves the element's fields under the element's OWN binding, like the fixpoint does, which means
+// swapping `_nsCtx`/`_typeSubst`. Both are SAVED AND RESTORED here rather than left swapped as the
+// collect-time pass could afford to: this now runs after emission too, and a partial NsCtx swap on an
+// emission path is the five-site hazard that broke 30 fixtures once already.
+std::string CEmitter::unsendableCulprit(const std::string& elem)
+{
+    auto ei = _classes.find(elem);
+    if (ei == _classes.end()) return "a field of it";
+    ClassInfo& ci = ei->second;
+    const NsCtx savedCtx = _nsCtx;
+    const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+    if (inst) {
+        const GenericTypeInst& egi = _genericTypeInsts[ci.name];
+        _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name] : _genericTypeCtx[egi.templateKey];
+        _typeSubst.clear();
+        const std::vector<std::string>& ps = _genericTypeParams[egi.templateKey];
+        for (size_t i = 0; i < ps.size() && i < egi.typeArgs.size(); ++i) _typeSubst[ps[i]] = egi.typeArgs[i];
+    } else {
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+    }
+    std::string culprit;   // "its field `name` (of type `T`)"
+    for (auto& f : ci.fields) {
+        std::string fc = cType(f.type);
+        auto fi = _classes.find(fc);
+        if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "its field `" + f.name + "` (of type `" + fc + "`)"; break; }
+    }
+    // A tagged enum carries its types in variant payloads, not fields, so the loop above finds nothing
+    // and the diagnostic used to fall back to the generic phrasing — for the one shape where the
+    // culprit is most easily named.
+    if (culprit.empty())
+        for (auto& v : ci.variants) {
+            for (auto& f : v.payload) {
+                std::string fc = cType(f.type);
+                auto fi = _classes.find(fc);
+                if (fi != _classes.end() && fi->second.reachesSharedWeak) {
+                    culprit = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`)"; break;
+                }
+            }
+            if (!culprit.empty()) break;
+        }
+    _nsCtx = savedCtx;
+    _typeSubst = savedSubst;
+    // ⚠️ The possessive lives INSIDE `culprit`: the fallback used to be spliced into "— its " + culprit,
+    // which rendered "cannot send `E` over a channel — its a field shares …". Reachable today, via an
+    // enum whose variant payload holds the refcount.
+    return culprit.empty() ? "a field of it" : culprit;   // reached via a base, or a deeper element
+}
+
+// The `spawn` BUNDLE faces the same gate as a channel element, and until now faced nothing at all.
+// `checkChannelSendability` walks `Channel`/`Sender`/`Receiver` instances, so the primary way data enters
+// an isolate — the bundle — was never tested: a bundle holding a `Shared<Mutable>` compiled clean, and
+// two isolates then retained and released one non-atomic control block. Torn count, then a double free.
+//
+// Recorded during emission and checked here, after it, for two reasons: a `spawn` lives inside a BODY, so
+// the collect-time pass that runs the channel half cannot see one; and `unsendableCulprit` resolves fields
+// under another type's binding, which must not happen while a body is mid-emission.
+//
+// Both modes are checked. A moved bundle carries a second live handle into the child, which then drops it;
+// a `ref`-borrowed one is not copied at the seam, but the child may `copy` the handle out of it, and the
+// parent's own drop then races that copy's release.
+void CEmitter::checkSpawnBundleSendability()
+{
+    for (const SpawnBundle& sb : _spawnBundles) {
+        auto ci = _classes.find(sb.cls);
+        if (ci == _classes.end() || !ci->second.reachesSharedWeak) continue;   // sendable
+        ScopedStr _f(_emitDeclFile, sb.file);
+        if (isSharedOrWeakClass(sb.cls)) {
+            unsupported(("cannot spawn with `" + sb.cls + "` as the bundle — it is a non-atomic shared "
+                         "refcount, and the isolate that receives it releases the same control block this "
+                         "one does; move an `Owned<X>` (unique) in, or send the pointee by value").c_str(), sb.line);
+            continue;
+        }
+        unsupported(("cannot spawn with `" + sb.cls + "` as the bundle — " + unsendableCulprit(sb.cls)
+                     + " shares a non-atomic refcount across isolates; use `Owned<Y>` (unique) or put a "
+                       "copy of the value in the bundle").c_str(), sb.line);
     }
 }
 
@@ -26219,6 +26279,9 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkSpawnBundleSendability();    // the `spawn` bundle's half of the gate `checkChannelSendability`
+                                      // runs at collect time — a `spawn` lives in a BODY, so its facts
+                                      // exist only once every body has been emitted.
     return _unsupported;
 }
 
@@ -26254,5 +26317,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkSpawnBundleSendability();    // the `spawn` bundle's half of the gate `checkChannelSendability`
+                                      // runs at collect time — a `spawn` lives in a BODY, so its facts
+                                      // exist only once every body has been emitted.
     return _unsupported;
 }

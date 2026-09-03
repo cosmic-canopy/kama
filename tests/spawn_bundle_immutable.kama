@@ -1,0 +1,40 @@
+// The discriminating twin of `tests/xfail/spawn_bundle_shared.kama`: the SAME shape, differing only in
+// one keyword, and this one is legal. A `Shared<T>` may cross into an isolate exactly when `T` is deeply
+// `immutable` — that is the case whose control block switches to an atomic refcount
+// (`__kama_ctrl_atomic()` is a per-instance compile-time constant, so an ordinary single-isolate `Shared`
+// pays nothing for the possibility).
+//
+// This is the shape a real program wants: one large read-only asset, shared by every isolate with no copy
+// and no `scope` bound on its lifetime. Sharing something that cannot change is the second of kama's two
+// safe sharing answers — the first being not sharing at all (a moved bundle).
+import { std::concurrent::Isolate, std::memory::Shared };
+
+type immutable value Palette {
+    int32 tint;
+    public ctor make(int32 tint) { this.tint = tint; }
+    public fn int32 shade(int32 i) { return this.tint + i; }
+}
+
+type resource Job {
+    Shared<Palette> asset;    // sendable: the payload is deeply immutable
+    int32 index;
+    public ctor make(Shared<Palette> asset, int32 index) { this.asset = give asset; this.index = index; }
+    public unsafe fn int32 run() { return this.asset.deref().shade(i: this.index); }
+}
+
+unsafe fn int32 run() {
+    Shared<Palette> art = new Palette.make(tint: 10);
+    Job a = Job.make(asset: copy art, index: 1);   // TWO isolates, TWO handles, ONE asset
+    Job b = Job.make(asset: copy art, index: 2);
+    int32 sum = 0;
+    scope {
+        spawn solo(j: give a);
+        spawn solo(j: give b);
+    }                                              // BARRIER: both joined
+    sum = art.deref().shade(i: 0);                 // this isolate still holds its own handle: 10
+    return sum + 32;                               // 42
+}
+
+fn void solo(Job j) { }
+
+fn int32 main() { return run(); }

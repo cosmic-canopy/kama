@@ -1944,6 +1944,12 @@ private:
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
     void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
+    // ...and the SAME gate on the other crossing: a `spawn` bundle. Recorded during emission (a `spawn`
+    // lives in a body, which the collect-time channel pass cannot see) and checked after it.
+    struct SpawnBundle { std::string cls; int line = 0; std::string file; };
+    std::vector<SpawnBundle> _spawnBundles;
+    void checkSpawnBundleSendability();
+    std::string unsendableCulprit(const std::string& elem);   // "its field `s` (of type `Shared<Leaf>`)"
     // A `type view` may not implement a contract whose `ctor` slot constructs the implementer out of
     // parameters that carry no borrow — such a view could only borrow a constructor local. Rejected at the
     // `implements`, because no body can satisfy it.

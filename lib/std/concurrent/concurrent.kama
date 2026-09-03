@@ -6,9 +6,15 @@ export { Isolate, cpuCount };
 //
 //     import std::concurrent;
 //     fn void worker(Payload p) { ... }              // entry: a top-level fn (no capture → shared-nothing)
-//     spawn worker(p: give payload);                 // fused: spawn on a new OS thread, then join
-//     Isolate h = spawn worker(p: give payload);     // handle form: spawn now, join later (or on drop)
+//     scope { spawn worker(p: give payload); }       // the SCOPE owns the join — at its closing brace
+//     Isolate h = spawn worker(p: give payload);     // handle form: an ISOLATE VALUE owns the join
 //     h.join();                                       // explicit join; ~Isolate() also joins (RAII)
+//
+// Those are the only two forms. A bare `spawn` MUST appear inside a `scope { }` — this comment used to
+// advertise a third, "fused: spawn on a new OS thread, then join", and the compiler rejects it. The
+// difference between the two is who owns the join: a `scope` pins it to a brace, while an `Isolate` is a
+// `resource`, so its join travels with the handle — which is what lets a long-lived service isolate keep
+// its handle in a FIELD and be joined by that object's destructor rather than by a block.
 //
 // The bundle is MOVED into the isolate (`give`), so any post-spawn use of the source is a compile error —
 // no memory is shared, which is what makes an isolate data-race-free by construction.
