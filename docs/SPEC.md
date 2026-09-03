@@ -3783,17 +3783,65 @@ wasm. It has its own stack, heap and module statics, and communicates only throu
 `Atomic<T>` seam. Isolates are meant to be *coarse* — roughly one per core, or a handful of
 long-lived service isolates — which is what makes it honest for one to block.
 
+**There are two spawn forms, and what separates them is who owns the join.**
+
 ```kama
 import { std::concurrent::Isolate };
 
-Isolate h = spawn worker(p: give payload);   // starts now; the handle is an owned resource
-h.join();                                    // explicit join …
+scope { spawn worker(p: give payload); }     // the SCOPE owns the join — at its closing brace
+Isolate h = spawn worker(p: give payload);   // the HANDLE owns it; starts now, joins later
+h.join();                                    // explicit join; `~Isolate()` also joins (RAII)
 ```
 
-`~Isolate()` joins, so a handle that simply goes out of scope joins there — no orphaned task, no
-detach-by-forgetting. Arguments cross into the isolate under the ordinary ownership rules: a
-`resource` is moved with `give` (so the spawning isolate provably cannot touch it afterwards), and
-a `value` is copied.
+A bare `spawn` **must** appear inside a `scope { }`. <!-- xfail: parallel_spawn_no_scope --> The
+handle form need not, and that is its reason to exist: `Isolate` is a `resource`, so its join
+travels with the handle, which may be moved into a **field**. That is how a long-lived service
+isolate is written — its join is owned by an object rather than by a block, and shutdown falls out
+of RAII in field order (dropping the `Sender` closes the channel, which ends the worker's `recv`
+loop, which the `Isolate` drop then joins). Either way a forgotten join is impossible: there is no
+detach-by-forgetting.
+
+#### The bundle ✅
+
+An isolate entry is an ordinary top-level `fn` that returns **`void`** and takes **exactly one**
+parameter — the **bundle**. <!-- xfail: parallel_spawn_no_scope --> It is `void` because there is
+no channel to hand a result back over, and one parameter because the bundle *is* the boundary:
+one object, one owner, one transfer. Everything an isolate receives, it receives here.
+
+The bundle has two forms, and the choice is not a style preference — they restrict on **opposite
+axes**:
+
+| | restricts | is free in |
+| --- | --- | --- |
+| `give` — a moved `resource` | **the type** — it must be a `resource` (a `value`, a primitive and a `string` are all rejected) and it must be **sendable** | **lifetime** — the child may outlive the parent's frame, which is what the handle form needs |
+| `ref T` — a borrow | **the lifetime** — only from a bare `spawn` inside a `scope`, over a place that scope outlives | **the type** — any place, of any size, `ref int32` included |
+
+So a moved bundle transfers ownership (the parent provably cannot touch it afterwards), while a
+borrowed one leaves the parent owning the storage — which makes `ref` the only way an isolate can
+mutate something the parent goes on using, since `join()` returns `void` and a moved bundle never
+comes back.
+
+**How state reaches an isolate — the whole surface, in four rows.**
+
+| | who may touch it | lifetime | why it is sound |
+| --- | --- | --- | --- |
+| a moved `resource` | the child, exclusively | unbounded | ownership transferred |
+| `ref T`, **disjoint** places | one child per place | the `scope` | no two children see the same bytes; the join orders the parent's read |
+| `ref Atomic<T>`, the **same** place | every child | the `scope` | atomic operations do not race |
+| `Shared<immutable T>` | every isolate | unbounded | nothing can change |
+
+Rows 2 and 3 are what a `scope` licenses, and they are the reason it exists: its closing brace
+joins **every** child before any local declared in it drops, so a borrow provably cannot dangle,
+the child's writes are ordered against the parent's next read with no atomic at all, and the scope
+is the domain over which "no two children overlap" is decided. Rows 1 and 4 need no scope because
+they are self-sufficient — one transfers exclusivity, the other removes writing from the picture.
+
+**Sendability applies to the bundle**, exactly as it does to a channel element: a bundle that
+transitively holds a `Shared`/`Weak` over a **mutable** payload is rejected, naming the offending <!-- xfail: spawn_bundle_shared -->
+field, because both isolates would release one non-atomic control block.
+The same shape over a deeply-`immutable` payload is legal <!-- test: spawn_bundle_immutable --> —
+that is the case whose control block switches to an atomic refcount, and it is what lets many
+isolates share one large read-only asset with no copy.
 
 ### Channels ✅
 
@@ -3984,6 +4032,10 @@ Cross-isolate state is confined to three greppable seams, the same way raw memor
 The load-bearing rule: **a module `static` is per-isolate by construction, so it cannot be observed
 by another isolate and therefore cannot race.** To share mutable state you must reach for
 `Atomic<T>`, which is visible in a grep.
+
+That is the rule about *storage*. For the rule about how state **reaches** an isolate in the first
+place — the bundle, and the four ways anything crosses — see [The bundle](#the-bundle-) above; the
+two answer different halves of the same question and neither is complete alone.
 
 ### `Atomic<T>` ✅
 

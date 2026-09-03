@@ -2,6 +2,15 @@
 // raw pointer to a slot main owns plus the value to write; the worker writes through it on its own thread.
 // The `scope` joins the child at its closing brace, and that join happens-before main's read — so there is
 // no data race (this fixture is the KAMA_TSAN shared-nothing proof) while still proving the worker ran.
+//
+// ⚠️ COPY THE MOVE, NOT THE POINTER. What this fixture is ABOUT is the moved bundle: ownership crosses to
+// the isolate, so the parent provably cannot touch it afterwards. The `UnsafePtr` is how a fixture written
+// before M4.2 observed the effect, and it is a legal crossing (SPEC, *the three sharing seams*: a raw
+// pointer crosses, the join is what orders the write against the parent's read). But it is NOT how you
+// should write "let a child write into something I keep" today — `tests/parfor_in_scope.kama` does exactly
+// that with `spawn bump(x: ref side)`, no `unsafe` and no pointer, because the borrow mode the scope
+// licenses did not exist when this was written. Reach for a moved bundle when the isolate should OWN its
+// state; reach for `ref` when the parent keeps it.
 import { std::concurrent::Isolate };
 
 type resource Payload {
