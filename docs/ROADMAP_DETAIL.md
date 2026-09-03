@@ -278,17 +278,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   per target. If a real case ever appears, the mechanism is the existing `@compileFor` decl-level prune plus a
   tag-type boundary, not a use-site predicate on primitives.
 
-- **An operator call's ARGUMENT TYPE is not checked** — found 2026-08-30 while probing the SIMD row, so
-  it has nothing to do with SIMD. `Mat4` declares one `operator*`, taking a `Mat4`
-  ([lib/std/math/mat.kama](../lib/std/math/mat.kama), vector transform is the named method `transform`).
-  Writing `m * v` with a `Vec4` **passes `kama check` with rc=0** and then fails in the C compiler:
-  `passing 'std__math__Vec4' to parameter of incompatible type 'std__math__Mat4'`. So the operator is
-  selected by name alone; the argument is never unified with the parameter. It is a bad diagnostic rather
-  than a hazard — the program does not build, and C catches it — but "the error comes from C" is exactly
-  what kama's diagnostics exist to prevent, and a type whose operator is overloaded on operand type
-  (SPEC's sanctioned exception, `mat*vec` vs `mat*mat`) is where a wrong pick could become a silent one.
-  Wants a fixture in `tests/xfail/` in the same commit as the fix.
-
 - **`fnptr` cannot take type parameters** — the only declaration form in kama that cannot
   (`type value X<T>`, `type contract C<T>`, `enum Result<T,E>` and `fn f<T>` all can). So a generic
   callback signature has no name: `fnptr Ordering Compare<T>(ref T a, ref T b);` does not parse
@@ -1050,10 +1039,24 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     `cflags` escape works and does not PROPAGATE, which is the half that bites and is the dependency-flags
     row. Wants a manifest key.
 
+  - **An `InlineArray` field's SIZE had to be imported with the type — FIXED `0.9.150` (their KB-11).**
+    Indexing `b.cells[0]` across a package boundary needed `geom::N` in the reader's import block; the
+    same shape inside one package always compiled. ⚠️ **The diagnostic named the wrong problem
+    entirely** — "raw pointer access requires an `unsafe fn`" for a missing-import bug, pointing the
+    reader at `unsafe`. The mechanism is a SILENT SKIP: a member's declared type is resolved wherever it
+    is READ, and `registerFixed` returns quietly when the size will not fold, so the field stopped being
+    a container. The LAYOUT was never wrong — a consumer calling a method that indexes the field
+    internally built and returned the right value. Fixed by BAKING the size at collect time, where the
+    declaring file's scope is still installed. ⚠️ **The read-site fix was tried first and is wrong:**
+    installing the owner's scope in `cTypeInInstance` for a non-generic class broke **30 fixtures and 17
+    analysis-agreement pairs** — the five-site NsCtx partial-swap hazard, and the same seam as the
+    `exprClass` row.
+
   **⚠️ What their queue is worth reading for.** KG-15 was filed as "ergonomic friction" and was a
   check/build divergence reaching four positions, not one; KB-10 was filed as an `InlineArray` problem and
   was `isConcreteTypeArg` not recognising a raw pointer, which broke EVERY generic inference over a
-  pointer element. **Both were bigger than the report, in the same direction: a consumer describes the
+  pointer element; KB-11 was filed as an import problem and was a silent skip plus a size resolved
+  in the wrong scope. **All three were bigger than the report, in the same direction: a consumer describes the
   shape they hit, not the rule that is wrong.** Re-derive the rule before sizing the fix.
 
   - **This bucket is EMPTY**, and what emptied it is worth keeping, because both items were parked on a

@@ -2618,7 +2618,7 @@ the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` —
 `Ok`.
 
 ```kama
-type enum SizeError implements Error { TooSmall; public fn string message() { return "size must be positive"; } }
+type enum SizeError implements Error { TooSmall; public const fn string message() { return "size must be positive"; } }
 type resource Buffer {
     int32 size;
     private ctor make(int32 size) { Buffer r; r.size = size; return give r; }        // trivial, infallible
@@ -3488,7 +3488,7 @@ satisfy them — the variants come first, then a `;`, then ordinary members:
 type enum IoError : uint8 implements Error {
     NotFound, Denied(int32 code);
 
-    public fn string message() {
+    public const fn string message() {
         return match (this) { case NotFound: "not found"; case Denied(code: c): "denied"; };
     }
 }

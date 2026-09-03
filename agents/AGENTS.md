@@ -98,13 +98,17 @@ feature.
 
 - **Every call uses named arguments.** `add(a: 1, b: 2)`, never `add(1, 2)`. There are no positional
   calls, which is why kama needs no function overloading.
-- **Bind intermediates to a local.** Inference reads *named locals*, not arbitrary nested
-  expressions. `"${a.length()}"` is a lexical error and `showIt(x: Leaf.make(n: 7))` cannot infer —
-  give the intermediate a name first.
+- **Bind intermediates to a local.** An interpolation hole takes an identifier with member/index
+  accessors and nothing else, so `"${a.length()}"` is a lexical error — bind the call first. And a
+  GENERIC function infers from *named locals*, not from a nested call: with `fn R showIt<T>(T x)`,
+  `showIt(x: Leaf.make(n: 7))` cannot infer `T`, while a `Leaf l = Leaf.make(n: 7);` one line up
+  makes it work. (A non-generic call nests freely — this is about inference, not about nesting.)
 - **`match`, never `switch`.** `switch` does not exist. `match` is exhaustive and produces a value.
 - **No `null`, no exceptions.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
-  safe type is a compile error. Constructors cannot fail — a fallible one is a `static` factory
-  returning `Result`. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
+  safe type is a compile error. A **constructor may fail** — the return type goes between `ctor` and
+  the name: `public ctor Result<Buffer, SizeError> create(int32 size)`, and an infallible ctor returns
+  the bare type. Do NOT write a `static fn` returning its own type; that is rejected as a disguised
+  constructor. `null` exists only for `UnsafePtr<T>` at the FFI boundary.
 - **A `type resource`'s fields are always private.** Expose behavior, not state. (A `type value`
   owns nothing, so its fields may be public.)
 - **`.` constructs, `::` resolves scope.** `Box.make(v: 10)` builds; `Plain::tag()` is a static.

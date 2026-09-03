@@ -10,7 +10,7 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §5 (embedded milestone) is the 
 with [ENGINE_READINESS.md](ENGINE_READINESS.md) (frame arenas) and the collections campaign (M10/M11).
 
 > **Post-concurrency triage (2026-07-23): this track is the front-runner.** With the concurrency campaign
-> complete, the readiness re-triage (ROADMAP_DETAIL §6 "Forward sequencing") leans MCU: it is the **only** track with
+> complete, the readiness re-triage (ROADMAP_DETAIL §1, "the decided big-arc sequence") leans MCU: it is the **only** track with
 > real **language-surface** work queued (Engine and Web are now library/platform work with no language gap),
 > and its #1 blocker builds directly onto the just-shipped concurrency model (see the statics row below). The
 > recommended sequence at the bottom is the actionable starting point.
