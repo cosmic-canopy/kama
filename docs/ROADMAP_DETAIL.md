@@ -326,15 +326,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   template the last body simply won), a function type parameter's `= Default` was parsed and dropped,
   and a type parameter shadowing a visible type said nothing. All three are pinned by `tests/xfail/`.
 
-- **`--no-heap` does not gate container allocation.** The flag rejects `new`, string interpolation,
-  `spawn`, `parallel_for` and error boxing (`rejectIfNoHeap`), but a `DynamicArray`/`Map`/`string` growing
-  through `GlobalAllocator` reaches `malloc` unchallenged — so the flag under-delivers on what its name
-  promises. M2a worked around this for the one case it introduced (`sort`/`sortWith` are
-  `@compileFor(!NOHEAP)`, so they vanish from a no-heap build), but that is a spot fix, not the rule.
-  The real change is to make `GlobalAllocator` growth an error under the flag, leaving containers usable
-  only with an explicit arena/pool allocator — which is the MCU story anyway. Wide blast radius (every
-  container use in a no-heap build), so it is its own campaign.
-
 - **The safety/unsafe boundary — SWEPT, and the seam has since been MOVED (findings 1, 2, 9 closed).**
   The intended guarantee is that danger is isolated behind `unsafe`: nothing in safe kama should be able
   to produce UB, and a bug inside an `unsafe fn` is library-author territory. Every claim below was
@@ -1004,16 +995,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       enough to become false. The pattern is widened and the claim is marked. A claim regex that
       recognises one grammatical voice has a blind spot the size of the other.
 
-    **Still open, and it is the FLAG, not the attribute.** `--no-heap` gates every body, so a callee that
-    allocates fails at its own declaration and needs no propagation — but the `GlobalAllocator` leaf is
-    applied to no body, so a `--no-heap` build still reaches `malloc` through a container. Measured, not
-    assumed: `kama check --no-heap` on a two-line `DynamicArray` program passes today. Applying the leaf
-    program-wide is one line; giving it a usable DIAGNOSTIC is not, and that is the whole remaining
-    problem. Every function in the chain reaches the leaf, so reporting per-body names `DynamicArray.add`
-    and `growTo` — stdlib functions the author did not write — and reporting only the OUTERMOST such
-    function needs a user-code/library distinction the emitter does not have (`diagFile()` falls back to
-    the file being compiled for any prelude body emitted in the header pass, so it cannot supply one).
-    That is the design question, and it is why this half stayed where it was.
+    **THE FLAG HALF SHIPPED `0.9.147`, and the design question it was parked on had a wrong premise.**
+    "A user-code/library distinction the emitter does not have" was true of `diagFile()`, which is what
+    had been looked at, and false of the emitter: `declFile` is recorded at COLLECT time and carries the
+    `<`-sentinel `checkReach` already reads. ⚠️ **Neither half of the test works alone, and each covers
+    exactly the other's blind spot** — the sentinel says nothing about `lib/std`, which is parsed off disk
+    under its real path, while the module-path test (collision-proof, since `std` and `core` are reserved
+    segments) calls the PRELUDE user code, because the prelude has an empty namespace scope and
+    `GlobalAllocator::allocate` renders bare. ⚠️ And `declFileOf` answers "" for a mangled
+    `Class__method`, so a member must be judged by its OWNER's file or every method seeds nothing.
+    The diagnostic anchors on the innermost user body — the frame holding the call the author can change —
+    which also kept the message count at one per defect instead of one per stack frame.
 
   - **NO WAY TO RUN KAMA ON A FOREIGN OS THREAD.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
     native and wasm, so a thread created by a C library — an audio device callback, a completion port,
@@ -1030,12 +1022,21 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     over-broad for trap-only mode. Best fix is upstream to emscripten; otherwise lower those traps in
     the emitted C on wasm, or a documented per-target opt-out. (Wasm Workers also need
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
-  - **This bucket is EMPTY — both items are ROADMAP rows now**, and what emptied it is worth keeping,
-    because both were parked on a dependency rather than on a judgement. The bucket said they waited on
-    `@noheap` transitivity and the foreign-thread entry; transitivity shipped, which discharged half of
-    that immediately. **`@noheap` on a `fnptr` type** then went from nice-to-have to needed by the very
-    campaign that unblocked it: a `fnptr` is a blind seam the proof cannot cross, so the call is now a
-    HARD ERROR in a no-heap region with nothing an author can write to permit it. **A per-region panic
+  - **This bucket is EMPTY**, and what emptied it is worth keeping, because both items were parked on a
+    dependency rather than on a judgement. The bucket said they waited on `@noheap` transitivity and the
+    foreign-thread entry; transitivity shipped, which discharged half of that immediately.
+    **`@noheap` on a `fnptr` type** then went from nice-to-have to needed by the very campaign that
+    unblocked it — a `fnptr` is a blind seam the proof cannot cross, so the call became a HARD ERROR in a
+    no-heap region with nothing an author could write to permit it — and it **SHIPPED `0.9.146`**:
+    `@noheap` on the signature, every bind checked against it, the call then provable
+    ([SPEC.md](SPEC.md) *No-heap subset*). ⚠️ **It was not the grammar change everyone assumed**, which is
+    the reusable part: `attribute_list plain_function_declaration` already covered the `fnptr` arm and
+    tree-sitter already had `optional(attribute_list)` on it, so the attribute PARSED and was rejected
+    semantically — no bison edit, no regenerated `grammar.bnf`, no Zed pin. ⚠️ **And it exposed that the
+    bind was checked in ONE position out of six:** `emitFnPtrBind` is the only caller of `sigMatches` and
+    a local declaration is its only caller, so an assignment, an argument, a return, a field and a module
+    `static` bound through `emitExpression`'s bare-name arm, which checked nothing — a shape-mismatched
+    function bound there compiled, and the call passed the wrong argument count. **A per-region panic
     policy** was promoted by measurement rather than by argument — see the consumer's underrun numbers
     above; it is what has to land before a mixer can run on a real audio thread without a bounds miss
     aborting the process from a thread nobody can see. ⚠️ **A "not scheduled" bucket whose reason is a
