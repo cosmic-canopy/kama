@@ -11,7 +11,11 @@ export { run, TickFn, quit };
 // `arg`, since the loop is host-driven on the web). On the web run() does NOT return — the loop is driven by
 // the host and the tick ends the program itself when its work is done.
 extern "kama_app.h";
-fnptr int32 TickFn(UnsafePtr state);
+// `@callerThread`: both loops call the tick on the thread that called `run` — native is a plain
+// `while (tick(state))`, and emscripten drives it from the browser/Node event loop on the main thread.
+// So a module `static` the tick touches is the same object `run`'s caller sees. (The reason the tick
+// takes `state` at all is that it should not need one: own the frame state and pass it through.)
+@callerThread fnptr int32 TickFn(UnsafePtr state);
 extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
 extern fn void kama_app_exit(int32 code);
 

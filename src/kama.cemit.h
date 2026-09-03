@@ -124,6 +124,16 @@ struct SigInfo {
                          // nothing, every function bound to it is checked against that promise, and a
                          // `@noheap` caller may then call through it.
     bool                   noHeap = false;
+                         // The THREADING contract of the C API this signature is handed to (ROADMAP row
+                         // 1). A callback crossing to C must say which, and it is a declaration rather
+                         // than an inference because the compiler genuinely cannot know: `kama_run_loop`
+                         // is `while (tick(state)) { }` and CoreAudio's render callback is another
+                         // thread, and nothing in either signature says so. `@foreignEntry` makes every
+                         // function bound to this type a region the module-static check walks;
+                         // `@callerThread` says the callee runs on the calling isolate and nothing
+                         // changes.
+    bool                   foreignEntry = false;
+    bool                   callerThread = false;
 };
 
 // What a `fnptr`-typed destination is being bound to, as resolved by `resolveFnPtrTarget`. One record
@@ -2616,6 +2626,9 @@ private:
     bool resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out);
     void checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line);
     void checkFnPtrValueBind(const std::string& dstCType, SharedExpression value, int line);
+    // A kama function crossing to C — the seam must DECLARE the callee's threading contract (row 1).
+    void checkForeignCrossing(const std::string& calleeCName, const ParamSig& p,
+                              SharedExpression argExpr, int line);
     bool        sigMatches(const SigInfo& sig, const FuncSig& fn) const;
     // BindableFunctionPtr<Sig> — construct/promote/invoke a bindable callable.
     void        emitBindableNew(const std::string& nm, const std::string& octy,
@@ -2700,6 +2713,7 @@ private:
                                AttrSite site = AttrSite::Function);
     bool fnHasNoHeap(FunctionDeclarationNode* fn) const;                 // does this fn carry `@noheap`?
     bool hasNoHeapAttr(const SharedAttributeList& attrs) const;          // ...same question, node-free
+    bool hasAttr(const SharedAttributeList& attrs, const char* name) const;   // ...for any attribute name
     void rejectIfNoHeap(const char* what, int line);                    // the ONE no-heap gate (`--no-heap`/`@noheap`)
     void rejectNoHeapIndirect(const char* what, int line);              // ...and its half for an unresolvable call
 #if !KAMA_INHERITANCE

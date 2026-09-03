@@ -8,7 +8,11 @@
 import { std::collections::FixedArray };
 extern "<stdlib.h>";
 extern "cb.h";
-fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);   // a function-pointer type
+// `@callerThread` is required, not decoration: a function handed to C must state which thread the C API
+// calls it on, because the compiler cannot know (`kama_run_loop` calls back on the caller's thread, a
+// device callback does not, and neither signature says so). qsort's contract is that the comparator runs
+// on the calling thread, so a module `static` it touches is the same object the caller sees.
+@callerThread fnptr int32 Comparator(UnsafePtr<int32> a, UnsafePtr<int32> b);   // a function-pointer type
 extern fn void qsort(UnsafePtr buf, usize nmemb, usize size, CompareFn compar);
 
 unsafe fn int32 cmp(UnsafePtr<int32> a, UnsafePtr<int32> b) { int32 r = 0; r = a[0] - b[0]; return r; }

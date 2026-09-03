@@ -514,7 +514,10 @@ unsafe fn string envOr(string name, string dflt) {
 // `Result`, never panic), and a re-entrant panic while handling one hard-aborts (no infinite recursion). On
 // `--target embedded` there is no runtime setter — provide a strong `kama_panic_handler` symbol at link time
 // instead (this call is a no-op there).
-fnptr void PanicHandler();
+// `@foreignEntry`: the handler runs on whichever thread panicked, which is not necessarily the isolate
+// that registered it — a bounds miss in library code on any isolate, or on a thread a C library created,
+// reaches this slot. So a module `static` the handler reads is a different object there.
+@foreignEntry fnptr void PanicHandler();
 extern fn void kama_set_panic_handler(PanicHandler h);
 unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
 

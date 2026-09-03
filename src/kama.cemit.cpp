@@ -7074,6 +7074,12 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             si.params   = paramSigsOf(fn->parameters);
             si.declFile = _collectingUnitPath;
             si.noHeap   = hasNoHeapAttr(fn->attributes);   // the declared half of the no-heap proof
+            si.foreignEntry = hasAttr(fn->attributes, "foreignEntry");   // ...and of the threading one
+            si.callerThread = hasAttr(fn->attributes, "callerThread");
+            if (si.foreignEntry && si.callerThread)
+                unsupported(("`" + *fn->name->value + "` is both `@foreignEntry` and `@callerThread` — a "
+                             "callback runs on the calling isolate or it does not; pick the one the C API "
+                             "documents").c_str(), fn->line);
             _sigs[si.cName] = si;
             continue;
         }
@@ -16353,6 +16359,11 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        // A callback crossing to C must state which thread it runs on — see checkForeignCrossing. Here
+        // rather than at the extern call sites for the same reason the call EDGE is recorded here: this
+        // is the one funnel every resolved call passes through, and a check spread over the sites that
+        // reach it fails open the moment one is missed.
+        checkForeignCrossing(cName, p, argExpr, srcLine);
         // The kind rule in ARGUMENT position. `className` already IS the C type for every DECLARED
         // parameter (`paramSigsOf` fills it with `cType`, primitives included), so the only signatures
         // it could not answer for were the SYNTHESIZED intrinsics, which name no type at all. Those
@@ -18478,6 +18489,52 @@ void CEmitter::checkFnPtrValueBind(const std::string& dstCType, SharedExpression
     checkFnPtrBind(dstCType, t, line);
 }
 
+// A kama function crossing to C (ROADMAP row 1). The seam must state the callee's THREADING contract,
+// and it is a declaration rather than an inference because the compiler genuinely cannot derive it:
+// `kama_run_loop` is `while (tick(state)) { }` and a device callback runs on a thread kama never created,
+// and nothing in either signature says which. Get it wrong and the failure is silent — a module `static`
+// set up during startup reads back as its declared initialiser inside the callback, because
+// KAMA_ISOLATE_LOCAL is `_Thread_local`.
+//
+// Called per argument from `emitReorderedCall`, the one funnel every resolved call passes through.
+void CEmitter::checkForeignCrossing(const std::string& calleeCName, const ParamSig& p,
+                                    SharedExpression argExpr, int line)
+{
+    if (_probingTemplate || !argExpr) return;   // a probe emits nothing, so it teaches nothing
+    auto cit = _funcs.find(calleeCName);
+    if (cit == _funcs.end() || !isExtern(cit->second.node)) return;
+
+    // The `fnptr` type is where the contract is declared, and it can be seen from either end. The
+    // PARAMETER names it when the seam is written in kama (`extern fn void kama_run_loop(TickFn tick,
+    // …)`). Where the parameter is a raw header typedef — `CompareFn` from `cb.h`, which
+    // `checkDeclaredTypes` deliberately passes through verbatim as the FFI seam working as designed —
+    // the kama type is visible only on the ARGUMENT, underneath the cast that bridges to it.
+    SharedExpression e = argExpr;
+    while (auto* c = dynamic_cast<CastNode*>(e.get())) e = c->unaryExpression;
+    std::string sig = isSigType(p.className) ? p.className : std::string();
+    if (sig.empty()) { const std::string ec = exprClass(e); if (isSigType(ec)) sig = ec; }
+
+    if (!sig.empty()) {
+        auto sit = _sigs.find(sig);
+        if (sit == _sigs.end() || sit->second.foreignEntry || sit->second.callerThread) return;
+        unsupported(("`" + demangleForDisplay(sig) + "` is handed to the C function `" + calleeCName
+                     + "`, and a callback's threading contract cannot be inferred — mark the `fnptr` "
+                       "type `@callerThread` if the C API calls it on the calling isolate, or "
+                       "`@foreignEntry` if it may run on a thread kama did not create (where a module "
+                       "`static` assigned elsewhere is a different object)").c_str(), line);
+        return;
+    }
+    // A bare function name handed straight to C, with no `fnptr` type to carry the contract at all.
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+        if (!id->value || _localTypes.count(*id->value)) return;
+        auto fit = _funcs.find(resolveFunc(*id->value, id->qualifier));
+        if (fit == _funcs.end() || isExtern(fit->second.node)) return;
+        unsupported(("function `" + *id->value + "` is handed to the C function `" + calleeCName
+                     + "` with no `fnptr` type to carry its threading contract — declare one, mark it "
+                       "`@callerThread` or `@foreignEntry`, and bind through it").c_str(), line);
+    }
+}
+
 // bind a value to a FunctionPtr<Sig> local — a free function name (resolve +
 // signature-check) or another FunctionPtr (copy). Non-null: `null`/unknown is an error.
 std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpression init, int line)
@@ -20303,6 +20360,30 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (at->args && !at->args->empty())
                 unsupported("`@noheap` takes no arguments", line);
             // no parts.push_back — emits nothing
+        } else if (an == "foreignEntry" || an == "callerThread") {
+            // The threading contract of a callback (ROADMAP row 1). Like `@noheap` these are CHECKER
+            // flags and contribute no `__attribute__`: `@foreignEntry` makes this body a region the
+            // module-static check walks (a static assigned on the other side of the boundary is a
+            // different object there), `@callerThread` says the opposite and turns the check off.
+            //
+            // On a BODY the pair is not symmetric, which is why they are judged apart here. A region is
+            // something a body can BE, so `@foreignEntry` is legal on any body — it is the declared
+            // escape for a pointer handed to C by a route the compiler cannot see, the same role
+            // `@noheap` on a `fnptr` plays for allocation. `@callerThread` states a promise about a
+            // CALLER, so on an ordinary body it would silence nothing (there is nothing to silence) and
+            // read as an assertion the compiler never checks; the one body that has a caller it cannot
+            // see is an `expose fn`, where a host picks the thread.
+            if (!fn && !onMember)
+                unsupported(("`@" + an + "` applies only to a function, not a `static`").c_str(), line);
+            if (at->args && !at->args->empty())
+                unsupported(("`@" + an + "` takes no arguments").c_str(), line);
+            if (an == "callerThread" && fn && !isExposed(fn))
+                unsupported("`@callerThread` states that a callback runs on the calling isolate, so it "
+                            "belongs on the `fnptr` type a C API takes, or on an `expose fn` a host "
+                            "calls — on an ordinary function there is no crossing for it to describe", line);
+            if (fn && hasAttr(fn->attributes, "foreignEntry") && hasAttr(fn->attributes, "callerThread"))
+                unsupported("a function is `@foreignEntry` or `@callerThread`, not both", line);
+            // no parts.push_back — emits nothing
         } else if (an == "compileFor") {
             // `@compileFor(FLAG)` is consumed by the conditional-compilation prune pass
             // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here from a
@@ -20338,8 +20419,9 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          "destructor or operator").c_str(), line);
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected "
-                         + (onMember ? "`@noheap` or `@section(\"...\")`"
-                                     : "`@interrupt`, `@section(\"...\")`, or `@noheap`")).c_str(), line);
+                         + (onMember ? "`@noheap`, `@foreignEntry` or `@section(\"...\")`"
+                                     : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@foreignEntry`, "
+                                       "or `@callerThread`")).c_str(), line);
         }
     }
     if (parts.empty()) return "";
@@ -20352,12 +20434,17 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
 // Does this attribute list carry `@noheap`? (Activates the per-body no-heap gate.) Node-free, because a
 // METHOD carries the same attribute on a different node — the question is about the list, never about
 // which declaration kind happens to hold it.
-bool CEmitter::hasNoHeapAttr(const SharedAttributeList& attrs) const
+bool CEmitter::hasAttr(const SharedAttributeList& attrs, const char* name) const
 {
     if (!attrs) return false;
     for (auto& at : *attrs)
-        if (at && at->name && *at->name == "noheap") return true;
+        if (at && at->name && *at->name == name) return true;
     return false;
+}
+
+bool CEmitter::hasNoHeapAttr(const SharedAttributeList& attrs) const
+{
+    return hasAttr(attrs, "noheap");
 }
 
 // Does this function carry `@noheap`? (Activates the per-body no-heap gate.)
@@ -25133,9 +25220,16 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                 if (!f->block) { isFnPtr = !isExtern(f); what = isFnPtr ? "a `fnptr`" : "an `extern fn`"; }
             for (auto& at : *filtered) {
                 if (!at || !at->name) continue;
-                if (isFnPtr && *at->name == "noheap") {
+                if (isFnPtr && (*at->name == "noheap" || *at->name == "foreignEntry"
+                                                      || *at->name == "callerThread")) {
+                    // Same exception, same reason: none of the three attaches to emitted code, each
+                    // states a promise, and a `fnptr` is the one bodyless form that declares a TYPE for
+                    // somebody else's body to satisfy. `@foreignEntry`/`@callerThread` name the C API's
+                    // threading contract (ROADMAP row 1) — the knowledge the compiler cannot derive,
+                    // since `kama_run_loop` calls back on the caller's thread and a device callback does
+                    // not, and neither signature says which.
                     if (at->args && !at->args->empty())
-                        unsupported("`@noheap` takes no arguments", decl->line);
+                        unsupported((std::string("`@") + *at->name + "` takes no arguments").c_str(), decl->line);
                     continue;
                 }
                 if (what)

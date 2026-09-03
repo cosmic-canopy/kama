@@ -30,7 +30,10 @@ type enum LogLevel { Error, Warn, Info, Debug, Trace }
 // `level` is the LogLevel ordinal (0 = Error .. 4 = Trace — see `levelBits`); a plain int32, not the enum, so
 // the fnptr type has no forward-reference into the (later-emitted) enum. The filter runs upstream (in the
 // facade), so a sink only ever sees enabled records.
-fnptr void LogSink(int32 level, string tag, string msg);
+// `@foreignEntry`: the sink is registered once and then called from whichever isolate logs, which is not
+// the one that installed it. A module `static` the sink reads is that isolate's own copy, so sink state
+// belongs in the record or behind an `Atomic`, never in a static the setup code assigned.
+@foreignEntry fnptr void LogSink(int32 level, string tag, string msg);
 
 fn int32 levelBits(LogLevel lv) {
     return match (lv) {
