@@ -1,0 +1,8 @@
+{
+  "name": "iapkg",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "dependencies": { "geom": { "path": "./vendor/geom" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

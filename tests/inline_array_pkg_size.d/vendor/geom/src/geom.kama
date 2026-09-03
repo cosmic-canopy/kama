@@ -1,0 +1,10 @@
+// The size of an `InlineArray` FIELD is part of the type's LAYOUT, not of its API — so a consumer that
+// imports `Box` must be able to index `cells` without also importing `N`. Exported here anyway, because
+// the bug was not about visibility: the constant was exported and public, and the consumer still could
+// not index the field without naming it in its own import block.
+export { N, Box };
+comptime isize N = 4;
+type value Box {
+    public InlineArray<isize>#(N) cells;
+    public ctor make() { isize i = 0; while (i < N) { this.cells[i] = i * 10; i = i + 1; } }
+}

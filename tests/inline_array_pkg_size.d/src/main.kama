@@ -1,0 +1,15 @@
+// Indexing an `InlineArray` field across a PACKAGE boundary, with the size constant deliberately NOT
+// imported. Reported by the first external project (KB-11), found while tidying an import that was
+// genuinely unused by name — so every "remove unused imports" pass, human or automated, hits it.
+//
+// Before the fix this was `raw pointer access requires an `unsafe fn`` — a diagnostic naming neither the
+// constant nor the import, and pointing the reader at `unsafe`. The mechanism: the size resolved through
+// the READING file's imports, `registerFixed` SILENTLY skipped when it would not fold, and the field
+// stopped being a container. The package boundary is load-bearing; the same shape in one file always
+// compiled, which is what made it take three attempts to pin down.
+import { geom::Box };            // NOTE: `geom::N` is deliberately NOT imported.
+fn int32 main() {
+    Box b = Box.make();
+    isize sum = b.cells[0] + b.cells[1] + b.cells[2] + b.cells[3];
+    return cast<int32>(sum);     // 0 + 10 + 20 + 30
+}

@@ -7925,6 +7925,22 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                         "after decoding", fd->line);
                     }
 
+                    // BAKE a named compile-time SIZE into the field's type, HERE, where the declaring
+                    // file's scope is still installed. `InlineArray<isize>#(N)` resolves `N` through the
+                    // reading file's imports wherever the field is later read, so a consumer that imported
+                    // the TYPE but not the CONSTANT could not index it — across a package boundary the
+                    // constant is not even in scope to import by accident. And the failure was a SILENT
+                    // SKIP: `registerFixed` returns when the size will not fold, so the field stopped being
+                    // a container and the access fell through to the raw-pointer path, reported as "raw
+                    // pointer access requires an `unsafe fn`" — naming neither the constant nor the import,
+                    // and pointing the reader at `unsafe`, the one direction this should never send anyone.
+                    //
+                    // Baked rather than resolved-at-read because the size is part of the type's LAYOUT, not
+                    // of its API: a consumer has no reason to know the name, and making them import it
+                    // leaks a private constant into every consumer's import block. Doing it at the read
+                    // site instead means swapping `_nsCtx` on every member-type resolution, which is the
+                    // five-site partial-swap hazard and measured at 30 corpus failures when tried.
+                    if (fd->type) bakeConstSizes(fd->type, cd->comptimeParams);
                     if (fd->declarators) {
                         for (auto& d : *fd->declarators) {
                             FieldInfo fi;
@@ -8752,6 +8768,31 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
 // The const value carried by a generic ARGUMENT node: a literal wrapped by the grammar
 // (`constArgValue`, as in `Fixed<T,4>`), or a bare const-param identifier bound in this
 // instantiation (`Fixed<T,N>`). Returns false for a type argument (no const value).
+// Rewrite a compile-time size written as a NAME into its literal value, in place. Called while COLLECTING
+// a declaration, which is the one moment the declaring file's scope is installed — see the call site for
+// why a member's size must not be left to the reader's imports.
+//
+// A size that does not fold here is left exactly as written: inside a generic template `N` is a comptime
+// PARAMETER and must stay symbolic until an instantiation binds it, and `shadowed` keeps a parameter that
+// happens to share a name with a module constant from being baked to the constant's value.
+void CEmitter::bakeConstSizes(SharedIdentifier t, const SharedStringList& shadowed)
+{
+    if (!t) return;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) bakeConstSizes(a, shadowed);
+    else if (t->genericArg) bakeConstSizes(t->genericArg, shadowed);
+    if (!t->genericArgs || t->genericArgs->size() != 2) return;
+    SharedIdentifier n = (*t->genericArgs)[1];
+    if (!n || !n->value || n->constArgValue || n->genericArg) return;   // already literal, or not a name
+    if (shadowed) for (auto& sp : *shadowed) if (sp && *sp == *n->value) return;
+    int64_t v;
+    if (!constArgN(n, v)) return;                                       // still symbolic: leave it alone
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
+    id->synthesized   = true;
+    id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, v);
+    (*t->genericArgs)[1] = id;
+}
+
 bool CEmitter::constArgN(SharedIdentifier arg, int64_t& out)
 {
     if (!arg) return false;

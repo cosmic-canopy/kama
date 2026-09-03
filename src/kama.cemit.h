@@ -1628,6 +1628,9 @@ private:
     // Const generics: the compile-time integer value of a const argument/param expression (an
     // integer literal, or a const-param identifier bound in the current instantiation via _comptimeSubst).
     bool constValue(SharedExpression e, int64_t& out);   // returns false if not a resolvable const int
+    // Bake a named compile-time size into a declared type, at COLLECT time, so a reader never has to
+    // import the constant. See the definition for why it is not done at the read site.
+    void bakeConstSizes(SharedIdentifier t, const SharedStringList& shadowed);
     bool constArgN(SharedIdentifier arg, int64_t& out);  // same, for a type-arg node (literal or bound param)
     bool scalarByteSize(SharedIdentifier type, int64_t& out);  // `sizeof(T)` for a fixed-width scalar T
     // The inclusive value range of a FIXED-WIDTH integral type. False for anything whose range this
