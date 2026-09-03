@@ -1365,13 +1365,19 @@ private:
     // whole-program analysis would otherwise have to approximate.
     struct AllocSite { std::string what; int line = 0; std::string file; bool indirect = false; };
     struct CallEdge  { int line = 0; };
-    struct NoHeapFn  { std::string display; int line = 0; std::string file; };
+    // `fromFlag` distinguishes a body the AUTHOR annotated from one `--no-heap` seeded. Both are roots of
+    // the same walk, but they are two different claims and must not borrow each other's sentence: telling
+    // an author their function "is `@noheap`" when they wrote no attribute names a cause that is not there.
+    struct NoHeapFn  { std::string display; int line = 0; std::string file; bool fromFlag = false; };
     std::map<std::string, AllocSite> _allocSites;   // C name -> why it allocates DIRECTLY
     // caller -> callee -> the FIRST call site. A map rather than a list so a body that calls the same
     // helper fifty times contributes one edge, and so iteration order is the callee name — the walk below
     // reports a chain, and a chain that changed between builds would be a diagnostic nobody could pin.
     std::map<std::string, std::map<std::string, CallEdge>> _callEdges;
-    std::map<std::string, NoHeapFn>  _noHeapFns;   // C name -> every `@noheap` body seen
+    // C name -> every root of the transitive walk: every `@noheap` body, and under `--no-heap` every USER
+    // body as well (`isUserBody` — the prelude and the stdlib are excluded, or the flag would report a
+    // defect against code the author never wrote and cannot change).
+    std::map<std::string, NoHeapFn>  _noHeapFns;
     // Record one call edge out of the body being emitted. A no-op outside a body, and self-edges are
     // dropped (direct recursion cannot make a function allocate that did not already).
     void recordCallEdge(const std::string& callee, int line);
@@ -1379,6 +1385,10 @@ private:
     std::string copyCall(const std::string& cls, const std::string& lvalue);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
+    // Is this body one the AUTHOR wrote, as opposed to the prelude or the stdlib? Asked only by
+    // `--no-heap`, which seeds the transitive walk with every user body — see the block comment on the
+    // definition for why neither half of the test is sufficient alone.
+    bool isUserBody(const std::string& declFile, const std::string& display) const;
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an

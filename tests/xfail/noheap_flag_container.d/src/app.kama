@@ -1,0 +1,16 @@
+// THE canonical `--no-heap` bug, and the flag's half of tests/xfail/noheap_container_growth.kama. The
+// flag rejects a DIRECT allocation in every body, but a container reaches the heap through its
+// `A: Allocator`, and that leaf fact is recorded rather than rejected (rejecting it where it is emitted
+// would fail every no-heap build at a prelude line the author never wrote) — so until the flag seeded the
+// transitive walk, this built clean and called `malloc`.
+//
+// A DIRECTORY fixture with a manifest, because a flag-driven rejection has no other home: the xfail loop
+// builds a plain fixture with no extra flags, and `no-heap` is a manifest key. That is what buys this the
+// `.msg` match, the position range check and a DIAGNOSTIC_LINES row that the guard cannot give it.
+//
+// The diagnostic must anchor on `grow` — the innermost body the author wrote, the frame that holds the
+// call they can change — not on `main`, `mid`, or a stdlib name on the chain.
+import { std::collections::DynamicArray };
+fn int32 grow(ref DynamicArray<int32> l, int32 n) { l.add(item: n); return 1; }
+fn int32 mid(ref DynamicArray<int32> l, int32 n) { return grow(l: ref l, n: n); }
+fn int32 main() { DynamicArray<int32> a = DynamicArray.empty(); return mid(l: ref a, n: 7); }

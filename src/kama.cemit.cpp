@@ -143,6 +143,13 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth) cons
         auto od = _opaqueDisplay.find(tok);
         if (od != _opaqueDisplay.end()) { out += od->second; continue; }
 
+        // The one rename `qualify()` makes that is not a scope prefix, undone here for the same reason
+        // every other rewriting in this function happens: the reader is being shown a name to go and look
+        // for, and `kama_main` is not in their file. It stayed invisible while nothing reported a chain
+        // rooted at `main` — which `--no-heap` now routinely does, since `main` is where a program owns
+        // the container whose destructor frees.
+        if (tok == "kama_main") { out += "main"; continue; }
+
         // A generic INSTANCE renders as its source spelling before any `__` rewriting, since the mangle
         // splices scope-qualified argument names into the same token.
         auto gi = _genericTypeInsts.find(tok);
@@ -20283,6 +20290,36 @@ void CEmitter::recordCallEdge(const std::string& callee, int srcLine)
     _callEdges[_currentFunc].emplace(callee, CallEdge{ srcLine });
 }
 
+// Is this body one the AUTHOR wrote? Asked only by `--no-heap`, which seeds the transitive walk with
+// every user body so the `GlobalAllocator` leaf finally applies program-wide.
+//
+// It has to exist because the alternative — seeding EVERY body — is wrong twice, and both were already
+// recorded facts before this was written. Gating the string copy program-wide once failed a program that
+// sorts three integers, because `Template.part` in the PRELUDE does `return copy this._parts[at]`; and
+// the leaf itself is deliberately "recorded, never rejected" (see its record in the member emitter) for
+// exactly the same reason. Reporting per body would also name `DynamicArray.add` and `growTo` — stdlib
+// functions the author did not write and cannot change.
+//
+// ⚠️ NEITHER HALF OF THE TEST IS SUFFICIENT ALONE, and each covers precisely the other's blind spot:
+//
+//   * `declFile` names the file a declaration was COLLECTED from, so the `<`-sentinel (`<prelude>`,
+//     `<builtin>`, the embedded `std::memory` triad) identifies compiler-owned code — the same test
+//     `checkReach` makes. But everything under `lib/std/` is parsed off disk and named by its real path,
+//     so the sentinel says nothing about the stdlib proper.
+//   * The module path DOES name the stdlib, and it cannot collide: `std` and `core` are RESERVED
+//     top-level module segments, refused to user code by the driver. But the prelude has an EMPTY
+//     namespace scope (`qualify`), so `GlobalAllocator::allocate` and `Template::part` render BARE and
+//     the prefix test would call them user code.
+//
+// Not `diagFile()` and not `unitOfDecl` — the first falls back to the file being compiled for a prelude
+// body emitted in the header pass (which is the trap this whole predicate exists to avoid), and the
+// second is filled only under `_analysis`, so it answers nothing during `kama build`.
+bool CEmitter::isUserBody(const std::string& declFile, const std::string& display) const
+{
+    if (declFile.empty() || declFile[0] == '<') return false;   // compiler-owned: prelude, builtin, triad
+    return display.compare(0, 5, "std::") != 0 && display.compare(0, 6, "core::") != 0;
+}
+
 // `@noheap` is transitive: prove that no function reachable from an annotated body allocates.
 //
 // Runs after ALL emission on BOTH entry points, which is the ordering that matters — the facts it reads
@@ -20291,9 +20328,12 @@ void CEmitter::recordCallEdge(const std::string& callee, int srcLine)
 // `emitIncludes` ran before `collectProgram` on the single-TU path and after it on the other. Two entry
 // points, one order, asserted by a guard.)
 //
-// Note this is a check about the ATTRIBUTE only. Whole-program `--no-heap` needs no propagation: it gates
-// every body in the program, so a callee that allocates is rejected where it is written, and transitivity
-// is a property of the flag by construction.
+// BOTH gates walk here, and for different reasons. The ATTRIBUTE needs propagation because the annotated
+// body is almost never the allocating one. The FLAG gates every body, so a DIRECT allocation is rejected
+// where it is written and needs none — but the `GlobalAllocator` leaf is recorded and never rejected (a
+// prelude body would otherwise fail a build the author never wrote), so the one thing the flag cannot see
+// on its own is exactly the thing that matters: a container reaching `malloc` through its allocator. That
+// is what the flag seeds this walk for, and why `--no-heap` under-delivered on its own name until it did.
 void CEmitter::checkNoHeapTransitive()
 {
     if (_noHeapFns.empty()) return;
@@ -20347,6 +20387,24 @@ void CEmitter::checkNoHeapTransitive()
         std::vector<std::string> chain;
         for (std::string n = hit; !n.empty(); n = (parent.count(n) ? parent[n] : std::string()))
             chain.push_back(n);
+
+        // ANCHOR AT THE BOUNDARY — a `--no-heap` root reports only when its FIRST HOP leaves user code.
+        // Every function on a chain reaches the leaf, so seeding every user body and reporting each one
+        // renders the same defect once per frame of the stack: `main`, then `mid`, then `grow`, three
+        // messages and three chains for one `l.add(x)`. The innermost user body is also the only one
+        // whose message is actionable — it is the frame that contains the call the author can change.
+        // If the first hop is itself a seeded root it will report, so this terminates on the last user
+        // function before the library, by induction down the chain. A first hop that is NOT a root (an
+        // intrinsic, a template probe) reports here instead, because nobody else will.
+        //
+        // The ATTRIBUTE is untouched: an author who wrote `@noheap` asked about THAT function, and the
+        // answer is about that function even when a helper one hop in shares the fault.
+        const std::string& firstHop = chain[chain.size() - 2];
+        if (kv.second.fromFlag) {
+            auto fh = _noHeapFns.find(firstHop);
+            if (fh != _noHeapFns.end() && fh->second.fromFlag) continue;
+        }
+
         std::string path;
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
             path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
@@ -20358,8 +20416,7 @@ void CEmitter::checkNoHeapTransitive()
                                 : (" at " + site.file + ":" + std::to_string(site.line));
         // Point at the FIRST HOP's call site: it is inside the annotated body, so it is the line the
         // author can actually act on, and it is in the annotated function's own file.
-        const int at = _callEdges[root].count(chain[chain.size() - 2])
-                     ? _callEdges[root][chain[chain.size() - 2]].line : kv.second.line;
+        const int at = _callEdges[root].count(firstHop) ? _callEdges[root][firstHop].line : kv.second.line;
         ScopedStr _f(_emitDeclFile, kv.second.file);
         // Two defects share the walk, so they share the sentence up to the verb and no further: one says
         // the chain ALLOCATES, the other says the chain stops being provable. Telling a reader their audio
@@ -20368,7 +20425,12 @@ void CEmitter::checkNoHeapTransitive()
         const std::string claim = site.indirect
             ? ("dispatches " + site.what + ", so what it allocates cannot be proven")
             : ("reaches heap allocation (" + site.what + ")" + where);
-        unsupported((std::string("`") + kv.second.display + "` is `@noheap`, but this call " + claim
+        // The two roots make two different claims and say so. `--no-heap` is a property of the BUILD, and
+        // saying a function "is `@noheap`" when the author wrote no attribute sends them looking for one.
+        const std::string subject = kv.second.fromFlag
+            ? ("this build is `--no-heap`, but `" + kv.second.display + "` ")
+            : ("`" + kv.second.display + "` is `@noheap`, but this call ");
+        unsupported((subject + claim
                      + " through " + path
                      + (site.indirect ? " — call a named function instead, or move the dispatch outside "
                                         "the no-heap region"
@@ -20511,6 +20573,14 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // in the program is known. Registered even when the flag is already on from an enclosing body:
         // the diagnostic should name the function the author actually annotated.
         if (!_probingTemplate) _noHeapFns[name] = NoHeapFn{ demangleForDisplay(name), fn->line, diagFile() };
+    } else if (_noHeapProgram && !_probingTemplate) {
+        // `--no-heap` seeds the SAME walk with every user body, which is what finally applies the
+        // `GlobalAllocator` leaf program-wide. The flag already rejects a direct allocation in any body;
+        // what it never reached was the leaf, because that fact is recorded and never rejected, so only
+        // the transitive walk can see it — and the walk ran over annotated roots only.
+        const std::string disp = demangleForDisplay(name);
+        if (isUserBody(declFileOf(name), disp))
+            _noHeapFns[name] = NoHeapFn{ disp, fn->line, diagFile(), /*fromFlag=*/true };
     }
     if (fn->block) {
         checkDefiniteAssignment(fn->block, fn->parameters);   // owning LOCAL read-before-assign + `out` params (free fn)
@@ -21101,6 +21171,9 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _currentFunc = ci.name + "__dtor";
     if (hasNoHeapAttr(dtorAttrs) && !_probingTemplate)
         _noHeapFns[_currentFunc] = NoHeapFn{ "~" + ci.name, ci.dtorNode ? ci.dtorNode->line : 0, diagFile() };
+    else if (_noHeapProgram && !_probingTemplate && isUserBody(ci.declFile, demangleForDisplay(ci.name)))
+        _noHeapFns[_currentFunc] = NoHeapFn{ "~" + ci.name, ci.dtorNode ? ci.dtorNode->line : 0,
+                                             diagFile(), /*fromFlag=*/true };
     // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
     // exactly like any other body.
     _inUnsafe = ci.dtorNode && modHas(ci.dtorNode->modifiers, "unsafe");
@@ -21199,6 +21272,12 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // Register an annotated member for the transitivity pass, exactly as emitFunction does for a free fn.
     if (hasNoHeapAttr(attrs) && !_probingTemplate)
         _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile() };
+    // ...and the `--no-heap` seeding, judged by the OWNER's file. `declFileOf` is keyed by the tables a
+    // top-level name lives in, and a method's mangled `Class__method` is in none of them — it would
+    // answer "" for every member and quietly seed nothing. The class is what was collected from a file.
+    else if (_noHeapProgram && !_probingTemplate && isUserBody(owner.declFile, demangleForDisplay(cName)))
+        _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0,
+                                      diagFile(), /*fromFlag=*/true };
 
     // THE ALLOCATION LEAF, and the one piece of by-name knowledge the analysis needs. Every chain ends at
     // an `extern fn`, which has no body and so cannot be analysed — and `GlobalAllocator.allocate` is the

@@ -582,9 +582,13 @@ call anything that allocates, however many calls away it is, and the diagnostic 
 ([tests/noheap_chain.kama](../tests/noheap_chain.kama)). Reachability includes **destructors**: owning a <!-- xfail: noheap_dtor_of_local -->
 local whose `~T()` allocates allocates, even though the body contains no call.
 
-The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop -->
+The chain ends at libc, and `GlobalAllocator` is the leaf — so a container or box drawing from it is <!-- xfail: noheap_container_growth, noheap_container_local, noheap_owned_drop, noheap_flag_container -->
 rejected inside a no-heap region, including merely *owning* one (dropping it frees; `free` can block on the
-allocator's lock exactly as `malloc` can). The same container over an **arena** is fine and needs no
+allocator's lock exactly as `malloc` can). **The whole-program `--no-heap` flag applies the same leaf**, so
+a no-heap build cannot reach `malloc` through a container either — the flag rejects a *direct* allocation
+in every body, and the leaf is what closes the indirect path a container takes. Its diagnostic anchors on
+the innermost function **you** wrote — the frame holding the call you can change — and never on a prelude
+or `std::` body, which would name code the author did not write and cannot edit. The same container over an **arena** is fine and needs no
 annotation: `A` is a type parameter, so `DynamicArray<T, BumpAllocator>` is a different monomorph reaching
 a different `allocate` ([tests/noheap_arena.kama](../tests/noheap_arena.kama)) — which is the idiom a
 real-time region is expected to use.
