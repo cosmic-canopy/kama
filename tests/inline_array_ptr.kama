@@ -1,0 +1,26 @@
+// A raw pointer as a CONTAINER ELEMENT. Reported by the first external project (KB-10): declaring an
+// `InlineArray<UnsafePtr>#(1)` was enough to fail the build — the natural spelling for a
+// `WGPUPipelineLayoutDescriptor`'s array of bind-group layout handles.
+//
+// The declaration alone was the trigger, with no `view()` call anywhere near it: `InlineArray`
+// materialises its `view()` for every instantiation, and `View<T>.swap` calls the generic `relocate<T>`.
+// Inference then asked `isConcreteTypeArg` whether `T = UnsafePtr` was something it could specialize
+// against, and got NO — a raw pointer is neither a primitive nor a registered type, because it is one
+// machine word whatever it points at and so nothing ever registers a class for it. The diagnostic pointed
+// at `lib/std/collections/view.kama`, a file the author did not write.
+//
+// Both spellings, because the typed one failed differently and was NOT a workaround: the untyped form
+// reported "no instantiation was resolved" and the typed form "cannot infer generic type parameter 'T'".
+import { std::collections::View };
+
+unsafe fn int32 raw() {
+    UnsafePtr p = null;
+    InlineArray<UnsafePtr>#(3) a = [p, p, p];
+    borrow a.view() as v { v.swap(i: 0, j: 2); return cast<int32>(v.length()); }
+}
+unsafe fn int32 typed() {
+    UnsafePtr<uint8> q = null;
+    InlineArray<UnsafePtr<uint8>>#(2) b = [q, q];
+    borrow b.view() as v { return cast<int32>(v.length()); }
+}
+fn int32 main() { return raw() * 10 + typed(); }   // 30 + 2

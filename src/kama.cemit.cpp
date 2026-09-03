@@ -11170,6 +11170,14 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
 {
     if (!t) return false;
     if (t->builtInVal != IDENTIFIER_NONE_VAL) return true;   // primitive
+    // A RAW POINTER is concrete, and it is neither a primitive nor a registered type — it is one machine
+    // word whatever it points at, which is why nothing ever registers a class for it. Without this,
+    // `T = UnsafePtr` failed EVERY generic inference over a pointer element: declaring an
+    // `InlineArray<UnsafePtr>#(1)` was enough to fail the build, because `InlineArray` materialises its
+    // `view()` for every instantiation and `View<T>.swap` calls the generic `relocate<T>`. The typed form
+    // is concrete exactly when its ELEMENT is, so `UnsafePtr<T>` inside a template stays parameterized.
+    if (t->value && *t->value == "UnsafePtr")
+        return !t->genericArg || isConcreteTypeArg(t->genericArg);
     // A generic type argument (`DynamicArray<int32>`, `Shared<Node>`) is concrete exactly when it has
     // already been REGISTERED as an instance — then it names a real struct and can be mangled into an
     // instantiation key. An unregistered one is either still parameterized (an argument that is itself a
