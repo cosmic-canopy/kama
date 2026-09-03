@@ -1,0 +1,20 @@
+// The OPERATOR operand, which was the one argument position nothing checked at all. Reported by the first
+// external project as `Mat4 * Vec4` passing `kama check` and failing in the C compiler; they filed it as
+// ergonomic friction, and it is a check/build divergence.
+//
+// The mechanism is a fallback: `findBinaryOperator` looks for the mixed-type form (`op_mul__Vec4`) and,
+// not finding one, falls back to the same-type form (`op_mul`) — and nothing then confirmed the operand
+// actually IS the declared parameter type. So the call resolved, emitted, and handed a `Vec4` to a
+// parameter declared `Mat4`.
+type value Mat4 {
+    public int32 a;
+    public ctor make(int32 a) { this.a = a; }
+    public Mat4 operator*(Mat4 o) { return Mat4.make(a: this.a * o.a); }
+}
+type value Vec4 { public int32 b; public ctor make(int32 b) { this.b = b; } }
+fn int32 main() {
+    Mat4 m = Mat4.make(a: 2);
+    Vec4 v = Vec4.make(b: 3);
+    Mat4 r = m * v;
+    return r.a;
+}

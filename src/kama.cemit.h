@@ -2431,6 +2431,11 @@ private:
                             const char* what = "this value");
     // The kind rule against an ALREADY-LOWERED destination C type, for the hand-off sites that have one
     // (a return value, a `match` arm, a call argument) rather than a declared type node.
+    // Two user classes that are not the same class, not an upcast, and not a widening. See the block
+    // comment on the definition — the `ref` path always checked this and the by-value path never did.
+    bool plainUserClass(const std::string& ct) const;
+    void rejectClassIdentityMismatch(const std::string& dstCType, SharedExpression value,
+                                     const char* what, int line);
     void rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                  const char* what, int line);
     // The variant type named by a `::` qualifier — a non-generic union directly, or a generic

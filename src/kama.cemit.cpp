@@ -1898,6 +1898,68 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
                  + primKeyOfCType(rt) + ">(…)`)").c_str(), line);
 }
 
+// A user class handed to a destination of a DIFFERENT user class. The `ref T` argument path has always
+// checked this ("cannot borrow a `X` as `ref Y`"); the BY-VALUE path never did, and neither did an
+// assignment, a local initializer or a return. So `Mat4 m = someVec4;` and `takesMat(m: someVec4)` passed
+// `kama check` and failed in the C COMPILER, naming mangled struct types at a line in the generated file.
+// C's name equivalence means it was always caught eventually — this is a check/build divergence and a
+// diagnostic-quality defect, not a soundness hole — but `kama check` promising a clean build and not
+// delivering one is the thing the suite's own analysis-agreement phase exists to prevent.
+//
+// Deliberately narrow: PLAIN user classes only. A smart pointer, an intrinsic collection and a contract
+// destination all admit values of other types by design (promotion, `Owned<T>` from `new T`, a contract
+// taking every kind), and a generic instance's argument list is how `Optional<Mat4> o = m;` is spelled.
+// Each of those is a legal widening, so the rule stops where the widenings start.
+bool CEmitter::plainUserClass(const std::string& ct) const
+{
+    if (ct.empty() || !isClass(ct) || isInterface(ct)) return false;
+    if (isSmartPtrClass(ct) || isBindableClass(ct)) return false;
+    auto it = _classes.find(ct);
+    if (it == _classes.end() || it->second.isIntrinsicColl || it->second.isExternStruct) return false;
+    return true;
+}
+
+void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedExpression value,
+                                           const char* what, int line)
+{
+    if (!value || !plainUserClass(dstCType)) return;
+    // ⚠️ NOT inside a generic instantiation. `_typeSubst` is non-empty only while emitting one, and there
+    // `exprClass` is not reliable enough to judge on: in `Owned<T, A>.adoptIn`, `this.alloc = allocator`
+    // has the FIELD answering the substituted `BumpAllocator` and the `A allocator` PARAMETER still
+    // answering the default `GlobalAllocator`, so the rule fired on the stdlib's own correct code. That
+    // is a pre-existing substitution inaccuracy this rule merely exposes — the same family as the
+    // generic-scan drift — and fixing it is its own campaign, so the rule stops at the boundary where its
+    // inputs are trustworthy rather than being weakened into something that fails open everywhere.
+    if (!_typeSubst.empty()) return;
+    const std::string src = exprClass(value);
+    if (src.empty() || src == dstCType || !plainUserClass(src)) return;
+    if (isBaseOf(dstCType, src)) return;                       // an inheritance UPCAST is the point of one
+    if (!_classes[dstCType].collElemClass.empty()
+        && _classes[dstCType].collElemClass == src) return;    // a container/handle over exactly this type
+    auto gi = _genericTypeInsts.find(dstCType);                // `Optional<Mat4> o = m;` and its siblings
+    auto si = _genericTypeInsts.find(src);
+    if (gi != _genericTypeInsts.end()) {
+        for (const auto& a : gi->second.typeArgs) if (a && cType(a) == src) return;
+        // Two instances of the SAME template. `Shared<Square>` into a `Shared<Shape>` is the smart-pointer
+        // upcast, and judging argument variance properly is a separate rule from "these are unrelated
+        // types" — so the shared template is where this one stops.
+        if (si != _genericTypeInsts.end() && si->second.templateKey == gi->second.templateKey) return;
+    }
+    // The library heap owners are ordinary generic types, not the intrinsic smart pointers, so
+    // `isSmartPtrClass` does not see them: an `Owned<Counter>` handed to a `Counter` parameter borrows its
+    // pointee through `Deref`, which is a widening and not a mismatch. Read off the ARGUMENT list so it
+    // covers `Owned<Square>` into a `Shape` too, rather than naming the three owner types.
+    if (si != _genericTypeInsts.end())
+        for (const auto& a : si->second.typeArgs) {
+            if (!a) continue;
+            const std::string ac = cType(a);
+            if (ac == dstCType || isBaseOf(dstCType, ac)) return;
+        }
+    unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, so it cannot be "
+                 "given a `" + demangleForDisplay(src) + "` — these are unrelated types. Convert it "
+                 "explicitly, or take a contract both implement").c_str(), line);
+}
+
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                        const char* what, int line)
 {
@@ -1914,6 +1976,7 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
     // documented silent path — which is exactly why every bind position but a local initializer went
     // unchecked. This is the funnel they all share, and it already has the destination type.
     checkFnPtrValueBind(dstCType, value, line);
+    rejectClassIdentityMismatch(dstCType, value, what, line);
     const TKind vk = exprKind(value);
     if (vk == TKind::Unknown) return;
     const TKind dk = kindOfCType(dstCType);
@@ -1954,6 +2017,10 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
             rejectNumericConversion(classifierCType(declType), init, what, /*isInit*/true, line);
         if (idFamilyOf(srcT) != IdFamily::None)
             rejectTypeIdentityMismatch(classifierCType(declType), init, what, /*isInit*/true, line);
+        // ...and the CLASS identity rule, which reads `exprClass` rather than `typeOfExpr` and so cannot
+        // ride the `srcT` gate above: a user class answers "" from `typeOfExpr` and would never reach it.
+        if (plainUserClass(exprClass(init)))
+            rejectClassIdentityMismatch(classifierCType(declType), init, what, line);
     }
     // Ask the CHEAP, certain side first. Most initializers are `Unknown`, and returning here keeps this
     // rule from calling `cType` on a declared type at all — which matters in `checkDeclaredTypes`, where
@@ -3473,9 +3540,22 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         return "0";
     }
     canAccess(owner, mi->visibility, mi->cName, line);
-    if (mi->arity == 1)   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
+    // An operator's operands are ARGUMENTS, and they were the one argument position nothing checked.
+    // `findBinaryOperator` falls back from the mixed-type form (`op_mul__Vec4`) to the same-type form
+    // (`op_mul`) whenever the mixed one is absent, and nothing then confirmed the operand actually IS the
+    // declared parameter type — so `Mat4 * Vec4` against `Mat4 operator*(Mat4)` resolved, emitted, and
+    // failed in the C compiler. The consumer filed this as ergonomic friction; it is a check/build
+    // divergence, and the same hole reached every by-value hand-off (see rejectClassIdentityMismatch).
+    if (mi->arity == 1) {   // method form: `A__op(&lhs, rhs)` (rvalue lhs -> compound-literal temporary)
+        if (!mi->params.empty())
+            rejectClassIdentityMismatch(mi->params[0].className, rhs, "the right-hand operand", line);
         return mi->cName + "(" + addrOfOperand(lhs, lc, line) + ", " + emitOperandByValue(rhs) + ")";
-    return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";   // free form: both by value
+    }
+    if (mi->params.size() >= 2) {   // free form: both by value
+        rejectClassIdentityMismatch(mi->params[0].className, lhs, "the left-hand operand", line);
+        rejectClassIdentityMismatch(mi->params[1].className, rhs, "the right-hand operand", line);
+    }
+    return mi->cName + "(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
 }
 
 // a compound-assignment token maps to its binary operator (`a += b` == `a = a + b`) for a

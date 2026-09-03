@@ -1,0 +1,21 @@
+// A user class handed to a destination of a DIFFERENT user class, in every by-value position. The `ref T`
+// argument path has always checked this ("cannot borrow a `X` as `ref Y`"); nothing else did — so all four
+// of these passed `kama check` and failed in the C COMPILER, which names mangled struct types at a line in
+// generated code. C's name equivalence meant it was always caught eventually, so this is a check/build
+// divergence rather than a soundness hole — but `kama check` promising a clean build and not delivering
+// one is exactly what the suite's analysis-agreement phase exists to prevent.
+//
+// The legal widenings this must NOT touch have their own fixtures: an inheritance upcast and a smart
+// pointer upcast in tests/upcast_shared_base.kama, and borrowing an `Owned<T>` as a `T` in
+// tests/borrow_agnostic.kama and tests/noheap_realtime_ok.kama.
+type value Mat4 { public int32 a; public ctor make(int32 a) { this.a = a; } }
+type value Vec4 { public int32 b; public ctor make(int32 b) { this.b = b; } }
+fn int32 takesMat(Mat4 m) { return m.a; }
+fn Mat4 badReturn() { Vec4 v = Vec4.make(b: 1); return v; }
+fn int32 main() {
+    Vec4 v = Vec4.make(b: 3);
+    Mat4 init = v;                       // a local initializer
+    Mat4 assigned = Mat4.make(a: 1);
+    assigned = v;                        // an assignment
+    return takesMat(m: v) + init.a + assigned.a + badReturn().a;   // an argument
+}
