@@ -1022,6 +1022,40 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     over-broad for trap-only mode. Best fix is upstream to emscripten; otherwise lower those traps in
     the emitted C on wasm, or a documented per-target opt-out. (Wasm Workers also need
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
+- **Three defects the first external project's queue turned up, and what each one cost to find.** All
+  reproduced against the shipped compiler before anything was written; two were fixed in `0.9.148` and
+  `0.9.149` and the residue below is what is left.
+
+  - **A diagnostic can name the USER's file at a line that does not exist in it.** `diagFile()` prefers
+    `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
+    stdlib body emitted in the HEADER pass the first two are empty, so the error is stamped with the
+    user's path and the library's line number. An 8-line repro was blamed at line 69. ⚠️ **It has been
+    worked around twice already rather than fixed**: the `GlobalAllocator` leaf stores no position at all
+    (`AllocSite{…, 0, ""}`) and `CEmitter::line()` is deliberately NARROWER than `diagFile()` for the same
+    reason, with a comment saying it must not be widened to it. `run_tests.sh`'s `diag_position_faults`
+    would catch the class, but only where a fixture drives it, and none does.
+
+  - **`exprClass` is unreliable inside a generic instantiation.** Adding the class-identity rule
+    (`0.9.148`) made this visible: run inside a generic body it fires on the stdlib's own correct code,
+    because in `Owned<T, A>.adoptIn` the assignment `this.alloc = allocator` has the FIELD answering the
+    substituted `BumpAllocator` and the `A allocator` PARAMETER still answering the default
+    `GlobalAllocator`. Same family as the generic-scan drift. The rule is gated on `_typeSubst.empty()`
+    until this is fixed, so `Mat4 m = someVec4;` is caught in every position EXCEPT inside a generic body.
+
+  - **No way to ask for reproducible floating point.** Nothing in `src/`, `include/`, `lib/` or `prelude/`
+    mentions `-ffp-contract`, so clang's default `on` governs. Their measurement, not an argument: 10 of
+    64 random `a*b + c` triples differ from the two-statement form on aarch64-macos, and 0 with
+    `-ffp-contract=off`. arm64 has FMA; wasm32 MVP and baseline x86-64 SSE2 do not, so a program whose
+    correctness IS bit-reproducibility across targets diverges browser from native. The raw per-target
+    `cflags` escape works and does not PROPAGATE, which is the half that bites and is the dependency-flags
+    row. Wants a manifest key.
+
+  **⚠️ What their queue is worth reading for.** KG-15 was filed as "ergonomic friction" and was a
+  check/build divergence reaching four positions, not one; KB-10 was filed as an `InlineArray` problem and
+  was `isConcreteTypeArg` not recognising a raw pointer, which broke EVERY generic inference over a
+  pointer element. **Both were bigger than the report, in the same direction: a consumer describes the
+  shape they hit, not the rule that is wrong.** Re-derive the rule before sizing the fix.
+
   - **This bucket is EMPTY**, and what emptied it is worth keeping, because both items were parked on a
     dependency rather than on a judgement. The bucket said they waited on `@noheap` transitivity and the
     foreign-thread entry; transitivity shipped, which discharged half of that immediately.
