@@ -1048,7 +1048,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     pointer elements FIXES KB-14 (the repro returns 14) and BREAKS 45 fixtures, every one failing with
     `cannot give out of a field/element` inside `dynamic_array.kama` — the same diagnostic the consumer hit
     trying `give slot[0]`. A third symptom found here: `drop(value: slot[0])` compiles and emits a literal
-    `(void)0;`. ⚠️ **GOALS §3a/§3e answer this without a design doc**: a raw pointer is the FFI seam and
+    `(void)0;`. ⚠️ **GOALS §3a/§3e answer this without a design doc**: a raw pointer is the foreign seam and
     "never general-purpose escape"; to persist or share, you OWN it. So `p[i] = v` keeps C semantics, and
     the work is the DIAGNOSTICS (refuse the silent `drop`; name the two spellings at the method call) plus
     removing the reason anyone owns through a raw pointer at all — which is the next bullet.
@@ -1061,12 +1061,15 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       compile-time initializer only (no init order, no hidden constructor before `main`), unreadable in a
       `@foreignEntry` region unless assigned there, and typed to the MCU shapes — value, `UnsafePtr`,
       `InlineArray`, `Simd`. "Support it in full" means removing fences nobody has asked to remove.
-    - **The need it was mistaken for is answered at the C boundary instead.** `HeapOwner<T>` has `adopt`
-      (Rust's `Box::from_raw`) and no twin — so ownership can enter kama from C but not leave it. An
-      `Owned<T>.release()` (the NOW row) lets the C API's own `userdata` slot hold the lifetime, as every
-      ownership language does at its FFI: hand it over in one `unsafe fn`, borrow through it in the
+    - **The need it was mistaken for is answered at the foreign boundary instead.** `HeapOwner<T>` has `adopt`
+      (Rust's `Box::from_raw`) and no twin — so ownership can enter kama from a foreign API but not leave
+      it. An `Owned<T>.release()` (the NOW row) lets the foreign API's own `userdata` slot hold the
+      lifetime, as every ownership language does at its foreign boundary: hand it over in one `unsafe fn`, borrow through it in the
       callback via a `ref T` parameter, `adopt` it back to destroy. That is GOALS §3a/§3e verbatim —
-      persistence is ownership, and the boundary is where ownership crosses.
+      persistence is ownership, and the boundary is where ownership crosses. ⚠️ **Say "foreign", never
+      "C", on this surface** — the vocabulary is already `@foreignEntry`/`extern`, and the rule row 17
+      writes down for `@linkName` applies: the host is C today and a VM or another backend tomorrow
+      (GOALS §10). The diagnostic, the docs section and the method's comment all name the concept.
     - **What it would cost if a real case ever pulls it**: a dtor seam at both teardown sites (the
       synthesized `main` after `kama_main`, cemit ~21365, and the isolate trampoline ~5153, since statics
       are per-isolate), `isConstInitExpr` accepting `Optional::None` so the static starts absent in the
