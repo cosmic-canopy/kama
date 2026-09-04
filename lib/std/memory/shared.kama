@@ -35,7 +35,12 @@ type value Ctrl { public usize strong; public usize weak; }
 // `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
 // alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
 type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy),
-                                    Deserialize<This> when [T: Deserialize<T>] {
+                                    Deserialize<This> when [T: Deserialize<T>],
+                                    // A shared handle may cross an isolate boundary exactly when its payload cannot
+                                    // change: then the control block takes the atomic refcount flavor and every
+                                    // isolate reads the same bytes. This line IS that rule — it used to be
+                                    // hand-wired in the compiler, unreadable from here.
+                                    Sendable when [T: Immutable, A: Sendable] {
     UnsafePtr<T> p;
     UnsafePtr<Ctrl> c;
     A alloc;

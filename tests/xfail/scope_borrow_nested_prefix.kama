@@ -8,9 +8,9 @@
 // (tests/xfail/scope_borrow_same_root). Must fail to compile.
 import { std::concurrent::Isolate };
 
-type value Acc { public int32 total; public ctor make() { this.total = 0; return this; } }
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; return this; } }
 
-type value World {
+type value World implements Sendable {
     public Acc bodies;
     public Acc springs;
     public ctor make() { this.bodies = Acc.make(); this.springs = Acc.make(); return this; }

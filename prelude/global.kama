@@ -7,6 +7,10 @@
 
 type enum Optional<T> { Some(T value), None }
 type enum Result<T, E: Error> { Ok(T value), Err(E error) }
+// ⚠️ Neither declares `Sendable`, and not by choice: a GENERIC enum cannot declare a contract yet (ROADMAP
+// §2, "generic `enum` members"). Until it can, a generic enum instance is judged by its payloads — see
+// unsendableReason — because a sum type has nothing its payloads do not show. (`Optional` stays on line 8:
+// tools/check-lsp.sh and check-query.sh pin go-to-definition on it.)
 // The empty value — the payload for a fallible op that succeeds with nothing to return
 // (`Result<Unit, E>`, the analogue of Rust's `Result<(), E>`). Keeps ONE error convention
 // (always Result) whether or not there is a value; no dead/placeholder payload. A single-variant
@@ -37,6 +41,19 @@ type contract Movable for resource { }
 // immutability is the reason a `Shared<T>` may cross an isolate boundary, and a `when` clause needs a
 // contract to name; the qualifier alone is not spellable in a bound.
 type contract Immutable for value, resource, enum { }
+// May a value cross an isolate boundary — be a `spawn` bundle, a `Channel<T>` element, a field of either?
+// DECLARED and VERIFIED, the `immutable` model at the isolate seam: a type writes `implements Sendable`,
+// and the compiler checks the claim over every field, base and variant payload (a `Shared<T>` over a
+// mutable `T` inside it is an error naming the field). A crossing REQUIRES the declaration — a type nobody
+// annotated does not cross — so the whole set of types that may leave an isolate is one grep away, and no
+// type is sendable by accident. What answers without a declaration is only what cannot carry one: the
+// primitives and `string` (declared below, like their other conformances), a payload-less `enum`, a bare
+// `fnptr` value, and the C seam (`UnsafePtr`, an extern struct). A `BindableFunctionPtr` never does: its
+// type names a signature and cannot show whether it retains a `Shared` receiver.
+// The stdlib writes its rules in this same vocabulary — `Sendable when [T: Sendable, A: Sendable]` on a
+// container, `when [T: Immutable]` on `Shared`/`Weak` — and a contract may require it of its implementors
+// (`type contract Job implements Sendable`), which is what lets a boxed `Owned<Job>` cross.
+type contract Sendable for value, resource, enum, intrinsic { }
 // `copy` is a CTOR, not a self-returning method: a copy IS a new object, so it construct-shaped like
 // every other factory (M8e had already ruled that shape out for a self-returning `static fn`; this was
 // the last member that escaped it by taking `self`). The source is BORROWED (`ref This`) — copying
@@ -133,6 +150,13 @@ type intrinsic <string> implements Hashable {
 type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }
 }
+// Every scalar and `string` may cross an isolate boundary: a scalar has no interior to share, and a
+// `string` is an owned buffer that moves whole. Declared, like every other conformance a primitive has,
+// so `Channel<int32>` satisfies `T: Sendable` through the same table as `Map<string, V>` satisfies
+// `K: Hashable` — nothing is sendable by compiler fiat.
+type intrinsic <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, bool, char, float32, float64>
+    implements Sendable { }
+type intrinsic <string> implements Sendable { }
 // Floats join the `Equatable` set (exact `==`, like Rust's `PartialEq<f64>`) so `<T: Equatable>` bounds and
 // `DynamicArray<float*>.contains` work — but they are NOT `Hashable`: float hash keys are a footgun
 // (NaN != NaN, ±0.0), and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add
@@ -237,7 +261,7 @@ type contract Serializer for resource {
 }
 // SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
 // fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
-type enum SerError implements Error {
+type enum SerError implements Error, Sendable {
     NotRepresentable, IoError;
 
     public const fn string message() {
@@ -257,7 +281,7 @@ type contract Serialize for value, resource, enum, intrinsic { const fn Result<U
 // DeError is a first-class `Error`: it BOXES into `Owned<Error>` at a fallible-`deserialize` boundary
 // and is recovered with `err.as<DeError>()`. (Declaring a method-carrying contract gives this
 // payload-less enum a tagged repr — transparent to its by-value uses.)
-type enum DeError implements Error {
+type enum DeError implements Error, Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId;
 
     public const fn string message() {
@@ -552,7 +576,7 @@ unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
-type value GlobalAllocator implements Allocator {
+type value GlobalAllocator implements Allocator, Sendable {   // stateless: a container over it may cross an isolate
     // The canonical zero-arg build (construction-model M8b): marks GlobalAllocator's zero as a valid `default`
     // — it is a stateless, zero-size handle, so a defaulted `A alloc` field (`Owned`/`DynamicArray`/`Map`/…)
     // may be left unassigned for the default fill rather than requiring an explicit assignment. Coexists with

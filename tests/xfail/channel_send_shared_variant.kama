@@ -1,9 +1,9 @@
 // A tagged enum's payload reaches the refcount too — and this fixture exists as much for the DIAGNOSTIC
 // as for the rejection.
 //
-// The rejection already worked: the sendability fixpoint walks variant payloads. What did not work was
-// naming the culprit. The message is built by searching the type's FIELDS, and an enum has none, so it
-// fell through to a generic phrase spliced after a possessive — rendering, verbatim:
+// The rejection already worked (the verifier walks variant payloads as it walks fields). What did not work,
+// once, was naming the culprit: the message was built by searching the type's FIELDS, and an enum has
+// none, so it fell through to a generic phrase spliced after a possessive — rendering, verbatim:
 //
 //     cannot send `E` over a channel — its a field shares a non-atomic refcount across isolates
 //
@@ -14,7 +14,7 @@ import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Rec
 
 type value Leaf { int32 v; }
 
-type enum E { A, B(Shared<Leaf> s) }
+type enum E implements Sendable { A, B(Shared<Leaf> s) }
 
 fn int32 main() {
     Channel<E> ch = Channel.bounded(capacity: 2);   // ERROR: variant `B`'s payload `s` holds the refcount

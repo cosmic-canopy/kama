@@ -7,7 +7,7 @@
 // exactly the children that exist. Run under KAMA_TSAN=1 — one child, one disjoint cell, no sharing.
 import { std::concurrent::Isolate };
 
-type value Acc {
+type value Acc implements Sendable {
     public int32 total;
     int32 lo;
     int32 hi;

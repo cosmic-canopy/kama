@@ -13,7 +13,7 @@
 // (tests/xfail/scope_borrow_through_shared). Run under KAMA_TSAN=1: disjoint cells, no sharing.
 import { std::concurrent::Isolate };
 
-type value Acc {
+type value Acc implements Sendable {
     public int32 total;
     int32 lo;
     int32 hi;
@@ -35,7 +35,7 @@ type value Acc {
 }
 
 // One world, two component arrays — the fields the two systems own.
-type value World {
+type value World implements Sendable {
     public Acc bodies;
     public Acc springs;
 

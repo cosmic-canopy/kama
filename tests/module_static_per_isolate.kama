@@ -5,7 +5,7 @@
 // three threads would race on one `box` and the result would drift.
 import { std::concurrent::Isolate };
 
-type resource Bundle { int32 pad; public ctor make() { this.pad = 0; } }
+type resource Bundle implements Sendable { int32 pad; public ctor make() { this.pad = 0; } }
 
 static int32 box = 0;
 

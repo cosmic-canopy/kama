@@ -27,7 +27,7 @@ import {
 };
 
 // ── components: plain data ───────────────────────────────────────────────────────────────────
-type value Transform {
+type value Transform implements Sendable {
     public float32 x; public float32 y; public float32 vx; public float32 vy;
     public ctor make(float32 x, float32 y, float32 vx, float32 vy) {
         this.x = x; this.y = y; this.vx = vx; this.vy = vy; }

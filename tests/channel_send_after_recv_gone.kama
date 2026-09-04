@@ -13,7 +13,7 @@ import {
     std::memory::Owned,
 };
 
-type value Box {
+type value Box implements Sendable {
     int32 v;
     public ctor make(int32 v) { this.v = v; }
     public fn int32 get() { return this.v; }

@@ -8,7 +8,7 @@
 // are fine (scope_borrow_disjoint); splitting one buffer by index is `parallel_for`. Must fail.
 import { std::concurrent::Isolate };
 
-type value Acc {
+type value Acc implements Sendable {
     public int32 total;
     int32 lo;
     int32 hi;

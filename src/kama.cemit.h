@@ -371,12 +371,8 @@ struct ClassInfo {
     // Recurses through collection elements + owned fields, but STOPS at a pointer (doesn't recurse
     // through it). Populated by computeReachesPointer(). Consumed by the serialization lowering (Phase C+).
     bool                              reachesPointer = false;
-    // Channel-sendability gate (M3): transitively reaches a NON-ATOMIC shared refcount — a `Shared<X>`
-    // or `Weak<X>` field/base/variant-payload/collection-element. `Owned<X>` is fine (unique ownership,
-    // the move transfers it whole), so this is the Shared|Weak-only sibling of `reachesPointer`. A type
-    // that reaches one may not cross a `channel<T>` (its refcount would race across isolates). Populated
-    // by computeReachesSharedWeak(); consumed by the channel-sendability check.
-    bool                              reachesSharedWeak = false;
+    // (Sendability is not a computed flag here: a type DECLARES `implements Sendable`, which lands in
+    // `interfaces` like any conformance, and checkSendableDeclarations verifies the claim over its fields.)
     // `immutable value|resource T` — the greppable qualifier opting into cross-isolate sharing (M6.2). The
     // emitter VERIFIES deep/transitive immutability (computeDeeplyImmutable); a qualified type with a mutable
     // field is a compile error. Distinct from a `const` binding (which permits a mutable alias elsewhere).
@@ -384,7 +380,7 @@ struct ClassInfo {
     // Deeply/transitively immutable (computed): `isImmutableQualified` AND every field/base/variant-payload/
     // element is itself deeply immutable, with no raw `UnsafePtr`/mutable-`Owned`/mutable collection. Populated by
     // computeDeeplyImmutable(). A `Shared<T>`/`Weak<T>` over such a `T` is sendable across isolates (its
-    // control block uses the ATOMIC refcount flavor; see useAtomicRefcount) and does NOT set reachesSharedWeak.
+    // control block uses the ATOMIC refcount flavor; see useAtomicRefcount) — `when [T: Immutable]` in std::memory.
     bool                              deeplyImmutable = false;
     // Refcount flavor (M6.2): a `Shared<T>`/`Weak<T>` instance whose element is deeplyImmutable uses the
     // Arc-correct ATOMIC control-block ops (race-free clone/drop across isolates); every other Shared/Weak
@@ -583,6 +579,10 @@ struct InterfaceInfo {
     // Refined parent contracts (`type contract Animated implements Drawable`) — resolved names. Their methods
     // are merged into `methods` by linkContracts() so vtable/conformance/dispatch see the full slot set.
     std::vector<std::string>     refines;
+    // `type contract Job implements Sendable` — every implementor must declare `Sendable` (and is verified),
+    // which is what lets the type-erased box `Owned<Job>` cross an isolate boundary. Not a parent in
+    // `refines`: the marker has no members to merge, only a requirement to pass on.
+    bool                         requiresSendable = false;
     // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
     // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
     bool                         isGenericInst = false;
@@ -1434,6 +1434,8 @@ private:
     std::string                                     _heapOwnerContract;     // resolved name of the prelude `HeapOwner` contract — `new` placement-constructs into a type implementing it
     std::string                                     _movableContract;       // resolved name of the prelude `Movable` marker (implicit on every resource; `!Movable` subtracts it)
     std::string                                     _copyableContract;      // resolved name of the prelude `Copyable` marker
+    std::string                                     _sendableContract;      // resolved name of the prelude `Sendable` marker (declared, verified, required at a crossing)
+    int                                             _silentBounds = 0;      // >0 while a bound-refused instance registers its shape: nested bound failures are consequences, not reported
 
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
@@ -1953,14 +1955,20 @@ private:
     void buildVtables();
     void computeDestructible();
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
-    void computeReachesSharedWeak();   // channel-sendability gate — Shared|Weak-only sibling of reachesPointer
-    void checkChannelSendability();    // reject a `channel<T>` whose T reaches a non-atomic shared refcount
+    void computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` instance over a deeply-immutable T takes the atomic ctrl-block flavor
     // ...and the SAME gate on the other crossing: a `spawn` bundle. Recorded during emission (a `spawn`
     // lives in a body, which the collect-time channel pass cannot see) and checked after it.
-    struct SpawnBundle { std::string cls; int line = 0; std::string file; };
+    // `what` names the crossing for the diagnostic: the bundle itself, or a `parallel_for` element / capture.
+    struct SpawnBundle { std::string cls; int line = 0; std::string file; std::string what = "as the bundle"; };
     std::vector<SpawnBundle> _spawnBundles;
     void checkSpawnBundleSendability();
-    std::string unsendableCulprit(const std::string& elem);   // "its field `s` (of type `Shared<Leaf>`)"
+    // Sendability is DECLARED (`implements Sendable`) and VERIFIED (checkSendableDeclarations); a crossing
+    // requires the declaration. `unsendableReason` is the one predicate, asked "why not" — "" means Sendable.
+    void        checkSendableDeclarations();
+    bool        isSendableClass(const std::string& cls);
+    std::string unsendableReason(const std::string& cls);
+    bool        contractRequiresSendable(const std::string& name) const;   // `type contract C implements Sendable`
+    void        enterClassCtx(const ClassInfo& ci);   // resolve as the class's own body does; caller saves/restores _nsCtx/_typeSubst
     // A `type view` may not implement a contract whose `ctor` slot constructs the implementer out of
     // parameters that carry no borrow — such a view could only borrow a constructor local. Rejected at the
     // `implements`, because no body can satisfy it.

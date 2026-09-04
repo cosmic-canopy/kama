@@ -16,7 +16,8 @@ export { PriorityQueue };
 // scheduling). `maxHeap()` inverts it (largest first). One implementation, one type; a single `maxOrder`
 // flag flips every comparison. Iteration order isn't meaningful for a heap, so it isn't `Iterable`; drain
 // it with repeated `pop`.
-type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>] {
+type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>],
+                                                                                  Sendable when [T: Sendable, A: Sendable] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
     bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
 

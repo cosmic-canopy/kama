@@ -3813,7 +3813,7 @@ axes**:
 
 | | restricts | is free in |
 | --- | --- | --- |
-| `give` — a moved `resource` | **the type** — it must be a `resource` (a `value`, a primitive and a `string` are all rejected) and it must be **sendable** | **lifetime** — the child may outlive the parent's frame, which is what the handle form needs |
+| `give` — a moved `resource` | **the type** — it must be a `resource` (a `value`, a primitive and a `string` are all rejected) and it must declare **`implements Sendable`** | **lifetime** — the child may outlive the parent's frame, which is what the handle form needs |
 | `ref T` — a borrow | **the lifetime** — only from a bare `spawn` inside a `scope`, over a place that scope outlives | **the type** — any place, of any size, `ref int32` included |
 
 So a moved bundle transfers ownership (the parent provably cannot touch it afterwards), while a
@@ -3836,9 +3836,10 @@ the child's writes are ordered against the parent's next read with no atomic at 
 is the domain over which "no two children overlap" is decided. Rows 1 and 4 need no scope because
 they are self-sufficient — one transfers exclusivity, the other removes writing from the picture.
 
-**Sendability applies to the bundle**, exactly as it does to a channel element: a bundle that
-transitively holds a `Shared`/`Weak` over a **mutable** payload is rejected, naming the offending <!-- xfail: spawn_bundle_shared -->
-field, because both isolates would release one non-atomic control block.
+**Sendability applies to the bundle**, exactly as it does to a channel element: the bundle's type must
+declare `implements Sendable` (see *Channels* below for the whole rule), and a declaration over a
+`Shared`/`Weak` with a **mutable** payload is rejected, naming the offending field, because both <!-- xfail: spawn_bundle_shared -->
+isolates would release one non-atomic control block.
 The same shape over a deeply-`immutable` payload is legal <!-- test: spawn_bundle_immutable --> —
 that is the case whose control block switches to an atomic refcount, and it is what lets many
 isolates share one large read-only asset with no copy.
@@ -3880,11 +3881,31 @@ A side is also open **before it is ever claimed**, which is what lets that last 
 receiver may call `recv()` before the isolate holding the `Channel` has minted its `Sender`, and it
 blocks rather than reading "no senders yet" as end-of-stream.
 
-**Sendability is computed, not declared.** There is no `Send` marker to write or forget. A type is
-sendable iff it is a `value` whose fields are all sendable, a `resource` (transferred by move), or a
-`Shared`/`Weak` over a deeply-immutable type. What is **rejected** is a **non-atomic shared refcount** — a <!-- xfail: channel_send_shared -->
-`Shared`/`Weak` over a mutable payload, or anything transitively containing one — with an error naming the
-offending field, the same way the escape check reports.
+**Sendability is declared, and verified — the `immutable` model at the isolate seam.** A type says
+`implements Sendable`, and the compiler checks the claim over every field, base and variant payload; a
+crossing — a `spawn` bundle, a `Channel<T: Sendable>` element — **requires** the declaration. Both mistakes
+are errors: the **lie** (`Bad implements Sendable` over a `Shared<Leaf>` whose `Leaf` is mutable — a
+non-atomic refcount two isolates would release) is refused where it is made, naming the member and the <!-- xfail: channel_send_shared, spawn_bundle_shared, sendable_lie_shared_field -->
+reason; the **omission** (a plain `Quiet { int32 n; }` handed to `spawn` or put in a `Channel`) is refused <!-- xfail: sendable_undeclared_spawn, sendable_undeclared_channel -->
+at the crossing. So the whole set of types that may leave an isolate is one grep away, and no type is
+sendable by accident: a `resource` wrapping a thread-affine C handle whose author wrote nothing is not
+Sendable, and nothing holding it may claim to be. <!-- xfail: sendable_undeclared_field -->
+
+What may cross **without** a declaration is exactly what cannot carry one: a primitive and `string`
+(declared for them in the prelude, like `Hashable`), a payload-less `enum`, a bare `fnptr` value, and the C
+seam — `UnsafePtr` and an extern struct. A **generic enum** (`Optional<T>`, a user `Msg<T>`) cannot declare
+a contract yet, so it alone is judged by its payloads: a sum type has nothing they do not show. The stdlib
+writes its own rules in the same words — `Sendable when [T: Sendable, A: Sendable]` on every container, so <!-- test: sendable_when_gate -->
+an arena-backed `DynamicArray<T, BumpAllocator>` cannot cross (its allocator points into the parent's <!-- xfail: sendable_arena_container -->
+arena), and `Sendable when [T: Immutable]` on `Shared`/`Weak`, which is the rule "a shared handle may cross
+exactly when its payload cannot change" written down rather than built in. <!-- test: spawn_bundle_immutable -->
+
+Two shapes are **never** Sendable, because their types hide what they hold. A `BindableFunctionPtr` bound
+from a `Shared<T>` retains that receiver — a non-atomic refcount — and its type names only the signature. <!-- xfail: sendable_bindable_field -->
+A boxed contract `Owned<C>` erases the concrete type behind it, so it is Sendable only when the contract
+**requires** it of every implementor — `type contract Job for resource implements Sendable` — after which <!-- xfail: sendable_boxed_contract, sendable_contract_refine_bad -->
+each `implements Job` must declare `Sendable` too and is verified like any other; that is what lets a job
+queue of `Owned<Job>` cross. <!-- test: sendable_contract_refine -->
 A `view` and a bare `contract` value need no rule here: neither can be a field at all, so neither ever
 reaches a bundle. <!-- xfail: view_field, iface_field -->
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
@@ -3960,6 +3981,9 @@ chunking below surprising. Now `grep 'workers:'` finds every parallelism-width d
 `ref` is mandatory: disjoint *mutable* access is the entire point. The input is a `View<T>` or any
 contiguous container that exposes `.view()` (`DynamicArray`, `FixedArray` are auto-viewed); a
 non-contiguous container such as a `Map` has no `.view()` and is rejected. <!-- xfail: parfor_noncontiguous -->
+The element and every captured local reach the workers by `ref`, which is the borrow form of a `spawn`
+bundle, so each faces the same sendability gate: a user element type must declare `implements Sendable` <!-- xfail: parfor_elem_undeclared -->
+(a primitive needs nothing — see *Channels* below for the whole rule), and `parallel_spawn` shares the gate. <!-- test: ecs_pattern, parallel_spawn_pool -->
 
 **There are usually FEWER workers than elements** — `workers: 8` over 30 elements is 8 isolates running 4
 elements each, one after another. That is the point of the construct: the work is finite and independent,
@@ -4067,7 +4091,8 @@ a silent no-op: the guarantee is deep and whole-type — one mutable field anywh
 per-member spelling could promise nothing. `const` is the per-field promise (write-once, constructor
 only) and `const fn` the per-method one.
 
-A `Shared<T>` over a deeply-immutable `T` is sendable, so any number of isolates can hold and read
+A `Shared<T>` over a deeply-immutable `T` is Sendable — `std::memory` writes it as `Sendable when
+[T: Immutable]` on the type itself — so any number of isolates can hold and read
 the same asset with no copy. Its control block switches to an atomic refcount only in that case, so
 an ordinary single-isolate `Shared` pays nothing. This is distinct from a `const` binding, which
 only promises *this* alias will not mutate and therefore cannot license cross-isolate sharing.

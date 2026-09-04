@@ -1,0 +1,25 @@
+// The first erasure hole the declared contract closes. A `BindableFunctionPtr` built from a `Shared<T>`
+// RETAINS the receiver (the runtime struct carries `obj` and `ctrl` — a non-atomic refcount), and its type
+// names only the signature, so no walk over `Handler`'s fields can tell a bound-from-Shared bindable from a
+// promoted free function. It is therefore never Sendable, and a type claiming `Sendable` over one is a lie.
+// PROBED against 0.9.157: this shape compiled clean and two isolates released one control block.
+import { std::concurrent::Isolate, std::memory::Shared };
+fnptr int32 Get(int32 d);
+type resource Probe implements Sendable {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 read(int32 d) { return this.id + d; }
+}
+type resource Handler implements Sendable {
+    BindableFunctionPtr<Get> cb;   // ERROR: may retain a `Shared` receiver its type cannot show
+    public ctor make(BindableFunctionPtr<Get> cb) { this.cb = give cb; }
+}
+fn void worker(Handler h) { }
+fn int32 main() {
+    Shared<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    Handler h = Handler.make(cb: give g);
+    Isolate w = spawn worker(h: give h);
+    w.join();
+    return p.read(d: 0);
+}

@@ -1,11 +1,11 @@
 // The transitive half of the sendability gate. `channel_send_shared` covers a bare `Shared<Leaf>` FIELD;
 // this covers the same refcount one level deeper, inside a collection — which passed the gate until now.
 //
-// Why it escaped: a library generic keeps its element in its TYPE ARGUMENTS, not in a field a walk can
-// resolve. `DynamicArray<T>` stores `UnsafePtr<T> data`, and a raw pointer is not a class, so the field
-// walk found nothing; and the collection-element arm beside it is gated on `isIntrinsicColl`, which
-// describes the intrinsic collections and the smart-pointer triad — not `DynamicArray`/`Map`, which are
-// ordinary library generic instances.
+// Why it escaped, then: a library generic keeps its element in its TYPE ARGUMENTS, not in a field a walk
+// can resolve. `DynamicArray<T>` stores `UnsafePtr<T> data`, and a raw pointer is not a class, so the
+// structural walk found nothing. Now the container states its own rule — `Sendable when [T: Sendable]` in
+// std::collections — so `DynamicArray<Shared<Leaf>>` simply is not Sendable, and `Bad`'s declaration over
+// it is refused naming the field `xs` and the argument that failed the gate.
 //
 // The hazard is identical to the guarded case: two isolates holding handles to one `Leaf` race a
 // non-atomic `Rc` counter, so the pointee is freed twice or never. `channel_send_shared`'s own header
@@ -14,7 +14,7 @@ import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Rec
 
 type value Leaf { int32 v; }
 
-type resource Bad {
+type resource Bad implements Sendable {
     DynamicArray<Shared<Leaf>> xs;   // the refcount, one indirection down
 }
 

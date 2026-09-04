@@ -9,13 +9,13 @@
 // safe sharing answers — the first being not sharing at all (a moved bundle).
 import { std::concurrent::Isolate, std::memory::Shared };
 
-type immutable value Palette {
+type immutable value Palette implements Sendable {
     int32 tint;
     public ctor make(int32 tint) { this.tint = tint; }
     public fn int32 shade(int32 i) { return this.tint + i; }
 }
 
-type resource Job {
+type resource Job implements Sendable {
     Shared<Palette> asset;    // sendable: the payload is deeply immutable
     int32 index;
     public ctor make(Shared<Palette> asset, int32 index) { this.asset = give asset; this.index = index; }

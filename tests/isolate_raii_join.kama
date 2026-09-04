@@ -4,7 +4,7 @@
 // `shared` afterward. KAMA_TSAN-clean (the drop-join is a happens-before barrier).
 import { std::concurrent::Isolate };
 
-type resource Payload {
+type resource Payload implements Sendable {
     UnsafePtr<int32> dst;
     int32 value;
 

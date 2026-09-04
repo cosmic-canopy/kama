@@ -1,0 +1,23 @@
+// The positive twin of xfail/sendable_boxed_contract: a job queue of `Owned<Job>`. `Job` requires
+// `Sendable` of its implementors, `Task` declares it (and is verified — one integer), so a `Worker` boxing
+// an `Owned<Job>` may declare it too and cross into an isolate. The child runs the job through the box.
+import { std::concurrent::Isolate, std::concurrent::Atomic, std::memory::Owned };
+type contract Job for resource implements Sendable { fn int32 run(); }
+type resource Task implements Job, Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 run() { return this.n * 2; }
+}
+type resource Worker implements Sendable {
+    Owned<Job> job;
+    public ctor make(Owned<Job> job) { this.job = give job; }
+    public fn int32 go() { return this.job.run(); }
+}
+fn void work(Worker w) { int32 r = w.go(); }
+fn int32 main() {
+    Owned<Job> j = new Task.make(n: 21);
+    Worker w = Worker.make(job: give j);
+    Isolate iso = spawn work(w: give w);
+    iso.join();
+    return 42;
+}

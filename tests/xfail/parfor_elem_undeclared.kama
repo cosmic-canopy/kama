@@ -1,0 +1,15 @@
+// `parallel_for` hands each worker its slice's elements by `ref` — the borrow form of a `spawn` bundle —
+// so an element type faces the same sendability gate a bundle does: a worker may `copy` a handle out of
+// an element, and the parent's drop after the barrier then races that copy's release. `Cell` declares
+// nothing, so the loop is refused at the crossing, exactly as `spawn step(c: ref cell)` would be.
+// (`parallel_spawn` shares the lowering and the gate; tests/parallel_spawn_pool.kama is the declaring twin.)
+import { std::concurrent::cpuCount, std::collections::DynamicArray };
+type value Cell { public int32 v; public ctor make(int32 v) { this.v = v; } }
+fn int32 main() {
+    DynamicArray<Cell> xs = DynamicArray.empty();
+    xs.add(item: Cell.make(v: 1));
+    parallel_for (ref Cell c in xs, workers: cpuCount()) {   // ERROR: `Cell` does not declare `implements Sendable`
+        c.v = c.v + 1;
+    }
+    return 0;
+}

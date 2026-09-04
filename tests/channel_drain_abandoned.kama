@@ -10,7 +10,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr  malloc(usize n);
 extern fn void free(UnsafePtr p);
 
-type resource Tracked {
+type resource Tracked implements Sendable {
     UnsafePtr<int32> tally;   // non-owning: a shared drop counter living in main
     public unsafe ctor make(UnsafePtr<int32> tally) { this.tally = tally; }
     unsafe ~Tracked() { this.tally[0] = this.tally[0] + 1; }

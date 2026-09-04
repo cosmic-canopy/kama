@@ -340,7 +340,9 @@ specifiers ride along: `${pi:.2}`, `${n:0x}`, `${n:06}`.
 kama's concurrency is shared-nothing. Work runs in **isolates** — real OS threads natively, Web
 Workers on the web — and they communicate over typed **channels** rather than shared memory. A
 `value` sent over a channel is copied; a `resource` is moved with `give`, so the sender provably
-cannot touch it afterwards.
+cannot touch it afterwards. A type of your own crosses only if it declares `implements Sendable`, a
+claim the compiler verifies over every field — so `grep Sendable` lists everything that may leave an
+isolate, and nothing does so by accident. Primitives and `string` need no declaration.
 
 ```kama
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };

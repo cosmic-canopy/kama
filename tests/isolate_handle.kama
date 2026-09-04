@@ -4,7 +4,7 @@
 // that the fused form (spawn+join in one statement) can't show.
 import { std::concurrent::Isolate };
 
-type resource Payload {
+type resource Payload implements Sendable {
     UnsafePtr<int32> dst;
     int32 value;
 

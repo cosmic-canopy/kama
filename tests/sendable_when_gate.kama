@@ -1,0 +1,37 @@
+// The declaring side, end to end. A user generic writes its rule the way the stdlib does —
+// `Sendable when [T: Sendable]` — and a bundle composes every shape that crosses without its own
+// declaration: a stdlib container over a declared element, a generic enum (`Optional<T>`, judged by its
+// payload because a generic enum cannot declare a contract yet), a raw pointer (the C seam), a primitive.
+import { std::concurrent::Isolate, std::concurrent::Atomic, std::collections::DynamicArray };
+type value Leaf implements Sendable { public int32 v; public ctor make(int32 v) { this.v = v; } }
+type resource Box<T> implements Sendable when [T: Sendable] {
+    T item;
+    public ctor make(T item) { this.item = item; }
+    public fn int32 peek() { return this.item.v; }
+}
+type resource Bundle implements Sendable {
+    Box<Leaf> boxed;
+    DynamicArray<Leaf> items;
+    Optional<int32> maybe;
+    UnsafePtr raw;
+    int32 n;
+    public unsafe ctor make(Box<Leaf> boxed, DynamicArray<Leaf> items) {
+        this.boxed = give boxed; this.items = give items; this.maybe = Optional::Some(value: 5); this.raw = null; this.n = 1;
+    }
+    public fn int32 sum() {
+        int32 s = this.boxed.peek() + this.n;
+        foreach (Leaf l in this.items) { s = s + l.v; }
+        return s;
+    }
+}
+fn void work(Bundle b) { int32 s = b.sum(); }
+fn int32 main() {
+    DynamicArray<Leaf> items = DynamicArray.empty();
+    items.add(item: Leaf.make(v: 10));
+    items.add(item: Leaf.make(v: 20));
+    Bundle b = Bundle.make(boxed: Box::<Leaf>.make(item: Leaf.make(v: 11)), items: give items);
+    int32 local = b.sum();                       // 11 + 1 + 10 + 20 = 42
+    Isolate iso = spawn work(b: give b);
+    iso.join();
+    return local;
+}

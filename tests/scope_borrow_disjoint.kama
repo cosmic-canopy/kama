@@ -5,7 +5,7 @@
 // dangle. No move, no heap box, no `UnsafePtr`/`unsafe` — the ergonomic payoff over M4.1. Run under KAMA_TSAN=1.
 import { std::concurrent::Isolate };
 
-type value Acc {
+type value Acc implements Sendable {
     public int32 total;   // read by main after the scope
     int32 lo;
     int32 hi;

@@ -1,0 +1,10 @@
+// `type contract Job for resource implements Sendable` is a REQUIREMENT on implementors, and it is
+// enforced where a type takes the contract: `Bad implements Job` without `Sendable` is refused before its
+// fields are ever looked at. (The positive twin is tests/sendable_contract_refine.kama.)
+type contract Job for resource implements Sendable { fn int32 run(); }
+type resource Bad implements Job {   // ERROR: `Job` requires `Sendable` of every implementor
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 run() { return this.n; }
+}
+fn int32 main() { Bad b = Bad.make(n: 1); return b.run(); }

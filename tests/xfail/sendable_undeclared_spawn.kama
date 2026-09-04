@@ -1,0 +1,13 @@
+// The OMISSION half of the `Sendable` contract: a type nobody annotated does not cross. `Quiet` is a
+// perfectly plain resource — one integer — and it is still refused as a bundle, because sendability is
+// declared and verified, never inferred: the set of types that may leave an isolate is a grep for
+// `implements Sendable`, and no type joins it by accident. (The declaring twin is tests/sendable_when_gate.)
+import { std::concurrent::Isolate };
+type resource Quiet { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void worker(Quiet q) { }
+fn int32 main() {
+    Quiet q = Quiet.make(n: 1);
+    Isolate w = spawn worker(q: give q);   // ERROR: `Quiet` does not declare `implements Sendable`
+    w.join();
+    return 0;
+}

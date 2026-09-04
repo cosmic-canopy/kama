@@ -4,7 +4,7 @@
 // TSan-clean (disjoint cells). Run under KAMA_TSAN=1.
 import { std::concurrent::Isolate };
 
-type resource Slot {
+type resource Slot implements Sendable {
     UnsafePtr<int32> cell;
     int32 value;
 

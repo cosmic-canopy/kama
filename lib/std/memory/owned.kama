@@ -9,7 +9,7 @@ export { Owned };
 // stores the handle in `alloc` (via `adoptIn`), so the dtor releases it through the SAME allocator —
 // letting a boxed object live in a caller-owned arena and be bulk-reclaimed on `reset()`. The allocator
 // is a copyable VALUE handle carried by value (zero-size for `GlobalAllocator`).
-type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T> {
+type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> p;
     A alloc;
     // HeapOwner: adopt a raw block into a box with the DEFAULT allocator (the bare-`new` path). Leaves `alloc`

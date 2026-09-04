@@ -62,7 +62,7 @@ extern fn int32  kama_atomic_cas      (UnsafePtr cell, UnsafePtr expected, Unsaf
 extern fn void   kama_atomic_fetch_add(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
 extern fn void   kama_atomic_fetch_sub(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
 
-type resource Atomic<T> {
+type resource Atomic<T> implements Sendable {   // one lock-free word: sendable outright, and shareable by `ref`
     T value;   // the one shared cell; naturally aligned (a single-field struct), so the ops are lock-free
 
     // Build a cell holding `value`. The only constructor — an `Atomic` is always created initialized.

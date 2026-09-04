@@ -1,0 +1,10 @@
+// Transitive opt-in is what makes a thread-affine C handle safe by DEFAULT. `GlContext` wraps a raw
+// pointer the driver says must stay on the thread that created it; structurally it is one `UnsafePtr`,
+// which every walk calls sendable. Its author wrote nothing — so it is not Sendable, and `Renderer` may not
+// claim to be over it. No opt-out marker is needed: silence is the opt-out.
+type resource GlContext { UnsafePtr handle; public unsafe ctor make(UnsafePtr h) { this.handle = h; } }
+type resource Renderer implements Sendable {
+    GlContext gl;   // ERROR: `GlContext` does not declare `implements Sendable`
+    public ctor make(GlContext gl) { this.gl = give gl; }
+}
+fn int32 main() { return 0; }

@@ -1,0 +1,15 @@
+// The LIE half: a declaration the compiler cannot verify is an error naming the member. `Bad` claims
+// `Sendable` and holds a `Shared<Leaf>` over a MUTABLE `Leaf` — a non-atomic refcount two isolates would
+// release. No crossing is needed for this to fire: the claim is checked where it is made, exactly as an
+// `immutable` qualifier is checked at its declaration (tests/xfail/immutable_mutable_field.kama).
+import { std::memory::Shared };
+type value Leaf implements Sendable { int32 v; public ctor make(int32 v) { this.v = v; } }
+type resource Bad implements Sendable {
+    Shared<Leaf> s;   // ERROR: `Leaf` is not `immutable`, so the shared refcount is not atomic
+    public ctor make(Shared<Leaf> s) { this.s = give s; }
+}
+fn int32 main() {
+    Shared<Leaf> s = new Leaf.make(v: 1);
+    Bad b = Bad.make(s: copy s);
+    return 0;
+}

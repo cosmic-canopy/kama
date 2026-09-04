@@ -20,7 +20,7 @@ type contract Hasher for value { static fn uint64 finish(uint64 raw); }
 // to live baked inside every integer `hash()`, so an integer key hashes identically to pre-M9). A
 // bijection over its input, so it never reduces entropy: re-mixing an already-mixed content hash
 // (string FNV) is harmless, and distinct raw hashes stay distinct (collisions come only from the mask).
-type value DefaultHasher implements Hasher {
+type value DefaultHasher implements Hasher, Sendable {
     public static fn uint64 finish(uint64 raw) {
         uint64 x = raw + 11400714819323198485ui64;
         x = (x ^ (x >> 30ui64)) * 13787848793156543929ui64;
@@ -33,6 +33,6 @@ type value DefaultHasher implements Hasher {
 // multiply vs splitmix's three — measurably faster in hot lookup loops — for keys already well
 // distributed (sequential integer ids). Weaker avalanche; select it explicitly (`Map<K,V,FastHasher>`)
 // only when you trust your key distribution.
-type value FastHasher implements Hasher {
+type value FastHasher implements Hasher, Sendable {
     public static fn uint64 finish(uint64 raw) { return raw * 11400714819323198485ui64; }
 }

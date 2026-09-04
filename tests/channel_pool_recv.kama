@@ -9,7 +9,7 @@
 // Run under KAMA_TSAN=1; the join is what orders each worker's write against main's read.
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
 
-type resource Worker {
+type resource Worker implements Sendable {
     Receiver<int32> rx;
     UnsafePtr<int32> tally;   // this worker's own cell — disjoint from its peer's
 

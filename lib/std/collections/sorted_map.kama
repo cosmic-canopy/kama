@@ -25,7 +25,7 @@ export { SortedMap };
 // B-tree algorithms live here as methods so `this` touches its own `keys`/`vals`/`kids` fields directly (the
 // normal in-place field mutation); a child is mutated via `this.kids[c].method()` (auto-deref through the
 // `Owned` box) and whole subtrees move via `this.kids.remove(...)` / `insertAt(...)`.
-type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
+type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements Sendable when [K: Sendable, V: Sendable, A: Sendable] {
     DynamicArray<K, A> keys;
     DynamicArray<V, A> vals;                            // parallel to keys (vals[i] belongs to keys[i])
     DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids;   // empty for a leaf; length == keys.length()+1 internal
@@ -462,7 +462,8 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
 type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
                    Serialize when [K: Serialize, V: Serialize],
-                   Deserialize<This> when [K: Deserialize<K>, V: Deserialize<V>] {
+                   Deserialize<This> when [K: Deserialize<K>, V: Deserialize<V>],
+                   Sendable when [K: Sendable, V: Sendable, A: Sendable] {
     // The ROOT box is drawn from `GlobalAllocator` (the `Owned`'s A defaults to Global), independent of
     // the node's own `A`: a bare `new` into a stateless-allocator box is allowed for any pointee A and
     // never touches a not-yet-set handle. Every INTERIOR node box is drawn from `A` (the placement

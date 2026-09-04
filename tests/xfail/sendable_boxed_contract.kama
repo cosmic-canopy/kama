@@ -1,0 +1,26 @@
+// The second erasure hole. `Owned<Job>` boxes a CONTRACT: the concrete type behind it is erased, so a
+// `Bad` holding a mutable `Shared<Leaf>` rides through as a `Job`. PROBED against 0.9.157: this compiled
+// and ran, and the child released the parent's non-atomic refcount. Now a boxed contract is Sendable only
+// when the contract REQUIRES it of its implementors — `type contract Job for resource implements Sendable`
+// — which then makes every `implements Job` declare and be verified (tests/sendable_contract_refine.kama).
+import { std::concurrent::Isolate, std::memory::Shared, std::memory::Owned };
+type value Leaf implements Sendable { public int32 v; public ctor make(int32 v) { this.v = v; } }
+type contract Job for resource { fn int32 run(); }
+type resource Bad implements Job {
+    Shared<Leaf> s;
+    public ctor make(Shared<Leaf> s) { this.s = give s; }
+    public fn int32 run() { return this.s.v; }
+}
+type resource Worker implements Sendable {
+    Owned<Job> job;   // ERROR: boxes contract `Job`, which does not require `Sendable` of its implementors
+    public ctor make(Owned<Job> job) { this.job = give job; }
+}
+fn void worker(Worker w) { }
+fn int32 main() {
+    Shared<Leaf> s = new Leaf.make(v: 1);
+    Owned<Job> j = new Bad.make(s: copy s);
+    Worker w = Worker.make(job: give j);
+    Isolate iso = spawn worker(w: give w);
+    iso.join();
+    return s.v;
+}

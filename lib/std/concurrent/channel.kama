@@ -43,7 +43,7 @@ type enum SendResult<T> { Sent, Undelivered(T item) }
 // The send endpoint. Move-only. Any number may share one channel (`Channel.sender()` registers each);
 // dropping the LAST one closes the sender side and wakes every blocked receiver, so `recv` returns `None`
 // once drained.
-type resource Sender<T> {
+type resource Sender<T: Sendable> implements Sendable {
     UnsafePtr handle;   // the shared queue; null once moved-from (drop then no-ops, INVARIANT #0)
 
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
@@ -95,7 +95,7 @@ type resource Sender<T> {
 // The receive endpoint. Move-only. Any number may share one channel — that is a worker pool, and each
 // item goes to exactly one of them. Dropping the LAST one closes the receiver side and wakes every
 // blocked sender.
-type resource Receiver<T> {
+type resource Receiver<T: Sendable> implements Sendable {
     UnsafePtr handle;   // the shared queue; null once moved-from
 
     public unsafe ctor make(UnsafePtr handle) { this.handle = handle; }
@@ -147,7 +147,10 @@ type resource Receiver<T> {
 // which is what makes a fixed pool of worker isolates over one channel correct. The `Channel` itself is a
 // move-only `resource`, so it can also be moved INTO an isolate whose worker then mints its own endpoint
 // (tests/channel_mint_in_isolate) — which is why no separate `clone()` is needed on the endpoints.
-type resource Channel<T> {
+// `T: Sendable` IS the sendability gate for a channel element — an undeclared element type fails this
+// bound, with the reason (which field, which mutable pointee). The endpoints and the channel itself are
+// Sendable: each is one thread-safe handle, which is the whole point of them.
+type resource Channel<T: Sendable> implements Sendable {
     UnsafePtr handle;
 
     public unsafe ctor bounded(usize capacity) {

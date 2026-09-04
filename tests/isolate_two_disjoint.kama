@@ -4,7 +4,7 @@
 // so exactly one `__kama_iso_*` trampoline is emitted.
 import { std::concurrent::Isolate };
 
-type resource Payload {
+type resource Payload implements Sendable {
     UnsafePtr<int32> dst;
     int32 value;
 

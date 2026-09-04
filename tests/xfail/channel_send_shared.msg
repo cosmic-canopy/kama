@@ -1,1 +1,1 @@
-shares a non-atomic refcount across isolates
+is not `Immutable`

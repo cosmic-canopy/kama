@@ -12,7 +12,7 @@
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
          std::concurrent::cpuCount, std::collections::DynamicArray, std::collections::View };
 
-type resource Worker {
+type resource Worker implements Sendable {
     Receiver<int32> rx;
     int32 got;
 

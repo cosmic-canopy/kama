@@ -38,7 +38,7 @@ fn int32 cpuCount() { return rawCpuCount(); }
 // `join()` blocks for completion and is idempotent (it nulls the handle, so a second join — including the
 // destructor's — is a no-op, avoiding a double `pthread_join`). Dropping the handle joins, so a forgotten
 // join can never orphan the thread. This is the seed of the M4 structured-concurrency scope.
-type resource Isolate {
+type resource Isolate implements Sendable {   // a join handle may itself be handed to another isolate
     UnsafePtr handle;   // heap-boxed kama_isolate_t; null once joined
 
     // Wrap a raw boxed handle from the isolate seam. The compiler lowers the `isolate …` expression form

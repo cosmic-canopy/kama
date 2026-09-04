@@ -3,7 +3,7 @@
 // use-after-move, caught by the same move seam that guards every other `give`. This must fail to compile.
 import { std::concurrent::Isolate };
 
-type resource Payload {
+type resource Payload implements Sendable {
     int32 value;
 
     public ctor make(int32 value) {

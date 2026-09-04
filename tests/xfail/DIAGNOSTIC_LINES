@@ -76,9 +76,9 @@ cast_const_oob_unsigned	cast_const_oob_unsigned.kama:3
 cast_enum_rejected	cast_enum_rejected.kama:16
 cast_to_contract	cast_to_contract.kama:19
 cast_to_struct	cast_to_struct.kama:14
-channel_send_shared	channel_send_shared.kama:15
-channel_send_shared_collection	channel_send_shared_collection.kama:22
-channel_send_shared_variant	channel_send_shared_variant.kama:20
+channel_send_shared	channel_send_shared.kama:12
+channel_send_shared_collection	channel_send_shared_collection.kama:17
+channel_send_shared_variant	channel_send_shared_variant.kama:17
 class_identity_operator	class_identity_operator.kama:18
 class_identity_value	class_identity_value.kama:14 class_identity_value.kama:17 class_identity_value.kama:19 class_identity_value.kama:20
 compilefor_dangling	compilefor_dangling.kama:8
@@ -511,6 +511,7 @@ packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
 parallel_spawn_workers	parallel_spawn_workers.kama:15
+parfor_elem_undeclared	parfor_elem_undeclared.kama:11
 parfor_no_workers	parfor_no_workers.kama:14
 parfor_noncontiguous	parfor_noncontiguous.kama:9
 parfor_this	parfor_this.kama:11
@@ -557,6 +558,14 @@ self_local	self_local.kama:8
 self_move_owned	self_move_owned.kama:5 self_move_owned.kama:7 self_move_owned.kama:8 self_move_owned.kama:9
 self_param	self_param.kama:8
 self_returning_static_fn	self_returning_static_fn.kama:8
+sendable_arena_container	sendable_arena_container.kama:6
+sendable_bindable_field	sendable_bindable_field.kama:13
+sendable_boxed_contract	sendable_boxed_contract.kama:14
+sendable_contract_refine_bad	sendable_contract_refine_bad.kama:5
+sendable_lie_shared_field	sendable_lie_shared_field.kama:7
+sendable_undeclared_channel	sendable_undeclared_channel.kama:7
+sendable_undeclared_field	sendable_undeclared_field.kama:6
+sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10
 ser_field_no_generate	ser_field_no_generate.kama:2
 ser_unmarked_field	ser_unmarked_field.kama:4
 serialize_isize_field	serialize_isize_field.kama:13
@@ -580,7 +589,7 @@ slot_never_filled	slot_never_filled.kama:5
 slot_one_arm	slot_one_arm.kama:5
 slot_read_before_assign	slot_read_before_assign.kama:7
 slot_with_initializer	slot_with_initializer.kama:5
-spawn_bundle_shared	spawn_bundle_shared.kama:24
+spawn_bundle_shared	spawn_bundle_shared.kama:13
 spawn_in_nested_block	spawn_in_nested_block.kama:24
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15
 static_call_nonstatic	static_call_nonstatic.kama:8

@@ -1,13 +1,15 @@
-// M3.2: the structural sendability gate. A type that transitively reaches a NON-ATOMIC shared refcount
-// (`Shared<X>` / `Weak<X>`) may not cross a channel — the refcount is plain (non-atomic), so a
-// cross-isolate copy would race it. `Bad` has a `Shared<Leaf>` field, so `Channel<Bad>` is rejected with
-// a field-naming error (the compiler computes sendability structurally, like the escape check). Using
-// `Owned<Leaf>` (unique) or sending `Leaf` by value would be fine.
+// The sendability LIE, on the channel crossing. A type that holds a `Shared<X>` / `Weak<X>` over a MUTABLE
+// `X` may not cross a channel — the refcount is plain (non-atomic), so a cross-isolate copy would race it.
+// `Bad` declares `implements Sendable` and has a `Shared<Leaf>` field, so the declaration is refused where
+// it is made, naming the field and the reason (`Leaf` is not `immutable`) — the rule `Shared<T>` writes for
+// itself in std::memory as `Sendable when [T: Immutable]`. Using `Owned<Leaf>` (unique) or sending `Leaf`
+// by value would be fine. (Sendability is declared and verified since 0.9.158; before, it was a structural
+// walk with no declaration to check.)
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::memory::Shared };
 
 type value Leaf { int32 v; }
 
-type resource Bad {
+type resource Bad implements Sendable {
     Shared<Leaf> s;   // a non-atomic shared refcount — not sendable
 }
 

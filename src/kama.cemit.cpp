@@ -4823,6 +4823,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
     std::string elemTy = cType(pf->type);
+    // Each worker borrows its slice's elements by `ref`, which is the borrow form of a `spawn` bundle —
+    // so the element faces the same sendability gate a bundle does (a worker may `copy` a handle out of
+    // an element, and the parent's drop then races that copy's release). Recorded like a bundle, checked
+    // after emission by checkSpawnBundleSendability. A primitive element passes: its conformance is
+    // declared in the prelude.
+    if (!_probingTemplate && !elemTy.empty())
+        _spawnBundles.push_back(SpawnBundle{ elemTy, pf->line, diagFile(), "as a `" + KW + "` element" });
 
     // ── (a) Resolve the iterable to a View<T> (direct, or auto-`.view()` a contiguous container). ─────
     std::string itCls = exprClass(pf->expression);
@@ -4995,6 +5002,11 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                          "across all workers and would race; make it an `Atomic<T>`, or write only through the "
                          "loop element `" + loopVar + "`").c_str(), pf->line);
         c.addr = _refParams.count(nm) ? nm : ("&(" + nm + ")");   // a ref-param capture IS already a pointer
+        // A capture reaches every worker by `ref` — the same crossing as a borrowed bundle, so the same
+        // sendability gate (see the element record above).
+        if (!_probingTemplate && !c.cType.empty())
+            _spawnBundles.push_back(SpawnBundle{ c.cType, pf->line, diagFile(),
+                                                 "as the captured local `" + nm + "` of a `" + KW + "`" });
         caps.push_back(c);
     }
 
@@ -7385,11 +7397,22 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         // `Copyable` (duplicable). Recognized by source name so the give/copy discipline can consult them.
         if (cd->name && cd->name->value && *cd->name->value == "Movable")  _movableContract  = ii.name;
         if (cd->name && cd->name->value && *cd->name->value == "Copyable") _copyableContract = ii.name;
+        // the prelude `Sendable` marker — DECLARED by a type and VERIFIED by the compiler over its fields
+        // (checkSendableDeclarations); required at every isolate crossing. Recognized by source name so
+        // the refinement below and the gates can consult it.
+        if (cd->name && cd->name->value && *cd->name->value == "Sendable") _sendableContract = ii.name;
         // Refinement: `type contract Animated implements Drawable` — record the parent contract names
         // (resolved in this contract's scope); linkContracts() merges their methods in transitively.
         if (cd->baseTypes && cd->baseTypes->interfaces)
             for (auto& p : *cd->baseTypes->interfaces)
-                if (p && p->value) ii.refines.push_back(resolveUserName(*p->value, p->qualifier));
+                if (p && p->value) {
+                    const std::string pn = resolveUserName(*p->value, p->qualifier);
+                    // `type contract Job implements Sendable` — a REQUIREMENT on implementors, not a
+                    // parent with members to merge: every `implements Job` must also declare `Sendable`
+                    // (and is verified), which is what lets a boxed `Owned<Job>` cross an isolate.
+                    if (!_sendableContract.empty() && pn == _sendableContract) ii.requiresSendable = true;
+                    else ii.refines.push_back(pn);
+                }
         // `<T is This>` — the identity pin. Validated here, at the declaration, because every rejection
         // below is a property of the contract alone; a use site would report it too late and too often.
         if (cd->typePins)
@@ -10395,6 +10418,13 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
     // Rust's `ty::Error` / Swift's `ErrorType` poisoning, and C++20's "constraint not satisfied, do not
     // instantiate"; walking the body anyway is the pre-concepts C++ behaviour, which is what this was.
     if (!boundsOk) _boundFailedInsts.insert(mangled);
+    // ...and while THIS refused instance's shape is registered below, a nested instantiation its member
+    // signatures force (`Channel<Quiet>` mentions `Receiver<T>`, so `Receiver<Quiet>` registers here, under
+    // the template's own file and line) fails the same bound again — a consequence of the argument already
+    // refused, reported against the LIBRARY. Guard case 8b: a failed bound is reported ONCE, at the use
+    // site. So bound failures are silent for the duration of a refused instance's registration.
+    struct SilentBounds { int& n; bool on; SilentBounds(int& c, bool o) : n(c), on(o) { if (on) ++n; } ~SilentBounds() { if (on) --n; } };
+    SilentBounds _sb(_silentBounds, !boundsOk);
 
     // Register the KEY first so the transitive scan below can't recurse into this same instance.
     _genericTypeInsts[mangled] = { tmpl, mangled, concrete };
@@ -13386,6 +13416,13 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // matches the `Copyable` arm directly below.
     if (bound_ == "Immutable")
         return it == _classes.end() ? true : isImmutableType(it->second);
+    // `Sendable` is declared and verified, and this is where the by-NATURE cases join the nominal ones:
+    // a `when [V: Sendable]` gate on `Map<K, Unit>` must see the payload-less enum, `DynamicArray<UnsafePtr>`
+    // the raw pointer, `Channel<InlineArray<int32>#(4)>` the comptime array — none of which has a
+    // declaration site. One predicate answers all of it (unsendableReason); it saves and restores every
+    // context it touches, which is why asking it from a const method is honest.
+    if (!_sendableContract.empty() && bound_ == _sendableContract)
+        return const_cast<CEmitter*>(this)->unsendableReason(t).empty();
     if (bound_ == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
@@ -14475,95 +14512,196 @@ bool CEmitter::isAtomicClass(const std::string& cls) const
     return g != _genericTypeInstOf.end() && g->second == _atomicTmpl;
 }
 
-// Channel-sendability gate: the Shared|Weak-only sibling of computeReachesPointer(). A clone of that
-// fixpoint that seeds ONLY `Shared`/`Weak` (a non-atomic refcount), so `reachesSharedWeak` marks exactly
-// the types that may not cross a `channel<T>`. `Owned` is sendable (unique) and does NOT seed here.
-void CEmitter::computeReachesSharedWeak()
+// The refcount FLAVOR of a `Shared<T>`/`Weak<T>` instance (M6.2): over a deeply-immutable `T` the control
+// block uses the atomic ops, so any number of isolates may hold the handle; over a mutable `T` it keeps
+// the cheap non-atomic `Rc` ops. Selected at emit time by the kama_ctrl.h seam (`__kama_ctrl_atomic()`),
+// so it must be settled here in collectProgram, before any body emits. It used to be a side effect of
+// seeding the sendability fixpoint; the fixpoint is gone (sendability is DECLARED and verified now — see
+// checkSendableDeclarations) and the flavor decision, which selects emitted code, stays where it was.
+void CEmitter::computeAtomicRefcount()
 {
     for (auto& kv : _classes) {
-        bool sw = isSharedOrWeakClass(kv.first);
-        // M6.2: a `Shared<T>`/`Weak<T>` over a DEEPLY-IMMUTABLE `T` is sendable across isolates — its control
-        // block uses the atomic refcount flavor, and the payload never mutates, so nothing races. Such a
-        // handle does NOT seed the sendability taint, so it (and any type holding it) may cross a channel /
-        // cross-scope borrow. A Shared/Weak over a mutable payload still seeds (its Rc counter would race).
-        if (sw) {
-            std::string elem;
-            auto gi = _genericTypeInsts.find(kv.first);
-            if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) elem = cType(gi->second.typeArgs[0]);
-            else { auto ci = _collections.find(kv.first); if (ci != _collections.end()) elem = ci->second.elemClass; }
-            if (!elem.empty() && deeplyImmutable(elem)) {
-                sw = false;
-                // M6.2: this Shared/Weak instance is the deeply-immutable flavor -> its control block uses the
-                // atomic refcount ops. Set the flag the prelude reads via `__kama_ctrl_atomic()` (library path,
-                // this ClassInfo) and its CollectionInfo sibling (intrinsic-macro path, wired later).
-                kv.second.useAtomicRefcount = true;
-                auto ci = _collections.find(kv.first);
-                if (ci != _collections.end()) ci->second.useAtomicRefcount = true;
-            }
-        }
-        kv.second.reachesSharedWeak = sw;
+        if (!isSharedOrWeakClass(kv.first)) continue;
+        std::string elem;
+        auto gi = _genericTypeInsts.find(kv.first);
+        if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty()) elem = cType(gi->second.typeArgs[0]);
+        else { auto ci = _collections.find(kv.first); if (ci != _collections.end()) elem = ci->second.elemClass; }
+        if (elem.empty() || !deeplyImmutable(elem)) continue;
+        kv.second.useAtomicRefcount = true;
+        auto ci = _collections.find(kv.first);
+        if (ci != _collections.end()) ci->second.useAtomicRefcount = true;
     }
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (auto& kv : _classes) {
-            ClassInfo& ci = kv.second;
-            if (ci.reachesSharedWeak || ci.isExternStruct) continue;
-            bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
-            if (inst) {
-                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-                _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]
-                                                            : _genericTypeCtx[gi.templateKey];
-                _typeSubst.clear();
-                const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
-                for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
-            } else {
-                _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+}
+
+// Resolve names the way `ci`'s own body does — its namespace, and for a generic instance its parameter
+// binding. The caller SAVES `_nsCtx`/`_typeSubst` before and RESTORES them after: the whole-program passes
+// that use this run after emission too, and a partial swap left behind on an emission path is the
+// five-site hazard that broke 30 fixtures once already.
+void CEmitter::enterClassCtx(const ClassInfo& ci)
+{
+    bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+    if (inst) {
+        const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+        _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name] : _genericTypeCtx[gi.templateKey];
+        _typeSubst.clear();
+        const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+        for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+    } else {
+        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+    }
+}
+
+// Does contract `name` require `Sendable` of every implementor — `type contract Job implements Sendable`?
+// Answered for a plain contract, a generic-contract template, and a specialized instance (via its template).
+bool CEmitter::contractRequiresSendable(const std::string& name) const
+{
+    auto it = _interfaces.find(name);
+    if (it != _interfaces.end()) {
+        if (it->second.requiresSendable) return true;
+        if (!it->second.templateKey.empty()) {
+            auto gt = _genericContracts.find(it->second.templateKey);
+            return gt != _genericContracts.end() && gt->second.requiresSendable;
+        }
+        return false;
+    }
+    auto gt = _genericContracts.find(name);
+    return gt != _genericContracts.end() && gt->second.requiresSendable;
+}
+
+// Is `cls` (a class key / C type) Sendable — may a value of it cross an isolate boundary?
+//
+// DECLARED, not computed. A user type says `implements Sendable` and the compiler VERIFIES the claim over
+// every field, base and variant payload (checkSendableDeclarations); a crossing — a `spawn` bundle, a
+// `Channel<T: Sendable>` element — requires the declaration. The `immutable` model: you write it, the
+// compiler double-checks it, and a type nobody annotated does not cross. What answers WITHOUT a
+// declaration is exactly what cannot carry one:
+//   - a primitive and `string`: conformances the prelude declares (`type intrinsic <…> implements Sendable`)
+//   - a payload-less `enum`, a bare `fnptr` value: scalars with no interior
+//   - `UnsafePtr<T>` and an extern struct: the C seam, stated here rather than hidden
+//   - `InlineArray<T>`/`Simd<T>`: iff `T` is (a comptime-sized value with no declaration site of its own)
+//   - a boxed contract (`Owned<C>`, the type-erased fat handle): iff `C` refines `Sendable`
+//     (`type contract C implements Sendable`), which makes every implementor declare it and be verified
+// and what never answers yes: a `BindableFunctionPtr`, whose type names a signature and cannot show
+// whether it retains a `Shared` receiver — the erasure hole the old structural walk could not see.
+// A library generic instance (`DynamicArray<T, A>`, `Shared<T, A>`) is judged NOMINALLY like a user type:
+// the stdlib writes `Sendable when [T: Sendable, A: Sendable]` on the container and `when [T: Immutable]`
+// on the shared pointer, the `when` gate is decided per instance at registration, and `interfaces` holds
+// the verdict. That is the rule "a `Shared<T>` may cross iff `T` cannot change", written in kama.
+//
+// `unsendableReason` is the same walk asked "why not": "" for Sendable, else one clause for a diagnostic.
+bool CEmitter::isSendableClass(const std::string& cls)
+{
+    return unsendableReason(cls).empty();
+}
+
+std::string CEmitter::unsendableReason(const std::string& cls)
+{
+    const std::string& S = _sendableContract;
+    if (S.empty()) return "";                       // no `Sendable` contract in this program: nothing to judge by
+    auto declaredOn = [&](const std::string& key) {
+        auto rc = _intrinsicConformances.find(key);
+        return rc != _intrinsicConformances.end() && rc->second.count(S) != 0;
+    };
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) {
+        if (cls.empty()) return "";
+        if (cls.back() == '*') return "";                              // `UnsafePtr<T>` — the C seam
+        if (isSigType(cls)) return "";                                 // a bare `fnptr` value: code, no receiver
+        if (isEnum(cls)) return "";                                    // a payload-less enum: a scalar
+        const std::string pk = primKeyOfCType(cls);
+        if (isScalarPrimKey(pk))
+            return declaredOn(pk) ? "" : "`" + pk + "` does not declare `implements Sendable`";
+        return "";                                                     // a C typedef from an extern header: the seam
+    }
+    const ClassInfo& ci = it->second;
+    if (ci.isExternStruct) return "";                                  // C data: the seam
+    if (isBindableClass(cls))
+        return "a `BindableFunctionPtr` may retain a `Shared` receiver its type cannot show";
+    if (ci.isIntrinsicColl) {
+        switch (ci.collKind) {
+            case CollKind::String:   // keyed by its C name in the pre-scan (`primKey` of a `string` target falls through to cType)
+                return (declaredOn(cls) || declaredOn("string")) ? "" : "`string` does not declare `implements Sendable`";
+            case CollKind::Fixed: case CollKind::Simd: case CollKind::Mask: {   // `InlineArray<T>`/`Simd<T>`: iff T
+                auto co = _collections.find(cls);
+                const std::string elem = co != _collections.end() ? co->second.elemCType : "";
+                const std::string r = elem.empty() ? "" : unsendableReason(elem);
+                return r.empty() ? "" : "its element `" + elem + "` is not Sendable (" + r + ")";
             }
-            bool r = (ci.base && ci.base->reachesSharedWeak);
-            if (!r)
-                for (auto& f : ci.fields) {
-                    auto it = _classes.find(cType(f.type));
-                    if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
+            case CollKind::Owned: case CollKind::Shared: case CollKind::Weak: {
+                // The intrinsic smart-pointer path is the CONTRACT-element box (`Owned<C>`, routed here by
+                // registerGenericTypeInst); a concrete element is an ordinary library instance, judged below.
+                const std::string& elem = ci.collElemClass;
+                if (isInterface(elem) || _genericContracts.count(elem)) {
+                    if (contractRequiresSendable(elem)) return "";
+                    return "it boxes contract `" + elem + "`, which does not require `Sendable` of its "
+                           "implementors (`type contract " + elem + " implements Sendable`)";
                 }
-            if (!r)
-                for (auto& v : ci.variants) {
-                    for (auto& f : v.payload) {
-                        auto it = _classes.find(cType(f.type));
-                        if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
+                if (ci.collKind == CollKind::Owned) {
+                    const std::string r = unsendableReason(elem);
+                    return r.empty() ? "" : "its pointee `" + elem + "` is not Sendable (" + r + ")";
+                }
+                return deeplyImmutable(elem) ? "" : "`" + elem + "` is not `immutable`, so the shared refcount is not atomic";
+            }
+            default: break;
+        }
+    }
+    for (auto& itf : ci.interfaces) if (itf == S) return "";           // NOMINAL: declared (and `when`-gated)
+    // A GENERIC enum instance (`Optional<T>`, `SendResult<T>`, a user `Msg<T>`) cannot declare a contract
+    // yet (ROADMAP §2, "generic `enum` members"), so it is the one shape judged by its payloads: a sum type
+    // has nothing its payloads do not show. A non-generic enum declares, like every other type.
+    if (ci.isGenericInst && ci.enumNode && !ci.variants.empty()) {
+        const NsCtx savedCtx = _nsCtx;
+        const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        enterClassCtx(ci);
+        std::string out;
+        for (auto& v : ci.variants) {
+            for (auto& f : v.payload) {
+                const std::string fc = cType(f.type);
+                const std::string r = unsendableReason(fc);
+                if (!r.empty()) { out = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`) is not Sendable (" + r + ")"; break; }
+            }
+            if (!out.empty()) break;
+        }
+        _nsCtx = savedCtx; _typeSubst = savedSubst;
+        return out;
+    }
+    // A generic instance whose TEMPLATE declares it: say which `when` condition failed for which argument,
+    // so an arena-backed container names its allocator rather than "does not declare".
+    if (ci.isGenericInst && _genericTypeInsts.count(cls)) {
+        const GenericTypeInst& gi = _genericTypeInsts[cls];
+        auto ti = _genericTypes.find(gi.templateKey);
+        ClassDeclarationNode* tn = ti != _genericTypes.end() ? ti->second.node : nullptr;
+        if (tn && tn->baseTypes && tn->baseTypes->interfaces) {
+            const NsCtx savedCtx = _nsCtx;
+            const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+            enterClassCtx(ci);
+            std::string out;
+            const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+            for (auto& itf : *tn->baseTypes->interfaces) {
+                if (!itf || !itf->value || resolveUserName(*itf->value, itf->qualifier) != S) continue;
+                if (!itf->whenParams) break;
+                for (size_t c = 0; c < itf->whenParams->size() && out.empty(); ++c) {
+                    auto& p = (*itf->whenParams)[c];
+                    auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
+                    const std::string pn = p && p->value ? *p->value : "";
+                    const std::string bn = resolveWhenBound(b);
+                    for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) {
+                        if (ps[i] != pn) continue;
+                        if (satisfiesBound(primKey(gi.typeArgs[i]), bn)) break;
+                        const std::string ac = cType(gi.typeArgs[i]);
+                        const std::string why = bn == S ? unsendableReason(ac) : "";
+                        out = "its type argument `" + ac + "` (for `" + pn + "`) is not `" + bn + "`"
+                            + (why.empty() ? "" : " (" + why + ")");
+                        break;
                     }
-                    if (r) break;
                 }
-            if (!r && ci.isIntrinsicColl) {
-                auto cit = _collections.find(ci.name);
-                if (cit != _collections.end()) {
-                    auto e = _classes.find(cit->second.elemClass);
-                    if (e != _classes.end() && e->second.reachesSharedWeak) r = true;
-                }
+                break;
             }
-            // A LIBRARY generic's element hides in its type ARGUMENTS, not in its fields. `DynamicArray<T>`
-            // stores `UnsafePtr<T> data` — a raw pointer, which is not a class, so the field walk above
-            // resolves nothing and the element is never seen. The `isIntrinsicColl` arm does not cover it
-            // either: `DynamicArray`/`Map` are library generic instances, not intrinsic collections.
-            //
-            // Without this, `DynamicArray<Shared<Leaf>>` in a sent bundle passed the gate while a bare
-            // `Shared<Leaf>` field was correctly rejected — the same non-atomic refcount, one level of
-            // indirection deeper, and the fixture's own header already promised "transitively reaches".
-            //
-            // Walking the arguments is the general statement of the rule: a container parameterized on an
-            // unsendable type is unsendable. It composes with the M6.2 exemption for free, because a
-            // `Shared<T>` over a deeply-immutable `T` never sets the flag this reads.
-            if (!r && inst) {
-                const GenericTypeInst& gi = _genericTypeInsts[ci.name];
-                for (auto& a : gi.typeArgs) {
-                    auto it = _classes.find(cType(a));
-                    if (it != _classes.end() && it->second.reachesSharedWeak) { r = true; break; }
-                }
-            }
-            if (inst) _typeSubst.clear();
-            if (r) { ci.reachesSharedWeak = true; changed = true; }
+            _nsCtx = savedCtx; _typeSubst = savedSubst;
+            if (!out.empty()) return out;
         }
     }
+    return "`" + cls + "` does not declare `implements Sendable`";
 }
 
 // M6.2 predicate: is `cls` a deeply-immutable class? (Primitives/enums aren't in `_classes`, so a non-class
@@ -14573,7 +14711,6 @@ bool CEmitter::deeplyImmutable(const std::string& cls) const
     auto it = _classes.find(cls);
     return it != _classes.end() && it->second.deeplyImmutable;
 }
-
 // Is a FIELD/variant-payload type deeply immutable — admissible inside an `immutable` type? A primitive
 // scalar (incl. `bool`/`float`/`char`) or the immutable `string` is an immutable leaf; an `enum` is an
 // immutable value; a named user type is immutable iff its class is `deeplyImmutable`. Everything else — a raw
@@ -14613,7 +14750,7 @@ void CEmitter::computeDeeplyImmutable()
     for (auto& kv : _classes)
         kv.second.deeplyImmutable = kv.second.isImmutableQualified;
 
-    // Set the field-resolution context for class `ci` exactly as computeReachesSharedWeak does.
+    // Set the field-resolution context for class `ci` exactly as enterClassCtx does.
     auto enterCtx = [&](ClassInfo& ci) -> bool {
         bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
         if (inst) {
@@ -15294,125 +15431,82 @@ void CEmitter::checkViewableContracts()
     for (auto& kv : _interfaces) if (kv.second.templateKey.empty()) check(kv.second);   // non-generic only
 }
 
-// Reject every `channel<T>` (`Channel`/`Sender`/`Receiver` instance) whose element T transitively reaches
-// a non-atomic shared refcount — its cross-isolate copy would race the `Shared`/`Weak` counter. Names the
-// offending field, mirroring the escape-check style. Runs after computeReachesSharedWeak, when all channel
-// instances are registered. `Owned<X>` passes (unique); plain values / collections / resources of sendable
-// fields all pass.
-void CEmitter::checkChannelSendability()
-{
-    if (_channelTmpl.empty() && _senderTmpl.empty() && _receiverTmpl.empty()) return;   // channels unused
-    std::set<std::string> reported;   // one diagnostic per offending element type (Channel/Sender/Receiver share it)
-    for (const std::string& mangled : _genericTypeInstOrder) {
-        auto g = _genericTypeInstOf.find(mangled);
-        if (g == _genericTypeInstOf.end()) continue;
-        if (g->second != _channelTmpl && g->second != _senderTmpl && g->second != _receiverTmpl) continue;
-        const GenericTypeInst& gi = _genericTypeInsts[mangled];
-        if (gi.typeArgs.empty()) continue;
-        std::string elem = cType(gi.typeArgs[0]);
-        auto ei = _classes.find(elem);
-        if (ei == _classes.end() || !ei->second.reachesSharedWeak) continue;   // sendable
-        if (!reported.insert(elem).second) continue;
-
-        int line = gi.typeArgs[0]->line;
-        // The element type may itself BE the refcount (`channel<Shared<X>>`), or reach one through a field.
-        if (isSharedOrWeakClass(elem)) {
-            unsupported(("cannot send `" + elem + "` over a channel — it is a non-atomic shared refcount that "
-                         "would race across isolates; send the pointee by value, or use `Owned<X>` (unique)").c_str(), line);
-            continue;
-        }
-        ClassInfo& ci = ei->second;
-        ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
-        unsupported(("cannot send `" + elem + "` over a channel — " + unsendableCulprit(elem)
-                     + " shares a non-atomic refcount across isolates; use `Owned<Y>` (unique) or send the "
-                       "value by copy").c_str(), line);
-    }
-}
-
-// Name the part of `elem` that carries the non-atomic refcount — "its field `s` (of type `Shared<Leaf>`)".
-// Extracted so the two crossings that face this gate say ONE sentence about the culprit: a channel element
-// (above) and a `spawn` bundle (checkSpawnBundleSendability). They asked the same question and only one of
-// them was asking it, which is how the bundle — the PRIMARY isolate entry point — went unchecked.
+// Every `implements Sendable` is a CLAIM, and this is what makes it one the compiler stands behind: for
+// each declaring type, every field, base and variant payload must itself be Sendable (unsendableReason),
+// and the first that is not is named, with the reason. This is the `immutable` model applied to the
+// isolate boundary — the declaration is where the author says it, this pass is its verification, and a
+// crossing may read the declaration. A lie is caught here; an omission is caught at the crossing
+// (checkSpawnBundleSendability, and the `Channel<T: Sendable>` bound in std::concurrent).
 //
-// ⚠️ Resolves the element's fields under the element's OWN binding, like the fixpoint does, which means
-// swapping `_nsCtx`/`_typeSubst`. Both are SAVED AND RESTORED here rather than left swapped as the
-// collect-time pass could afford to: this now runs after emission too, and a partial NsCtx swap on an
-// emission path is the five-site hazard that broke 30 fixtures once already.
-std::string CEmitter::unsendableCulprit(const std::string& elem)
+// Post-emission, from BOTH entry points (see checkNoHeapTransitive on why both): a generic instance
+// minted inside a body is registered during emission, and its `when [T: Sendable]` verdict is only in
+// `interfaces` by then. An intrinsic collection cannot declare anything and is skipped; an extern struct
+// is the C seam and answers yes without a declaration.
+// ⚠️ Resolves fields under the class's OWN binding — `_nsCtx`/`_typeSubst` swapped and RESTORED.
+void CEmitter::checkSendableDeclarations()
 {
-    auto ei = _classes.find(elem);
-    if (ei == _classes.end()) return "a field of it";
-    ClassInfo& ci = ei->second;
-    const NsCtx savedCtx = _nsCtx;
-    const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-    bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
-    if (inst) {
-        const GenericTypeInst& egi = _genericTypeInsts[ci.name];
-        _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name] : _genericTypeCtx[egi.templateKey];
-        _typeSubst.clear();
-        const std::vector<std::string>& ps = _genericTypeParams[egi.templateKey];
-        for (size_t i = 0; i < ps.size() && i < egi.typeArgs.size(); ++i) _typeSubst[ps[i]] = egi.typeArgs[i];
-    } else {
-        _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
-    }
-    std::string culprit;   // "its field `name` (of type `T`)"
-    for (auto& f : ci.fields) {
-        std::string fc = cType(f.type);
-        auto fi = _classes.find(fc);
-        if (fi != _classes.end() && fi->second.reachesSharedWeak) { culprit = "its field `" + f.name + "` (of type `" + fc + "`)"; break; }
-    }
-    // A tagged enum carries its types in variant payloads, not fields, so the loop above finds nothing
-    // and the diagnostic used to fall back to the generic phrasing — for the one shape where the
-    // culprit is most easily named.
-    if (culprit.empty())
-        for (auto& v : ci.variants) {
-            for (auto& f : v.payload) {
-                std::string fc = cType(f.type);
-                auto fi = _classes.find(fc);
-                if (fi != _classes.end() && fi->second.reachesSharedWeak) {
-                    culprit = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`)"; break;
-                }
+    const std::string& S = _sendableContract;
+    if (S.empty()) return;
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (ci.isExternStruct || ci.isIntrinsicColl) continue;
+        bool declares = false;
+        for (auto& itf : ci.interfaces) if (itf == S) { declares = true; break; }
+        if (!declares) continue;
+        const NsCtx savedCtx = _nsCtx;
+        const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+        enterClassCtx(ci);
+        std::string what, why;
+        if (ci.base) {
+            why = unsendableReason(ci.base->name);
+            if (!why.empty()) what = "its base `" + ci.base->name + "`";
+        }
+        if (what.empty())
+            for (auto& f : ci.fields) {
+                const std::string fc = cType(f.type);
+                why = unsendableReason(fc);
+                if (!why.empty()) { what = "its field `" + f.name + "` (of type `" + fc + "`)"; break; }
             }
-            if (!culprit.empty()) break;
-        }
-    _nsCtx = savedCtx;
-    _typeSubst = savedSubst;
-    // ⚠️ The possessive lives INSIDE `culprit`: the fallback used to be spliced into "— its " + culprit,
-    // which rendered "cannot send `E` over a channel — its a field shares …". Reachable today, via an
-    // enum whose variant payload holds the refcount.
-    return culprit.empty() ? "a field of it" : culprit;   // reached via a base, or a deeper element
+        if (what.empty())
+            for (auto& v : ci.variants) {
+                for (auto& f : v.payload) {
+                    const std::string fc = cType(f.type);
+                    why = unsendableReason(fc);
+                    if (!why.empty()) { what = "its variant `" + v.name + "` payload `" + f.name + "` (of type `" + fc + "`)"; break; }
+                }
+                if (!what.empty()) break;
+            }
+        _nsCtx = savedCtx; _typeSubst = savedSubst;
+        if (what.empty()) continue;
+        ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
+        unsupported(("`" + ci.name + "` declares `implements Sendable`, but " + what + " is not Sendable — "
+                     + why).c_str(), ci.declLine());
+    }
 }
 
-// The `spawn` BUNDLE faces the same gate as a channel element, and until now faced nothing at all.
-// `checkChannelSendability` walks `Channel`/`Sender`/`Receiver` instances, so the primary way data enters
-// an isolate — the bundle — was never tested: a bundle holding a `Shared<Mutable>` compiled clean, and
-// two isolates then retained and released one non-atomic control block. Torn count, then a double free.
+// The `spawn` BUNDLE is a crossing, and it requires the declaration exactly as a channel element does
+// (there the requirement is the `T: Sendable` bound on `Channel`/`Sender`/`Receiver`; a bundle has no
+// type parameter to carry one, so it is asked here). Until 0.9.153 the bundle — the PRIMARY way data
+// enters an isolate — faced no gate at all, while the channel half did.
 //
-// Recorded during emission and checked here, after it, for two reasons: a `spawn` lives inside a BODY, so
-// the collect-time pass that runs the channel half cannot see one; and `unsendableCulprit` resolves fields
-// under another type's binding, which must not happen while a body is mid-emission.
+// Recorded during emission and checked after it: a `spawn` lives inside a BODY, and unsendableReason
+// resolves other types' fields under their own binding, which must not happen mid-emission.
 //
 // Both modes are checked. A moved bundle carries a second live handle into the child, which then drops it;
-// a `ref`-borrowed one is not copied at the seam, but the child may `copy` the handle out of it, and the
-// parent's own drop then races that copy's release.
+// a `ref`-borrowed one is not copied at the seam, but the child may `copy` a handle out of it, and the
+// parent's own drop then races that copy's release. A `ref int32` bundle passes: a primitive's conformance
+// is declared in the prelude.
 void CEmitter::checkSpawnBundleSendability()
 {
     for (const SpawnBundle& sb : _spawnBundles) {
-        auto ci = _classes.find(sb.cls);
-        if (ci == _classes.end() || !ci->second.reachesSharedWeak) continue;   // sendable
+        const std::string why = unsendableReason(sb.cls);
+        if (why.empty()) continue;
         ScopedStr _f(_emitDeclFile, sb.file);
-        if (isSharedOrWeakClass(sb.cls)) {
-            unsupported(("cannot spawn with `" + sb.cls + "` as the bundle — it is a non-atomic shared "
-                         "refcount, and the isolate that receives it releases the same control block this "
-                         "one does; move an `Owned<X>` (unique) in, or send the pointee by value").c_str(), sb.line);
-            continue;
-        }
-        unsupported(("cannot spawn with `" + sb.cls + "` as the bundle — " + unsendableCulprit(sb.cls)
-                     + " shares a non-atomic refcount across isolates; use `Owned<Y>` (unique) or put a "
-                       "copy of the value in the bundle").c_str(), sb.line);
+        unsupported(("cannot spawn with `" + sb.cls + "` " + sb.what + " — " + why + "; a type crosses an "
+                     "isolate boundary only by declaring `implements Sendable`, which the compiler verifies "
+                     "over every field").c_str(), sb.line);
     }
 }
-
 // The class in ci's ancestry that declares `field` (or nullptr).
 ClassInfo* CEmitter::findFieldOwner(ClassInfo* ci, const std::string& field)
 {
@@ -15917,6 +16011,10 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
     // ...and `Immutable`'s one derived rule, the same shape: answered from the verified deep property
     // rather than from a declaration, because a declaration could lie about it.
     if (contract == "Immutable") return isImmutableType(*ci);
+    // ...and `Sendable`'s: nominal for a user type, by nature for an intrinsic (`InlineArray<int32>`, a
+    // boxed contract that requires it) — the same predicate `satisfiesBound` consults, so the two halves
+    // of the bound check cannot disagree about it.
+    if (!_sendableContract.empty() && contract == _sendableContract) return isSendableClass(ci->name);
     return implementsContractTemplate(ci, contract);
 }
 
@@ -16175,8 +16273,14 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // `when [T: Copyable<T>]` worked, because the gate goes through `satisfiesBound` and this did not.
         bool structural = !ci && satisfiesBound(rkey, contract);
         if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
-            unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
-                         + "` does not satisfy bound `" + *b->value + "`").c_str(), line);
+            // A failed `Sendable` bound says WHY (the field, the mutable pointee, the undeclared type):
+            // it is the channel crossing's gate, and "does not satisfy" alone sent the author hunting.
+            const std::string why = (!_sendableContract.empty() && contract == _sendableContract)
+                                  ? unsendableReason(cls) : std::string();
+            if (_silentBounds == 0)   // a consequence of an already-refused outer instance says nothing (see registerGenericTypeInst)
+                unsupported(("type argument `" + clsName + "` for type parameter `" + paramName
+                             + "` does not satisfy bound `" + *b->value + "`"
+                             + (why.empty() ? "" : " — " + why)).c_str(), line);
             ok = false;
         }
     }
@@ -25616,8 +25720,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     }
     computeReachesPointer();   // serialization mode gate (by-value vs. graph)
     computeDeeplyImmutable();     // M6.2: mark deeply-immutable types (feeds the sendability seed below)
-    computeReachesSharedWeak();   // channel-sendability gate (Shared|Weak-only sibling)
-    checkChannelSendability();    // reject `channel<T>` whose T reaches a non-atomic shared refcount
+    computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` over a deeply-immutable T takes the atomic flavor
     computeGraphNodeTypes();   // graph node closure + Shared<T> deserialize return types (Phase D)
 
     // Contract kind-gate enforcement: a type may `implements` a contract only if its kind is named by
@@ -25643,6 +25746,22 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             unsupported(("`" + kv.first + "` is " + art + "`" + kw + "`, but contract `" + shown
                          + "` is declared `for " + kamaImplKindListText(allowed) + "` — " + art
                          + kw + " can't implement it").c_str(), ci.declLine());
+        }
+        // A contract that REQUIRES `Sendable` (`type contract Job implements Sendable`) is satisfied only
+        // by a type that declares it too — the declaration is then verified like any other. Asked here,
+        // beside the kind gate, because it is the same question: may this type implement that contract.
+        for (auto& base : ci.interfaces) {
+            if (!contractRequiresSendable(base)) continue;
+            bool declares = false;
+            for (auto& itf : ci.interfaces) if (itf == _sendableContract) { declares = true; break; }
+            if (declares) continue;
+            auto bi = _interfaces.find(base);
+            const std::string& shown = (bi != _interfaces.end() && !bi->second.templateKey.empty())
+                                       ? bi->second.templateKey : base;
+            unsupported(("`" + kv.first + "` implements `" + shown + "`, which requires `Sendable` of every "
+                         "implementor (`type contract " + shown + " implements Sendable`), but does not "
+                         "declare `implements Sendable`").c_str(), ci.declLine());
+            break;
         }
     }
 
@@ -26448,7 +26567,8 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
-    checkSpawnBundleSendability();    // the `spawn` bundle's half of the gate `checkChannelSendability`
+    checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
+    checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     return _unsupported;
@@ -26486,7 +26606,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
-    checkSpawnBundleSendability();    // the `spawn` bundle's half of the gate `checkChannelSendability`
+    checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
+    checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     return _unsupported;

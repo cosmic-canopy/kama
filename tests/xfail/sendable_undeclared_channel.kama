@@ -1,0 +1,9 @@
+// The channel crossing asks the same question through a BOUND: `Channel<T: Sendable>` in std::concurrent.
+// An undeclared element type fails the bound, and the diagnostic says why rather than only "does not
+// satisfy" — the same sentence the spawn gate uses.
+import { std::concurrent::Channel };
+type resource Quiet { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn int32 main() {
+    Channel<Quiet> ch = Channel.bounded(capacity: 1);   // ERROR: `Quiet` does not satisfy bound `Sendable`
+    return 0;
+}

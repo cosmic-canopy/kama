@@ -1,0 +1,15 @@
+// A hole the old structural walk could not see: an ARENA-backed container. Its allocator holds a pointer
+// into an `Arena` the parent owns, so the child would free into the parent's arena — yet nothing in
+// `BitSet<BumpAllocator>`'s fields looked shared. The stdlib writes `Sendable when [A: Sendable]` on every
+// container and `BumpAllocator` declares nothing, so the `when` gate fails for exactly this argument.
+import { std::collections::BitSet, std::collections::Arena, std::collections::BumpAllocator };
+type resource Batch implements Sendable {
+    BitSet<BumpAllocator> bits;   // ERROR: its type argument `BumpAllocator` (for `A`) is not `Sendable`
+    public ctor make(BitSet<BumpAllocator> b) { this.bits = give b; }
+}
+fn int32 main() {
+    Arena arena = Arena.make(capacity: 4096);
+    BitSet<BumpAllocator> b = BitSet.withAllocator(allocator: arena.handle());
+    Batch batch = Batch.make(b: give b);
+    return 0;
+}

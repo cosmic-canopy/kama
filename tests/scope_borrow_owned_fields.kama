@@ -9,7 +9,7 @@
 // library heap-owner families at once. Run under KAMA_TSAN=1.
 import { std::concurrent::Isolate };
 
-type value Acc {
+type value Acc implements Sendable {
     public int32 total;
     int32 lo;
     int32 hi;
@@ -30,7 +30,7 @@ type value Acc {
     }
 }
 
-type value World {
+type value World implements Sendable {
     public Acc bodies;
     public Acc springs;
 

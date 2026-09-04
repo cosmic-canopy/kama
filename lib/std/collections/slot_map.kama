@@ -6,7 +6,7 @@ export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
 // generation — so a handle to a slot that was removed (and possibly reused for a different value) is rejected
 // rather than silently aliasing the new occupant. A plain Copyable value: keep it, copy it, pass it around.
 @generate(of)
-type value Handle {
+type value Handle implements Sendable {
     public isize index;
     public uint32 generation;
 }
@@ -68,7 +68,7 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
 type resource SlotMap<V, A: Allocator = GlobalAllocator>
         implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
-                   ValuesIterableMut<SlotMapValueIterMut<V>> {
+                   ValuesIterableMut<SlotMapValueIterMut<V>>, Sendable when [V: Sendable, A: Sendable] {
     UnsafePtr<V> values = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
     isize slotCount = 0; isize freeLen = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 

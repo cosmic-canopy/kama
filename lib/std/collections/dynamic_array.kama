@@ -36,7 +36,8 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
-                                  Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>] {
+                                  Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>],
+                                  Sendable when [T: Sendable, A: Sendable] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
     // (force-explicit-field-init: a primitive or raw `UnsafePtr` no longer rides silently on `= {0}`).
     UnsafePtr<T> data = null; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
