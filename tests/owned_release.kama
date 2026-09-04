@@ -1,0 +1,37 @@
+// `Owned<T>.release()` — the missing half of the foreign boundary. `HeapOwner<T>.adopt` (Rust's
+// `Box::from_raw`) lets ownership ENTER kama from a host API; `release()` (`Box::into_raw`) lets it LEAVE:
+// the raw block comes back and the handle is emptied, so the destructor frees nothing. The host's own
+// userdata slot then holds the lifetime — borrow through it with a `ref T` parameter, `adopt` it back to
+// destroy. This is the sanctioned way for a value to outlive the frame that made it, and the reason the
+// first consumer no longer needs to calloc a `World` by hand (their KB-14/KB-15 both started there).
+//
+// Exit code: 42 iff the pointee survived `install` (its dtor did not run), was readable through a `ref`
+// borrow, and was dropped exactly once by `teardown`; otherwise the drop count + 10 * the value read.
+
+static int32 drops = 0;
+
+type resource World {
+    int32 tick;
+    public ctor make(int32 tick) { this.tick = tick; return this; }
+    public fn int32 get() { return this.tick; }
+    ~World() { drops = drops + 1; }
+}
+
+fn int32 step(ref World w) { return w.get(); }
+
+// The host's userdata slot, standing in for a foreign API's `void*`.
+unsafe fn UnsafePtr<World> install(Owned<World> w) { return w.release(); }        // `w` is dropped here: empty, frees nothing
+unsafe fn int32 frame(UnsafePtr<World> raw) { return step(w: ref raw[0]); }       // borrow through the pointer
+unsafe fn void teardown(UnsafePtr<World> raw) { Owned<World> back = Owned.adopt(raw: raw); }   // dropped once, here
+
+unsafe fn int32 run() {
+    Owned<World> w = new World.make(tick: 7);
+    UnsafePtr<World> slot = install(w: give w);
+    int32 afterInstall = drops;             // must still be 0
+    int32 seen = frame(raw: slot);          // 7
+    teardown(raw: slot);
+    if (afterInstall == 0 && seen == 7 && drops == 1) { return 42; }
+    return drops + 10 * seen;
+}
+
+fn int32 main() { return run(); }

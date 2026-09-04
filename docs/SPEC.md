@@ -763,6 +763,23 @@ fn Owned<Node> make(int32 v) { return new Node.make(id: v); }   // inline `new` 
 Move-only: copying/initializing/returning an `Owned` transfers ownership and invalidates the source, so the
 pointee is freed exactly once (RAII, with the pointee's destructor).
 
+**The foreign boundary — `adopt` in, `release()` out.** `HeapOwner<T>`'s `ctor adopt(UnsafePtr<T> raw)` is
+how ownership *enters* kama from a host API (Rust's `Box::from_raw`); **`unsafe fn UnsafePtr<T> release()`**
+is how it *leaves* (`Box::into_raw`): it hands back the raw block and empties the handle, so the
+destructor frees nothing. That is the one sanctioned way for a value to outlive the frame that made it —
+hand it to the host's own userdata slot in one `unsafe fn`, borrow through it in the callback via a
+`ref T` parameter, and `adopt` it back to destroy. It is *not* a way to own through a raw pointer inside
+kama: a `static` will not hold a resource and a raw element will not be dropped or called through (see
+*The raw seam*). An `Owned<T, A>` over a custom allocator releases the same block; the host must give
+it back to `adoptIn` with that allocator, or free it as the allocator would. `Shared<T>` has no `release()`:
+its control block makes the ownership a count, not a pointer, so there is nothing a host could hold.
+<!-- test: owned_release -->
+
+```kama
+unsafe fn UnsafePtr<World> install(Owned<World> w) { return w.release(); }   // the host's userdata now owns it
+unsafe fn void teardown(UnsafePtr<World> raw) { Owned<World> back = Owned.adopt(raw: raw); }   // dropped here
+```
+
 **Ownership hand-off — `give` / `copy`.** When a *named* owned value is handed off — in an initializer,
 assignment, argument, or return — an explicit marker states the intent, uniformly in all four positions:
 **`give`** moves (invalidates the source), **`copy`** retains (`Shared`/`Weak`) or duplicates. **Every owning

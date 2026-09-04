@@ -20,6 +20,12 @@ type resource Owned<T, A: Allocator = GlobalAllocator> implements Deref<T>, Heap
     // same handle (the `new(allocator: a) T(...)` path).
     public unsafe ctor adoptIn(UnsafePtr<T> raw, A allocator) { this.p = raw; this.alloc = allocator; return this; }
     public unsafe fn ref T deref() { return this.p[0]; }
+    // The other half of `adopt` (Rust's `Box::into_raw` to its `from_raw`): give the block up to a FOREIGN
+    // owner — a host API's userdata slot — and empty this handle, so the dtor below frees nothing. That is
+    // how a value outlives the frame that made it: hand it over in one `unsafe fn`, borrow through the
+    // pointer in the callback via a `ref T` parameter, `adopt` it back to destroy. A custom-`A` box releases
+    // the same block; the host must return it to `adoptIn` with that allocator, or free it as `A` would.
+    public unsafe fn UnsafePtr<T> release() { UnsafePtr<T> raw = this.p; this.p = null; return raw; }
     // run pointee dtor, then release through the allocator — guarding a null pointer (a
     // zero-initialized/moved-from handle).
     unsafe ~Owned() { if (cast<usize>(this.p) != 0) { drop(value: this.deref()); this.alloc.deallocate(pointer: cast<UnsafePtr>(this.p), bytes: sizeof(T)); } }
