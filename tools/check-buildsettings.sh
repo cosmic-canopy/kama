@@ -236,6 +236,97 @@ JSON
     || { bad "a relative -I on the ROOT was refused"; head -2 "$tmp/e" >&2; }
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: \`csources\` compiles C, and says what it does not compile"
+
+# The runnable end-to-end proofs are tests/csources_basic.d/ and tests/csources_dep.d/ — they build a C
+# file and call into it, on every leg. What lives here is the part an exit code cannot see: the
+# refusals, where the object lands, and the collision two packages can cause.
+
+# C++ is refused BY NAME, with the two reasons, rather than reaching the C compiler as a `-std=c11`
+# compile of a .cpp and failing there.
+app cpp <<'JSON'
+{ "name": "cpp", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/thing.cpp"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+if "$KAMA" build "$tmp/cpp/kama.json" -o "$tmp/cpp/app" >"$tmp/o" 2>"$tmp/e"; then
+    bad "a .cpp in \`csources\` was accepted"
+elif grep -qF 'compiles C only today' "$tmp/e" && grep -qF 'C++ runtime library' "$tmp/e"; then
+    ok "a .cpp entry is refused, naming both obstacles"
+else
+    bad "a .cpp entry was refused without saying why"; head -3 "$tmp/e" >&2
+fi
+
+app absol <<'JSON'
+{ "name": "absol", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["/etc/shim.c"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/absol/kama.json" -o "$tmp/absol/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "an absolute \`csources\` path was accepted" \
+    || { grep -qF 'relocatable' "$tmp/e" \
+         && ok "an absolute path is refused — a manifest must stay relocatable" \
+         || { bad "an absolute path was refused for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+app missing <<'JSON'
+{ "name": "missing", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/nope.c"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/missing/kama.json" -o "$tmp/missing/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a \`csources\` path that does not exist was accepted" \
+    || { grep -qF 'does not exist' "$tmp/e" \
+         && ok "a path that is not there is named by kama, not by the C compiler" \
+         || { bad "a missing csource failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+# TWO PACKAGES SHIPPING `shim.c`. Without an owner prefix on the object name they write the same file —
+# a silent overwrite in one invocation, and a RACE under -j. `-j 2` forces the per-TU path, which is the
+# only leg where the object names are actually used.
+app twoshims geo phys <<'JSON'
+{ "name": "twoshims", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "geo": { "path": "./vendor/geo" }, "phys": { "path": "./vendor/phys" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+for dep in geo phys; do
+    mkdir -p "$tmp/twoshims/vendor/$dep/csrc"
+    cat > "$tmp/twoshims/vendor/$dep/kama.json" <<JSON
+{ "name": "$dep", "version": "1.0.0", "kind": "library", "source": "src", "csources": ["csrc/shim.c"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+    printf 'int kama_%s_shim(void) { return 1; }\n' "$dep" > "$tmp/twoshims/vendor/$dep/csrc/shim.c"
+done
+rc=0
+"$KAMA" pkg install "$tmp/twoshims/kama.json" >/dev/null 2>&1 || rc=1
+[ "$rc" = 0 ] && { "$KAMA" build "$tmp/twoshims/kama.json" -j 2 -o "$tmp/twoshims/app" >"$tmp/o" 2>"$tmp/e" || rc=1; }
+# The program's own exit code is 7 by construction (see `app`), so only the BUILD is being judged here.
+[ "$rc" = 0 ] && { arc=0; "$tmp/twoshims/app" >/dev/null 2>&1 || arc=$?; [ "$arc" = 7 ] || rc=1; }
+if [ "$rc" = 0 ]; then
+    ok "two packages both shipping csrc/shim.c compile to different objects"
+else
+    bad "two packages shipping the same C file name collided"; head -3 "$tmp/e" >&2
+fi
+
+# The objects land in dirname(-o) and the user's .c is never touched: `tools/check-clean-tree.sh` holds
+# the general rule, and this is the csources-shaped instance of it.
+[ -f "$tmp/twoshims/vendor/geo/csrc/shim.o" ] || [ -f "$tmp/twoshims/vendor/geo/csrc/shim.c.o" ] \
+    && bad "a csource's object was written beside the user's source" \
+    || ok "...and neither object was written into the package that owns the source"
+
+# OUTPUT=OBJECT is one translation unit by definition, and a csource is a second one. Refused by name
+# rather than as clang's "cannot specify -o when generating multiple output files".
+app objkind <<'JSON'
+{ "name": "objkind", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "csources": ["csrc/x.c"],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/objkind/csrc"; printf 'int kama_objkind_x(void) { return 1; }\n' > "$tmp/objkind/csrc/x.c"
+"$KAMA" build "$tmp/objkind/kama.json" --select OUTPUT=OBJECT -o "$tmp/objkind/app.o" >"$tmp/o" 2>"$tmp/e" \
+    && bad "OUTPUT=OBJECT accepted a build with two translation units" \
+    || { grep -qF 'single translation unit' "$tmp/e" \
+         && ok "OUTPUT=OBJECT with a csource is refused by name, pointing at OUTPUT=STATIC" \
+         || { bad "OUTPUT=OBJECT failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a broken dependency manifest is fatal to a build, not to a query"
 
 # The same split `strictImports` draws. A build that would read settings from a manifest it cannot parse

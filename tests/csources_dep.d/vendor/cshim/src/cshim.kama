@@ -1,0 +1,8 @@
+// The kama face of the package's own C. The consumer never mentions `shim.c` — the package's manifest
+// does, and the consumer's build compiles it.
+export { triple };
+
+extern "shim.h";
+extern fn int32 kama_test_shim_triple(int32 n);
+
+unsafe fn int32 triple(int32 n) { return kama_test_shim_triple(n: n); }

@@ -156,6 +156,38 @@ default.
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
 
+### `csources` — your own C, compiled by `kama build`
+
+A project (or a package) can hand the build its own C:
+
+```json
+{
+  "csources": ["csrc/adder.c", "csrc/hash.c"]
+}
+```
+
+Each entry is one translation unit, compiled with the same flags kama's own generated C gets and linked
+into the same artifact — no out-of-band Makefile. Paths are **relative to the manifest that declares
+them**, and each entry's directory goes on the include path, so a header sitting beside the `.c` is
+found both from that `.c` and from the kama file that `extern "adder.h";`s it.
+
+A dependency's `csources` are compiled too, which is what lets a package that wraps a C library ship
+the shim that binds it. Two packages that both ship `csrc/shim.c` are fine — the object is named after
+the package that owns the source.
+
+**C only, today.** A `.cpp` (or `.cc`, `.cxx`, `.mm`) entry is refused by name, and the message says
+why: every input shares one flag prefix (`-std=c11`, plus the C-only warning promotions), and a C++
+link needs the target's C++ runtime library. A `.m` is refused for a third reason — Objective-C is one
+platform's language, and `csources` is project-wide with no per-target tier to exclude it elsewhere.
+For per-target C, guard the source itself (`#ifndef __EMSCRIPTEN__`), which is how C does it.
+
+Two smaller rules, both refusals with a message: an **absolute** path (a manifest must stay
+relocatable, and a published package cannot name a directory nobody else has) and a path escaping the
+project with `..`. A path that simply is not there is named by kama, not by the C compiler.
+
+`OUTPUT=OBJECT` builds one translation unit by definition, so it refuses a build that has a `csources`
+entry beside the program — `OUTPUT=STATIC` is the shape that takes several.
+
 ### What a dependency contributes
 
 A dependency's `cflags`, `ldflags` and `link` apply to your build. A package that needs `-lm`, or a
@@ -176,7 +208,7 @@ What a dependency **cannot** do is redefine your build:
 
 | it contributes | it does not |
 |---|---|
-| `cflags`, `ldflags`, `link` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| `cflags`, `ldflags`, `link`, `csources` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 

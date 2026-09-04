@@ -1,0 +1,5 @@
+// A dependency's `csources` is compiled into the consumer's build. Without that, `kama_test_shim_triple`
+// is an undefined symbol at link time and no manifest key could say so.
+import { cshim::triple };
+
+fn int32 main() { return triple(n: 7); }   // 21

@@ -1,0 +1,12 @@
+// `csources` — the project's own C compiled into the build, with no out-of-band Makefile. The header
+// lives BESIDE the .c and is found because `csources` puts that directory on the include path.
+extern "adder.h";
+extern fn int32 kama_test_add(int32 a, int32 b);
+
+// The `extern` call is the boundary, so it needs an `unsafe fn` around it — nothing to do with
+// `csources`, which changes where the C comes from and not what calling into it means.
+unsafe fn int32 addTwo() { return kama_test_add(a: 17, b: 12); }
+
+fn int32 main() {
+    return addTwo();   // 29
+}

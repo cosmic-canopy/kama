@@ -2089,6 +2089,9 @@ static std::vector<std::string> g_manifestLink;
 // carries, because the target tier appends: the command line reads project-then-target, so the more
 // specific list gets the last word (and, for a flag the C compiler resolves last-wins, the win).
 static std::vector<std::string> g_manifestCflags, g_manifestLdflags;
+// The project's own `csources`, as written. Resolved against the manifest's directory once the build
+// configuration is settled (a dependency's are resolved against ITS manifest, in the dep walk).
+static std::vector<std::string> g_manifestCsources;
 static bool g_manifestWebgpu = false, g_manifestNoHeap = false;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
@@ -2581,6 +2584,7 @@ struct ManifestReader {
     // nothing to such a build, which would leave dependency propagation half-dead on arrival.
     std::vector<std::string>* cflagsOut = nullptr;          // set to capture the project-level `cflags`
     std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
+    std::vector<std::string>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
@@ -2645,6 +2649,39 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ']') { ++i; return true; }
             return fail("expected ',' or ']' in the array" + where);
         }
+    }
+
+    // One `csources` entry. `.c` and nothing else, for now, and the refusals say why rather than
+    // leaving the author to find out from the C compiler.
+    //
+    // C++ is refused BY NAME because it is a real gap and not an oversight: kama hands every input the
+    // same flag prefix (`-std=c11` and the C-only warning promotions), so a C++ TU would need its own,
+    // and linking one needs the target's C++ runtime library, which varies per target. `.m`/`.mm` are
+    // refused for a third reason — an Objective-C source is inherently one-platform, and `csources` is
+    // deliberately project-level with no per-target tier to exclude it from a wasm build.
+    bool validCSource(const std::string& p) {
+        if (p.empty()) return fail("`csources` has an empty path");
+        if (p[0] == '/' || (p.size() > 1 && p[1] == ':'))
+            return fail("`csources` path \"" + p + "\" is absolute; it must be relative to the manifest "
+                        "that declares it, or the project stops being relocatable (and a published "
+                        "package would name a directory nobody else has)");
+        if (p.find("..") != std::string::npos)
+            return fail("`csources` path \"" + p + "\" escapes the project with `..`; a package's own C "
+                        "belongs inside it");
+        const size_t dot = p.rfind('.');
+        const std::string ext = dot == std::string::npos ? std::string() : p.substr(dot);
+        if (ext == ".c") return true;
+        if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c++" || ext == ".mm")
+            return fail("`csources` compiles C only today, and \"" + p + "\" is C++. Two things are "
+                        "missing: every input shares one flag prefix (`-std=c11` plus the C-only warning "
+                        "promotions), and a C++ link needs the target's C++ runtime library. Build it "
+                        "outside kama and name the objects through `ldflags` for now");
+        if (ext == ".m")
+            return fail("`csources` compiles C only today, and \"" + p + "\" is Objective-C — which is "
+                        "one platform's language, while `csources` is project-wide with no per-target "
+                        "tier to exclude it from your other targets. Guard the C with `#ifdef __APPLE__` "
+                        "instead");
+        return fail("`csources` names C source files (`.c`), and \"" + p + "\" is not one");
     }
 
     // A JSON boolean. Its own reader because `optional` is REQUIRED and closed: `"optional": "no"` must
@@ -3225,6 +3262,17 @@ struct ManifestReader {
             // line is project-then-target and the more specific one gets the last word.
             else if (key == "cflags") { if (cflagsOut) { if (!stringArray(*cflagsOut, "cflags")) return false; } else if (!skipValue()) return false; }
             else if (key == "ldflags") { if (ldflagsOut) { if (!stringArray(*ldflagsOut, "ldflags")) return false; } else if (!skipValue()) return false; }
+            // The project's own C sources, compiled alongside the C kama emits. PARSED and VALIDATED
+            // unconditionally, like `modules` and unlike the sink-guarded keys above: the value set is
+            // closed (a `.c` path, relative to this manifest), and a swallowed entry would be a
+            // translation unit silently missing from the link — which surfaces as an undefined symbol
+            // with nothing pointing back at the manifest that named it.
+            else if (key == "csources") {
+                std::vector<std::string> scratch;
+                std::vector<std::string>& into = csourcesOut ? *csourcesOut : scratch;
+                if (!stringArray(into, "csources")) return false;
+                for (const std::string& p : into) if (!validCSource(p)) return false;
+            }
             // The module map (§2b). RECOGNIZED unconditionally and parsed even when nothing captures it,
             // unlike the sink-guarded keys above: its errors are the point. A swallowed `modules` would be
             // a swallowed visibility decision, which is precisely what unknown-keys-are-an-error exists to
@@ -3893,17 +3941,17 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
 // (with the target tier merged in) every dependency's, through loadBuildSettings.
 static bool loadManifestProjectFlags(const std::string& path, std::vector<std::string>& link,
                                      std::vector<std::string>& cflags, std::vector<std::string>& ldflags,
-                                     std::string& err)
+                                     std::vector<std::string>& csources, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.linkOut = &link; r.cflagsOut = &cflags; r.ldflagsOut = &ldflags;
+    r.linkOut = &link; r.cflagsOut = &cflags; r.ldflagsOut = &ldflags; r.csourcesOut = &csources;
     if (!r.parse()) {
         err = r.err.empty() ? "malformed JSON" : r.err;
-        link.clear(); cflags.clear(); ldflags.clear();
+        link.clear(); cflags.clear(); ldflags.clear(); csources.clear();
         return false;
     }
     return true;
@@ -4082,7 +4130,13 @@ const std::string& ownImportName(const std::string& packageDir)
 struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
     std::vector<std::string> cflags, ldflags, link;
+    std::vector<std::string> csources;   // as written, relative to `manifestPath`
 };
+
+// One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
+// shipping `shim.c` from writing the same object file (and racing for it under `-j`).
+struct CSourceRef { std::string owner, path; };
+static std::vector<CSourceRef> g_csources;
 
 // Resolve one manifest's contribution for target `targetName`. `targetName` is the RESOLVED target's
 // name (g_target.name), which is empty for an anonymous triple — a dep then contributes its project tier
@@ -4091,7 +4145,8 @@ struct BuildSettings {
 static bool loadBuildSettings(const std::string& manifestPath, const std::string& targetName,
                               BuildSettings& out, std::string& err)
 {
-    if (!loadManifestProjectFlags(manifestPath, out.link, out.cflags, out.ldflags, err)) return false;
+    if (!loadManifestProjectFlags(manifestPath, out.link, out.cflags, out.ldflags, out.csources, err))
+        return false;
     if (targetName.empty()) return true;
     std::map<std::string, TargetSpec>  targets;
     std::map<std::string, SelectGroup> groups;     // ignored: a dep declares no flag universe of ours
@@ -4183,7 +4238,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_manifestLink.clear();
-    g_manifestCflags.clear(); g_manifestLdflags.clear();
+    g_manifestCflags.clear(); g_manifestLdflags.clear(); g_manifestCsources.clear();
+    g_csources.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false;
     g_strictFlags = false;
     g_logDefault.clear();
@@ -4266,7 +4322,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one
         // — the target key exists only to say "not this one" / "something else here".
-        if (!loadManifestProjectFlags(manifest, g_manifestLink, g_manifestCflags, g_manifestLdflags, err)) {
+        if (!loadManifestProjectFlags(manifest, g_manifestLink, g_manifestCflags, g_manifestLdflags,
+                                      g_manifestCsources, err)) {
             err = manifest + ": " + err; return false;
         }
         // Same shape and the same place as `link`: project properties a target may then override.
@@ -4430,6 +4487,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
                 depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
                 depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
+                // A dependency wrapping a C library ships the shim that binds it, and the consumer
+                // compiles it — which is the whole reason `csources` propagates. Resolved against the
+                // DECLARING manifest, lexically (see the symlink note above).
+                for (const std::string& cs : bs.csources)
+                    g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs) });
             }
         }
         g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
@@ -4442,6 +4504,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const std::string& l : depLink) if (seen.insert(l).second) merged.push_back(l);
         g_target.link = merged;
     }
+    // The project's own C comes after its dependencies', matching the flag order: a dependency
+    // contributes first, the project last.
+    if (!req.manifest.empty())
+        for (const std::string& cs : g_manifestCsources)
+            g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs) });
     // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
     // the way to say "not this one". `--no-heap` therefore ORs in rather than overriding.
     if (g_target.noHeap) g_noHeap = true;
@@ -9748,6 +9815,16 @@ int main(int argc, char** argv)
         if (stopsAtObject) cmd << "-c ";                                                // no link step
         cmd << "-I" << runtimeDir << " -I" << dirName(absolutePath(input)) << " -I. ";
         if (!headerDir.empty()) cmd << "-I" << headerDir << " ";   // the shared generated header
+        // Each `csources` entry's own directory, so a header BESIDE the .c is findable — from the .c
+        // itself, and from the kama file that `extern "shim.h";`s it. Deduped, and AFTER the project's
+        // own dirs above so a first-party header still shadows a dependency's.
+        {
+            std::set<std::string> seenDirs;
+            for (const CSourceRef& cs : g_csources) {
+                std::string d = dirName(cs.path);
+                if (!d.empty() && seenDirs.insert(d).second) cmd << "-I\"" << d << "\" ";
+            }
+        }
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         // Native --webgpu: find wgpu-native's webgpu.h / wgpu.h. (wasm gets its header from the port above.)
         if (!wasm && webgpu) cmd << "-I\"" << wgpuDir << "/include\" ";
@@ -9853,6 +9930,35 @@ int main(int argc, char** argv)
             ccInputs.push_back({ g_target.isMacOS() ? "-x objective-c \"" + seam + "\" -x none "
                                                     : "\"" + seam + "\" ",
                                  genDir + "/kama_gpu.o" });
+        }
+        // The project's own C, and its dependencies' — `csources`. Each is its own translation unit,
+        // exactly like the seam above, and for the same reason its object goes in genDir: `dirname(-o)`
+        // is the one directory a build may write to, and a user's source tree is not it. The OWNER
+        // prefix is what keeps two packages that both ship `shim.c` from writing the same object — a
+        // silent overwrite in a single invocation, and a RACE under `-j`.
+        {
+            std::map<std::string, std::string> objClaimed;   // object path -> the source that claimed it
+            for (const CSourceRef& cs : g_csources) {
+                if (!fileExists(cs.path)) {
+                    fprintf(stderr,
+                        "kama: `csources` names '%s', which does not exist%s%s.\n",
+                        cs.path.c_str(),
+                        cs.owner.empty() ? "" : " (declared by dependency `",
+                        cs.owner.empty() ? "" : (cs.owner + "`)").c_str());
+                    return 2;
+                }
+                std::string obj = genDir + "/csrc__" + (cs.owner.empty() ? std::string("self") : cs.owner)
+                                + "__" + stripExtension(baseName(cs.path)) + ".o";
+                auto claimed = objClaimed.emplace(obj, cs.path);
+                if (!claimed.second) {
+                    fprintf(stderr,
+                        "kama: '%s' and '%s' would both compile to '%s'.\n"
+                        "      Two `csources` entries in one package cannot share a file name.\n",
+                        claimed.first->second.c_str(), cs.path.c_str(), obj.c_str());
+                    return 2;
+                }
+                ccInputs.push_back({ "\"" + cs.path + "\" ", obj });
+            }
         }
 
         // ---- The link tail. Every flag from here down is link-time, which is exactly why the sources
@@ -9990,6 +10096,21 @@ int main(int argc, char** argv)
         // executables and shared libraries, where the join is a link rather than an `ar`.
         const bool perTU = outStatic || nJobs > 1;
 
+        // OUTPUT=OBJECT is ONE translation unit by definition, and this is where that is enforced —
+        // before the per-TU/single-invocation split rather than inside the single-invocation arm.
+        //
+        // ⚠️ It used to live in the else-branch below and count `cFiles`, which made it unreachable for
+        // exactly the builds it was written for: two inputs mean `nJobs > 1`, so a multi-unit
+        // OUTPUT=OBJECT went down the per-TU path instead, compiled each input, and then "joined" them
+        // with a command still carrying `-c`. No diagnostic, and an artifact nobody can use. Counted
+        // over `ccInputs` too, so the native gpu seam and a `csources` entry count as the translation
+        // units they are.
+        if (outObject && ccInputs.size() > 1) {
+            fprintf(stderr, "kama: OUTPUT=OBJECT builds a single translation unit, but this build has "
+                            "%zu — use OUTPUT=STATIC to get one archive instead\n", ccInputs.size());
+            return 2;
+        }
+
         int rc;
         if (perTU) {
             std::string base = cmd.str();
@@ -10038,11 +10159,6 @@ int main(int argc, char** argv)
                 }
             }
         } else {
-            if (outObject && cFiles.size() > 1) {
-                fprintf(stderr, "kama: OUTPUT=OBJECT builds a single translation unit, but this program has "
-                                "%zu — use OUTPUT=STATIC to get one archive instead\n", cFiles.size());
-                return 2;
-            }
             for (auto& in : ccInputs) cmd << in.tok;
             cmd << link.str() << "-o \"" << outPath << "\"";
             rc = runCmd(cmd.str());

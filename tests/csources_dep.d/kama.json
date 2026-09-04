@@ -1,0 +1,9 @@
+{
+  "name": "csrcdep",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "dependencies": { "cshim": { "path": "./vendor/cshim" } },
+  "modules": { ".": { "visibility": "internal" } }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "cshim",
+  "version": "1.0.0",
+  "kind": "library",
+  "source": "src",
+  "csources": ["csrc/shim.c"],
+  "modules": { ".": { "visibility": "public" } }
+}
