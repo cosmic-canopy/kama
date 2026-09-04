@@ -2112,6 +2112,8 @@ private:
     ClassInfo* implTargetInfo(const std::string& tkey);   // collection/primitive impl-conformance ClassInfo
     // AND over a `when [P: B, …]` gate: every gated param's concrete arg must satisfy its bound. `params`
     // are the template's type-param names, `concrete` the instance's args (index-aligned).
+    // The contract a `when [P: B]` gate names, RESOLVED — a conformance list holds resolved names.
+    std::string resolveWhenBound(const SharedIdentifier& b);
     bool whenConditionsHold(const std::vector<std::string>& whenParams,
                             const std::vector<std::string>& whenBounds,
                             const std::vector<std::string>& params,

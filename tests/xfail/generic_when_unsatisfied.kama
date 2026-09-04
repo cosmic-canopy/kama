@@ -1,0 +1,26 @@
+// The other side of tests/generic_when_user_contract.kama: when a `when [T: B]` gate does NOT hold, the
+// conditional conformance must be ABSENT, so the bound rejects. Without this the fix for the raw-vs-
+// resolved name mismatch could have "worked" by making every gate hold — which is the failure mode a
+// resolution fix invites, and the reason the positive fixture alone would not have caught it.
+//
+// `Plain` does not implement `Tagged`, so `Queue<Plain>` is not `Tagged` either, and the bound on
+// `takes` must refuse it.
+
+type contract Tagged for resource { const fn int32 tag(); }
+
+type resource Plain { int32 y; public ctor make() { this.y = 0; } }   // no `implements Tagged`
+
+type resource Queue<T> implements Tagged when [T: Tagged] {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 tag() { return this.n; }
+}
+
+fn int32 takes<T: Tagged>(ref T v) { return v.tag(); }
+
+unsafe fn int32 run() {
+    Queue<Plain> q = Queue::<Plain>.make(n: 1);
+    return takes(v: ref q);      // ERROR: `Plain` is not `Tagged`, so `Queue<Plain>` is not either
+}
+
+fn int32 main() { return run(); }

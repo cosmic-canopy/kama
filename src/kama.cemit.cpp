@@ -7817,7 +7817,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 auto& p = (*itf->whenParams)[c];
                                 auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                                 ci.copyableWhenParams.push_back(p && p->value ? *p->value : "");
-                                ci.copyableWhenBounds.push_back(b && b->value ? *b->value : "Copyable");
+                                ci.copyableWhenBounds.push_back(resolveWhenBound(b));
                             }
                     }
                 }
@@ -7984,7 +7984,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 auto& p = (*md->whenParams)[c];
                                 auto& b = md->whenBounds ? (*md->whenBounds)[c] : p;
                                 mi.whenParams.push_back(p && p->value ? *p->value : "");
-                                mi.whenBounds.push_back(b && b->value ? *b->value : "Copyable");
+                                mi.whenBounds.push_back(resolveWhenBound(b));
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
@@ -10458,7 +10458,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
                     auto& p = (*itf->whenParams)[c];
                     auto& b = itf->whenBounds ? (*itf->whenBounds)[c] : p;
                     wp.push_back(p && p->value ? *p->value : "");
-                    wb.push_back(b && b->value ? *b->value : "Copyable");
+                    wb.push_back(resolveWhenBound(b));
                 }
                 if (!whenConditionsHold(wp, wb, params, concrete)) continue;
             }
@@ -15805,6 +15805,26 @@ ClassInfo* CEmitter::implTargetInfo(const std::string& tkey)
 // A `when [P1: B1, …]` gate holds iff EVERY condition holds: the concrete arg bound to each gated param
 // satisfies its required contract. A condition naming a param that isn't a type-param of this template
 // fails conservatively (as the old single-param gate did — it left the capability off).
+// The contract named by a `when [P: B]` gate, resolved the way every OTHER contract name is.
+//
+// ⚠️ This used to store `*b->value` — the RAW SOURCE SPELLING — while a conformance list stores the
+// RESOLVED name, so the two could never match and the gate silently failed. It looked like it worked
+// because a PRELUDE contract resolves to its own bare name: `when [T: Hashable]` matched by accident,
+// and `when [T: MyContract]` (which resolves to `_Fi1__MyContract`) never held at all. The conditional
+// conformance was then dropped from the instance in silence, and the only symptom was an unrelated
+// bound check failing much later — "type argument `Queue` does not satisfy bound `MyContract`" on a
+// type that declares exactly that conformance.
+//
+// `default` is NOT a contract — it is the structural default-constructible gate `whenConditionsHold`
+// answers itself — so it is passed through untouched. A prelude name resolves to itself, which is why
+// the shipped `when [T: Copyable<T>]` clauses are unaffected.
+std::string CEmitter::resolveWhenBound(const SharedIdentifier& b)
+{
+    if (!b || !b->value) return "Copyable";
+    if (*b->value == "default") return "default";
+    return resolveUserName(*b->value, b->qualifier);
+}
+
 bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                                   const std::vector<std::string>& whenBounds,
                                   const std::vector<std::string>& params,

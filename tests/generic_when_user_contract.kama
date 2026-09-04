@@ -1,0 +1,45 @@
+// A `when [P: B]` gate naming a USER-DECLARED contract. Conditional conformance was effectively a
+// PRELUDE-ONLY feature: the gate stored the RAW SOURCE SPELLING of the bound (`Tagged`) while a
+// conformance list stores the RESOLVED name (`_F..__Tagged`), so the two could never match. A prelude
+// contract resolves to its own bare name, so `when [T: Hashable]` matched BY ACCIDENT and the feature
+// looked like it worked — while every user contract silently failed.
+//
+// ⚠️ The symptom was nowhere near the cause. The conformance was quietly dropped from the instance, and
+// what the author saw was an unrelated bound check failing later: "type argument `Queue` for type
+// parameter `T` does not satisfy bound `Tagged`" — on a type whose declaration says `implements Tagged`
+// three lines up, and whose `tag()` method was callable the whole time.
+//
+// This fixture drives all three shapes the gate reaches: a conditional INTERFACE (`Queue`), a
+// conditional METHOD (`only`), and the bound that consumes the result (`takes`).
+
+type contract Tagged for resource { const fn int32 tag(); }
+
+type resource Job implements Tagged {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public const fn int32 tag() { return this.x; }
+}
+
+type resource Queue<T> implements Tagged when [T: Tagged] {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 tag() { return this.n; }
+    // a conditional METHOD gated on the same user contract — the second of the three sites
+    public const fn int32 only() when [T: Tagged] { return this.n * 2; }
+}
+
+fn int32 takes<T: Tagged>(ref T v) { return v.tag(); }   // the bound that consumes the conformance
+
+unsafe fn int32 run() {
+    Job j = Job.make(x: 7);
+    Queue<Job> q = Queue::<Job>.make(n: 10);
+
+    int32 direct = takes(v: ref j);        // 7  — a plain conformer satisfies the bound
+    int32 viaWhen = takes(v: ref q);       // 10 — the CONDITIONAL conformance satisfies it too
+    int32 gated = q.only();                // 20 — and the conditional method exists
+
+    // The unsatisfied side is pinned by tests/xfail/generic_when_unsatisfied.kama.
+    return direct + viaWhen + gated;            // 7 + 10 + 20 = 37
+}
+
+fn int32 main() { return run(); }
