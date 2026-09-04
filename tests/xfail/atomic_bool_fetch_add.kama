@@ -1,0 +1,8 @@
+// `fetchAdd` on an `Atomic<bool>` is refused at the call: the shim adds the cell's raw bytes, so `true + 1`
+// would store the byte 2 — not a `bool`, and not a flip. The flip is `swap(value:)`.
+import { std::concurrent::Atomic };
+fn int32 main() {
+    Atomic<bool> flag = Atomic.make(value: false);
+    bool prior = flag.fetchAdd(delta: true);        // ERROR: needs an integer element
+    return 0;
+}

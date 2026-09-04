@@ -7,9 +7,11 @@ export { Atomic, MemoryOrder };
 // its state; sharing is by move (`give`) or by immutable `Shared`). When two tasks must touch the SAME
 // mutable location — a counter, a done-flag, a lock-free head pointer — that location is an `Atomic<T>`.
 //
-// `T` is an integer primitive (`int8`…`uint64`, `usize`/`isize`) or `UnsafePtr` — a naturally-aligned lock-free
-// scalar. A non-scalar element (a `resource`/`value`/contract) is a compile error: atomicity is a hardware
-// property of a machine word, so a struct can't be one cell (compose several `Atomic` fields instead).
+// `T` is an integer primitive (`int8`…`uint64`, `usize`/`isize`), `bool` (the done-flag) or `UnsafePtr` — a
+// naturally-aligned lock-free scalar. A non-scalar element (a `resource`/`value`/contract) is a compile
+// error: atomicity is a hardware property of a machine word, so a struct can't be one cell (compose several
+// `Atomic` fields instead). A `bool` cell has no `fetchAdd`/`fetchSub` — the shim adds raw bytes, and
+// `true + 1` is not a `bool` — so those two are refused at the call; `swap`/`compareExchange` are the flip.
 //
 // Sharing model: an `Atomic<T>` is a move-only `resource` (no silent copies — a copy would be a SECOND,
 // independent cell, defeating the point). Cross-isolate sharing is by `ref`-borrow inside a `scope`: the

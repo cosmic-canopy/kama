@@ -1,1 +1,1 @@
-requires an integer primitive or
+requires an integer primitive

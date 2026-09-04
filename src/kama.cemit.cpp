@@ -10368,9 +10368,14 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl, SharedIdentifier
         // machine words, so they are named here on purpose rather than by widening the span.
         bool isSize = el->builtInVal == IDENTIFIER_ISIZE_VAL || el->builtInVal == IDENTIFIER_USIZE_VAL;
         bool isPtr  = el->value && *el->value == "UnsafePtr";
-        if (!isInt && !isSize && !isPtr) {
-            unsupported(("`Atomic<T>` requires an integer primitive or `UnsafePtr` element (a lock-free machine "
-                         "word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
+        // `bool` is a lock-free byte too — the done-flag the docs advertise. What it cannot do is
+        // `fetchAdd`/`fetchSub`: the shim adds the raw bytes, and `true + 1` is the byte 2, which is not a
+        // `_Bool`. Those two are refused at the CALL on a `bool` cell (emitDispatch), where `swap`/
+        // `compareExchange` are the flip. `float` stays out for the same raw-bytes reason, with no use.
+        bool isBool = el->builtInVal == IDENTIFIER_BOOL_VAL;
+        if (!isInt && !isSize && !isPtr && !isBool) {
+            unsupported(("`Atomic<T>` requires an integer primitive, `bool` or `UnsafePtr` element (a lock-free "
+                         "machine word) — `" + cType(el) + "` is not one; use one `Atomic` field per shared word").c_str(), line);
             return;
         }
     }
@@ -23918,6 +23923,22 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     if (!_classes.count(clsName)) { unsupported("call on unknown class", srcLine); return "0"; }
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[clsName], method, &owner);
+    // `Atomic<bool>` has no arithmetic: `fetchAdd`/`fetchSub` add the cell's raw bytes, and `true + 1` is
+    // the byte 2, which is not a `_Bool` (undefined, and it does not "flip"). A use-site rule rather than a
+    // `when` on the method, because no bound spells "an integer" (ROADMAP §2); the flip is `swap`.
+    // Judged at the USER's call, not inside `Atomic`'s own body: `fetchAdd` forwards to `fetchAddExplicit`
+    // there, and that forwarding is emitted for every instance, `Atomic<bool>` included.
+    if (mi && isAtomicClass(clsName) && !(_currentClass && isAtomicClass(_currentClass->name))
+        && (method == "fetchAdd" || method == "fetchSub" || method == "fetchAddExplicit" || method == "fetchSubExplicit")) {
+        auto gi = _genericTypeInsts.find(clsName);
+        if (gi != _genericTypeInsts.end() && !gi->second.typeArgs.empty() && gi->second.typeArgs[0]
+            && gi->second.typeArgs[0]->builtInVal == IDENTIFIER_BOOL_VAL) {
+            unsupported(("`" + method + "` needs an integer element — `Atomic<bool>` is a flag: set it with "
+                         "`store(value:)`, flip it with `swap(value:)` (which hands back the prior value), or "
+                         "`compareExchange`").c_str(), srcLine);
+            return "0";
+        }
+    }
     if (!mi) {
         // Auto-deref fallback: `method` is not on `clsName`, but `clsName` implements `Deref<T>` and the
         // method IS on the pointee `T`. Resolve on `T` and call through `clsName__deref(recvPtr)` — a

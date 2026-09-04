@@ -3424,8 +3424,10 @@ DynamicArray<Shared<Shape>> scene;                              // nested generi
   through its own parameter is checked at each instantiation instead. The stdlib has no such template: a
   value crossing a type-erased boundary is passed by ADDRESS and moved as `sizeof(T)` bytes, which
   converts nothing and needs no such promise. That is the idiom to reach for; `Atomic<T>` is written that
-  way throughout, and its element restriction — a lock-free machine word — is enforced by the compiler at
-  the use site, being likewise unspellable as a bound.
+  way throughout, and its element restriction — a lock-free machine word: an integer, `bool` (the
+  done-flag) or `UnsafePtr` — is enforced by the compiler at the use site, being likewise unspellable as <!-- xfail: atomic_nonscalar -->
+  a bound; so is the one operation a `bool` cell lacks, `fetchAdd`/`fetchSub` (the shim adds raw bytes, and
+  `true + 1` is not a `bool`), whose flip is `swap` or `compareExchange`. <!-- xfail: atomic_bool_fetch_add --> <!-- test: atomic_bool -->
 - **Comptime parameters** — a parameter may be a **value** instead of a type: `comptime(int32 N)`, in its
   own trailing list, supplied at a use site with `#(4)`. `<…>` holds types; `#(…)` holds values. Inside the declaration it reads as an ordinary value
   of its type, so a length, a shift or a scale becomes a parameter rather than part of a name:

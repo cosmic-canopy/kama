@@ -1,0 +1,19 @@
+// `Atomic<bool>` — the done-flag the docs advertise, now admissible: a `bool` is a lock-free byte. Set it
+// with `store`, read it with `load`, flip it with `swap` (which hands back the prior value) or
+// `compareExchange`. The child raises the flag; the scope barrier orders the parent's read. What a `bool`
+// cell cannot do is `fetchAdd`/`fetchSub` (the rejecting twin, tests/xfail/atomic_bool_fetch_add): the shim
+// adds raw bytes, and `true + 1` is the byte 2, which is not a `bool`.
+import { std::concurrent::Isolate, std::concurrent::Atomic };
+fn void raise(ref Atomic<bool> done) { done.store(value: true); }
+fn int32 main() {
+    Atomic<bool> done = Atomic.make(value: false);
+    scope { spawn raise(done: ref done); }          // BARRIER: the store is visible after the join
+    int32 r = 0;
+    if (done.load()) { r = r + 20; }                // 20
+    bool prior = done.swap(value: false);           // prior = true, cell = false
+    if (prior) { r = r + 10; }                      // 30
+    if (!done.load()) { r = r + 5; }                // 35
+    bool expected = false;
+    if (done.compareExchange(expected: ref expected, desired: true)) { r = r + 7; }   // 42
+    return r;
+}
