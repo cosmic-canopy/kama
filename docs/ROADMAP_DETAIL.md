@@ -1040,6 +1040,51 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   `0.9.149`, one in `0.9.150`, and the residue below is what is left. The two newest (their KB-12 and
   KB-13, triaged 2026-09-04 against `0.9.164`) are the first bullets.
 
+  - **The raw seam and the owning `static` — triaged 2026-09-04 against `0.9.169`, from their KB-14 and
+    KB-15.** Both reproduce exactly (KB-15 at 527 MB vs 2.5 MB). They are ONE seam, and the decisive
+    measurement is that it is load-bearing: a local `UnsafePtr<T>` element is deliberately untyped to
+    ownership (`ptrLocalElemType` is kept out of `exprClass`, and its comment says why) so that
+    `nd[i] = od[i]` in `DynamicArray.growTo` stays a bitwise relocate. Widening `exprClass` to local
+    pointer elements FIXES KB-14 (the repro returns 14) and BREAKS 45 fixtures, every one failing with
+    `cannot give out of a field/element` inside `dynamic_array.kama` — the same diagnostic the consumer hit
+    trying `give slot[0]`. A third symptom found here: `drop(value: slot[0])` compiles and emits a literal
+    `(void)0;`. ⚠️ **GOALS §3a/§3e answer this without a design doc**: a raw pointer is the FFI seam and
+    "never general-purpose escape"; to persist or share, you OWN it. So `p[i] = v` keeps C semantics, and
+    the work is the DIAGNOSTICS (refuse the silent `drop`; name the two spellings at the method call) plus
+    removing the reason anyone owns through a raw pointer at all — which is the next bullet.
+  - **A module `static` cannot own a destructible resource, and it was untracked.** `static World g =
+    World.make();` is refused — "no destructible resources yet"; the gate's comment: "v1 has no static-dtor
+    seam". This is WHY the first consumer callocs a `World`: on the web `main`'s frame is unwound while
+    the rAF callback lives, so the one owner that outlives a frame is a static. The shape the goals give:
+    `static Optional<Owned<World>> g;` — absence in the type (§3b), `match` forces the dead case exactly as
+    `Weak.tryUpgrade` does — and the C callback receives a pointer borrowed from the owner and turns it into
+    a `ref World` PARAMETER at one `unsafe fn`, which is measured working and dropping today (their own
+    `place(b: ref slot[0])` is that shape). Three pieces: the dtor seam at BOTH teardown sites (the
+    synthesized `main` after `kama_main`, and the isolate trampoline — statics are `KAMA_ISOLATE_LOCAL`),
+    the static-initializer rule (`isConstInitExpr`) accepting a payload-less variant literal so the static
+    can start as `None`, and the reassignment bug below, because assigning the static IS a generic-resource
+    reassignment.
+  - **A GENERIC resource reassigned from a fresh rvalue never drops the old value — found here, ours.**
+    `slot = fresh();` on `Owned<T>`, `Shared<T>` or a user `Box<T>`: 503 MB over 2,000 iterations; the
+    non-generic twin 1.8 MB; `slot = give t;` from a local 1.9 MB (so `tests/give_assign.kama`'s own shape
+    is fine — and its comment's claim "b's old is freed" is true of that shape only, and unobservable by
+    its exit code either way). Root: the fresh-rvalue reassignment branch in the assignment emitter is
+    gated `_genericTypeInstOf.find(lty) == end()` on the claim that "the value-producing path further down
+    already drops the old value" — that path is the `isIntrinsicColl` COLLECTION branch, so a generic
+    resource matches neither and lands in a plain store. Fixture instrument: a dtor counter in a module
+    `static` (`tests/out_arg_drops.kama`'s idiom) returning the count — exit-code observable on every leg,
+    which an RSS oracle is not. ⚠️ And reducing it found a second divergence: a generic type's dtor naming
+    that static directly is emitted BEFORE the static's declaration (`use of undeclared identifier` from
+    clang, `kama check` clean); route through a helper `fn` for the fixture, and row it.
+  - **`reproducible-float` does not propagate from a dependency — a defect in `0.9.169`.** Found by
+    re-reading the consumer's `sim`/`tests` case against the shipped key: their raw `-ffp-contract=off`
+    cflag now propagates, the first-class key that replaces it does not. It was grouped with
+    `no-heap`/`webgpu`, and it is not alike — it cannot refuse code or demand an SDK; it can only turn
+    contraction OFF, and it states a requirement of the DEPENDENCY's own arithmetic, which the consumer
+    compiles.
+  - **KG-15 in their doc is stale**: `Mat4 * Vec4` is caught by `kama check` today ("the right-hand
+    operand expects a `Mat4`, so it cannot be given a `Vec4`"), and check and build agree.
+
   - **A statement-form `match` over a width-pinned enum whose arms all `return` fails
     `-Werror,-Wreturn-type` (their KB-12).** Thirteen lines: `type enum Tri : uint8 { A, B, C }` and a
     `fn int32 pick(Tri t)` whose `match` returns in every arm. `kama check` says OK and clang says
