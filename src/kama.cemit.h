@@ -653,7 +653,7 @@ public:
     void setPrelude(SharedCompilationUnit u, const std::string& srcPath = std::string())
     {
         _preludeUnit = u;
-        if (u && !srcPath.empty()) _builtinUnitFile[u.get()] = srcPath;
+        if (u && !srcPath.empty()) noteBuiltinFile(u.get(), srcPath);
     }
 
     // `--no-heap` (MCU step 5): reject every emitter-visible heap allocation program-wide (the no-heap
@@ -736,7 +736,7 @@ public:
     {
         if (!u) return;
         _preludeModuleUnits.push_back(u);
-        if (!srcPath.empty()) _builtinUnitFile[u.get()] = srcPath;   // see setPrelude
+        if (!srcPath.empty()) noteBuiltinFile(u.get(), srcPath);     // see setPrelude
     }
 
     // Emit a single self-contained translation unit (transpile / single-file
@@ -1054,8 +1054,28 @@ private:
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
     std::vector<SharedCompilationUnit> _preludeModuleUnits;  // namespaced built-ins (the triad), collect-only
     // Compiler-owned unit -> the file it was embedded FROM. Filled by setPrelude / addPreludeModule; read
-    // only by buildDeclUnits, to give those declarations' DefSites a `file` they can be opened at.
+    // by buildDeclUnits, to give those declarations' DefSites a `file` they can be opened at.
     std::map<const CompilationUnit*, std::string> _builtinUnitFile;
+    // The same answer keyed by the unit's synthetic NAME, which is what diagFile() deals in — a
+    // diagnostic knows the file it belongs to as a string, never as a unit pointer. See reportPath().
+    std::map<std::string, std::string> _builtinFileByName;
+    // Record both keyings at once. Out of line because `CompilationUnit` is incomplete here and the
+    // unit's NAME has to be read off it.
+    void noteBuiltinFile(const CompilationUnit* u, const std::string& srcPath);
+
+public:
+    // The file name to SHOW for a unit: a compiler-owned unit's real source when the install has it and
+    // the driver has verified it is still the text this binary compiled (builtinSourcePath), else the
+    // synthetic name unchanged. Applied only where a position leaves the compiler — a diagnostic's
+    // `file`, an instrument's row — never to `_collectingUnitPath` or `declFile`, which the `<` sentinel
+    // is read out of by checkReach, CEmitter::line, setPackageResolver and moduleOfUnit.
+    std::string reportPath(const std::string& unit) const
+    {
+        if (unit.empty() || unit[0] != '<') return unit;
+        auto it = _builtinFileByName.find(unit);
+        return it == _builtinFileByName.end() ? unit : it->second;
+    }
+private:
     // prelude/builtin.kama and its name -> span table, both owned by the driver (the table is a process
     // -wide static, scanned once). See setBuiltinDoc.
     std::string                            _builtinDocFile;

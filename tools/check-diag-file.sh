@@ -18,9 +18,10 @@
 # assertion about the FILE NAME in the diagnostic — the xfail harness compares a message substring against
 # stderr and has no shape for either. Same reasoning as check-self-import.sh.
 #
-# Five assertions, because there are several ways to be wrong and a fix can trade one for another. The
-# first three are about the COLLECT pass, the last two about the EMIT walk underneath it — where the same
-# defect survived the original fix, because `_collectingUnitPath` is empty by the time a body is walked:
+# Nine assertions, because there are several ways to be wrong and a fix can trade one for another. The
+# first three are about the COLLECT pass, 4 and 5 about the EMIT walk underneath it — where the same
+# defect survived the original fix, because `_collectingUnitPath` is empty by the time a body is walked —
+# and 6 through 9 were each added by the campaign that found them:
 #   1. A broken declaration in an IMPORTED module names that module's file, not the consumer's.
 #   2. A broken declaration in the file being checked still names ITS OWN file — the case that always
 #      worked, and the one an over-eager fix would break by letting the collect path win everywhere.
@@ -28,6 +29,11 @@
 #   4. A mistake in an imported module's function BODY names that module.
 #   5. A mistake in an imported GENERIC TEMPLATE's body names the template's file — that body is emitted
 #      from the header pass, before any module's path is current, so it has its own record to read.
+#   6. An unresolved module names the RULE that refused it, not a directory.
+#   7. A same-module import blames the cause that fired, not the export list.
+#   8. A failed generic bound is the USE SITE's mistake, reported once, in its file (case 1 inverted).
+#   9. A position raised in the header pass — where NO module is current — names the prelude rather than
+#      falling through to the file being compiled, which is the same defect with no declaration to blame.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -341,9 +347,66 @@ if [ "$n8" != 1 ]; then
     exit 1
 fi
 
+# ---- 9. the HEADER PASS names the file it is emitting -------------------------------------------------
+#
+# The prelude is collect-only, so nobody's module emits its bodies — `emitHeaderContent` does, where no
+# module is current. `diagFile()`'s last rung is "the file being compiled", so every position raised in a
+# prelude body was stamped with the USER's path and the PRELUDE's line number. Measured on 0.9.177 with a
+# FOUR-line program: `--strict-numeric` produced 26 rows, every one of them naming that program, not one
+# at a line it has, the highest claiming line 531.
+#
+# ⚠️ WHY --strict-numeric IS THE PROBE. The class needs a position raised while a prelude BODY is being
+# emitted, and the prelude compiles clean — so no error fixture can reach it without breaking the prelude
+# itself. The strict-numeric instrument reports from exactly those bodies, on a correct program, and it
+# formats `diagFile()` into every row. It is the only observable of this class that a passing build has.
+cat > "$tmp/tiny.kama" <<'EOF'
+fn int32 main() {
+    int32 a = 2;
+    return a;
+}
+EOF
+TINY=$(wc -l < "$tmp/tiny.kama" | tr -d ' ')
+rows=$("$KAMA" build --strict-numeric "$tmp/tiny.kama" -o "$tmp/tiny.bin" 2>&1 | LC_ALL=C grep '^kama-strictnum' || true)
+
+# A probe that produced nothing must not read as a pass — check-diag-line.sh learned this one the hard way.
+n9=$(printf '%s\n' "$rows" | LC_ALL=C grep -c '^kama-strictnum' || true)
+if [ "$n9" -lt 4 ]; then
+    echo "check-diag-file: FAIL — the header-pass probe emitted $n9 strict-numeric rows (expected several)."
+    echo "  it can no longer see the class it is guarding; fix the probe, do not delete the case."
+    exit 1
+fi
+
+# 9a. no row may name the user's own file at a line it does not have.
+bad9=$(printf '%s\n' "$rows" | LC_ALL=C awk -F'\t' -v max="$TINY" '$2 ~ /tiny\.kama$/ && $3 > max' || true)
+if [ -n "$bad9" ]; then
+    echo "check-diag-file: FAIL — a position raised in the header pass names the USER's file at a line"
+    echo "  that file does not have (it has $TINY):"
+    printf '%s\n' "$bad9" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
+# 9b. ...and positively: the prelude's own rows are attributed to the PRELUDE. Without this, silencing the
+#     instrument would satisfy 9a. The name is either the real source file (when the install ships it and
+#     it still matches what was compiled — see check-builtin-path.sh) or the `<prelude>` sentinel.
+if ! printf '%s\n' "$rows" | LC_ALL=C grep -qE '(<prelude>|prelude/global\.kama|std/memory/)'; then
+    echo "check-diag-file: FAIL — not one row is attributed to a compiler-owned source, yet the prelude"
+    echo "  is where these rows come from. They are being charged to somebody else:"
+    printf '%s\n' "$rows" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
+# 9c. every position that names a REAL file must be a line that file has. This is what the instrument's
+#     own range check cannot do — it only knows the fixture's sources, and these name the stdlib's.
+printf '%s\n' "$rows" | LC_ALL=C awk -F'\t' '$2 !~ /^</ { print $2 "\t" $3 }' | sort -u | while IFS="$(printf '\t')" read -r f l; do
+    [ -f "$f" ] || { echo "check-diag-file: FAIL — a row names \`$f\`, which is not a file" >&2; exit 1; }
+    fmax=$(wc -l < "$f" | tr -d ' ')
+    [ "$l" -le "$fmax" ] || { echo "check-diag-file: FAIL — a row names $f:$l, and that file has $fmax lines" >&2; exit 1; }
+done
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
 echo "                       unresolved module names the rule that refused it, not a directory; a"
 echo "                       same-module import blames the cause that fired, not the export list; and a"
-echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file)"
+echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file; and a
+                       position raised in the HEADER PASS names the prelude, not the user's file)"

@@ -269,6 +269,15 @@ struct ScopedNoHeap { bool& b; bool prev;
     ScopedNoHeap(bool& b_, bool on) : b(b_), prev(b_) { if (on) b = true; }
     ~ScopedNoHeap() { b = prev; } }; }
 
+// Where a compiler-owned unit's source lives, keyed BOTH ways: by unit pointer for the query layer's
+// DefSites, and by the unit's synthetic name for reportPath, which is what a diagnostic carries.
+void CEmitter::noteBuiltinFile(const CompilationUnit* u, const std::string& srcPath)
+{
+    if (!u) return;
+    _builtinUnitFile[u] = srcPath;
+    if (u->name) _builtinFileByName[*u->name] = srcPath;
+}
+
 const std::string& CEmitter::diagFile() const
 {
     if (!_collectingUnitPath.empty()) return _collectingUnitPath;
@@ -297,7 +306,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     //
     // The `/* TODO(kama): unsupported … */` marker below is deliberately NOT deduped: it is a property of
     // the emission site, one per body actually emitted, and it keeps `--keep-c` honest.
-    if (!_reportedDiags.insert(diagFile() + ":" + std::to_string(srcLine) + ":" + display).second) {
+    if (!_reportedDiags.insert(reportPath(diagFile()) + ":" + std::to_string(srcLine) + ":" + display).second) {
         *_out << "/* TODO(kama): unsupported " << what << " */";
         return;
     }
@@ -313,7 +322,10 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     d.severity = DiagSeverity::Error;
     d.code = "unsupported";
     d.message = what;
-    d.file = diagFile();
+    // reportPath, not diagFile: a diagnostic owned by the prelude names the prelude's FILE when the
+    // install has it (and the driver has verified it is still what this binary compiled), and its
+    // synthetic `<prelude>` name when it does not. The unit keeps its name either way.
+    d.file = reportPath(diagFile());
     d.subject = subject;
     _diagnostics.push_back(d);
     *_out << "/* TODO(kama): unsupported " << what << " */";
@@ -1274,7 +1286,7 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     // intrinsic with a NULL `returnType` — `s.length()` and its `usize` siblings — records no type at
     // all. This count is the upper bound on what a later pass could still find.
     if (src.empty()) {
-        std::string u = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line)
+        std::string u = "kama-strictnum\t" + reportPath(diagFile()) + "\t" + std::to_string(line)
                       + "\t?\t" + dstCType + "\tunknown-src\t" + (what ? what : "");
         size_t t = u.find('`'); if (t != std::string::npos) u = u.substr(0, t);
         if (_strictNumericSeen.insert(u).second) std::fprintf(stdout, "%s\n", u.c_str());
@@ -1309,7 +1321,7 @@ void CEmitter::noteNumericHandoff(const std::string& dstCType, SharedExpression 
     if (tick != std::string::npos) pos = pos.substr(0, tick);
     while (!pos.empty() && pos.back() == ' ') pos.pop_back();
 
-    std::string row = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+    std::string row = "kama-strictnum\t" + reportPath(diagFile()) + "\t" + std::to_string(line) + "\t"
                     + src + "\t" + dstCType + "\t" + cat + "\t" + pos;
     // A generic body is emitted once per instantiation and the prelude is analyzed once per unit, so
     // the same site arrives many times. Same dedupe key as `unsupported`, for the same reason.
@@ -1391,7 +1403,7 @@ void CEmitter::noteNumericOperands(int opToken, SharedExpression lhs, SharedExpr
 
     if (!cat) return;                              // same type, nothing to migrate and nothing to note
 
-    std::string row = "kama-strictnum\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+    std::string row = "kama-strictnum\t" + reportPath(diagFile()) + "\t" + std::to_string(line) + "\t"
                     + (lt.empty() ? "?" : lt) + "\t" + (rt.empty() ? "?" : rt) + "\t" + cat + "\t"
                     + (posWhat ? posWhat : "");
     if (!_strictNumericSeen.insert(row).second) return;
@@ -1481,7 +1493,7 @@ void CEmitter::noteTypeIdentity(const std::string& dstCType, SharedExpression va
     if (tick != std::string::npos) pos = pos.substr(0, tick);
     while (!pos.empty() && pos.back() == ' ') pos.pop_back();
 
-    std::string row = "kama-typeid\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+    std::string row = "kama-typeid\t" + reportPath(diagFile()) + "\t" + std::to_string(line) + "\t"
                     + (src.empty() ? "?" : src) + "\t" + dstCType + "\t" + cat + "\t" + pos;
     if (!_strictNumericSeen.insert(row).second) return;
     std::fprintf(stdout, "%s\n", row.c_str());
@@ -1513,7 +1525,7 @@ void CEmitter::noteTypeIdentityOperands(int opToken, SharedExpression lhs, Share
     else                                                cat = "id-op-enum-arith";
     if (!cat) return;
 
-    std::string row = "kama-typeid\t" + diagFile() + "\t" + std::to_string(line) + "\t"
+    std::string row = "kama-typeid\t" + reportPath(diagFile()) + "\t" + std::to_string(line) + "\t"
                     + (lt.empty() ? "?" : lt) + "\t" + (rt.empty() ? "?" : rt) + "\t" + cat + "\t"
                     + (opName ? opName : "");
     if (!_strictNumericSeen.insert(row).second) return;
@@ -22185,10 +22197,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     if (!_probingTemplate && owner.name == "GlobalAllocator" && memberName
         && (std::string(memberName) == "allocate" || std::string(memberName) == "deallocate")
         && !_allocSites.count(cName))
-        // No file/line: this body is the PRELUDE's, emitted in the header pass where `diagFile()` has no
-        // unit to name and falls back to the file being compiled — which would point the reader at an
-        // innocent line of their own program. The chain already ends at `GlobalAllocator::allocate`, so
-        // the position adds nothing the message does not already say.
+        // No file/line, and this is now a CHOICE rather than a defence. It was written when a position
+        // taken here would have been a lie — the header pass named no unit, so `diagFile()` fell through
+        // to the file being compiled and pointed the reader at an innocent line of their own program.
+        // That is fixed (0.9.179: the header pass installs its owner), so an honest `<prelude>` position
+        // is available. It is still not taken: this position renders INSIDE the message text, on a
+        // sentence whose chain already ends at `GlobalAllocator::allocate`, and a prelude line the author
+        // cannot act on adds nothing to it. Keep the behaviour; do not restore the old reason for it.
         _allocSites[cName] = AllocSite{ "a container or box drawing from `GlobalAllocator`, which is libc "
                                         "malloc/free", 0, std::string() };
     _inStaticMethod = isStatic;   // a static body has no `self`/`this`
@@ -26667,6 +26682,13 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // prelude free fns ride `emitGenericInst`; extern/signature-only ones carry no body.
     if (_preludeUnit && _preludeUnit->codeDeclarationList) {
         _nsCtx = _unitCtx[_preludeUnit.get()];
+        // Say WHOSE code this is. Header content belongs to no module, so a diagnostic raised in one of
+        // these bodies fell through diagFile()'s last rung to `_sourcePath` — the file being compiled —
+        // and was stamped with the USER's path at the PRELUDE's line. Measured on 0.9.177: a 4-line
+        // program, built with `--strict-numeric`, produced 26 rows naming that program and not one of
+        // them at a line it has; the highest claimed line 531. `emitStruct` already installs this for the
+        // same reason one layer up. See diagFile().
+        ScopedStr _cu(_collectingUnitPath, _preludeUnit->name ? *_preludeUnit->name : std::string());
         _emitStaticInlineFn = true;
         for (auto& decl : *_preludeUnit->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
@@ -26691,6 +26713,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         for (auto& kv : _typeConsts) {
             TypeConstInfo& tc = kv.second;
             auto oc = _classes.find(tc.owner);
+            // ...and this one is USER code emitted from the header pass, where `_sourcePath` is "" in a
+            // multi-file build — so its rejection below named no file at all. See diagFile().
+            ScopedStr _cu(_collectingUnitPath, oc != _classes.end() ? oc->second.declFile : std::string());
             if (oc != _classes.end()) scopeOf(oc->second.scope, oc->second.usings, oc->second.symbolAliases);
             *_out << "static const " << cType(tc.type) << " " << tc.cName << " = ";
             if (tc.hasValue) *_out << tc.value;
@@ -26724,6 +26749,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         // an enum has none of that. The dedicated block just below emits its bodies instead.
         if (kv.second.isVariant) continue;
         scopeOf(kv.second.scope, kv.second.usings, kv.second.symbolAliases);
+        ScopedStr _cu(_collectingUnitPath, kv.second.declFile);   // whose code this is — see diagFile()
         _emitStaticClass = true;
         emitClassPrototypes(kv.second);
         emitClassDefinitions(kv.second);
@@ -26741,6 +26767,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (it == _classes.end() || !it->second.isVariant) continue;   // only a promoted enum reaches _classes
             ClassInfo& eci = it->second;
             scopeOf(eci.scope, eci.usings, eci.symbolAliases);
+            ScopedStr _cu(_collectingUnitPath, eci.declFile);   // whose code this is — see diagFile()
             if (eci.destructible) emitDtorDefinition(eci);
             emitClassInterfaceVtables(eci);
             emitEnumMemberBodies(eci, eci.enumNode);   // a prelude `type enum`'s own methods
@@ -26756,6 +26783,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // `List<int32>.contains`, or an int-keyed `Map` resolves without importing `std::collections`.
     if (_preludeUnit && _preludeUnit->codeDeclarationList) {
         _nsCtx = _unitCtx[_preludeUnit.get()];
+        ScopedStr _cu(_collectingUnitPath, _preludeUnit->name ? *_preludeUnit->name : std::string());
         _emitStaticClass = true;
         for (auto& e : implEmitsOf(_preludeUnit)) {
             ScopedStr _ts(_thisType, e.target->name);

@@ -129,7 +129,7 @@ bool CEmitter::ctFail(const char* what, int line)
         d.severity = DiagSeverity::Error;
         d.code = "comptime";
         d.message = std::string("comptime evaluation: ") + what;
-        d.file = diagFile();
+        d.file = reportPath(diagFile());   // the prelude names its own file when the install has it — see reportPath
         _diagnostics.push_back(d);
         _ctFailed = true;
     }
