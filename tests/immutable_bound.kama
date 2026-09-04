@@ -1,0 +1,39 @@
+// Deep immutability as a BOUND. The `immutable` qualifier is a verified whole-type guarantee, but a
+// qualifier cannot be named in a `<T: …>` bound or a `when [T: …]` gate — so the prelude carries an
+// `Immutable` marker contract the compiler DERIVES rather than accepts a declaration of.
+//
+// This is what lets a shared handle say the thing that makes it sendable: a `Shared<T>` may cross an
+// isolate boundary exactly when `T` cannot change, and `when [T: Immutable]` is how that sentence is
+// written. Before this, deep immutability was computable but unspellable, so the conformance had to be
+// hand-wired in the compiler for the two smart pointers.
+//
+// ⚠️ Derived, never declared: `implements Immutable` is an error (tests/xfail/immutable_declared.kama).
+// A marker contract has no members, so a nominal declaration would be satisfied by ANY type — a promise
+// nothing checks, about the one property whose entire value is that it is checked.
+
+type immutable value Frozen {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public fn int32 get() { return this.v; }
+}
+
+// The `Shared<T>`-shaped case: a capability this type has only when its payload cannot change.
+type resource Handle<T> implements Movable when [T: Immutable] {
+    int32 tag;
+    public ctor make(int32 tag) { this.tag = tag; }
+    public fn int32 get() { return this.tag; }
+}
+
+fn int32 viaBound<T: Immutable>(ref T v) { return 5; }        // the bound, directly
+fn int32 viaWhen<T: Movable>(ref T v) { return 7; }           // consumes the conditional conformance
+
+unsafe fn int32 run() {
+    Frozen f = Frozen.make(v: 30);
+    Handle<Frozen> h = Handle::<Frozen>.make(tag: 0);
+
+    int32 a = viaBound(v: ref f);      // 5  — `Frozen` is deeply immutable
+    int32 b = viaWhen(v: ref h);       // 7  — so `Handle<Frozen>` got its conditional `Movable`
+    return f.get() + a + b;            // 30 + 5 + 7 = 42
+}
+
+fn int32 main() { return run(); }

@@ -2108,6 +2108,8 @@ private:
     ClassInfo* findFieldOwner(ClassInfo* ci, const std::string& field);   // class declaring `field`
     MethodInfo* findMethod(ClassInfo* ci, const std::string& name, ClassInfo** owner);
     // Does `ci` structurally satisfy contract `contract` (have all its methods, public)?
+    // Deep immutability, as the derived `Immutable` bound asks — reads the qualifier too (ordering).
+    bool isImmutableType(const ClassInfo& ci) const;
     bool classSatisfiesBound(ClassInfo* ci, const std::string& contract);
     ClassInfo* implTargetInfo(const std::string& tkey);   // collection/primitive impl-conformance ClassInfo
     // AND over a `when [P: B, …]` gate: every gated param's concrete arg must satisfy its bound. `params`

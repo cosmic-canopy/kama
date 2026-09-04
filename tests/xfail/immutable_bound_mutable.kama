@@ -1,0 +1,14 @@
+// The negative half of tests/immutable_bound.kama: a MUTABLE type must not satisfy the derived
+// `Immutable` bound. Without this the fix could have failed open — answering "yes" for every type would
+// make the positive fixture pass just as convincingly, and would silently license sharing a mutable
+// payload across isolates, which is the exact race the whole rule exists to stop.
+type value Hot { int32 v; public ctor make() { this.v = 1; } }
+
+fn int32 takes<T: Immutable>(ref T v) { return 1; }
+
+unsafe fn int32 run() {
+    Hot h = Hot.make();
+    return takes(v: ref h);      // ERROR: `Hot` is not `immutable`, so it cannot satisfy `Immutable`
+}
+
+fn int32 main() { return run(); }

@@ -7810,6 +7810,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // `copy()` no longer implies it). Recognized by name — the capability markers are
                     // compiler-owned. The `(bare: …)` parameter is the mandatory bare-hand-off default;
                     // its presence + the `copy()` method are validated after the member loop below.
+                    // Derived-only: the qualifier is where immutability is stated, and it is VERIFIED.
+                    // A nominal `implements Immutable` would be a promise nothing checks — on a marker
+                    // contract with no members, any type at all would satisfy it structurally.
+                    if (*itf->value == "Immutable")
+                        unsupported(("`" + ci.name + "` may not declare `implements Immutable` — deep "
+                                     "immutability is stated with the `immutable` qualifier on the type "
+                                     "(`type immutable value …`), which the compiler verifies over every "
+                                     "field, base and variant payload; the contract exists only so a bound "
+                                     "can name it").c_str(), ci.declLine());
                     if (*itf->value == "Copyable") {
                         ci.copyable = true; ci.bareDefault = itf->bareDefault;
                         if (itf->whenParams)   // conditional: `… when [P: B, …]` — record each gated param+bound
@@ -13356,6 +13365,14 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
 {
     const std::string bound = pinnedInstanceName(bound_, t);
     auto it = _classes.find(t);
+    // `Immutable` is DERIVED, not declared: the compiler answers it for exactly the types the
+    // `immutable` qualifier verifies deeply (computeDeeplyImmutable). It exists so deep immutability can
+    // be NAMED in a bound — `when [T: Immutable]` is what lets `Shared<T>` say it is sendable exactly
+    // when its payload cannot change — since the qualifier itself is not spellable in a bound.
+    // A PRIMITIVE has no `_classes` entry and is immutable by nature (a scalar has no interior), which
+    // matches the `Copyable` arm directly below.
+    if (bound_ == "Immutable")
+        return it == _classes.end() ? true : isImmutableType(it->second);
     if (bound_ == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
@@ -15854,6 +15871,23 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
     return true;
 }
 
+// Is `ci` deeply immutable, as the `Immutable` BOUND asks?
+//
+// ⚠️ It reads the QUALIFIER, not only the computed flag, and that is deliberate: `computeDeeplyImmutable`
+// runs partway through `collectProgram`, while a bound is checked at every generic instantiation —
+// including ones registered before it, where `deeplyImmutable` is still false and a correct
+// `<T: Immutable>` would be refused for a reason having nothing to do with the type.
+//
+// Reading the qualifier is not a weakening, because the two coincide in every program that COMPILES: a
+// `type immutable` holding a mutable member is a hard error naming that member (tests/xfail/
+// immutable_mutable_field.kama), so `isImmutableQualified && !deeplyImmutable` is exactly the set of
+// programs already rejected — and rejected with a better diagnostic than a bound failure would give.
+// The qualifier is the declaration; the pass is its verification; the bound may read the declaration.
+bool CEmitter::isImmutableType(const ClassInfo& ci) const
+{
+    return ci.deeplyImmutable || ci.isImmutableQualified;
+}
+
 bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
 {
     if (!ci) return false;
@@ -15867,6 +15901,9 @@ bool CEmitter::classSatisfiesBound(ClassInfo* ci, const std::string& contract)
         if (ci->kind == TypeKind::Value) return true;
         return ci->copyable;
     }
+    // ...and `Immutable`'s one derived rule, the same shape: answered from the verified deep property
+    // rather than from a declaration, because a declaration could lie about it.
+    if (contract == "Immutable") return isImmutableType(*ci);
     return implementsContractTemplate(ci, contract);
 }
 

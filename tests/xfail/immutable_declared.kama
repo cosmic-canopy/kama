@@ -1,0 +1,10 @@
+// `Immutable` is DERIVED, never declared. A marker contract has no members, so a nominal
+// `implements Immutable` would be satisfied by any type at all — a promise nothing verifies, about the
+// one property whose entire value is that the compiler proved it. Say it with the qualifier, which IS
+// verified (tests/xfail/immutable_mutable_field.kama pins that half).
+type value Evil implements Immutable {
+    int32 v;
+    public ctor make() { this.v = 1; }
+}
+
+fn int32 main() { return 0; }

@@ -30,6 +30,13 @@ type contract HeapOwner<T> for resource { ctor adopt(UnsafePtr<T> raw); }
 // implements it is ALSO duplicable. A `Copyable(bare: copy)` resource = shared-ownership: a bare
 // hand-off RETAINS (constructs a copy), while `give` still MOVES the handle (the `Shared`/`Weak` model).
 type contract Movable for resource { }
+// Deep immutability as a BOUND (`<T: Immutable>`, `when [T: Immutable]`). DERIVED, never written: the
+// compiler implements it for exactly those types the `immutable` qualifier verifies deeply, so
+// `implements Immutable` on a type is an error — the qualifier is where you say it, and a nominal
+// declaration could lie about a property the whole point of which is that it cannot. It exists because
+// immutability is the reason a `Shared<T>` may cross an isolate boundary, and a `when` clause needs a
+// contract to name; the qualifier alone is not spellable in a bound.
+type contract Immutable for value, resource, enum { }
 // `copy` is a CTOR, not a self-returning method: a copy IS a new object, so it construct-shaped like
 // every other factory (M8e had already ruled that shape out for a self-returning `static fn`; this was
 // the last member that escaped it by taking `self`). The source is BORROWED (`ref This`) — copying
