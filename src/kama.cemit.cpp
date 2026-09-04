@@ -5447,7 +5447,11 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
             *_out << nm << "." << f.name << " = " << emitExpression(f.initializer) << ";\n";
             continue;
         }
-        std::string fcls = cTypeInInstance(ty, f.type);
+        // The BAKED type — this class may be declared in another module, and resolving its field types
+        // here resolved them in the READER's scope: across a module boundary the prefix differs, the
+        // lookup below missed, and the `continue` skipped a fill that the same source one module over
+        // emitted. The field then kept its `{0}` instead of its `default` ctor. See bakeFieldCTypes.
+        std::string fcls = fieldCType(ty, f);
         auto cit = _classes.find(fcls);
         if (cit == _classes.end()) continue;
         bool filled = false;
