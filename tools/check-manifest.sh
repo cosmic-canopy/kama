@@ -232,19 +232,26 @@ else
     bad "the declared layout did not resolve"; head -2 "$tmp/e" >&2
 fi
 
-# A MALFORMED manifest costs that package its NAME, and nothing else. A module name is `<project>::<…>`
-# (§2b), so a package whose manifest does not parse has no name to be imported by — but the failure must
-# be that one import saying so, not the analysis giving up: an editor sits above trees it does not own,
-# and a JSON typo somewhere up one of them must not strip hover and go-to-definition from code that is
-# itself fine.
+# A MALFORMED manifest in a package this project DEPENDS on stops the build, naming that file. A module
+# name is `<project>::<…>` (§2b), so such a package has no name to be imported by either — but the
+# reported failure is now the manifest itself, which is the more useful of the two: the reader is told
+# which file to fix rather than which import stopped working.
+#
+# ⚠️ This assertion used to expect `cannot resolve module 'geo'`, and the change is deliberate. A build
+# reads a dependency's `cflags`/`ldflags`/`link` now (tools/check-buildsettings.sh), so silently skipping
+# a manifest it cannot parse would silently drop a `-lm` and surface as a link error somewhere else —
+# exactly the silent drift that row exists to kill. It costs nothing in reach: `kama pkg install` already
+# refuses a child manifest it cannot read, so a tree that installs at all has readable ones, and this
+# only changes WHEN the problem is reported. The half that must NOT change is below: an editor sits above
+# trees it does not own, and `kama query`/`kama lsp` stay lenient (asserted in check-buildsettings.sh).
 cp "$dep/geo/kama.json" "$tmp/geo.json.good"
 printf '{ "name": "geo", oops\n' > "$dep/geo/kama.json"
 if "$KAMA" build "$dep/app/kama.json" -o "$dep/out.bin" >"$tmp/o" 2>"$tmp/e"; then
     bad "a package with an unparseable manifest still resolved — by what name?"
-elif grep -qF "cannot resolve module 'geo'" "$tmp/e"; then
-    ok "an unparseable manifest costs the package its name, and the import says so"
+elif grep -qF "geo/kama.json" "$tmp/e"; then
+    ok "an unparseable dependency manifest stops the build, naming that file"
 else
-    bad "the unparseable-manifest import failed for the wrong reason"; head -2 "$tmp/e" >&2
+    bad "the unparseable-manifest build failed for the wrong reason"; head -2 "$tmp/e" >&2
 fi
 printf 'fn int32 alone() { return 1; }\n' > "$dep/app/src/solo.kama"
 "$KAMA" check "$dep/app/src/solo.kama" >"$tmp/o" 2>"$tmp/e" \

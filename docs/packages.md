@@ -469,6 +469,11 @@ declares (an undeclared import is a hard error — no phantom dependencies):
 import { geo::area };
 ```
 
+A dependency also brings its **build settings** with it: a package that needs `-lm`, or a `-D` its own
+C expects, declares that once in its own manifest and every consumer gets it. What it can and cannot
+contribute — and the order the lists compose in — is
+[What a dependency contributes](targets.md#what-a-dependency-contributes).
+
 Install resolves the whole dependency graph (transitively) and writes the lockfile:
 
 ```sh

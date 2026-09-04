@@ -120,7 +120,7 @@ Two reasons it is on the project and not only on a target. A flag that is true o
 More decisively: a target is matched **by name**, so `--target aarch64-linux-gnu` — an anonymous
 triple — matches no `select.TARGET` entry at all, and a **dependency** cannot know how its consumer
 spells the target. Without a project tier, a dependency's build settings could not reach such a build
-at all.
+at all; see [What a dependency contributes](#what-a-dependency-contributes).
 
 ### `no-heap` and `webgpu` — the same shape, for the same reason
 
@@ -155,6 +155,40 @@ default.
 
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
+
+### What a dependency contributes
+
+A dependency's `cflags`, `ldflags` and `link` apply to your build. A package that needs `-lm`, or a
+`-D` its own C expects, says so **once, in its own manifest**, and every consumer gets it — you do not
+repeat the block, and it cannot drift between your copy and theirs.
+
+The order is fixed: **dependencies first** (alphabetically by import name), **then your project**, then
+the command line. So you always have the last word wherever the C compiler resolves a repeated flag
+last-wins. `link` is deduped, because it is a list of library *names* and two packages both wanting `m`
+is the ordinary case; `cflags`/`ldflags` are not, because they are raw text where a repeat can be
+load-bearing.
+
+Each manifest resolves on its own before the lists are joined. So a dependency's
+`select.TARGET.<NAME>.link`, which **replaces**, replaces *that package's* list and never yours —
+otherwise adding a dependency could delete your `-lm`.
+
+What a dependency **cannot** do is redefine your build:
+
+| it contributes | it does not |
+|---|---|
+| `cflags`, `ldflags`, `link` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| | `no-heap` — it changes what compiles, program-wide |
+| | `webgpu` — it selects an SDK, and could make your build demand a download |
+
+Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
+resolve against *your* working directory rather than against the package — make it absolute. And a
+dependency whose manifest does not parse stops the build, naming that file: silently skipping it would
+silently drop whatever it was contributing. (`kama query` and `kama lsp` stay lenient — an editor sits
+above trees you do not own.)
+
+⚠️ Settings are read from the materialized `.kama/deps` view, which is what `kama pkg install` builds
+and what the import path already uses. A stale view is a stale build in exactly the same way it is a
+stale import; re-run `kama pkg install`.
 
 ### 2. You have clang and a sysroot
 

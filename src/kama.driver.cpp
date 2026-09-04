@@ -4067,6 +4067,70 @@ const std::string& ownImportName(const std::string& packageDir)
 }
 
 
+// ---- what ONE manifest contributes to the C command line --------------------------------------------
+//
+// A dependency's `cflags`/`ldflags`/`link` used to be read NOWHERE: at build time a dep's kama.json was
+// consulted for its `source`, its `name` and its `dependencies`, and for nothing else. So every consumer
+// had to repeat the block, and drift between the copies was silent — the first external project repeats
+// it in two packages today.
+//
+// The rule is per-manifest resolution, then concatenation. Each manifest resolves its own settings under
+// today's precedence (project tier, then the selected target's; a target's `link` REPLACES that
+// manifest's own project `link`), and only then are manifests joined. Resolving globally instead would
+// let a DEPENDENCY's `select.TARGET.<T>.link` delete the consumer's `-lm` — i.e. adding a dependency
+// could break your link, which is not what "not that one, here" was ever meant to say.
+struct BuildSettings {
+    std::string owner;        // "" for the root project, else the dependency's import name
+    std::vector<std::string> cflags, ldflags, link;
+};
+
+// Resolve one manifest's contribution for target `targetName`. `targetName` is the RESOLVED target's
+// name (g_target.name), which is empty for an anonymous triple — a dep then contributes its project tier
+// only, and cannot contribute a per-target list at all. That is the honest answer rather than a
+// surprising one: a target is matched by name, and a dependency does not know how you spell yours.
+static bool loadBuildSettings(const std::string& manifestPath, const std::string& targetName,
+                              BuildSettings& out, std::string& err)
+{
+    if (!loadManifestProjectFlags(manifestPath, out.link, out.cflags, out.ldflags, err)) return false;
+    if (targetName.empty()) return true;
+    std::map<std::string, TargetSpec>  targets;
+    std::map<std::string, SelectGroup> groups;     // ignored: a dep declares no flag universe of ours
+    if (!loadManifestTargets(manifestPath, targets, groups, err)) return false;
+    auto t = targets.find(targetName);
+    if (t == targets.end()) return true;
+    out.cflags.insert(out.cflags.end(),   t->second.cflags.begin(),  t->second.cflags.end());
+    out.ldflags.insert(out.ldflags.end(), t->second.ldflags.begin(), t->second.ldflags.end());
+    if (t->second.linkSet) out.link = t->second.link;   // replaces THIS manifest's own list, nobody else's
+    return true;
+}
+
+// A dependency's relative `-I`/`-L`/`-isystem` resolves against the CONSUMER's working directory, not
+// against the dependency — so it either fails loudly or, worse, silently finds the consumer's own
+// `include/`. Refused rather than propagated: the supported route for a path is a structured key kama
+// resolves against the declaring manifest. The ROOT's own relative paths are untouched — those are the
+// consumer's business and have always been CWD-relative.
+static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const std::string& owner,
+                                  const std::string& manifestPath, std::string& err)
+{
+    static const char* kPathFlags[] = { "-I", "-L", "-isystem", "-iquote", "-idirafter" };
+    for (size_t i = 0; i < flags.size(); ++i) {
+        const std::string& f = flags[i];
+        for (const char* pf : kPathFlags) {
+            const size_t n = strlen(pf);
+            if (f.compare(0, n, pf) != 0) continue;
+            // Either `-Ifoo` (joined) or `-I foo` / `-isystem foo` (the next element).
+            std::string arg = f.size() > n ? f.substr(n) : (i + 1 < flags.size() ? flags[i + 1] : std::string());
+            while (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
+            if (arg.empty() || arg[0] == '/' || (arg.size() > 1 && arg[1] == ':')) break;   // absolute: their call
+            err = "dependency `" + owner + "` declares a relative path in its build flags (`" + f + "`),\n"
+                  "      which would resolve against YOUR working directory rather than against\n"
+                  "      " + manifestPath + ". Make it absolute.";
+            return false;
+        }
+    }
+    return true;
+}
+
 // ---- build configuration resolution ----------------------------------------------------------------
 // The manifest -> target -> flag-set sequence, lifted out of `main`. `kama lsp` returns ~185 lines
 // BEFORE this used to run inline, and that is precisely why the server's `@compileFor` set was empty:
@@ -4088,6 +4152,11 @@ struct BuildConfigRequest {
     std::vector<std::string> selects, defines, undefines;
     bool                     release = false;          // --release/--debug value
     bool                     releaseExplicit = false;  // was either passed? (sugar must lose to --select)
+    bool                     dev = false;              // --dev: also walk `.kama/dev-deps` for build settings
+    // Whether a DEPENDENCY's malformed manifest is fatal. True for every command that produces an
+    // artifact; false for `kama query` and `kama lsp`, the same split `strictImports` draws — refusing
+    // to answer an editor over a broken manifest in some package is punishing the wrong thing.
+    bool                     strictDeps = false;
 };
 struct BuildConfigResult {
     std::string manifest;        // echoed back — the caller's dep-view check keys off it
@@ -4309,6 +4378,70 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_target.ldflags.insert(g_target.ldflags.begin(), g_manifestLdflags.begin(), g_manifestLdflags.end());
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
+
+    // ---- what the DEPENDENCIES contribute ----------------------------------------------------------
+    //
+    // Enumerated from the `.kama/deps` VIEW, not from kama.lock, for two reasons. The view is flat and
+    // already transitive, so one readdir gets the whole production closure with no BFS to re-derive.
+    // And the view is what is actually COMPILED: `kama.local.json` `overrides` repoint it without
+    // touching the lock, so a lock-driven walk could read a dependency's settings while building a
+    // different copy of that dependency.
+    //
+    // Order is deps (alphabetical by import name), then the root, then the CLI — one sentence for every
+    // key. `-l` ordering does not matter here the way it does for archives: every dependency's kama code
+    // is already inside this program's own objects, and `link` names SYSTEM libraries.
+    if (!req.manifest.empty()) {
+        const std::string projDir = dirName(req.manifest);
+        std::vector<std::string> views;
+        views.push_back(projDir + "/.kama/deps");
+        if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
+        std::vector<std::string> depCflags, depLdflags, depLink;
+        for (const std::string& view : views) {
+            std::vector<std::string> names;
+            if (DIR* d = opendir(view.c_str())) {
+                while (struct dirent* e = readdir(d)) {
+                    std::string n = e->d_name;
+                    if (n == "." || n == "..") continue;
+                    names.push_back(n);
+                }
+                closedir(d);
+            }
+            std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
+            for (const std::string& n : names) {
+                // ⚠️ LEXICAL, never absolutePath — that is realpath(), and a dependency reaches its
+                // package THROUGH this symlink. Resolving it away would respell the dep's files as
+                // first-party paths and print a store path the user cannot see.
+                const std::string depManifest = joinPathLexical(view, n) + "/kama.json";
+                if (!fileExists(depManifest)) continue;
+                BuildSettings bs; bs.owner = n;
+                std::string derr;
+                if (!loadBuildSettings(depManifest, g_target.name, bs, derr)) {
+                    // Lenient for the editor, fatal for a build. Reach costs nothing: `kama pkg install`
+                    // already hard-fails on a child manifest it cannot read, so a tree that installs at
+                    // all has readable dependency manifests — this only changes WHEN it is reported.
+                    if (req.strictDeps) { err = depManifest + ": " + derr; return false; }
+                    continue;
+                }
+                if (!depFlagPathIsPortable(bs.cflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.ldflags, n, depManifest, derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+                depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
+                depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
+                depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
+            }
+        }
+        g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
+        g_target.ldflags.insert(g_target.ldflags.begin(), depLdflags.begin(), depLdflags.end());
+        // `link` is a NAME list, so a repeat is pure noise and two dependencies both wanting `m` is the
+        // ordinary case. `cflags`/`ldflags` are raw text, where a repeat can be load-bearing
+        // (`-Xlinker -foo`) and where last-wins is the semantic — those are left exactly as written.
+        depLink.insert(depLink.end(), g_target.link.begin(), g_target.link.end());
+        std::vector<std::string> merged; std::set<std::string> seen;
+        for (const std::string& l : depLink) if (seen.insert(l).second) merged.push_back(l);
+        g_target.link = merged;
+    }
     // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
     // the way to say "not this one". `--no-heap` therefore ORs in rather than overriding.
     if (g_target.noHeap) g_noHeap = true;
@@ -8598,6 +8731,12 @@ int main(int argc, char** argv)
     bcReq.undefines       = undefines;
     bcReq.release         = release;
     bcReq.releaseExplicit = releaseExplicit;
+    bcReq.dev             = devBuild;
+    // A dependency's malformed manifest is fatal for anything that produces an artifact, and merely
+    // skipped for `kama query` — the same split `strictImports` draws, for the same reason: refusing to
+    // answer a question about a file the user is looking at, over a manifest in some package, punishes
+    // the wrong thing. (`kama lsp` never reaches here; lspResolveBuildConfig leaves both false.)
+    bcReq.strictDeps      = subcommand != "query";
 
     BuildConfigResult bcfg;
     {
