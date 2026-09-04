@@ -1037,86 +1037,41 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.)
 - **The defects the first external project's queue turned up, and what each one cost to find.** All
   reproduced against the shipped compiler before anything was written; two were fixed in `0.9.148` and
-  `0.9.149`, one in `0.9.150`, and the residue below is what is left. The two newest (their KB-12 and
-  KB-13, triaged 2026-09-04 against `0.9.164`) are the first bullets.
+  `0.9.149`, one in `0.9.150`, `0.9.170`–`0.9.175` closed the raw-seam triage (KB-12, KB-14, KB-15 and
+  three findings of ours — the git log has each), and the residue below is what is left. Their KB-13
+  (triaged 2026-09-04 against `0.9.164`) is the first open bullet.
 
-  - **The raw seam and the owning `static` — triaged 2026-09-04 against `0.9.169`, from their KB-14 and
-    KB-15.** Both reproduce exactly (KB-15 at 527 MB vs 2.5 MB). They are ONE seam, and the decisive
-    measurement is that it is load-bearing: a local `UnsafePtr<T>` element is deliberately untyped to
-    ownership (`ptrLocalElemType` is kept out of `exprClass`, and its comment says why) so that
-    `nd[i] = od[i]` in `DynamicArray.growTo` stays a bitwise relocate. Widening `exprClass` to local
-    pointer elements FIXES KB-14 (the repro returns 14) and BREAKS 45 fixtures, every one failing with
-    `cannot give out of a field/element` inside `dynamic_array.kama` — the same diagnostic the consumer hit
-    trying `give slot[0]`. A third symptom found here: `drop(value: slot[0])` compiles and emits a literal
-    `(void)0;`. ⚠️ **GOALS §3a/§3e answer this without a design doc**: a raw pointer is the foreign seam and
-    "never general-purpose escape"; to persist or share, you OWN it. So `p[i] = v` keeps C semantics, and
-    the work is the DIAGNOSTICS (refuse the silent `drop`; name the two spellings at the method call) plus
-    removing the reason anyone owns through a raw pointer at all — which is the next bullet.
   - **A module `static` cannot own a destructible resource — considered, deliberately DEFERRED, not a
-    row (2026-09-04).** `static World g = World.make();` is refused, and the gate's own comment says why:
-    "v1 has no static-dtor seam". It surfaced as the ROOT of the first consumer's calloc'd `World` (on the
-    web `main`'s frame is unwound while the rAF callback lives), which is what made it look like the
-    fix. It is not, and the reasoning is kept here so it is not re-derived:
+    row (2026-09-04).** `static World g = World.make();` is refused, and the diagnostic states this stance.
+    It surfaced as the ROOT of the first consumer's calloc'd `World` (on the web `main`'s frame is unwound
+    while the rAF callback lives), which is what made it look like the fix. It is not, and the reasoning
+    is kept here so it is not re-derived. (The seam it was mistaken for — a local `UnsafePtr<T>` element
+    is deliberately untyped to ownership so `nd[i] = od[i]` stays a bitwise relocate; widening `exprClass`
+    fixes their KB-14 and breaks 45 fixtures — is now DIAGNOSTICS, shipped `0.9.174`: `drop` through a
+    raw element is refused, the method call names the two spellings, the SPEC has *The raw seam*.)
     - **kama's `static` is a fenced MCU tool, not a general global.** Per-isolate (`KAMA_ISOLATE_LOCAL`),
       compile-time initializer only (no init order, no hidden constructor before `main`), unreadable in a
       `@foreignEntry` region unless assigned there, and typed to the MCU shapes — value, `UnsafePtr`,
       `InlineArray`, `Simd`. "Support it in full" means removing fences nobody has asked to remove.
-    - **The need it was mistaken for is answered at the foreign boundary instead.** `HeapOwner<T>` has `adopt`
-      (Rust's `Box::from_raw`) and no twin — so ownership can enter kama from a foreign API but not leave
-      it. An `Owned<T>.release()` (the NOW row) lets the foreign API's own `userdata` slot hold the
-      lifetime, as every ownership language does at its foreign boundary: hand it over in one `unsafe fn`, borrow through it in the
-      callback via a `ref T` parameter, `adopt` it back to destroy. That is GOALS §3a/§3e verbatim —
-      persistence is ownership, and the boundary is where ownership crosses. ⚠️ **Say "foreign", never
-      "C", on this surface** — the vocabulary is already `@foreignEntry`/`extern`, and the rule row 17
-      writes down for `@linkName` applies: the host is C today and a VM or another backend tomorrow
-      (GOALS §10). The diagnostic, the docs section and the method's comment all name the concept.
+    - **The need it was mistaken for is answered at the foreign boundary instead — SHIPPED `0.9.175`.**
+      `HeapOwner<T>` had `adopt` (Rust's `Box::from_raw`) and no twin, so ownership could enter kama from
+      a foreign API but not leave it. `Owned<T>.release()` lets the foreign API's own `userdata` slot hold
+      the lifetime, as every ownership language does at its foreign boundary: hand it over in one
+      `unsafe fn`, borrow through it in the callback via a `ref T` parameter, `adopt` it back to destroy.
+      That is GOALS §3a/§3e verbatim — persistence is ownership, and the boundary is where ownership
+      crosses. ⚠️ **Say "foreign", never "C", on this surface** — the vocabulary is already
+      `@foreignEntry`/`extern`, and the rule the `@linkName` row writes down applies: the host is C today
+      and a VM or another backend tomorrow (GOALS §10). The diagnostic, the SPEC section and the method's
+      comment all name the concept.
     - **What it would cost if a real case ever pulls it**: a dtor seam at both teardown sites (the
       synthesized `main` after `kama_main`, cemit ~21365, and the isolate trampoline ~5153, since statics
-      are per-isolate), `isConstInitExpr` accepting `Optional::None` so the static starts absent in the
-      TYPE (§3b) rather than through a runtime initializer, and the generic-resource reassignment bug
-      fixed first (assigning the static IS that reassignment). A pulling case would be an isolate-local
-      driver object with a destructor; on an MCU nothing exits, so even there the gap is the initializer.
-    - **What ships instead is the MESSAGE.** "no destructible resources yet" reads as a promise. The
-      diagnostic should state this stance and name the two spellings — part of the raw-seam diagnostics
-      row. If a case arrives, this entry is the design; reopen it as a row then.
-  - **A GENERIC resource reassigned from a fresh rvalue never drops the old value — found here, ours.**
-    `slot = fresh();` on `Owned<T>`, `Shared<T>` or a user `Box<T>`: 503 MB over 2,000 iterations; the
-    non-generic twin 1.8 MB; `slot = give t;` from a local 1.9 MB (so `tests/give_assign.kama`'s own shape
-    is fine — and its comment's claim "b's old is freed" is true of that shape only, and unobservable by
-    its exit code either way). Root: the fresh-rvalue reassignment branch in the assignment emitter is
-    gated `_genericTypeInstOf.find(lty) == end()` on the claim that "the value-producing path further down
-    already drops the old value" — that path is the `isIntrinsicColl` COLLECTION branch, so a generic
-    resource matches neither and lands in a plain store. Fixture instrument: a dtor counter in a module
-    `static` (`tests/out_arg_drops.kama`'s idiom) returning the count — exit-code observable on every leg,
-    which an RSS oracle is not. ⚠️ And reducing it found a second divergence: a generic type's dtor naming
-    that static directly is emitted BEFORE the static's declaration (`use of undeclared identifier` from
-    clang, `kama check` clean); route through a helper `fn` for the fixture, and row it.
-  - **`reproducible-float` does not propagate from a dependency — a defect in `0.9.169`.** Found by
-    re-reading the consumer's `sim`/`tests` case against the shipped key: their raw `-ffp-contract=off`
-    cflag now propagates, the first-class key that replaces it does not. It was grouped with
-    `no-heap`/`webgpu`, and it is not alike — it cannot refuse code or demand an SDK; it can only turn
-    contraction OFF, and it states a requirement of the DEPENDENCY's own arithmetic, which the consumer
-    compiles.
+      are per-isolate), and `isConstInitExpr` accepting `Optional::None` so the static starts absent in the
+      TYPE (§3b) rather than through a runtime initializer. (The generic-resource reassignment leak that
+      assigning such a static would have hit is fixed, `0.9.173`.) A pulling case would be an
+      isolate-local driver object with a destructor; on an MCU nothing exits, so even there the gap is
+      the initializer. If a case arrives, this entry is the design; reopen it as a row then.
   - **KG-15 in their doc is stale**: `Mat4 * Vec4` is caught by `kama check` today ("the right-hand
     operand expects a `Mat4`, so it cannot be given a `Vec4`"), and check and build agree.
-
-  - **A statement-form `match` over a width-pinned enum whose arms all `return` fails
-    `-Werror,-Wreturn-type` (their KB-12).** Thirteen lines: `type enum Tri : uint8 { A, B, C }` and a
-    `fn int32 pick(Tri t)` whose `match` returns in every arm. `kama check` says OK and clang says
-    "non-void function does not return a value in all control paths" — a check/build divergence, the
-    class the harness's analysis-agreement phase exists to catch. ⚠️ **kama is not missing the analysis:**
-    the same function with an `if` and no `else` is refused by kama's own "can reach the end of its body
-    without returning a value" check, so the return-path walk correctly treats an exhaustive `match` as
-    divergent. The C disagrees because `emitMatchDefaultArm` closes the `switch` with `default: break;`
-    unless the match is VALUE-producing on a PINNED tag — the arm that already panics instead, added when
-    `-Werror=uninitialized` hit the same CFG edge (a pinned enum lowers to `typedef uint8_t`, so clang sees
-    256 values and three cases). Its comment declares the statement form correct "byte-for-byte", and it
-    is, unless every arm diverges: then the same dead edge is a `-Wreturn-type` error. Measured siblings:
-    the unpinned `type enum Tri { A, B, C }` builds and returns 3; the same match followed by `return 0;`
-    builds. The fix is the panic arm in both forms on a pinned tag — the argument in that comment (dead on
-    a safe path, a diagnosed abort for a raw integer from an `extern` or a deserializer) does not depend
-    on whether the match produces a value. **Diff a fix against its sibling**: the value form was fixed
-    for exactly this shape and the statement form was declared fine by construction.
 
   - **A file must import a type it never names (their KB-13).** Twelve lines, two files in one module:
     `decl.kama` exports `type enum Kind` and a `type value Holder { public int32 n; public Kind k; … }`;
