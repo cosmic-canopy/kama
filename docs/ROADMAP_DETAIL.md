@@ -1007,9 +1007,50 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     message where `ud2` printed nothing, run the panic hook, and are what an `@onPanic` region can recover
     from. Release codegen parity is asserted by `tools/check-release-arith.sh`. (Wasm Workers also need
     SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.)
-- **Three defects the first external project's queue turned up, and what each one cost to find.** All
+- **The defects the first external project's queue turned up, and what each one cost to find.** All
   reproduced against the shipped compiler before anything was written; two were fixed in `0.9.148` and
-  `0.9.149` and the residue below is what is left.
+  `0.9.149`, one in `0.9.150`, and the residue below is what is left. The two newest (their KB-12 and
+  KB-13, triaged 2026-09-04 against `0.9.164`) are the first bullets.
+
+  - **A statement-form `match` over a width-pinned enum whose arms all `return` fails
+    `-Werror,-Wreturn-type` (their KB-12).** Thirteen lines: `type enum Tri : uint8 { A, B, C }` and a
+    `fn int32 pick(Tri t)` whose `match` returns in every arm. `kama check` says OK and clang says
+    "non-void function does not return a value in all control paths" — a check/build divergence, the
+    class the harness's analysis-agreement phase exists to catch. ⚠️ **kama is not missing the analysis:**
+    the same function with an `if` and no `else` is refused by kama's own "can reach the end of its body
+    without returning a value" check, so the return-path walk correctly treats an exhaustive `match` as
+    divergent. The C disagrees because `emitMatchDefaultArm` closes the `switch` with `default: break;`
+    unless the match is VALUE-producing on a PINNED tag — the arm that already panics instead, added when
+    `-Werror=uninitialized` hit the same CFG edge (a pinned enum lowers to `typedef uint8_t`, so clang sees
+    256 values and three cases). Its comment declares the statement form correct "byte-for-byte", and it
+    is, unless every arm diverges: then the same dead edge is a `-Wreturn-type` error. Measured siblings:
+    the unpinned `type enum Tri { A, B, C }` builds and returns 3; the same match followed by `return 0;`
+    builds. The fix is the panic arm in both forms on a pinned tag — the argument in that comment (dead on
+    a safe path, a diagnosed abort for a raw integer from an `extern` or a deserializer) does not depend
+    on whether the match produces a value. **Diff a fix against its sibling**: the value form was fixed
+    for exactly this shape and the statement form was declared fine by construction.
+
+  - **A file must import a type it never names (their KB-13).** Twelve lines, two files in one module:
+    `decl.kama` exports `type enum Kind` and a `type value Holder { public int32 n; public Kind k; … }`;
+    `main.kama` imports `Holder` and `makeHolder` only and declares `Holder h = makeHolder();`. Result:
+    "`Kind` is declared in `src/decl.kama` and this file does not import it", against a file that never
+    spells `Kind`. Located with a backtrace, not read: `checkDefiniteAssignment` classifies a local's
+    fields as owning or not by calling `cType(f.type)` on each field of the class, `cType` resolves the
+    field's type through `resolveUserName` with the FIELD's own identifier node as the site, and
+    `checkReach` judges that node — text from the declaring file — against `refFilePath()`, the consumer
+    being emitted. Measured shapes: a `type value` and a `type resource` holder both fire, an enum field
+    and a `type value` field both fire, a resource holder fires **three** times (so at least two more
+    read sites of the same shape exist); a discarded `makeHolder();` and an inline `makeHolder().n` do
+    not, and a primitive-only holder does not. ⚠️ **This is the fixed `InlineArray`-size bug's family
+    exactly** — a member's declared type resolved wherever it is READ — and that bug's record above says
+    which fix is right: bake the answer at collect time, where the declaring file's scope is installed;
+    the read-site scope swap is the measured wrong one (30 fixtures, 17 agreement pairs). "Is this field
+    owning" is a fact about the class, not about the reader. **The position is a second wrong-file
+    mechanism**: `site->line` is the field's line in `decl.kama` (7 in their repro, 5 with a value field)
+    stamped with `main.kama`'s path — a 6-line file blamed at `7:0`. `run_tests.sh`'s
+    `diag_position_faults` would flag it, in a `.d/` fixture that exercises it. Their cost statement is
+    the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
+    file that merely holds one, invisible from the type's own definition.
 
   - **A diagnostic can name the USER's file at a line that does not exist in it.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
@@ -1052,8 +1093,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   check/build divergence reaching four positions, not one; KB-10 was filed as an `InlineArray` problem and
   was `isConcreteTypeArg` not recognising a raw pointer, which broke EVERY generic inference over a
   pointer element; KB-11 was filed as an import problem and was a silent skip plus a size resolved
-  in the wrong scope. **All three were bigger than the report, in the same direction: a consumer describes the
-  shape they hit, not the rule that is wrong.** Re-derive the rule before sizing the fix.
+  in the wrong scope; KB-13 was filed as an import-rule problem and is the KB-11 read-site resolution
+  again, at three or more sites. **All four were bigger than the report, in the same direction: a
+  consumer describes the shape they hit, not the rule that is wrong.** Re-derive the rule before sizing
+  the fix. KB-12 is the exception that proves it from the other side: filed as "emit a terminator after
+  the match", it is the statement-form half of a fix that already exists, and the right change is the
+  sibling's, not the one suggested.
 
   - **This bucket is EMPTY**, and what emptied it is worth keeping, because both items were parked on a
     dependency rather than on a judgement. The bucket said they waited on `@noheap` transitivity and the
