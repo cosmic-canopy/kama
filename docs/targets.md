@@ -188,6 +188,48 @@ project with `..`. A path that simply is not there is named by kama, not by the 
 `OUTPUT=OBJECT` builds one translation unit by definition, so it refuses a build that has a `csources`
 entry beside the program — `OUTPUT=STATIC` is the shape that takes several.
 
+### `jsLibraries` and `emSettings` — the emscripten pair
+
+```json
+{
+  "jsLibraries": ["js/audio_glue.js"],
+  "emSettings": {
+    "EXPORTED_RUNTIME_METHODS": ["ccall", "cwrap"],
+    "STACK_SIZE": "4MB",
+    "ALLOW_MEMORY_GROWTH": true
+  }
+}
+```
+
+**`jsLibraries`** is a plain list of `--js-library` files, resolved against the manifest that declares
+them. emcc accumulates them, so there is nothing to resolve between a project and its dependencies —
+a package that binds a browser API ships the glue that binds it.
+
+**`emSettings`** is an object, and the **shape of each value decides what it means**:
+
+| value | kind | how it merges |
+|---|---|---|
+| an array of strings | **list** | **unions** — kama's values, then dependencies', then yours |
+| a string, number or boolean | **scalar** | last-wins, and **you win** over kama and over every dependency |
+
+That is the point of the key. emcc is last-wins on a repeated `-s`, and the settings kama emits for you
+(`EXIT_RUNTIME`, and `EXPORTED_RUNTIME_METHODS` when your program uses `std::net::web`, and the pthread
+settings when it uses isolates) reached the command line *after* anything you smuggled in through
+`cflags` — so the only way to say this was also the way to lose. Now
+`"EXPORTED_RUNTIME_METHODS": ["ccall"]` gives you `ccall` **and** the two names the stdlib's own glue
+needs.
+
+Two dependencies setting the same scalar to different values is **refused, naming both** — and stating
+that setting in your own `emSettings` settles it, because you merge last.
+
+Both keys are **inert on a non-wasm target**, not an error: one manifest builds every target, and
+`subsystem` set that precedent. The *shape* is still validated everywhere, so a typo is caught by
+whoever wrote it rather than by whoever ships to the web.
+
+⚠️ You can override `EXIT_RUNTIME`, and it is load-bearing: without it an emscripten program returns
+from `main` and leaves node to wind the runtime down, which has been observed to deadlock against V8's
+own background threads. Turn it off only if you know why you need to.
+
 ### What a dependency contributes
 
 A dependency's `cflags`, `ldflags` and `link` apply to your build. A package that needs `-lm`, or a
@@ -208,7 +250,7 @@ What a dependency **cannot** do is redefine your build:
 
 | it contributes | it does not |
 |---|---|
-| `cflags`, `ldflags`, `link`, `csources` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| `cflags`, `ldflags`, `link`, `csources`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 

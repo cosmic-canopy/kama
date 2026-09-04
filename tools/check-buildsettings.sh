@@ -327,6 +327,145 @@ mkdir -p "$tmp/objkind/csrc"; printf 'int kama_objkind_x(void) { return 1; }\n' 
          || { bad "OUTPUT=OBJECT failed for the wrong reason"; head -2 "$tmp/e" >&2; }; }
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: \`emSettings\` MERGES with kama's own, instead of losing to them"
+
+# The defect: emcc is LAST-WINS on a repeated `-s`, and kama emitted its own
+# `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` AFTER the project's `cflags` — so the only way a
+# project could say this at all was also the way it silently lost. Now the key is structured, kama's
+# settings declare their own kind, and a LIST unions.
+#
+# These are command-line facts an exit code cannot see, and a wasm-only fixture does not fit
+# run_tests.sh's every-leg model — so they live here rather than in tests/.
+emline() {
+    "$KAMA" build "$tmp/$1/kama.json" --target wasm --cc "echo emcc" -o "$tmp/$1/app.html" 2>/dev/null || true
+}
+
+app emmerge <<'JSON'
+{ "name": "emmerge", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "emSettings": { "EXPORTED_RUNTIME_METHODS": ["ccall"], "STACK_SIZE": "4MB",
+                  "ALLOW_MEMORY_GROWTH": true },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+# The program has to reach std::net::web, because that is what makes kama emit the two runtime methods
+# its JS glue needs — the setting there is nothing to union WITH otherwise, and the case would pass
+# while testing nothing.
+cat > "$tmp/emmerge/src/app.kama" <<'KAMA'
+import { std::net::web::WsConnection };
+
+fn int32 main() { return 7; }
+KAMA
+line=$(emline emmerge)
+printf '%s' "$line" | grep -qF -- "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8,ccall" \
+    && ok "a list setting UNIONS: the stdlib's names survive and the project's is added" \
+    || { bad "the project's EXPORTED_RUNTIME_METHODS did not merge with kama's"
+         printf '%s\n' "$line" | tr ' ' '\n' | grep -- '-s' | sed 's/^/    /' >&2; }
+printf '%s' "$line" | grep -qF -- "-sSTACK_SIZE=4MB" \
+    && ok "a string scalar reaches the command line verbatim" \
+    || bad "a string scalar did not reach the command line"
+printf '%s' "$line" | grep -qF -- "-sALLOW_MEMORY_GROWTH=1" \
+    && ok "a boolean renders as =1" \
+    || bad "a boolean setting did not render"
+# ...and every -s is in the LINK tail, after the inputs, because that is what it is. (Before this they
+# sat among the compile flags, which is exactly how the collision above went unnoticed.)
+case "$line" in
+    *".c "*"-sEXIT_RUNTIME"*) ok "the settings are emitted in the link tail, after the inputs" ;;
+    *) bad "an -s setting is still emitted among the compile flags" ;;
+esac
+
+# The project beats kama's own default for a scalar.
+app emscalar <<'JSON'
+{ "name": "emscalar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "emSettings": { "EXIT_RUNTIME": 0 },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$(emline emscalar)
+printf '%s' "$line" | grep -qF -- "-sEXIT_RUNTIME=0" && ! printf '%s' "$line" | grep -qF -- "-sEXIT_RUNTIME=1" \
+    && ok "the project overrides one of kama's own scalars" \
+    || { bad "the project could not override -sEXIT_RUNTIME"; printf '%s\n' "$line" | sed 's/^/    /' >&2; }
+
+# TWO DEPENDENCIES disagreeing on one scalar is refused by name. Picking the alphabetically-later
+# package would be a silent answer to a question only the consumer can settle.
+app emconf geo phys <<'JSON'
+{ "name": "emconf", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "geo": { "path": "./vendor/geo" }, "phys": { "path": "./vendor/phys" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/emconf/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "emSettings": { "STACK_SIZE": "4MB" }, "modules": { ".": { "visibility": "public" } } }
+JSON
+cat > "$tmp/emconf/vendor/phys/kama.json" <<'JSON'
+{ "name": "phys", "version": "1.0.0", "kind": "library", "source": "src",
+  "emSettings": { "STACK_SIZE": "16MB" }, "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/emconf/kama.json" >/dev/null 2>&1 || true
+if "$KAMA" build "$tmp/emconf/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emconf/app.html" \
+        >"$tmp/o" 2>"$tmp/e"; then
+    bad "two dependencies disagreeing on a scalar setting was resolved silently"
+elif grep -qF 'geo' "$tmp/e" && grep -qF 'phys' "$tmp/e" && grep -qF 'STACK_SIZE' "$tmp/e"; then
+    ok "two dependencies disagreeing is refused, naming both and the setting"
+else
+    bad "the conflict was refused without naming both"; head -3 "$tmp/e" >&2
+fi
+# ...and the project stating it settles the question, with no error.
+cat > "$tmp/emconf/kama.json" <<'JSON'
+{ "name": "emconf", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "emSettings": { "STACK_SIZE": "8MB" },
+  "dependencies": { "geo": { "path": "./vendor/geo" }, "phys": { "path": "./vendor/phys" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$(emline emconf)
+printf '%s' "$line" | grep -qF -- "-sSTACK_SIZE=8MB" \
+    && ok "...and the project stating it settles the conflict" \
+    || { bad "the project's value did not settle the dependency conflict"; printf '%s\n' "$line" | sed 's/^/    /' >&2; }
+
+# `jsLibraries` is a plain append list — emcc accumulates `--js-library`, so there is no collision to
+# resolve. A dependency's reaches the build for the same reason its `csources` does: a package that
+# binds a browser API ships the glue that binds it.
+app jslib geo <<'JSON'
+{ "name": "jslib", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "jsLibraries": ["js/own.js"],
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+mkdir -p "$tmp/jslib/js" "$tmp/jslib/vendor/geo/js"
+printf 'mergeInto(LibraryManager.library, {});\n' > "$tmp/jslib/js/own.js"
+printf 'mergeInto(LibraryManager.library, {});\n' > "$tmp/jslib/vendor/geo/js/dep.js"
+cat > "$tmp/jslib/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "jsLibraries": ["js/dep.js"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/jslib/kama.json" >/dev/null 2>&1 || true
+line=$(emline jslib)
+if printf '%s' "$line" | grep -qF -- "own.js" && printf '%s' "$line" | grep -qF -- "dep.js"; then
+    ok "both the project's and a dependency's \`jsLibraries\` reach the link"
+else
+    bad "a \`jsLibraries\` entry did not reach the link"; printf '%s\n' "$line" | sed 's/^/    /' >&2
+fi
+"$KAMA" build "$tmp/jslib/kama.json" -o "$tmp/jslib/app" >"$tmp/o" 2>"$tmp/e" \
+    && ok "...and they are inert on a native build" \
+    || { bad "jsLibraries broke a native build"; head -2 "$tmp/e" >&2; }
+
+# INERT on a non-wasm target, not refused: the same manifest builds both, and `subsystem` set the
+# precedent for an accepted no-op. The SHAPE is still validated everywhere, which is the half that
+# makes a typo findable by whoever wrote it rather than by whoever ships to the web.
+nat=$("$KAMA" build "$tmp/emmerge/kama.json" --cc "echo CC:" -o "$tmp/emmerge/app" 2>/dev/null || true)
+[ -n "$nat" ] && ! printf '%s' "$nat" | grep -q -- '-sSTACK_SIZE' \
+    && ok "emSettings are inert on a native build, not an error" \
+    || { bad "emSettings leaked into a native build (or the build failed)"; printf '%s\n' "$nat" | sed 's/^/    /' >&2; }
+
+app emshape <<'JSON'
+{ "name": "emshape", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "emSettings": { "STACK_SIZE": { "nope": 1 } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/emshape/kama.json" -o "$tmp/emshape/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "an object-valued emSetting was accepted" \
+    || { grep -qF 'must be an array of strings, a string, a number or a boolean' "$tmp/e" \
+         && ok "...while a value of no legal shape is refused on EVERY target, naming the four" \
+         || { bad "a malformed emSetting was refused for the wrong reason"; head -2 "$tmp/e" >&2; }; }
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a broken dependency manifest is fatal to a build, not to a query"
 
 # The same split `strictImports` draws. A build that would read settings from a manifest it cannot parse

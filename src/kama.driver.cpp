@@ -2084,14 +2084,6 @@ static std::string activeTargetLabel()
 static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).
-static std::vector<std::string> g_manifestLink;
-// The project-level `cflags`/`ldflags`. Unlike `link` these PREPEND onto whatever the resolved target
-// carries, because the target tier appends: the command line reads project-then-target, so the more
-// specific list gets the last word (and, for a flag the C compiler resolves last-wins, the win).
-static std::vector<std::string> g_manifestCflags, g_manifestLdflags;
-// The project's own `csources`, as written. Resolved against the manifest's directory once the build
-// configuration is settled (a dependency's are resolved against ITS manifest, in the dep walk).
-static std::vector<std::string> g_manifestCsources;
 static bool g_manifestWebgpu = false, g_manifestNoHeap = false;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
@@ -2564,6 +2556,59 @@ static bool isRegistryDep(const DepSpec& d)
 }
 // ---------------------------------------------------------------------------------------------
 
+// One `-s<KEY>=<value>` emscripten setting. The JSON SHAPE decides which of the two kinds it is, which
+// is the whole reason `emSettings` is an object rather than an array of raw `-sFOO=1` strings: emcc is
+// last-wins on a repeated `-s`, so kama's own `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` silently
+// beat any project that set the same key through `cflags`. A merge needs comparable keys, and a raw
+// string array is just `cflags` with extra steps.
+//
+// A JSON ARRAY is a LIST setting and UNIONS (kama's values, then dependencies', then the project's);
+// anything else is a SCALAR and is last-wins, with the project winning over kama and over every
+// dependency. So the project can say `"EXPORTED_RUNTIME_METHODS": ["ccall"]` and get its own name
+// AND the two the stdlib's JS glue needs.
+struct EmValue {
+    bool isList = false;
+    std::vector<std::string> list;   // isList
+    std::string scalar;              // !isList — already rendered (`true` -> "1", a number verbatim)
+};
+
+// Everything ONE manifest contributes to the C command line, with its own project/target rules already
+// applied. Joined across manifests by the dependency walk in resolveBuildConfig, where the ordering and
+// merge rules are written out.
+struct BuildSettings {
+    std::string owner;        // "" for the root project, else the dependency's import name
+    std::vector<std::string> cflags, ldflags, link;
+    std::vector<std::string> csources, jsLibraries;   // as written, relative to `manifestPath`
+    std::vector<std::pair<std::string, EmValue>> emSettings;
+};
+
+// One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
+// shipping `shim.c` from writing the same object file (and racing for it under `-j`).
+struct CSourceRef { std::string owner, path; };
+static std::vector<CSourceRef> g_csources;
+// The emscripten pair, resolved and merged across every manifest in the build. Both are inert on a
+// non-wasm target; the SHAPE is still validated everywhere, because the same manifest builds both.
+static std::vector<CSourceRef> g_jsLibraries;
+// Ordered, so the command line is stable and a conflict names its settings in manifest order. `owner`
+// on each entry is the manifest that last set it — a scalar conflict between two dependencies is
+// refused, and the message needs both names.
+struct EmSetting {
+    std::string key, owner;
+    EmValue value;
+    // Two DEPENDENCIES setting one scalar differently. Recorded rather than reported on the spot,
+    // because the project merges LAST and stating the setting itself is exactly how a consumer settles
+    // it — reporting during the dependency walk would refuse a manifest that had already answered.
+    std::string conflictOwner, conflictValue;
+};
+static std::vector<EmSetting> g_emSettings;
+
+// ...and everything else the ROOT manifest contributes to the C command line, as written. `link` is
+// seeded into g_target after target resolution unless the target overrode it; `cflags`/`ldflags` PREPEND
+// onto whatever the target carries, because the target tier appends (project-then-target, so the more
+// specific list gets the last word); the path-valued lists are resolved against the manifest's own
+// directory once the build configuration is settled.
+static BuildSettings g_rootSettings;
+
 struct ManifestReader {
     const std::string& s;
     size_t i = 0;
@@ -2585,6 +2630,10 @@ struct ManifestReader {
     std::vector<std::string>* cflagsOut = nullptr;          // set to capture the project-level `cflags`
     std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
     std::vector<std::string>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
+    std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
+    // A VECTOR, not a map: the file's own order is the order a conflict names its settings in, and the
+    // order they reach the command line.
+    std::vector<std::pair<std::string, EmValue>>* emSettingsOut = nullptr;
     std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
@@ -2659,15 +2708,24 @@ struct ManifestReader {
     // and linking one needs the target's C++ runtime library, which varies per target. `.m`/`.mm` are
     // refused for a third reason — an Objective-C source is inherently one-platform, and `csources` is
     // deliberately project-level with no per-target tier to exclude it from a wasm build.
-    bool validCSource(const std::string& p) {
-        if (p.empty()) return fail("`csources` has an empty path");
+    // The path rules every file-naming manifest key shares: inside the package, and relative to the
+    // manifest that names it — so the project stays relocatable and a published package cannot name a
+    // directory nobody else has.
+    bool validRelPath(const std::string& p, const char* key) {
+        const std::string k = std::string("`") + key + "`";
+        if (p.empty()) return fail(k + " has an empty path");
         if (p[0] == '/' || (p.size() > 1 && p[1] == ':'))
-            return fail("`csources` path \"" + p + "\" is absolute; it must be relative to the manifest "
+            return fail(k + " path \"" + p + "\" is absolute; it must be relative to the manifest "
                         "that declares it, or the project stops being relocatable (and a published "
                         "package would name a directory nobody else has)");
         if (p.find("..") != std::string::npos)
-            return fail("`csources` path \"" + p + "\" escapes the project with `..`; a package's own C "
-                        "belongs inside it");
+            return fail(k + " path \"" + p + "\" escapes the project with `..`; a package's own files "
+                        "belong inside it");
+        return true;
+    }
+
+    bool validCSource(const std::string& p) {
+        if (!validRelPath(p, "csources")) return false;
         const size_t dot = p.rfind('.');
         const std::string ext = dot == std::string::npos ? std::string() : p.substr(dot);
         if (ext == ".c") return true;
@@ -2682,6 +2740,47 @@ struct ManifestReader {
                         "tier to exclude it from your other targets. Guard the C with `#ifdef __APPLE__` "
                         "instead");
         return fail("`csources` names C source files (`.c`), and \"" + p + "\" is not one");
+    }
+
+    // `emSettings`: { "<KEY>": <array of strings | string | number | boolean> }. The value's SHAPE is
+    // the declaration of what it means (see EmValue), so there is no table of known emscripten keys to
+    // keep in step with emscripten — a project states which kind it is, and kama's own settings declare
+    // themselves the same way.
+    bool emSettingsObject(std::vector<std::pair<std::string, EmValue>>& out) {
+        ws(); if (i >= s.size() || s[i] != '{') return fail("`emSettings` must be a JSON object");
+        ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
+        while (true) {
+            std::string k; if (!str(k)) return false;
+            if (k.empty()) return fail("`emSettings` has an empty setting name");
+            for (const auto& kv : out)
+                if (kv.first == k) return fail("`emSettings` names `" + k + "` twice");
+            ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after an `emSettings` name");
+            ++i; ws();
+            EmValue v;
+            if (i < s.size() && s[i] == '[') {
+                v.isList = true;
+                if (!stringArray(v.list, "emSettings")) return false;
+            } else if (i < s.size() && s[i] == '"') {
+                if (!str(v.scalar)) return false;
+            } else if (s.compare(i, 4, "true") == 0)  { v.scalar = "1"; i += 4; }
+            else if (s.compare(i, 5, "false") == 0)   { v.scalar = "0"; i += 5; }
+            else {
+                // A bare number, captured verbatim so `4` and `4.0` reach emcc as written.
+                size_t start = i;
+                while (i < s.size() && (isdigit((unsigned char)s[i]) || s[i]=='-' || s[i]=='+' ||
+                                        s[i]=='.' || s[i]=='e' || s[i]=='E')) ++i;
+                if (i == start)
+                    return fail("`emSettings.\"" + k + "\"` must be an array of strings, a string, a "
+                                "number or a boolean");
+                v.scalar = s.substr(start, i - start);
+            }
+            out.push_back({ k, v });
+            ws();
+            if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
+            if (i < s.size() && s[i] == '}') { ++i; break; }
+            return fail("expected ',' or '}' in `emSettings`");
+        }
+        return true;
     }
 
     // A JSON boolean. Its own reader because `optional` is REQUIRED and closed: `"optional": "no"` must
@@ -3272,6 +3371,20 @@ struct ManifestReader {
                 std::vector<std::string>& into = csourcesOut ? *csourcesOut : scratch;
                 if (!stringArray(into, "csources")) return false;
                 for (const std::string& p : into) if (!validCSource(p)) return false;
+            }
+            // The emscripten pair. VALIDATED on every target, not just wasm — the same manifest builds
+            // both, and a typo caught only under `--target wasm` is a typo found by whoever ships to the
+            // web rather than by whoever wrote it. APPLIED only on wasm (the `subsystem` precedent:
+            // an accepted no-op, so one build script carries it).
+            else if (key == "jsLibraries") {
+                std::vector<std::string> scratch;
+                std::vector<std::string>& into = jsLibrariesOut ? *jsLibrariesOut : scratch;
+                if (!stringArray(into, "jsLibraries")) return false;
+                for (const std::string& p : into) if (!validRelPath(p, "jsLibraries")) return false;
+            }
+            else if (key == "emSettings") {
+                std::vector<std::pair<std::string, EmValue>> scratch;
+                if (!emSettingsObject(emSettingsOut ? *emSettingsOut : scratch)) return false;
             }
             // The module map (§2b). RECOGNIZED unconditionally and parsed even when nothing captures it,
             // unlike the sink-guarded keys above: its errors are the point. A swallowed `modules` would be
@@ -3939,19 +4052,19 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
 // The project tier of the three flag lists that reach the C compiler: `link`, `cflags`, `ldflags`.
 // ONE wrapper rather than three, because they are read together everywhere — the root manifest here and
 // (with the target tier merged in) every dependency's, through loadBuildSettings.
-static bool loadManifestProjectFlags(const std::string& path, std::vector<std::string>& link,
-                                     std::vector<std::string>& cflags, std::vector<std::string>& ldflags,
-                                     std::vector<std::string>& csources, std::string& err)
+static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.linkOut = &link; r.cflagsOut = &cflags; r.ldflagsOut = &ldflags; r.csourcesOut = &csources;
+    r.linkOut = &out.link; r.cflagsOut = &out.cflags; r.ldflagsOut = &out.ldflags;
+    r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries;
+    r.emSettingsOut = &out.emSettings;
     if (!r.parse()) {
         err = r.err.empty() ? "malformed JSON" : r.err;
-        link.clear(); cflags.clear(); ldflags.clear(); csources.clear();
+        out = BuildSettings();
         return false;
     }
     return true;
@@ -4127,16 +4240,6 @@ const std::string& ownImportName(const std::string& packageDir)
 // manifest's own project `link`), and only then are manifests joined. Resolving globally instead would
 // let a DEPENDENCY's `select.TARGET.<T>.link` delete the consumer's `-lm` — i.e. adding a dependency
 // could break your link, which is not what "not that one, here" was ever meant to say.
-struct BuildSettings {
-    std::string owner;        // "" for the root project, else the dependency's import name
-    std::vector<std::string> cflags, ldflags, link;
-    std::vector<std::string> csources;   // as written, relative to `manifestPath`
-};
-
-// One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
-// shipping `shim.c` from writing the same object file (and racing for it under `-j`).
-struct CSourceRef { std::string owner, path; };
-static std::vector<CSourceRef> g_csources;
 
 // Resolve one manifest's contribution for target `targetName`. `targetName` is the RESOLVED target's
 // name (g_target.name), which is empty for an anonymous triple — a dep then contributes its project tier
@@ -4145,8 +4248,7 @@ static std::vector<CSourceRef> g_csources;
 static bool loadBuildSettings(const std::string& manifestPath, const std::string& targetName,
                               BuildSettings& out, std::string& err)
 {
-    if (!loadManifestProjectFlags(manifestPath, out.link, out.cflags, out.ldflags, out.csources, err))
-        return false;
+    if (!loadManifestProjectFlags(manifestPath, out, err)) return false;
     if (targetName.empty()) return true;
     std::map<std::string, TargetSpec>  targets;
     std::map<std::string, SelectGroup> groups;     // ignored: a dep declares no flag universe of ours
@@ -4182,6 +4284,69 @@ static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const s
                   "      " + manifestPath + ". Make it absolute.";
             return false;
         }
+    }
+    return true;
+}
+
+// Merge one manifest's `emSettings` over what is already there. `owner` is "" for the root project.
+//
+// A LIST unions (kama's values are already in place, then dependencies', then the project's), so a
+// project asking for `EXPORTED_RUNTIME_METHODS: ["ccall"]` keeps the two names the stdlib's JS glue
+// needs instead of silently replacing them — which is exactly what happened when the only way to say
+// this was a raw `-s` in `cflags` and emcc took the last one.
+//
+// A SCALAR is last-wins, and the merge order makes that "the project wins". Two DEPENDENCIES setting
+// one scalar differently is refused by name: picking the alphabetically-later package would be a silent
+// answer to a question only the consumer can settle — and stating it in the root settles it.
+static bool mergeEmSettings(const std::vector<std::pair<std::string, EmValue>>& in,
+                            const std::string& owner, std::string& err)
+{
+    for (const auto& kv : in) {
+        EmSetting* have = nullptr;
+        for (auto& e : g_emSettings) if (e.key == kv.first) { have = &e; break; }
+        if (!have) { g_emSettings.push_back({ kv.first, owner, kv.second }); continue; }
+        if (have->value.isList != kv.second.isList) {
+            err = "emSettings `" + kv.first + "` is a list in one manifest and a single value in "
+                  "another (" + (have->owner.empty() ? std::string("this project")
+                                                     : "dependency `" + have->owner + "`") + " vs " +
+                  (owner.empty() ? std::string("this project") : "dependency `" + owner + "`") +
+                  ") — one shape or the other, not both";
+            return false;
+        }
+        if (kv.second.isList) {
+            for (const std::string& v : kv.second.list) {
+                bool dup = false;
+                for (const std::string& x : have->value.list) if (x == v) { dup = true; break; }
+                if (!dup) have->value.list.push_back(v);
+            }
+            continue;
+        }
+        // A scalar. The project wins outright and clears any conflict two dependencies could not settle
+        // between themselves; two dependencies disagreeing is remembered for emScalarConflict() to
+        // report once the project has had its say.
+        if (owner.empty()) {
+            have->value = kv.second; have->owner = owner;
+            have->conflictOwner.clear(); have->conflictValue.clear();
+            continue;
+        }
+        if (!have->owner.empty() && have->value.scalar != kv.second.scalar && have->conflictOwner.empty()) {
+            have->conflictOwner = owner; have->conflictValue = kv.second.scalar;
+        }
+    }
+    return true;
+}
+
+// The scalar disagreements no project value settled. Reported after every manifest has merged, naming
+// both packages and the setting — picking the alphabetically-later one would be a silent answer to a
+// question only the consumer can settle.
+static bool emScalarConflict(std::string& err)
+{
+    for (const auto& e : g_emSettings) {
+        if (e.conflictOwner.empty()) continue;
+        err = "dependency `" + e.owner + "` sets emSettings `" + e.key + "` to \"" + e.value.scalar +
+              "\" and dependency `" + e.conflictOwner + "` sets it to \"" + e.conflictValue +
+              "\" — set `" + e.key + "` in this project's own `emSettings` to say which";
+        return false;
     }
     return true;
 }
@@ -4237,9 +4402,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_declaredFlags.clear();
     g_selectGroups.clear();
     g_manifestTargets.clear();
-    g_manifestLink.clear();
-    g_manifestCflags.clear(); g_manifestLdflags.clear(); g_manifestCsources.clear();
-    g_csources.clear();
+    g_rootSettings = BuildSettings();
+    g_csources.clear(); g_jsLibraries.clear(); g_emSettings.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false;
     g_strictFlags = false;
     g_logDefault.clear();
@@ -4322,8 +4486,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one
         // — the target key exists only to say "not this one" / "something else here".
-        if (!loadManifestProjectFlags(manifest, g_manifestLink, g_manifestCflags, g_manifestLdflags,
-                                      g_manifestCsources, err)) {
+        if (!loadManifestProjectFlags(manifest, g_rootSettings, err)) {
             err = manifest + ": " + err; return false;
         }
         // Same shape and the same place as `link`: project properties a target may then override.
@@ -4427,12 +4590,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     // cross build needs no config file.
     if (!resolveTarget(selTarget, g_manifestTargets, g_target, err)) return false;
     // The project's `link` applies to every target that did not override it.
-    if (!g_target.linkSet)   g_target.link   = g_manifestLink;
+    if (!g_target.linkSet)   g_target.link   = g_rootSettings.link;
     // ...and the project's compile/link flags go BEFORE the target's, which resolveTarget has already
     // appended onto the built-in's. One insert at the front, not an append: "project, then target" is
     // the whole rule, and it is the same direction `select.TARGET` appends in.
-    g_target.cflags.insert(g_target.cflags.begin(), g_manifestCflags.begin(), g_manifestCflags.end());
-    g_target.ldflags.insert(g_target.ldflags.begin(), g_manifestLdflags.begin(), g_manifestLdflags.end());
+    g_target.cflags.insert(g_target.cflags.begin(), g_rootSettings.cflags.begin(), g_rootSettings.cflags.end());
+    g_target.ldflags.insert(g_target.ldflags.begin(), g_rootSettings.ldflags.begin(), g_rootSettings.ldflags.end());
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
 
@@ -4492,6 +4655,12 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // DECLARING manifest, lexically (see the symlink note above).
                 for (const std::string& cs : bs.csources)
                     g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs) });
+                for (const std::string& js : bs.jsLibraries)
+                    g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
+                if (!mergeEmSettings(bs.emSettings, n, derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
             }
         }
         g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
@@ -4506,9 +4675,17 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     }
     // The project's own C comes after its dependencies', matching the flag order: a dependency
     // contributes first, the project last.
-    if (!req.manifest.empty())
-        for (const std::string& cs : g_manifestCsources)
+    if (!req.manifest.empty()) {
+        for (const std::string& cs : g_rootSettings.csources)
             g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs) });
+        for (const std::string& js : g_rootSettings.jsLibraries)
+            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        // The project merges LAST, which is what makes "the project wins" true of a scalar — including
+        // over a conflict two dependencies could not settle between themselves.
+        std::string merr;
+        if (!mergeEmSettings(g_rootSettings.emSettings, "", merr)) { err = merr; return false; }
+        if (!emScalarConflict(merr)) { err = merr; return false; }
+    }
     // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
     // the way to say "not this one". `--no-heap` therefore ORs in rather than overriding.
     if (g_target.noHeap) g_noHeap = true;
@@ -9837,13 +10014,11 @@ int main(int argc, char** argv)
         // std::net::web (WebSocket / WebTransport) is a thin JS-glue --js-library, linked only when the
         // program actually externs its header. Both the header (compile) and the glue (link) live next to the
         // module in the stdlib. The glue moves bytes across the wasm/JS boundary via the exported heap views.
-        if (needsNetWeb) {
-            std::string webdir = resolveStdlibDir(argv[0]) + "/std/net/web";
-            cmd << "-I\"" << webdir << "\" ";                          // find kama_net_web.h at compile
-            if (wasm)
-                cmd << "--js-library \"" << webdir << "/kama_net_web.js\" "
-                    << "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 ";
-        }
+        // ⚠️ The COMPILE half only. `--js-library` and `-sEXPORTED_RUNTIME_METHODS` used to be emitted
+        // here too; they are emscripten LINK settings and now live in the merged block in the link tail,
+        // where a project can add to them instead of silently losing to them.
+        if (needsNetWeb)
+            cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/net/web") << "\" ";   // kama_net_web.h
         // EVERY wasm build, not just the two that used to need it. A kama program is a batch program:
         // `main` returns an exit code and the process is done. EXIT_RUNTIME is what makes emscripten act
         // on that — call `exit(status)` and shut the runtime down — instead of returning from `main` and
@@ -9904,7 +10079,8 @@ int main(int argc, char** argv)
         // keep its runtime alive after `main`, so this has to become conditional again. Key it on the
         // artifact KIND (program vs module), which is the honest axis, and not on which library the
         // program happens to use, which is what it was keyed on before and why it was wrong here.
-        if (wasm) cmd << "-sEXIT_RUNTIME=1 ";
+        // (`-sEXIT_RUNTIME=1` is emitted with the other emscripten settings in the link tail — it is a
+        // LINK setting, and gathering them in one place is what lets a project merge with them.)
         // ---- The command is three pieces, not one: the compile flags above (`cmd`), the INPUTS
         // (`ccInputs`), and the link tail (`link`). A single invocation is exactly
         // `cmd + inputs + link + -o out`, byte for byte — reassembly is an identity, not a
@@ -10004,10 +10180,7 @@ int main(int argc, char** argv)
         // latency knob, not a correctness cap.
         if (needsPthread && !stopsAtObject) {
             if (wasm) {
-                const char* pool = getenv("KAMA_PTHREAD_POOL");   // build-time override; unset => 0 (grow on demand)
-                link << "-pthread -sPROXY_TO_PTHREAD "
-                     << "-sPTHREAD_POOL_SIZE=" << (pool && *pool ? pool : "0") << " "
-                     << "-sPTHREAD_POOL_SIZE_STRICT=0 ";
+                link << "-pthread ";   // the three `-s` settings go in the merged emscripten block below
             } else if (g_target.isWindows() && g_target.runtime != "dynamic") {
                 // mingw-w64 installs BOTH libpthread.a and libpthread.dll.a, and the linker prefers the
                 // IMPORT LIBRARY — so a bare `-lpthread` binds libwinpthread-1.dll out of the msys2 tree
@@ -10055,6 +10228,84 @@ int main(int argc, char** argv)
             link << "-Wl,--subsystem,windows ";
             cmd  << "-DKAMA_SUBSYSTEM_WINDOWS=1 ";
         }
+        // ---- The emscripten settings, in ONE place. Every `-s<KEY>=<value>` is an emcc LINK setting;
+        // they used to be scattered through the COMPILE flags above only because a wasm build is never
+        // split into per-TU compiles, so nobody noticed. Gathering them is what makes the merge below
+        // possible at all: emcc is LAST-WINS on a repeated `-s`, so kama's own
+        // `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` — emitted after the project's `cflags` —
+        // silently beat any project that set the same key, which is the defect this closes.
+        //
+        // kama's own settings go in first and declare their own kind (list or scalar). The manifest's
+        // merge over them: a LIST unions, a SCALAR is last-wins with the project winning. So a project
+        // adds `ccall` to the exported methods rather than replacing the two the stdlib's glue needs.
+        if (wasm && !stopsAtObject) {
+            std::vector<EmSetting> em;
+            auto setScalar = [&](const std::string& k, const std::string& v) {
+                for (auto& e : em) if (e.key == k) { e.value.scalar = v; return; }
+                EmValue val; val.scalar = v; em.push_back({ k, "", val });
+            };
+            auto addList = [&](const std::string& k, const std::string& v) {
+                for (auto& e : em) if (e.key == k) { e.value.list.push_back(v); return; }
+                EmValue val; val.isList = true; val.list.push_back(v); em.push_back({ k, "", val });
+            };
+            // A kama program is a batch program: `main` returns an exit code and the process is done.
+            // (The reasoning, and the node teardown deadlock that made it unconditional, is above.)
+            setScalar("EXIT_RUNTIME", "1");
+            if (needsNetWeb) { addList("EXPORTED_RUNTIME_METHODS", "UTF8ToString");
+                               addList("EXPORTED_RUNTIME_METHODS", "HEAPU8"); }
+            if (needsPthread) {
+                // PROXY_TO_PTHREAD runs `main` on a dedicated worker so it may block on join/recv
+                // (Atomics.wait THROWS on the JS main thread). The pool is a pre-warm knob, not a cap.
+                setScalar("PROXY_TO_PTHREAD", "1");
+                setScalar("PTHREAD_POOL_SIZE", "0");
+                setScalar("PTHREAD_POOL_SIZE_STRICT", "0");
+            }
+            std::string merr;
+            for (const auto& e : g_emSettings) {
+                EmSetting* have = nullptr;
+                for (auto& x : em) if (x.key == e.key) { have = &x; break; }
+                if (!have) { em.push_back(e); continue; }
+                if (have->value.isList != e.value.isList) {
+                    fprintf(stderr, "kama: emSettings `%s` is a %s here and a %s in kama's own settings "
+                                    "for this build — one shape or the other, not both\n",
+                            e.key.c_str(), e.value.isList ? "list" : "single value",
+                            have->value.isList ? "list" : "single value");
+                    return 2;
+                }
+                if (e.value.isList) {
+                    for (const std::string& v : e.value.list) {
+                        bool dup = false;
+                        for (const std::string& x : have->value.list) if (x == v) { dup = true; break; }
+                        if (!dup) have->value.list.push_back(v);
+                    }
+                } else {
+                    have->value.scalar = e.value.scalar;   // the manifest wins over kama's default
+                }
+            }
+            // ⚠️ AFTER the merge, so the documented env-wins precedence survives: an environment
+            // override that a manifest key could beat would be a knob that silently loses.
+            if (const char* pool = getenv("KAMA_PTHREAD_POOL"))
+                if (*pool && needsPthread) setScalar("PTHREAD_POOL_SIZE", pool);
+            for (const auto& e : em) {
+                link << "-s" << e.key << "=";
+                if (e.value.isList) {
+                    for (size_t i = 0; i < e.value.list.size(); ++i)
+                        link << (i ? "," : "") << e.value.list[i];
+                } else {
+                    link << e.value.scalar;
+                }
+                link << " ";
+            }
+            // A plain append list — emcc accumulates these, so there is no collision to resolve. Deduped
+            // by resolved path: the root and a dependency naming the same file would otherwise define
+            // the same JS symbols twice, which emcc refuses.
+            if (needsNetWeb)
+                link << "--js-library \"" << (resolveStdlibDir(argv[0]) + "/std/net/web/kama_net_web.js")
+                     << "\" ";
+            std::set<std::string> seenJs;
+            for (const CSourceRef& js : g_jsLibraries)
+                if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
+        }
         // The target's own link flags from kama.json, last so they can override anything above.
         if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << f << " ";
 
@@ -10080,9 +10331,13 @@ int main(int argc, char** argv)
         //
         //  * nothing to split (one input: an import-free program, or a --release native unity build).
         //  * Windows: no posix_spawn/waitpid pool.
-        //  * wasm: emcc's link settings (--use-port, --js-library, -sEXPORTED_RUNTIME_METHODS,
-        //    -sEXIT_RUNTIME) are emitted into the COMPILE flags above, so a per-TU `emcc -c` would warn
-        //    on every TU; emcc's Python startup also makes per-TU spawning far costlier than clang's.
+        //  * wasm: emcc's Python startup makes per-TU spawning far costlier than clang's.
+        //    ⚠️ This used to give a second reason — that emcc's link settings (`--js-library`,
+        //    `-sEXPORTED_RUNTIME_METHODS`, `-sEXIT_RUNTIME`) sat in the COMPILE flags, so a per-TU
+        //    `emcc -c` would warn on every TU. That is no longer true: every `-s` moved to the link
+        //    tail when `emSettings` gave them one place to be merged in. The startup cost stands on its
+        //    own, so the clamp is unchanged — but the stale reason is removed rather than left to be
+        //    believed. (`--use-port=emdawnwebgpu` genuinely is a compile flag: it supplies headers.)
         //  * `zig cc`: measured, and it is a SIGN FLIP rather than a smaller win. zig has its own
         //    content-addressed object cache, so one invocation over 32 TUs is 4.13s cold but 0.07s warm
         //    and 0.11s after editing one file — it already does incremental rebuilds. Per-TU zig cannot
