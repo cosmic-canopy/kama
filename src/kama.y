@@ -2080,20 +2080,33 @@ plain_class_member
   | destructor_declaration   { $$ = $1; }
   | friend_declaration   { $$ = $1; }
   ;
+/* EVERY class member below begins with the nullable `modifiers_opt`, which is the same skew STAMP_START
+   was written for at top level (see the `fn` rules): on the empty derivation @$ starts at the END OF THE
+   PREVIOUS CONSTRUCT, so a member written without `public`/`static`/… reported the line of whatever
+   preceded it. Measured on 0.9.179: `fn int64 area()` on line 5, after a ctor on line 4, was reported at
+   4 — and as the FIRST member of a class, at the class header's own line. Blank lines between them change
+   nothing, which is what identifies it as the previous construct's end rather than an off-by-one. A
+   modifier is the exception rather than the rule on a member (a `value`'s fields are public anyway), so
+   this was the common case, not the corner one. `const_opt` on the method arms is nullable too, hence
+   `$2 ? @2 : @3` there.
+   ⚠️ THE TEST IS `$1->empty()`, NOT `!$1`. `modifiers_opt` reduces to an empty ModifierList, never to
+   null — unlike the top-level `fn` arms' `function_modifier_opt`, where `!$1` is right. Writing it the
+   other way compiles, runs, changes nothing, and reads exactly like a fix. It was written that way here
+   first, and the probes were still reporting the old line afterwards. */
 constant_declaration
-  : modifiers_opt CONST type constant_declarators SEMICOLON   { $$ = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); }
-  | modifiers_opt COMPTIME type constant_declarators SEMICOLON   { auto k = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); k->isComptime = true; $$ = k; }   /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
+  : modifiers_opt CONST type constant_declarators SEMICOLON   { $$ = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); if (!$1 || $1->empty()) STAMP_START($$, @2); }
+  | modifiers_opt COMPTIME type constant_declarators SEMICOLON   { auto k = std::make_shared<ClassConstDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, $4); k->isComptime = true; if (!$1 || $1->empty()) STAMP_START(k, @2); $$ = k; }   /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
   ;
 /* `@field … type name;` no longer needs an arm here — `class_member_declaration` attaches the attribute
    list for every member kind, this one included. */
 field_declaration
-  : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
+  : modifiers_opt type variable_declarators SEMICOLON   { $$ = std::make_shared<ClassFieldDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); if (!$1 || $1->empty()) STAMP_START($$, @2); }
   ;
 method_declaration
-  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(m->name, @5); m->isComptime = true; $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
-  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
-  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } $$ = m; }
-  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(m->name, @5); m->isComptime = true; if (!$1 || $1->empty()) STAMP_START(m, @2); $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
+  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
+  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
+  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
   ;
 /* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
    value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
@@ -2182,14 +2195,14 @@ overloadable_operator
   | LEQ
   ;
 constructor_declaration
-  : modifiers_opt constructor_declarator constructor_body   { $$ = std::make_shared<ClassConstructorDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); }
+  : modifiers_opt constructor_declarator constructor_body   { $$ = std::make_shared<ClassConstructorDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $2, $3); if (!$1 || $1->empty()) STAMP_START($$, @2); }
     /* Construction-model: a NAMED constructor — sugar for a static factory returning the enclosing type
        (infallible, no return type written) or `Result<This,E>` (fallible, leading type like `fn`). Lowered
        through the static-method pipeline; the emitter fills the infallible return type = the enclosing type. */
   | modifiers_opt CTOR method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $8); STAMP_LOC(m->name, @3); m->isCtor = true; if ($7) { m->whenParams = $7->whenParams; m->whenBounds = $7->whenBounds; } $$ = m; }
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, SharedIdentifier(), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $5, $8); STAMP_LOC(m->name, @3); m->isCtor = true; if ($7) { m->whenParams = $7->whenParams; m->whenBounds = $7->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, @2); $$ = m; }
   | modifiers_opt CTOR type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body
-    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); STAMP_LOC(m->name, @4); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } $$ = m; }
+    { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT, $1, $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $9); STAMP_LOC(m->name, @4); m->isCtor = true; if ($8) { m->whenParams = $8->whenParams; m->whenBounds = $8->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, @2); $$ = m; }
   ;
 constructor_declarator
   : IDENTIFIER LPAREN parameter_list_opt RPAREN constructor_initializer_opt   { $$ = std::make_shared<ClassConstructorDeclaratorNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), $3, $5); STAMP_LOC($$->constructorName, @1); }

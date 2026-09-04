@@ -191,7 +191,7 @@ elem_method_const	elem_method_const.kama:12
 empty_custom_alloc	empty_custom_alloc.kama:13 empty_custom_alloc.kama:8
 enum_bare_spelling	enum_bare_spelling.kama:4
 enum_extends	enum_extends.kama:3
-enum_field	enum_field.kama:3
+enum_field	enum_field.kama:4
 enum_missing_contract_method	enum_missing_contract_method.kama:2
 enum_recursive	enum_recursive.kama:1
 enum_unknown_contract	enum_unknown_contract.kama:4
@@ -290,7 +290,7 @@ identity_sig_arity	identity_sig_arity.kama:20
 identity_sig_cross_sig	identity_sig_cross_sig.kama:13
 iface_collection	iface_collection.kama:5
 iface_field	iface_field.kama:5
-iface_method_private	iface_method_private.kama:6
+iface_method_private	iface_method_private.kama:7
 iface_ref_concrete	iface_ref_concrete.kama:12
 iface_return	iface_return.kama:4 iface_return.kama:5
 immutable_bound_mutable	immutable_bound_mutable.kama:11
@@ -312,7 +312,7 @@ inherit_depth_exceeded	inherit_depth_exceeded.kama:20
 init_kind_bool_from_element	init_kind_bool_from_element.kama:9
 init_kind_bool_from_int	init_kind_bool_from_int.kama:4
 init_kind_class_from_int	init_kind_class_from_int.kama:9
-init_kind_field_from_string	init_kind_field_from_string.kama:3
+init_kind_field_from_string	init_kind_field_from_string.kama:4
 init_kind_int_from_bool	init_kind_int_from_bool.kama:3
 init_kind_int_from_call	init_kind_int_from_call.kama:7
 init_kind_int_from_class	init_kind_int_from_class.kama:10
@@ -346,7 +346,7 @@ intrinsic_direct_call_class	intrinsic_direct_call_class.kama:9
 intrinsic_dtor	intrinsic_dtor.kama:4
 intrinsic_dup	intrinsic_dup.kama:5
 intrinsic_extends	intrinsic_extends.kama:4
-intrinsic_field	intrinsic_field.kama:3
+intrinsic_field	intrinsic_field.kama:4
 intrinsic_incomplete	intrinsic_incomplete.kama:3
 intrinsic_multi_contract	intrinsic_multi_contract.kama:4
 intrinsic_no_contract	intrinsic_no_contract.kama:2
@@ -580,7 +580,7 @@ sendable_undeclared_channel	sendable_undeclared_channel.kama:7
 sendable_undeclared_field	sendable_undeclared_field.kama:6
 sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10
 ser_field_no_generate	ser_field_no_generate.kama:2
-ser_unmarked_field	ser_unmarked_field.kama:4
+ser_unmarked_field	ser_unmarked_field.kama:5
 serialize_isize_field	serialize_isize_field.kama:13
 shadow_enclosing	shadow_enclosing.kama:4
 shadow_field	shadow_field.kama:6

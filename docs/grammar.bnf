@@ -1392,6 +1392,19 @@ plain_class_member
   | destructor_declaration
   | friend_declaration
   ;
+/* EVERY class member below begins with the nullable `modifiers_opt`, which is the same skew STAMP_START
+   was written for at top level (see the `fn` rules): on the empty derivation @$ starts at the END OF THE
+   PREVIOUS CONSTRUCT, so a member written without `public`/`static`/… reported the line of whatever
+   preceded it. Measured on 0.9.179: `fn int64 area()` on line 5, after a ctor on line 4, was reported at
+   4 — and as the FIRST member of a class, at the class header's own line. Blank lines between them change
+   nothing, which is what identifies it as the previous construct's end rather than an off-by-one. A
+   modifier is the exception rather than the rule on a member (a `value`'s fields are public anyway), so
+   this was the common case, not the corner one. `const_opt` on the method arms is nullable too, hence
+   `$2 ? @2 : @3` there.
+   ⚠️ THE TEST IS `$1->empty()`, NOT `!$1`. `modifiers_opt` reduces to an empty ModifierList, never to
+   null — unlike the top-level `fn` arms' `function_modifier_opt`, where `!$1` is right. Writing it the
+   other way compiles, runs, changes nothing, and reads exactly like a fix. It was written that way here
+   first, and the probes were still reporting the old line afterwards. */
 constant_declaration
   : modifiers_opt CONST type constant_declarators SEMICOLON
   | modifiers_opt COMPTIME type constant_declarators SEMICOLON      /* `comptime T NAME` — a type-associated compile-time constant, read `Type::NAME` (6b-2) */
