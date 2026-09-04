@@ -6801,11 +6801,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (handoff == 0 && dynamic_cast<InvocationNode*>(rhs.get())) {
                 std::string lty = exprClass(as->unaryExpression);
                 auto ci = _classes.find(lty);
-                // A GENERIC-instance ctor (`this.m = SortedMap::withAllocator(…)`) must resolve its callee
-                // from the LHS instance — the value-producing path further down threads that type and already
-                // drops the old value; don't preempt it. Only a NON-generic resource is safe to emit standalone.
+                // A dot-ctor on a generic TEMPLATE (`b = Box.make(…)`, `this.m = SortedMap.withAllocator(…)`)
+                // must resolve its callee from the LHS instance — the value-producing path further down
+                // threads that type and drops the old value; don't preempt it. Every OTHER call returning a
+                // resource by value is emitted here, generic instance or not: this gate used to exclude any
+                // generic instance (`_genericTypeInstOf`) on the claim that the path below would drop, but
+                // that path fires for exactly the dot-ctor shape, so `b = fresh()` on a `Box<int32>` or an
+                // `Owned<Probe>` fell through both into a plain store and LEAKED the old value — 503 MB over
+                // 2,000 iterations in safe kama, against 1.8 MB for the non-generic twin. The `__dtor` below
+                // is right for an instance too: `lty` IS its mangled name. tests/generic_reassign_drop.kama.
                 if (ci != _classes.end() && ci->second.kind == TypeKind::Resource
-                    && _genericTypeInstOf.find(lty) == _genericTypeInstOf.end()) {
+                    && !isGenericDotCtorCall(rhs.get())) {
                     checkConstWrite(as->unaryExpression, n->line);
                     std::string lname = lvalueMoveKey(as->unaryExpression);
                     bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
@@ -6913,10 +6919,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 SharedStringList qual;
                 if (auto* iv = dynamic_cast<InvocationNode*>(r)) {
                     if (iv->identifier) qual = iv->identifier->qualifier;
-                    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
-                        std::string dt;
-                        if (isTypeReceiver(ma, dt) && _genericTypeParams.count(dt)) isDotCtor = true;
-                    }
+                    isDotCtor = isGenericDotCtorCall(r);
                 }
                 else if (auto* id = dynamic_cast<IdentifierNode*>(r)) qual = id->qualifier;
                 if (qual && !qual->empty()) {
@@ -16188,6 +16191,30 @@ bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, 
                      "`" + V + "(allocator: …) T(...)`, not a bare `" + V + "`").c_str(), line);
     }
     return boxStateful;   // a matched, non-Global placement drives the `_ALLOC_` emission path
+}
+
+// Is `r` a ctor call spelled on a generic TEMPLATE name — `Box.make(…)`, `SortedMap::withAllocator(…)` —
+// or a qualified variant construction (`Optional::Some(…)`)? Such a call has no instance of its own: the
+// emitter resolves `Box` -> `Box_int32` from the assignment TARGET (the same channel a local declaration
+// uses), so the two assignment paths agree on it through this one predicate — the value-producing path
+// claims it, the fresh-rvalue resource path leaves it alone. Both spellings are here because the
+// corpus reassigns through both, and a predicate that knew one of them would send the other into a
+// standalone emit with no target type to resolve against. A call on a concrete type, or a free
+// function returning an instance by value, is not one.
+bool CEmitter::isGenericDotCtorCall(ASTNode* r)
+{
+    auto* iv = dynamic_cast<InvocationNode*>(r);
+    if (!iv) return false;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
+        std::string dt;
+        if (isTypeReceiver(ma, dt) && _genericTypeParams.count(dt)) return true;
+    }
+    SharedStringList qual = iv->identifier ? iv->identifier->qualifier : nullptr;
+    if (!qual || qual->empty()) return false;
+    auto q = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < qual->size(); ++i) q->push_back((*qual)[i]);
+    std::string en = resolveUserName(*qual->back(), q);
+    return (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
 }
 
 // If `e` is `this.field[i]` (or `obj.field[i]`) where `field` is a raw `UnsafePtr<T>`, return the element's

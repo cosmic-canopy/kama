@@ -2340,6 +2340,9 @@ private:
     bool exprDiverges(const ASTNode* n) const;          // a `panic(...)` call
     bool hasLoopBreak(const SharedStatement& s) const;  // a `break` escaping THIS loop
     bool isLiteralTrue(const SharedExpression& e) const;
+    // A ctor call spelled on a generic TEMPLATE name (`Box.make(…)`) — resolved from the assignment
+    // target, so the two assignment paths share this one predicate. See the definition.
+    bool isGenericDotCtorCall(ASTNode* r);
     std::string ptrElemType(SharedExpression e);   // if `e` is a raw `this.field[i]` where field is UnsafePtr<T>, the element C-type; else ""
     std::string ptrLocalElemType(SharedExpression e);  // if `e` is a bare-LOCAL `buf[i]` where buf is UnsafePtr<T>, the element C-type; else "" (store-path only)
     std::string exprClass(SharedExpression e);          // class name of expr, "" if unknown/primitive

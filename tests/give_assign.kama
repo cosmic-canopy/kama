@@ -2,6 +2,9 @@ import { std::memory::Owned, std::memory::Shared };
 // give/copy markers in ASSIGNMENT position (uniform with init/arg/return). A bare reassignment
 // uses the kind default: a move-only Owned MOVES (`give` is the explicit form); a copy-only Shared
 // RETAINS (releasing the target's old handle first).
+// ⚠️ This covers the NAMED-source forms only (`b = give a`, `t = s`). A reassignment from a FRESH
+// rvalue (`b = mk()`) is a different emitter path, and an exit code cannot see a leak on it —
+// tests/generic_reassign_drop.kama counts destructors for that shape.
 type value C { int32 n; public ctor make(int32 n){ this.n = n; } public fn int32 g(){ return this.n; } }
 fn int32 main() {
     Owned<C> a = new C.make(n: 20);

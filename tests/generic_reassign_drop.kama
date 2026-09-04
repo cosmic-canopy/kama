@@ -1,0 +1,48 @@
+// A GENERIC resource reassigned from a FRESH rvalue must drop the value it held — `b = freshBox();`
+// on a `Box<int32>`, `o = mk();` on an `Owned<Probe>`. Safe kama, and it leaked: measured 503 MB over
+// 2,000 iterations against 1.8 MB for the non-generic twin, and this fixture's counters read 1 of 3
+// drops on both generic shapes while `Plain` read 3.
+//
+// The fresh-rvalue branch of the assignment emitter releases the old value before the store, and it
+// was gated to a NON-generic resource on the claim that "the value-producing path further down already
+// drops the old value". That path fires for a dot-ctor on a generic TEMPLATE (`b = Box.make(…)`, the
+// `dotCtor` case here, which was always right) and for match/variant/array-literal RHS — not for a plain
+// call returning the instance by value, which fell through both into a bare store. tests/give_assign.kama
+// covers the NAMED-source forms (`b = give a`), which never had a genericity gate and always dropped.
+//
+// Exit code = 42 iff every shape counts 3 drops; otherwise the four counts packed base-4 (g p o d),
+// so 1 on a generic shape reads as "the two reassigned values leaked again".
+
+static int32 drops = 0;
+
+type resource Box<T> {
+    T v;
+    public ctor make(T v) { this.v = v; return this; }
+    ~Box() { drops = drops + 1; }
+}
+type resource Plain {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; return this; }
+    ~Plain() { drops = drops + 1; }
+}
+type resource Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; return this; }
+    ~Probe() { drops = drops + 1; }
+}
+
+fn Box<int32> freshBox() { return Box.make(v: 1); }
+fn Plain freshPlain() { return Plain.make(v: 1); }
+fn Owned<Probe> mk() { return new Probe.make(id: 1); }
+
+fn int32 generic() { drops = 0; { Box<int32> b = freshBox(); b = freshBox(); b = freshBox(); } return drops; }
+fn int32 plain()   { drops = 0; { Plain p = freshPlain(); p = freshPlain(); p = freshPlain(); } return drops; }
+fn int32 owned()   { drops = 0; { Owned<Probe> o = mk(); o = mk(); o = mk(); } return drops; }
+fn int32 dotCtor() { drops = 0; { Box<int32> b = freshBox(); b = Box.make(v: 2); b = Box.make(v: 3); } return drops; }
+
+fn int32 main()
+{
+    int32 g = generic(); int32 p = plain(); int32 o = owned(); int32 d = dotCtor();
+    if (g == 3 && p == 3 && o == 3 && d == 3) { return 42; }
+    return g * 64 + p * 16 + o * 4 + d;
+}
