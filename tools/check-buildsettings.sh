@@ -466,6 +466,100 @@ JSON
          || { bad "a malformed emSetting was refused for the wrong reason"; head -2 "$tmp/e" >&2; }; }
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: \`reproducible-float\` forbids the C compiler fusing a*b+c"
+
+# ⚠️ THIS CANNOT BE A tests/*.d FIXTURE, and finding out why is the reason the oracle lives here.
+# run_tests.sh builds every fixture in DEBUG, where `a * b + c` is emitted as
+# `KAMA_ADD(KAMA_MUL(a, b), c)` — the trap-checking macros, which already break the single expression
+# clang would have contracted. So a debug fixture passes identically with and without the key: it would
+# look like coverage and assert nothing. The divergence only exists in a release build, which only a
+# guard can ask for.
+fp="$tmp/fp"
+mkdir -p "$fp/src"
+cat > "$fp/src/main.kama" <<'KAMA'
+// Exit code = how many of 64 triples give a different result for `a * b + c` than for the same
+// multiply and add written as two statements. Under clang's default `-ffp-contract=on` the
+// one-expression form may fuse into an FMA and the two-statement form may not, so on a target WITH an
+// FMA the two disagree — which is what makes a cross-target program's numerics depend on its target.
+fn int32 main() {
+    int32 differ = 0;
+    int32 i = 1;
+    while (i <= 64) {
+        float64 a = cast<float64>(i) * 0.7853981633974483f64 + 1.0f64;
+        float64 b = cast<float64>(i) * 1.4142135623730951f64 + 0.5f64;
+        float64 c = cast<float64>(i) * 2.7182818284590452f64 + 0.25f64;
+        float64 fused = a * b + c;
+        float64 prod  = a * b;
+        float64 split = prod + c;
+        if (fused != split) { differ = differ + 1; }
+        i = i + 1;
+    }
+    return differ;
+}
+KAMA
+cat > "$fp/kama.json" <<'JSON'
+{ "name": "fp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$fp/kama.json" --release -o "$fp/off" >"$tmp/o" 2>"$tmp/e" \
+    || bad "the fp fixture would not build"
+base=0; [ -x "$fp/off" ] && { "$fp/off" >/dev/null 2>&1 || base=$?; }
+cat > "$fp/kama.json" <<'JSON'
+{ "name": "fp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",
+  "reproducible-float": true,
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$fp/kama.json" --release -o "$fp/on" >"$tmp/o" 2>"$tmp/e" \
+    || bad "the fp fixture would not build with the key"
+withkey=0; [ -x "$fp/on" ] && { "$fp/on" >/dev/null 2>&1 || withkey=$?; }
+if [ "$base" -eq 0 ]; then
+    # No FMA on this host (baseline x86-64 SSE2, or a target that never contracts), so there is nothing
+    # for the key to prevent. Said out loud rather than reported as a pass: this leg is inert here.
+    ok "the oracle is inert on this host (nothing contracts: $base of 64 differ without the key)"
+    [ "$withkey" -eq 0 ] || bad "the key made results differ where nothing contracted ($withkey of 64)"
+elif [ "$withkey" -eq 0 ]; then
+    ok "$base of 64 triples differ without the key, 0 with it"
+else
+    bad "the key did not stop contraction ($base of 64 without, $withkey with)"
+fi
+
+# The command line, which is checkable on every host and on a target this machine cannot run.
+app rfl <<'JSON'
+{ "name": "rfl", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "reproducible-float": true,
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$("$KAMA" build "$tmp/rfl/kama.json" --cc "echo CC:" -o "$tmp/rfl/app" 2>/dev/null || true)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && ok "the flag reaches a native build" || bad "the flag did not reach a native build"
+line=$("$KAMA" build "$tmp/rfl/kama.json" --target wasm --cc "echo emcc" -o "$tmp/rfl/a.html" 2>/dev/null || true)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && ok "...and wasm, where it is a no-op but the command line must not fork per target" \
+    || bad "the flag did not reach the wasm build"
+
+# A target says "not this one", exactly as it can for `no-heap` and `webgpu`.
+app rfloff <<'JSON'
+{ "name": "rfloff", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "reproducible-float": true,
+  "select": { "TARGET": { "HOST": { "reproducible-float": false } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$("$KAMA" build "$tmp/rfloff/kama.json" --cc "echo CC:" -o "$tmp/rfloff/app" 2>/dev/null || true)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && bad "a target's \`reproducible-float: false\` did not turn it off" \
+    || ok "a target turns it off again, the way it can for no-heap and webgpu"
+
+# ...and the control, so the two cases above cannot both pass by the flag never being emitted at all.
+app rflnone <<'JSON'
+{ "name": "rflnone", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+line=$("$KAMA" build "$tmp/rflnone/kama.json" --cc "echo CC:" -o "$tmp/rflnone/app" 2>/dev/null || true)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && bad "a project that never asked for it got -ffp-contract=off" \
+    || ok "...and a project that never asked for it gets nothing"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a broken dependency manifest is fatal to a build, not to a query"
 
 # The same split `strictImports` draws. A build that would read settings from a manifest it cannot parse

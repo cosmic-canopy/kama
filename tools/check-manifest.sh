@@ -357,6 +357,22 @@ KAMA_WGPU_DIR=/nonexistent-wgpu "$KAMA" build "$tmp/wg/kama.json" -o "$tmp/wg/ap
     && ok "a target's \`webgpu\`: false overrides the project's" \
     || { bad "a target could not turn \`webgpu\` off"; head -2 "$tmp/e" >&2; }
 
+# `reproducible-float` is the third key of exactly this shape, so its value set is closed for exactly
+# the same reason: `"yes"` must be refused by name rather than read as some truthiness nobody wrote
+# down. (What the key DOES — and the release-only measurement behind it — is in
+# tools/check-buildsettings.sh, which can ask for a release build.)
+proj rfbad <<'JSON'
+{ "name": "rfbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "reproducible-float": "yes", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject rfbad 'expected `true` or `false`' "a non-boolean \`reproducible-float\` is refused by name"
+
+proj rfok <<'JSON'
+{ "name": "rfok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "reproducible-float": true, "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept rfok "...while the boolean form builds"
+
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: projects do not nest"
 

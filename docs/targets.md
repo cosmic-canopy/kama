@@ -122,9 +122,9 @@ triple — matches no `select.TARGET` entry at all, and a **dependency** cannot 
 spells the target. Without a project tier, a dependency's build settings could not reach such a build
 at all; see [What a dependency contributes](#what-a-dependency-contributes).
 
-### `no-heap` and `webgpu` — the same shape, for the same reason
+### `no-heap`, `webgpu` and `reproducible-float` — the same shape, for the same reason
 
-Two more project properties a target may override, spelled exactly like `link`:
+Three more project properties a target may override, spelled exactly like `link`:
 
 ```json
 {
@@ -148,6 +148,30 @@ heap on the host that builds your tooling; WebGPU from the browser on wasm and f
 natively. Both values are checked when the manifest is read, so `"no-heap": "yes"` is refused by name
 rather than read as some truthiness nobody wrote down. `--no-heap` and `--webgpu` can only turn a
 setting **on**, so they OR in with the manifest; a target is how you say *"not this one"*.
+
+**`reproducible-float`** is the third of the shape, and it says: *this program's floating point must
+give the same bits on every target.*
+
+```json
+{ "reproducible-float": true }
+```
+
+Without it, clang's default lets `a * b + c` contract into a single fused multiply-add — one rounding
+step instead of two. A target with an FMA (arm64) then gives different bits from one without
+(wasm32 MVP, baseline x86-64 SSE2), so the same source disagrees with itself browser-versus-native.
+Measured on this repo's own fixture: **13 of 64 random triples differ** on aarch64-macos in a release
+build, and **0** with the key.
+
+It is named for the goal rather than for the `-ffp-contract=off` it emits today, because the flag is a
+C-backend detail and the goal is not. It is a boolean because kama can honor exactly two states, and
+"absent" already means *"I have not thought about it"* — a third spelling for that would be a second
+way to say the same thing. Manifest-only, deliberately: a property that correctness depends on must not
+be losable by forgetting a command-line flag.
+
+⚠️ Two honest limits. The flag applies to a **build**, so it does not travel through `kama transpile`
+into someone else's toolchain — pass it yourself there. And it changes nothing in a **debug** build
+that was not already true: kama's own overflow-checking arithmetic already splits the expression, so
+the difference only appears under `--release`.
 
 `runtime` is `"static"` or `"dynamic"` and says how the *language's own* runtime is linked — see
 [Runtime linkage](#runtime-linkage) below. Every key is optional; omitting one takes the target's
@@ -253,6 +277,7 @@ What a dependency **cannot** do is redefine your build:
 | `cflags`, `ldflags`, `link`, `csources`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
+| | `reproducible-float` — a whole-artifact numerics decision |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
 resolve against *your* working directory rather than against the package — make it absolute. And a

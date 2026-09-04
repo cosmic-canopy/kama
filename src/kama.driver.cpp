@@ -1929,6 +1929,10 @@ struct TargetSpec {
     // succeeds with allocation allowed, so a bare-metal target quietly gains a heap nobody asked for.
     bool webgpu = false,  webgpuSet = false;
     bool noHeap = false,  noHeapSet = false;
+    // "this program's floating point must be bit-reproducible across targets" — named for the GOAL,
+    // not for the clang flag it happens to emit today (the rule ROADMAP row 20 writes down for
+    // `@linkName`: kama's only backend is C now, and a 2.0 bytecode VM has no `-ffp-contract`).
+    bool reproFloat = false, reproFloatSet = false;
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
@@ -2084,7 +2088,7 @@ static std::string activeTargetLabel()
 static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).
-static bool g_manifestWebgpu = false, g_manifestNoHeap = false;
+static bool g_manifestWebgpu = false, g_manifestNoHeap = false, g_manifestReproFloat = false;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
 // own catalog). Seeded with the built-in BUILD_TYPE, then extended by the manifest.
@@ -2155,6 +2159,7 @@ static bool resolveTarget(const std::string& selRaw,
         if (u.linkSet)   { out.link   = u.link;   out.linkSet   = true; }   // replace, per the note in the reader
         if (u.webgpuSet) { out.webgpu = u.webgpu; out.webgpuSet = true; }
         if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
+        if (u.reproFloatSet) { out.reproFloat = u.reproFloat; out.reproFloatSet = true; }
         if (out.arch.empty() || out.os.empty()) {
             err = "target '" + sel + "' declares no `triple` and is not a built-in";
             return false;
@@ -2637,6 +2642,7 @@ struct ManifestReader {
     std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
+    bool* reproFloatOut = nullptr;                        // set to capture `reproducible-float`
     // `kama_workspace.json` mode: a DIFFERENT file with a different key set, read by the same parser
     // rather than a second one. `projects` there is a MAP whose every entry states `optional`, and the
     // only other legal key is `dependencies` — so the mode is a flag, not a sink, because it changes
@@ -3095,6 +3101,9 @@ struct ManifestReader {
                 else if (k == "link")    { if (!stringArray(t.link, "link")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
+                else if (k == "reproducible-float") {
+                    if (!boolean(t.reproFloat)) return false; t.reproFloatSet = true;
+                }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
                 // builds for one target declares it once instead of retyping `--target`, and the editor
                 // can then analyze for it too. `--target` still wins.
@@ -3399,6 +3408,10 @@ struct ManifestReader {
             // than read as some truthiness nobody wrote down.
             else if (key == "webgpu")  { bool b = false; if (!boolean(b)) return false; if (webgpuOut) *webgpuOut = b; }
             else if (key == "no-heap") { bool b = false; if (!boolean(b)) return false; if (noHeapOut) *noHeapOut = b; }
+            // Same shape and the same reason as the two above: a closed value set, validated in the
+            // reader so `"reproducible-float": "yes"` is refused by name rather than read as some
+            // truthiness nobody wrote down.
+            else if (key == "reproducible-float") { bool b = false; if (!boolean(b)) return false; if (reproFloatOut) *reproFloatOut = b; }
             // Moved out, not dropped. A monorepo root carrying `projects` was a manifest that looked like
             // a project while being an aggregator with no `kind`, no `source`, no namespace and no
             // artifact — the one shape every other rule here needed an exemption for. The workspace is a
@@ -4037,14 +4050,15 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
 
 // Load a `kama.json` manifest's project-level `link` — the native libraries this artifact links, as bare
 // names (`["m"]` -> `-lm`). Left empty if absent. Returns false + `err` on malformed JSON.
-static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap, std::string& err)
+static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, bool& noHeap,
+                                      bool& reproFloat, std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.webgpuOut = &webgpu; r.noHeapOut = &noHeap;
+    r.webgpuOut = &webgpu; r.noHeapOut = &noHeap; r.reproFloatOut = &reproFloat;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -4404,7 +4418,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_emSettings.clear();
-    g_manifestWebgpu = false; g_manifestNoHeap = false;
+    g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_strictFlags = false;
     g_logDefault.clear();
     g_target  = TargetSpec();
@@ -4490,7 +4504,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             err = manifest + ": " + err; return false;
         }
         // Same shape and the same place as `link`: project properties a target may then override.
-        if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap, err)) {
+        if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap,
+                                      g_manifestReproFloat, err)) {
             err = manifest + ": " + err; return false;
         }
 
@@ -4598,6 +4613,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_target.ldflags.insert(g_target.ldflags.begin(), g_rootSettings.ldflags.begin(), g_rootSettings.ldflags.end());
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
+    if (!g_target.reproFloatSet) g_target.reproFloat = g_manifestReproFloat;
 
     // ---- what the DEPENDENCIES contribute ----------------------------------------------------------
     //
@@ -9893,6 +9909,21 @@ int main(int argc, char** argv)
         // and a read of an uninitialized local. The #line directives map these back to the
         // .kama source. (Audit Step 2 — "no silent surprises".)
         cmd << compiler << crossFlags << " -std=c11 -Werror=return-type -Werror=uninitialized ";
+        // `reproducible-float`: forbid the C compiler contracting `a*b + c` into a single fused
+        // multiply-add. clang's default is `on`, which contracts within one expression — so the same
+        // source gives different bits on a target WITH an FMA (arm64) than on one without (wasm32 MVP,
+        // baseline x86-64 SSE2), and a program whose correctness IS bit-reproducibility diverges browser
+        // from native. Measured on this repo's own fixture: 13 of 64 random triples differ on
+        // aarch64-macos in a release build, 0 with this flag.
+        //
+        // ⚠️ Emitted here, in the fixed base, so a target's raw `cflags` can still override it with
+        // `-ffp-contract=fast` — raw flags are the escape hatch everywhere else and this is no different.
+        // Sent on EVERY target including wasm: it is a no-op where there is no FMA, and a command line
+        // that forked per target would need its own guard to say why.
+        //
+        // ⚠️ It reaches `kama transpile` output not at all — the flag lives on the command line, not in
+        // the C. A `#pragma STDC FP_CONTRACT` would travel, but GCC does not implement it.
+        if (g_target.reproFloat) cmd << "-ffp-contract=off ";
         // The target's own toolchain settings from kama.json (a sysroot and any extra compile flags).
         if (!g_target.sysroot.empty()) cmd << "--sysroot=\"" << g_target.sysroot << "\" ";
         for (const auto& f : g_target.cflags) cmd << f << " ";
