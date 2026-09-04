@@ -1052,18 +1052,30 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     "never general-purpose escape"; to persist or share, you OWN it. So `p[i] = v` keeps C semantics, and
     the work is the DIAGNOSTICS (refuse the silent `drop`; name the two spellings at the method call) plus
     removing the reason anyone owns through a raw pointer at all — which is the next bullet.
-  - **A module `static` cannot own a destructible resource, and it was untracked.** `static World g =
-    World.make();` is refused — "no destructible resources yet"; the gate's comment: "v1 has no static-dtor
-    seam". This is WHY the first consumer callocs a `World`: on the web `main`'s frame is unwound while
-    the rAF callback lives, so the one owner that outlives a frame is a static. The shape the goals give:
-    `static Optional<Owned<World>> g;` — absence in the type (§3b), `match` forces the dead case exactly as
-    `Weak.tryUpgrade` does — and the C callback receives a pointer borrowed from the owner and turns it into
-    a `ref World` PARAMETER at one `unsafe fn`, which is measured working and dropping today (their own
-    `place(b: ref slot[0])` is that shape). Three pieces: the dtor seam at BOTH teardown sites (the
-    synthesized `main` after `kama_main`, and the isolate trampoline — statics are `KAMA_ISOLATE_LOCAL`),
-    the static-initializer rule (`isConstInitExpr`) accepting a payload-less variant literal so the static
-    can start as `None`, and the reassignment bug below, because assigning the static IS a generic-resource
-    reassignment.
+  - **A module `static` cannot own a destructible resource — considered, deliberately DEFERRED, not a
+    row (2026-09-04).** `static World g = World.make();` is refused, and the gate's own comment says why:
+    "v1 has no static-dtor seam". It surfaced as the ROOT of the first consumer's calloc'd `World` (on the
+    web `main`'s frame is unwound while the rAF callback lives), which is what made it look like the
+    fix. It is not, and the reasoning is kept here so it is not re-derived:
+    - **kama's `static` is a fenced MCU tool, not a general global.** Per-isolate (`KAMA_ISOLATE_LOCAL`),
+      compile-time initializer only (no init order, no hidden constructor before `main`), unreadable in a
+      `@foreignEntry` region unless assigned there, and typed to the MCU shapes — value, `UnsafePtr`,
+      `InlineArray`, `Simd`. "Support it in full" means removing fences nobody has asked to remove.
+    - **The need it was mistaken for is answered at the C boundary instead.** `HeapOwner<T>` has `adopt`
+      (Rust's `Box::from_raw`) and no twin — so ownership can enter kama from C but not leave it. An
+      `Owned<T>.release()` (the NOW row) lets the C API's own `userdata` slot hold the lifetime, as every
+      ownership language does at its FFI: hand it over in one `unsafe fn`, borrow through it in the
+      callback via a `ref T` parameter, `adopt` it back to destroy. That is GOALS §3a/§3e verbatim —
+      persistence is ownership, and the boundary is where ownership crosses.
+    - **What it would cost if a real case ever pulls it**: a dtor seam at both teardown sites (the
+      synthesized `main` after `kama_main`, cemit ~21365, and the isolate trampoline ~5153, since statics
+      are per-isolate), `isConstInitExpr` accepting `Optional::None` so the static starts absent in the
+      TYPE (§3b) rather than through a runtime initializer, and the generic-resource reassignment bug
+      fixed first (assigning the static IS that reassignment). A pulling case would be an isolate-local
+      driver object with a destructor; on an MCU nothing exits, so even there the gap is the initializer.
+    - **What ships instead is the MESSAGE.** "no destructible resources yet" reads as a promise. The
+      diagnostic should state this stance and name the two spellings — part of the raw-seam diagnostics
+      row. If a case arrives, this entry is the design; reopen it as a row then.
   - **A GENERIC resource reassigned from a fresh rvalue never drops the old value — found here, ours.**
     `slot = fresh();` on `Owned<T>`, `Shared<T>` or a user `Box<T>`: 503 MB over 2,000 iterations; the
     non-generic twin 1.8 MB; `slot = give t;` from a local 1.9 MB (so `tests/give_assign.kama`'s own shape
