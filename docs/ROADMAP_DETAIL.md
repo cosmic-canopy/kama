@@ -1071,8 +1071,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     `static` bound through `emitExpression`'s bare-name arm, which checked nothing — a shape-mismatched
     function bound there compiled, and the call passed the wrong argument count. **A per-region panic
     policy** was promoted by measurement rather than by argument — see the consumer's underrun numbers
-    above; it is what has to land before a mixer can run on a real audio thread without a bounds miss
-    aborting the process from a thread nobody can see. ⚠️ **A "not scheduled" bucket whose reason is a
+    above — and **shipped in `0.9.162` as `@onPanic(recover: <literal>)`** (SPEC *Recoverable regions*):
+    `setjmp`/`longjmp`, gated on `@noheap` plus a transitive no-destructible-local walk, the hook not
+    run for a recovered panic. ⚠️ `__builtin_setjmp` is not supported on arm64 macOS, so `<setjmp.h>` is
+    included only by a program that declares a region. ⚠️ **A "not scheduled" bucket whose reason is a
     dependency needs re-reading every time that dependency ships**, or it silently becomes a list of
     things nobody will look at again.
 

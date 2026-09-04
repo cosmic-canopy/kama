@@ -353,6 +353,30 @@ static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
     else       { m = (unsigned long long)v; }
     kama_u64_to_buf(buf, p, m);
 }
+// ── Recoverable regions: `@onPanic(recover: <literal>)` (ROADMAP row 2) ─────────────────────────────
+// A panic inside a region declared `@onPanic` does not terminate the process: the fault leaf (bounds,
+// narrowing, arithmetic, division, shift, float cast, `panic`, `assert`, OOM) writes its message, then
+// `kama_try_recover` longjmps to the region's prologue, which returns the literal the region named. The
+// slot is PER THREAD (`KAMA_ISOLATE_LOCAL`), so a foreign audio thread's region never sees another
+// isolate's; regions nest (each saves the previous slot). The process-level panic hook is NOT run for a
+// recovered panic — the region's declared recovery IS the handling, and the hook keeps its contract of
+// running only when the process is about to terminate.
+//
+// The compiler admits a region only when it is `@noheap` and no frame it reaches owns a destructible
+// local, so the longjmp skips no destructor. `<setjmp.h>` is hosted-only (not in C11's freestanding
+// list), so the emitted C includes it — and defines KAMA_ONPANIC — only for a program that declares a
+// region; every other program keeps this header dependency-light and the recovery path empty.
+#if defined(KAMA_ONPANIC)
+typedef struct kama_recover { jmp_buf jb; struct kama_recover* prev; } kama_recover_t;
+extern KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top;   /* defined in the entry TU */
+static inline void kama_try_recover(void) {
+    kama_recover_t* r = kama_recover_top;
+    if (r) { kama_recover_top = r->prev; longjmp(r->jb, 1); }
+}
+#else
+static inline void kama_try_recover(void) { }
+#endif
+
 #if defined(KAMA_TARGET_EMBEDDED)
 // Freestanding trap policy (MCU campaign step 3). On a bare-metal target there is no fd 2 to write
 // to and no `abort` under `-nostdlib`, so every fatal condition (bounds/slice/panic/OOM) funnels
@@ -362,53 +386,64 @@ static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
 __attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) { for (;;) __builtin_trap(); }
 static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
     (void)i; (void)len;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
 }
 static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
     (void)v; (void)lo; (void)hi;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
     (void)v; (void)lo; (void)hi;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
     (void)v; (void)lo; (void)hi;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
     (void)lane;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_sdiv_fail(void) {
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_div_zero_fail(void) {
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
     (void)n; (void)width;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_fcast_fail(void) {
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
     (void)op; (void)width;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
@@ -422,8 +457,9 @@ static inline void kama_set_panic_handler(void (*h)(void)) { (void)h; }
 // Contract (baked in): SET-ONCE (first registration wins — register at startup before spawning isolates,
 // same rule as the argv stash, so the read-only slot is race-free); RE-ENTRANCY-GUARDED (a panic while
 // already handling one skips the hook and hard-aborts — no infinite recursion); and the runtime ALWAYS
-// TERMINATES after it (it is not a resume point — recovery is `Result`, not panic). Covers every hosted
-// fatal path (bounds / panic / assert), matching the embedded "one hook for all fatal conditions" policy.
+// TERMINATES after it (it is not a resume point — recovery is `Result`, or a declared `@onPanic` region,
+// which recovers BEFORE the hook and never reaches it). Covers every hosted fatal path (bounds / panic /
+// assert), matching the embedded "one hook for all fatal conditions" policy.
 //
 // EXTERNAL LINKAGE (single definition in the entry TU, emitted by the compiler — see `isEntry` in
 // kama.cemit.cpp). This handler is PROCESS-GLOBAL by contract, not per-isolate, so it must be ONE object: a
@@ -436,6 +472,7 @@ extern void (*kama_panic_hook)(void);
 extern int kama_in_panic_hook;
 static inline void kama_set_panic_handler(void (*h)(void)) { if (!kama_panic_hook) kama_panic_hook = h; }
 static inline void kama_run_panic_hook(void) {
+    kama_try_recover();   /* an armed `@onPanic` region recovers here and never reaches the hook */
     if (kama_panic_hook && !kama_in_panic_hook) { kama_in_panic_hook = 1; kama_panic_hook(); }
 }
 static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
@@ -1553,6 +1590,7 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
 #if defined(KAMA_TARGET_EMBEDDED)
     // Freestanding: no stderr, no `abort`. Route through the overridable weak hook (see kama_bounds_fail).
     (void)msg;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 #else
@@ -1585,6 +1623,7 @@ static inline kama_ctrl* kama_ctrl_new(void) {
 static inline KAMA_NORETURN void kama_fail_emit(const char* buf, size_t n) {
 #if defined(KAMA_TARGET_EMBEDDED)
     (void)buf; (void)n;
+    kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 #else

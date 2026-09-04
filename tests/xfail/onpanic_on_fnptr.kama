@@ -1,0 +1,3 @@
+// `@onPanic` names a BODY's recovery; a `fnptr` type has no body and no prologue to arm.
+@onPanic(recover: 1) fnptr int32 Tick(int32 n);   // ERROR
+fn int32 main() { return 0; }

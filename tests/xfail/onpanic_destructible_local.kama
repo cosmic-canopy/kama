@@ -1,0 +1,14 @@
+// A region may own no destructible local: the longjmp from the fault to the prologue would skip its
+// destructor. `Token` owns nothing on the heap (so `@noheap` holds) but has a destructor, which is enough.
+type resource Token {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 get() { return this.id; }
+    ~Token() { }
+}
+@noheap @onPanic(recover: 0)
+fn int32 region(isize i) {
+    Token t = Token.make(id: 1);     // ERROR: owns `t`, which has a destructor
+    return t.get();
+}
+fn int32 main() { return region(i: 0); }

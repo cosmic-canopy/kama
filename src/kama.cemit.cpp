@@ -4434,6 +4434,35 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         indent(depth);
         *_out << it->className << "__dtor(&" << it->cVar << ");\n";
     }
+    // A `@onPanic` region DISARMS on every exit path: this helper is on all of them (fall-through, and
+    // the return/break/continue unwinds), and the root scope is the region's frame.
+    if (s.isFunctionRoot && _onPanicArmed) {
+        indent(depth);
+        *_out << "kama_recover_top = __kama_rec.prev;\n";
+    }
+}
+
+// The landing pad of a `@onPanic` region, first thing inside the root block: arm the per-thread recovery
+// slot, and on a longjmp back here restore the previous slot and return the region's declared value.
+// `__kama_rec` is not modified between setjmp and longjmp, so no `volatile` is needed for `prev`.
+void CEmitter::emitOnPanicPrologue(int depth)
+{
+    if (!_onPanicArmed) return;
+    indent(depth); *_out << "kama_recover_t __kama_rec; __kama_rec.prev = kama_recover_top;\n";
+    indent(depth); *_out << "if (setjmp(__kama_rec.jb)) { kama_recover_top = __kama_rec.prev; return"
+                         << (_onPanicRecover.empty() ? "" : " " + _onPanicRecover) << "; }\n";
+    indent(depth); *_out << "kama_recover_top = &__kama_rec;\n";
+}
+
+// A destructible local (or owning by-value parameter) the body being emitted OWNS — the fact the
+// `@onPanic` walk needs, recorded where the local is registered so it cannot drift from the dtor emission.
+void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::string& className)
+{
+    if (_probingTemplate || _currentFunc.empty()) return;
+    auto ci = _classes.find(className);
+    if (ci == _classes.end() || !ci->second.destructible) return;   // owns nothing: no dtor to skip
+    if (!_destructibleOwners.count(_currentFunc))
+        _destructibleOwners[_currentFunc] = DestructibleSite{ cVar, className, _curLine, diagFile() };
 }
 
 // Pop the innermost scope, first erasing move-state for the locals it owned. A name going out of
@@ -4487,6 +4516,7 @@ void CEmitter::emitUnwindAll(int depth)
 
 void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className)
 {
+    recordDestructibleOwner(cVar, className);   // the `@onPanic` walk's fact, at the one registration point
     if (!_scopes.empty())
         _scopes.back().locals.push_back({cVar, className});
     // Track for move analysis: move-only resources AND heap-owning collections/strings (so `give s`
@@ -4541,11 +4571,13 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
         for (auto& l : _pendingParamDtors) {
             _scopes.back().locals.push_back(l);
             noteDestructibleOwner(l.className);   // the callee OWNS it and drops it — see the helper
+            recordDestructibleOwner(l.cVar, l.className);   // ...and a `@onPanic` region may not (the parameter hole)
         }
         _pendingParamDtors.clear();
     }
 
     *_out << "{\n";
+    if (functionRoot) emitOnPanicPrologue(depth + 1);   // a `@onPanic` region arms itself before anything else
     SharedStatement last;
     if (block && block->statements) {
         for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
@@ -20608,6 +20640,45 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (fn && hasAttr(fn->attributes, "foreignEntry") && hasAttr(fn->attributes, "callerThread"))
                 unsupported("a function is `@foreignEntry` or `@callerThread`, not both", line);
             // no parts.push_back — emits nothing
+        } else if (an == "onPanic") {
+            // `@onPanic(recover: <literal>)` (ROADMAP row 2): a CHECKER flag plus a prologue — emits no
+            // `__attribute__`. The body becomes a recoverable region: a panic inside it (or inside anything
+            // it calls) returns the literal instead of aborting the process. Legal only on a body, and
+            // only beside `@noheap`: recovery is a longjmp, which skips every destructor between the fault
+            // and the prologue, so the region must own nothing that needs one — no heap (the attribute the
+            // author writes here) and no destructible local (checkOnPanicRegions, walked transitively).
+            // The region names its own recovery value because no default is right: a `TickFn` returns 1
+            // to keep the loop running, so a zero would end the very loop the region was meant to save.
+            if (!fn && !onMember)
+                unsupported("`@onPanic` applies only to a function body, not a `static`", line);
+            if (!hasAttr(attrs, "noheap"))
+                unsupported("`@onPanic` needs `@noheap` on the same body — recovery is a longjmp out of "
+                            "the fault, which frees nothing, so the region must allocate nothing", line);
+            const bool isVoid = fn && (!fn->returnType || (fn->returnType->value && *fn->returnType->value == "void"));
+            const size_t nargs = at->args ? at->args->size() : 0;
+            if (nargs > 1 || (nargs == 1 && (!(*at->args)[0] || !(*at->args)[0]->name
+                                              || !(*at->args)[0]->name->value
+                                              || *(*at->args)[0]->name->value != "recover")))
+                unsupported("`@onPanic` takes one named argument, the value the region returns after a "
+                            "recovered panic: `@onPanic(recover: 1)` — or none on a `void` body", line);
+            else if (nargs == 0 && fn && !isVoid)
+                unsupported(("`@onPanic` on `" + (fn->name && fn->name->value ? *fn->name->value : std::string("?"))
+                             + "` needs `recover:` — the region returns a value, so say which one a "
+                               "recovered panic hands back (`@onPanic(recover: 1)`)").c_str(), line);
+            else if (nargs == 1 && fn && isVoid)
+                unsupported("`@onPanic(recover: …)` on a `void` body — there is nothing to return; write `@onPanic`", line);
+            else if (nargs == 1) {
+                SharedExpression e = (*at->args)[0]->expression;
+                ASTNode* en = e.get();
+                if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(en)) en = su->expression.get();   // `-1`
+                const bool lit = dynamic_cast<Int32Node*>(en) || dynamic_cast<Int64Node*>(en)
+                              || dynamic_cast<Float32Node*>(en) || dynamic_cast<Float64Node*>(en)
+                              || dynamic_cast<BooleanNode*>(en);
+                if (!lit)
+                    unsupported("`recover:` takes a literal — the value is returned from a longjmp landing "
+                                "pad, before any local exists to compute it from", line);
+            }
+            // no parts.push_back — emits nothing here; the prologue is emitted at the body's root block
         } else if (an == "compileFor") {
             // `@compileFor(FLAG)` is consumed by the conditional-compilation prune pass
             // (pruneInactiveDecls) and stripped from kept decls before emission — reaching here from a
@@ -20967,6 +21038,64 @@ void CEmitter::recordStaticWrite(SharedExpression target)
     if (!key.empty()) _staticWriters[key].insert(_currentFunc);
 }
 
+// The `@onPanic` gate the attribute cannot judge alone: recovery is a longjmp from the fault to the
+// region's prologue, which skips every destructor in between — in the root AND in every callee on the
+// chain. So no frame the region reaches may own a destructible local or an owning by-value parameter.
+// `@noheap` (required beside the attribute) already proves the region allocates nothing, transitively;
+// this is the RAII half of the same guarantee, over the same call graph, anchored at the local.
+void CEmitter::checkOnPanicRegions()
+{
+    if (_onPanicFns.empty() || _destructibleOwners.empty()) return;
+    for (auto& kv : _onPanicFns) {
+        const std::string& root = kv.first;
+        std::map<std::string, std::string> parent;
+        std::vector<std::string> queue{ root };
+        std::set<std::string> region{ root };
+        for (size_t qi = 0; qi < queue.size(); ++qi) {
+            auto it = _callEdges.find(queue[qi]);
+            if (it == _callEdges.end()) continue;
+            for (auto& e : it->second)
+                if (region.insert(e.first).second) { parent[e.first] = queue[qi]; queue.push_back(e.first); }
+        }
+        for (const std::string& f : queue) {
+            auto d = _destructibleOwners.find(f);
+            if (d == _destructibleOwners.end()) continue;
+            std::vector<std::string> chain;
+            for (std::string n = f; !n.empty(); n = (parent.count(n) ? parent[n] : std::string())) chain.push_back(n);
+            std::string path;
+            for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+                path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+            ScopedStr _f(_emitDeclFile, d->second.file);
+            unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (chain.size() > 1 ? path + " owns" : "it owns")
+                         + " `" + d->second.name + "` (a `" + d->second.className + "`), which has a destructor — "
+                         "a recovered panic is a longjmp out of the fault, which would skip it. Keep the region's "
+                         "state in the pointer the callback receives, or move the owner outside the region").c_str(),
+                        d->second.line);
+            break;   // one sentence per region: the nearest frame, shortest chain
+        }
+    }
+}
+
+// Does any unit declare a `@onPanic` body? Asked before the TU's first line is written, because the
+// answer decides whether `<setjmp.h>` is included and KAMA_ONPANIC defined — program-wide, since the
+// runtime's recovery slot is `extern` in every TU and defined in the entry TU under the same macro.
+bool CEmitter::unitsUseOnPanic(const std::vector<SharedCompilationUnit>& units)
+{
+    for (auto& u : units) {
+        if (!u || !u->codeDeclarationList) continue;
+        for (auto& decl : *u->codeDeclarationList) {
+            if (auto* f = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (f->attributes && hasAttr(f->attributes, "onPanic")) return true;
+            } else if (auto* c = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
+                if (!c->members) continue;
+                for (auto& m : *c->members)
+                    if (m && m->attributes && hasAttr(m->attributes, "onPanic")) return true;
+            }
+        }
+    }
+    return false;
+}
+
 void CEmitter::checkForeignEntryStatics()
 {
     if (_foreignEntryFns.empty() || _staticReads.empty()) return;
@@ -21161,6 +21290,21 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     // can see. Registered like a `@noheap` root; the walk runs once every call edge is known.
     if (!_probingTemplate && hasAttr(fn->attributes, "foreignEntry"))
         _foreignEntryFns[name] = ForeignEntryFn{ demangleForDisplay(name), fn->line, diagFile(), "" };
+    // `@onPanic`: a root for the destructor-free walk, and the arming the root block's prologue reads.
+    // Restored when this body is done — a nested emission must not inherit the region.
+    struct ScopedOnPanic {
+        CEmitter& e; bool prevArmed; std::string prevRecover;
+        ScopedOnPanic(CEmitter& em) : e(em), prevArmed(em._onPanicArmed), prevRecover(em._onPanicRecover) {}
+        ~ScopedOnPanic() { e._onPanicArmed = prevArmed; e._onPanicRecover = prevRecover; }
+    } _sop(*this);
+    _onPanicArmed = hasAttr(fn->attributes, "onPanic");
+    _onPanicRecover.clear();
+    if (_onPanicArmed) {
+        for (auto& at : *fn->attributes)
+            if (at && at->name && *at->name == "onPanic" && at->args && !at->args->empty() && (*at->args)[0])
+                _onPanicRecover = emitExpression((*at->args)[0]->expression);
+        if (!_probingTemplate) _onPanicFns[name] = OnPanicFn{ demangleForDisplay(name), fn->line, diagFile() };
+    }
     if (fn->block) {
         checkDefiniteAssignment(fn->block, fn->parameters);   // owning LOCAL read-before-assign + `out` params (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
@@ -21182,6 +21326,11 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // `main`. The panic hook and argv are hosted-only (the headers declare them under the same guard; on
         // embedded the panic path is the weak `kama_panic_handler` and there is no argv); the log sink is
         // declared unconditionally (present on embedded too), emitted only when the program imports std::log.
+        // The `@onPanic` recovery slot: per thread, one definition, declared `extern` in the runtime header
+        // under the same KAMA_ONPANIC the TU preamble defines — so a program with no region defines nothing.
+        *_out << "#if defined(KAMA_ONPANIC)\n"
+              << "KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top = 0;\n"
+              << "#endif\n";
         *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
              << "void (*kama_panic_hook)(void) = 0;\n"
              << "int kama_in_panic_hook = 0;\n"
@@ -21740,6 +21889,9 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     SharedAttributeList dtorAttrs = ci.dtorNode ? ci.dtorNode->attributes : SharedAttributeList();
     _memberAttrPrefix = declAttrPrefix(dtorAttrs, nullptr,
                                        ci.dtorNode ? ci.dtorNode->line : 0, AttrSite::Member);
+    if (hasAttr(dtorAttrs, "onPanic"))
+        unsupported("`@onPanic` on a destructor — a drop has no value to recover to; put the region on the "
+                    "method that owns and drops the value", ci.dtorNode ? ci.dtorNode->line : 0);
     ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(dtorAttrs));
     _currentClass = &ci;
     // A destructor body is a function body, and until the transitivity analysis needed to know WHICH
@@ -21860,6 +22012,23 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
     if (hasAttr(attrs, "foreignEntry") && !_probingTemplate)   // a `@foreignEntry` member is a root too
         _foreignEntryFns[cName] = ForeignEntryFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile(), "" };
+    // `@onPanic` on a method: the same arming emitFunction does (restored when this body is done).
+    struct ScopedOnPanic {
+        CEmitter& e; bool prevArmed; std::string prevRecover;
+        ScopedOnPanic(CEmitter& em) : e(em), prevArmed(em._onPanicArmed), prevRecover(em._onPanicRecover) {}
+        ~ScopedOnPanic() { e._onPanicArmed = prevArmed; e._onPanicRecover = prevRecover; }
+    } _sop(*this);
+    _onPanicArmed = hasAttr(attrs, "onPanic");
+    _onPanicRecover.clear();
+    if (_onPanicArmed) {
+        if (std::string(retType) == owner.name || cName.find("__ctor") != std::string::npos)
+            unsupported("`@onPanic` on a constructor — a recovered panic would hand back a half-built "
+                        "object; put the region on the method that constructs and calls it", body ? body->line : 0);
+        for (auto& at : *attrs)
+            if (at && at->name && *at->name == "onPanic" && at->args && !at->args->empty() && (*at->args)[0])
+                _onPanicRecover = emitExpression((*at->args)[0]->expression);
+        if (!_probingTemplate) _onPanicFns[cName] = OnPanicFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile() };
+    }
 
     // THE ALLOCATION LEAF, and the one piece of by-name knowledge the analysis needs. Every chain ends at
     // an `extern fn`, which has no body and so cannot be analysed — and `GlobalAllocator.allocate` is the
@@ -21952,6 +22121,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
           << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
                                owner.isScalarRecv) << ")\n{\n";   // static: no self
+    emitOnPanicPrologue(1);   // a `@onPanic` method arms itself first thing (no-op otherwise)
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
 
@@ -26685,6 +26855,10 @@ void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units)
 int CEmitter::emit(SharedCompilationUnit unit)
 {
     *_out << "/* Generated by kama. Do not edit. */\n";
+    // A program with a `@onPanic` region pulls in `<setjmp.h>` (hosted-only, so never unconditionally)
+    // and defines KAMA_ONPANIC BEFORE the runtime header, which builds its recovery path on that macro.
+    if (unit && unit->codeDeclarationList && unitsUseOnPanic({unit}))
+        *_out << "#define KAMA_ONPANIC 1\n#include <setjmp.h>\n";
     *_out << "#include \"kama_runtime.h\"\n";
     if (!unit || !unit->codeDeclarationList)
         return _unsupported;
@@ -26702,6 +26876,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
+    checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
@@ -26724,6 +26899,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     _out = &header;
     header << "/* Generated by kama. Do not edit. */\n";
     header << "#ifndef " << guard << "\n#define " << guard << "\n";
+    if (unitsUseOnPanic(units))   // see emit(): program-wide, since every TU includes this header
+        header << "#define KAMA_ONPANIC 1\n#include <setjmp.h>\n";
     header << "#include \"kama_runtime.h\"\n";
     emitIncludes(units);        // FFI #include directives (before any type decls)
     // ...and the prelude's static-inline BODIES, which the comment here used to deny. They emitted 389
@@ -26742,6 +26919,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
+    checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts

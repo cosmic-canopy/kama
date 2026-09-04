@@ -1,0 +1,16 @@
+// The process-level panic hook is NOT run for a recovered panic: the region's declared recovery IS the
+// handling, and the hook keeps its contract — it runs only when the process is about to terminate. The
+// hook here would poison the trace; the trace stays at its initial value.
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }
+unsafe fn void hook() { kama_trace(code: 9); }
+@noheap @onPanic(recover: 0)
+fn int32 region(InlineArray<int32>#(2) a, isize i) { return a[i]; }
+unsafe fn void install() { setPanicHandler(handler: hook); }
+fn int32 main() {
+    install();
+    InlineArray<int32>#(2) a = [5; 2];
+    int32 r = region(a: a, i: 9);    // recovered as 0; the hook must not have run
+    return r + traceGet() + 42;      // 0 + 0 + 42
+}

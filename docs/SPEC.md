@@ -670,6 +670,38 @@ says which. The threading contract of a C API is knowledge only the seam author 
 - **The attribute on a body is the declared escape** for a pointer handed to C by a route no bind can
   see — stored in a struct, registered later — the same role `@noheap` on a `fnptr` plays for allocation.
 
+#### Recoverable regions — `@onPanic(recover: <literal>)` ✅
+
+A panic — a bounds miss, a narrowing or arithmetic fault, division by zero, a bad shift, a float cast,
+`panic`, `assert`, out of memory — terminates the process, and in a real-time callback it does so from a
+thread the player cannot see: the mixer dies and the game goes silent. `@onPanic` names a **region** that
+**recovers instead**: the fault leaf still writes its message (a glitch stays visible on stderr), then
+control returns to the region's prologue, which returns the value the region declared. The mixer glitches
+and degrades. <!-- test: onpanic_bounds, onpanic_nested, onpanic_void -->
+
+```kama
+@foreignEntry @noheap @onPanic(recover: 1)      // a TickFn returns 1 to keep the loop running
+fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any depth, returns 1
+```
+
+- **The region names its own value**, because no default is right: a `TickFn` returns `1` to continue, so
+  a zero would end the very loop the region was meant to save. `recover:` takes a literal; a `void` region
+  takes none, and a value-returning one must give it. <!-- xfail: onpanic_missing_recover -->
+- **`@noheap` is mandatory beside it**, and the region may own no destructible local — in the root or in
+  anything it reaches, walked transitively over the same call graph the no-heap proof uses. Recovery is a <!-- xfail: onpanic_not_noheap, onpanic_destructible_local, onpanic_destructible_callee -->
+  longjmp from the fault to the prologue, which frees nothing and runs no destructor; the gate is what
+  makes it sound rather than merely fast. Keep the region's state behind the pointer the callback receives.
+- **Regions nest** (each saves the previous slot), and the slot is **per thread**, so a foreign audio
+  thread's region never sees another isolate's. A region is a *body*: on a `fnptr` type, a constructor or
+  a destructor it is refused. <!-- xfail: onpanic_on_fnptr -->
+- **The process-level panic hook does not run** for a recovered panic: the region's declared recovery *is*
+  the handling, and `setPanicHandler`'s hook keeps its contract of running only when the process is about
+  to terminate. <!-- test: onpanic_handler_not_run -->
+- The mechanism is `setjmp`/`longjmp`. `<setjmp.h>` is hosted-only, so the emitted C includes it — and the
+  runtime builds its recovery path — only for a program that declares a region; every other program is
+  untouched. On wasm this rides emscripten's `setjmp` support; on `--target embedded` the toolchain must
+  supply the header (newlib does).
+
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 
 Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`,
@@ -1917,7 +1949,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For
   a *bug that can't continue*; recoverable errors use `Result<T, E>`. A custom fatal handler (for a shipped
   game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** — it runs for cleanup/exhibition,
-  then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.) The
+  then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.
+  The one exception is a declared **`@onPanic` region**, which recovers *before* the hook and never reaches
+  it — see *Recoverable regions*.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
   library owner over `UnsafePtr<T>` drop its heap pointee before `free`.

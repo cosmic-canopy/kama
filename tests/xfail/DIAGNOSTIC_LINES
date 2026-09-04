@@ -490,6 +490,11 @@ null_safe_compare	null_safe_compare.kama:17
 null_safe_declaration	null_safe_declaration.kama:14 null_safe_declaration.kama:16 null_safe_declaration.kama:21
 of_on_resource	of_on_resource.kama:2
 of_private_field	of_private_field.kama:2
+onpanic_destructible_callee	onpanic_destructible_callee.kama:9
+onpanic_destructible_local	onpanic_destructible_local.kama:11
+onpanic_missing_recover	onpanic_missing_recover.kama:4
+onpanic_not_noheap	onpanic_not_noheap.kama:4
+onpanic_on_fnptr	onpanic_on_fnptr.kama:2
 op_compare_usize	op_compare_usize.kama:1
 op_compound	op_compound.kama:1
 op_int_float	op_int_float.kama:1

@@ -1,0 +1,5 @@
+// A region that returns a value must say which value a recovered panic hands back — there is no default
+// that is right (a `TickFn` returns 1 to keep going; a zero would end the loop the region was meant to save).
+@noheap @onPanic
+fn int32 region(isize i) { return 0; }   // ERROR: needs `recover:`
+fn int32 main() { return region(i: 0); }

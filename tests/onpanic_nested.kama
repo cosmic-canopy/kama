@@ -1,0 +1,16 @@
+// Regions nest: an inner region recovers its own panic and hands its literal to the outer, which keeps
+// running; a panic in the outer (outside the inner) recovers at the outer's prologue. The slot is a stack.
+@noheap @onPanic(recover: 100)
+fn int32 inner(int32 d) { return 10 / d; }                     // d = 0 -> division by zero -> 100
+@noheap @onPanic(recover: 1000)
+fn int32 outer(int32 d, int32 n) {
+    int32 r = inner(d: d);                                     // 100 when d == 0, else 10/d
+    InlineArray<int32>#(2) a = [1; 2];
+    return r + a[n];                                           // n = 5 -> bounds miss -> 1000
+}
+fn int32 main() {
+    int32 a = outer(d: 2, n: 0);    // 5 + 1 = 6
+    int32 b = outer(d: 0, n: 0);    // 100 + 1 = 101
+    int32 c = outer(d: 2, n: 5);    // 1000
+    return a + b + c - 1065;        // 42
+}

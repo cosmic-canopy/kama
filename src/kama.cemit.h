@@ -1415,6 +1415,22 @@ private:
     void recordStaticRead(const std::string& key, const std::string& name, int line);
     void recordStaticWrite(SharedExpression target);
     void checkForeignEntryStatics();
+    // ROADMAP row 2 — `@onPanic(recover: <literal>)`: a `@noheap` body whose panics (bounds, arithmetic,
+    // `panic`, `assert`, …) longjmp back to its prologue and return the literal, instead of aborting the
+    // process from a thread the player cannot see. Gated so the longjmp skips no destructor: the region —
+    // the root plus everything it reaches over `_callEdges` — may own no destructible local (facts recorded
+    // at recordDestructibleLocal and the two parameter sites, walked after emission like the no-heap proof).
+    struct OnPanicFn        { std::string display; int line = 0; std::string file; };
+    struct DestructibleSite { std::string name; std::string className; int line = 0; std::string file; };
+    std::map<std::string, OnPanicFn>        _onPanicFns;          // C name -> root of the walk
+    std::map<std::string, DestructibleSite> _destructibleOwners;  // fn -> the first destructible local it owns
+    bool        _usesOnPanic   = false;   // any unit declares a region: the TU includes <setjmp.h> and defines KAMA_ONPANIC
+    bool        _onPanicArmed  = false;   // the body being emitted is a region (prologue + disarm on every exit)
+    std::string _onPanicRecover;          // the literal the landing pad returns ("" for a `void` region)
+    bool        unitsUseOnPanic(const std::vector<SharedCompilationUnit>& units);
+    void        emitOnPanicPrologue(int depth);
+    void        recordDestructibleOwner(const std::string& cVar, const std::string& className);
+    void        checkOnPanicRegions();
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an

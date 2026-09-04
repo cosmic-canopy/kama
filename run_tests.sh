@@ -514,7 +514,10 @@ test_one() {
         { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
         echo FAIL >"$res"; return
     fi
-    if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
+    # Any sanitizer output fails — but a RECOVERED panic inside an `@onPanic` region writes its `kama: …`
+    # line and carries on by design (tests/onpanic_bounds). A sanitizer line never starts with `kama: `
+    # (`==…`, `SUMMARY:`, `file:line: runtime error:`), so the test is "any line the runtime did not write".
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] && grep -qv '^kama: ' "$TMP/$name.san" 2>/dev/null; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
     if [ "$actual" = "$expected" ]; then
@@ -634,7 +637,10 @@ multi_one() {
         { echo "FAIL $name (HUNG — killed after ${KAMA_FIXTURE_TIMEOUT}s)"; hang_evidence "$wd"; } >"$out"
         echo FAIL >"$res"; return
     fi
-    if [ ${#SAN_FLAGS[@]} -gt 0 ] && [ -s "$TMP/$name.san" ]; then
+    # Any sanitizer output fails — but a RECOVERED panic inside an `@onPanic` region writes its `kama: …`
+    # line and carries on by design (tests/onpanic_bounds). A sanitizer line never starts with `kama: `
+    # (`==…`, `SUMMARY:`, `file:line: runtime error:`), so the test is "any line the runtime did not write".
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] && grep -qv '^kama: ' "$TMP/$name.san" 2>/dev/null; then
         { echo "FAIL $name (sanitizer)"; head -20 "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"; return
     fi
 

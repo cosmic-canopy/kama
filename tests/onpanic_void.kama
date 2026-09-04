@@ -1,0 +1,15 @@
+// A `void` region takes no `recover:` — a recovered panic simply returns. The counter proves the region ran
+// up to the fault and nothing after it.
+static int32 reached = 0;
+@noheap @onPanic
+fn void step(InlineArray<int32>#(2) a, isize i) {
+    reached = reached + 1;
+    int32 x = a[i];                  // i = 7 -> bounds miss -> return
+    reached = reached + 10;          // not reached on the faulting call
+}
+fn int32 main() {
+    InlineArray<int32>#(2) a = [0; 2];
+    step(a: a, i: 0);                // reached = 11
+    step(a: a, i: 7);                // reached = 12
+    return reached + 30;             // 42
+}

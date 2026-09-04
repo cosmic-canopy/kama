@@ -1,0 +1,17 @@
+// `@onPanic(recover: <literal>)` — ROADMAP row 2. A bounds miss inside the region does not abort the
+// process: the fault leaf writes its message, then longjmps to the region's prologue, which returns the
+// literal the region named. The mixer glitches and degrades instead of killing the player from a thread it
+// cannot see. `@noheap` is mandatory beside it: recovery frees nothing, so the region must allocate nothing.
+// The message is still written (a glitch stays visible on stderr); the trap twin that still aborts is
+// every fixture in tests/trap/.
+@noheap @onPanic(recover: -1)
+fn int32 mix(InlineArray<int32>#(4) buf, isize i) {
+    return buf[i];                              // i = 9 -> bounds miss -> recovered as -1
+}
+fn int32 main() {
+    InlineArray<int32>#(4) buf = [7; 4];
+    int32 ok  = mix(buf: buf, i: 2);           // 7
+    int32 bad = mix(buf: buf, i: 9);           // -1 (recovered)
+    int32 again = mix(buf: buf, i: 1);         // 7 — the slot was disarmed and re-armed correctly
+    return ok + again - bad + 27;              // 7 + 7 + 1 + 27 = 42
+}

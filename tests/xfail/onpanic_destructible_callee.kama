@@ -1,0 +1,13 @@
+// ...and the rule is TRANSITIVE: a destructible local two calls down is skipped by the same longjmp, so
+// the region is refused with the chain, anchored at the local.
+type resource Token {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public fn int32 get() { return this.id; }
+    ~Token() { }
+}
+fn int32 leaf() { Token t = Token.make(id: 1); return t.get(); }
+fn int32 mid() { return leaf(); }
+@noheap @onPanic(recover: 0)
+fn int32 region(isize i) { return mid(); }   // ERROR: region -> mid -> leaf owns `t`
+fn int32 main() { return region(i: 0); }

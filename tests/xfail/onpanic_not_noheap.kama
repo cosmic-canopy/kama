@@ -1,0 +1,5 @@
+// `@onPanic` without `@noheap` is refused: recovery is a longjmp out of the fault, which frees nothing,
+// so a region that could allocate would leak on every recovered panic.
+@onPanic(recover: 0)
+fn int32 region(isize i) { return 0; }   // ERROR: needs `@noheap`
+fn int32 main() { return region(i: 0); }

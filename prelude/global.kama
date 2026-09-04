@@ -542,7 +542,8 @@ unsafe fn string envOr(string name, string dflt) {
 // a handler can exhibit gracefully instead (show a dialog, flush a save, route to a telemetry sink). CONTRACT:
 // register ONCE at startup before spawning isolates (the slot is then read-only = race-free); the handler runs
 // for CLEANUP/REPORTING only — the runtime ALWAYS terminates after it (it is NOT a resume point; recovery is
-// `Result`, never panic), and a re-entrant panic while handling one hard-aborts (no infinite recursion). On
+// `Result`, or a declared `@onPanic` region, which recovers BEFORE the hook and never reaches it), and a
+// re-entrant panic while handling one hard-aborts (no infinite recursion). On
 // `--target embedded` there is no runtime setter — provide a strong `kama_panic_handler` symbol at link time
 // instead (this call is a no-op there).
 // `@foreignEntry`: the handler runs on whichever thread panicked, which is not necessarily the isolate
