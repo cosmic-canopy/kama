@@ -173,6 +173,15 @@ into someone else's toolchain — pass it yourself there. And it changes nothing
 that was not already true: kama's own overflow-checking arithmetic already splits the expression, so
 the difference only appears under `--release`.
 
+**And one way it is NOT like the other two: it propagates from a dependency.** `no-heap` and `webgpu`
+are read from your manifest only, because a dependency must not change what compiles in your program
+or make your build demand an SDK. `reproducible-float` can only turn contraction *off*, and it states
+a requirement of the dependency's own arithmetic — which you compile. So a dependency that declares it
+gets it, in your build, and it is one-way: a dependency's `false` takes nothing from a consumer (or a
+sibling) that asked. This was not true of `0.9.169` as shipped, where the key was grouped with the
+other two — and a raw `-ffp-contract=off` in a dependency's `cflags` propagated while the first-class
+key replacing it did not.
+
 `runtime` is `"static"` or `"dynamic"` and says how the *language's own* runtime is linked — see
 [Runtime linkage](#runtime-linkage) below. Every key is optional; omitting one takes the target's
 default.
@@ -275,9 +284,8 @@ What a dependency **cannot** do is redefine your build:
 | it contributes | it does not |
 |---|---|
 | `cflags`, `ldflags`, `link`, `csources`, `jsLibraries`, `emSettings` | `cc`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
-| | `no-heap` — it changes what compiles, program-wide |
+| `reproducible-float` — it can only turn contraction off, and its own arithmetic is what you compile | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
-| | `reproducible-float` — a whole-artifact numerics decision |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
 resolve against *your* working directory rather than against the package — make it absolute. And a

@@ -2585,6 +2585,13 @@ struct BuildSettings {
     std::vector<std::string> cflags, ldflags, link;
     std::vector<std::string> csources, jsLibraries;   // as written, relative to `manifestPath`
     std::vector<std::pair<std::string, EmValue>> emSettings;
+    // The one boolean that travels. `no-heap` and `webgpu` are whole-artifact decisions a dependency
+    // must not make for its consumer (one changes what compiles, the other demands an SDK) and are read
+    // from the root only. This one can only turn contraction OFF, and it states a requirement of the
+    // dependency's OWN arithmetic — which the consumer compiles. Shipped in 0.9.169 grouped with the
+    // other two, and the first consumer's raw `-ffp-contract=off` cflag (which propagates) would have
+    // silently lost its guarantee on migrating to the key.
+    bool reproFloat = false;
 };
 
 // One resolved C source: who declared it, and where it actually is. `owner` is what keeps two packages
@@ -4076,6 +4083,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.linkOut = &out.link; r.cflagsOut = &out.cflags; r.ldflagsOut = &out.ldflags;
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries;
     r.emSettingsOut = &out.emSettings;
+    r.reproFloatOut = &out.reproFloat;
     if (!r.parse()) {
         err = r.err.empty() ? "malformed JSON" : r.err;
         out = BuildSettings();
@@ -4272,6 +4280,7 @@ static bool loadBuildSettings(const std::string& manifestPath, const std::string
     out.cflags.insert(out.cflags.end(),   t->second.cflags.begin(),  t->second.cflags.end());
     out.ldflags.insert(out.ldflags.end(), t->second.ldflags.begin(), t->second.ldflags.end());
     if (t->second.linkSet) out.link = t->second.link;   // replaces THIS manifest's own list, nobody else's
+    if (t->second.reproFloatSet) out.reproFloat = t->second.reproFloat;   // same: this manifest's own tier
     return true;
 }
 
@@ -4666,6 +4675,10 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
                 depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
                 depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
+                // An OR, one way: a dependency that needs reproducible arithmetic gets it, and no
+                // dependency's `false` can take it from a consumer (or a sibling) that asked. The
+                // consumer compiles the dependency's code, so the requirement is the consumer's too.
+                if (bs.reproFloat) g_target.reproFloat = true;
                 // A dependency wrapping a C library ships the shim that binds it, and the consumer
                 // compiles it — which is the whole reason `csources` propagates. Resolved against the
                 // DECLARING manifest, lexically (see the symlink note above).

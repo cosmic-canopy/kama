@@ -559,6 +559,55 @@ printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
     && bad "a project that never asked for it got -ffp-contract=off" \
     || ok "...and a project that never asked for it gets nothing"
 
+# A DEPENDENCY's `reproducible-float` reaches the consumer. Unlike `no-heap` and `webgpu` (asserted
+# above NOT to propagate) this key can only turn contraction off, and it states a requirement of the
+# dependency's own arithmetic — which the consumer compiles. 0.9.169 shipped it grouped with the other
+# two, so the first consumer's raw `-ffp-contract=off` cflag propagated and the key replacing it did not.
+app rfldep geo <<'JSON'
+{ "name": "rfldep", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/rfldep/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "reproducible-float": true,
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+line=$(cmdline rfldep)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && ok "a dependency's project-tier \`reproducible-float\` reaches the consumer's build" \
+    || { bad "a dependency's \`reproducible-float\` did not reach the consumer's build"
+         printf '%s\n' "$line" | sed 's/^/    /' >&2; }
+
+# ...from the dependency's TARGET tier too — its own `select.TARGET` overrides its own project tier,
+# per-manifest, before the join (the same rule `link` follows).
+cat > "$tmp/rfldep/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "select": { "TARGET": { "HOST": { "reproducible-float": true } } },
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+line=$(cmdline rfldep)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && ok "...and from the dependency's target tier" \
+    || bad "a dependency's target-tier \`reproducible-float\` did not reach the consumer's build"
+
+# ...and it is ONE-WAY: a dependency saying `false` takes nothing from a consumer that asked.
+app rfldepoff geo <<'JSON'
+{ "name": "rfldepoff", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "reproducible-float": true,
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/rfldepoff/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "reproducible-float": false,
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+line=$(cmdline rfldepoff)
+printf '%s' "$line" | grep -qF -- "-ffp-contract=off" \
+    && ok "...and a dependency's \`false\` cannot turn it off for a consumer that asked" \
+    || bad "a dependency's \`reproducible-float: false\` overrode the consumer's \`true\`"
+
 # ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a broken dependency manifest is fatal to a build, not to a query"
 
