@@ -1892,6 +1892,7 @@ private:
     void rejectStoredInterface(SharedIdentifier ty, const char* whereClause, int line, bool alsoView = false);
     void rejectMintProtocolValue(SharedIdentifier ty, const char* what, int line);   // a `@viewable` contract is not a value
     std::string smartPtrInvalidate(const std::string& expr, CollKind kind, bool ifaceElem = false);  // null the dtor's guard field
+    std::string moveNullStmt(const std::string& cls, const std::string& expr) const;   // the moved-FROM intrinsic's reset, by shape
     // Cross-element smart-ptr UPCAST: widen a CONCRETE-element owning handle into a
     // CONTRACT-element (intrinsic fat) handle — the Liskov "is a" (`Shared<Shape> s = a;`
     // where `a: Shared<Sq>`). The concrete side is a library `Shared`/`Owned` struct (thin

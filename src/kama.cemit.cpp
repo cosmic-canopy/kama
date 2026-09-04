@@ -6036,8 +6036,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             else { indent(depth); *_out << nm << " = " << copyCall(ty, emitExpression(init)) << ";\n"; }
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer.
-                        else { indent(depth); *_out << "(" << emitExpression(init) << ").data = NULL; ("
-                                                     << emitExpression(init) << ").len = 0;\n"; }
+                        else { indent(depth); *_out << moveNullStmt(ty, emitExpression(init)) << "\n"; }
                     } else if (isMoveOnlyValue(ty) && isNamedValue(init.get())) {
                         // A destructible `resource` value. Movable is universal: `give` MOVES (relocate —
                         // the `=` blit already transferred the bytes; move-tracking suppresses the source
@@ -6554,7 +6553,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     indent(depth); *_out << et << "__dtor(" << sp << ");\n";           // release the old element
                     indent(depth); *_out << "*" << sp << " = " << tv << ";\n";         // move/copy the new one in
                     if (!doCopy && named) {   // consume the moved source (a copy leaves it valid; a fresh rvalue has none)
-                        if (isColl) { indent(depth); *_out << "(" << src << ").data = NULL; (" << src << ").len = 0;\n"; }
+                        if (isColl) { indent(depth); *_out << moveNullStmt(et, src) << "\n"; }
                         else { std::string mv = moveOnlySource(rhs, n->line); if (!mv.empty()) markMoved(mv); }
                     }
                     return;
@@ -6783,7 +6782,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line);
                     indent(depth); *_out << lty << "__dtor(&" << b << ");\n";
                     indent(depth); *_out << b << " = " << src << ";\n";
-                    indent(depth); *_out << "(" << src << ").data = NULL; (" << src << ").len = 0;\n";
+                    indent(depth); *_out << moveNullStmt(lty, src) << "\n";
                     if (!mv.empty()) markMoved(mv);
                     return;
                 }
@@ -13276,6 +13275,20 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind,
     return expr + ".ctrl = NULL; " + expr + (ifaceElem ? ".obj = NULL;" : ".ptr = NULL;");  // Shared/Weak guard on ctrl
 }
 
+// After `give` relocates an intrinsic collection's struct, the SOURCE must read as empty so its scope-drop
+// is a no-op. The reset is the struct's own shape, and there are two: a `string`/buffer is `{data, len}`,
+// a `BindableFunctionPtr` is `{obj, ctrl, fn, elemdtor}` (kama_runtime.h, KAMA_BINDABLE_TYPE). Every
+// hand-off site spelled the first shape inline, so `give`-ing a named bindable into a field or a by-value
+// parameter emitted `.data = NULL` against a struct that has no `data` and died in clang — a bindable
+// could be built and called, and never stored anywhere. One helper, five sites, dispatched on the class.
+std::string CEmitter::moveNullStmt(const std::string& cls, const std::string& expr) const
+{
+    if (isBindableClass(cls))
+        return "(" + expr + ").obj = NULL; (" + expr + ").ctrl = NULL; (" + expr + ").fn = NULL; ("
+             + expr + ").elemdtor = NULL;";
+    return "(" + expr + ").data = NULL; (" + expr + ").len = 0;";
+}
+
 // ---- Resource-value move analysis -----------------------------------------
 
 // A move-only VALUE: a destructible class value that isn't a smart-ptr / collection / extern
@@ -16846,8 +16859,7 @@ std::string CEmitter::emitReorderedCall(const std::string& cName, const std::str
                     s += copyCall(p.className, val);
                 } else {                                             // give = move: relocate + null source
                     std::string t = "__kama_carg" + std::to_string(_tempCounter++);
-                    std::string blit = p.className + " " + t + " = (" + val + "); ("
-                                     + val + ").data = NULL; (" + val + ").len = 0;";
+                    std::string blit = p.className + " " + t + " = (" + val + "); " + moveNullStmt(p.className, val);
                     if (_hoistOK) { _hoisted.push_back(blit); s += t; }
                     else          { s += "({ " + blit + " " + t + "; })"; }
                     std::string mv = moveOnlySource(argExpr, srcLine); if (!mv.empty()) markMoved(mv);
@@ -19774,8 +19786,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                                 "constructed value to a local first", srcLine);
                 else {
                     std::string t = "__varg" + std::to_string(_tempCounter++);
-                    _hoisted.push_back(fcls + " " + t + " = (" + val + "); ("
-                                       + val + ").data = NULL; (" + val + ").len = 0;");
+                    _hoisted.push_back(fcls + " " + t + " = (" + val + "); " + moveNullStmt(fcls, val));
                     field = t;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
@@ -23538,6 +23549,13 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
                             return emitReorderedCall("(" + recvPtr + ")->" + method, "", sig.params,
                                                      args, srcLine);
+                        }
+                        // ...and its bound twin: a `BindableFunctionPtr` FIELD, invoked. The local arm
+                        // (`emitBindableInvoke` on a bare local) was the only spelling, so a handler type
+                        // holding one — the shape a UI event table is — could store it and never fire it.
+                        if (isBindableClass(fc)) {
+                            canAccess(fo, f.visibility, method, srcLine);
+                            return emitBindableInvoke("(" + recvPtr + ")->" + method, fc, args, srcLine);
                         }
                     }
         }

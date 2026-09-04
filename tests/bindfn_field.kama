@@ -1,0 +1,35 @@
+// A `BindableFunctionPtr` stored in a FIELD and fired through it — the handler-type shape (captures + a
+// bound callable in one `resource`). Two holes closed at once, found while probing sendability:
+//   1. `give`-ing a named bindable into a ctor parameter or a field emitted the `string`/buffer reset
+//      (`.data = NULL; .len = 0`) against a struct that has no `data`, and died in clang — a bindable could
+//      be built and called as a local, and never STORED anywhere (moveNullStmt now resets by shape).
+//   2. `this.cb(d: 41)` reported "`Handler` has no method `cb`": only a bare LOCAL of bindable type could
+//      be invoked (the field-of-`fnptr` arm had no bindable twin).
+// RAII still holds across the store: the bound `Probe` drops EXACTLY ONCE, when the handler that owns the
+// bindable drops (trace fold: one drop -> 9, a double drop -> 288, a leak -> 0).
+import { std::memory::Owned };
+extern fn void kama_trace(int32 code);
+extern fn int32 kama_trace_get();
+unsafe fn int32 traceGet() { return kama_trace_get(); }
+fnptr int32 Get(int32 d);
+type resource Probe {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    unsafe ~Probe() { kama_trace(code: 9); }
+    public fn int32 read(int32 d) { return this.id + d; }
+}
+type resource Handler {
+    BindableFunctionPtr<Get> cb;
+    public ctor make(BindableFunctionPtr<Get> cb) { this.cb = give cb; }   // hole 1: give into a param, then a field
+    public fn int32 fire() { return this.cb(d: 41); }                       // hole 2: invoke through the field
+}
+fn int32 use() {
+    Owned<Probe> p = new Probe.make(id: 1);
+    BindableFunctionPtr<Get> g = new BindableFunctionPtr<Get>(obj: p, method: Probe::read);
+    Handler h = Handler.make(cb: give g);
+    return h.fire();                          // 42; `h` drops here -> the bindable -> Probe::~ once
+}
+fn int32 main() {
+    if (use() != 42) { return 1; }
+    return traceGet();                        // single dtor -> 9
+}
