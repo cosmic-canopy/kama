@@ -25,13 +25,13 @@ and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundati
 - **Contracts + virtual dispatch** — first-class interfaces (fat pointers) and inheritance vtables, so a
   `type contract HttpHandler { fn Result<Response, Error> handle(ref Request); }` with many implementations
   (middleware, route handlers) works today. This is the plugin/middleware backbone.
-- **Intrinsic serialization + JSON** — `@generate` Serialize/Deserialize with a `std::serialization::json` backend
+- **Intrinsic serialization + JSON** — `@generate` Serializable/Deserializable with a `std::serialization::json` backend
   (`encode`/`decode::<T>`). JSON request/response bodies work out of the box.
 - **UTF-8 strings + growable bytes** — `string` (find/split/substring/trim/replace/startsWith/…, byte index `s[i]`,
   `.chars()` codepoints), `DynamicArray<uint8>` as a growable buffer, and `View<T>` for non-owning slices — enough
   to hand-parse HTTP/1.1 (the `examples/httpd` static server proves the composition).
 - **Callables** — free `fnptr` + `BindableFunctionPtr<Sig>` (binds a receiver object) cover handler registration.
-- **String formatting + interpolation** — the `Format` contract + `Formatter` sink, and `${expr}`
+- **String formatting + interpolation** — the `Formattable` contract + `Formatter` sink, and `${expr}`
   interpolation (compile-time, statically checked). Covers logging + response text today; the planned **tagged
   strings** (`html"…"` auto-escaping holes, `sql"…"` parameterized queries) target exactly the web XSS/injection
   safety story, and the AST is already tag-ready. (See [SPEC.md](SPEC.md) "Formatting & string interpolation".)

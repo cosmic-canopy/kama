@@ -1,1 +1,1 @@
-`@generate(Serialize, Deserialize)` applies only to a plain
+`@generate(Serializable, Deserializable)` applies only to a plain

@@ -7,17 +7,17 @@ import { std::serialization::json::decode, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Sq implements Shape {
     @field int32 side;
     public ctor make(int32 side) { this.side = side; }
     public fn int32 area() { return this.side * this.side; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Tag { @field int32 n; public ctor make(int32 n) { this.n = n; } }   // a NON-Shape graph node
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Scene {
     @field Shared<Shape> a;   // polymorphic edge
     @field Shared<Tag> t;     // concrete edge -> makes `Tag` a graph node

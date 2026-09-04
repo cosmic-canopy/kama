@@ -11,7 +11,7 @@ import {
     std::collections::DynamicArray,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Neg {
     @field int8  a;
     @field int16 b;

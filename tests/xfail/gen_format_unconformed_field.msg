@@ -1,1 +1,1 @@
-implements Format
+implements Formattable

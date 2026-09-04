@@ -36,7 +36,7 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
 type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
-                                  Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>],
+                                  Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
                                   Sendable when [T: Sendable, A: Sendable] {
     // Field defaults ARE the empty state, declared once here instead of repeated in four ctors
     // (force-explicit-field-init: a primitive or raw `UnsafePtr` no longer rides silently on `= {0}`).
@@ -244,13 +244,13 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         return 0 - 1;
     }
 
-    // --- Serialization (present only when the element is Serialize/Deserialize) ---
+    // --- Serialization (present only when the element is Serializable/Deserializable) ---
     // The element method must be called through a NAMEABLE `ref T` (like `indexOf`'s `equals`), so a
     // primitive element's intrinsic `serialize`/`deserialize` resolves — a raw buffer element `this[i]`
     // isn't a nameable receiver. Hence the `serElem` helper.
-    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serializable] { return e.serialize(w: w); }
     // A JSON array: each element serialized in order — a bad element write propagates its boxed error.
-    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
         while (i < this.len) {
@@ -263,7 +263,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     }
     // Reconstruct from a JSON array — a fresh list, each element read fallibly and moved in. A bad element
     // read propagates its boxed error (dropping the partial list via RAII).
-    public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize<T>] {
+    public ctor Result<DynamicArray<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

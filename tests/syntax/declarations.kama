@@ -8,7 +8,7 @@
 // The second oracle is the point: a grammar assertion about a spelling the compiler rejects is worthless.
 // It corrected this file four times over — the drafts used `fn name() -> T` (kama has no `->`; a function
 // is `fn <returnType> name(…)`, C-style), a bare `ctor(…)` (a ctor is NAMED: `ctor make(…)`), a bare
-// `@generate` (it needs at least one of Serialize/Deserialize) and a `type abstract resource` with no
+// `@generate` (it needs at least one of Serializable/Deserializable) and a `type abstract resource` with no
 // overridable method. Attributes are also top-level-only: `public @noheap fn` and every other ordering
 // fails to parse, so there is no indented attribute here to look at.
 

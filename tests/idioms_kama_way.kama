@@ -12,8 +12,8 @@ type resource Counter {
     public fn int32 value() { return this.n; }
 }
 
-// (2) `@generate(Serialize)` requires EVERY field to be marked `@field` or `@skip`.
-@generate(Serialize)
+// (2) `@generate(Serializable)` requires EVERY field to be marked `@field` or `@skip`.
+@generate(Serializable)
 type value Point {
     @field int32 x;
     @skip  int32 cachedHash;

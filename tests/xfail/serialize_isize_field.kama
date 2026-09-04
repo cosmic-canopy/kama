@@ -1,6 +1,6 @@
-// `isize`/`usize` implement neither `Serialize` nor `Deserialize`, ON PURPOSE: they are the only
+// `isize`/`usize` implement neither `Serializable` nor `Deserializable`, ON PURPOSE: they are the only
 // platform-varying types (`ptrdiff_t`/`size_t` — 8 bytes natively, 4 on wasm32), so a field of that type
-// has no wire format. The negative claim lives in prelude/global.kama above the `Serialize` block and in
+// has no wire format. The negative claim lives in prelude/global.kama above the `Serializable` block and in
 // SPEC's `isize` section; this fixture is what holds it down.
 //
 // ⚠️ IT MUST FAIL AS A KAMA ERROR, not as a C one. Until 0.9.136 this exact program produced a clean kama
@@ -8,7 +8,7 @@
 // `isize__serialize` that is never defined. Zero kama diagnostics for a defect kama could see. An xfail
 // that only asserts "this does not build" cannot tell those two apart, which is why the `.msg` beside this
 // pins the wording of the kama diagnostic.
-@generate(Serialize)
+@generate(Serializable)
 type value Record {
     @field public isize offset;
     @field public int32 tag;

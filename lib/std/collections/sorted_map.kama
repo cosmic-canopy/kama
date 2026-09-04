@@ -429,9 +429,9 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
     // primitive element's intrinsic `serialize` resolves) — the map serializes to a SORTED pair array.
-    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
-    public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serialize, V: Serialize] {
+    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serializable] { return v.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) {
@@ -461,8 +461,8 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 // iterator can detect mid-iteration mutation.
 type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
-                   Serialize when [K: Serialize, V: Serialize],
-                   Deserialize<This> when [K: Deserialize<K>, V: Deserialize<V>],
+                   Serializable when [K: Serializable, V: Serializable],
+                   Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>],
                    Sendable when [K: Sendable, V: Sendable, A: Sendable] {
     // The ROOT box is drawn from `GlobalAllocator` (the `Owned`'s A defaults to Global), independent of
     // the node's own `A`: a bare `new` into a stateless-allocator box is allowed for any pointee A and
@@ -557,19 +557,19 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         return give result;
     }
 
-    // Serialize as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
-    // order is hash-arbitrary). Deserialize `put`s each pair back (the tree re-sorts).
-    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    // Serializable as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
+    // order is hash-arbitrary). Deserializable `put`s each pair back (the tree re-sorts).
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w);
         match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    // Deserialize is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
+    // Deserializable is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the
     // first `put`). Same convention as the other collections' A-ignoring deserialize.
-    public ctor Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize<K>, V: Deserialize<V>] {
+    public ctor Result<SortedMap<K,V>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>] {
         SortedMap<K,V> result = SortedMap.empty();
         r.beginArray();
         while (r.moreElems()) {

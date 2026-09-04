@@ -13,7 +13,7 @@ import {
     std::serialization::json::decodeFrom,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Rec {
     @field int32 id;
     @field string name;

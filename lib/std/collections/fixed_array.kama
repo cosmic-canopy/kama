@@ -27,7 +27,7 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
 // `size` elements is live from construction (zero-initialized) to drop — unlike `DynamicArray`, which tracks a
 // separate `len`. Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<View<T>>,
-                                  Serialize when [T: Serialize], Sendable when [T: Sendable, A: Sendable] {
+                                  Serializable when [T: Serializable], Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
@@ -102,11 +102,11 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         return result;
     }
 
-    // Serialize as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserialize is a
+    // Serializable as a JSON array (element method via a nameable `ref T`, like `indexOf`). Deserializable is a
     // follow-up: an `FixedArray` is fixed-size but a JSON array's length is unknown until read, and transferring a
     // temp `DynamicArray`'s buffer into an `FixedArray` without double-dropping resource elements needs a buffer-steal ctor.
-    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
-    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serializable] { return e.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
         w.beginArray(count: cast<usize>(this.size));
         isize i = 0;
         while (i < this.size) {

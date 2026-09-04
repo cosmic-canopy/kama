@@ -1,6 +1,6 @@
 // Optional<T> fields serialize as the inner value (Some) or JSON null (None).
 import { std::serialization::json::encode };
-@generate(Serialize)
+@generate(Serializable)
 type value Node {
     @field int32 id;
     @field Optional<int32> parent;

@@ -716,7 +716,7 @@ public:
 };
 
 // `@name` / `@name(args)` — a declaration attribute (serialization metadata + codegen trigger), attached to
-// a type declaration or a field. `args` reuses ArgumentNode: a BARE entry (`@generate(Serialize)`) carries
+// a type declaration or a field. `args` reuses ArgumentNode: a BARE entry (`@generate(Serializable)`) carries
 // its identifier in `name` with a null `expression`; a NAMED entry (`@field(name: "wire")`) carries the key
 // in `name` and the value in `expression`.
 class AttributeNode : public ExpressionNode {
@@ -1200,7 +1200,7 @@ public:
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedIdentifierList typeDefaults; // per-param default type (`= …`) parallel to typeParams; null entry = no default
-    SharedAttributeList attributes;  // `@generate(Serialize, Deserialize)` on the enum (null when un-attributed)
+    SharedAttributeList attributes;  // `@generate(Serializable, Deserializable)` on the enum (null when un-attributed)
     // `type enum E : uint8 implements C, D { A, B; …methods… }` — the conformance clause and the members
     // that satisfy it. An enum is a full type kind, so it declares conformance inline like every other
     // kind; before this it had no `class_base_opt` at all and needed a retroactive `implements C for E`.
@@ -1324,7 +1324,7 @@ inline void harvestUnitFacts(const SharedCompilationUnit& unit)
                 for (auto& var : *v->variables)
                     if (var && var->name && var->name->value) unit->topLevelNames.insert(*var->name->value);
         } else if (dynamic_cast<IntrinsicImplNode*>(d)) {
-            // `type intrinsic <int32> implements FromStr { … }` registers a conformance for a PRIMITIVE,
+            // `type intrinsic <int32> implements Parseable { … }` registers a conformance for a PRIMITIVE,
             // program-wide, under no name of its own. Two files in lib/ have one.
             unit->unprunable = true;
         } else if (auto* inc = dynamic_cast<IncludeNode*>(d)) {

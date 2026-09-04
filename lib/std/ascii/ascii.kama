@@ -9,7 +9,7 @@ export { isDigit, isHexDigit, isAlpha, isAlnum, isSpace, isUpper, isLower, isPun
 //
 // These are FREE FUNCTIONS rather than methods on `char`, and not by preference: `char` and `uint32`
 // share one C type, so the conformance registry cannot hold a separate entry for `char` (the same reason
-// `char` has no `Format`/`Serialize` conformance).
+// `char` has no `Formattable`/`Serializable` conformance).
 //
 // Every predicate is FALSE for a non-ASCII codepoint rather than guessing, and `toLower`/`toUpper`
 // return such a codepoint unchanged — so they can never corrupt one, which is what makes them safe to

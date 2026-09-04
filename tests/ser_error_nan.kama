@@ -2,7 +2,7 @@
 // represent a non-finite float, so encoding one surfaces `Err(SerError::NotRepresentable)` — never a
 // half-written string — recovered via `err.as<SerError>()`. A finite value encodes to `Ok`.
 import { std::serialization::json::encode };
-@generate(Serialize)
+@generate(Serializable)
 type value Measure {
     @field float64 v;
     public ctor make(float64 v) { this.v = v; }

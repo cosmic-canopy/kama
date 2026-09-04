@@ -6,7 +6,7 @@ import {
     std::collections::DynamicArray,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Rec {   // owns a `string` -> must be a resource (move-only)
     @field int32 x;
     @field float32 f;

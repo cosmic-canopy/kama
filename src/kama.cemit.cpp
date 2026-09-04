@@ -2889,7 +2889,7 @@ std::string CEmitter::cType(SharedIdentifier type)
 // The key a type's contract conformances are filed under: the KAMA spelling for a scalar primitive, the C
 // name for everything else (`string` -> `kama_string`, a user type -> its mangle). The distinction exists
 // because `cType` is not injective — `char` and `uint32` both emit `uint32_t`, so a cType-keyed registry
-// could hold a `Format` for one of them and not the other. Nothing else in the compiler collides.
+// could hold a `Formattable` for one of them and not the other. Nothing else in the compiler collides.
 //
 // The `_typeSubst` hop comes FIRST, exactly as in `cType` and `mangleElem`: inside a monomorph a parameter's
 // recorded type node is still the unsubstituted `T`, and reading `builtInVal` off that would fall through to
@@ -2918,7 +2918,7 @@ std::string CEmitter::primKey(SharedIdentifier type)
         // arm here, so they fell through to `return cType(type)` and their conformance key became the C
         // name — `ptrdiff_t`/`size_t`. Nothing chose that; it was the fall-through. It leaked into
         // diagnostics ("`ptrdiff_t` has no method `format`") and, worse, it disagreed with `mangleElem`,
-        // which DID spell them `isize`/`usize`: `@generate(Serialize)` over an `isize` field emitted a
+        // which DID spell them `isize`/`usize`: `@generate(Serializable)` over an `isize` field emitted a
         // call to `ptrdiff_t__serialize` beside a `Result_isize_…` declaration, which is two names for
         // one type in a single translation unit.
         case IDENTIFIER_ISIZE_VAL:   return "isize";
@@ -3606,7 +3606,7 @@ std::string CEmitter::emitUnaryUserOp(int opToken, SharedExpression operand, int
 
 // String interpolation `"a ${x} b"` lowers to a Formatter build, hoisted into the enclosing statement (ISO
 // C — no statement-expressions): a `Formatter` temp, a `writeStr` per literal part + a `<hole>.format(ref f)`
-// per hole (synthesized method-call ASTs, so EVERY hole type goes through the real Format dispatch), then a
+// per hole (synthesized method-call ASTs, so EVERY hole type goes through the real Formattable dispatch), then a
 // `finish()` whose owned-string temp is the expression's value (scope-dropped like any string rvalue). The
 // whole nested value materializes in ONE growing buffer — no O(n²) concat.
 std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
@@ -3653,8 +3653,8 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
 }
 
 // Render ONE interpolation hole into the Formatter named `fv` (a hoisted C temp): a `${x:spec}` applies its
-// specifier via a Formatter fast-path; a `char` renders its CHARACTER (char has no Format conformance — it
-// shares uint32's cType); everything else dispatches through the real `Format` contract on the hole's static
+// specifier via a Formatter fast-path; a `char` renders its CHARACTER (char has no Formattable conformance — it
+// shares uint32's cType); everything else dispatches through the real `Formattable` contract on the hole's static
 // type. Shared by the plain lowering above and the per-hole render in emitTaggedInterpolation.
 void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec)
 {
@@ -3663,15 +3663,15 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     auto ident = [&](const std::string& s) { return synthId(s); };
     if (spec) { emitHoleSpec(fv, hole, *spec); return; }
     if (exprIsChar(hole)) { _hoisted.push_back("Formatter__writeChar(&" + fv + ", " + emitExpression(hole) + ");"); return; }
-    // `${x}` renders through the `Format` contract. Check that BEFORE synthesizing the call: the
+    // `${x}` renders through the `Formattable` contract. Check that BEFORE synthesizing the call: the
     // synthesized node carries the synth context's line (1), so letting it fail inside emitDispatch
-    // reported `unknown method` against line 1 of the user's file and never named `Format`, the type, or
+    // reported `unknown method` against line 1 of the user's file and never named `Formattable`, the type, or
     // even the method — the one error a reader could act on, missing all four.
     {
         std::string hc = exprClass(hole);
-        if (!hc.empty() && _classes.count(hc) && !satisfiesBound(hc, "Format")) {
+        if (!hc.empty() && _classes.count(hc) && !satisfiesBound(hc, "Formattable")) {
             unsupported(("`" + hc + "` cannot be interpolated — `${…}` renders a value through the "
-                         "`Format` contract; add `implements Format` (or `@generate(Format)`), or call a "
+                         "`Formattable` contract; add `implements Formattable` (or `@generate(Formattable)`), or call a "
                          "method that returns a string").c_str(), hole->line);
             return;   // reported; synthesizing the call would add a second error against the synth line
         }
@@ -3681,7 +3681,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
         // the interpolation. `isize`/`usize` were the ones that hit it — they were absent from every
         // `type intrinsic <…> implements …` list in the prelude until 0.9.136, and they are exactly the
         // types a `length()` or an index has, so the recommended type for every length was the one that
-        // could not be logged. They implement `Format` now; this check stays because it is not about
+        // could not be logged. They implement `Formattable` now; this check stays because it is not about
         // them — any primitive reaching a hole without a conformance takes the same road.
         if (hc.empty()) {
             SharedIdentifier htn = receiverTypeNode(hole);
@@ -3689,7 +3689,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
             const std::string ck = receiverScalarCType(hole);
             if (!hk.empty() && !ck.empty() && !primConformance(primKeyOfCType(ck)))
                 unsupported(("`" + hk + "` cannot be interpolated — `${…}` renders a value through the "
-                             "`Format` contract, and no `Format` is implemented for `" + hk
+                             "`Formattable` contract, and no `Formattable` is implemented for `" + hk
                              + "`. Widen it at the hole (`cast<int64>(…)`) or render it another way").c_str(),
                             hole->line);
         }
@@ -3706,7 +3706,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     call->line = hole->line;
     // This call is the COMPILER's lowering of `${x}`, not something the author wrote, so the
     // contract-scope gate does not apply to it: the rule is about what a primitive's API looks like in
-    // SOURCE, and interpolation is how the language itself reaches `Format`.
+    // SOURCE, and interpolation is how the language itself reaches `Formattable`.
     bool prevSynth = _inSynthDispatch; _inSynthDispatch = true;
     _hoisted.push_back(emitExpression(call) + ";");
     _inSynthDispatch = prevSynth;
@@ -3716,7 +3716,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
 // them into two C arrays, wrap a prelude `Template` (borrowed `UnsafePtr<string>` + counts) over them, and call the
 // tag function `fn R <tag>(ref Template)`. The tag decides how literals (trusted) and holes (values) combine —
 // escaping, dedenting, or `?`-parameter binding (holes stay out-of-band → injection-safe by construction).
-// Holes render via the SAME per-hole path as plain interpolation (spec/char/Format), so specs compose for free.
+// Holes render via the SAME per-hole path as plain interpolation (spec/char/Formattable), so specs compose for free.
 std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
 {
     CodeGenContext& ctx = *_synthCtx;
@@ -7627,10 +7627,10 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 _genericTypeCtx[name]    = _nsCtx;
                 _genericTypes[name]      = ci;
             } else {
-                // `@generate` serialization for a concrete tagged enum: register the Serialize/Deserialize
+                // `@generate` serialization for a concrete tagged enum: register the Serializable/Deserializable
                 // conformance + synthesized methods so the emitter emits `E__serialize`/`E__deserialize` in C
                 // (externally-tagged `{"tag":…[,"value":{…}]}`). An enum can't carry a fat-pointer method, so
-                // the conformance is nominal-only (staticOnlyInterfaces → static dispatch, satisfies a `<T: Serialize>`
+                // the conformance is nominal-only (staticOnlyInterfaces → static dispatch, satisfies a `<T: Serializable>`
                 // bound + resolves `e.serialize()`); the body is emitted separately (emitEnumSerializeDefinition).
                 bool eser = false, ede = false;
                 if (ed->attributes)
@@ -7638,14 +7638,14 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                         if (!at || !at->name || *at->name != "generate" || !at->args) continue;
                         for (auto& a : *at->args)
                             if (a && a->name && a->name->value && !a->expression) {
-                                if      (*a->name->value == "Serialize")   eser = true;
-                                else if (*a->name->value == "Deserialize") ede = true;
-                                else unsupported("`@generate(...)` on an enum accepts only Serialize, Deserialize", ed->line);
+                                if      (*a->name->value == "Serializable")   eser = true;
+                                else if (*a->name->value == "Deserializable") ede = true;
+                                else unsupported("`@generate(...)` on an enum accepts only Serializable, Deserializable", ed->line);
                             }
                     }
                 if (eser) {
                     ci.genSerialize = true;
-                    ci.interfaces.push_back("Serialize"); ci.staticOnlyInterfaces.push_back("Serialize");
+                    ci.interfaces.push_back("Serializable"); ci.staticOnlyInterfaces.push_back("Serializable");
                     MethodInfo mi; mi.cName = name + "__serialize"; mi.visibility = Visibility::Public;
                     mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
                     mi.returnType = resultUnitOwnedErrorTypeNode();   // P4: fallible `Result<Unit, Owned<Error>>`
@@ -7653,13 +7653,13 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     ParamSig w; w.name = "w"; w.byRef = true; w.className = "Serializer"; mi.params.push_back(w);
                     ci.methods["serialize"] = mi;
                 }
-                // Deserialize needs a payload-less variant as the unknown-tag fallback (else defer, as before).
+                // Deserializable needs a payload-less variant as the unknown-tag fallback (else defer, as before).
                 bool hasUnit = false;
                 for (auto& v : ci.variants) if (v.payload.empty()) { hasUnit = true; break; }
                 if (ede && hasUnit) {
                     ci.genDeserialize = true;
                     {   // pinned: the conformance is `Deserialize_<Enum>`, not the bare name — see synthConformanceName
-                        std::string dn = synthConformanceName("Deserialize", name);
+                        std::string dn = synthConformanceName("Deserializable", name);
                         ci.interfaces.push_back(dn); ci.staticOnlyInterfaces.push_back(dn);
                     }
                     MethodInfo mi; mi.cName = name + "__deserialize"; mi.visibility = Visibility::Public;
@@ -7844,7 +7844,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         }
         ci.node = cd;
 
-        // `@generate(Serialize, Deserialize)` — opt this type into serialization codegen (pay-for-what-you-
+        // `@generate(Serializable, Deserializable)` — opt this type into serialization codegen (pay-for-what-you-
         // use: only a marked type gets the reflective helpers). Only the type-level `@generate` is valid
         // here; per-field attributes are read in the member loop below.
         if (cd->attributes)
@@ -7852,22 +7852,22 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if (!at || !at->name) continue;
                 if (*at->name == "generate") {
                     if (!at->args || at->args->empty())
-                        unsupported("`@generate(...)` needs at least one of Serialize, Deserialize, Format, "
+                        unsupported("`@generate(...)` needs at least one of Serializable, Deserializable, Formattable, "
                                     "Equatable, Hashable, of, zero", cd->line);
                     else for (auto& a : *at->args) {
-                        // bare identifier args only (Serialize/Deserialize/of/zero); a `key: value` form is invalid here
+                        // bare identifier args only (Serializable/Deserializable/of/zero); a `key: value` form is invalid here
                         std::string which = (a && a->name && a->name->value && !a->expression) ? *a->name->value : "";
-                        if      (which == "Serialize")   ci.genSerialize = true;
-                        else if (which == "Deserialize") ci.genDeserialize = true;
+                        if      (which == "Serializable")   ci.genSerialize = true;
+                        else if (which == "Deserializable") ci.genDeserialize = true;
                         else if (which == "of")   ci.genOf = true;     // bag ctor — validated + registered after fields (below)
                         else if (which == "zero") ci.genZero = true;
-                        else if (which == "Format") ci.genFormat = true;   // field-dump Format impl — registered below
+                        else if (which == "Formattable") ci.genFormat = true;   // field-dump Formattable impl — registered below
                         // Memberwise `equals` / field-walked `hash` + the nominal conformance — so a data bag
                         // becomes comparable (and a `Map` key) without hand-rolling an FNV loop. Rust's
                         // `#[derive(PartialEq, Hash)]`. Registered + validated after the fields are known.
                         else if (which == "Equatable") ci.genEquatable = true;
                         else if (which == "Hashable")  ci.genHashable = true;
-                        else unsupported("`@generate(...)` accepts only Serialize, Deserialize, Format, "
+                        else unsupported("`@generate(...)` accepts only Serializable, Deserializable, Formattable, "
                                          "Equatable, Hashable, of, zero", cd->line);
                     }
                 } else if (*at->name == "viewable") {
@@ -8024,7 +8024,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         }
                     if (!serGen && !ci.genFormat && fd->attributes && !fd->attributes->empty())
                         unsupported("field attributes (`@field`/`@skip`) require `@generate(...)` on the type", fd->line);
-                    // `@generate(Format)` honors `@skip` (omit a field from the dump) but does NOT require every
+                    // `@generate(Formattable)` honors `@skip` (omit a field from the dump) but does NOT require every
                     // field marked — a field dump needs no wire names, so marking would be pointless ceremony.
                     if (serGen && !fMarked)
                         unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
@@ -8432,16 +8432,16 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         // `@generate` tree struct that supplies NEITHER a hand-written impl NOR a driver-generated graph
         // impl — both land a method in `ci.methods`, so the `!count` guard makes hand-written / graph win.
         // Concrete product types only (a generic template specializes per instance; enums are driver-side).
-        // Registers the conformance exactly like `implements Serialize` (interfaces + method) so the normal
+        // Registers the conformance exactly like `implements Serializable` (interfaces + method) so the normal
         // vtable/dispatch machinery works; only the BODY is emitted specially (isSynthSer/isSynthDe).
         if (!(cd->typeParams && !cd->typeParams->empty()) && !ci.isVariant) {
             // Register the nominal conformance whenever `@generate` opts in — INDEPENDENT of whether the
             // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
             // still lands the type in `ci.methods`, so the `!count` guard below skips only the BODY synth;
-            // the type must still satisfy the `Serialize`/`Deserialize` bound (`decode::<T>` checks it).
+            // the type must still satisfy the `Serializable`/`Deserializable` bound (`decode::<T>` checks it).
             auto hasItf = [&](const std::string& n) { for (auto& i : ci.interfaces) if (i == n) return true; return false; };
             if (ci.genSerialize) {
-                if (!hasItf("Serialize")) ci.interfaces.push_back("Serialize");
+                if (!hasItf("Serializable")) ci.interfaces.push_back("Serializable");
                 if (!ci.methods.count("serialize")) {
                     MethodInfo mi; mi.cName = ci.name + "__serialize"; mi.visibility = Visibility::Public;
                     mi.isSynthSer = true; mi.isConst = true;   // writes to `w`, reads `this`
@@ -8452,7 +8452,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 }
             }
             if (ci.genDeserialize) {
-                if (!hasItf("Deserialize")) ci.interfaces.push_back(synthConformanceName("Deserialize", ci.name));
+                if (!hasItf("Deserializable")) ci.interfaces.push_back(synthConformanceName("Deserializable", ci.name));
                 if (!ci.methods.count("deserialize")) {
                     MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
                     // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
@@ -8466,12 +8466,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
                 }
             }
-            // `@generate(Format)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
-            // (`Type { f1: v1, … }`). The display analog of Serialize: register the nominal `Format`
+            // `@generate(Formattable)` — a synthesized infallible field-dump `fn void format(ref Formatter f)`
+            // (`Type { f1: v1, … }`). The display analog of Serializable: register the nominal `Formattable`
             // conformance + the synth method; a hand-written `format` wins via the `!count` guard (body only).
             // returnType stays null -> cType(null) == "void".
             if (ci.genFormat) {
-                if (!hasItf("Format")) ci.interfaces.push_back("Format");
+                if (!hasItf("Formattable")) ci.interfaces.push_back("Formattable");
                 if (!ci.methods.count("format")) {
                     MethodInfo mi; mi.cName = ci.name + "__format"; mi.visibility = Visibility::Public;
                     mi.isSynthFormat = true; mi.isConst = true;   // the dump writes to `f`, never to `this`
@@ -8521,7 +8521,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // hand-rolling an FNV loop. Structural equality remains OPT-IN — that is the whole stance; the
             // attribute is where you ask for it. A hand-written `equals`/`hash` wins via the `!count` guard
             // (body only — the conformance is still registered). Per-field conformance is checked at emit,
-            // like `@generate(Format)`, because impl blocks are not all collected yet at this point.
+            // like `@generate(Formattable)`, because impl blocks are not all collected yet at this point.
             if (ci.genEquatable) {
                 // `Equatable` PINS its parameter, so the conformance is recorded as `Equatable_<Type>`.
                 // There is no source node here to carry `<This>` — the attribute is the whole declaration —
@@ -8554,12 +8554,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             unsupported("`@generate(of, zero)` applies only to a plain transparent `value` (all public fields) "
                         "— not a generic or variant type; write a `ctor`", cd->line);
         } else if (ci.genFormat) {
-            // A generic `value<T>` template or a variant: `@generate(Format)` is out of scope for a first cut;
-            // write a hand `implements Format` (per-instance synthesis for generics is a later milestone).
-            unsupported("`@generate(Format)` applies only to a plain (non-generic, non-variant) type "
-                        "— write `implements Format` by hand for a generic or variant", cd->line);
+            // A generic `value<T>` template or a variant: `@generate(Formattable)` is out of scope for a first cut;
+            // write a hand `implements Formattable` (per-instance synthesis for generics is a later milestone).
+            unsupported("`@generate(Formattable)` applies only to a plain (non-generic, non-variant) type "
+                        "— write `implements Formattable` by hand for a generic or variant", cd->line);
         } else if (ci.genEquatable || ci.genHashable) {
-            // Same v1 scope as `@generate(Format)`: a generic template specializes per instance and a variant
+            // Same v1 scope as `@generate(Formattable)`: a generic template specializes per instance and a variant
             // needs per-tag walks — both are follow-ons (ROADMAP), not a silent half-derive.
             unsupported("`@generate(Equatable, Hashable)` applies only to a plain (non-generic, non-variant) "
                         "type — write `implements Equatable`/`Hashable` by hand for a generic or variant", cd->line);
@@ -8567,8 +8567,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // The only two kinds that had NO arm here, so they were accepted in silence: the type read as
             // conforming, nothing synthesized the conformance, and the first `encode(v: b)` died in the C
             // compiler on a missing `_F<file>__Box_int32__as_Serialize` vtable. Its four siblings above all say so.
-            unsupported("`@generate(Serialize, Deserialize)` applies only to a plain (non-generic, non-variant) "
-                        "type — write `implements Serialize`/`Deserialize` by hand for a generic or variant", cd->line);
+            unsupported("`@generate(Serializable, Deserializable)` applies only to a plain (non-generic, non-variant) "
+                        "type — write `implements Serializable`/`Deserializable` by hand for a generic or variant", cd->line);
         }
         // a generic TYPE template (`type value Box<T>`) is kept OUT of _classes — it is
         // specialized per concrete `Box<Arg>` at discovery. Its ClassInfo shape (T-typed fields/
@@ -9455,7 +9455,7 @@ void CEmitter::registerFixedViews()
         ci.methods["view"] = mi;
 
         // The grant. `Viewable<V>` is a generic contract, so its instance must be registered before it can
-        // be named — the same two-step `synthConformanceName` does for `Deserialize<T>` — and the instance
+        // be named — the same two-step `synthConformanceName` does for `Deserializable<T>` — and the instance
         // name is the one registerGenericContractInst computes: template + mangled args. `borrow` and
         // `parallel_for` read this to prove the host IS the thing being viewed rather than a type
         // forwarding somebody else's view, and here it states a fact: an `InlineArray` is
@@ -12152,7 +12152,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                     mi.arity      = m.params ? (int)m.params->size() : 0;
                 }
                 _classes[names[i]].methods[m.name] = mi;
-                // A contract may REQUIRE a ctor (`FromStr` requires `fromStr`, `HeapOwner` requires
+                // A contract may REQUIRE a ctor (`Parseable` requires `fromStr`, `HeapOwner` requires
                 // `adopt`), and construction resolves through `ctors`, not `methods` — the two are
                 // populated together everywhere else, and populating only one here made `T.fromStr(s: s)`
                 // report "`T` cannot be constructed — it has no `ctor`" against a bound that supplies
@@ -13456,7 +13456,7 @@ bool CEmitter::isCopyable(const std::string& cls) const
 // `Equatable` on `Duration` is `Equatable_Duration`. The compiler names these contracts bare in
 // several places that have no source AST to hang a `<This>` on — operator lowering (`==` -> `equals`),
 // `@generate(Equatable, Hashable)`, the `when [T: Equatable]` gate — and after the pin a bare name
-// matches no recorded conformance. Unpinned contracts (`Hashable`, `Format`, `Iterator`) come back
+// matches no recorded conformance. Unpinned contracts (`Hashable`, `Formattable`, `Iterator`) come back
 // unchanged, so every caller can ask unconditionally.
 std::string CEmitter::pinnedInstanceName(const std::string& bare, const std::string& t) const
 {
@@ -13469,17 +13469,17 @@ std::string CEmitter::pinnedInstanceName(const std::string& bare, const std::str
     return bare + "_" + t;
 }
 
-// Record a compiler-synthesized conformance to a contract that may be PINNED. `@generate(Deserialize)`
+// Record a compiler-synthesized conformance to a contract that may be PINNED. `@generate(Deserializable)`
 // pushes the contract's name straight into `ci.interfaces` — there is no `implements` clause for
 // resolveInterfaceNames to mangle — so a bare name is right only while the contract has no parameters.
-// Once `Deserialize` declared its factory it had to become `Deserialize<T is This>` (a contract may not
-// name `This` in a signature), and a bare `"Deserialize"` would then match nothing `satisfiesBound` looks
-// for: every `when [T: Deserialize<T>]` gate would silently read as unsatisfied, which is a whole
+// Once `Deserializable` declared its factory it had to become `Deserializable<T is This>` (a contract may not
+// name `This` in a signature), and a bare `"Deserializable"` would then match nothing `satisfiesBound` looks
+// for: every `when [T: Deserializable<T>]` gate would silently read as unsatisfied, which is a whole
 // subsystem quietly not emitted rather than a diagnostic. Mint the instance and hand back its name.
 std::string CEmitter::synthConformanceName(const std::string& bare, const std::string& typeName)
 {
     std::string inst = pinnedInstanceName(bare, typeName);
-    if (inst == bare) return bare;                    // not pinned (Serialize) — the bare name IS the name
+    if (inst == bare) return bare;                    // not pinned (Serializable) — the bare name IS the name
     auto args = std::make_shared<IdentifierList>();
     args->push_back(synthId(typeName));
     registerGenericContractInst(bare, args);
@@ -15302,10 +15302,10 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
         if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
         // A GRAPH NODE's `deserialize` is the compiler's two-pass driver and returns `Result<Shared<This>,
         // …>`, not `Result<This, …>` — rebuilding a cyclic object graph cannot hand back a value, so the
-        // root arrives behind a handle. BOTH sides here are compiler-written: `@generate(Deserialize)`
+        // root arrives behind a handle. BOTH sides here are compiler-written: `@generate(Deserializable)`
         // synthesizes the method and records the conformance, and there is no `implements` clause anyone
         // authored. This check exists to catch a DECLARED promise that drifted from its contract; there is
-        // no such promise to hold. (Surfaced the moment `Deserialize` stopped being an empty marker and
+        // no such promise to hold. (Surfaced the moment `Deserializable` stopped being an empty marker and
         // started declaring its factory — the mismatch was always there, with nothing to compare against.)
         if (mi->isSynthDe && tci.graphDeserialize) continue;
 
@@ -15645,7 +15645,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             // A PRIMITIVE serde conformance's `Result<scalar, Owned<Error>>` return (the ~12 monomorphs)
             // only matters when the program uses serde — skip registering it otherwise (the impl itself
             // is likewise gated off in emitHeaderContent). Every other return scans normally.
-            if (!((contract == "Serialize" || contract == "Deserialize") && isPrimitive && !_usesSerde))
+            if (!((contract == "Serializable" || contract == "Deserializable") && isPrimitive && !_usesSerde))
                 scanTypeForCollections(mi.returnType);  // a monomorph named only in an impl sig
             tci.methods[mname] = mi;
         }
@@ -15775,13 +15775,13 @@ SharedIdentifier CEmitter::intrinsicContract(IntrinsicImplNode* n) const
     return (*n->baseTypes->interfaces)[0];
 }
 
-// A primitive's `Serialize`/`Deserialize` conformance is only worth emitting when the program actually
+// A primitive's `Serializable`/`Deserializable` conformance is only worth emitting when the program actually
 // serializes something — otherwise every binary carries the ~24 prelude monomorphs. Same gate for both
 // impl spellings.
 bool CEmitter::serdeGatedOff(SharedIdentifier contract) const
 {
     return !_usesSerde && contract && contract->value &&
-           (*contract->value == "Serialize" || *contract->value == "Deserialize");
+           (*contract->value == "Serializable" || *contract->value == "Deserializable");
 }
 
 // The effective member list for ONE target of a `type intrinsic` set: the block's shared bodies, with any
@@ -15901,7 +15901,7 @@ void CEmitter::applyIntrinsicImpl(IntrinsicImplNode* n)
         // `isPrimitive` here means "a PRELUDE scalar/`string` conformance whose `Result<…>` return only
         // matters when the program uses serde" — NOT "has no _classes entry". `string` is exactly as
         // eligible as `int32`; keying off `_classes` instead would make `type intrinsic <string>
-        // implements Serialize` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
+        // implements Serializable` register monomorphs whose bodies `implEmitsOf` then refuses to emit.
         injectImplMethods(tci, members, contract, tkey, /*isPrimitive=*/tgt->builtInVal != 0);
         checkImplCompleteness(tci, contract, *tgt->value, n->line);
     }
@@ -16037,12 +16037,12 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                                   const std::vector<SharedIdentifier>& concrete)
 {
     for (size_t c = 0; c < whenParams.size() && c < whenBounds.size(); ++c) {
-        // Serde gate: a `when [T: Serialize]` / `[T: Deserialize]` conditional (a collection's `serialize`/
-        // `deserialize`/`serKey`/… and its `Serialize`/`Deserialize` interface) is treated as UNSATISFIED when
+        // Serde gate: a `when [T: Serializable]` / `[T: Deserializable]` conditional (a collection's `serialize`/
+        // `deserialize`/`serKey`/… and its `Serializable`/`Deserializable` interface) is treated as UNSATISFIED when
         // the program uses no serde — so none of that machinery is emitted, and it references no primitive
         // serde impl (which is likewise gated off). A program that truly serializes has a Serializer backend
         // or a `@generate` type, which sets `_usesSerde` (see collectProgram) and restores the normal check.
-        if (!_usesSerde && (whenBounds[c] == "Serialize" || whenBounds[c] == "Deserialize")) return false;
+        if (!_usesSerde && (whenBounds[c] == "Serializable" || whenBounds[c] == "Deserializable")) return false;
         bool held = false;
         for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
             if (params[i] == whenParams[c]) {
@@ -16271,8 +16271,8 @@ std::string CEmitter::heapOwnerTarget(const std::string& cls)
 
 // A bound names a contract in the scope where the TEMPLATE was written, not where it is called. Checking
 // it under the call site's namespace made a bound resolvable only if the caller had also imported the
-// contract — so `std::fmt`'s `parse<T: FromStr>` forced every user to `import` a marker contract they
-// never name, and the only reason `decode<T: Deserialize>` never showed this is that `Deserialize` lives
+// contract — so `std::fmt`'s `parse<T: Parseable>` forced every user to `import` a marker contract they
+// never name, and the only reason `decode<T: Deserializable>` never showed this is that `Deserializable` lives
 // in the always-visible prelude. Restores the caller's context on the way out.
 // Only the CONTRACT name moves scope. The concrete type argument still has to resolve at the call site
 // (it is the caller's `Point`), which is why this wraps the contract lookup alone and not all of
@@ -20394,7 +20394,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         }
         // Fallback: a bound type-parameter head (`T::make` in a generic `fn f<T: C>()`) substitutes to its
         // monomorphized concrete type, so a static contract method on a type-param resolves (e.g.
-        // `json::decode<T: Deserialize>` calling `T::deserialize(...)`, or a collection's `T::deserialize`).
+        // `json::decode<T: Deserializable>` calling `T::deserialize(...)`, or a collection's `T::deserialize`).
         // The concrete type may be a PRIMITIVE whose static conformance lives in `_primConformances`
         // (`int32::deserialize` -> `r.readI32()`), so consider both tables.
         // A bound type-parameter head substitutes to its monomorphized concrete type.
@@ -20416,7 +20416,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             // greppability the split exists for would be false: `grep '\.make('` would miss half the call
             // sites. This is the mirror of the `Type.staticFn(...)` rejection in emitDotOnTypeCtorCall; both
             // directions are now closed, so `.` is construction and `::` is scope resolution, always.
-            // No exemption for a type-parameter head: `T.deserialize(...)` in `fn f<T: Deserialize>()` is
+            // No exemption for a type-parameter head: `T.deserialize(...)` in `fn f<T: Deserializable>()` is
             // construction too, and dot-on-type resolves through the substitution just as `::` did. One
             // rule, no exceptions — which is the only way `grep '\.make('` finds every construction site.
             if (mi && mi->isCtor) {
@@ -21861,7 +21861,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isSynthSer) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__serialize(" << ci.name << "* self, Serializer* w);\n"; continue; }   // P4: Result<Unit, Owned<Error>>
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
-        if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << ci.name << "* self, Formatter* f);\n"; continue; }   // `@generate(Format)`
+        if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << ci.name << "* self, Formatter* f);\n"; continue; }   // `@generate(Formattable)`
         if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
             if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << ci.name << "* self, " << ci.name << "* other);\n";
             else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << ci.name << "* self);\n";
@@ -22223,7 +22223,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         if (mi.isSynthSer) { ci.reachesPointer   ? emitGraphSerializeDefinition(ci)   : emitSerializeDefinition(ci); continue; }
         if (mi.isSynthDe)  { ci.graphDeserialize ? emitGraphDeserializeDefinition(ci) : emitDeserializeDefinition(ci); continue; }
         if (mi.isSynthBag) { emitBagCtorBody(ci, kv.first); continue; }   // M6: `@generate(of|zero)` bag ctor
-        if (mi.isSynthFormat) { emitFormatDefinition(ci); continue; }     // `@generate(Format)` field dump
+        if (mi.isSynthFormat) { emitFormatDefinition(ci); continue; }     // `@generate(Formattable)` field dump
         if (mi.isSynthCmp) {                                              // `@generate(Equatable|Hashable)`
             if (kv.first == "equals") emitEqualsDefinition(ci); else emitHashDefinition(ci);
             continue;
@@ -22317,13 +22317,13 @@ static const char* serScalarSuffix(int builtInVal)
 // nothing partial to drop, unlike the read side). Empty `resultCType` = graph-node/void context: the sticky
 // flag carries the failure to the graph boundary, so just drop the redundant box (leak-clean).
 // A PRIMITIVE field with no serde conformance has nothing to call, and the generator used to emit the
-// call anyway — `isize__serialize(...)` against a function that is never defined — so `@generate(Serialize)`
+// call anyway — `isize__serialize(...)` against a function that is never defined — so `@generate(Serializable)`
 // over an `isize` field produced a clean kama build and an implicit-declaration error from the C compiler.
 // Zero kama diagnostics for a defect kama can see. Everything non-primitive falls through as before: a
 // user type / enum / collection legitimately reaches its own generated `__serialize`.
 //
 // `isize`/`usize` are the only primitives this fires for, and deliberately so — see the note above the
-// `Serialize` block in prelude/global.kama. A platform-varying width has no wire format.
+// `Serializable` block in prelude/global.kama. A platform-varying width has no wire format.
 bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& access, bool writing, int line)
 {
     if (!ty || ty->genericArg) return false;              // a generic instance is composite — not ours
@@ -22341,7 +22341,7 @@ bool CEmitter::serdeRejectsPrimitive(SharedIdentifier ty, const std::string& acc
                  + (writing ? "serialized" : "deserialized")
                  + " — `" + kt + "` is a platform-varying width (`" + cType(ty)
                  + "`: 8 bytes natively, 4 on wasm32), so it has no wire format and implements neither "
-                   "`Serialize` nor `Deserialize`. Give the field a fixed width (`int64`/`uint64`) and "
+                   "`Serializable` nor `Deserializable`. Give the field a fixed width (`int64`/`uint64`) and "
                    "`cast` at the boundary, or mark it `@skip`").c_str(), line);
     return true;
 }
@@ -22410,7 +22410,7 @@ void CEmitter::emitSerializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
-// `@generate(Format)` — write a literal chunk of the dump ("Type {", " name: ", ", ", " }") into the caller's
+// `@generate(Formattable)` — write a literal chunk of the dump ("Type {", " name: ", ", ", " }") into the caller's
 // Formatter. `kama_string_lit` is non-owning (points at static rodata), so the temp needs no dtor — the same
 // reason emitInterpolation's literal chunks are dtor-free.
 void CEmitter::emitFmtLiteral(const std::string& s)
@@ -22419,9 +22419,9 @@ void CEmitter::emitFmtLiteral(const std::string& s)
     indent(1); *_out << "kama_string " << tmp << " = " << kamaStrLit(s) << "; Formatter__writeStr(f, &" << tmp << ");\n";
 }
 
-// `@generate(Format)` — write one field of the dump. A scalar/string/char/bool uses the matching Formatter
-// fast-path (char is direct via writeChar — it has no Format conformance, sharing uint32's cType, exactly as
-// emitInterpolation special-cases it); a composite field must itself `implements Format` and recurses through
+// `@generate(Formattable)` — write one field of the dump. A scalar/string/char/bool uses the matching Formatter
+// fast-path (char is direct via writeChar — it has no Formattable conformance, sharing uint32's cType, exactly as
+// emitInterpolation special-cases it); a composite field must itself `implements Formattable` and recurses through
 // its own `__format` into the SAME Formatter (one buffer, no per-field allocation).
 void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line)
 {
@@ -22432,7 +22432,7 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
         case IDENTIFIER_BOOL_VAL:    indent(1); *_out << "Formatter__writeBool(f, " << access << ");\n";   return;
         // The widening cast is what lets the platform-varying pair ride the fixed widths here: on a
         // 64-bit host it is the identity, on wasm32 it widens. Rendering never needs to know the width,
-        // which is why these two join in (`Format`) where `sizeof` and `bitcast` refuse them.
+        // which is why these two join in (`Formattable`) where `sizeof` and `bitcast` refuse them.
         case IDENTIFIER_INT8_VAL: case IDENTIFIER_INT16_VAL:
         case IDENTIFIER_INT32_VAL: case IDENTIFIER_INT64_VAL: case IDENTIFIER_ISIZE_VAL:
             indent(1); *_out << "Formatter__writeI64(f, (int64_t)(" << access << "));\n";  return;
@@ -22442,12 +22442,12 @@ void CEmitter::emitFmtFieldWrite(SharedIdentifier ty, const std::string& access,
         case IDENTIFIER_FLOAT32_VAL: indent(1); *_out << "Formatter__writeF32(f, " << access << ");\n";    return;
         case IDENTIFIER_FLOAT64_VAL: indent(1); *_out << "Formatter__writeF64(f, " << access << ");\n";    return;
     }
-    // Composite field: it must itself implement Format. (Optional/collections/enum-typed fields don't today
+    // Composite field: it must itself implement Formattable. (Optional/collections/enum-typed fields don't today
     // and land here as a clean error — v1 scope, tracked on the ROADMAP.)
     std::string ct = cType(ty);
-    if (!satisfiesBound(ct, "Format"))
-        unsupported(("`@generate(Format)` needs every field to be a primitive/string or a type that "
-                     "`implements Format`; field type `" + (ty && ty->value ? *ty->value : ct)
+    if (!satisfiesBound(ct, "Formattable"))
+        unsupported(("`@generate(Formattable)` needs every field to be a primitive/string or a type that "
+                     "`implements Formattable`; field type `" + (ty && ty->value ? *ty->value : ct)
                      + "` does not").c_str(), line);
     indent(1); *_out << ct << "__format(&" << access << ", f);\n";
 }
@@ -22521,9 +22521,9 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
-// `@generate(Format)` — the synthesized infallible field dump: `Type { f1: v1, f2: v2 }` (empty => `Type {}`).
+// `@generate(Formattable)` — the synthesized infallible field dump: `Type { f1: v1, f2: v2 }` (empty => `Type {}`).
 // The display analog of emitSerializeDefinition; string fields render raw/unquoted (each field dispatches to
-// its own Format — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
+// its own Formattable — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
 void CEmitter::emitFormatDefinition(ClassInfo& ci)
 {
     int line = ci.declLine();
@@ -22758,7 +22758,7 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
     SharedIdentifier inner = opt ? ty->genericArg : ty;
     std::string ic = cType(inner);
     // Graph deserialize reconstructs a Shared/Weak/Owned edge with a ZEROED allocator (it has no handle on the
-    // wire), so a STATEFUL-allocator edge would later free through a bogus/zeroed `A` -> leak/UAF. Deserialize
+    // wire), so a STATEFUL-allocator edge would later free through a bogus/zeroed `A` -> leak/UAF. Deserializable
     // is GlobalAllocator-only by design; reject a non-Global edge at the one spot the box type is known.
     auto rejectStatefulEdge = [&](const std::string& a) {
         if (!a.empty() && a != "GlobalAllocator")
@@ -22917,7 +22917,7 @@ void CEmitter::computeGraphNodeTypes()
                     // and be SILENTLY dropped from the wire. Reject at the edge field; the author must mark it
                     // @generate or not route it through a serialized graph edge.
                     else unsupported(("`" + kv2.first + "` implements the serialized graph-edge contract `" + e.elemC +
-                                      "` but is not `@generate(Serialize/Deserialize)` — it would be silently dropped "
+                                      "` but is not `@generate(Serializable/Deserializable)` — it would be silently dropped "
                                       "from the wire; mark it `@generate` or don't route it through a serialized graph "
                                       "edge").c_str(), f.type ? f.type->line : 0);
                 }
@@ -23329,7 +23329,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     // (`Serializer s = this`), referencing the `static const C__as_I` vtable — which has no forward decl for a
     // header-inline instance, so it must be defined first. Vtable slots reference only method PROTOTYPES
     // (phase 1), so this order is safe. (Free fns emit later, so they never hit the ordering hazard.)
-    else { emitClassInterfaceVtables(ci); emitClassDefinitions(ci); }   // `static` C__as_I vtables (e.g. List<int32> as Serialize)
+    else { emitClassInterfaceVtables(ci); emitClassDefinitions(ci); }   // `static` C__as_I vtables (e.g. List<int32> as Serializable)
     _emitStaticClass = false;
     _typeSubst.clear();
     _comptimeSubst.clear();
@@ -24803,7 +24803,7 @@ bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
                 if (s != _typeSubst.end()) {
                     std::string ct = primKey(s->second);   // the conformance key, not the C type
                     // A PRIMITIVE is a legitimate receiver here: conformance puts real `ctor`s on
-                    // int32/float64/… (`type intrinsic <int32> implements Deserialize { public ctor … }`),
+                    // int32/float64/… (`type intrinsic <int32> implements Deserializable { public ctor … }`),
                     // and they live in `_primConformances`, not `_classes`. The `::` resolver consulted both;
                     // this one only ever needed `_classes` because no other path reached a primitive ctor.
                     if (_classes.count(ct) || primConformance(ct)) { outType = ct; return true; }
@@ -24851,7 +24851,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // A GENERIC type: `typeName` names the bare template (not in `_classes`; its specialized instances are).
     std::string tn = dotOnTypeInstance(recv, typeName);
     // A user type resolves in `_classes`; a `ctor` added to a PRIMITIVE by an impl block
-    // (`type intrinsic <int32> implements Deserialize`) resolves through `implTargetInfo` — the same two tables the
+    // (`type intrinsic <int32> implements Deserializable`) resolves through `implTargetInfo` — the same two tables the
     // `::` resolver consults, so both spellings see the same set of constructors.
     ClassInfo* stci = _classes.count(tn) ? &_classes[tn] : implTargetInfo(tn);
     // The head is a GENERIC TEMPLATE whose instance could not be pinned down (no turbofish, nothing to
@@ -25100,7 +25100,7 @@ int CEmitter::holeBuiltinType(SharedExpression e)
     return 0;
 }
 
-// Emit a format-specifier hole `${x:spec}` as a Formatter fast-path (the Format contract stays spec-less).
+// Emit a format-specifier hole `${x:spec}` as a Formatter fast-path (the Formattable contract stays spec-less).
 // `spec` is the raw text after the `:`. Forms:
 //   base (M1)      — `x`/`0x`/`0X`/`o`/`0o`/`b`/`0b`  (integer holes; the leading `0` is echoed as a prefix)
 //   width (M2)     — `W` (space-pad) / `0W` (zero-pad) on decimal integers, and `W.N` / `0W.N` on floats
@@ -25346,7 +25346,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
         if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
-                         "implemented for `" + rk + "` (an interpolation hole needs `Format`, a `Map` key "
+                         "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "
                          "needs `Hashable`, `sort` needs `Comparable`)").c_str(), call->line, rk);
         else
             unsupported((who.empty()
@@ -25912,11 +25912,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
         }
     }
-    // PERF: does the program use serde at all? A `@generate(Serialize|Deserialize)` type or a
+    // PERF: does the program use serde at all? A `@generate(Serializable|Deserializable)` type or a
     // `Serializer`/`Deserializer` BACKEND implementer (JsonWriter/JsonReader) is the ONLY way to serialize or
     // deserialize anything — you cannot even call a collection's `serialize` without a `Serializer` sink. When
-    // NEITHER is present we emit NONE of the serde machinery: not the prelude's primitive Serialize/Deserialize
-    // conformances, and not the conditional serde a collection would carry (the `when [T: Serialize]` bound is
+    // NEITHER is present we emit NONE of the serde machinery: not the prelude's primitive Serializable/Deserializable
+    // conformances, and not the conditional serde a collection would carry (the `when [T: Serializable]` bound is
     // treated as unsatisfied under `!_usesSerde` in whenConditionsHold, so `serialize`/`serKey`/… all drop).
     // Compile-time only (all of it is static-inline / dead-strippable). Computed HERE — before collectClasses,
     // so every downstream decision (collection specialization included) sees the final flag. Both signals are
@@ -25926,7 +25926,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             if (at && at->name && *at->name == "generate" && at->args)
                 for (auto& a : *at->args)
                     if (a && a->name && a->name->value && !a->expression &&
-                        (*a->name->value == "Serialize" || *a->name->value == "Deserialize")) return true;
+                        (*a->name->value == "Serializable" || *a->name->value == "Deserializable")) return true;
         return false;
     };
     for (auto& u : units) {
@@ -26424,7 +26424,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // (emitModuleContent). A USER-type target emits through the normal machinery (skipped here).
     // User-unit impl blocks: non-static prototype here; body lands in that unit's `.c` (below). The PRELUDE's
     // blocks (collect-only, no home module) are emitted `static inline` in a dedicated pass just after.
-    // Skip an ungated serde block: the prelude's primitive `Serialize`/`Deserialize` conformances are
+    // Skip an ungated serde block: the prelude's primitive `Serializable`/`Deserializable` conformances are
     // emitted only when `_usesSerde` (see the collect-time gate). All other blocks always emit.
     auto emitImplProtos = [&](const std::vector<SharedCompilationUnit>& us, const char* stat) {
         for (auto& u : us) {

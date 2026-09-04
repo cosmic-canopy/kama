@@ -35,7 +35,7 @@ type value Ctrl { public usize strong; public usize weak; }
 // `Shared` and vice versa (cross-type, so field-poke can't reach the sibling's private fields). `adopt`
 // alone builds same-type by field-poke + `give` (the move avoids needing a default `A` value for the ctor).
 type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, HeapOwner<T>, Copyable<This>(bare: copy),
-                                    Deserialize<This> when [T: Deserialize<T>],
+                                    Deserializable<This> when [T: Deserializable<T>],
                                     // A shared handle may cross an isolate boundary exactly when its payload cannot
                                     // change: then the control block takes the atomic refcount flavor and every
                                     // isolate reads the same bytes. This line IS that rule — it used to be
@@ -45,15 +45,15 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Hea
     UnsafePtr<Ctrl> c;
     A alloc;
     public unsafe ctor make(UnsafePtr<T> p, UnsafePtr<Ctrl> c, A alloc) { this.p = p; this.c = c; this.alloc = alloc; }   // shares an existing ctrl
-    // Deserialize INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
+    // Deserializable INTO a Shared: a graph root is heap + shared-owned, so `decode::<Shared<N>>` reconstructs the
     // whole object graph and hands back the owning root handle. Delegates to `T::deserialize` — for a graph type
-    // `N` the `@generate(Deserialize)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
-    // driver, emitted directly in C), so this simply forwards it (the `T: Deserialize` bound is what makes
+    // `N` the `@generate(Deserializable)` intrinsic emits `N::deserialize` returning `Shared<N>` (the two-pass graph
+    // driver, emitted directly in C), so this simply forwards it (the `T: Deserializable` bound is what makes
     // `T::deserialize` resolve, exactly like the `__kamaDeserialize` trampoline). Only type-checks when
     // `N::deserialize` yields a `Shared<N>` — i.e. `N` is a graph type. Instantiating `Shared<X>::deserialize`
     // for a non-graph `X` (whose `X::deserialize` returns `X`) is a type error — decode a plain value as
     // `decode::<X>` instead.
-    public ctor Result<Shared<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize<T>] {
+    public ctor Result<Shared<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
         return T.deserialize(r: r);
     }
     // HeapOwner: adopt a raw pointee into a box with the DEFAULT allocator (the bare-`new` path). The ctrl

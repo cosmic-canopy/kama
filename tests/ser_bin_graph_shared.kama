@@ -1,4 +1,4 @@
-// KBIN object-graph round-trip: two owners share one leaf. Serialize dedups the leaf into the id table (both
+// KBIN object-graph round-trip: two owners share one leaf. Serializable dedups the leaf into the id table (both
 // pointer fields reference one id); decode rebuilds a `Shared<Pair>` re-sharing the single leaf. Proven by a
 // decode -> re-encode producing BYTE-IDENTICAL output (id dedup + graph structure survived). ASan proves the
 // refcounts balance. Returns 55.
@@ -9,10 +9,10 @@ import {
     std::memory::Shared,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Pair {
     @field Shared<Leaf> a;
     @field Shared<Leaf> b;

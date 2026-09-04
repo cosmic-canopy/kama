@@ -1,7 +1,7 @@
 // char-typed interpolation holes render as their CHARACTER (not the codepoint number) via the Formatter's
-// writeChar fast-path — char has no Format conformance (shares uint32's C type), so the compiler detects a
+// writeChar fast-path — char has no Formattable conformance (shares uint32's C type), so the compiler detects a
 // char hole from its kama type node (local, foreach binding, or struct field). Exit 7 = all three forms.
-type value Glyph implements Format {
+type value Glyph implements Formattable {
     public char ch;
     public ctor make(char c) { this.ch = c; return this; }
     public const fn void format(ref Formatter f) { f.writeChar(c: this.ch); }

@@ -6,10 +6,10 @@ import {
     std::collections::DynamicArray,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Pt { @field public int32 x; @field public int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Scene {
     @field string name;
     @field DynamicArray<int32> ids;

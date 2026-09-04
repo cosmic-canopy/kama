@@ -4,7 +4,7 @@
 //       proving the generic writer instantiates over distinct W monomorphs and the flush path drains.
 //       (encodeTo shares JsonWriter's exact byte path with encode, verified byte-exact by (a).)
 //   (c) `decodeFrom` over a SliceReader round-trips through readAll + pump + JsonReader.
-// A free fn takes a `Serialize` as a second-class borrow, so `r` stays usable across calls. Returns 0.
+// A free fn takes a `Serializable` as a second-class borrow, so `r` stays usable across calls. Returns 0.
 import {
     std::serialization::json::encode,
     std::serialization::json::decodeFrom,
@@ -16,7 +16,7 @@ import {
     std::io::BufWriter,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Rec {
     @field int32 id;
     @field string name;

@@ -7,7 +7,7 @@
 // This is the mechanism that replaces "the width is in the name". `clampToI32` used to live privately in
 // fixed.kama, hard-wired to one width; `std::num::ops` still spells `clampI32`/`clampI64` per width. A
 // contract with a `type intrinsic` conformance per width is kama's answer to that shape (the same one
-// `Real` uses in std::math::scalar, and `FromStr` in std::fmt::parse) — one block per target, because each
+// `Real` uses in std::math::scalar, and `Parseable` in std::fmt::parse) — one block per target, because each
 // body carries its own range limits and there is no shared body for a set form to hold.
 //
 // Exported so a user type can join: `type value MyRep implements FixedBacking<This> { … }` makes it a legal

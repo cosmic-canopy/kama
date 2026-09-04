@@ -184,7 +184,7 @@ fi
 
 # --- 8. a nameless decl with a program-wide effect survives -----------------------------------------
 # Two kinds, both unreachable by any reference and so both unprunable:
-#   `type intrinsic <int32> implements FromStr` — registers a conformance for a PRIMITIVE, under no name.
+#   `type intrinsic <int32> implements Parseable` — registers a conformance for a PRIMITIVE, under no name.
 #   `extern "kama_isolate.h";`                  — the seam `spawn`/`parallel_for` require while naming
 #                                                 nothing in the file that provides it.
 cat >"$tmp/nameless.kama" <<'EOF'

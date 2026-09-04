@@ -11,21 +11,21 @@ import {
 
 type contract Shape for resource { fn int32 area(); }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Sq implements Shape {
     @field int32 side;
     public ctor make(int32 side) { this.side = side; }
     public fn int32 area() { return this.side * this.side; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Circle implements Shape {
     @field int32 r;
     public ctor make(int32 r) { this.r = r; }
     public fn int32 area() { return 3 * this.r * this.r; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Scene {
     @field Shared<Shape> a;
     @field Shared<Shape> b;

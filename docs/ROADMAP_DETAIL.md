@@ -499,10 +499,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
-  `@generate(Format)`, and tagged strings all ship (SPEC). Still open, additive, no current need: combining a
-  base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Format)`
+  `@generate(Formattable)`, and tagged strings all ship (SPEC). Still open, additive, no current need: combining a
+  base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `@generate(Formattable)`
   on a **generic**/**variant**/**enum** type; a `${x:?}`-routed `@generate(Debug)` (spec hook already exists);
-  per-derive `@skip(Format)` / `@skip(Serialize)` for redaction (today `@skip` is one shared boolean —
+  per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
   parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears); and tagged-string
   *type-preserved params* (Model B — each hole keeping its static type into the params list, `html` returning
   a distinct `SafeHtml`). Regex is a separate campaign. `string + <number>` stays a compile error by design.
@@ -524,7 +524,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   keying that was wrong before.
 - **Derive follow-ons.** `@generate(Equatable, Hashable)` ships for plain types (SPEC § *Derives*). Still
   open, additive: the same derives on a **generic** or **variant** type (the same v1 boundary
-  `@generate(Format)` draws — all of them now error rather than half-deriving; `Serialize`/`Deserialize`
+  `@generate(Formattable)` draws — all of them now error rather than half-deriving; `Serializable`/`Deserializable`
   were the two kinds with no arm, so they were *accepted in silence* and died in the C compiler on a
   missing `_F<file>__Box_int32__as_Serialize` vtable — guarded by `tests/xfail/generate_serialize_generic`),
   and on a payload-less **enum**, which
@@ -1143,7 +1143,7 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 - **More back ends (library, no compiler change)** — YAML; **XML**/**HTML**. Each is a `Serializer`/`Deserializer`
   impl + `encode`/`decode`. `std::encoding::base64` is a separate small module.
 - **A back end's ENTRY POINTS are a convention, not a contract** — the defect the line above quietly
-  describes. `Serializer`/`Deserializer`/`Serialize`/`Deserialize` are real contracts
+  describes. `Serializer`/`Deserializer`/`Serializable`/`Deserializable` are real contracts
   ([prelude/global.kama:207](../prelude/global.kama)), but `encode`/`decode`/`decodeFrom` are **bare free
   functions**, duplicated per back end (`json.kama:198,538,546`, `binary.kama:253,263,270`) with nothing
   checking that a back end supplies them or that their signatures agree. "A drop-in twin of the JSON back
@@ -1565,7 +1565,7 @@ rather than here, so there is one number to keep current. Forward work:
      not have: `view.kama` declares `type view View<T>`, so the type-kind word is a bare identifier rather
      than a closed `value|resource|contract` set. A regex would have missed it.
   4. ~~"a nameless declaration is inert"~~ — two kinds are not, and both are invisible to any closure.
-     `type intrinsic <int32> implements FromStr` registers a conformance for a *primitive* under no name.
+     `type intrinsic <int32> implements Parseable` registers a conformance for a *primitive* under no name.
      Worse, `spawn` and `parallel_for` require `extern "kama_isolate.h";` from
      `lib/std/concurrent/concurrent.kama` while naming nothing in it — and the demand is program-wide, so
      the `spawn` need not even be in the file that did the import. Both providers are marked unprunable.

@@ -138,7 +138,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
-                   Serialize when [K: Serialize, V: Serialize], Deserialize<This> when [K: Deserialize<K>, V: Deserialize<V>],
+                   Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>],
                    Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable] {
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     isize len = 0; isize cap = 0; isize tombs = 0; uint32 mods = 0; A alloc;
@@ -380,13 +380,13 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         this.mods = this.mods + 1;
     }
 
-    // --- Serialization (present only when BOTH key and value are Serialize/Deserialize) ---
+    // --- Serialization (present only when BOTH key and value are Serializable/Deserializable) ---
     // A generic `Map<K,V>` can't emit a JSON object (`fieldName` needs a `string`, `K` is generic), so it
     // serializes as an ARRAY of `{"key":k,"value":v}` objects. Key/value go through a `ref K`/`ref V` helper
     // (like `cloneKey`/`cloneVal`) so a primitive element's intrinsic `serialize` resolves.
-    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serialize] { return v.serialize(w: w); }
-    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, V: Serialize] {
+    const fn Result<Unit, Owned<Error>> serKey(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
+    const fn Result<Unit, Owned<Error>> serVal(const ref V v, ref Serializer w) when [V: Serializable] { return v.serialize(w: w); }
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
         while (i < this.cap) {
@@ -408,7 +408,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
     // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
-    public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize<K>, V: Deserialize<V>] {
+    public ctor Result<Map<K,V,H>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>] {
         r.beginArray();
         while (r.moreElems()) {
             r.beginObject();

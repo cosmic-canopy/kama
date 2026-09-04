@@ -42,7 +42,7 @@ type view DequeIterMut<T> implements IteratorMut<T> {
 // slot of the front element; the `len` live elements occupy `data[(head + i) % cap]` for i in 0..len, so the
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
 type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
-                            Serialize when [T: Serialize], Deserialize<This> when [T: Deserialize<T>],
+                            Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
                             Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize head = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -177,10 +177,10 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         return 0 - 1;
     }
 
-    // --- Serialization (present only when the element is Serialize/Deserialize) --- a JSON array in
+    // --- Serialization (present only when the element is Serializable/Deserializable) --- a JSON array in
     // front-to-back order. The `serElem` helper gives the element a nameable `ref T` receiver.
-    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serialize] { return e.serialize(w: w); }
-    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serialize] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref T e, ref Serializer w) when [T: Serializable] { return e.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
         while (i < this.len) {
@@ -191,7 +191,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserialize<T>] {
+    public ctor Result<Deque<T>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

@@ -1,13 +1,13 @@
 // Nested @generate types: a resource with a string + a nested user-type field -> recursive JSON, with
 // string escaping (embedded quotes) and a nested object.
 import { std::serialization::json::encode };
-@generate(Serialize)
+@generate(Serializable)
 type resource Address {
     @field string city;
     @field int32 zip;
     public ctor make(string city, int32 zip) { this.city = give city; this.zip = zip; }
 }
-@generate(Serialize)
+@generate(Serializable)
 type resource Person {
     @field string name;
     @field int32 age;

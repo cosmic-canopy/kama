@@ -1,6 +1,6 @@
 // A format specifier on a user-type hole is a compile error — specifiers apply only to numeric holes (the
-// `Format` contract itself stays spec-less; specs are primitive Formatter fast-paths).
-type value Pt implements Format {
+// `Formattable` contract itself stays spec-less; specs are primitive Formatter fast-paths).
+type value Pt implements Formattable {
     public int32 x;
     public ctor make(int32 x) { this.x = x; return this; }
     public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.x)); }

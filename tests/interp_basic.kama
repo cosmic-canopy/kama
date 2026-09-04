@@ -1,7 +1,7 @@
 // String interpolation (P2): `${expr}` holes lower to a Formatter build. Covers primitives + string, member
-// access, a whole user type via its Format, the `\${` escape + literal `$`, verbatim non-interpolation,
+// access, a whole user type via its Formattable, the `\${` escape + literal `$`, verbatim non-interpolation,
 // adjacent holes, and an index hole. Exit code is a bitset of the checks that passed (127 = all seven).
-type value Pt implements Format {
+type value Pt implements Formattable {
     public int32 x; public int32 y;
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
     public const fn void format(ref Formatter f) {
@@ -26,7 +26,7 @@ fn int32 main() {
     string b = "pt=${p.x},${p.y}";
     if (b == "pt=3,4") { r = r + 2; }
 
-    // a whole user type renders via its Format impl
+    // a whole user type renders via its Formattable impl
     string c = "here ${p}!";
     if (c == "here (3,4)!") { r = r + 4; }
 

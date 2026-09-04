@@ -1,6 +1,6 @@
 // The read half of the same rule — see serialize_isize_field.kama for why it is a rule. `usize` is used
 // here (and `isize` there) so a fix that only ever ran on one of the two cannot pass both.
-@generate(Deserialize)
+@generate(Deserializable)
 type value Cursor {
     @field public usize position;
     @field public bool eof;

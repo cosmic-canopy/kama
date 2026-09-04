@@ -61,10 +61,10 @@ type resource BinaryWriter<W: Writer> implements Serializer {
     // Borrow the underlying sink (e.g. so `encode` can `takeBytes()` its concrete StringWriter). W-agnostic.
     public fn ref W innerRef() { return this.sink; }
 
-    // Stream a `Serialize` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
+    // Stream a `Serializable` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
     // `encode` sugar (a generic free fn can't instantiate `BinaryWriter<W>`, so this is an instance method the
     // caller builds at a concrete site). Mirrors JsonWriter.encodeValue.
-    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serialize v) {
+    public fn Result<Unit, std::memory::Owned<Error>> encodeValue(Serializable v) {
         Serializer s = this;
         Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
         match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
@@ -260,9 +260,9 @@ type resource BinaryReader implements Deserializer {
     public const fn DeError errorCode() { return this.code; }
 }
 
-// Serialize any `Serialize` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a
-// `DynamicArray<uint8>`, not a `string`. A concrete value auto-wraps behind the `Serialize` interface.
-fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serialize v) {
+// Serializable any `Serializable` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a
+// `DynamicArray<uint8>`, not a `string`. A concrete value auto-wraps behind the `Serializable` interface.
+fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serializable v) {
     BinaryWriter<StringWriter> w = BinaryWriter::<StringWriter>.make(sink: StringWriter.make());
     Serializer s = w;
     Result<Unit, std::memory::Owned<Error>> r = v.serialize(w: ref s);
@@ -270,16 +270,16 @@ fn Result<DynamicArray<uint8>, std::memory::Owned<Error>> encode(Serialize v) {
     return Result::Ok(value: w.innerRef().takeBytes());
 }
 
-// Deserialize a KBIN byte buffer into a `Deserialize` type. Name the target with turbofish:
+// Deserializable a KBIN byte buffer into a `Deserializable` type. Name the target with turbofish:
 // `binary::decode::<Point>(src)`. Takes owned bytes (the reader holds them for the two-pass graph rewind).
-fn Result<T, Owned<Error>> decode<T: Deserialize<T>>(DynamicArray<uint8> src) {
+fn Result<T, Owned<Error>> decode<T: Deserializable<T>>(DynamicArray<uint8> src) {
     BinaryReader r = BinaryReader.make(src: give src);
     return T.deserialize(r: r);
 }
 
-// Deserialize from any `Reader` (a file, socket, …) — the streaming twin of `decode`. Drains the reader fully
+// Deserializable from any `Reader` (a file, socket, …) — the streaming twin of `decode`. Drains the reader fully
 // into a byte buffer first (graph decode seeks backward), then parses. A read `IoError` auto-boxes.
-fn Result<T, Owned<Error>> decodeFrom<T: Deserialize<T>>(Reader from) {
+fn Result<T, Owned<Error>> decodeFrom<T: Deserializable<T>>(Reader from) {
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };

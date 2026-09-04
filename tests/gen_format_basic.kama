@@ -1,19 +1,19 @@
-// `@generate(Format)` (fmt Task 2): the compiler synthesizes a default field-dump `Format` impl —
-// `Type { f1: v1, f2: v2 }`, strings raw/unquoted, each field dispatching to its own Format. Covers a plain
+// `@generate(Formattable)` (fmt Task 2): the compiler synthesizes a default field-dump `Formattable` impl —
+// `Type { f1: v1, f2: v2 }`, strings raw/unquoted, each field dispatching to its own Formattable. Covers a plain
 // value (primitives), composite recursion into ONE buffer, `@skip`, a `resource` with a `string` field, and
 // the free `toString`. Exit code is a bitset of the checks (63 = all six).
 
-// A plain value: `Format` + `of` compose — one gives the memberwise ctor, the other the dump.
-@generate(Format, of) type value Stat { public int32 hp; public bool alive; }
+// A plain value: `Formattable` + `of` compose — one gives the memberwise ctor, the other the dump.
+@generate(Formattable, of) type value Stat { public int32 hp; public bool alive; }
 
-// A field that is itself a Format value — proves composite recursion (Stat's format writes into the SAME sink).
-@generate(Format, of) type value Line { public Stat lead; public int32 len; }
+// A field that is itself a Formattable value — proves composite recursion (Stat's format writes into the SAME sink).
+@generate(Formattable, of) type value Line { public Stat lead; public int32 len; }
 
 // `@skip` omits a field from the dump.
-@generate(Format, of) type value Secret { public int32 shown; @skip public int32 hidden; }
+@generate(Formattable, of) type value Secret { public int32 shown; @skip public int32 hidden; }
 
 // A `resource` (owns its `string`) works too — a hand ctor, fields private.
-@generate(Format) type resource Named {
+@generate(Formattable) type resource Named {
     string name; int32 n;
     public ctor make(string name, int32 n) { this.name = give name; this.n = n; }
 }

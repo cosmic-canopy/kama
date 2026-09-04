@@ -9,10 +9,10 @@ import {
     std::memory::Owned,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Parent {
     @field Owned<Child> kid;
     public ctor make(Owned<Child> kid) { this.kid = give kid; }

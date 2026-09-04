@@ -233,7 +233,7 @@ type enum Shape : int32
 Attributes including compileFor negation
 ================================================================================
 
-@generate(Serialize, Format)
+@generate(Serializable, Formattable)
 type value Rec
 {
     @field(name: "x") int32 x;

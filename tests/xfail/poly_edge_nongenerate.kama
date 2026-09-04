@@ -6,7 +6,7 @@ import { std::serialization::json::encode, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Sq implements Shape {
     @field int32 side;
     public ctor make(int32 side) { this.side = side; }
@@ -20,7 +20,7 @@ type resource Tri implements Shape {
     public fn int32 area() { return (this.b * this.h) / 2; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Scene {
     @field Shared<Shape> s;
     public ctor make(Shared<Shape> s) { this.s = give s; }

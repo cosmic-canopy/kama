@@ -34,8 +34,8 @@ optional backend is an import:
 
 | Feature | Always-on half (prelude / `kama_runtime.h`) | Opt-in half |
 | --- | --- | --- |
-| Formatting | the `Format` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
-| Serialization | the `Serialize`/`Deserialize`/`Serializer`/`Deserializer` contracts + `@generate` synthesis | `std::serialization::{binary,json}` — the byte backends |
+| Formatting | the `Formattable` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
+| Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts + `@generate` synthesis | `std::serialization::{binary,json}` — the byte backends |
 | Memory | `Owned`/`Shared`/`Weak` + `HeapOwner`/`Deref`/`Copyable`, which drive `new`/`give`/`copy` | *(none — entirely floor)* |
 | Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams |
 
@@ -114,8 +114,8 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
 - **Core contracts:** `Deref<T>`, `HeapOwner<T>`, `Movable`, `Copyable`, `Hashable`, `Equatable`,
   `Comparable` (+ `Ordering`), `Error`, `Iterator<T>`/`IteratorMut<T>`/`Iterable<T>`, `Viewable<V>`,
   `Allocator`
-  (+ `GlobalAllocator`), `Serialize`/`Deserialize`/`Serializer`/`Deserializer`.
-- **Text rendering (`std::fmt` core):** the `Format` contract + `Formatter` sink, and `"${x}"` interpolation
+  (+ `GlobalAllocator`), `Serializable`/`Deserializable`/`Serializer`/`Deserializer`.
+- **Text rendering (`std::fmt` core):** the `Formattable` contract + `Formatter` sink, and `"${x}"` interpolation
   — the machinery `"${…}"` interpolation lowers onto.
 - **Construction / memory builtins** (see [SPEC.md](SPEC.md) "Writing a collection *in* kama"): `sizeof(T)`,
   `alignof(T)`, `bitcast<T>(x)`, `drop(value:)`, `addr(of:)`, and `unwrapPtr(Optional<UnsafePtr>)` (infallible-alloc

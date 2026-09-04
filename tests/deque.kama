@@ -57,7 +57,7 @@ fn int32 main() {
     Optional<DynamicArray<int32>> first = owned.popFront();   // moved out + dropped here
     if (owned.length() == 2) { r = r + 10; }                 // two remain for ~Deque to drop
 
-    // Serialize round-trip through JSON (front-to-back array).
+    // Serializable round-trip through JSON (front-to-back array).
     Deque<int32> s = Deque.empty();
     s.pushBack(item: 7); s.pushBack(item: 8); s.pushBack(item: 9);
     Result<string, Owned<Error>> __enc = encode(v: s);

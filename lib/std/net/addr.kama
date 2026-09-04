@@ -13,7 +13,7 @@ type enum IpAddr {
 // sender) and `localAddr()` (the OS-assigned ephemeral port). Callers still pass plain `host`+`port`
 // strings/scalars INTO connect/bind/sendTo; `SocketAddr` exists so returns have a first-class shape.
 @generate(of)
-type value SocketAddr implements Format {
+type value SocketAddr implements Formattable {
     public IpAddr ip;
     public uint16 port;
 
@@ -34,7 +34,7 @@ type value SocketAddr implements Format {
         };
     }
 
-    // Render "a.b.c.d:port" into a Formatter (the `Format` contract), so `"${addr}"` renders it
+    // Render "a.b.c.d:port" into a Formatter (the `Formattable` contract), so `"${addr}"` renders it
     // gives the owned-string convenience; `ipString()` supplies the host octets (host-order match).
     public const fn void format(ref Formatter f) {
         string host = this.ipString();

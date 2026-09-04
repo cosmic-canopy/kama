@@ -1,4 +1,4 @@
-// Format specifiers M2: minimum field width + zero-pad. `W` space-pads (right-aligns), `0W` zero-pads (the
+// Formattable specifiers M2: minimum field width + zero-pad. `W` space-pads (right-aligns), `0W` zero-pads (the
 // sign stays ahead of the zeros); on a float a width composes with a precision (`W.N` / `0W.N`). The killer
 // case is zero-padded columns/timestamps (`${h:02}:${m:02}`). Exit is a bitset (127 = all seven checks).
 fn int32 main() {

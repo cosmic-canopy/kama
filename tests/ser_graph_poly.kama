@@ -4,26 +4,26 @@
 // concrete behind each contract edge (recovered from the node's `__type`) and re-forms the fat `Shared<Shape>`
 // handle — proven by a re-encode reproducing the exact wire AND by dynamic dispatch (`area()`) surviving the
 // trip. ASan proves each concrete frees exactly once. (v1 rule: a contract graph edge's implementors are
-// `@generate(Serialize, Deserialize)`.)
+// `@generate(Serializable, Deserializable)`.)
 import { std::serialization::json::encode, std::serialization::json::decode, std::memory::Shared };
 
 type contract Shape for resource { fn int32 area(); }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Sq implements Shape {
     @field int32 side;
     public ctor make(int32 side) { this.side = side; }
     public fn int32 area() { return this.side * this.side; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Circle implements Shape {
     @field int32 r;
     public ctor make(int32 r) { this.r = r; }
     public fn int32 area() { return 3 * this.r * this.r; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Scene {
     @field Shared<Shape> a;
     @field Shared<Shape> b;

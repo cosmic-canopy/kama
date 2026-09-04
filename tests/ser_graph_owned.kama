@@ -1,5 +1,5 @@
 // Object-graph round-trip with a UNIQUELY-OWNED child: a `Parent` owns a `Child` via `Owned<Child>` (a
-// pointer field, so `Parent` is graph mode). Serialize writes the child once (id 2) and the owner's field as
+// pointer field, so `Parent` is graph mode). Serializable writes the child once (id 2) and the owner's field as
 // its id; deserialize rebuilds into a `Shared<Parent>`, transferring the child by GIVE-ONCE (the reconstructed
 // child is moved out of its shell into the `Owned` field — no refcount) — proven by a re-encode that
 // reproduces the exact wire, and ASan proves the single-owner path frees the child exactly once.
@@ -10,10 +10,10 @@ import {
     std::memory::Owned,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Parent {
     @field Owned<Child> kid;
     public ctor make(Owned<Child> kid) { this.kid = give kid; }

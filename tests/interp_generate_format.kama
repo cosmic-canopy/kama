@@ -1,6 +1,6 @@
 // The counterpart to xfail/interp_no_format: the advice that diagnostic gives actually works. One
-// `@generate(Format)` makes a value interpolatable — the derived `format` renders every field. Returns 42.
-@generate(of, Format)
+// `@generate(Formattable)` makes a value interpolatable — the derived `format` renders every field. Returns 42.
+@generate(of, Formattable)
 type value Point { public int32 x; public int32 y; }
 
 fn int32 main() {

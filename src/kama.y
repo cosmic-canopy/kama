@@ -1767,7 +1767,7 @@ argument
   | IDENTIFIER COLON OUT variable_reference   { $$ = std::make_shared<ArgumentNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3), $4); STAMP_LOC($$->name, @1); }
   ;
 /* `@name` / `@name(args)` — declaration attributes (serialization metadata + codegen trigger). A BARE arg
-   (`@generate(Serialize)`) is an identifier with no value (name set, expression null); a NAMED arg
+   (`@generate(Serializable)`) is an identifier with no value (name set, expression null); a NAMED arg
    (`@field(name: "x")`) is `key: expr`; a bare STRING is `@section(".isr_vector")` and a bare NUMBER is
    `@align(16)`. The number alternative is deliberately a LITERAL and not `expression`: an identifier is
    already the bare-flag form (`@compileFor(!RELEASE)`), so admitting a general expression here would make

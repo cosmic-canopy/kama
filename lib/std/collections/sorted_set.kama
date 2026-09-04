@@ -6,7 +6,7 @@ export { SortedSet };
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
 type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [K: Copyable<K>],
-        Serialize when [K: Serialize, K: Copyable<K>], Deserialize<This> when [K: Deserialize<K>],
+        Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>],
         Sendable when [K: Sendable, A: Sendable] {
     SortedMap<K, Unit, A> m;
 
@@ -40,10 +40,10 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     public fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
     public ctor copy(ref SortedSet<K, A> source) when [K: Copyable<K>] { this.m = copy source.m; }
 
-    // Serialize as a JSON array of the members in ascending order (Serialize needs a Copyable key — the key
+    // Serializable as a JSON array of the members in ascending order (Serializable needs a Copyable key — the key
     // view yields copies); deserialize just `add`s each key back.
-    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serialize] { return k.serialize(w: w); }
-    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serialize, K: Copyable<K>] {
+    const fn Result<Unit, Owned<Error>> serElem(const ref K k, ref Serializer w) when [K: Serializable] { return k.serialize(w: w); }
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, K: Copyable<K>] {
         DynamicArray<K> es = this.m.keys();
         w.beginArray(count: cast<usize>(es.length()));
         isize i = 0;
@@ -55,7 +55,7 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    public ctor Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserialize<K>] {
+    public ctor Result<SortedSet<K>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>] {
         r.beginArray();
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject

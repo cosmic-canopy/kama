@@ -1,6 +1,6 @@
 // A DynamicArray of enums with a string payload, an int payload, and a no-payload variant — composition + tag dispatch.
 import { std::serialization::json::encode, std::serialization::json::decode, std::collections::DynamicArray };
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type enum Tok { Word(string s), Num(int32 n), End }
 fn int32 main() {
     DynamicArray<Tok> ts = DynamicArray.empty(); string w = "hi";

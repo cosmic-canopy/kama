@@ -69,7 +69,7 @@ generic *type's* method — "this method exists only when `T` is `Copyable`". A 
 ## `@generate` requires every field to be marked
 
 ```kama
-@generate(Serialize)
+@generate(Serializable)
 type value Point {
     @field int32 x;
     @skip  int32 cachedHash;

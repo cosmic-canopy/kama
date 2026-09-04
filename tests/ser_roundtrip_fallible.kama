@@ -1,7 +1,7 @@
 // Landing D: the two fallible boundaries compose — a value round-trips through the fallible `encode`
 // (Result<string, Owned<Error>>) and the fallible `decode` (Result<This, Owned<Error>>), both `Ok`.
 import { std::serialization::json::encode, std::serialization::json::decode };
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Point {
     @field int32 x;
     @field int32 y;

@@ -1,4 +1,4 @@
-// Format specifiers M3: the `+` flag forces a leading sign on non-negatives, and `-` left-aligns within a
+// Formattable specifiers M3: the `+` flag forces a leading sign on non-negatives, and `-` left-aligns within a
 // field width. Both compose with the M2 width/zero-pad and float precision. Order: flags, then width, then
 // `.precision`. Exit is a bitset (127 = all seven checks).
 fn int32 main() {

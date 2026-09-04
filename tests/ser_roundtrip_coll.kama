@@ -1,7 +1,7 @@
 // Round-trip Optional<T> (Some/None) and DynamicArray<T> (array) fields — deserialize now matches serialize for
 // these container shapes (natural defaults: Optional::None, empty DynamicArray).
 import { std::serialization::json::encode, std::serialization::json::decode, std::collections::DynamicArray };
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Rec {
     @field int32 id;
     @field Optional<int32> parent;

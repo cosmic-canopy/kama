@@ -3,10 +3,10 @@
 // claimed and `decode` returns `DeError::DuplicateId` (an owned object can have exactly one owner).
 import { std::serialization::json::decode, std::memory::Shared, std::memory::Owned };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Child { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Twin {
     @field Owned<Child> a;
     @field Owned<Child> b;

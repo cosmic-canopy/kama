@@ -12,7 +12,7 @@
 //   3. `readChar` returned `s[0]`, the UTF-8 LEAD BYTE, so any non-ASCII char decoded to a mangled scalar.
 import { std::serialization::json::encode, std::serialization::json::decode };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Msg {
     @field string text;
     public ctor make(string text) { this.text = give text; }
@@ -20,7 +20,7 @@ type resource Msg {
     public fn bool same(ref string other) { return this.text == other; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource CharBox {
     @field char c;
     public ctor make(char c) { this.c = c; }

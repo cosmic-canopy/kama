@@ -6,7 +6,7 @@
 // already uses — so the exception, the trampoline, and the prelude name all went together.
 import { std::serialization::json::decode };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Bad {
     @field int32 v;
     public ctor make(int32 v) { this.v = v; }

@@ -6,7 +6,7 @@
 // Both directions are checked, because "rejects everything" would also pass the second half alone.
 import { std::serialization::json::encode, std::serialization::json::decode };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Small {
     @field int8 n;
     public ctor make(int8 n) { this.n = n; }

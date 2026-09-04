@@ -133,22 +133,22 @@ match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; }
 
 ### Formatting & string interpolation ✅
 
-Rendering a value as text goes through **one** contract, `Format` (prelude, so it works without an import and
-survives `--no-std`) — the display twin of `Serialize`:
+Rendering a value as text goes through **one** contract, `Formattable` (prelude, so it works without an import and
+survives `--no-std`) — the display twin of `Serializable`:
 
 ```kama
-type contract Format for value, resource, intrinsic { fn void format(ref Formatter f); }
+type contract Formattable for value, resource, intrinsic { fn void format(ref Formatter f); }
 ```
 
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
 value materializes in **one** allocation — no O(n²) concat. `Formatter` has `writeStr` / `writeI64` /
 `writeU64` / `writeF64` / `writeF32` / `writeBool` / `writeChar` and a `finish() -> string`. Every primitive
 (`int8`..`uint64`, `float32/64`, `bool`, `string`) conforms. **`"${x}"` is the one way to render a value** —
-it lowers to exactly this build, so there is no free wrapper beside it. `Format` is **infallible** (`void`,
+it lowers to exactly this build, so there is no free wrapper beside it. `Formattable` is **infallible** (`void`,
 no `Result`) — an in-memory write can't fail, unlike `serialize` over an I/O sink.
 
 ```kama
-type value Point implements Format {
+type value Point implements Formattable {
     int32 x; int32 y;
     public fn void format(ref Formatter f) {
         f.writeStr(s: "("); f.writeI64(v: cast<int64>(this.x));
@@ -172,7 +172,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
 - **Verbatim** strings never interpolate — `@"raw ${x}"` is literal (the raw escape hatch).
 - A **`char`-typed hole** renders as its character (`${c}` → the glyph) via a `writeChar` fast-path — the
   compiler detects `char` from the hole's type node (`char` shares `uint32`'s C type, so it can't hold a
-  `Format` conformance directly).
+  `Formattable` conformance directly).
 - **Format specifiers** `${expr:spec}` render a numeric hole in a chosen form — the vocabulary **mirrors
   Kama's numeric literals** rather than printf. Precision is `.N` (`${pi:.2}` → `3.14`) — no printf type-letter,
   since the hole's type is already known; it requires a **float** hole. Base reuses the literal prefixes
@@ -180,31 +180,31 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   (prefixed — itself a valid Kama literal); the letter's case controls digit case (`${n:0X}` → `0XFF`). Base
   requires an **integer** hole and shows the unsigned bit pattern of its declared width, so a signed negative
   round-trips (`${x:0x}` on `-1i8` → `0xff`). A spec on a user-type hole, or a kind mismatch (`.N` on an int,
-  `0x` on a float), is a compile error — the `Format` contract stays spec-less (specs are `Formatter` <!-- xfail: interp_spec_user_type, interp_spec_kind_mismatch -->
+  `0x` on a float), is a compile error — the `Formattable` contract stays spec-less (specs are `Formatter` <!-- xfail: interp_spec_user_type, interp_spec_kind_mismatch -->
   fast-paths). A **minimum field width** right-aligns: `${n:6}` space-pads, `${n:06}` zero-pads (the sign
   stays ahead of the zeros), and on a float it composes with a precision (`${pi:8.2}`, `${pi:08.2}`) — ideal
   for zero-padded columns (`${h:02}:${m:02}`). A leading **`+`** forces a sign on non-negatives (`${n:+}` →
   `+42`) and **`-`** left-aligns within the width (`${n:-6}`); both compose with the width/precision. The full
   spec grammar is `[+|-]* [0? width] [.precision] | base`. Combining a base marker with width/flags, a custom
   fill character, and center-align are not yet supported (see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
-- **`@generate(Format)`** synthesizes a default field-dump `Format` impl so a type renders without a
-  hand-written `format` — `Type { field1: v1, field2: v2 }`, each field dispatching to its own `Format` into
+- **`@generate(Formattable)`** synthesizes a default field-dump `Formattable` impl so a type renders without a
+  hand-written `format` — `Type { field1: v1, field2: v2 }`, each field dispatching to its own `Formattable` into
   the same sink (so nesting composes, one allocation):
 
   ```kama
-  @generate(Format) type value Stat { public int32 hp; public bool alive; }
+  @generate(Formattable) type value Stat { public int32 hp; public bool alive; }
   string s = "${Stat.of(hp: 30i32, alive: true)}";   // "Stat { hp: 30, alive: true }"
   ```
 
   Strings render **raw/unquoted** (uniform single-contract dispatch — no special-case). A hand-written
   `format` wins over the derive; `@skip` omits a field. Every non-skipped field must itself be a
-  primitive/string or a type that `implements Format` (an `Optional`/collection/enum-typed field, or a
+  primitive/string or a type that `implements Formattable` (an `Optional`/collection/enum-typed field, or a
   generic/variant/enum carrying the attribute, is a clear compile error — see [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2).
-  It is named after the **contract** (`Format`), not `display`/`debug` — Kama has one to-string contract, no
+  It is named after the **contract** (`Formattable`), not `display`/`debug` — Kama has one to-string contract, no
   Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
 - **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
   `stripIndent"…"`; no space) makes it *tagged*. The compiler splits the string into its trusted literal
-  **parts** and its rendered **holes** (each hole run through `Format`) and hands them to a function
+  **parts** and its rendered **holes** (each hole run through `Formattable`) and hands them to a function
   `fn R name(ref Template t)`, which decides how they combine — so a tag is just a function you can define:
 
   ```kama
@@ -1109,7 +1109,7 @@ number" and "too big for this type" want different messages. Rust, Zig and Go al
 only the boolean and optional shapes discard it.
 
 **One generic spelling, no `parseI32`/`parseI64` ladder.** The mechanism is the serde one — a marker
-contract (`FromStr`) plus a per-type `type intrinsic` impl supplying a fallible `ctor`, reached as
+contract (`Parseable`) plus a per-type `type intrinsic` impl supplying a fallible `ctor`, reached as
 `T.fromStr(...)`.
 The turbofish is required because nothing in the arguments mentions `T`. Covers `int8`…`int64`,
 `uint8`…`uint64`, `float32`/`float64` and `bool` (exactly `"true"`/`"false"`). `parseRadix` adds bases
@@ -1226,16 +1226,16 @@ against an unsigned index. Go's `len() -> int`, Swift's `Int`, Python's `Py_ssiz
 `std::ssize()` all landed in the same place; the unsigned camp (C, C++, Rust, Zig) predates the lesson.
 
 **They carry the four value contracts, and deliberately not the two wire ones.** `isize`/`usize` implement <!-- xfail: serialize_isize_field, deserialize_usize_field -->
-`Format`, `Hashable`, `Equatable` and `Comparable`, so a length can be interpolated, be a `Map`/`Set` key,
+`Formattable`, `Hashable`, `Equatable` and `Comparable`, so a length can be interpolated, be a `Map`/`Set` key,
 be `contains`-searched and be sorted — the four a size type needs, given that every `length()`, `count()`
-and index is one. They implement **neither `Serialize` nor `Deserialize`**, and they are the only
+and index is one. They implement **neither `Serializable` nor `Deserializable`**, and they are the only
 primitives that do not: a stream is read by a program that is not the one that wrote it, so a field whose
 width is `ptrdiff_t` would be 8 bytes written natively and 4 read on wasm32. A platform-varying width has
 no wire format. Give a serialized field a fixed width (`int64`/`uint64`) and `cast` at the boundary;
-`@generate(Serialize)` over an `isize` field is an error naming the field. <!-- xfail: serialize_isize_field -->
+`@generate(Serializable)` over an `isize` field is an error naming the field. <!-- xfail: serialize_isize_field -->
 
 The same line divides everything else about them: they refuse `sizeof` folding at compile time and refuse
-`bitcast` (an equal-width reinterpret needs a width), while `Format`'s widening `cast<int64>` needs none.
+`bitcast` (an equal-width reinterpret needs a width), while `Formattable`'s widening `cast<int64>` needs none.
 **What decides is whether the operation needs to know the width.**
 
 **Bare `int` is not a kama type.** It was an alias for `int32` carrying no information of its own, and a
@@ -2326,7 +2326,7 @@ all) and would mean **disjunction** here, one symbol with opposite senses.
 Every kind is enforced, and each is judged as what it was declared, not as what it lowers to: a
 `type view` codegens like a `value` (same layout, same copy) but implements as a **view**, so a contract
 that does not name `view` rejects it. `@generate`-synthesized conformances go through the same gate — a
-`@generate(Serialize) type value` needs `Serialize` to name `value`.
+`@generate(Serializable) type value` needs `Serializable` to name `value`.
 
 Widening a clause is a **non-breaking** change and narrowing one is not, so state the kinds a contract is
 *for*, not merely the ones implementing it today: the clause is a design statement, and a set narrowed to
@@ -2526,8 +2526,8 @@ hand-written member always wins over the synthesized body, and the nominal confo
 
 | Name | Synthesizes |
 | --- | --- |
-| `Serialize` / `Deserialize` | the reflective wire methods — see *Serialization* |
-| `Format` | a field-dump `format(ref Formatter)` — `Type { f: v, … }` |
+| `Serializable` / `Deserializable` | the reflective wire methods — see *Serialization* |
+| `Formattable` | a field-dump `format(ref Formatter)` — `Type { f: v, … }` |
 | `Equatable` | a memberwise `equals(ref This)`; also what gives the type `==` / `!=` |
 | `Hashable` | a field-walked `hash()`, FNV-combined in declaration order |
 | `of` | a memberwise ctor `T.of(f1:, …)` — **bag only** (a transparent `value`) |
@@ -2624,7 +2624,7 @@ that is legal there has to stay legal for whatever subclass sits behind the slot
 The query surface: `length`/`isEmpty`/`capacity`/`count`, `contains`/`indexOf`/`test`/`isSubsetOf`,
 `get`/`peek`/`first`/`last`/`floor`/`ceil`, `iterator` (but not `iterMut`), all of `Vec`/`Mat`/`Quat`/
 `Duration`/`Instant`/`Fixed`, and the protocols — `Hashable.hash`, `Equatable.equals`,
-`Comparable.compareTo`, `Error.message`, `Format.format`, `Serialize.serialize`, `Real`'s twenty-one
+`Comparable.compareTo`, `Error.message`, `Formattable.format`, `Serializable.serialize`, `Real`'s twenty-one
 members. `Equatable` and `Comparable` borrow their operand `const ref`.
 
 What it deliberately does **not** mark is as informative:
@@ -3013,7 +3013,7 @@ c.compareTo(other: r);                       // a CONTRACT VALUE — one indirec
 
 Those two are the only spellings, and both are real. The rule covers every type an impl block decorates;
 a type that declares `implements C` in its **own body** is untouched — its methods are its own. String
-interpolation is exempt: `"${x}"` is the compiler's own lowering to `Format`, not something an author
+interpolation is exempt: `"${x}"` is the compiler's own lowering to `Formattable`, not something an author
 wrote.
 
 **Widening — a primitive as a contract value.** A primitive can be bound to a contract, as a borrow or as
@@ -3820,7 +3820,7 @@ directions**, so it is a real greppability guarantee rather than a convention: a
 dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called with `::` is rejected <!-- xfail: dot_on_type_not_ctor, scope_op_on_ctor -->
 (`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
-The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserialize` — and for a
+The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and for a
 `ctor` added to a primitive by a `type intrinsic` block. Every spelling is pinned by
 `tests/ctor_spelling_edges.kama`.
 
@@ -4202,15 +4202,15 @@ and the smart-pointer internals), so it emits them directly and correctly rather
 restrictions — and nothing leaks into the public API.
 
 **Three layers.**
-- **User-facing (opt-in):** the contracts `Serialize` / `Deserialize<T is This>`, the attributes
-  `@generate(Serialize, Deserialize)` (per-direction) + `@field` / `@field(name: "wire")` / `@skip`, and one
+- **User-facing (opt-in):** the contracts `Serializable` / `Deserializable<T is This>`, the attributes
+  `@generate(Serializable, Deserializable)` (per-direction) + `@field` / `@field(name: "wire")` / `@skip`, and one
   entry pair `encode(v:)` / `decode::<T>(src)`. A **hand-written `serialize`/`deserialize` wins** — the intrinsic
   only synthesizes for a `@generate` type that supplies none (override = implement the contract yourself).
 - **Library (wire backends, swappable):** the `Serializer` / `Deserializer` contracts (`writeInt32`/`readInt32`/…,
   `beginObject`/`fieldName`/…, and the graph framing `writeRef`/`beginGraph`/…) + `DeError`. `std::serialization::json`
   (text) and `std::serialization::binary` (**KBIN** — a compact self-describing little-endian tagged format) both
   ship; yaml/xml/user backends are just new implementors — no compiler change. A type opts into serialization
-  ONCE (`@generate(Serialize, Deserialize)`) and works with every backend automatically, since the generated code
+  ONCE (`@generate(Serializable, Deserializable)`) and works with every backend automatically, since the generated code
   drives only the format-agnostic token contract. The **binary** backend is byte-oriented — `binary::encode`
   yields a `DynamicArray<uint8>` and `decode` takes bytes (not a `string`, since binary isn't valid UTF-8) — and
   streams over the same `Writer`/`Reader` substrate as JSON (so it flows to a file or socket for game-save /
@@ -4261,7 +4261,7 @@ expired). `Shared`/`Weak` dedup by pointee identity; a `Weak` writes its id only
 polymorphic edge — `Shared`/`Weak`/`Owned<Contract>` — reconstructs the concrete type from each node's `__type`
 tag and re-forms the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the
 contract → `DeError::TypeMismatch`. Every nominal implementor of a contract used as a graph edge **must** be
-`@generate(Serialize, Deserialize)` — this is **compile-enforced**: a non-`@generate` implementor (which would
+`@generate(Serializable, Deserializable)` — this is **compile-enforced**: a non-`@generate` implementor (which would
 have no node writer and be silently dropped from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 `DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
 
@@ -4272,14 +4272,14 @@ core model; see [TYPE_MODEL.md](TYPE_MODEL.md).
 import { std::serialization::json::encode, std::serialization::json::decode };   // wire backend (library); the triad needs no import
 
 // by-value (tree): a pointer-free resource round-trips on the stack
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource User { @field(name: "user_name") string name; @field int32 age;
     public ctor make(string name, int32 age) { User r; r.name = give name; r.age = age; return give r; } }
 string j = encode(v: User.make(name: "ada", age: 36));            // {"user_name":"ada","age":36}
 Result<User, DeError> u = decode::<User>(src: give j);            // by value
 
 // graph (heap): reaches a pointer -> only via Shared; cycles rebuilt through the Weak back-edge
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back; … }
 Result<Shared<Node>, DeError> g = decode::<Shared<Node>>(src: give wire);
 // decode::<Node>(...) would be a compile error: Node reaches a pointer -> decode as Shared<Node>

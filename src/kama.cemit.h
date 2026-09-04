@@ -221,7 +221,7 @@ struct MethodInfo {
     // null: the proto/body loops skip these and emit via emitSerializeDefinition/emitDeserializeDefinition.
     bool                         isSynthSer = false;  // synthesized `serialize(ref Serializer)`
     bool                         isSynthDe  = false;  // synthesized static `deserialize(Deserializer) -> This`
-    // Compiler-synthesized `@generate(Format)` field-dump `format(ref Formatter)`. `node` is null: the
+    // Compiler-synthesized `@generate(Formattable)` field-dump `format(ref Formatter)`. `node` is null: the
     // proto/body loops skip the ordinary path and emit via emitFormatDefinition.
     bool                         isSynthFormat = false;
     // Compiler-synthesized `@generate(of|zero)` bag ctor (M6). `node` is null: the proto/body loops skip the
@@ -320,7 +320,7 @@ struct ClassInfo {
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor
-    // `@generate(Serialize|Deserialize)` opt-in (pay-for-what-you-use): only set for a marked type; drives
+    // `@generate(Serializable|Deserializable)` opt-in (pay-for-what-you-use): only set for a marked type; drives
     // emission of the reflective `__serialize`/`__deserialize` helpers (see emitSerialize/DeserializeDefinition).
     bool                              genSerialize = false;
     bool                              genDeserialize = false;
@@ -330,7 +330,7 @@ struct ClassInfo {
     // emitBagCtorDefinitions. See the construction-model campaign (M6).
     bool                              genOf = false;
     bool                              genZero = false;
-    // `@generate(Format)` — opt-in synthesized field-dump `Format` impl (`Type { f: v, … }`), infallible;
+    // `@generate(Formattable)` — opt-in synthesized field-dump `Formattable` impl (`Type { f: v, … }`), infallible;
     // the display analog of genSerialize. Body emitted by emitFormatDefinition.
     bool                              genFormat = false;
     // `@generate(Equatable|Hashable)` — opt-in memberwise `equals` / field-walked `hash`, plus the nominal
@@ -1057,8 +1057,8 @@ private:
     const std::map<std::string, SrcRange>* _builtinDocIndex = nullptr;
     // Does the program use serde at all? Set in collectProgram from a `@generate` type or a Serializer/
     // Deserializer backend — the only ways to (de)serialize anything. When false we emit NONE of the serde
-    // machinery: the prelude's primitive Serialize/Deserialize conformances are skipped, and a collection's
-    // conditional `when [T: Serialize]` serde (serialize/serKey/…) is dropped via whenConditionsHold. Purely a
+    // machinery: the prelude's primitive Serializable/Deserializable conformances are skipped, and a collection's
+    // conditional `when [T: Serializable]` serde (serialize/serKey/…) is dropped via whenConditionsHold. Purely a
     // compile-time saving — all of it is static-inline / dead-strippable.
     bool                             _usesSerde = false;
     std::string   _sourcePath;       // absolute path, used in #line directives
@@ -1641,7 +1641,7 @@ private:
     // module bodies) all walk exactly this set, so they share it instead of re-deriving it three times.
     struct ImplEmit { ClassInfo* target; SharedClassMemberDeclarationList members; };
     std::vector<ImplEmit> implEmitsOf(SharedCompilationUnit u);
-    bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serialize/Deserialize
+    bool serdeGatedOff(SharedIdentifier contract) const;   // an ungated primitive Serializable/Deserializable
     void emitEnumMemberBodies(ClassInfo& eci, EnumDeclarationNode* ed);   // bodies of a `type enum`'s own methods
     void injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationList members,
                            const std::string& contract, const std::string& tkey, bool isPrimitive);
@@ -2064,7 +2064,7 @@ private:
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
     void emitDeserializeDefinition(ClassInfo& ci);
-    // `@generate(Format)` — the synthesized infallible field-dump `void T__format(T* self, Formatter* f)` and
+    // `@generate(Formattable)` — the synthesized infallible field-dump `void T__format(T* self, Formatter* f)` and
     // its per-field writer (scalar -> a Formatter writeX, composite -> its own `__format`).
     void emitFormatDefinition(ClassInfo& ci);
     void emitFmtFieldWrite(SharedIdentifier ty, const std::string& access, int line);
@@ -2350,7 +2350,7 @@ private:
     bool exprIsChar(SharedExpression e);                // true iff `e`'s kama type is `char` (a char literal, local/param/foreach binding, or a char field)
     int holeBuiltinType(SharedExpression e);            // IDENTIFIER_*_VAL of an interp hole's numeric kama type (local/param/field/literal), 0 if unknown
     void emitHoleSpec(const std::string& fv, SharedExpression hole, const std::string& spec);  // format-specifier fast-path for `${x:spec}`
-    void emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec);        // render one hole into Formatter `fv` (spec / char / Format dispatch); shared by plain + tagged interpolation
+    void emitHoleInto(const std::string& fv, SharedExpression hole, SharedString spec);        // render one hole into Formatter `fv` (spec / char / Formattable dispatch); shared by plain + tagged interpolation
     std::string lvalueCType(SharedExpression e);        // C type of an lvalue local/param/field, KEEPING collection/string types
     bool exprIsString(SharedExpression e);              // true iff `e` statically has kama type `string` (kama_string)
     std::string hoistStringTemp(SharedExpression e);    // owned-string RVALUE -> a scope-dtor'd temp (frees it); "" for lvalue/literal/non-string

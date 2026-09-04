@@ -5,7 +5,7 @@
 // reads through the same spelling, and a malformed field surfaces as `Err(nothing)` via `.as<DeError>()`.
 import { std::serialization::json::encode, std::serialization::json::decode };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Point {
     @field int32 x;
     @field int32 y;
@@ -13,7 +13,7 @@ type value Point {
     public fn int32 sum() { return this.x + this.y; }
 }
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Line {
     @field Point start;
     @field Point end;

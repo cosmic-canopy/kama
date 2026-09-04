@@ -2,7 +2,7 @@
 // `Err` (never a half-built object); the concrete error is recovered with `err.as<DeError>()`. A good
 // input round-trips to `Ok`. Mirrors the boundary guarantee "Ok(complete) or Err(nothing)".
 import { std::serialization::json::encode, std::serialization::json::decode };
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type value Point {
     @field int32 x;
     @field int32 y;

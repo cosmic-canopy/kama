@@ -1469,7 +1469,7 @@ static inline kama_string kama_fmt_char(uint32_t cp) {
     return kama_string_from_raw(b, 0, (int32_t)n);
 }
 
-// Format-specifier `flags` bitmask shared by the width/precision helpers below: bit0 zero-pad, bit1
+// Formattable-specifier `flags` bitmask shared by the width/precision helpers below: bit0 zero-pad, bit1
 // left-align (`-`), bit2 force a leading `+` on non-negatives. Assembled into a printf conversion — `0` is
 // dropped when left-aligning (printf makes `-` win), matching C semantics. `+` is only emitted for the signed
 // helpers (it is a no-op / ill-formed for `%u`).

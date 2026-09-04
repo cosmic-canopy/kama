@@ -1,4 +1,4 @@
-// KBIN round-trip of a bare collection (a DynamicArray is a first-class Serialize/Deserialize value). Returns 60.
+// KBIN round-trip of a bare collection (a DynamicArray is a first-class Serializable/Deserializable value). Returns 60.
 import {
     std::serialization::binary::encode,
     std::serialization::binary::decode,

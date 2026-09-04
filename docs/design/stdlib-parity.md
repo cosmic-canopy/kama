@@ -38,7 +38,7 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > 2. **Generic inference could not bind `T` from a `View<T>` argument** — only a *bare* `T x` parameter was
 >    inferable, which is why `tickAll::<Timer>` in the ECS fixture carried a turbofish. Now unifies type
 >    arguments positionally.
-> 3. **A generic's contract bounds resolved in the CALLER's namespace**, so `parse<T: FromStr>` demanded
+> 3. **A generic's contract bounds resolved in the CALLER's namespace**, so `parse<T: Parseable>` demanded
 >    every caller import a marker contract they never name. Bounds now resolve in the template's home scope.
 > 4. **`exprTypeNode` could not type a negated literal or a non-generic call result**, so `abs(x: -5.0)`
 >    and `log(x: exp(x: 1.0))` failed to infer once math went generic. Unary-minus and non-generic call
@@ -54,8 +54,8 @@ record — see the maintenance table at the top of [ROADMAP.md](../ROADMAP.md).*
 > ⚠️ **`Order<Owned<T>>` is not instantiable**: a `ref` parameter may not name a smart pointer. Sort a
 > container of the resources themselves.
 >
-> ✅ **The conformance mechanism M2a leaned on has since been replaced.** `Real`, `FromStr` and
-> `FromStrRadix` exist as contracts only because an intrinsic had no way to declare conformance; it now
+> ✅ **The conformance mechanism M2a leaned on has since been replaced.** `Real`, `Parseable` and
+> `ParseableRadix` exist as contracts only because an intrinsic had no way to declare conformance; it now
 > has one (`type intrinsic <…> implements C`), and the retroactive block is gone — the contract-model
 > campaign is complete, and what the language now *is* lives in [SPEC.md](../SPEC.md).
 

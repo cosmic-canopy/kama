@@ -1,6 +1,6 @@
 // Object-graph round-trip with a cycle: node 1 owns node 2 (Shared forward edge), node 2 holds a Weak
-// back-edge to node 1. Serialize terminates (the parent is already interned, so the back-edge writes its id)
-// and is leak-free (the Weak breaks the ownership cycle). Deserialize rebuilds both edges — the forward
+// back-edge to node 1. Serializable terminates (the parent is already interned, so the back-edge writes its id)
+// and is leak-free (the Weak breaks the ownership cycle). Deserializable rebuilds both edges — the forward
 // `Shared` and the `Weak` back-edge (re-`downgrade`d onto the reconstructed owner) — proven by a re-encode
 // that reproduces the exact wire; ASan proves the rebuilt cycle is still leak-free. A never-null Shared can't
 // bootstrap a cycle, so the edges are nullable (Optional); `0` = absent/expired.
@@ -11,7 +11,7 @@ import {
     std::memory::Weak,
 };
 
-@generate(Serialize, Deserialize)
+@generate(Serializable, Deserializable)
 type resource Node {
     @field int32 id;
     @field Optional<Shared<Node>> next;   // owns (forward edge)

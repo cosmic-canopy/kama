@@ -1,7 +1,7 @@
-// `@generate(Format)` rejects a field whose type does not implement Format — the derive can only dump
-// primitives/strings and types that are themselves Format (v1 scope; Optional/collections are the same case).
-@generate(of) type value Plain { public int32 x; }          // constructible, but NOT `implements Format`
-@generate(Format, of) type value Wrap { public Plain p; }
+// `@generate(Formattable)` rejects a field whose type does not implement Formattable — the derive can only dump
+// primitives/strings and types that are themselves Formattable (v1 scope; Optional/collections are the same case).
+@generate(of) type value Plain { public int32 x; }          // constructible, but NOT `implements Formattable`
+@generate(Formattable, of) type value Wrap { public Plain p; }
 
 fn int32 main() {
     Wrap w = Wrap.of(p: Plain.of(x: 1i32));
