@@ -1,0 +1,16 @@
+// The multi-file twin of tests/generic_dtor_static.kama: the static and the generic type live HERE, the
+// instantiation in main.kama — a different translation unit. Reordering the single-file output would
+// not have fixed this one: `Box<int32>`'s bodies are `static inline` in the shared header, so from
+// main.c they named a C-`static` private to a.c. The static now has external linkage, declared in the
+// header and defined once here.
+export { Box, dropsSoFar };
+
+static int32 drops = 0;
+
+type resource Box<T> {
+    T v;
+    public ctor make(T v) { this.v = v; return this; }
+    ~Box() { drops = drops + 1; }
+}
+
+fn int32 dropsSoFar() { return drops; }

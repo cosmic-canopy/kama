@@ -3084,10 +3084,14 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
-  `static` is **file-private** (internal C linkage): it may not appear in an `export { … }` list, and no <!-- xfail: export_module_static -->
-  other file — not even a sibling in the same module — can name it. Per-isolate storage is why: a second
-  translation unit could only get its own copy, which would be a silent correctness bug rather than
-  sharing. Publish a **`comptime`** if the value is constant, or a function if it is not. A `hardware`
+  `static` is **file-private**: it may not appear in an `export { … }` list, and no other file — not <!-- xfail: export_module_static -->
+  even a sibling in the same module — can name it. Per-isolate storage is why: a second translation
+  unit could only get its own copy, which would be a silent correctness bug rather than sharing.
+  Publish a **`comptime`** if the value is constant, or a function if it is not. (Privacy is the
+  language's rule, not C's: the emitted object has external linkage, declared `extern` in the shared
+  header and defined once in its unit — the shape every function has — because a **generic** type's
+  bodies are emitted in that header ahead of every unit, and a generic destructor counting into a
+  module static in its own file is ordinary code.) A `hardware`
   static (`static hardware T name`) adds the
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
   `volatile T*` for an `UnsafePtr<T>` handle. *(Destructible statics are a later MCU step.)*

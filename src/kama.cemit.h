@@ -2769,7 +2769,10 @@ private:
     void collectProgram(const std::vector<SharedCompilationUnit>& units);
     void emitHeaderContent(const std::vector<SharedCompilationUnit>& units);  // typedefs/structs/protos/macros
     void emitModuleContent(SharedCompilationUnit unit);                       // this file's vtables + defs
-    void emitModuleStaticDecl(ModuleVariableDeclaration* mv);                 // MCU step 1: module-level `static`
+    // MCU step 1: module-level `static`. `declOnly` emits the header's `extern` declaration of a MUTABLE
+    // static (nothing for a `comptime`); the default emits the definition — see the definition for why
+    // a mutable static has external linkage.
+    void emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly = false);
 };
 
 #endif // __KAMA_CEMIT_H__

@@ -26489,21 +26489,26 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     //
     // `static const` in a header gives every TU its own copy, which is exactly right for an immutable
     // compile-time value: it stays addressable (SPEC promises `@section`-placeable storage) and there is
-    // no one-definition rule to violate. A MUTABLE `static` cannot come along — per-TU copies of mutable
-    // state would be a silent correctness bug, not a fix — so it stays in its unit and is rejected at the
-    // export list instead.
-    // Only an EXPORTED one comes here. A constant its own file keeps private is reachable from nowhere
-    // else (the file rung sees to that), so it stays in its unit — which matters for a `comptime fn`
-    // table: a 256-byte `.rodata` aggregate has no business being copied into every translation unit of
-    // an MCU build to serve one file.
+    // no one-definition rule to violate. A MUTABLE `static` must not be COPIED — per-TU copies of mutable
+    // state would be a silent correctness bug, not a fix — so it is DECLARED here (`extern`, the
+    // function-prototype shape exactly) and defined once, in its unit, and it is still rejected at the
+    // export list. The declaration is what a GENERIC type's bodies need: they are emitted `static inline`
+    // in this header, before every unit, so a generic dtor counting into a module static was a clang
+    // "use of undeclared identifier" while its non-generic twin built — see emitModuleStaticDecl.
+    // Only an EXPORTED constant comes here. A constant its own file keeps private is reachable from
+    // nowhere else (the file rung sees to that), so it stays in its unit — which matters for a
+    // `comptime fn` table: a 256-byte `.rodata` aggregate has no business being copied into every
+    // translation unit of an MCU build to serve one file.
     bool anyConst = false;
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList || u == _preludeUnit) continue;
         _nsCtx = _unitCtx[u.get()];
         ScopedStr _edf(_emitDeclFile, u->name ? *u->name : std::string());   // diagnostics land on the DECLARING file
         for (auto& decl : *u->codeDeclarationList)
-            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get()))
+            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
                 if (mv->isComptime && moduleVarExported(mv)) { emitModuleStaticDecl(mv); anyConst = true; }
+                else if (!mv->isComptime) { emitModuleStaticDecl(mv, /*declOnly=*/true); anyConst = true; }
+            }
     }
     if (anyConst) *_out << "\n";
 
@@ -26651,17 +26656,33 @@ static bool isConstInitExpr(ExpressionNode* e)
 
 // MCU step 1: emit a module-level `static T name …`. Per-isolate by construction — the KAMA_ISOLATE_LOCAL
 // macro (kama_runtime.h) is `_Thread_local` on native, empty on wasm/embedded. Value/UnsafePtr/InlineArray only;
-// no RAII/move tracking (contrast the local-decl path). Emitted before bodies (file-scope def-before-use).
-void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
+// no RAII/move tracking (contrast the local-decl path).
+//
+// A MUTABLE static is DECLARED in the shared header (`declOnly`: `extern KAMA_ISOLATE_LOCAL T name;`) and
+// DEFINED in its unit, with external linkage — the shape every non-generic function already has. It used
+// to be C-`static` in its unit and nowhere else, which a body in that unit reaches by order alone; but a
+// GENERIC type's bodies are emitted `static inline` in the header, ahead of every unit, so `~Box() {
+// drops = drops + 1; }` passed `kama check` and failed clang with `use of undeclared identifier` while the
+// non-generic twin built. In a multi-file program it was worse than order: a header-inline body in any
+// OTHER unit could not reach a file-private symbol at all. Nothing is copied — one definition, in the
+// declaring unit — so the rule against per-TU copies of mutable state (see emitHeaderContent) holds; the
+// C name is already file-mangled (`_Fgds__drops`), so two files' private `drops` cannot collide. A
+// `comptime` constant stays `static const` in its unit: an unexported one is folded to a literal
+// wherever it is read, and an exported one is defined in the header (emitHeaderContent).
+//
+// The gates run in both passes; only the definition pass REPORTS, so a refused static is diagnosed once.
+void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly)
 {
     if (!mv || !mv->type || !mv->variables) return;
+    if (declOnly && mv->isComptime) return;
     std::string ty = cType(mv->type);
     bool isPtr = mv->type->value && *mv->type->value == "UnsafePtr";
     // `hardware` (MMIO/ISR) is valid on a scalar value (`volatile T`) or an `UnsafePtr<T>` handle (`volatile T*`).
     // An InlineArray/collection static with `hardware` has murky element-volatility — reject it in v1.
     if (mv->isHardware && !isPtr && _classes.count(ty) && _classes[ty].isIntrinsicColl) {
-        unsupported("`hardware` applies only to a scalar value or an `UnsafePtr<T>` static (an MMIO register or ISR flag)",
-                    mv->line);
+        if (!declOnly)
+            unsupported("`hardware` applies only to a scalar value or an `UnsafePtr<T>` static (an MMIO register or ISR flag)",
+                        mv->line);
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
@@ -26675,8 +26696,17 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
-        unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` (no destructible "
-                     "resources yet) — `" + ty + "` owns memory").c_str(), mv->line);
+        if (!declOnly)
+            unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` (no destructible "
+                         "resources yet) — `" + ty + "` owns memory").c_str(), mv->line);
+        return;
+    }
+    if (declOnly) {
+        // The declaration carries no section attribute and no initializer — both belong to the one
+        // definition, and C attaches an attribute given on any declaration to the object anyway.
+        for (auto& d : *mv->variables)
+            if (d && d->name && d->name->value)
+                *_out << "extern KAMA_ISOLATE_LOCAL " << hw << ty << " " << qualify(*d->name->value) << ";\n";
         return;
     }
     // `@section(".x")` places the static in a named linker section (flash const table, DMA RAM bank,
@@ -26688,11 +26718,12 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv)
         line(mv->line);
         // 6b-2: a `comptime NAME` is an immutable, compile-time-folded named constant. Emit plain
         // `static const` — NOT KAMA_ISOLATE_LOCAL: an immutable value is race-free to share across isolates,
-        // so it needs no per-isolate copy. A mutable `static` keeps the isolate-local storage class.
+        // so it needs no per-isolate copy. A mutable `static` keeps the isolate-local storage class, with
+        // external linkage — its `extern` declaration went out in the header (see above).
         if (mv->isComptime)
             *_out << "static const " << secAttr << hw << ty << " " << cname;
         else
-            *_out << "static " << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
+            *_out << secAttr << "KAMA_ISOLATE_LOCAL " << hw << ty << " " << cname;
         if (mv->isComptime) {
             if (!d->initializer) {
                 unsupported(("a `comptime` constant must be initialized — `" + *d->name->value

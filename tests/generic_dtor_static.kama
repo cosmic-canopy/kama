@@ -1,0 +1,36 @@
+// A GENERIC type's destructor naming a module `static` directly — the idiom every non-generic dtor
+// fixture uses to count drops (tests/out_arg_drops.kama, tests/slot_drop_elided.kama).
+//
+// This passed `kama check` and failed clang with `use of undeclared identifier '_F…__drops'`, while the
+// non-generic twin (`Plain` below) built. A generic instance's bodies are emitted `static inline` in the
+// shared header, ahead of every unit; a module static was a C-`static` DEFINED in its unit, so the
+// header body read a name that did not exist yet. tests/generic_resource.kama counts its drops through
+// `kama_trace` for exactly this reason — the workaround was the bug's fingerprint. A mutable static is
+// now declared `extern` in the header and defined once in its unit, the shape every function has.
+// Found reducing the generic-reassignment leak; a check/build divergence, the class the harness's
+// agreement phase exists for. tests/generic_dtor_static.d/ is the multi-file twin, where the static and
+// the instantiation live in different units.
+
+static int32 drops = 0;
+
+type resource Box<T> {
+    T v;
+    public ctor make(T v) { this.v = v; return this; }
+    ~Box() { drops = drops + 1; }
+}
+
+type resource Plain {
+    int32 v;
+    public ctor make(int32 v) { this.v = v; return this; }
+    ~Plain() { drops = drops + 1; }
+}
+
+fn int32 main()
+{
+    {
+        Box<int32> a = Box.make(v: 1);
+        Box<int64> b = Box.make(v: 2i64);
+        Plain p = Plain.make(v: 3);
+    }
+    return drops == 3 ? 42 : drops;   // 42 = one drop per value; anything else is the count that was seen
+}

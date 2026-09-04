@@ -1,0 +1,10 @@
+import { gds::geo::Box, gds::geo::dropsSoFar };
+
+fn int32 main()
+{
+    {
+        Box<int32> a = Box.make(v: 1);
+        Box<int64> b = Box.make(v: 2i64);
+    }
+    return dropsSoFar() == 2 ? 42 : dropsSoFar();   // 42 = both drops counted across the unit boundary
+}
