@@ -996,15 +996,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     The diagnostic anchors on the innermost user body — the frame holding the call the author can change —
     which also kept the message count at one per defect instead of one per stack frame.
 
-  - **KAMA'S UNCONDITIONAL `-fsanitize` BLOCKS `-sWASM_WORKERS`**, and with it AudioWorklet and
-    Wasm Workers generally, so there is no audio thread in the browser at all. The driver emits
-    `-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow` plus the matching
-    `-fsanitize-trap` on **every target and tier**; emscripten refuses `WASM_WORKERS` whenever any
-    `-fsanitize` is present. ⚠️ **Their analysis is sharp and worth acting on:** kama passes
-    `-fsanitize-trap`, which lowers to `__builtin_trap` with **no sanitizer runtime**, so the refusal is
-    over-broad for trap-only mode. Best fix is upstream to emscripten; otherwise lower those traps in
-    the emitted C on wasm, or a documented per-target opt-out. (Wasm Workers also need
-    SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.) **S.**
+  - **SHIPPED `0.9.160`/`0.9.161` — no `-fsanitize` flag remains, on any target or tier.** The consumer's
+    finding was that kama's unconditional `-fsanitize=integer-divide-by-zero,shift-exponent,
+    float-cast-overflow` (with `-fsanitize-trap`, so no sanitizer runtime) made emscripten refuse
+    `-sWASM_WORKERS`, and with it AudioWorklet — no audio thread in the browser at all — and that the
+    refusal was over-broad for trap-only mode. The answer taken was the second of the three they offered,
+    on every target rather than wasm alone: the four faults are now the compiler's own checks in the
+    emitted C (`KAMA_DIV`/`MOD`/`SHL`/`SHR`, `kama_f2i_chk`, and in debug `KAMA_ADD`/`SUB`/`MUL`/`NEG`
+    plus the place operators for `+=`/`++`), which cost the branch the sanitizer already cost, print a
+    message where `ud2` printed nothing, run the panic hook, and are what an `@onPanic` region can recover
+    from. Release codegen parity is asserted by `tools/check-release-arith.sh`. (Wasm Workers also need
+    SharedArrayBuffer and therefore COOP/COEP headers — a hosting constraint, not kama's.)
 - **Three defects the first external project's queue turned up, and what each one cost to find.** All
   reproduced against the shipped compiler before anything was written; two were fixed in `0.9.148` and
   `0.9.149` and the residue below is what is left.

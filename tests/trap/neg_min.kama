@@ -1,0 +1,8 @@
+// Negating TYPE_MIN is the one unary overflow: `-(-2147483648)` is 2147483648, which int32 cannot hold.
+// Debug traps (KAMA_NEG names the operation); release wraps to INT32_MIN, as `-fwrapv` defines.
+import { std::num::int32Min };
+fn int32 main() {
+    int32 m = int32Min();
+    int32 n = -m;                             // overflow -> trap (debug)
+    return n;
+}

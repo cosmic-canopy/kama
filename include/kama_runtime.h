@@ -402,6 +402,11 @@ static inline KAMA_NORETURN void kama_fcast_fail(void) {
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
+    (void)op; (void)width;
+    kama_panic_handler();
+    for (;;) {}
+}
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
     kama_panic_handler();
@@ -546,6 +551,20 @@ static inline KAMA_NORETURN void kama_fcast_fail(void) {
     const char* m = "kama: float -> int conversion is out of range (or NaN)\n";
     size_t n = 0; while (m[n]) ++n;
     (void)kama_raw_write(2, m, n);
+    kama_run_panic_hook();
+    abort();
+}
+// A signed `+ - *` or negation that overflowed a 32/64-bit type (debug tier). Like kama_sdiv_fail it can
+// report no result — the result is the one number the type cannot hold — so it names the operation.
+static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
+    extern void abort(void);
+    char buf[96]; size_t p = 0;
+    const char* a = "kama: arithmetic overflow -- int";          while (*a) buf[p++] = *a++;
+    kama_i64_to_buf(buf, &p, (long long)width);
+    const char* b = " ";                                        while (*b) buf[p++] = *b++;
+    while (*op) buf[p++] = *op++;
+    const char* c = " overflowed\n";                            while (*c) buf[p++] = *c++;
+    (void)kama_raw_write(2, buf, p);
     kama_run_panic_hook();
     abort();
 }
@@ -711,6 +730,7 @@ static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi)
     return v;
 }
 
+
 // Signed overflow TRAPS in debug and WRAPS in release — the same two-tier rule `int32`/`int64` get from
 // `-fsanitize=signed-integer-overflow` (debug only, since 0.9.125) + `-fwrapv`. `NDEBUG` is the release
 // tier's marker; the driver passes it with `-O3`. The release arm is a plain truncation, which IS the
@@ -753,6 +773,125 @@ static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi)
     float:  kama_f2i_chk((double)(x), (LO), (HI)),                              \
     double: kama_f2i_chk((double)(x), (LO), (HI)),                              \
     default: (x))
+
+// Signed `+ - *` and negation at 32/64 bits: TRAP in debug, WRAP in release — kama's own check, not the
+// toolchain's. Until 0.9.161 the debug half was `-fsanitize=signed-integer-overflow` with
+// `-fsanitize-trap`: a bare `ud2` that named nothing and could not be recovered from, and the last
+// `-fsanitize` flag standing between a wasm build and `-sWASM_WORKERS`. The release half is unchanged and
+// costs nothing: under NDEBUG every macro below is the plain C operator, and `-fwrapv` (both tiers now,
+// so the runtime's own C is defined too) makes that the defined two's-complement wrap —
+// tools/check-release-arith.sh reads the release asm to keep it true.
+//
+// VALUE operators (`KAMA_ADD(a, b)`) dispatch on the promoted result type: signed `int`/`long`/`long long`
+// take the checked helper; unsigned and float take an identity helper OF THEIR OWN TYPE, so the expression
+// keeps its type. A sub-`int` operand never reaches these — it takes KAMA_ARITH_NARROW (range-checked
+// against its own width) from the emitter, as before.
+#define KAMA_WIDE_ARITH(SUF, T, TMIN, W)                                        \
+static inline T kama_add_##SUF(T a, T b) {                                      \
+    T o; if (__builtin_add_overflow(a, b, &o)) kama_wide_arith_fail("+", (W)); return o; } \
+static inline T kama_sub_##SUF(T a, T b) {                                      \
+    T o; if (__builtin_sub_overflow(a, b, &o)) kama_wide_arith_fail("-", (W)); return o; } \
+static inline T kama_mul_##SUF(T a, T b) {                                      \
+    T o; if (__builtin_mul_overflow(a, b, &o)) kama_wide_arith_fail("*", (W)); return o; } \
+static inline T kama_neg_##SUF(T a) {                                           \
+    if (a == (TMIN)) kama_wide_arith_fail("negation", (W)); return (T)(-a); }
+#define KAMA_PLAIN_ARITH(SUF, T)                                                \
+static inline T kama_add_##SUF(T a, T b) { return (T)(a + b); }                 \
+static inline T kama_sub_##SUF(T a, T b) { return (T)(a - b); }                 \
+static inline T kama_mul_##SUF(T a, T b) { return (T)(a * b); }                 \
+static inline T kama_neg_##SUF(T a)      { return (T)(-a); }
+KAMA_WIDE_ARITH(i32, int,                INT32_MIN, 32)
+KAMA_WIDE_ARITH(l,   long,               LONG_MIN,  (int)(sizeof(long) * 8))
+KAMA_WIDE_ARITH(ll,  long long,          LLONG_MIN, 64)
+KAMA_PLAIN_ARITH(u32, unsigned int)
+KAMA_PLAIN_ARITH(ul,  unsigned long)
+KAMA_PLAIN_ARITH(ull, unsigned long long)
+KAMA_PLAIN_ARITH(f32, float)
+KAMA_PLAIN_ARITH(f64, double)
+#define KAMA_VAL_SEL(OP, x) _Generic((x),                                       \
+    int: kama_##OP##_i32, long: kama_##OP##_l, long long: kama_##OP##_ll,       \
+    unsigned int: kama_##OP##_u32, unsigned long: kama_##OP##_ul,               \
+    unsigned long long: kama_##OP##_ull, float: kama_##OP##_f32, double: kama_##OP##_f64)
+#ifdef NDEBUG
+#  define KAMA_ADD(a, b) ((a) + (b))
+#  define KAMA_SUB(a, b) ((a) - (b))
+#  define KAMA_MUL(a, b) ((a) * (b))
+#  define KAMA_NEG(a)    (-(a))
+#else
+#  define KAMA_ADD(a, b) KAMA_VAL_SEL(add, (a) + (b))((a), (b))
+#  define KAMA_SUB(a, b) KAMA_VAL_SEL(sub, (a) - (b))((a), (b))
+#  define KAMA_MUL(a, b) KAMA_VAL_SEL(mul, (a) * (b))((a), (b))
+#  define KAMA_NEG(a)    KAMA_VAL_SEL(neg, (a) + 0)((a))
+#endif
+
+// PLACE operators — compound assignment and `++`/`--` — take the place BY ADDRESS, so `a[idx()] += 1`
+// evaluates `idx()` exactly once (a rewrite to `x = x + 1` would not), and `x++` in value position hands
+// back the old value. One helper per (op, storage type); `_Generic` keys on the POINTER type, which keeps
+// a `volatile` (`static hardware`) place distinct and reachable. Three classes of arithmetic: a signed
+// sub-`int` place computes in `long long` and range-checks against its own width (debug) or truncates
+// (release) — the two-tier rule of KAMA_ARITH_NARROW, and the check C's `x += y` never had (it promoted,
+// added and truncated silently — the one shape the D-arith rule missed); a wide signed place uses the
+// value operators above; unsigned and float are the plain operator. `/= %= <<= >>=` check in EVERY tier.
+#define KAMA_OPSYM_add +
+#define KAMA_OPSYM_sub -
+#define KAMA_OPSYM_mul *
+#define KAMA_VAL_add(a, b) KAMA_ADD(a, b)
+#define KAMA_VAL_sub(a, b) KAMA_SUB(a, b)
+#define KAMA_VAL_mul(a, b) KAMA_MUL(a, b)
+#define KAMA_KIND_NARROW(NAME, T, LO, HI, a, b) KAMA_ARITH_NARROW(T, LO, HI, (long long)(a) KAMA_OPSYM_##NAME (long long)(b))
+#define KAMA_KIND_WIDE(NAME, T, LO, HI, a, b)   KAMA_VAL_##NAME((a), (b))
+#define KAMA_KIND_PLAIN(NAME, T, LO, HI, a, b)  ((a) KAMA_OPSYM_##NAME (b))
+#define KAMA_PLACE_ARITH(SUF, Q, T, LO, HI, KIND)                               \
+static inline T kama_addeq_##SUF(Q T* p, T b) { T v = (T)KIND(add, T, LO, HI, *p, b); *p = v; return v; } \
+static inline T kama_subeq_##SUF(Q T* p, T b) { T v = (T)KIND(sub, T, LO, HI, *p, b); *p = v; return v; } \
+static inline T kama_muleq_##SUF(Q T* p, T b) { T v = (T)KIND(mul, T, LO, HI, *p, b); *p = v; return v; } \
+static inline T kama_postadd_##SUF(Q T* p, T b) { T o = *p; kama_addeq_##SUF(p, b); return o; }          \
+static inline T kama_postsub_##SUF(Q T* p, T b) { T o = *p; kama_subeq_##SUF(p, b); return o; }
+#define KAMA_PLACE_INT(SUF, Q, T)                                               \
+static inline T kama_diveq_##SUF(Q T* p, T b) { T v = (T)KAMA_DIV(*p, b); *p = v; return v; }            \
+static inline T kama_modeq_##SUF(Q T* p, T b) { T v = (T)KAMA_MOD(*p, b); *p = v; return v; }            \
+static inline T kama_shleq_##SUF(Q T* p, long long n) { T v = (T)KAMA_SHL(*p, n); *p = v; return v; }    \
+static inline T kama_shreq_##SUF(Q T* p, long long n) { T v = (T)KAMA_SHR(*p, n); *p = v; return v; }
+#define KAMA_PLACE_FLOAT(SUF, Q, T)                                             \
+static inline T kama_diveq_##SUF(Q T* p, T b) { T v = (T)(*p / b); *p = v; return v; }
+#define KAMA_PLACE_TYPES(Q, V)                                                                          \
+KAMA_PLACE_ARITH(i8##V,  Q, signed char,        -128,       127,        KAMA_KIND_NARROW) KAMA_PLACE_INT(i8##V,  Q, signed char)        \
+KAMA_PLACE_ARITH(i16##V, Q, short,              -32768,     32767,      KAMA_KIND_NARROW) KAMA_PLACE_INT(i16##V, Q, short)              \
+KAMA_PLACE_ARITH(i32##V, Q, int,                0, 0,                   KAMA_KIND_WIDE)   KAMA_PLACE_INT(i32##V, Q, int)                \
+KAMA_PLACE_ARITH(l##V,   Q, long,               0, 0,                   KAMA_KIND_WIDE)   KAMA_PLACE_INT(l##V,   Q, long)               \
+KAMA_PLACE_ARITH(ll##V,  Q, long long,          0, 0,                   KAMA_KIND_WIDE)   KAMA_PLACE_INT(ll##V,  Q, long long)          \
+KAMA_PLACE_ARITH(u8##V,  Q, unsigned char,      0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_INT(u8##V,  Q, unsigned char)      \
+KAMA_PLACE_ARITH(u16##V, Q, unsigned short,     0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_INT(u16##V, Q, unsigned short)     \
+KAMA_PLACE_ARITH(u32##V, Q, unsigned int,       0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_INT(u32##V, Q, unsigned int)       \
+KAMA_PLACE_ARITH(ul##V,  Q, unsigned long,      0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_INT(ul##V,  Q, unsigned long)      \
+KAMA_PLACE_ARITH(ull##V, Q, unsigned long long, 0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_INT(ull##V, Q, unsigned long long) \
+KAMA_PLACE_ARITH(f32##V, Q, float,              0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_FLOAT(f32##V, Q, float)            \
+KAMA_PLACE_ARITH(f64##V, Q, double,             0, 0,                   KAMA_KIND_PLAIN)  KAMA_PLACE_FLOAT(f64##V, Q, double)
+KAMA_PLACE_TYPES(, )
+KAMA_PLACE_TYPES(volatile, v)
+#define KAMA_PSEL(OP, SUF, T) T*: kama_##OP##_##SUF, volatile T*: kama_##OP##_##SUF##v
+#define KAMA_PLACE_SEL_INT(OP, p) _Generic((p),                                 \
+    KAMA_PSEL(OP, i8, signed char), KAMA_PSEL(OP, i16, short), KAMA_PSEL(OP, i32, int),          \
+    KAMA_PSEL(OP, l, long), KAMA_PSEL(OP, ll, long long),                                        \
+    KAMA_PSEL(OP, u8, unsigned char), KAMA_PSEL(OP, u16, unsigned short),                        \
+    KAMA_PSEL(OP, u32, unsigned int), KAMA_PSEL(OP, ul, unsigned long),                          \
+    KAMA_PSEL(OP, ull, unsigned long long))
+#define KAMA_PLACE_SEL(OP, p) _Generic((p),                                     \
+    KAMA_PSEL(OP, i8, signed char), KAMA_PSEL(OP, i16, short), KAMA_PSEL(OP, i32, int),          \
+    KAMA_PSEL(OP, l, long), KAMA_PSEL(OP, ll, long long),                                        \
+    KAMA_PSEL(OP, u8, unsigned char), KAMA_PSEL(OP, u16, unsigned short),                        \
+    KAMA_PSEL(OP, u32, unsigned int), KAMA_PSEL(OP, ul, unsigned long),                          \
+    KAMA_PSEL(OP, ull, unsigned long long),                                                      \
+    KAMA_PSEL(OP, f32, float), KAMA_PSEL(OP, f64, double))
+#define KAMA_ADDEQ(p, b)   KAMA_PLACE_SEL(addeq, p)((p), (b))
+#define KAMA_SUBEQ(p, b)   KAMA_PLACE_SEL(subeq, p)((p), (b))
+#define KAMA_MULEQ(p, b)   KAMA_PLACE_SEL(muleq, p)((p), (b))
+#define KAMA_DIVEQ(p, b)   KAMA_PLACE_SEL(diveq, p)((p), (b))
+#define KAMA_MODEQ(p, b)   KAMA_PLACE_SEL_INT(modeq, p)((p), (b))
+#define KAMA_SHLEQ(p, n)   KAMA_PLACE_SEL_INT(shleq, p)((p), (long long)(n))
+#define KAMA_SHREQ(p, n)   KAMA_PLACE_SEL_INT(shreq, p)((p), (long long)(n))
+#define KAMA_POSTADD(p, b) KAMA_PLACE_SEL(postadd, p)((p), (b))
+#define KAMA_POSTSUB(p, b) KAMA_PLACE_SEL(postsub, p)((p), (b))
 
 // InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
 // it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.

@@ -1,0 +1,20 @@
+// A compound assignment evaluates its PLACE exactly once. `a[idx()] += 1` reaches the element through one
+// `__at` call (a pointer), and the place operators take that pointer — a rewrite to `a[idx()] = a[idx()] + 1`
+// would call `idx()` twice. `calls` counts the index function; `i++` in value position hands back the old
+// value; `x += y` on an int8 stays checked (its trap twin is tests/trap/compound_overflow_i8).
+import { std::collections::DynamicArray };
+static int32 calls = 0;
+fn isize idx() { calls = calls + 1; return 1; }
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 10); a.add(item: 20); a.add(item: 30);
+    a[idx()] += 5;                        // a[1] = 25, calls = 1
+    a[idx()] *= 2;                        // a[1] = 50, calls = 2
+    int32 i = 5;
+    int32 old = i++;                      // old = 5, i = 6
+    int8 s = 100i8;
+    s += 27i8;                            // 127: fits, no trap
+    int64 w = 1i64;
+    w <<= 40i64;                          // 2^40, checked amount
+    return a[1] - 50 + calls + old + cast<int32>(s) - 127 + cast<int32>(w >> 40i64) - 1 + i;   // 0+2+5+0+0+6 = 13
+}

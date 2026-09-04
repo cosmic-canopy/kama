@@ -9547,8 +9547,15 @@ int main(int argc, char** argv)
         // case it was buying is checked explicitly instead — `kama_sdiv_i32`/`_i64` in kama_runtime.h,
         // emitted for a signed division at every width, in every build. One predictable branch per
         // division (already a 20-40 cycle instruction) buys back the whole release tier.
-        if (release) cmd << "-fwrapv ";
-        else         cmd << "-fsanitize=signed-integer-overflow -fsanitize-trap=signed-integer-overflow ";
+        //
+        // ⚠️ And since 0.9.161 the DEBUG trap is kama's own as well (KAMA_ADD/SUB/MUL/NEG and the place
+        // operators in kama_runtime.h, `__builtin_*_overflow` under !NDEBUG), so no `-fsanitize` flag
+        // remains in either tier — a debug overflow prints which operation overflowed, runs the panic
+        // hook and is recoverable inside an `@onPanic` region, and emscripten no longer refuses
+        // `-sWASM_WORKERS` for a debug wasm build either. `-fwrapv` now goes to BOTH tiers: it costs
+        // nothing, and it is what makes the runtime header's own C arithmetic defined once the sanitizer
+        // is gone.
+        cmd << "-fwrapv ";
         // --target embedded: a freestanding, hosted-runtime-free compile that stops at an OBJECT. No libc
         // (`-nostdlib`), no OS/hosting assumptions (`-ffreestanding`), and `-c` so no link is attempted —
         // the crt0/startup + linker script are the user's per-chip link step. `-DKAMA_TARGET_EMBEDDED`

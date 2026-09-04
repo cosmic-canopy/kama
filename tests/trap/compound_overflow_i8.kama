@@ -1,0 +1,11 @@
+// The compound form of the sub-`int` overflow rule. `x += y` on an `int8` used to promote, add and truncate
+// silently — C's `+=`, which no sanitizer watches — while `x = x + y` trapped through KAMA_ARITH_NARROW.
+// The place operators (KAMA_ADDEQ, by address) give the compound form the same check: 100 + 100 = 200 is
+// not representable in int8, so this traps in debug exactly as tests/trap/arith_overflow_i8 does.
+import { std::num::int8Max };
+fn int32 main() {
+    int8 x = int8Max() - int8Max() + 100i8;   // 100, opaque
+    int8 y = int8Max() - int8Max() + 100i8;   // 100, opaque
+    x += y;                                   // 200 does not fit -> trap
+    return cast<int32>(x);
+}

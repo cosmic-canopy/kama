@@ -1286,8 +1286,15 @@ implement is a separate error (`tests/xfail/contract_arg_nonconforming.kama` and
 
 **No undefined behavior in arithmetic** (Rust's model). Every integer operation is *defined* — never C's
 UB:
-- **Signed overflow** (`+`/`-`/`*`) **traps** in debug builds (catches the accidental-overflow bug during
-  development) and **wraps** two's-complement in release (`-fwrapv`, zero-cost, *defined* — not UB).
+- **Signed overflow** (`+`/`-`/`*`, and `-x` on `TYPE_MIN`) **traps** in debug builds (catches the
+  accidental-overflow bug during development — `kama: arithmetic overflow -- int32 + overflowed`,
+  `tests/trap/signed_overflow`, `neg_min`) and **wraps** two's-complement in release (`-fwrapv`, zero-cost,
+  *defined* — not UB). The debug check is the compiler's own (`KAMA_ADD`/`SUB`/`MUL`/`NEG`, the overflow
+  builtins under `!NDEBUG`, the plain operator under `NDEBUG`), so a debug overflow prints which operation
+  overflowed, runs the panic hook and is recoverable inside an `@onPanic` region. **A compound assignment
+  and `++`/`--` follow the same rule** through place operators that take the place by address — `a[idx()]
+  += 1` evaluates its index exactly once, `i++` hands back the old value — which is also what gives `int8
+  x += y` the range check C's `+=` never had (`tests/trap/compound_overflow_i8`, `tests/arith_compound_place_once`).
   Intentional signed wrapping is opt-in: `std::num`'s `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
   `wrappingNegI32` (+ the `I64` set) always wrap and never trap (computed in the unsigned type), or just use
   unsigned math directly. **Unsigned overflow always wraps** (as C already defines).
@@ -1330,12 +1337,14 @@ inside an `@onPanic` region. Until `0.9.160` division by zero, a bad shift and a
 `-fsanitize-trap` — the same compare-and-branch, lowered to a bare `__builtin_trap` that printed nothing,
 ran no hook and could not be recovered from; and any `-fsanitize` at all is what made emscripten refuse
 `-sWASM_WORKERS`, so there was no audio thread in the browser.
-⚠️ **`-fsanitize=signed-integer-overflow` is passed in the DEBUG tier only**, and that is load-bearing
-rather than incidental: it is not reliably suppressed by `-fwrapv` (Apple clang does not suppress it;
-Ubuntu clang and gcc do), so passing it in release made overflow trap on one platform and wrap on
-another *and* cost a compare-and-branch on every signed add and multiply — against an invariant that
-calls release arithmetic C-parity. The release tier therefore relies on `-fwrapv` alone, with the one
-case it does not define checked explicitly. `tools/check-release-arith.sh` asserts both the semantics
+⚠️ **The two tiers differ in exactly one macro definition**, and that is load-bearing rather than
+incidental. `-fsanitize=signed-integer-overflow` used to supply the debug trap, and it was not reliably
+suppressed by `-fwrapv` (Apple clang does not suppress it; Ubuntu clang and gcc do), so passing it in
+release made overflow trap on one platform and wrap on another *and* cost a compare-and-branch on every
+signed add and multiply — against an invariant that calls release arithmetic C-parity. Since `0.9.161` no
+tier passes it: the debug check is `KAMA_ADD` & co. under `!NDEBUG`, and under `NDEBUG` the same macros
+are the plain operator, so the release tier relies on `-fwrapv` alone with the one case it does not
+define (`TYPE_MIN / -1`) checked explicitly. `tools/check-release-arith.sh` asserts both the semantics
 and the zero cost, on a tier the fixture suite cannot build.
 
 ```kama
@@ -4277,9 +4286,8 @@ every module into **one unity translation unit** so the C compiler can inline ac
 which is what lands numeric code at C parity (kama has no incremental object cache, so a build already compiles
 all modules in a single invocation — the unity fold costs nothing and only unlocks inlining). The
 numeric-safety checks (division by zero, `TYPE_MIN / -1`, a bad shift, an out-of-range float cast, a
-narrowing cast) are the compiler's own, in the emitted C, in **every** build — no sanitizer flag; signed
-overflow traps in debug (`-fsanitize=signed-integer-overflow`, `__builtin_trap`) and wraps (`-fwrapv`) in
-release.
+narrowing cast, signed overflow in debug) are the compiler's own, in the emitted C — **no `-fsanitize` flag
+in either tier**; signed overflow wraps (`-fwrapv`, passed in both tiers) in release.
 
 **One UBSan sub-check is permanently exempt: `function`.** A kama program built under
 `-fsanitize=undefined` should add `-fno-sanitize=function`, as the test suite does. This is a **deliberate,

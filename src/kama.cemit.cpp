@@ -3119,6 +3119,23 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
     return "";   // unhandled form → caller degrades to a bare "assertion failed"
 }
 
+// The PLACE operator (kama_runtime.h) a compound assignment lowers to — `x += y` is `KAMA_ADDEQ(&(x), y)`,
+// the place taken by ADDRESS so `a[idx()] += 1` evaluates its index once and a sub-`int` place gets the
+// range check C's `+=` never had. "" for the bitwise forms, which stay C's own operator (no fault to check).
+static const char* placeOpMacro(int token)
+{
+    switch (token) {
+        case PLUSEQ:  return "KAMA_ADDEQ";
+        case MINUSEQ: return "KAMA_SUBEQ";
+        case STAREQ:  return "KAMA_MULEQ";
+        case DIVEQ:   return "KAMA_DIVEQ";
+        case MODEQ:   return "KAMA_MODEQ";
+        case LTLTEQ:  return "KAMA_SHLEQ";
+        case GTGTEQ:  return "KAMA_SHREQ";
+        default:      return "";
+    }
+}
+
 std::string CEmitter::assignmentOperator(int token)
 {
     switch (token) {
@@ -3471,6 +3488,16 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // is inside `KAMA_DIV` (kama_div_i32/_i64 check the OPERANDS: `INT64_MIN / -1` overflows the very
         // `long long` a result check would compute it in), promised in EVERY build since the release tier
         // dropped the signed-overflow sanitizer (see the driver's note).
+        //
+        // ...and the WIDE half of the overflow rule: `+ - *` on `int32`/`int64` (nothing narrows, so the
+        // arm above cannot see them) trap in debug and wrap in release through `KAMA_ADD`/`SUB`/`MUL` —
+        // the plain operator under NDEBUG, `__builtin_*_overflow` otherwise. It used to be
+        // `-fsanitize=signed-integer-overflow`, the last sanitizer flag the driver passed.
+        // (`resT` non-empty here is an UNSIGNED sub-`int` — the signed one returned above — whose wrap is
+        // defined and whose result `open` truncates; it stays the plain operator.)
+        if (arithTok && !vec && resT.empty())
+            return std::string(token == PLUS ? "KAMA_ADD(" : token == MINUS ? "KAMA_SUB(" : "KAMA_MUL(")
+                 + l + ", " + r + ")";
         return open + body + ")";   // primitives — `open` narrows a sub-`int` result
     }
 
@@ -4076,6 +4103,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 // Compound (a[i] += x): mutate the element in place through the bounds-checked `*__at`
                 // place — the index is evaluated ONCE (no double `__get`+`__set`), and a nested
                 // `a[i][j] += x` works because `recvExpr` is itself a place.
+                // An arithmetic compound goes through the place operator with the `__at` POINTER — the
+                // index is evaluated once, the sub-`int` result is range-checked, `/=` checks its divisor.
+                if (*placeOpMacro(v->token))
+                    return std::string(placeOpMacro(v->token)) + "(" + coll + "__at(&(" + recvExpr + "), " + idx
+                         + "), (" + rhs + "))";
                 return "((*" + coll + "__at(&(" + recvExpr + "), " + idx + ")) "
                             + assignmentOperator(v->token) + " (" + rhs + "))";
             }
@@ -4083,6 +4115,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (indexesUserOp(ea)) {
                 std::string place = emitPlace(v->unaryExpression);
                 std::string rhs = emitExpression(v->expression);
+                if (*placeOpMacro(v->token))
+                    return std::string(placeOpMacro(v->token)) + "(&(" + place + "), (" + rhs + "))";
                 return "(" + place + " " + assignmentOperator(v->token) + " (" + rhs + "))";
             }
             // Raw pointer store `p[i] = v` — only inside an `unsafe fn`.
@@ -4094,6 +4128,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 unsupported("raw pointer access requires an `unsafe fn`", ea->line);
                 return "0";
             }
+            if (*placeOpMacro(v->token))
+                return std::string(placeOpMacro(v->token)) + "(&((" + emitExpression(recv) + ")[" + ridx + "]), ("
+                     + emitExpression(v->expression) + "))";
             return "((" + emitExpression(recv) + ")[" + ridx + "] "
                        + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
         }
@@ -4115,6 +4152,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             rejectMixedOperands(binTok, v->unaryExpression, v->expression,
                                 assignmentOperator(v->token), v->line);
         }
+        // Arithmetic and shift compounds on a primitive place: `KAMA_ADDEQ(&(x), y)` — see placeOpMacro.
+        // A `hardware` (volatile) static and a `ref` parameter (already a pointer, so `&(*p)`) both work.
+        if (*placeOpMacro(v->token))
+            return std::string(placeOpMacro(v->token)) + "(&(" + emitExpression(v->unaryExpression) + "), ("
+                 + emitExpression(v->expression) + "))";
         return "(" + emitExpression(v->unaryExpression) + " "
                    + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
     }
@@ -4157,16 +4199,18 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         checkConstWrite(v->expression, v->line);
         std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // op_inc/op_dec on a user type
         if (!uop.empty()) return uop;
-        std::string op = (v->token == PLUSPLUS) ? "++" : "--";
-        return "(" + op + emitExpression(v->expression) + ")";
+        // `++x` is `x += 1` — the place operator, by address: checked at every width, evaluated once.
+        return std::string(v->token == PLUSPLUS ? "KAMA_ADDEQ(&(" : "KAMA_SUBEQ(&(")
+             + emitExpression(v->expression) + "), 1)";
     }
 
     if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
         checkConstWrite(v->expression, v->line);
         std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   //  (mutating in place — pre/post alike)
         if (!uop.empty()) return uop;
-        std::string op = (v->token == PLUSPLUS) ? "++" : "--";
-        return "(" + emitExpression(v->expression) + op + ")";
+        // `x++` hands back the OLD value (tests/post_increment_expr) through the post variant.
+        return std::string(v->token == PLUSPLUS ? "KAMA_POSTADD(&(" : "KAMA_POSTSUB(&(")
+             + emitExpression(v->expression) + "), 1)";
     }
 
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
@@ -4187,8 +4231,18 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // binary half above.
         if (v->token != EXCLAMATION) {
             const std::string t = typeOfExpr(v->expression);
-            if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t))
+            if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t)) {
+                // `-x` on a signed sub-`int` is the one unary overflow (`-(-128i8)` is 128): range-checked
+                // like the binary half, trapping in debug and truncating in release.
+                std::string lo, hi;
+                if (v->token == MINUS && cNumSigned(t) && cNumRangeText(t, lo, hi))
+                    return "KAMA_ARITH_NARROW(" + t + ", " + lo + ", " + hi + ", -(long long)("
+                         + emitExpression(v->expression) + "))";
                 return "(" + t + ")(" + op + emitExpression(v->expression) + ")";
+            }
+            // ...and at 32/64 bits `-TYPE_MIN` overflows too: KAMA_NEG traps in debug, wraps in release.
+            if (v->token == MINUS && (t.empty() || (cNumBits(t) && !cNumFloat(t)) || cNumFloat(t)))
+                return "KAMA_NEG(" + emitExpression(v->expression) + ")";
         }
         return "(" + op + emitExpression(v->expression) + ")";
     }
