@@ -767,11 +767,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the *other* leak in the same file — five hand-written `wgpu*Release` calls per frame, all on the
     happy path, which any later early `return` would leak. Two halves, two different bugs, and a wrapper
     wants both.
-  - **Build settings do not propagate from a dependency.** `cflags`, `ldflags` and `link` are all
-    **ignored on a dependency**, so every consumer must repeat the block and drift between them is
-    silent. That half is a bug rather than ergonomic friction. The other half — no way to hand project
-    C/C++ sources to the build at all, so compiling your own C needs an out-of-band Makefile — is a
-    genuine gap; a `csources` key is the shape suggested.
+  - **Build settings did not propagate from a dependency — FIXED `0.9.165`-`0.9.168`.** See the
+    as-shipped record below (*The build-settings campaign*).
   - **The `std::gpu` seam is half-built.** `kama_gpu_pump` calls `glfwPollEvents()` and **discards the
     queue** (the web pump is `{ return 1; }`), so there is no keyboard, mouse, wheel, pointer-lock,
     resize, focus or gamepad on either target; and the surface is configured at a hardcoded 512×512 with
@@ -866,16 +863,47 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     case completely, and nothing else does", which needs the foreign-thread row to be safe at all, the
     `@noheap` transitivity that shipped for the guarantee to be real, and the panic-policy row before it
     can ship — a bounds miss in a mixer currently aborts the process from a thread nobody can see.
-  - **Build settings, now two rows.** `cflags`/`ldflags`/`link` being ignored on a dependency is a BUG
-    (they reclassified it as one and that is right): the consumer repeats the block in two packages, and
-    also copies kama's own macOS/Linux window and framework link flags out of the driver, because kama
-    adds them only for a program that externs its own `kama_gpu.h` — so a project with its own seam rots
-    silently when that list changes. The genuine GAP beside it is that a project cannot hand its own
-    C/C++ sources to the build at all; their tree drives C, C++ and a third-party cmake project from an
-    out-of-band Makefile, and M6's whisper.cpp is the same shape. `--js-library` has the same problem
-    with a sharper edge: it is smuggled through per-target `cflags`, and the stdlib's own
-    `-sEXPORTED_RUNTIME_METHODS` is emitted AFTER those, so it wins a collision unless the project uses
-    `ldflags` instead.
+  - **Build settings — SHIPPED `0.9.165` through `0.9.168`.** Their two complaints and one more this
+    campaign found, with the reasoning that is worth not re-deriving:
+    - **A project tier had to come first.** `cflags`/`ldflags` existed only under `select.TARGET.<NAME>`,
+      and a target is matched BY NAME — so `--target aarch64-linux-gnu`, an anonymous triple, matched no
+      entry and got none of them. Decisively: a DEPENDENCY cannot know how its consumer spells the
+      target, so propagation alone would have been half-dead on arrival.
+    - **Per-manifest resolution, then concatenation.** Each manifest resolves under its own precedence
+      and only then are the lists joined, because `link`-REPLACES applied globally would let a dependency
+      delete the consumer's `-lm` — adding a dependency could break your link.
+    - **Read from the `.kama/deps` VIEW, not from `kama.lock`**: the view is flat and already transitive,
+      and `kama.local.json` `overrides` repoint it without touching the lock, so a lock-driven walk could
+      read settings from a dependency other than the one being compiled.
+    - **The negative half is the load-bearing one.** A rule that propagated everything would pass every
+      positive test. A dependency cannot reach the consumer's `cc`/`ar`/`sysroot`/`runtime`/`subsystem`,
+      cannot impose `no-heap` (it changes what compiles, program-wide), cannot demand a `webgpu` SDK
+      download, and cannot contribute a RELATIVE `-I` (it would resolve against the consumer's working
+      directory and silently find the consumer's own `include/`).
+    - **`emSettings` is an object, and the value's SHAPE decides its kind** — an array unions, a scalar
+      is last-wins with the project winning. An array of raw `-sFOO=1` strings would have been `cflags`
+      with extra steps, and the merge is the entire point: emcc is last-wins, so kama's own
+      `-sEXPORTED_RUNTIME_METHODS` (emitted after the project's `cflags`) silently beat any project that
+      set the same key — while simply moving the project later would have dropped the two names the
+      stdlib's JS glue needs. ⚠️ Two dependencies disagreeing on a scalar must be recorded and reported
+      AFTER the project merges: reporting during the walk refuses a manifest that had already settled it.
+    - ⚠️ **`OUTPUT=OBJECT` with more than one translation unit was UNREACHABLE**, found writing the
+      guard. The arity check sat in the single-invocation arm and counted `cFiles`, but two inputs mean
+      `nJobs > 1`, so such a build took the per-TU path, compiled each input, and "joined" them with a
+      command still carrying `-c`. No diagnostic, and an artifact nobody can use. Reachable before this
+      campaign, via `needsGpu`.
+    - ⚠️ **The reproducible-float fixture would have been VACUOUS.** It reproduces only under
+      `--release`: in debug, `a * b + c` is emitted as `KAMA_ADD(KAMA_MUL(a, b), c)` and the
+      overflow-checking macros already break the expression clang would have contracted. `run_tests.sh`
+      builds every fixture in debug, so the planned `tests/*.d` fixture would have passed identically
+      with and without the key. The oracle lives in `tools/check-buildsettings.sh` instead, and detects
+      its own vacuity on a host with no FMA.
+    - **The window/framework sub-complaint is answered by the project tier, not by hoisting kama's
+      list.** A project with its OWN window seam now writes its own `link` + per-target `ldflags`, which
+      is the right outcome: kama's hardcoded GLFW/framework list exists for a program that externs
+      `kama_gpu.h`, and a project that does not is not entitled to track it.
+    - What is left is the C++ half of `csources`, which is its own row.
+
   - **Declared NOT ours, and they agree** — the audio backend, WebGPU binding breadth, their RFC6455
     framing, module statics being per-isolate (correct behaviour), and a PATH entry that is a directory
     breaking `make` in the emscripten image. Their `ENGINE_TODO.md` holds those.
@@ -1068,13 +1096,10 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     `GlobalAllocator`. Same family as the generic-scan drift. The rule is gated on `_typeSubst.empty()`
     until this is fixed, so `Mat4 m = someVec4;` is caught in every position EXCEPT inside a generic body.
 
-  - **No way to ask for reproducible floating point.** Nothing in `src/`, `include/`, `lib/` or `prelude/`
-    mentions `-ffp-contract`, so clang's default `on` governs. Their measurement, not an argument: 10 of
-    64 random `a*b + c` triples differ from the two-statement form on aarch64-macos, and 0 with
-    `-ffp-contract=off`. arm64 has FMA; wasm32 MVP and baseline x86-64 SSE2 do not, so a program whose
-    correctness IS bit-reproducibility across targets diverges browser from native. The raw per-target
-    `cflags` escape works and does not PROPAGATE, which is the half that bites and is the dependency-flags
-    row. Wants a manifest key.
+  - **No way to ask for reproducible floating point — SHIPPED `0.9.169`** as the manifest key
+    `reproducible-float`. Measured here rather than taken from the report: **13** of 64 random `a*b + c`
+    triples differ on aarch64-macos, 0 with `-ffp-contract=off` — and ONLY in a release build, which is
+    the finding worth keeping (see the vacuous-fixture note above).
 
   - **An `InlineArray` field's SIZE had to be imported with the type — FIXED `0.9.150` (their KB-11).**
     Indexing `b.cells[0]` across a package boundary needed `geom::N` in the reader's import block; the
