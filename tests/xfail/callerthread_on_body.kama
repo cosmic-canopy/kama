@@ -1,0 +1,5 @@
+// `@callerThread` states a promise about a CALLER the compiler cannot see, so it belongs on the `fnptr`
+// type a C API takes, or on an `expose fn` a host calls. On an ordinary function there is no crossing for
+// it to describe, and an attribute the compiler never checks would read as an assertion it verified.
+@callerThread fn void tick() { }   // ERROR: nothing to describe
+fn int32 main() { tick(); return 0; }

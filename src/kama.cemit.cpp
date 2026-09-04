@@ -3972,6 +3972,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 if (!v->synthesized)
                     checkReach(key, nm, "this reference", v->line, refFilePath(),
                                v->qualifier && !v->qualifier->empty());
+                recordStaticRead(key, nm, v->line);   // the foreign-entry walk's read fact — this is the one funnel
                 return key;
             }
         }
@@ -4056,6 +4057,15 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
         checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
+        // A plain `=` STORES to its target: the LHS mention that follows is a write, not a read, and the
+        // foreign-entry walk must not count it (writing a static inside the region is per-thread scratch).
+        // A compound `+=` reads first, so it keeps the read; `recordStaticRead` consumes this once.
+        if (v->token == EQ && v->unaryExpression) {
+            const std::string root = rootBinding(v->unaryExpression);
+            if (!root.empty() && root != "this" && !_localTypes.count(root) && !_paramNames.count(root)
+                && !(_currentClass && findFieldOwner(_currentClass, root)))
+                _staticWriteLhs = resolveModuleVar(root, nullptr);
+        }
         // The window defeated from the INSIDE. An alias names one window over one place for the extent of
         // one block; reseating it to some other container's view keeps the name and drops the bound, so
         // the rest of the block reads a view nothing froze.
@@ -17425,6 +17435,7 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     // The window's freeze rides this helper for the same reason the const rules do: it is on every write
     // path there is. Independent of the const arms below, so a write that is both gets both sentences.
     rejectFrozenWrite(target, srcLine);
+    recordStaticWrite(target);   // the foreign-entry walk's write fact rides the same "every write path" helper
     std::string root = rootBinding(target);
     // A comptime parameter is a compile-time value, not storage — `F = 3` used to emit
     // `((int32_t)16) = 3` and die in clang against generated code. Reported here rather than through
@@ -18649,6 +18660,12 @@ void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t,
         unsupported((t.display + " is bound to `" + demangleForDisplay(sigCName) + "`, which is `@noheap` — "
                      "declare `" + t.name + "` `@noheap` too, so a no-heap caller calling through the "
                      "slot still gets the guarantee").c_str(), line);
+    // A function bound to a `@foreignEntry` signature IS a foreign entry: the signature declared that the
+    // C API may call it on a thread kama did not create, and every bind position funnels through here.
+    // First root wins, so a body the author also annotated keeps its own line.
+    if (sit->second.foreignEntry && !_probingTemplate && !t.cName.empty() && !_foreignEntryFns.count(t.cName))
+        _foreignEntryFns[t.cName] = ForeignEntryFn{ demangleForDisplay(t.cName), line, diagFile(),
+                                                    demangleForDisplay(sigCName) };
 }
 
 // A `fnptr`-typed destination in any position OTHER than a local initializer — an assignment, a call
@@ -20888,6 +20905,81 @@ void CEmitter::checkNoHeapTransitive()
     }
 }
 
+// ── The foreign-entry static-read walk (ROADMAP row 1) ───────────────────────────────────────────────
+// A module `static` is `KAMA_ISOLATE_LOCAL` — one object per thread. A function that runs on a thread
+// kama did not create (an audio render callback, a completion port, an ISR) therefore sees the DECLARED
+// initialiser in every static, never a value some isolate assigned; the program compiles, runs, and reads
+// an empty mixer buffer. `@foreignEntry` names that region so this walk can say, at compile time, "this
+// read can only ever see the initialiser". The facts are recorded where every read and every write already
+// passes — the identifier arm of emitExpression and checkConstWrite — so detection cannot drift from
+// emission, and the region is closed over the same call graph the no-heap proof walks.
+void CEmitter::recordStaticRead(const std::string& key, const std::string& name, int line)
+{
+    if (_probingTemplate || _currentFunc.empty()) return;
+    if (key == _staticWriteLhs) { _staticWriteLhs.clear(); return; }   // the store target of a plain `=` — not a read
+    if (_constStatics.count(key)) return;                             // `comptime`: a C `static const`, ONE object
+    auto& m = _staticReads[_currentFunc];
+    if (!m.count(key)) m[key] = StaticRead{ name, line, diagFile() };
+}
+
+void CEmitter::recordStaticWrite(SharedExpression target)
+{
+    if (_probingTemplate || _currentFunc.empty() || !target) return;
+    const std::string root = rootBinding(target);
+    if (root.empty() || root == "this" || _localTypes.count(root) || _paramNames.count(root)) return;
+    if (_currentClass && findFieldOwner(_currentClass, root)) return;   // a bare field name, not a static
+    const std::string key = resolveModuleVar(root, nullptr);
+    if (!key.empty()) _staticWriters[key].insert(_currentFunc);
+}
+
+void CEmitter::checkForeignEntryStatics()
+{
+    if (_foreignEntryFns.empty() || _staticReads.empty()) return;
+    for (auto& kv : _foreignEntryFns) {
+        const std::string& root = kv.first;
+        // The REGION: everything the root reaches, breadth-first so the chain reported is the shortest one.
+        std::map<std::string, std::string> parent;
+        std::vector<std::string> queue{ root };
+        std::set<std::string> region{ root };
+        for (size_t qi = 0; qi < queue.size(); ++qi) {
+            auto it = _callEdges.find(queue[qi]);
+            if (it == _callEdges.end()) continue;
+            for (auto& e : it->second)
+                if (region.insert(e.first).second) { parent[e.first] = queue[qi]; queue.push_back(e.first); }
+        }
+        std::set<std::string> reported;   // one sentence per static per root
+        for (const std::string& f : queue) {
+            auto rit = _staticReads.find(f);
+            if (rit == _staticReads.end()) continue;
+            for (auto& sr : rit->second) {
+                const std::string& key = sr.first;
+                if (reported.count(key)) continue;
+                auto wit = _staticWriters.find(key);
+                if (wit == _staticWriters.end()) continue;
+                // Assigned only INSIDE the region is per-thread scratch and fine; the defect is a writer
+                // the region cannot reach — that assignment happened on some other isolate's copy.
+                std::string outside;
+                for (const std::string& w : wit->second) if (!region.count(w)) { outside = w; break; }
+                if (outside.empty()) continue;
+                reported.insert(key);
+                std::vector<std::string> chain;
+                for (std::string n = f; !n.empty(); n = (parent.count(n) ? parent[n] : std::string())) chain.push_back(n);
+                std::string path;
+                for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+                    path += (path.empty() ? "`" : " -> `") + demangleForDisplay(*it) + "`";
+                ScopedStr _f(_emitDeclFile, sr.second.file);
+                unsupported(("`" + kv.second.display + "` is `@foreignEntry`"
+                             + (kv.second.via.empty() ? std::string() : " (bound to `" + kv.second.via + "`)")
+                             + ", but " + (chain.size() > 1 ? path + " reads" : "it reads") + " module static `"
+                             + sr.second.name + "`, which `" + demangleForDisplay(outside) + "` assigns outside "
+                             "the region — on a thread kama did not create a static holds only its declared "
+                             "initialiser, never that value; carry the state through the pointer the C API "
+                             "hands the callback instead").c_str(), sr.second.line);
+            }
+        }
+    }
+}
+
 #if !KAMA_INHERITANCE
 // The ONE gate for a `KAMA_INHERITANCE=0` compiler. Every surface that would need vtable machinery
 // funnels through here (`extends`, a `virtual`/`abstract` class, a `virtual`/`override`/`abstract`
@@ -21030,6 +21122,10 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         if (isUserBody(declFileOf(name), disp))
             _noHeapFns[name] = NoHeapFn{ disp, fn->line, diagFile(), /*fromFlag=*/true };
     }
+    // `@foreignEntry` on the body itself: the declared root for a pointer handed to C by a route no bind
+    // can see. Registered like a `@noheap` root; the walk runs once every call edge is known.
+    if (!_probingTemplate && hasAttr(fn->attributes, "foreignEntry"))
+        _foreignEntryFns[name] = ForeignEntryFn{ demangleForDisplay(name), fn->line, diagFile(), "" };
     if (fn->block) {
         checkDefiniteAssignment(fn->block, fn->parameters);   // owning LOCAL read-before-assign + `out` params (free fn)
         emitBlockScoped(fn->block.get(), 0, /*loopBoundary=*/false, /*functionRoot=*/true);
@@ -21726,6 +21822,9 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     else if (_noHeapProgram && !_probingTemplate && isUserBody(owner.declFile, demangleForDisplay(cName)))
         _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0,
                                       diagFile(), /*fromFlag=*/true };
+
+    if (hasAttr(attrs, "foreignEntry") && !_probingTemplate)   // a `@foreignEntry` member is a root too
+        _foreignEntryFns[cName] = ForeignEntryFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile(), "" };
 
     // THE ALLOCATION LEAF, and the one piece of by-name knowledge the analysis needs. Every chain ends at
     // an `extern fn`, which has no body and so cannot be analysed — and `GlobalAllocator.allocate` is the
@@ -26567,6 +26666,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
@@ -26606,6 +26706,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
+    checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts

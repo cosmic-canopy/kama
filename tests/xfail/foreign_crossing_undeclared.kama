@@ -1,0 +1,12 @@
+// A `fnptr` handed to C must say which thread the C API calls it on — `@callerThread` or `@foreignEntry`
+// on the signature. `Cb` says neither, so passing it to an `extern fn` is refused: a callback's threading
+// contract is knowledge only the seam author has (`kama_run_loop` calls back on the caller's thread,
+// CoreAudio's render callback does not, and nothing in either signature says which).
+fnptr void Cb();
+extern fn void c_register(Cb cb);
+fn void handler() { }
+unsafe fn void install() {
+    Cb h = handler;
+    c_register(cb: h);   // ERROR: `Cb`'s threading contract cannot be inferred
+}
+fn int32 main() { install(); return 0; }

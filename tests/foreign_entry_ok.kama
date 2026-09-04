@@ -1,0 +1,26 @@
+// What a foreign-entry region MAY read, and the two things beside it that are not regions at all.
+//   - `RATE` is `comptime`: a C `static const`, ONE object for every thread — always readable.
+//   - `frames` is assigned only INSIDE the region: per-thread scratch, which is exactly what a per-isolate
+//     static is for.
+//   - `cmp` is bound to a `@callerThread` signature, so it is NOT a region: reading `gain`, which `main`
+//     assigns, is fine — qsort calls its comparator on the caller's thread, where `gain` is the same object.
+// The rejecting twins: tests/xfail/foreign_entry_static_read (the attribute on a body),
+// foreign_entry_static_transitive (two hops down), foreign_entry_via_fnptr_bind (a root made by a bind).
+comptime int32 RATE = 48000;
+static int32 frames = 0;
+static int32 ticks  = 0;
+static int32 gain   = 0;
+
+@foreignEntry fnptr int32 RenderCb(int32 n);
+@callerThread fnptr int32 Comparator(int32 a);
+
+fn int32 render(int32 n) { frames = frames + n; return RATE / 1000 + frames; }   // 48 + 1 = 49
+@foreignEntry fn int32 tick(int32 n) { ticks = ticks + n; return ticks; }        // 1
+fn int32 cmp(int32 a) { return a + gain; }                                        // 0 + 7 = 7
+
+fn int32 main() {
+    gain = 7;
+    RenderCb   r = render;
+    Comparator c = cmp;
+    return r(n: 1) + tick(n: 1) + c(a: 0);   // 49 + 1 + 7 = 57
+}

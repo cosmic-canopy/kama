@@ -1,0 +1,10 @@
+// The region is TRANSITIVE — the root and everything it reaches, exactly like the no-heap proof — so the
+// read may be two calls down and is still reported against the root, with the chain. The write inside
+// the region (`pump` writing `frames`) is per-thread scratch and is fine; only `gain` has a writer outside.
+static int32 gain = 0;
+static int32 frames = 0;
+fn void setup() { gain = 7; }
+fn int32 pump() { frames = frames + 1; return gain; }   // the read, two hops from the root
+fn int32 mix() { return pump(); }
+@foreignEntry fn void render(int32 frames) { int32 g = mix(); }   // ERROR: render -> mix -> pump reads `gain`
+fn int32 main() { setup(); return 0; }

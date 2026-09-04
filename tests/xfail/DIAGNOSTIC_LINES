@@ -70,6 +70,7 @@ brace_foreach_bare	brace_foreach_bare.kama:7
 brace_if_bare	brace_if_bare.kama:6
 brace_if_empty_semi	brace_if_empty_semi.kama:6
 brace_while_bare	brace_while_bare.kama:5
+callerthread_on_body	callerthread_on_body.kama:4
 cast_const_oob	cast_const_oob.kama:5
 cast_const_oob_comptime	cast_const_oob_comptime.kama:4
 cast_const_oob_unsigned	cast_const_oob_unsigned.kama:3
@@ -230,6 +231,12 @@ foreach_ref_comptime	foreach_ref_comptime.kama:12
 foreach_ref_give	foreach_ref_give.kama:4 foreach_ref_give.kama:7 foreach_ref_give.kama:8
 foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
+foreign_crossing_bare_name	foreign_crossing_bare_name.kama:5
+foreign_crossing_both	foreign_crossing_both.kama:2
+foreign_crossing_undeclared	foreign_crossing_undeclared.kama:10
+foreign_entry_static_read	foreign_entry_static_read.kama:10
+foreign_entry_static_transitive	foreign_entry_static_transitive.kama:7
+foreign_entry_via_fnptr_bind	foreign_entry_via_fnptr_bind.kama:7
 friend_nongranted	friend_nongranted.kama:8
 friend_public	friend_public.kama:6
 friend_typo	friend_typo.kama:2 friend_typo.kama:3

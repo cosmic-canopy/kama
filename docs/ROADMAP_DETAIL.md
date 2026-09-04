@@ -996,12 +996,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     The diagnostic anchors on the innermost user body — the frame holding the call the author can change —
     which also kept the message count at one per defect instead of one per stack frame.
 
-  - **NO WAY TO RUN KAMA ON A FOREIGN OS THREAD.** `KAMA_ISOLATE_LOCAL` is `_Thread_local` on
-    native and wasm, so a thread created by a C library — an audio device callback, a completion port,
-    an RTOS ISR — sees fresh zero-initialised module statics, and a mixer buffer would silently be a
-    different, empty buffer inside the callback. The per-isolate design is right and simply has no
-    escape hatch. Wants a `kama_isolate_attach()`/`detach()` pair or a `@foreignEntry` attribute that
-    emits the prologue. **Not audio-specific — every callback-driven C API meets it. L.**
   - **KAMA'S UNCONDITIONAL `-fsanitize` BLOCKS `-sWASM_WORKERS`**, and with it AudioWorklet and
     Wasm Workers generally, so there is no audio thread in the browser at all. The driver emits
     `-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow` plus the matching

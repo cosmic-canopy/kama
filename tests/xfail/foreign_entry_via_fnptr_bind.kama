@@ -1,0 +1,12 @@
+// The root can come from a BIND rather than an attribute on the body: `RenderCb` is `@foreignEntry`, so
+// every function bound to it is a foreign entry, at every bind position (a local initializer here — the
+// funnel is checkFnPtrBind, which every position reaches). `render` itself carries no attribute.
+@foreignEntry fnptr void RenderCb(int32 frames);
+static int32 gain = 0;
+fn void setup() { gain = 7; }
+fn void render(int32 frames) { int32 g = gain; }   // ERROR once bound below: reads `gain`, assigned by `setup`
+fn int32 main() {
+    setup();
+    RenderCb cb = render;   // the bind that makes `render` a region
+    return 0;
+}

@@ -64,6 +64,9 @@ _Static_assert(sizeof(double) == 8, "kama: float64 maps to C double and must be 
 //               -pthread`) that SHARE one linear memory (SharedArrayBuffer), exactly like native pthreads
 //               share an address space — so a plain `static` would be shared/racy; TLS makes it per-isolate.
 //  - embedded  : empty → one core = one isolate; a plain C `static`, zero cost (set when `--target embedded` lands).
+// ⚠️ A thread kama did NOT create (a C callback) is a fresh isolate too: it sees every static at its
+// declared initialiser. The compiler checks that at compile time inside `@foreignEntry` regions — SPEC,
+// "Foreign entry points" — so the state a callback needs travels through the pointer the C API hands it.
 #if defined(KAMA_TARGET_EMBEDDED)
   #define KAMA_ISOLATE_LOCAL
 #else

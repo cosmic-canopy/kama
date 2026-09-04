@@ -1,0 +1,7 @@
+// A bare function NAME handed straight to C, with no `fnptr` type at all to carry the threading contract.
+fn void handler() { }
+extern fn void c_register(UnsafePtr cb);
+unsafe fn void install() {
+    c_register(cb: cast<UnsafePtr>(handler));   // ERROR: no `fnptr` type carries the contract
+}
+fn int32 main() { install(); return 0; }

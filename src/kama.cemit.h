@@ -1399,6 +1399,22 @@ private:
     // `--no-heap`, which seeds the transitive walk with every user body — see the block comment on the
     // definition for why neither half of the test is sufficient alone.
     bool isUserBody(const std::string& declFile, const std::string& display) const;
+    // ROADMAP row 1 — the check `@foreignEntry` exists for. A body that may run on a thread kama did not
+    // create sees FRESH module statics (`KAMA_ISOLATE_LOCAL` is `_Thread_local`): the declared initialiser,
+    // never a value another isolate assigned. So inside a foreign-entry REGION — the root and everything it
+    // reaches over `_callEdges` — reading a static that is assigned anywhere OUTSIDE the region is an
+    // error: that read can only ever see the initialiser. Same shape as the no-heap proof: facts at the
+    // two funnels (the identifier arm for reads, checkConstWrite for writes), roots from the attribute and
+    // from every bind to a `@foreignEntry` signature (checkFnPtrBind), the walk after emission.
+    struct ForeignEntryFn { std::string display; int line = 0; std::string file; std::string via; };   // `via`: the signature it was bound to, or ""
+    struct StaticRead     { std::string name; int line = 0; std::string file; };
+    std::map<std::string, ForeignEntryFn>                    _foreignEntryFns;   // C name -> root of the walk
+    std::map<std::string, std::map<std::string, StaticRead>> _staticReads;      // fn -> static key -> first read
+    std::map<std::string, std::set<std::string>>             _staticWriters;    // static key -> every fn that assigns it
+    std::string                                              _staticWriteLhs;   // the static a plain `=` is storing to: its LHS mention is not a read
+    void recordStaticRead(const std::string& key, const std::string& name, int line);
+    void recordStaticWrite(SharedExpression target);
+    void checkForeignEntryStatics();
     std::set<std::string>                     _activeFlags;              // `@compileFor`: active build flags (membership gate)
     std::set<std::string>                     _declaredFlags;            // `kama.json` declared user-flag universe (strict validation)
     std::set<std::string>                     _prunedNames;              // decls `@compileFor` dropped in THIS build — so an

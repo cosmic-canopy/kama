@@ -640,6 +640,36 @@ type value Mixer {                                     // ...and the same gate o
 }
 ```
 
+#### Foreign entry points — `@foreignEntry` / `@callerThread` ✅
+
+A function handed to C as a callback may run on a thread kama did not create: an audio render callback,
+a completion port, an RTOS ISR. Every module `static` is **per isolate** (`_Thread_local`, see *Module
+statics*), so on such a thread a static holds only its **declared initialiser** — never a value some
+isolate assigned — and a mixer that keeps its buffer in a static reads silence. The program compiles and
+runs. That is the failure this pair exists to make a compile error, and it is a **declaration, not an <!-- xfail: foreign_entry_static_read -->
+inference**, because the compiler genuinely cannot know: `kama_run_loop` is `while (tick(state)) { }` and
+calls back on the calling thread, CoreAudio's render callback does not, and nothing in either signature
+says which. The threading contract of a C API is knowledge only the seam author has.
+
+- **Every `fnptr` type handed to an `extern fn` must carry one of the two.** `@callerThread` says the C
+  API calls back on the calling isolate — `qsort`'s comparator, a run loop's tick — and nothing changes.
+  `@foreignEntry` says it may run on a thread kama did not create. A bare signature at the crossing is <!-- xfail: foreign_crossing_undeclared -->
+  refused, so is a bare function name handed over with no `fnptr` type to carry the contract at all, <!-- xfail: foreign_crossing_bare_name -->
+  and a signature claiming both is a contradiction. <!-- xfail: foreign_crossing_both --> `@callerThread` on an
+  ordinary body describes no crossing and is refused; it belongs on a `fnptr` type or an `expose fn`. <!-- xfail: callerthread_on_body -->
+- **`@foreignEntry` names a region, and the region is checked.** Every function bound to a
+  `@foreignEntry` signature — at any bind position — and every body that carries the attribute itself is
+  a root, and the region is the root plus everything it reaches, over the same call graph the no-heap
+  proof walks. Inside it, **reading a module `static` that is assigned anywhere outside the region is an
+  error**, reported at the read with the chain from the root: that read can only ever see the <!-- xfail: foreign_entry_static_read, foreign_entry_static_transitive, foreign_entry_via_fnptr_bind -->
+  initialiser. Assigning a static inside the region is fine (per-thread scratch), reading a `comptime` is
+  fine (a C `static const`, one object for every thread), and a `@callerThread` callee is not a region <!-- test: foreign_entry_ok -->
+  at all. The state a callback needs travels through the pointer the C API hands it — `UnsafePtr` in,
+  one `unsafe fn` at the seam to turn it into a `ref`, and everything downstream is safe and typed,
+  `Atomic<T>` fields included.
+- **The attribute on a body is the declared escape** for a pointer handed to C by a route no bind can
+  see — stored in a struct, registered later — the same role `@noheap` on a `fnptr` plays for allocation.
+
 ### Allocator-aware `new` / `Owned<T, A>` / `Shared<T, A>` / `Weak<T, A>` ✅
 
 Heap-*boxed* objects draw from an allocator too: `Owned<T, A: Allocator = GlobalAllocator>`,
@@ -2995,6 +3025,9 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   a `static` **cannot be seen by another isolate → cannot race**; cross-isolate mutable sharing stays on the
   greppable `Atomic<T>` / shared-region seam (see [Concurrency](#concurrency-)). This unifies the MCU need with the threading
   model: the same declaration is race-free the day it runs multicore (proven ThreadSanitizer-clean).
+  The one place the copy is a trap rather than a guarantee is a thread **kama did not create** — a C
+  callback — which sees every static at its declared initialiser; that is what `@foreignEntry` regions
+  check at compile time (see *Foreign entry points* under *No-heap subset*). <!-- xfail: foreign_entry_static_read -->
 - **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `UnsafePtr`, or `InlineArray`**
   (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
   or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or <!-- xfail: module_static_resource -->

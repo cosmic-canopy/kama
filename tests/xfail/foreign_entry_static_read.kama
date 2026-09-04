@@ -1,0 +1,12 @@
+// The check `@foreignEntry` exists for. A module `static` is one object PER THREAD (`KAMA_ISOLATE_LOCAL`
+// is `_Thread_local`), so a callback running on a thread kama did not create — an audio render callback,
+// a completion port — sees `gain` as its declared initialiser, 0, never the 7 that `setup` assigned on
+// the main isolate. That program compiles, runs, and mixes silence. The region declared by `@foreignEntry`
+// makes it a compile error: a read of a static that is assigned anywhere outside the region can only ever
+// see the initialiser. (PROBED: compiled clean on 0.9.158.)
+static int32 gain = 0;
+fn void setup() { gain = 7; }
+@foreignEntry fn void render(int32 frames) {
+    int32 g = gain;   // ERROR: `setup` assigns `gain` outside the region
+}
+fn int32 main() { setup(); return 0; }

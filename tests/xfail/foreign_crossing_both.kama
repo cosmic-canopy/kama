@@ -1,0 +1,3 @@
+// A signature declares ONE threading contract. Both at once is a contradiction, refused at the declaration.
+@foreignEntry @callerThread fnptr void Cb();   // ERROR: both
+fn int32 main() { return 0; }
