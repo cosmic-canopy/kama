@@ -19349,8 +19349,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    emitMatchDefaultArm(hasWildcard, resultTemp != nullptr,
-                        _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(), subjCls, depth);
+    emitMatchDefaultArm(hasWildcard, _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(),
+                        subjCls, depth);
     indent(depth); *_out << "}\n";
     // a materialized owning subject (a call/construction result) is dropped once after the
     // switch — bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
@@ -19361,8 +19361,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 
 // The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.
 //
-// `break` is right almost everywhere, and wrong in exactly one shape: a VALUE-producing match whose tag
-// is a PINNED INTEGER (`type enum Color : uint8`). ISO C cannot set an enum's underlying type, so that
+// `break` is right almost everywhere, and wrong in exactly one shape: a match whose tag is a PINNED
+// INTEGER (`type enum Color : uint8`). ISO C cannot set an enum's underlying type, so that
 // form lowers to `typedef uint8_t Color;` plus an anonymous constant enum (see emitEnum) — and clang
 // then sees a switch over 256 possible values with three cases, takes the default in its CFG, and reports
 // the result temp as used-uninitialized. `-Werror=uninitialized` (kama.driver.cpp) makes that FATAL, so
@@ -19379,14 +19379,21 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 // a deserializer both hand back a raw integer that no static rule inspects, and there `unreachable` is UB
 // while a panic is a diagnosed abort. It is a cold, noreturn call either way.
 //
-// Everything else keeps `default: break;` BYTE-FOR-BYTE: a statement-form match has no value to produce
-// so falling through is correct, and a real C enum tag already satisfies clang.
-void CEmitter::emitMatchDefaultArm(bool hasWildcard, bool valueProducing, bool pinnedTag,
-                                   const std::string& what, int depth)
+// The arm is the same in BOTH forms. This used to panic only in the value-producing form, on the claim
+// that a statement-form match "has no value to produce, so falling through is correct" — true until every
+// arm diverges: `fn int32 pick(Tri t) { match (t) { case A: return 1; … } }` is proven exhaustive by
+// kama's own return-path walk (alwaysExits), and the same dead `default: break;` edge is then a
+// `-Werror=return-type` error from clang instead of `-Werror=uninitialized`. Same CFG edge, same
+// argument, one arm. The first consumer hit exactly this (their KB-12) and rewrote every such function
+// to assign in the arms.
+//
+// A real C enum tag keeps `default: break;` BYTE-FOR-BYTE: clang already treats a switch that names
+// every enumerator as total.
+void CEmitter::emitMatchDefaultArm(bool hasWildcard, bool pinnedTag, const std::string& what, int depth)
 {
     if (hasWildcard) return;
     indent(depth + 1);
-    if (!valueProducing || !pinnedTag) { *_out << "default: break;\n"; return; }
+    if (!pinnedTag) { *_out << "default: break;\n"; return; }
     // The message a USER reads at runtime, so it goes through the same demangler every diagnostic does —
     // `_Fvm__Color` is an emitter-internal spelling nobody wrote.
     const std::string msg = "match on '" + demangleForDisplay(what) + "': value names no variant";
@@ -19606,8 +19613,8 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    emitMatchDefaultArm(hasWildcard, resultTemp != nullptr,
-                        _enums.count(enumTy) && !_enums[enumTy].underlyingCType.empty(), enumTy, depth);
+    emitMatchDefaultArm(hasWildcard, _enums.count(enumTy) && !_enums[enumTy].underlyingCType.empty(),
+                        enumTy, depth);
     indent(depth); *_out << "}\n";
 }
 

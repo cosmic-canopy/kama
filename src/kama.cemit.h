@@ -2521,11 +2521,10 @@ private:
     // The trailing `__attribute__((packed, aligned(N)))` on a struct definition; "" when unannotated.
     std::string layoutAttrSuffix(const ClassInfo& ci) const;
 
-    // The `default:` arm closing an exhaustive match's switch. `break` unless the temp of a
-    // VALUE-producing match would be left unassigned on it — see the definition for why that is a
-    // compile error and not merely a lost value.
-    void        emitMatchDefaultArm(bool hasWildcard, bool valueProducing, bool pinnedTag,
-                                    const std::string& what, int depth);
+    // The `default:` arm closing an exhaustive match's switch. `break` unless the tag is a pinned integer,
+    // where the arm diverges instead — see the definition for why the dead edge is a compile error (an
+    // unassigned temp in the value form, a missing return in the statement form) and not merely lost.
+    void        emitMatchDefaultArm(bool hasWildcard, bool pinnedTag, const std::string& what, int depth);
 
     // Merge per-arm move-states at a match join. A `match` is exhaustive, so a local moved on some but
     // not all reaching arms becomes MaybeMoved (rejected as an undecidable drop at scope exit) — the

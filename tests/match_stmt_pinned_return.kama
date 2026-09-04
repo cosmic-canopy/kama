@@ -1,0 +1,62 @@
+// A STATEMENT-form `match` over an enum whose tag width is pinned with `: IntType`, in a function whose
+// every arm `return`s — the sibling of tests/enum_match_intty.kama (the value-producing form).
+//
+// `kama check` accepted this and clang refused it with `-Werror,-Wreturn-type`: kama's own return-path
+// walk correctly treats an exhaustive match as divergent, but the emitter closed the switch with
+// `default: break;`, and a pinned tag lowers to `typedef uint8_t Tri;`, so clang saw 256 values, three
+// cases, and a fall-through out of a non-void function. The value form had already been fixed for this
+// exact CFG edge (the panic arm); the statement form was declared correct "by construction" and was
+// not. Found by the first external project (their KB-12), who rewrote every such function to assign in
+// the arms. Both enum shapes, because the two `default:` arms are separate lines of the emitter.
+//
+// Measured siblings, kept as controls: the UNPINNED enum builds either way (a real C enum tag satisfies
+// clang), and so does the pinned match followed by a trailing `return`.
+
+type enum Tri : uint8 { A, B, C }
+
+type enum Shape : uint8 { Circle(int32 r), Empty }
+
+type enum Plain { X, Y }
+
+fn int32 pick(Tri t)
+{
+    match (t) {
+        case A: { return 1; }
+        case B: { return 2; }
+        case C: { return 4; }
+    };
+}
+
+fn int32 radius(Shape s)
+{
+    match (s) {
+        case Circle(r: r): { return r; }
+        case Empty:        { return 0; }
+    };
+}
+
+fn int32 plain(Plain p)
+{
+    match (p) {
+        case X: { return 8; }
+        case Y: { return 16; }
+    };
+}
+
+fn int32 trailing(Tri t)
+{
+    match (t) {
+        case A: { return 32; }
+        case B: { return 32; }
+        case C: { return 32; }
+    };
+    return 0;
+}
+
+fn int32 main()
+{
+    return pick(t: Tri::A) + pick(t: Tri::C)            // 1 + 4
+         + radius(s: Shape::Circle(r: 10))              // 10
+         + plain(p: Plain::Y)                           // 16
+         + trailing(t: Tri::B);                         // 32   = 63
+}
