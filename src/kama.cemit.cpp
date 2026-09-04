@@ -21796,6 +21796,15 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         for (auto& m : ii.methods) {
             ClassInfo* owner = nullptr;
             MethodInfo* mi = findMethod(&ci, m.name, &owner);
+            {
+            // Every conformance report below is about the IMPLEMENTER — its line comes from `mi->node`
+            // or `ci.declLine()`, both of which are in `ci`'s file. `ScopedContractNs` above moved
+            // `_collectingUnitPath` to the CONTRACT's file, which is right for rendering the slot
+            // signatures under the contract's imports and wrong for these: the pair came out as the
+            // contract's file at the implementer's line. Measured on 0.9.180, a contract alone in a
+            // 2-line file: "src/proto/shape.kama:5" for a method on line 5 of main.kama.
+            // ⚠️ THE RULE: the file must come from whichever declaration the line came from.
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);
             if (m.isCtor) {
                 // A contract-required `ctor` (M8a, e.g. `HeapOwner::adopt`) is a COMPILE-TIME conformance
                 // guarantee, not a runtime slot — construction can't be dispatched on an instance. On a
@@ -21848,6 +21857,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
                                        "`const` — declare it `const` here too").c_str(),
                                     mi->node ? mi->node->line : ci.declLine());
                 }
+            }
             indent(1);
             *_out << "." << m.name << " = (" << cType(m.returnType) << (m.isPlaceReturn ? "*" : "")
                  << "(*)" << ifaceSlotSig(m.params) << ")&" << mi->cName << ",\n";

@@ -138,6 +138,7 @@ contract_local_nonconforming	contract_local_nonconforming.kama:13
 contract_no_for	contract_no_for.kama:1
 contract_operator_mismatch	contract_operator_mismatch.kama:9
 contract_param_mismatch	contract_param_mismatch.kama:7
+contract_public_cross_file	main.kama:11
 contract_refine_missing	contract_refine_missing.kama:4
 contract_return_mismatch	contract_return_mismatch.kama:9
 contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5

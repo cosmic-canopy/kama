@@ -1,0 +1,2 @@
+export { Shape };
+type contract Shape for value { fn int64 area(); }

@@ -1,0 +1,14 @@
+// A conformance defect is the IMPLEMENTER's, and the diagnostic must say so with BOTH halves of the
+// position. Rendering a contract's slot signatures reseats the emitter onto the contract's file (its
+// imports are the ones the signatures resolve through), and the conformance reports were carried along
+// with it — so this mistake came out as `proto/shape.kama:6`, a file with two lines in it.
+// The three single-file fixtures for this rule cannot see it: contract and implementer share a file.
+import { proto::Shape };
+
+type value Circle implements Shape {
+    int64 r;
+    public ctor make(int64 r) { this.r = r; }
+    fn int64 area() { return this.r * this.r; }   // line 11 — not public, and this is line 11 OF THIS FILE
+}
+
+fn int32 main() { Circle c = Circle.make(r: 2); return 0; }
