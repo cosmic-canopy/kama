@@ -478,6 +478,37 @@ if ! symbols | grep -q 'function hosted'; then
 fi
 rm -f "$dflt/kama.local.json"
 
+# 9c. THE PROJECT TIER of `cflags`/`ldflags`. They used to exist only under `select.TARGET.<NAME>`, which
+#     is matched BY NAME — so `--target aarch64-linux-gnu` (an anonymous triple) matched no entry and got
+#     none of them, and a DEPENDENCY, which cannot know how its consumer spells the target, could
+#     contribute nothing at all. The tiers compose in one direction: project first, then target, so the
+#     more specific list gets the last word with a C compiler that resolves a repeated flag last-wins.
+tier="$tmp/tier"
+mkdir -p "$tier/src"
+cat > "$tier/kama.json" <<'JSON'
+{ "name": "flagtiers", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "cflags": ["-DPROJECT_TIER"], "ldflags": ["-Wl,--project-tier"],
+  "select": { "TARGET": { "HOST": { "cflags": ["-DTARGET_TIER"], "ldflags": ["-Wl,--target-tier"] } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cp "$FIXTURE" "$tier/src/app.kama"
+tierline=$("$KAMA" build "$tier/kama.json" --cc "echo TIERCC:" -o "$tier/app" 2>/dev/null || true)
+for want in "-DPROJECT_TIER" "-DTARGET_TIER" "-Wl,--project-tier" "-Wl,--target-tier"; do
+    if ! printf '%s' "$tierline" | grep -qF -- "$want"; then
+        echo "check-target: FAIL — a project-tier/target-tier flag did not reach the command line: $want" >&2
+        printf '%s\n' "$tierline" | sed 's/^/    /' >&2
+        exit 1
+    fi
+done
+# ORDER, not just presence: project before target, in both lists. Written with `sed` rather than by
+# comparing `grep -b` offsets so it reads the same on every awk/grep in the matrix.
+order=$(printf '%s' "$tierline" | tr ' ' '\n' | grep -n -- '-DPROJECT_TIER\|-DTARGET_TIER\|--project-tier\|--target-tier' | cut -d: -f2 | tr '\n' ' ')
+case "$order" in
+    "-DPROJECT_TIER -DTARGET_TIER"*"-Wl,--project-tier -Wl,--target-tier"*) ;;
+    *) echo "check-target: FAIL — project-tier flags must precede the target's; got: $order" >&2
+       exit 1 ;;
+esac
+
 # 10. OUTPUT AXIS — the artifact kind is its own single-select group rather than a `--shared` boolean plus
 #     "bare metal implies object". STATIC is new capability (kama could not produce a `.a` at all), and
 #     OBJECT on a HOSTED target proves object output is no longer welded to bare metal.

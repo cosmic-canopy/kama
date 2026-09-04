@@ -100,6 +100,28 @@ to say *"not that one, here"*. This is deliberately the opposite of `cflags`/`ld
 onto the built-in target they merge over. A target that never mentions `link` inherits the project's
 list unchanged. The CLI `--link` is unaffected and still appends, after both.
 
+**`cflags` and `ldflags` sit on the project too**, exactly like `link`:
+
+```json
+{
+  "cflags":  ["-DFEATURE_X"],
+  "ldflags": ["-Wl,--as-needed"],
+  "select": { "TARGET": { "RPI": { "cflags": ["-mcpu=cortex-a72"] } } }
+}
+```
+
+A project-level entry applies to **every** target; a target's list is **appended after** it, so the
+command line reads project-then-target and the more specific list gets the last word wherever the C
+compiler resolves a repeated flag last-wins. The honest limit of appending: a project-level flag cannot
+be *removed* on one target the way `link` can be — override it with a later flag instead.
+
+Two reasons it is on the project and not only on a target. A flag that is true of the artifact
+(`-DFEATURE_X`) is not a fact about any one target, and saying it once beats repeating it in each.
+More decisively: a target is matched **by name**, so `--target aarch64-linux-gnu` — an anonymous
+triple — matches no `select.TARGET` entry at all, and a **dependency** cannot know how its consumer
+spells the target. Without a project tier, a dependency's build settings could not reach such a build
+at all.
+
 ### `no-heap` and `webgpu` — the same shape, for the same reason
 
 Two more project properties a target may override, spelled exactly like `link`:

@@ -286,6 +286,28 @@ printf '%s' "$tail_out" | grep -qE -- '-lm( |$)' \
     && ok "...while a target that never mentions it inherits" \
     || { bad "a silent target lost the project's \`link\`"; printf '%s\n' "$tail_out" | sed 's/^/    /' >&2; }
 
+# `cflags`/`ldflags` are string ARRAYS at the project tier too, and the reader is strict about it: the
+# single most likely typo is the scalar form, and a tolerated scalar would be a flag silently dropped.
+# (Their composition with the target tier is asserted in tools/check-target.sh §9c, which owns the
+# `--cc echo` command-line instrument; what belongs here is the SCHEMA.)
+proj cfscalar <<'JSON'
+{ "name": "cfscalar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "cflags": "-DNOPE", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject cfscalar 'expected a JSON array of strings for `cflags`' "a scalar \`cflags\` is refused, not read as one flag"
+
+proj ldscalar <<'JSON'
+{ "name": "ldscalar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "ldflags": ["-Wl,--as-needed", 7], "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject ldscalar 'expected a string in the array for `ldflags`' "a non-string element in \`ldflags\` is refused"
+
+proj flagsok <<'JSON'
+{ "name": "flagsok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "cflags": ["-DFINE"], "ldflags": [], "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept flagsok "the project tier of \`cflags\`/\`ldflags\` builds"
+
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: \`webgpu\` is a project property, not a flag to remember"
 

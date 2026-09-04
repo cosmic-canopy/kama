@@ -2085,6 +2085,10 @@ static std::map<std::string, TargetSpec> g_manifestTargets;
 // The project-level `link` list. Seeded into g_target after target resolution, unless the selected
 // target overrode it (TargetSpec::linkSet).
 static std::vector<std::string> g_manifestLink;
+// The project-level `cflags`/`ldflags`. Unlike `link` these PREPEND onto whatever the resolved target
+// carries, because the target tier appends: the command line reads project-then-target, so the more
+// specific list gets the last word (and, for a flag the C compiler resolves last-wins, the win).
+static std::vector<std::string> g_manifestCflags, g_manifestLdflags;
 static bool g_manifestWebgpu = false, g_manifestNoHeap = false;
 
 // Every single-select group except TARGET (whose values are triples and carry a toolchain, so it has its
@@ -2569,6 +2573,14 @@ struct ManifestReader {
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
     std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
+    // The project-level twins of the per-target `cflags`/`ldflags`. They exist for the reason `link`
+    // sits on the project too — a setting that is true of the ARTIFACT, not of one target — and,
+    // decisively, because a DEPENDENCY cannot know how its consumer spells the target: `select.TARGET`
+    // is matched by NAME (resolveTarget), and `--target aarch64-linux-gnu` resolves as an anonymous
+    // triple matching no manifest entry at all. A dep with only per-target settings would contribute
+    // nothing to such a build, which would leave dependency propagation half-dead on arrival.
+    std::vector<std::string>* cflagsOut = nullptr;          // set to capture the project-level `cflags`
+    std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
     std::vector<ModuleNode>* modulesOut = nullptr;         // set to capture the nested `modules` map (§2b)
     bool* webgpuOut = nullptr;                            // set to capture the project-level `webgpu`
     bool* noHeapOut = nullptr;                            // set to capture the project-level `no-heap`
@@ -2616,17 +2628,22 @@ struct ManifestReader {
     // A JSON array of strings (`projects`). Rejects a non-array or a non-string element rather than
     // tolerating it: this one declares what the tooling may rewrite, so a typo must not silently widen
     // or narrow the set.
-    bool stringArray(std::vector<std::string>& out) {
-        ws(); if (i >= s.size() || s[i] != '[') return fail("expected a JSON array");
+    // `key` names the offending key in the message. It is optional only because the module reader's
+    // `visibleTo` predates it; every other caller passes one, because "expected a JSON array" against a
+    // manifest with eight array-valued keys tells the reader nothing about which one they got wrong.
+    bool stringArray(std::vector<std::string>& out, const char* key = nullptr) {
+        const std::string where = key ? std::string(" for `") + key + "`" : std::string();
+        ws(); if (i >= s.size() || s[i] != '[') return fail("expected a JSON array of strings" + where);
         ++i; ws();
         if (i < s.size() && s[i] == ']') { ++i; return true; }
         while (true) {
-            std::string v; if (!str(v)) return false;
+            std::string v;
+            if (!str(v)) { err.clear(); return fail("expected a string in the array" + where); }
             out.push_back(v);
             ws();
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
             if (i < s.size() && s[i] == ']') { ++i; return true; }
-            return fail("expected ',' or ']' in a string array");
+            return fail("expected ',' or ']' in the array" + where);
         }
     }
 
@@ -2698,7 +2715,7 @@ struct ManifestReader {
     bool visibilityValue(ModuleNode& n, const std::string& where) {
         ws();
         if (i < s.size() && s[i] == '[') {
-            if (!stringArray(n.visibleTo)) return false;
+            if (!stringArray(n.visibleTo, "visibleTo")) return false;
             if (n.visibleTo.empty())
                 return fail("`visibility` for `" + where + "` is an empty list, so nothing could ever "
                             "import it — an unimportable module can only be dead code. Name at least one "
@@ -2933,13 +2950,13 @@ struct ManifestReader {
                     if (t.subsystem != "console" && t.subsystem != "windows")
                         return fail("a target's `subsystem` must be \"console\" or \"windows\"");
                 }
-                else if (k == "cflags")  { if (!stringArray(t.cflags))  return false; }
-                else if (k == "ldflags") { if (!stringArray(t.ldflags)) return false; }
+                else if (k == "cflags")  { if (!stringArray(t.cflags,  "cflags"))  return false; }
+                else if (k == "ldflags") { if (!stringArray(t.ldflags, "ldflags")) return false; }
                 // A target OVERRIDES the project's `link` rather than adding to it — that is what
                 // "overridable" means, and it is the only way to say "not on this target". Note this is
                 // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
                 // over; the two have always differed and the difference is deliberate.
-                else if (k == "link")    { if (!stringArray(t.link)) return false; t.linkSet = true; }
+                else if (k == "link")    { if (!stringArray(t.link, "link")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
@@ -3202,7 +3219,12 @@ struct ManifestReader {
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut)) return false; } else if (!skipValue()) return false; }
+            else if (key == "link") { if (linkOut) { if (!stringArray(*linkOut, "link")) return false; } else if (!skipValue()) return false; }
+            // The project tier of `cflags`/`ldflags`. A target's list APPENDS onto these (the same
+            // direction a target appends onto the built-in it merges over), so the order on the command
+            // line is project-then-target and the more specific one gets the last word.
+            else if (key == "cflags") { if (cflagsOut) { if (!stringArray(*cflagsOut, "cflags")) return false; } else if (!skipValue()) return false; }
+            else if (key == "ldflags") { if (ldflagsOut) { if (!stringArray(*ldflagsOut, "ldflags")) return false; } else if (!skipValue()) return false; }
             // The module map (§2b). RECOGNIZED unconditionally and parsed even when nothing captures it,
             // unlike the sink-guarded keys above: its errors are the point. A swallowed `modules` would be
             // a swallowed visibility decision, which is precisely what unknown-keys-are-an-error exists to
@@ -3866,15 +3888,24 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
     return true;
 }
 
-static bool loadManifestLink(const std::string& path, std::vector<std::string>& out, std::string& err)
+// The project tier of the three flag lists that reach the C compiler: `link`, `cflags`, `ldflags`.
+// ONE wrapper rather than three, because they are read together everywhere — the root manifest here and
+// (with the target tier merged in) every dependency's, through loadBuildSettings.
+static bool loadManifestProjectFlags(const std::string& path, std::vector<std::string>& link,
+                                     std::vector<std::string>& cflags, std::vector<std::string>& ldflags,
+                                     std::string& err)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     ManifestReader r(src, declared, defaults);
-    r.linkOut = &out;
-    if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
+    r.linkOut = &link; r.cflagsOut = &cflags; r.ldflagsOut = &ldflags;
+    if (!r.parse()) {
+        err = r.err.empty() ? "malformed JSON" : r.err;
+        link.clear(); cflags.clear(); ldflags.clear();
+        return false;
+    }
     return true;
 }
 
@@ -4083,6 +4114,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_selectGroups.clear();
     g_manifestTargets.clear();
     g_manifestLink.clear();
+    g_manifestCflags.clear(); g_manifestLdflags.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false;
     g_strictFlags = false;
     g_logDefault.clear();
@@ -4165,7 +4197,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         // The project's own `link`, which a `select.TARGET` entry may then override wholesale. Read here
         // rather than folded into loadManifestTargets because it is a PROJECT property, not a target one
         // — the target key exists only to say "not this one" / "something else here".
-        if (!loadManifestLink(manifest, g_manifestLink, err)) { err = manifest + ": " + err; return false; }
+        if (!loadManifestProjectFlags(manifest, g_manifestLink, g_manifestCflags, g_manifestLdflags, err)) {
+            err = manifest + ": " + err; return false;
+        }
         // Same shape and the same place as `link`: project properties a target may then override.
         if (!loadManifestArtifactFlags(manifest, g_manifestWebgpu, g_manifestNoHeap, err)) {
             err = manifest + ": " + err; return false;
@@ -4268,6 +4302,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     if (!resolveTarget(selTarget, g_manifestTargets, g_target, err)) return false;
     // The project's `link` applies to every target that did not override it.
     if (!g_target.linkSet)   g_target.link   = g_manifestLink;
+    // ...and the project's compile/link flags go BEFORE the target's, which resolveTarget has already
+    // appended onto the built-in's. One insert at the front, not an append: "project, then target" is
+    // the whole rule, and it is the same direction `select.TARGET` appends in.
+    g_target.cflags.insert(g_target.cflags.begin(), g_manifestCflags.begin(), g_manifestCflags.end());
+    g_target.ldflags.insert(g_target.ldflags.begin(), g_manifestLdflags.begin(), g_manifestLdflags.end());
     if (!g_target.webgpuSet) g_target.webgpu = g_manifestWebgpu;
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
     // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
