@@ -14424,6 +14424,78 @@ void CEmitter::buildVtables()
 void CEmitter::buildVtables() {}
 #endif
 
+// Resolve every field's declared type in ITS OWN class's scope, once, and remember the answer.
+//
+// A member's declared type used to be re-resolved wherever it was READ, which put the DECLARING file's
+// identifier node in front of the resolver while the CONSUMER's file was installed — so the consumer was
+// judged for a name it never spells. Measured on 0.9.175, two sibling files of one module: a 3-line
+// `use.kama` holding a `Holder` whose field is a `Kind` was told "`Kind` is declared in `decl.kama` and
+// this file does not import it", positioned at line 5 — `decl.kama`'s field line, wearing `use.kama`'s
+// name. And the import it demanded was pure ceremony: importing `Kind` and never spelling it built.
+//
+// ⚠️ The message was the SMALL half. Across a module boundary the consumer's scope prefix differs, so the
+// same resolution MISSED instead of firing: `_classes.find` came up empty and the field was silently
+// dropped from the analysis. Measured, same program in two places: a `slot Box b;` written INSIDE `Box`'s
+// module emits the field-default fill `b.c = Counter__start();`, and written one module over emits
+// nothing — identical source, different C, decided by the reader's imports.
+//
+// So the answer is baked HERE, where the declaring class's scope is installed (the same install
+// computeDestructible does below, which already resolves every field of every class this way) and where
+// `_refUnit` is null — so `checkReach` returns at its first line and `recordRef` files nothing, for a
+// checked reason rather than a hopeful one. This is the `InlineArray`-size fix's shape exactly
+// (bakeConstSizes, and see the field-collection site that calls it for the full argument).
+//
+// ⚠️ TWO fixes that look right and are not:
+//   • The read-site scope swap — installing the owner's NsCtx in cTypeInInstance — is MEASURED WRONG:
+//     30 corpus fixtures and 17 analysis-agreement pairs, the five-site partial-swap hazard. Do not retry it.
+//   • Suppressing checkReach around the read sites fixes the message and leaves the cross-module silent
+//     skip, the missing fill, and the cross-file xref entry exactly where they are.
+// Nor is this baked into the AST node the way bakeConstSizes bakes a size: a generic template's field
+// nodes are SHARED by every instance's ClassInfo, so a node rewrite would freeze one instance's answer
+// for all of them. The string lives on FieldInfo, which is per-ClassInfo and cannot alias.
+void CEmitter::bakeFieldCTypes()
+{
+    NsCtx savedNs = _nsCtx;
+    auto bake = [&](std::vector<FieldInfo>& fields) {
+        for (auto& f : fields) {
+            if (!f.type) continue;
+            std::string t = cType(f.type);
+            // An unbound type param resolves to itself — a template's own `T`, which has no answer until
+            // an instance binds it. Leave it unbaked so the read site resolves it under the substitution.
+            if (t.empty() || isTypeParamName(t)) continue;
+            f.cTypeBaked = t;
+        }
+    };
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        // The context install is computeDestructible's, verbatim: a specialized instance's fields are
+        // typed in `T`, so resolve them under its binding and the template's scope.
+        bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
+        if (inst) {
+            const GenericTypeInst& gi = _genericTypeInsts[ci.name];
+            _nsCtx = _genericTypeInstCtx.count(ci.name) ? _genericTypeInstCtx[ci.name]
+                                                        : _genericTypeCtx[gi.templateKey];
+            _typeSubst.clear();
+            const std::vector<std::string>& ps = _genericTypeParams[gi.templateKey];
+            for (size_t i = 0; i < ps.size() && i < gi.typeArgs.size(); ++i) _typeSubst[ps[i]] = gi.typeArgs[i];
+        } else {
+            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+        }
+        bake(ci.fields);
+        for (auto& v : ci.variants) bake(v.payload);
+        if (inst) _typeSubst.clear();
+    }
+    _nsCtx = savedNs;
+}
+
+// A field's C type. The baked answer when there is one; otherwise resolve it now, under the owner's type
+// arguments — an instance minted after bakeFieldCTypes ran has no baked field, and cTypeInInstance is the
+// stronger fallback (bare `cType` would lose the substitution).
+std::string CEmitter::fieldCType(const std::string& ownerCls, const FieldInfo& f)
+{
+    return f.cTypeBaked.empty() ? cTypeInInstance(ownerCls, f.type) : f.cTypeBaked;
+}
+
 // A class is destructible if it declares a dtor, has a destructible field, OR
 // its base is destructible (transitive). Fixed-point — cycle-safe.
 void CEmitter::computeDestructible()
@@ -18370,8 +18442,11 @@ void CEmitter::checkDefiniteAssignment(SharedBlock body, SharedParameterList par
             if (owned.empty() && !cls.empty()) {
                 auto ci = _classes.find(cls);
                 if (ci != _classes.end())
+                    // `fieldCType`, not `cType`: this class may be declared in another file, and resolving
+                    // its field types HERE judged the declaring file's spelling against this one. See
+                    // bakeFieldCTypes.
                     for (auto& f : ci->second.fields)
-                        if (!heapOwnerTarget(cType(f.type)).empty()) fs.insert(f.name);
+                        if (!heapOwnerTarget(fieldCType(cls, f)).empty()) fs.insert(f.name);
             }
             if (lv->variables) for (auto& v : *lv->variables) if (v && v->name && v->name->value) {
                 const std::string& nm = *v->name->value;
@@ -26101,6 +26176,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     registerFixedViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
+    bakeFieldCTypes();     // ...and resolve every field's type in its OWN class's scope, before any body
+                           // walk can resolve it in a reader's. computeDestructible installs the same
+                           // context immediately below; this is that answer, kept.
     computeDestructible();
     // A `type view` borrows and owns nothing, so it must not be destructible — a destructible view means
     // it has an owning/resource field (a `DynamicArray`, `Owned`/`Shared`, `string`, …) that its (absent)

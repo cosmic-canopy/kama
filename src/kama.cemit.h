@@ -163,6 +163,11 @@ struct FieldInfo {
     SharedIdentifier type;
     SharedExpression initializer;    // optional; applied in the constructor
     Visibility       visibility = Visibility::Private;
+    // The field's C type, resolved ONCE in the DECLARING class's scope by bakeFieldCTypes(). "" = not
+    // baked (a type parameter, or a class registered after the pass), which `fieldCType` falls back on.
+    // A field's type is a fact about its class, never about whoever reads it — see bakeFieldCTypes.
+    // Sibling of ParamSig::className and ClassInfo::tagCType, which bake the same kind of answer.
+    std::string      cTypeBaked;
     // Serialization metadata (from `@field`/`@skip` on a `@generate`d type; see collectClasses).
     bool             serSkip = false;   // `@skip` — omit from serialization
     std::string      serName;           // wire name (`@field(name: "…")`; empty => use `name`)
@@ -1985,6 +1990,12 @@ private:
     // (transitive, cycle-safe), so a refining contract's vtable/conformance/dispatch include the parent slots.
     void linkContracts();
     void buildVtables();
+    // Resolve every field's declared type in ITS OWN class's scope, once, before any body is walked.
+    // Runs immediately before computeDestructible, whose context install it reuses. See the definition
+    // for why a read site must not do this itself.
+    void bakeFieldCTypes();
+    // A field's C type: the baked answer, else resolve it now (an instance minted after the bake).
+    std::string fieldCType(const std::string& ownerCls, const FieldInfo& f);
     void computeDestructible();
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     void computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` instance over a deeply-immutable T takes the atomic ctrl-block flavor

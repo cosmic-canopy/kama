@@ -1,0 +1,8 @@
+import { Holder, makeHolder, Res, makeRes };
+export { viaHolder };
+
+fn int32 viaHolder() {
+    Holder h = makeHolder();
+    Res r = makeRes();
+    return h.n + r.get();   // 20 + 22
+}

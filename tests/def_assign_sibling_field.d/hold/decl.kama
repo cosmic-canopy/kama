@@ -1,0 +1,31 @@
+// A member's declared type is a fact about its CLASS, not about whoever reads it. Both holders below
+// have a field whose type is another user type; `use.kama` beside them declares a local of each and
+// never spells `Kind` or `Node`. The definite-assignment walk classifies a local's fields as owning or
+// not, and used to re-resolve each field's type AT THAT READ SITE — putting this file's identifier node
+// in front of the resolver while `use.kama` was installed. So `use.kama` was told to import a name it
+// does not use, positioned at THIS file's field line under its own path (a 3-line file blamed at 5).
+// Cross-module the same resolution missed instead of firing, and the field was silently dropped from
+// the analysis. Baked at collect time now — see bakeFieldCTypes. (Positive: it must simply build.)
+import { std::memory::Owned };
+export { Kind, Holder, makeHolder, Res, makeRes };
+
+type enum Kind { A, B }
+
+type value Holder {
+    public int32 n;
+    public Kind k;
+    public ctor make(int32 n, Kind k) { this.n = n; this.k = k; }
+}
+
+fn Holder makeHolder() { return Holder.make(n: 20, k: Kind::A); }
+
+type value Node { public int32 v; public ctor make(int32 v) { this.v = v; } }
+
+// The resource shape: an OWNING field, which is the one the walk is actually looking for.
+type resource Res {
+    Owned<Node> o;
+    public ctor make(int32 v) { Owned<Node> n = new Node.make(v: v); this.o = give n; }
+    public fn int32 get() { return this.o.v; }
+}
+
+fn Res makeRes() { return Res.make(v: 22); }
