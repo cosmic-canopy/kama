@@ -20362,6 +20362,24 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
     if (name == "drop" && bareCall && call->args && call->args->size() == 1) {
         SharedExpression a = (*call->args)[0]->expression;
         std::string cls = exprClass(a);
+        // `drop(value: p[0])` through a LOCAL raw `UnsafePtr<T>` element whose `T` is a destructible class:
+        // the element is untyped to ownership (see the method-call site for why that is deliberate), so
+        // exprClass answers "" and this used to emit a literal `(void)0;` — a drop that dropped nothing,
+        // silently. Refused with the two spellings instead. Exactly that shape and no wider: a FIELD
+        // element (`this.keys[i]`) resolves through ptrElemType when its element is a class, and when it
+        // is a primitive the no-op below is the correct answer the collections rely on (a `drop` of an
+        // `int32` slot); a local element of a non-destructible type is the same legitimate no-op.
+        if (cls.empty()) {
+            std::string et = ptrLocalElemType(a);
+            if (!et.empty() && _classes.count(et) && _classes[et].destructible) {
+                const std::string place = unparseExpr(a);
+                unsupported(("`drop` cannot run through a raw pointer element — `" + place + "` is untyped to "
+                             "ownership, so nothing would be dropped; drop the value through a `ref " + et
+                             + "` parameter, or own it in an `Owned<" + et + ">` and let that go out of scope").c_str(),
+                            call->line);
+                return "(void)0";
+            }
+        }
         if (!cls.empty() && _classes.count(cls)) {
             // A polymorphic type drops through its vtable (`__vdrop`): a base handle owning a
             // derived must run the derived's dtor, and a derived can own resources even when the
@@ -25376,6 +25394,27 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // `isize`/`usize` are absent from every `type intrinsic <…> implements …` list in the prelude.
         // Telling someone that `n` is "not in reach" when `n` is the local on the line above sends them
         // hunting for a scope bug that is not there.
+        // ...and a THIRD: an element of a raw `UnsafePtr<T>` — `p[0].m()`. A raw element is deliberately
+        // untyped to ownership (ptrLocalElemType is kept out of exprClass so `nd[i] = od[i]` stays a bitwise
+        // relocate in the collections), so its class is unknown HERE by design, not by accident. Widening
+        // exprClass to it was measured: it resolves this call and breaks 45 fixtures inside
+        // dynamic_array.kama. So the answer is the two spellings GOALS §3a/§3e give — borrow through the
+        // pointer, or own the value — not "its type is not known", which reads as a scope bug. The first
+        // consumer's KB-14. Only a LOCAL element whose element type is a class reaches this: a field
+        // element of class type resolves through ptrElemType (so `cls` is not empty), and a primitive
+        // element takes the conformance branches below.
+        {
+            std::string et = ptrLocalElemType(receiver);
+            if (!et.empty() && _classes.count(et)) {
+                const std::string place = unparseExpr(receiver);
+                unsupported(("`" + place + "` is an element of a raw `UnsafePtr<" + et + ">`, which is untyped to "
+                             "ownership, so `" + method + "` cannot be called on it — borrow it through a `ref " + et
+                             + "` parameter (`fn f(ref " + et + " x)`, called as `f(x: ref " + place + ")`), or own the "
+                             "value in an `Owned<" + et + ">` and reach it through that (`release()` hands it to a foreign "
+                             "API's userdata slot to outlive a frame)").c_str(), call->line);
+                return "0";
+            }
+        }
         const std::string rct = receiverScalarCType(receiver);
         const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
         if (!rk.empty())
@@ -26723,9 +26762,17 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
+        // The message states the STANCE, not a promise: this used to end "(no destructible resources yet)",
+        // which read as a queue entry. It is not one — a `static` is the MCU shape (per-isolate,
+        // const-initialised, no teardown seam), and persistence of a resource is answered by ownership at the
+        // foreign boundary instead: `Owned<T>` holds it, `release()` hands it to the host's userdata slot to
+        // outlive a frame, `adopt` takes it back to destroy. GOALS §3a/§3e; the design for a destructible
+        // static is kept in ROADMAP_DETAIL §2 should an isolate/MCU case ever pull it.
         if (!declOnly)
-            unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` (no destructible "
-                         "resources yet) — `" + ty + "` owns memory").c_str(), mv->line);
+            unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` — `" + ty
+                         + "` owns memory. A `static` is the MCU shape, not a home for a resource: persistence is "
+                         "ownership, so keep it in an `Owned<" + ty + ">`, and `release()` it to a foreign API's "
+                         "userdata slot when it must outlive a frame").c_str(), mv->line);
         return;
     }
     if (declOnly) {

@@ -642,6 +642,8 @@ unsafe_on_type	unsafe_on_type.kama:4
 unsafe_ptr_addr_of_outside	unsafe_ptr_addr_of_outside.kama:8
 unsafe_ptr_call_result	unsafe_ptr_call_result.kama:8
 unsafe_ptr_cast_outside	unsafe_ptr_cast_outside.kama:4
+unsafe_ptr_elem_drop	unsafe_ptr_elem_drop.kama:15
+unsafe_ptr_elem_method	unsafe_ptr_elem_method.kama:17
 unsafe_ptr_field_outside	unsafe_ptr_field_outside.kama:8
 unsafe_ptr_local_outside	unsafe_ptr_local_outside.kama:7
 unsafe_ptr_match_binding	unsafe_ptr_match_binding.kama:13

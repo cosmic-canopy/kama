@@ -1642,6 +1642,16 @@ usize n = cast<usize>(verts.length()) * sizeof(float32);   // byte count: there 
 // ... pass (data, n) to a C upload fn; dereferencing `data` still needs an `unsafe fn`
 ```
 
+**The raw seam is a seam, not a second ownership system.** An element `p[i]` of a raw `UnsafePtr<T>` is
+**untyped to ownership**: `p[i] = v` is a plain store (the old bytes are overwritten, no destructor runs),
+and `nd[i] = od[i]` is a bitwise relocate — which is exactly what a collection's own buffer needs, and why
+the emitter does not resolve a class for a raw element. So two things that *look* like they should work
+through one are refused with the two spellings instead: a **method call** on a raw element (`p[0].m()`) <!-- xfail: unsafe_ptr_elem_method -->
+and **`drop(value: p[0])`** (which would otherwise drop nothing, silently). To use the value: **borrow it** <!-- xfail: unsafe_ptr_elem_drop -->
+through a `ref T` parameter (`fn f(ref T x)`, called as `f(x: ref p[0])`), or **own it** — keep it in an
+`Owned<T>`, and `release()` it to a foreign API's userdata slot when it must outlive a frame (see *Smart
+pointers*). A raw pointer is the foreign boundary, never general-purpose escape (GOALS §3a/§3e).
+
 #### What requires an `unsafe fn` — the decision table
 
 **One rule, and it keys on the TYPE, not the spelled token: an expression, declaration, or binding whose
@@ -1954,7 +1964,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   it — see *Recoverable regions*.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.
 - **`drop(value: place)`** — run a place's destructor now (a no-op for a non-destructible type); lets a
-  library owner over `UnsafePtr<T>` drop its heap pointee before `free`.
+  library owner over `UnsafePtr<T>` drop its heap pointee before `free` — through `deref()`'s `ref T`,
+  never through a bare raw element (`drop(value: p[0])` is refused: the element is untyped to ownership, <!-- xfail: unsafe_ptr_elem_drop -->
+  so it would drop nothing).
 - **`addr(of: place)`** — the address of a place (a field/local/element) as an `UnsafePtr<T>`. Taking an address
   is safe (an `UnsafePtr` is safe to hold); dereferencing stays `unsafe`. Lets a library type hold a live
   back-pointer to another's field (e.g. an iterator to its container's mutation counter).
@@ -3078,10 +3090,13 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   The one place the copy is a trap rather than a guarantee is a thread **kama did not create** — a C
   callback — which sees every static at its declared initialiser; that is what `@foreignEntry` regions
   check at compile time (see *Foreign entry points* under *No-heap subset*). <!-- xfail: foreign_entry_static_read -->
-- **v1 scope (deliberately minimal, MCU-correct).** The type must be a **value, `UnsafePtr`, or `InlineArray`**
-  (owns nothing, needs no teardown — v1 has no static-destructor seam); a destructible `resource`, `string`,
-  or smart pointer is rejected. The initializer must be a **compile-time constant** (a literal, `sizeof`, or <!-- xfail: module_static_resource -->
-  const arithmetic); a runtime initializer (a call / `new` / `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
+- **The MCU shape, deliberately.** The type must be a **value, `UnsafePtr`, `InlineArray` or `Simd`**
+  (owns nothing, needs no teardown); a destructible `resource`, `string`, or smart pointer is rejected — <!-- xfail: module_static_resource -->
+  and the rejection states the stance, not a queue entry: **persistence is ownership.** A resource that
+  must outlive a frame lives in an `Owned<T>`, and `release()` hands it to a foreign API's userdata slot
+  (see *Smart pointers*); a `static` is not a home for one. The initializer must be a **compile-time
+  constant** (a literal, `sizeof`, or const arithmetic); a runtime initializer (a call / `new` / `spawn`)
+  is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is **file-private**: it may not appear in an `export { … }` list, and no other file — not <!-- xfail: export_module_static -->
@@ -3094,7 +3109,7 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   module static in its own file is ordinary code.) A `hardware`
   static (`static hardware T name`) adds the
   `volatile` qualifier for an MMIO register or single-core ISR↔loop flag — `volatile T` for a scalar,
-  `volatile T*` for an `UnsafePtr<T>` handle. *(Destructible statics are a later MCU step.)*
+  `volatile T*` for an `UnsafePtr<T>` handle.
 
 ### Compile-time constants — `comptime` ✅
 

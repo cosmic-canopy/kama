@@ -1,0 +1,1 @@
+`drop` cannot run through a raw pointer element
