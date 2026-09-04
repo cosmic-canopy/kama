@@ -117,9 +117,9 @@ EOF
     "$KAMA" transpile "$tmp/parity.kama" -o "$tmp/parity.c" >/dev/null 2>&1 || {
         echo "check-release-arith: FAIL — transpile failed on the parity probe" >&2; exit 1; }
     # kama's release C flags, reproduced (kama.driver.cpp, the release block).
+    # (No `-fsanitize` here since 0.9.160: division, shifts and float casts are kama's own checks in the
+    # emitted C, and the release line carries none.)
     clang -std=c11 -O3 -DNDEBUG -fwrapv \
-          -fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow \
-          -fsanitize-trap=integer-divide-by-zero,shift-exponent,float-cast-overflow \
           -I "$ROOT/include" -S "$tmp/parity.c" -o "$tmp/parity.s" 2>/dev/null || {
         echo "check-release-arith: FAIL — clang could not compile the parity probe" >&2; exit 1; }
     # A trap block reachable from plain arithmetic is the signature of the regression.

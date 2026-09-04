@@ -9523,13 +9523,15 @@ int main(int argc, char** argv)
             cmd << "-g -O0 ";
         }
         // Numeric safety — no arithmetic UB (Rust's model). Divide-by-zero, shift-past-width, and
-        // out-of-range float->int all TRAP in EVERY build (they're always bugs). Signed overflow TRAPS in
-        // debug (catch the accidental-overflow bug in dev) and WRAPS (defined two's-complement, -fwrapv,
-        // zero-cost) in release. `-fsanitize-trap` lowers to `__builtin_trap` — a clean abort with NO
-        // sanitizer-runtime dependency. `shift-exponent` only (not `shift-base`), so `1 << 31` (setting the
-        // sign bit) stays legal. Intentional signed wrap is opt-in (unsigned math, or a `wrapping*` helper).
-        cmd << "-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow "
-               "-fsanitize-trap=integer-divide-by-zero,shift-exponent,float-cast-overflow ";
+        // out-of-range float->int are faults in EVERY build (they're always bugs) — and they are kama's
+        // OWN checks in the emitted C (KAMA_DIV/KAMA_MOD/KAMA_SHL/KAMA_SHR, kama_f2i_chk in
+        // kama_runtime.h), not sanitizer flags. Until 0.9.160 they were
+        // `-fsanitize=integer-divide-by-zero,shift-exponent,float-cast-overflow` with `-fsanitize-trap`:
+        // the same compare-and-branch the helpers emit, but lowered to a bare `__builtin_trap` that printed
+        // nothing, ran no panic hook, and could not be recovered from inside an `@onPanic` region. The
+        // helpers cost the branch the sanitizer already cost (release parity is measured by
+        // tools/check-release-arith.sh); and with no `-fsanitize` in the release line at all, emscripten
+        // no longer refuses `-sWASM_WORKERS` (an AudioWorklet needs it — ROADMAP §2).
         // Signed overflow: debug TRAPS it, release `-fwrapv`-WRAPS `+`/`-`/`*` (defined, zero-cost).
         //
         // ⚠️ The sanitizer is DEBUG-ONLY, and it used to be passed in both tiers. The reasoning for that

@@ -3382,11 +3382,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             if (signedInt && op && lc == rc)
                 return std::string(op) + "(" + sc + ", " + emitOperandByValue(lhs) + ", "
                      + emitOperandByValue(rhs) + ")";
-            // ⚠️ A signed `<<` must NOT reach `kama_lshift` below: that shim dispatches with `_Generic`,
-            // which cannot see a vector type and type-checks every branch — so a `Simd` operand is a hard
-            // C error ("invalid conversion between vector type and integer type of different size"), not
-            // a fallback. The per-lane `__shl` is the same rule (shift in the unsigned peer, so shifting
-            // into the sign bit stays defined) written where a vector can use it.
+            // ⚠️ A signed `<<` must NOT reach `KAMA_SHL` below: that shim dispatches with `_Generic`,
+            // which cannot see a vector type — so a `Simd` operand is a hard C error, not a fallback. The
+            // per-lane `__shl` is the same rule (shift in the unsigned peer, so shifting into the sign bit
+            // stays defined) written where a vector can use it.
             if (signedInt && token == LTLT && lc == rc)
                 return sc + "__shl(" + emitOperandByValue(lhs) + ", " + emitOperandByValue(rhs) + ")";
         }
@@ -3426,24 +3425,23 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             if (!(cNumBits(resT) && cNumBits(resT) < 32 && !cNumFloat(resT))) resT.clear();
         }
         const std::string open  = resT.empty() ? "(" : "(" + resT + ")(";
-        // A signed LEFT shift into the sign bit is UB in C; route it through `kama_lshift` (shifts in the
-        // matching unsigned type — defined) so there's no UB even in debug (release's `-fwrapv` also
-        // defines it, but debug has none). Right shift of a signed value is impl-defined, not UB.
-        if (token == LTLT) {
-            // Only a SIGNED left shift needs the macro — shifting into the sign bit is the UB it exists to
-            // avoid. On an unsigned operand `<<` is already fully defined, and routing it through
-            // `kama_lshift` anyway was actively harmful: `_Generic` type-checks EVERY branch, selected or
-            // not, so `b << 56` on a `uint64` made clang warn "shift count >= width of type" against the
-            // unselected `int8_t`/`int16_t`/`int32_t` arms. That is a false positive, but it fired 72 times
-            // across the corpus (all of `std::num`'s byteswaps) and buried the real warnings underneath.
-            int lt = holeBuiltinType(lhs);
-            bool knownUnsigned = lt == IDENTIFIER_UINT8_VAL  || lt == IDENTIFIER_UINT16_VAL
-                              || lt == IDENTIFIER_UINT32_VAL || lt == IDENTIFIER_UINT64_VAL;
-            if (!knownUnsigned)   // unknown type stays on the safe path
-                return open + "kama_lshift(" + emitExpression(lhs) + ", " + emitExpression(rhs) + "))";
-        }
-        const std::string body = emitExpression(lhs) + " " + binaryOperator(token) + " "
-                               + emitExpression(rhs);
+        // Every shift and every integer division takes kama's own checked path (kama_runtime.h): a shift
+        // amount outside the promoted width, a zero divisor and `TYPE_MIN / -1` are faults the program can
+        // NAME — a message, the panic hook, recovery inside an `@onPanic` region — where they used to be a
+        // bare `-fsanitize-trap` `ud2`. A signed left shift into the sign bit stays DEFINED (the helper
+        // shifts in the unsigned peer). Dispatch is `_Generic` on the promoted type, inside a function per
+        // width, so no "shift count >= width" false positive fires against an unselected arm (the old
+        // `kama_lshift` macro shifted inline in every arm and fired 72 of them across `std::num`).
+        // A `Simd` operand keeps C's own vector operator: `_Generic` cannot see a vector type, and a
+        // float lane division is IEEE (an unsigned lane shift is defined; the signed cases return above).
+        const bool vec = isSimdColl(lc) || isSimdColl(rc);
+        if (!vec && (token == LTLT || token == GTGT))
+            return open + (token == LTLT ? "KAMA_SHL(" : "KAMA_SHR(") + emitExpression(lhs) + ", "
+                 + emitExpression(rhs) + "))";
+        const std::string l = emitExpression(lhs), r = emitExpression(rhs);
+        const std::string body = (!vec && token == SLASH)   ? "KAMA_DIV(" + l + ", " + r + ")"
+                               : (!vec && token == PERCENT) ? "KAMA_MOD(" + l + ", " + r + ")"
+                               : l + " " + binaryOperator(token) + " " + r;
         // D-arith, the CHECK half. `resT` non-empty means a sub-`int` result, which is exactly where the
         // language's own overflow rule had a hole: C promotes `int8`/`int16` operands to `int`, so
         // `100 + 100` is computed as 200 where `-fsanitize=signed-integer-overflow` sees nothing, and the
@@ -3469,28 +3467,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                  ? "KAMA_ARITH_NARROW(" + resT + ", " + lo + ", " + hi + ", " + body + ")"
                  : "((" + resT + ")kama_arith_chk((long long)(" + body + "), " + lo + ", " + hi + "))";
         }
-        // The WIDE half of the same division rule. `resT` is empty for `int32`/`int64` — they are already
-        // their own type in C, so nothing narrows and the arm above cannot see them — but `TYPE_MIN / -1`
-        // overflows at every width, and SPEC promises it traps in EVERY build.
-        //
-        // It used to come from `-fsanitize=signed-integer-overflow`, which the driver passed in release as
-        // well as debug for this one case. That is no longer true (see the driver's own note): the
-        // sanitizer is debug-only now, because Apple clang would not let `-fwrapv` suppress it and a macOS
-        // release build was paying a compare and a branch on every signed add and multiply. Checking here
-        // is what made dropping it safe.
-        //
-        // ⚠️ The check is on the OPERANDS, not the result: `INT64_MIN / -1` overflows the very `long long`
-        // a result-based check would have to compute it in. That is why this cannot reuse `kama_arith_chk`
-        // the way the sub-`int` arm above does.
-        if (token == SLASH) {
-            const std::string dt = typeOfExpr(lhs);
-            if (!dt.empty() && dt == typeOfExpr(rhs) && cNumSigned(dt) && !cNumFloat(dt)) {
-                const int w = cNumBits(dt);
-                if (w == 32 || w == 64)
-                    return std::string("kama_sdiv_i") + (w == 32 ? "32" : "64") + "("
-                         + emitExpression(lhs) + ", " + emitExpression(rhs) + ")";
-            }
-        }
+        // The WIDE half of the division rule — `TYPE_MIN / -1` at 32 and 64 bits, where nothing narrows —
+        // is inside `KAMA_DIV` (kama_div_i32/_i64 check the OPERANDS: `INT64_MIN / -1` overflows the very
+        // `long long` a result check would compute it in), promised in EVERY build since the release tier
+        // dropped the signed-overflow sanitizer (see the driver's note).
         return open + body + ")";   // primitives — `open` narrows a sub-`int` result
     }
 
@@ -8671,9 +8651,10 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
     if (!src.empty()) {
         // A kind crossing (a `bool`, a `string`, an enum) is a different rule's error, not a narrowing.
         if (!cNumBits(src) && !cNumTargetWidth(src)) return "";
-        // float -> int needs no check of ours: out of range already traps in EVERY build via
-        // `-fsanitize-trap=float-cast-overflow`, and in range must keep truncating toward zero.
-        if (cNumFloat(src)) return "";
+        // float -> int: a range test on the double (out of range or NaN is a fault the program can name —
+        // it was `-fsanitize-trap=float-cast-overflow`), then the cast itself still truncates toward zero.
+        if (cNumFloat(src))
+            return "((" + dstCType + ")kama_f2i_chk((double)(" + emitExpression(value) + "), " + lo + ", " + hi + "))";
         if (cNumContains(dstCType, src)) return "";
         const bool sgn = cNumSigned(src);
         return "((" + dstCType + ")kama_narrow_chk_"

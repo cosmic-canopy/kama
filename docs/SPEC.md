@@ -1291,14 +1291,16 @@ UB:
   Intentional signed wrapping is opt-in: `std::num`'s `wrappingAddI32`/`wrappingSubI32`/`wrappingMulI32`/
   `wrappingNegI32` (+ the `I64` set) always wrap and never trap (computed in the unsigned type), or just use
   unsigned math directly. **Unsigned overflow always wraps** (as C already defines).
-- **Divide by zero** and **`INT_MIN / -1`** **trap** (a clean abort) in every build — always bugs, never UB.
-  Divide-by-zero comes from the sanitizer; `TYPE_MIN / -1` is **emitted by the compiler**
-  (`kama_sdiv_i32`/`_i64`), because `-fwrapv` does not define it and the release tier no longer carries
-  the signed-overflow sanitizer. The check is on the *operands*, since `INT64_MIN / -1` overflows the
-  width a result check would use (`tests/trap/intmin_div`, `intmin_div64`).
-- **Shift ≥ the type width** **traps**; a **signed left shift into the sign bit** (`1 << 31`) is **defined**
-  (computed in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
-- **Out-of-range `float → int`** **traps**; in-range truncates toward zero.
+- **Divide by zero** and **`INT_MIN / -1`** **trap** in every build — always bugs, never UB. Both are
+  **emitted by the compiler** (`KAMA_DIV`/`KAMA_MOD` in the runtime header: one branch per fault, then a
+  cold leaf that prints `kama: division by zero`, runs the panic hook and, inside an `@onPanic` region,
+  recovers). The `TYPE_MIN / -1` check is on the *operands*, since `INT64_MIN / -1` overflows the width a
+  result check would use (`tests/trap/div_zero`, `mod_zero`, `intmin_div`, `intmin_div64`); `TYPE_MIN % -1`
+  is `0`, where C traps computing it.
+- **Shift ≥ the promoted width, or negative,** **traps** (`kama: shift by 40 is outside the 32-bit width` —
+  `tests/trap/shift_width`); a **signed left shift into the sign bit** (`1 << 31`) is **defined** (computed
+  in the unsigned type — a defined bit pattern), so bit-twiddling is safe.
+- **Out-of-range or NaN `float → int`** **traps** (`tests/trap/float_cast_oob`); in-range truncates toward zero.
 - **A narrowing `cast<T>(x)` whose value does not fit `T`** **traps**, in every build — the integer sibling
   of the line above, and the same policy for the same reason. `cast` preserves the *value*, so a value that
   does not fit is not a conversion but a different number: `int32 big = 300; int8 a = cast<int8>(big);`
@@ -1321,8 +1323,13 @@ UB:
   shift into the sign bit is *defined* (above), so `3i8 << 7i8` is `-128`, not an overflow
   (`tests/arith_same_type`). **Unsigned is untouched at every width:** wrapping is defined and stays silent.
 
-Enforced by `-fsanitize-trap` (a bare `__builtin_trap`, no sanitizer-runtime dependency) + `-fwrapv` +
-the `kama_lshift` runtime shim — so a kama program can't hit arithmetic UB whether built debug or release.
+Enforced by the compiler's own checks in the emitted C (`KAMA_DIV`/`KAMA_MOD`/`KAMA_SHL`/`KAMA_SHR`,
+`kama_f2i_chk`, the narrowing checks) + `-fwrapv` — so a kama program can't hit arithmetic UB whether
+built debug or release, and every fault it can raise takes ONE path: a message, the panic hook, recovery
+inside an `@onPanic` region. Until `0.9.160` division by zero, a bad shift and a float cast were
+`-fsanitize-trap` — the same compare-and-branch, lowered to a bare `__builtin_trap` that printed nothing,
+ran no hook and could not be recovered from; and any `-fsanitize` at all is what made emscripten refuse
+`-sWASM_WORKERS`, so there was no audio thread in the browser.
 ⚠️ **`-fsanitize=signed-integer-overflow` is passed in the DEBUG tier only**, and that is load-bearing
 rather than incidental: it is not reliably suppressed by `-fwrapv` (Apple clang does not suppress it;
 Ubuntu clang and gcc do), so passing it in release made overflow trap on one platform and wrap on
@@ -4268,10 +4275,11 @@ Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back t
 every module into **one unity translation unit** so the C compiler can inline across module boundaries — a
 `std::math` operator or a collection accessor inlines into the caller's hot loop and then auto-vectorizes,
 which is what lands numeric code at C parity (kama has no incremental object cache, so a build already compiles
-all modules in a single invocation — the unity fold costs nothing and only unlocks inlining). Numeric-safety
-traps (`integer-divide-by-zero`, `shift-exponent`, `float-cast-overflow`, `signed-integer-overflow` → a clean
-`__builtin_trap`, no sanitizer runtime) are on in **every** build; signed overflow additionally wraps
-(`-fwrapv`) in release.
+all modules in a single invocation — the unity fold costs nothing and only unlocks inlining). The
+numeric-safety checks (division by zero, `TYPE_MIN / -1`, a bad shift, an out-of-range float cast, a
+narrowing cast) are the compiler's own, in the emitted C, in **every** build — no sanitizer flag; signed
+overflow traps in debug (`-fsanitize=signed-integer-overflow`, `__builtin_trap`) and wraps (`-fwrapv`) in
+release.
 
 **One UBSan sub-check is permanently exempt: `function`.** A kama program built under
 `-fsanitize=undefined` should add `-fno-sanitize=function`, as the test suite does. This is a **deliberate,

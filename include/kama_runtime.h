@@ -389,6 +389,19 @@ static inline KAMA_NORETURN void kama_sdiv_fail(void) {
     kama_panic_handler();
     for (;;) {}
 }
+static inline KAMA_NORETURN void kama_div_zero_fail(void) {
+    kama_panic_handler();
+    for (;;) {}
+}
+static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
+    (void)n; (void)width;
+    kama_panic_handler();
+    for (;;) {}
+}
+static inline KAMA_NORETURN void kama_fcast_fail(void) {
+    kama_panic_handler();
+    for (;;) {}
+}
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
     (void)off;
     kama_panic_handler();
@@ -503,6 +516,39 @@ static inline KAMA_NORETURN void kama_sdiv_fail(void) {
     kama_run_panic_hook();
     abort();
 }
+// The three faults that used to be `-fsanitize-trap` — a bare `ud2` that printed nothing, ran no hook and
+// could not be recovered from. Each is now kama's own check (KAMA_DIV/KAMA_MOD/KAMA_SHL/KAMA_SHR and
+// kama_f2i_chk below), so every fault a kama program can raise takes ONE path: a message, the panic hook,
+// and — inside an `@onPanic` region — recovery. It is also what lets the driver pass no `-fsanitize` at
+// all, which is what emscripten's Wasm Workers (an AudioWorklet) required.
+static inline KAMA_NORETURN void kama_div_zero_fail(void) {
+    extern void abort(void);
+    const char* m = "kama: division by zero\n";
+    size_t n = 0; while (m[n]) ++n;
+    (void)kama_raw_write(2, m, n);
+    kama_run_panic_hook();
+    abort();
+}
+static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
+    extern void abort(void);
+    char buf[96]; size_t p = 0;
+    const char* a = "kama: shift by ";                        while (*a) buf[p++] = *a++;
+    kama_i64_to_buf(buf, &p, n);
+    const char* b = " is outside the ";                       while (*b) buf[p++] = *b++;
+    kama_i64_to_buf(buf, &p, (long long)width);
+    const char* c = "-bit width\n";                           while (*c) buf[p++] = *c++;
+    (void)kama_raw_write(2, buf, p);
+    kama_run_panic_hook();
+    abort();
+}
+static inline KAMA_NORETURN void kama_fcast_fail(void) {
+    extern void abort(void);
+    const char* m = "kama: float -> int conversion is out of range (or NaN)\n";
+    size_t n = 0; while (m[n]) ++n;
+    (void)kama_raw_write(2, m, n);
+    kama_run_panic_hook();
+    abort();
+}
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
@@ -576,20 +622,94 @@ static inline long long kama_arith_chk(long long v, long long lo, unsigned long 
 // instruction) and lets the release tier drop the sanitizer entirely.
 //
 // The test is on the OPERANDS, not the result: `INT64_MIN / -1` overflows the very `long long` a
-// result-based check would have to compute it in. Divide-by-zero is a separate check and stays on the
-// sanitizer, in every build.
+// result-based check would have to compute it in. Divide-by-zero is the OTHER fault a division can raise,
+// and the same helpers check it, in every build (it was `-fsanitize-trap` until 0.9.160).
 // ⚠️ It reports NO value, and that is forced rather than lazy: the result of `TYPE_MIN / -1` is
 // `-TYPE_MIN`, which is exactly the one number the type cannot hold — and at 64 bits it cannot be held
 // by `long long` either, so there is no width to pass it in. The first version of this macro computed
 // the bounds inline and made clang warn "overflow in expression" on its own definition, in every
 // program. The message names the operation instead, which is the whole of what a reader needs.
-#define KAMA_SDIV_CHK(NAME, T, TMIN)                                            \
+// Division and remainder with no undefined behaviour, in EVERY build. Two faults: a zero divisor, and
+// `TYPE_MIN / -1` (the one signed division that overflows; `TYPE_MIN % -1` is 0 by kama's rule, where C
+// traps computing it). One predictable branch each on an instruction that already costs 20-40 cycles,
+// then a cold noreturn leaf. `KAMA_DIV`/`KAMA_MOD` dispatch on the PROMOTED operand type — `_Generic`
+// reads the type of `(a) / (b)` and never evaluates it — so a sub-`int` operand takes the `int` helper
+// exactly as C promotes it, and the associations are C's builtin types, never the <stdint.h> typedefs
+// (`long` and `unsigned long` are what `int64_t`/`size_t` spell on Linux). Float division is IEEE, takes
+// no check, and keeps its own type. No `default:` on purpose: a type nobody listed is a compile error
+// here, not a silently unchecked division.
+#define KAMA_DIV_CHK(NAME, T, TMIN, SIGNED)                                     \
 static inline T NAME(T a, T b) {                                                \
-    if (b == (T)-1 && a == (TMIN)) kama_sdiv_fail();                             \
+    if (b == 0) kama_div_zero_fail();                                           \
+    if ((SIGNED) && b == (T)-1 && a == (TMIN)) kama_sdiv_fail();                \
     return a / b;                                                               \
 }
-KAMA_SDIV_CHK(kama_sdiv_i32, int32_t, INT32_MIN)
-KAMA_SDIV_CHK(kama_sdiv_i64, int64_t, INT64_MIN)
+#define KAMA_MOD_CHK(NAME, T, SIGNED)                                           \
+static inline T NAME(T a, T b) {                                                \
+    if (b == 0) kama_div_zero_fail();                                           \
+    if ((SIGNED) && b == (T)-1) return 0;                                       \
+    return a % b;                                                               \
+}
+KAMA_DIV_CHK(kama_div_i32, int32_t,  INT32_MIN, 1)
+KAMA_DIV_CHK(kama_div_i64, int64_t,  INT64_MIN, 1)
+KAMA_DIV_CHK(kama_div_u32, uint32_t, 0,         0)
+KAMA_DIV_CHK(kama_div_u64, uint64_t, 0,         0)
+KAMA_MOD_CHK(kama_mod_i32, int32_t,  1)
+KAMA_MOD_CHK(kama_mod_i64, int64_t,  1)
+KAMA_MOD_CHK(kama_mod_u32, uint32_t, 0)
+KAMA_MOD_CHK(kama_mod_u64, uint64_t, 0)
+static inline float  kama_div_f32(float a, float b)   { return a / b; }
+static inline double kama_div_f64(double a, double b) { return a / b; }
+#define KAMA_DIV(a, b) _Generic((a) / (b),                                      \
+    int: kama_div_i32, long: kama_div_i64, long long: kama_div_i64,             \
+    unsigned int: kama_div_u32, unsigned long: kama_div_u64,                    \
+    unsigned long long: kama_div_u64,                                           \
+    float: kama_div_f32, double: kama_div_f64)((a), (b))
+#define KAMA_MOD(a, b) _Generic((a) % (b),                                      \
+    int: kama_mod_i32, long: kama_mod_i64, long long: kama_mod_i64,             \
+    unsigned int: kama_mod_u32, unsigned long: kama_mod_u64,                    \
+    unsigned long long: kama_mod_u64)((a), (b))
+
+// A shift amount at or past the PROMOTED width, or negative, is UB in C and was `-fsanitize-trap`. Now one
+// branch against the width, then the shift. A signed LEFT shift is done in the unsigned peer, because a
+// shift into the sign bit is DEFINED in kama ("computed in the unsigned type — a defined bit pattern"),
+// so `1 << 31` is legal and `3i8 << 7i8` is -128. The amount is widened to `long long`, so a huge unsigned
+// amount reads as negative and fails the same test.
+#define KAMA_SHL_CHK(NAME, T, UT, W)                                            \
+static inline T NAME(T a, long long n) {                                        \
+    if (n < 0 || n >= (W)) kama_shift_fail(n, (W));                             \
+    return (T)((UT)a << n);                                                     \
+}
+#define KAMA_SHR_CHK(NAME, T, W)                                                \
+static inline T NAME(T a, long long n) {                                        \
+    if (n < 0 || n >= (W)) kama_shift_fail(n, (W));                             \
+    return a >> n;                                                              \
+}
+KAMA_SHL_CHK(kama_shl_i32, int32_t,  uint32_t, 32)
+KAMA_SHL_CHK(kama_shl_i64, int64_t,  uint64_t, 64)
+KAMA_SHL_CHK(kama_shl_u32, uint32_t, uint32_t, 32)
+KAMA_SHL_CHK(kama_shl_u64, uint64_t, uint64_t, 64)
+KAMA_SHR_CHK(kama_shr_i32, int32_t,  32)
+KAMA_SHR_CHK(kama_shr_i64, int64_t,  64)
+KAMA_SHR_CHK(kama_shr_u32, uint32_t, 32)
+KAMA_SHR_CHK(kama_shr_u64, uint64_t, 64)
+#define KAMA_SHL(a, b) _Generic((a) + 0,                                        \
+    int: kama_shl_i32, long: kama_shl_i64, long long: kama_shl_i64,             \
+    unsigned int: kama_shl_u32, unsigned long: kama_shl_u64,                    \
+    unsigned long long: kama_shl_u64)((a), (long long)(b))
+#define KAMA_SHR(a, b) _Generic((a) + 0,                                        \
+    int: kama_shr_i32, long: kama_shr_i64, long long: kama_shr_i64,             \
+    unsigned int: kama_shr_u32, unsigned long: kama_shr_u64,                    \
+    unsigned long long: kama_shr_u64)((a), (long long)(b))
+
+// An out-of-range (or NaN) float -> int conversion is UB in C and was `-fsanitize-trap`. The check is a
+// range test on the double; the truncation toward zero is still C's own cast, applied by the caller to
+// the value handed back. `hi + 1.0` is exact for every target width — 2^31, 2^63 and 2^64 are all
+// representable — and a NaN fails both comparisons.
+static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi) {
+    if (!(v >= (double)lo && v < (double)hi + 1.0)) kama_fcast_fail();
+    return v;
+}
 
 // Signed overflow TRAPS in debug and WRAPS in release — the same two-tier rule `int32`/`int64` get from
 // `-fsanitize=signed-integer-overflow` (debug only, since 0.9.125) + `-fwrapv`. `NDEBUG` is the release
@@ -608,16 +728,15 @@ KAMA_SDIV_CHK(kama_sdiv_i64, int64_t, INT64_MIN)
 // parameter, a `foreach` binding, an intrinsic with no recorded return type — it emits this instead, and
 // C answers the question it could not: `_Generic` selects on the operand's static type and evaluates ONLY
 // the selected branch, so a side-effecting operand (`cast<int8>(f())`) is still evaluated exactly once
-// (`kama_lshift` below leans on the same property). A statement expression would be the obvious
+// (`KAMA_DIV`/`KAMA_SHL` above lean on the same property). A statement expression would be the obvious
 // alternative and is not available: kama emits strict ISO C11, where `({ … })` is a GNU extension.
 //
 // ⚠️ The associations are C's BUILTIN types, never the <stdint.h> typedefs: on Linux x86_64 `size_t` and
 // `uint64_t` are both `unsigned long`, and two `_Generic` associations for one type does not compile.
 // The 10 integer builtins + plain `char` cover every numeric type kama can emit.
 //
-// float/double are deliberately NOT checked here. An out-of-range float->int conversion already traps in
-// every build via `-fsanitize-trap=float-cast-overflow`, and an in-range one must keep truncating toward
-// zero (`cast<int32>(3.9f64) == 3`), so this hands the value straight to the caller's cast.
+// A float/double source takes the range test (kama_f2i_chk) and hands the VALUE back unchanged, so the
+// caller's cast still truncates toward zero (`cast<int32>(3.9f64) == 3`).
 #define KAMA_NARROW(x, LO, HI) _Generic((x),                                    \
     signed char:        kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
     char:               kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
@@ -631,21 +750,9 @@ KAMA_SDIV_CHK(kama_sdiv_i64, int64_t, INT64_MIN)
     unsigned long:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
     unsigned long long: kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
     _Bool:              kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    float:  (x),                                                                \
-    double: (x),                                                                \
+    float:  kama_f2i_chk((double)(x), (LO), (HI)),                              \
+    double: kama_f2i_chk((double)(x), (LO), (HI)),                              \
     default: (x))
-
-// Left shift with NO undefined behavior. A signed left shift into/past the sign bit is UB in C; do the
-// shift in the matching UNSIGNED type (a defined two's-complement bitwise shift) and convert back. Unsigned
-// operands shift as-is. `_Generic` dispatches on the operand's static type (evaluating `a`/`b` once each),
-// so no per-call type info is needed at the emitter. The shift AMOUNT is untouched, so an out-of-range
-// exponent still trips `-fsanitize=shift-exponent` (a clean trap) exactly as a plain `<<` would.
-#define kama_lshift(a, b) _Generic((a),                 \
-    int8_t:   (int8_t) ((uint8_t) (a) << (b)),          \
-    int16_t:  (int16_t)((uint16_t)(a) << (b)),          \
-    int32_t:  (int32_t)((uint32_t)(a) << (b)),          \
-    int64_t:  (int64_t)((uint64_t)(a) << (b)),          \
-    default:  ((a) << (b)))
 
 // InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T v[N]; }`). It owns no heap:
 // it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
@@ -823,7 +930,7 @@ static inline NAME NAME##__chkMul(NAME a, NAME b) {                             
         r[i] = o; } return r;                                                   \
 }                                                                               \
 /* A signed left shift INTO the sign bit is UB in C, for a vector lane exactly as for a scalar. kama  */\
-/* defines it (SPEC: "computed in the unsigned type - a defined bit pattern"), and `kama_lshift` does */\
+/* defines it (SPEC: "computed in the unsigned type - a defined bit pattern"), and `KAMA_SHL` does */\
 /* that for scalars via `_Generic` - which cannot see a vector type, and produced a hard C error the  */\
 /* first time a `Simd` met `<<`. This is the same rule, per lane, with the unsigned peer passed in.   */\
 static inline NAME NAME##__shl(NAME a, NAME b) {                                \

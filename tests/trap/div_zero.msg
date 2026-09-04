@@ -1,0 +1,1 @@
+kama: division by zero
