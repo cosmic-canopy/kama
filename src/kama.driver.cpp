@@ -393,8 +393,46 @@ std::string resolveStdlibDir(const char* argv0)
 // is handed an emitter and nothing else, and the answer is a process constant either way.
 static const char* g_argv0 = nullptr;
 
+// The text the BINARY compiled for a compiler-owned unit, or null when it carries none. `<prelude>` and
+// the triad are embedded (tools/embed_prelude.sh); `<builtin>` is a documentation file read off disk, so
+// it IS its own source and has nothing to be checked against.
+static const char* embeddedSourceOf(const std::string& unitName)
+{
+    if (unitName == "<prelude>") return KAMA_PRELUDE_SRC;
+    for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i)
+        if (unitName == KAMA_PRELUDE_MODULES[i].name) return KAMA_PRELUDE_MODULES[i].src;
+    return nullptr;
+}
+
+// Does the file on disk still say what the binary compiled? Compared with `\r` dropped, so a CRLF checkout
+// matches rather than mismatching spuriously — and spurious MISMATCH is the safe direction anyway: it
+// costs a path, while a spurious match is the whole fault this exists to prevent.
+static bool fileMatchesEmbedded(const std::string& path, const char* embedded)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::string disk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string src(embedded);
+    disk.erase(std::remove(disk.begin(), disk.end(), '\r'), disk.end());
+    src.erase(std::remove(src.begin(), src.end(), '\r'), src.end());
+    return disk == src;
+}
+
 // Where a compiler-owned source ACTUALLY lives on disk, given the synthetic name it carries inside the
-// binary (`<prelude>`, `<prelude>/std/memory/owned.kama`). Empty when there is no such file.
+// binary (`<prelude>`, `<prelude>/std/memory/owned.kama`). Empty when there is no such file — or when the
+// file is no longer the one that was compiled.
+//
+// ⚠️ A PATH HERE IS A CLAIM ABOUT THE BINARY'S OWN SOURCE, so it is checked against it. The prelude and
+// the triad are compiled from text EMBEDDED at build time, while this resolves a file on disk beside the
+// install — two things that drift the moment either moves, and a stale binary against an edited prelude
+// is the everyday case in this repo. Measured before the check: insert five lines at the top of a copy's
+// `prelude/global.kama` without rebuilding, and go-to-definition on `Optional` still answered line 8,
+// where line 8 had become a comment and `Optional` had moved to 13. Every language that precompiles its
+// standard library makes this mismatch DETECTABLE — Rust's `/rustc/<hash>/…` resolves only against the
+// matching `rust-src`, the JVM reports "source does not match the bytecode" — and the ones that compile
+// it from disk (Go, Zig, C) cannot have the problem at all. kama needs neither a hash nor a version pin,
+// because the text it compiled is right here: compare, and hand back nothing on a mismatch. Degrade,
+// never lie — every caller already treats "" as "no file on disk (a --no-std install)".
 //
 // ⚠️ The synthetic name is NOT replaced by this, and must not be. The leading `<` is a sentinel four
 // passes read: `checkReach` exempts compiler-owned declarations from the export/import rungs on it,
@@ -412,15 +450,21 @@ static std::string builtinSourcePath(const std::string& unitName)
     // are exe-relative and compose `..` freely — a dev tree yields
     // `out/Darwin-arm64/../../lib/../prelude/global.kama`, which opens fine and reads as a bug.
     const std::string root = resolveStdlibDir(g_argv0);
+    const char* embedded = embeddedSourceOf(unitName);
+    // The file must exist AND still be what was compiled. `<builtin>` carries no embedded text (it is a
+    // documentation file, and its own source of truth), so existence is all there is to ask of it.
+    auto usable = [&](const std::string& p) {
+        return fileExists(p) && (!embedded || fileMatchesEmbedded(p, embedded));
+    };
     const std::string pfx = "<prelude>/";
     if (unitName.compare(0, pfx.size(), pfx) == 0) {
         const std::string p = root + "/" + unitName.substr(pfx.size());
-        return fileExists(p) ? lspRealPath(p) : std::string();
+        return usable(p) ? lspRealPath(p) : std::string();
     }
     if (unitName == "<prelude>" || unitName == "<builtin>") {
         const std::string base = unitName == "<builtin>" ? "/prelude/builtin.kama" : "/prelude/global.kama";
         for (const std::string& p : { root + base, root + "/.." + base })
-            if (fileExists(p)) return lspRealPath(p);
+            if (usable(p)) return lspRealPath(p);
     }
     return std::string();
 }
