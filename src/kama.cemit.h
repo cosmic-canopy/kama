@@ -706,6 +706,10 @@ public:
     // `--release`: strips `debugAssert(...)` (dev-only checks) at emit time, mirroring C's `NDEBUG` /
     // Rust's `debug_assert!`. `assert(...)` stays always-on. Set from the driver before emission.
     void setRelease(bool on) { _release = on; _logCompileMin = on ? 3 /*Debug*/ : 99 /*no strip*/; }
+    // `OUTPUT=SHARED`: the program is a self-contained dynamic module with no `main`, so the runtime slots
+    // that the entry TU would define are defined in its first unit instead (emitRuntimeSlotDefinitions).
+    // Not for STATIC/OBJECT — an archive member defining them would collide with the app that links it.
+    void setSharedModule(bool on) { _sharedModule = on; }
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), and whether
@@ -1535,6 +1539,8 @@ private:
     // `declFile`, and `checkReach` asks whether the referencing file is in it.
     std::map<std::string, std::set<std::string>> _externDeclSites;   // literal C name -> files declaring it
     std::map<std::string, std::string> _externSymbolOwner;           // C symbol -> the kama name bound to it (one per program)
+    bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
+    void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     void emitIncludes(const std::vector<SharedCompilationUnit>& units);  // FFI #include directives
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)

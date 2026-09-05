@@ -1843,6 +1843,7 @@ static bool g_probeTemplates = false;
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
 static bool g_release = false;
+static bool g_outputShared = false;   // OUTPUT=SHARED — the emitter defines the runtime slots without a `main`
 
 // `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
 // and a missing signature both become hard errors. Off by default (warn-only: a present signature is
@@ -2271,6 +2272,7 @@ static void configureEmitter(CEmitter& e)
     e.setStrictNumeric(g_strictNumeric);   // `--strict-numeric` (M5a): measure numeric hand-offs
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
+    e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
     e.setBuildFlags(g_activeFlags, g_declaredFlags, g_strictFlags);   // `@compileFor` conditional compilation
     e.setLogDefault(g_logDefault);     // baked `KAMA_LOG` project default (M5), compiled into main
     // Which PACKAGE owns a given source file. The emitter needs this only to name both sides when two
@@ -9206,6 +9208,7 @@ int main(int argc, char** argv)
     const bool outObject = (outputKind == "OBJECT");
     const bool outStatic = (outputKind == "STATIC");
     const bool outShared = (outputKind == "SHARED");
+    g_outputShared = outShared;
     // Anything that is not a finished executable stops at `-c`; only EXE and SHARED reach the linker.
     const bool stopsAtObject = outObject || outStatic;
 

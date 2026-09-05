@@ -16679,6 +16679,43 @@ std::string CEmitter::vptrPrefix(ClassInfo* ci)
 std::string CEmitter::vptrPrefix(ClassInfo*) { return ""; }
 #endif
 
+// Single definition of the process-global set-once runtime slots (external-linkage in the headers — see
+// kama_runtime.h / kama_log.h). Their readers are `static inline` and inlined into every TU, while the
+// writer runs only here, so a per-TU `static` would let a slot set in one TU be read as empty in another.
+// The entry TU is the one, program-wide place to define them — and a `--shared` module, which has no
+// `main`, defines them in its first unit (emitProgram / emit): before that a module with any panic path
+// at all failed to LINK, `kama_panic_hook` undefined, which is how `tests/support/expose_shared_check.sh`
+// sat broken from 0.9.162 until tools/check-expose-shared.sh started running it. The panic hook and argv
+// are hosted-only (the headers declare them under the same guard; on embedded the panic path is the weak
+// `kama_panic_handler` and there is no argv); the log sink is declared unconditionally (present on
+// embedded too), emitted only when the program imports std::log. The `@onPanic` recovery slot: per
+// thread, one definition, declared `extern` in the runtime header under the same KAMA_ONPANIC the TU
+// preamble defines — so a program with no region defines nothing.
+void CEmitter::emitRuntimeSlotDefinitions()
+{
+    *_out << "#if defined(KAMA_ONPANIC)\n"
+          << "KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top = 0;\n"
+          << "#endif\n";
+    *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
+          << "void (*kama_panic_hook)(void) = 0;\n"
+          << "int kama_in_panic_hook = 0;\n"
+          << "int kama_argc = 0;\n"
+          << "char** kama_argv = 0;\n"
+          << "#endif\n";
+    if (externsHeader("kama_log.h"))
+        *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
+    // The detached-child reaper's park (kama_os.h, POSIX branch) — same one-definition rule: its
+    // accessors are `static inline`, so a per-TU `static` park would defeat the cross-TU sweep.
+    if (externsHeader("kama_os.h"))
+        *_out << "#if !defined(_WIN32)\n"
+              << "int* kama_reap_pids = 0;\n"
+              << "size_t kama_reap_len = 0;\n"
+              << "size_t kama_reap_cap = 0;\n"
+              << "int kama_reap_lock = 0;\n"
+              << "#endif\n";
+    *_out << "\n";
+}
+
 bool CEmitter::isExtern(FunctionDeclarationNode* fn)
 {
     return fn && fn->modifier && fn->modifier->value && *fn->modifier->value == "extern";
@@ -21689,36 +21726,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _viewParams.clear();
 
     if (isEntry) {
-        // Single definition of the process-global set-once runtime slots (external-linkage in the headers —
-        // see kama_runtime.h / kama_log.h). The entry TU is the one, program-wide place to define them: their
-        // readers are `static inline` and inlined into every TU, while the writer runs only here, so a per-TU
-        // `static` would let a slot set in one TU be read as empty in another. Emitted at file scope, before
-        // `main`. The panic hook and argv are hosted-only (the headers declare them under the same guard; on
-        // embedded the panic path is the weak `kama_panic_handler` and there is no argv); the log sink is
-        // declared unconditionally (present on embedded too), emitted only when the program imports std::log.
-        // The `@onPanic` recovery slot: per thread, one definition, declared `extern` in the runtime header
-        // under the same KAMA_ONPANIC the TU preamble defines — so a program with no region defines nothing.
-        *_out << "#if defined(KAMA_ONPANIC)\n"
-              << "KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top = 0;\n"
-              << "#endif\n";
-        *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
-             << "void (*kama_panic_hook)(void) = 0;\n"
-             << "int kama_in_panic_hook = 0;\n"
-             << "int kama_argc = 0;\n"
-             << "char** kama_argv = 0;\n"
-             << "#endif\n";
-        if (externsHeader("kama_log.h"))
-            *_out << "kama_log_sink_fn kama_log_slot = 0;\n";
-        // The detached-child reaper's park (kama_os.h, POSIX branch) — same one-definition rule: its
-        // accessors are `static inline`, so a per-TU `static` park would defeat the cross-TU sweep.
-        if (externsHeader("kama_os.h"))
-            *_out << "#if !defined(_WIN32)\n"
-                  << "int* kama_reap_pids = 0;\n"
-                  << "size_t kama_reap_len = 0;\n"
-                  << "size_t kama_reap_cap = 0;\n"
-                  << "int kama_reap_lock = 0;\n"
-                  << "#endif\n";
-        *_out << "\n";
+        emitRuntimeSlotDefinitions();   // at file scope, before `main`
         // Synthesized portable entry point. Emitted target-agnostically (the emitter has no target
         // knowledge by design): BOTH forms are written behind a preprocessor guard, and the driver's
         // `-DKAMA_TARGET_EMBEDDED` (`--target embedded`) selects the freestanding one — same pattern as
@@ -27506,6 +27514,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     emitIncludes({unit});           // FFI #include directives
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
+    if (_sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU — see the definition
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
@@ -27548,6 +27557,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
         *_out << "/* Generated by kama. Do not edit. */\n";
         *_out << "#include \"" << headerName << "\"\n\n";
         emitModuleContent(units[i]);
+        if (i == 0 && _sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU
     }
     checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
