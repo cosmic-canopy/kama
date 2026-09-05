@@ -82,6 +82,8 @@ cast_to_struct	cast_to_struct.kama:14
 channel_send_shared	channel_send_shared.kama:12
 channel_send_shared_collection	channel_send_shared_collection.kama:17
 channel_send_shared_variant	channel_send_shared_variant.kama:17
+class_identity_generic_fn	class_identity_generic_fn.kama:7
+class_identity_generic_type	class_identity_generic_type.kama:8
 class_identity_operator	class_identity_operator.kama:18
 class_identity_value	class_identity_value.kama:14 class_identity_value.kama:17 class_identity_value.kama:19 class_identity_value.kama:20
 compilefor_dangling	compilefor_dangling.kama:8

@@ -1,0 +1,28 @@
+// A `Deref<T>` wrapper whose OWN field shares a name with a field of its pointee. `w.tag` and `this.tag`
+// name the WRAPPER's field — auto-deref forwards only a member the wrapper does not have — and every
+// resolver must agree: `lvalueCType`, which `typeOfExpr` consults first, forwarded unconditionally and so
+// typed `this.tag` (and, in `Owned<T, A>.adoptIn`, `this.alloc`) as the pointee's field. That wrong
+// answer is what made the class-identity rule fire on the stdlib and get gated out of every generic
+// body. The assignment inside `retag` goes through the same resolver for its ownership check, so this
+// pins the emitted C as well as the type.
+type value Payload {
+    public int32 tag;
+    public int32 n;
+    public ctor make(int32 tag, int32 n) { this.tag = tag; this.n = n; }
+}
+
+type value Wrap implements Deref<Payload> {
+    Payload inner;
+    public int32 tag;                                   // shadows `Payload.tag`
+    public ctor make(Payload p, int32 tag) { this.inner = p; this.tag = tag; }
+    public fn ref Payload deref() { return this.inner; }
+    public fn void retag(int32 t) { this.tag = t; }     // the wrapper's field, not the pointee's
+    public fn int32 ownTag() { return this.tag; }
+}
+
+fn int32 main() {
+    Wrap w = Wrap.make(p: Payload.make(tag: 1, n: 10), tag: 20);
+    w.retag(t: 30);
+    // 30 (wrapper, via method) + 10 (pointee `n`, auto-deref) + 30 (wrapper `tag` wins over pointee) + 1
+    return w.ownTag() + w.n + w.tag + w.deref().tag;    // 71
+}

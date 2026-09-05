@@ -1327,6 +1327,22 @@ compiler nor the sanitizers will report here. Assigning a *function* to a signat
 structurally and is unaffected.
 (`tests/xfail/identity_sig_cross_sig.kama`, `tests/xfail/identity_sig_arity.kama`.)
 
+**A user class is not another user class.** Two `type value`/`type resource` declarations are two types
+however alike their fields, and a value of one is never accepted where the other is declared — in a
+local initializer, an assignment, an argument, a `return`, or an operator's operand: <!-- xfail: class_identity_value, class_identity_operator -->
+
+```kama
+type value Mat4 { … }   type value Vec4 { … }
+Vec4 v = …;
+Mat4 m = v;             // error — unrelated types; convert explicitly, or take a contract both implement
+Mat4 p = m * v;         // error — `Mat4 * Vec4` needs an operator declared for that pair
+```
+
+The rule holds inside a generic body too: `fn f<T>(T x) { Mat4 m = x; }` is judged per instantiation,
+and is an error exactly when `T` is bound to something other than `Mat4`. <!-- xfail: class_identity_generic_fn, class_identity_generic_type -->
+(`tests/xfail/class_identity_value.kama`, `class_identity_operator`, `class_identity_generic_fn`,
+`class_identity_generic_type`.)
+
 What this rule does **not** touch: a contract destination (which admits every kind by design, so
 `Hashable h = someInt32;` keeps working), an inheritance upcast, `Owned`/`Shared`/`Optional` promotion,
 and any hand-off whose type kama cannot resolve — the same silence the width rule keeps. Every exemption is

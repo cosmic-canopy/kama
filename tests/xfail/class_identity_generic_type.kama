@@ -1,0 +1,10 @@
+// The class-identity rule inside a GENERIC TYPE's method. Sibling of class_identity_generic_fn: the field
+// `this.v` is a `T`, bound to `B` in this instance, handed to an `A` local.
+type value A { public int32 a; public ctor make(int32 a) { this.a = a; } }
+type value B { public int32 b; public ctor make(int32 b) { this.b = b; } }
+type value Holder<T> {
+    T v;
+    public ctor make(T v) { this.v = v; }
+    public fn int32 get() { A m = this.v; return m.a; }
+}
+fn int32 main() { Holder<B> h = Holder.make(v: B.make(b: 2)); return h.get(); }

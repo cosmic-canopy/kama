@@ -1935,14 +1935,9 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
                                            const char* what, int line)
 {
     if (!value || !plainUserClass(dstCType)) return;
-    // ⚠️ NOT inside a generic instantiation. `_typeSubst` is non-empty only while emitting one, and there
-    // `exprClass` is not reliable enough to judge on: in `Owned<T, A>.adoptIn`, `this.alloc = allocator`
-    // has the FIELD answering the substituted `BumpAllocator` and the `A allocator` PARAMETER still
-    // answering the default `GlobalAllocator`, so the rule fired on the stdlib's own correct code. That
-    // is a pre-existing substitution inaccuracy this rule merely exposes — the same family as the
-    // generic-scan drift — and fixing it is its own campaign, so the rule stops at the boundary where its
-    // inputs are trustworthy rather than being weakened into something that fails open everywhere.
-    if (!_typeSubst.empty()) return;
+    // Runs inside a generic instantiation too. It was gated on `_typeSubst.empty()` from `0.9.148` to
+    // `0.9.184` because it fired on `Owned<T, A>.adoptIn`; that was `lvalueCType` auto-dereferencing
+    // `this.alloc` onto the pointee (fixed in its member arm), not a substitution defect.
     const std::string src = exprClass(value);
     if (src.empty() || src == dstCType || !plainUserClass(src)) return;
     if (isBaseOf(dstCType, src)) return;                       // an inheritance UPCAST is the point of one
@@ -23699,8 +23694,22 @@ std::string CEmitter::lvalueCType(SharedExpression e)
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {             // `obj.field` — resolve the receiver's field
         std::string recv = exprClass(ma->expression);
-        if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;
-        else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }
+        // Auto-deref a smart-pointer / `Deref<T>` receiver to its pointee — but ONLY when the member is
+        // not a field of the wrapper itself, the rule `exprClass`'s own member arm already follows and
+        // the one this arm was never taught (the identifier arm above got its matching lesson first).
+        // Unconditional, `this.alloc` inside `Owned<T, A>` resolved `alloc` on the POINTEE, which is
+        // silent until the pointee also spells a field `alloc` with a different type: `BTreeNode<K,V,A>`
+        // does, and `SortedMap.withAllocator` deliberately boxes its root as `Owned<BTreeNode<K,V,A>>`
+        // (default `A`) — so in that instance's `adoptIn` the field answered the node's `BumpAllocator`
+        // while the parameter, correctly, answered the box's own `GlobalAllocator`. `typeOfExpr`
+        // consults this resolver FIRST, which is how a wrong answer here blinded the class-identity rule
+        // to every generic body until it was found.
+        bool memberOnWrapper = !recv.empty() && ma->identifier && ma->identifier->value
+                            && _classes.count(recv) && findFieldOwner(&_classes[recv], *ma->identifier->value);
+        if (!memberOnWrapper) {
+            if (isSmartPtrClass(recv)) recv = _classes[recv].collElemClass;
+            else { std::string dt = derefTarget(recv); if (!dt.empty()) recv = dt; }
+        }
         if (!recv.empty() && ma->identifier && ma->identifier->value && _classes.count(recv)) {
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)

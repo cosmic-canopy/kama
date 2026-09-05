@@ -1,0 +1,8 @@
+// The class-identity rule inside a GENERIC FREE FUNCTION's body. From 0.9.148 to 0.9.184 the rule was
+// gated on `_typeSubst.empty()`, so `A m = x;` with `T = B` passed `kama check` here and failed in clang —
+// the one position where `Mat4 m = someVec4;` was still a C error. tests/xfail/class_identity_value.kama
+// pins the non-generic positions.
+type value A { public int32 a; public ctor make(int32 a) { this.a = a; } }
+type value B { public int32 b; public ctor make(int32 b) { this.b = b; } }
+fn int32 take<T>(T x) { A m = x; return m.a; }
+fn int32 main() { B v = B.make(b: 1); return take(x: v); }
