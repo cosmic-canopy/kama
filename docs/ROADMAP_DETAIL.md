@@ -827,31 +827,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     re-bind in between — now has a spelling ([tests/fnptr_stored.kama](../tests/fnptr_stored.kama)), and
     SPEC's `fnptr` section says so.
 
-  - **No way to give an `extern fn` or an `expose fn` a symbol name different from its kama name.**
-    `@linkName("…")` — the peer of Rust's `#[link_name]` / `#[export_name]`. Rowed 2026-09-01 while
-    closing the reserved-word-field row, because working that one out showed the two are **different
-    problems** and Rust keeps them separate on purpose:
-
-    | problem | Rust | kama |
-    |---|---|---|
-    | "my grammar cannot SPELL this name" | `r#type` | contextual keywords (`type`, `copy`, `give`, `base`, `default`, `truncate`) |
-    | "this SYMBOL is named something else" | `#[link_name]` / `#[export_name]` | **nothing — this row** |
-
-    A struct field is the first problem, and it is closed: the field name is resolved at compile time and
-    emitted as text, so there is no symbol involved. This row is the second. Today an `extern fn` must be
-    spelled exactly as C names it (SPEC: *"an `extern` keeps a literal name"*), so a C symbol colliding
-    with a kama KEYWORD — not merely with another identifier, which the wrapper convention already
-    handles — has no binding at all; and `expose fn` emits under its bare kama name with no way to choose
-    the exported symbol.
-
-    ⚠️ **Do not name it `@cname`.** kama's only backend is C emission today, so the name would be accurate
-    and would age badly: the 2.0 dual-mode arc puts a bytecode VM behind the same source, and a VM has no
-    C names. Name it for the concept (`@linkName`, `@symbol`), not for one backend.
-
-    Not urgent: no consumer is blocked on it, and no collision of this kind has been hit. It is rowed so
-    the distinction is not re-derived — the reserved-word-field work reached for `@cname` twice before the
-    measurement showed a contextual keyword was both smaller and categorically the right tool.
-
 
   - **The real-time cluster stopped being an argument and became a number.** Because kama cannot run on
     the CoreAudio thread, their synth runs on the frame loop and feeds the device through a ring — so
@@ -1060,7 +1035,7 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       `unsafe fn`, borrow through it in the callback via a `ref T` parameter, `adopt` it back to destroy.
       That is GOALS §3a/§3e verbatim — persistence is ownership, and the boundary is where ownership
       crosses. ⚠️ **Say "foreign", never "C", on this surface** — the vocabulary is already
-      `@foreignEntry`/`extern`, and the rule the `@linkName` row writes down applies: the host is C today
+      `@foreignEntry`/`extern`, and the rule `@linkName` was named by applies: the host is C today
       and a VM or another backend tomorrow (GOALS §10). The diagnostic, the SPEC section and the method's
       comment all name the concept.
     - **What it would cost if a real case ever pulls it**: a dtor seam at both teardown sites (the
@@ -1148,18 +1123,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
-  - **An enum member cannot be derived from a sibling — opened by the unresolved-name rows.** Measured on
-    `0.9.184`, `type enum K { A = 1, B = … }` with every spelling of "one more than `A`": bare `A + 1` is
-    refused as "`A` is a variant of `K` — write `K::A`" (the identifier arm's hint, which is right about
-    the spelling and wrong about the outcome); `K::A + 1` is refused by the enum-arithmetic rule, which is
-    correct for a VALUE and beside the point in an initializer, where the member is being defined as an
-    integer; `cast<int32>(K::A) + 1` passes `kama check` and fails in clang as "not an integer constant
-    expression", because the cast lowers through a runtime macro. Only `B = K::A` works. Before `0.9.183`
-    the bare form emitted `KAMA_ADD(A, 1)` for clang to refuse. Two decisions, then one small fix: whether an
-    initializer may name a sibling bare (C does; kama says `::` everywhere else — `K::A` is the consistent
-    answer), and whether the arithmetic rule is suspended inside an initializer (it must be, or the row is
-    "aliases only"). Then `emitEnum` folds the initializer against the members declared so far.
-
   - **A diagnostic can name the USER's file at a line that does not exist in it — the original filing.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
     stdlib body emitted in the HEADER pass the first two are empty, so the error is stamped with the
@@ -1168,13 +1131,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     (`AllocSite{…, 0, ""}`) and `CEmitter::line()` is deliberately NARROWER than `diagFile()` for the same
     reason, with a comment saying it must not be widened to it. `run_tests.sh`'s `diag_position_faults`
     would catch the class, but only where a fixture drives it, and none does.
-
-  - **`exprClass` is unreliable inside a generic instantiation.** Adding the class-identity rule
-    (`0.9.148`) made this visible: run inside a generic body it fires on the stdlib's own correct code,
-    because in `Owned<T, A>.adoptIn` the assignment `this.alloc = allocator` has the FIELD answering the
-    substituted `BumpAllocator` and the `A allocator` PARAMETER still answering the default
-    `GlobalAllocator`. Same family as the generic-scan drift. The rule is gated on `_typeSubst.empty()`
-    until this is fixed, so `Mat4 m = someVec4;` is caught in every position EXCEPT inside a generic body.
 
   - **No way to ask for reproducible floating point — SHIPPED `0.9.169`** as the manifest key
     `reproducible-float`. Measured here rather than taken from the report: **13** of 64 random `a*b + c`
@@ -1191,8 +1147,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     internally built and returned the right value. Fixed by BAKING the size at collect time, where the
     declaring file's scope is still installed. ⚠️ **The read-site fix was tried first and is wrong:**
     installing the owner's scope in `cTypeInInstance` for a non-generic class broke **30 fixtures and 17
-    analysis-agreement pairs** — the five-site NsCtx partial-swap hazard, and the same seam as the
-    `exprClass` row.
+    analysis-agreement pairs** — the five-site NsCtx partial-swap hazard, and the same seam the
+    class-identity rule's generic-body gate sat on until `0.9.185`.
 
   **⚠️ What their queue is worth reading for.** KG-15 was filed as "ergonomic friction" and was a
   check/build divergence reaching four positions, not one; KB-10 was filed as an `InlineArray` problem and
