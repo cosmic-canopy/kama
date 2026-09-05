@@ -20,6 +20,7 @@
                          "web":    { "visibility": "public" }
                        } },
     "num":           { "visibility": "public" },
+    "path":          { "visibility": "public" },
     "process":       { "visibility": "public" },
     "ptr":           { "visibility": "public" },
     "serialization": { "visibility": "public",

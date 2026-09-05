@@ -1,0 +1,68 @@
+// std::path — the six pure path functions, and the five places a mainstream implementation surprises
+// someone (this module's header lists them). POSIX spellings only, so the fixture runs on every leg.
+// The eight flags sum to 255.
+import { std::path::join, std::path::parent, std::path::fileName, std::path::stem,
+         std::path::extension, std::path::isAbsolute, std::path::separator };
+
+fn bool is(Optional<string> got, const ref string want) {
+    return match (got) { case Some(value: s): s == want; case None: false; };
+}
+
+fn bool none(Optional<string> got) {
+    return match (got) { case Some(value: s): false; case None: true; };
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // parent
+    if (is(got: parent(path: "/a/b/c.txt"), want: "/a/b")
+     && is(got: parent(path: "/a/b/"),      want: "/a")        // a trailing separator is not a component
+     && is(got: parent(path: "/a//b"),      want: "/a")        // ...nor is a doubled one
+     && is(got: parent(path: "/file"),      want: "/")         // the root keeps its separator
+     && none(got: parent(path: "/"))                           // the root is its own last component
+     && none(got: parent(path: "file.txt"))) { r = r + 1; }    // ⚠️ None, where Rust answers Some("")
+
+    // fileName
+    if (is(got: fileName(path: "/a/b/c.txt"), want: "c.txt")
+     && is(got: fileName(path: "/a/b/"),      want: "b")
+     && is(got: fileName(path: "solo"),       want: "solo")
+     && none(got: fileName(path: "/"))
+     && none(got: fileName(path: "a/.."))                      // ⚠️ a directory reference, not a name
+     && none(got: fileName(path: "."))) { r = r + 2; }
+
+    // extension — without the dot, and absent for the two shapes that only look like one
+    if (is(got: extension(path: "/a/b.tar.gz"), want: "gz")    // the LAST dot splits
+     && is(got: extension(path: "x.c"),         want: "c")
+     && none(got: extension(path: "/a/.bashrc"))               // ⚠️ a dotfile has no extension
+     && none(got: extension(path: "archive."))                 // ⚠️ nor does a trailing dot
+     && none(got: extension(path: "/a/README"))) { r = r + 4; }
+
+    // stem
+    if (is(got: stem(path: "/a/b.tar.gz"), want: "b.tar")
+     && is(got: stem(path: "/a/README"),   want: "README")
+     && is(got: stem(path: "/a/.bashrc"),  want: ".bashrc")     // no extension, so the whole name
+     && none(got: stem(path: "/"))) { r = r + 8; }
+
+    // join — the seam is collapsed to exactly one separator, whichever side carried it
+    string sep = separator();
+    string a = join(path: "/srv", with: "www");
+    string b = join(path: "/srv/", with: "www");
+    string c = join(path: "/srv//", with: "//www");
+    if (a == "/srv" + sep + "www" && b == a && c == a) { r = r + 16; }
+
+    // ...and the pitfall: an absolute right-hand side is APPENDED, never allowed to replace the base.
+    // In Rust and in Python this line yields "/etc/passwd" and the sandbox is gone.
+    string esc = join(path: "/srv/root", with: "/etc/passwd");
+    if (esc == "/srv/root" + sep + "etc" + sep + "passwd"
+     || esc == "/srv/root" + sep + "etc/passwd") { r = r + 32; }
+
+    // join with an empty side is the other side, unchanged
+    if (join(path: "", with: "x") == "x" && join(path: "x", with: "") == "x"
+     && join(path: "/", with: "x") == sep + "x") { r = r + 64; }
+
+    // isAbsolute
+    if (isAbsolute(path: "/a/b") && !isAbsolute(path: "a/b") && !isAbsolute(path: "")) { r = r + 128; }
+
+    return r;   // 255
+}
