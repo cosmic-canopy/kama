@@ -1,0 +1,94 @@
+// An owning `match` SUBJECT — a call result the match materializes into a temp — is dropped on every way
+// out of the match, not just the one that falls through.
+//
+// The temp used to be released by a bare dtor line written after the switch, which an arm that `return`s,
+// `break`s or `continue`s jumps straight over. Measured under LeakSanitizer: 16 bytes leaked per call of
+// the `return` form, while the same match whose arms fall through was clean — so this fixture's real
+// assertion runs on the sanitizer leg, and the exit code here only proves the values still arrive.
+// Found while writing the `std::net::resolve` fixture, whose `resolveOne` is exactly the `return` shape.
+import { std::collections::DynamicArray, std::io::IoError };
+
+fn Result<DynamicArray<int32>, IoError> makeList(int32 v) {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: v);
+    return Result::Ok(value: give d);
+}
+
+// `return` out of an arm.
+fn int32 viaReturn(int32 v) {
+    match (makeList(v: v)) {
+        case Err(error: e): { return -1; }
+        case Ok(value: list): { return copy list[0]; }
+    };
+    return -2;
+}
+
+// Fall-through: the shape that always worked, kept as the control.
+fn int32 viaFallThrough(int32 v) {
+    int32 got = -1;
+    match (makeList(v: v)) {
+        case Err(error: e): { }
+        case Ok(value: list): { got = copy list[0]; }
+    };
+    return got;
+}
+
+// `break` out of an arm, which unwinds to the loop boundary rather than to the function root.
+fn int32 viaBreak(int32 v) {
+    int32 got = -1;
+    while (true) {
+        match (makeList(v: v)) {
+            case Err(error: e): { }
+            case Ok(value: list): { got = copy list[0]; }
+        };
+        break;
+    }
+    return got;
+}
+
+// `continue` from inside the arm itself — the temp must go before the next iteration allocates another.
+fn int32 viaContinue(int32 v) {
+    int32 got = 0;
+    int32 i = 0;
+    while (i < 3) {
+        i = i + 1;
+        match (makeList(v: v)) {
+            case Err(error: e): { }
+            case Ok(value: list): { int32 v0 = copy list[0]; got = got + v0; continue; }
+        };
+        got = got + 100;
+    }
+    return got;
+}
+
+// A CONSUMED subject (`match (give r)`) whose payload is a smart-pointer handle, `give`n straight out
+// again — `std::serialization::json::encode`'s own shape. The binding must take ownership: it is neither
+// `ownsByValue` nor a borrow, so it used to alias a box the subject still owned, and `give e` moved it out
+// from under a live owner. That was a latent double free the missing subject drop was hiding.
+type enum Boom implements Error {
+    Bad;
+    public const fn string message() { return "boom"; }
+}
+
+fn Result<int32, Owned<Error>> failing() { return Result::Err(error: Boom::Bad); }
+
+fn Result<int32, Owned<Error>> forward() {
+    Result<int32, Owned<Error>> r = failing();
+    match (give r) {
+        case Err(error: e): { return Result::Err(error: give e); }
+        case Ok(value: v): { }
+    };
+    return Result::Ok(value: 0);
+}
+
+fn int32 viaGiveOut() {
+    match (forward()) {
+        case Err(error: e): { string m = e.message(); return cast<int32>(m.length()); }   // 4
+        case Ok(value: v): { return -1; }
+    };
+    return -2;
+}
+
+fn int32 main() {
+    return viaReturn(v: 1) + viaFallThrough(v: 2) + viaBreak(v: 4) + viaContinue(v: 8) + viaGiveOut();
+}   // 1 + 2 + 4 + 24 + 4 = 35

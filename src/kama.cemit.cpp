@@ -19489,6 +19489,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                    || dynamic_cast<ThisAccessNode*>(m->subject.get())
                    || dynamic_cast<ElementAccessNode*>(m->subject.get());
     std::string subjOwner;
+    size_t subjLocMark = 0;      // where the subject temp sits in the enclosing scope; see the drop below
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
     // a `ref string` param — `match (map.get("k"))`), so their decls land BEFORE the subject line, not
     // inside the first arm body (which would leave them undeclared at the point of use).
@@ -19497,11 +19498,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         // (bitwise handle copy), and mark the source moved (its own scope-drop then no-ops). Payload bindings
         // MOVE out of this temp (destructure-move); the temp's post-switch drop no-ops the defused slots.
         auto* h = dynamic_cast<HandoffNode*>(m->subject.get());
+        // No `_hoistOK` here, unlike the sibling branch below: `give` moves a named local, and a call
+        // result or an inline ctor is refused outright ("cannot `give` out of a field/element"), so this
+        // subject can never carry an argument temp to hoist.
         std::string subjExpr = emitExpression(h->value);
         flushHoisted(depth);
+        subjLocMark = _scopes.empty() ? 0 : _scopes.back().locals.size();
         subjOwner = "__msubj" + std::to_string(_tempCounter++);
         indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
+        recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
         std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
     } else {
     // A1: pin the concrete instance so the inline variant ctor constructs `Optional_int32`, not bare `Optional`.
@@ -19512,9 +19518,17 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                   || dynamic_cast<MatchNode*>(m->subject.get())
                   || dynamic_cast<TernaryExpressionNode*>(m->subject.get());
     std::string pvt = _variantTargetType, pmt = _matchTargetCType; bool ph = _hoistOK;
-    if (valueSubj) { _variantTargetType = subjCls; _matchTargetCType = subjCls; _hoistOK = true; }
+    if (valueSubj) { _variantTargetType = subjCls; _matchTargetCType = subjCls; }
+    // `_hoistOK` for EVERY subject, not just a value-producing one. The subject stands in a statement slot
+    // and its temps are flushed on the next line, which is the whole precondition hoisting asks for — and
+    // the comment above already claimed this worked ("a `string` literal materialized for a `ref string`
+    // param"). It did not: the materialization arms in emitReorderedCall are gated on `_hoistOK`, so
+    // `match (f(s: "lit"))` on a `const ref string` parameter emitted `&(kama_string_lit(…))` and only
+    // clang objected — "cannot take the address of an rvalue" — while `Optional<T> o = f(s: "lit");` one
+    // line up compiled. A check/build divergence, and the kind a fixture only finds by being written.
+    _hoistOK = true;
     std::string subjExpr = emitExpression(m->subject);
-    if (valueSubj) { _variantTargetType = pvt; _matchTargetCType = pmt; _hoistOK = ph; }
+    _variantTargetType = pvt; _matchTargetCType = pmt; _hoistOK = ph;
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
         // `this` emits as `self`, which is ALREADY a `subjCls*` (the receiver pointer) — do NOT re-address
@@ -19524,9 +19538,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     } else if (subjLvalue) {
         indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
     } else {
+        subjLocMark = _scopes.empty() ? 0 : _scopes.back().locals.size();
         subjOwner = "__msubj" + std::to_string(_tempCounter++);
         indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
+        recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
     }
     }
     indent(depth); *_out << "switch (" << sp << "->tag) {\n";
@@ -19619,7 +19635,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // Destructure-MOVE: when the subject is CONSUMED (`match (give x)`) and the payload is owning,
                 // the binding takes ownership — defuse the subject slot (so the subject's drop no-ops it) and
                 // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).
-                if (subjConsumed && ownsByValue(bcty)) {
+                // ⚠️ `isSmartPtrClass` as well as `ownsByValue`, and the omission was a latent double free
+                // that only the subject temp's missing drop was hiding. `match (give r) { case Err(error:
+                // e): return Result::Err(error: give e); }` — `std::serialization::json::encode`'s own
+                // shape — binds an `Owned<Error>` fat handle, which is not `ownsByValue`, so it took
+                // NEITHER branch: not defused (the subject kept owning the box) and not marked borrowed
+                // (that arm is for a borrowing match), so `give e` moved an alias out from under a live
+                // owner. It survived only because an arm that `return`s jumped over the bare dtor line
+                // after the switch; the moment that drop became a real scope drop, the box was freed twice.
+                // A consumed subject hands ownership to the binding whatever the payload's shape is.
+                if (subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
                     indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
                     _scopes.back().locals.push_back({bn, bcty});
                     _moveState[bn] = MoveState::NotMoved;
@@ -19731,11 +19756,17 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     emitMatchDefaultArm(hasWildcard, _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(),
                         subjCls, depth);
     indent(depth); *_out << "}\n";
-    // a materialized owning subject (a call/construction result) is dropped once after the
-    // switch — bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
-    if (!subjOwner.empty() && _classes.count(subjCls) && _classes[subjCls].destructible) {
-        indent(depth); *_out << subjCls << "__dtor(&" << subjOwner << ");\n";
-    }
+    // A materialized owning subject (a call/construction result) is dropped once after the switch —
+    // bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
+    //
+    // ⚠️ Through the SCOPE, not as a bare `T__dtor(&temp);` line, and that is the whole fix: an arm that
+    // `return`s jumps over anything written after the switch. `match (makeList()) { case Ok(value: l):
+    // { return copy l[0]; } … }` therefore leaked the list on every call — measured, 16 bytes per call
+    // under LeakSanitizer — while the identical match whose arms fall through was clean. Registering the
+    // temp makes `emitUnwindAll` (return) and `emitUnwindToLoop` (break/continue) find it like any other
+    // owning local, and `dropCondTemps` performs the fall-through drop and unregisters it so scope exit
+    // does not drop it twice. It is the condition-temp pattern, which exists for exactly this reason.
+    if (!subjOwner.empty()) dropCondTemps(subjLocMark, depth);
 }
 
 // The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.

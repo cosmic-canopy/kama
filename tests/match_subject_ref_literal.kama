@@ -1,0 +1,41 @@
+// A call whose argument needs a materialized temp — a string literal, or a bare number, handed to a
+// `const ref` parameter — used AS THE SUBJECT of a `match`.
+//
+// The subject stands in a statement slot, so hoisting a temp before it is legal and is what every other
+// statement position does. `emitMatchSwitch` enabled it only for a value-producing subject, so the
+// materialization arms in `emitReorderedCall` stayed off and the argument emitted as `&(rvalue)` — illegal
+// C, caught by clang and not by kama, while the identical call bound to a local one line up compiled.
+// Found writing the `std::net::resolve` fixture, where every call reads `match (resolve(host: "…"))`.
+// (The `give` subject cannot reach this: it moves a named local, and a call result is refused outright.)
+// Five flags, 31.
+
+fn Optional<int32> firstByte(const ref string s) {
+    if (s.length() == 0) { return Optional::None; }
+    return Optional::Some(value: cast<int32>(s[0]));
+}
+
+fn Optional<int32> doubled(const ref int32 n) { return Optional::Some(value: n * 2); }
+
+fn Optional<string> owned(const ref string s) { return Optional::Some(value: s + "!"); }
+
+fn int32 main() {
+    int32 r = 0;
+
+    // The control: the same call in the position that always worked.
+    Optional<int32> bound = firstByte(s: "A");
+    match (bound) { case Some(value: v): { if (v == 65) { r = r + 1; } } case None: { } };
+
+    // A string LITERAL to a `const ref string`, as the subject.
+    match (firstByte(s: "A")) { case Some(value: v): { if (v == 65) { r = r + 2; } } case None: { } };
+
+    // A string RVALUE (a concat, not a literal) to the same parameter, as the subject.
+    match (firstByte(s: "A" + "B")) { case Some(value: v): { if (v == 65) { r = r + 4; } } case None: { } };
+
+    // A bare numeric literal to a `const ref int32`, as the subject — the neighbouring materialization arm.
+    match (doubled(n: 21)) { case Some(value: v): { if (v == 42) { r = r + 8; } } case None: { } };
+
+    // An OWNING result off the same shape — the temp is materialized and the returned string still drops.
+    match (owned(s: "hi")) { case Some(value: s): { if (s == "hi!") { r = r + 16; } } case None: { } };
+
+    return r;   // 31
+}
