@@ -14679,6 +14679,18 @@ void CEmitter::bakeFieldCTypes()
 // A field's C type. The baked answer when there is one; otherwise resolve it now, under the owner's type
 // arguments — an instance minted after bakeFieldCTypes ran has no baked field, and cTypeInInstance is the
 // stronger fallback (bare `cType` would lose the substitution).
+//
+// ⚠️ THIS IS THE ONLY WAY TO READ A FIELD'S TYPE. `cTypeInInstance(owner, f.type)` at a read site is the
+// defect, not a shortcut around it: it hands the DECLARING file's identifier node to the resolver while
+// the READER's file is installed. 0.9.176 landed the bake with two callers and left eleven sites on the
+// old spelling, so the same bug survived one release in a narrower shape — a field merely PASSED ALONG
+// (`takesOther(o: h.k)`) was still judged in the reader's scope. That is worse than the message it
+// produced: cross-module the resolution MISSES rather than fires, so the enum-identity rule went silent
+// and a `Kind` reached an `Other` parameter with no diagnostic from kama and none from clang either
+// (both lower to the same C integer). Every field-type read now comes through here — lvalueCType,
+// exprClass, receiverScalarCType, exprEnumType, the fnptr-field invoke and the variant-payload paths —
+// and they had to move TOGETHER: typeOfExpr takes the first non-empty of four resolvers, so converting
+// some of them would only have made them disagree. tools/check-module-emit-parity.sh case 2 holds it.
 std::string CEmitter::fieldCType(const std::string& ownerCls, const FieldInfo& f)
 {
     return f.cTypeBaked.empty() ? cTypeInInstance(ownerCls, f.type) : f.cTypeBaked;
@@ -19600,7 +19612,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // hover, go-to-definition and rename all reach it, the same as any other named use.
                 if (a->labelIds && i < a->labelIds->size() && pf.nameId)
                     recordNodeRef((*a->labelIds)[i].get(), pf.nameId.get());
-                std::string bcty = cTypeInInstance(subjCls, pf.type);
+                std::string bcty = fieldCType(subjCls, pf);
                 std::string slot = std::string(sp) + "->u." + *a->variantName + "." + pf.name;
                 indent(depth + 2);
                 *_out << bcty << " " << bn << " = " << slot << ";\n";
@@ -19848,7 +19860,7 @@ std::string CEmitter::exprEnumType(SharedExpression e)
                 for (auto& f : owner->fields)
                     // resolved in the OWNER INSTANCE, like every other field resolution — a `T`-typed
                     // field whose instance binds `T` to a plain enum is a legal `match` subject.
-                    if (f.name == *id->value && f.type) { std::string r = asEnum(cTypeInInstance(_currentClass->name, f.type)); if (!r.empty()) return r; }
+                    if (f.name == *id->value && f.type) { std::string r = asEnum(fieldCType(_currentClass->name, f)); if (!r.empty()) return r; }
         }
         return "";
     }
@@ -19860,7 +19872,7 @@ std::string CEmitter::exprEnumType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type) { std::string r = asEnum(cTypeInInstance(recv, f.type)); if (!r.empty()) return r; }
+                    if (f.name == *ma->identifier->value && f.type) { std::string r = asEnum(fieldCType(recv, f)); if (!r.empty()) return r; }
         }
         return "";
     }
@@ -20254,7 +20266,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
             // through emitReorderedCall, so A2's one line does not cover it. By node, so a generic union's
             // instances collapse onto the template's declaration.
             recordNodeRef(ai->second->name.get(), f.nameId.get());
-            std::string fcls = cType(f.type);            // the payload field's C type (Shared_Probe / int32_t / …)
+            std::string fcls = fieldCType(ci.name, f);   // the payload field's C type (Shared_Probe / int32_t / …)
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
@@ -23784,7 +23796,7 @@ std::string CEmitter::lvalueCType(SharedExpression e)
                     // bound wins: inside `Box<int64>`'s method, `r.item` on a `Reader<int32>` answered
                     // int64. `typeOfExpr` consults this resolver FIRST, so its wrong answer beat the three
                     // that had it right.
-                    if (f.name == *id->value && f.type) return cTypeInInstance(_currentClass->name, f.type);
+                    if (f.name == *id->value && f.type) return fieldCType(_currentClass->name, f);
         }
         return "";
     }
@@ -23810,7 +23822,7 @@ std::string CEmitter::lvalueCType(SharedExpression e)
             ClassInfo* owner = findFieldOwner(&_classes[recv], *ma->identifier->value);
             if (owner)
                 for (auto& f : owner->fields)
-                    if (f.name == *ma->identifier->value && f.type) return cTypeInInstance(recv, f.type);
+                    if (f.name == *ma->identifier->value && f.type) return fieldCType(recv, f);
         }
         return "";
     }
@@ -24043,7 +24055,7 @@ std::string CEmitter::exprClass(SharedExpression e)
             if (owner)
                 for (auto& f : owner->fields)
                     if (f.name == *id->value && f.type) {   // resolve under the OWNER instance's type args
-                        std::string ft = cTypeInInstance(_currentClass->name, f.type);
+                        std::string ft = fieldCType(_currentClass->name, f);
                         if (isClass(ft)) return ft;
                     }
         }
@@ -24069,7 +24081,7 @@ std::string CEmitter::exprClass(SharedExpression e)
                         // Resolve the field type under its OWNER INSTANCE's type args — NOT the ambient
                         // _typeSubst, which inside an enum-variant/arg emission may bind only some params
                         // (e.g. `Optional<T>`'s `T`), leaving a nested `DynamicArray<T,A>`'s `A` unbound.
-                        std::string ft = cTypeInInstance(recv, f.type);
+                        std::string ft = fieldCType(recv, f);
                         if (isClass(ft)) return ft;
                     }
         }
@@ -24512,7 +24524,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             if (fo)
                 for (auto& f : fo->fields)
                     if (f.name == method && f.type) {
-                        const std::string fc = cTypeInInstance(clsName, f.type);
+                        const std::string fc = fieldCType(clsName, f);
                         if (isSigType(fc)) {
                             canAccess(fo, f.visibility, method, srcLine);
                             const SigInfo& sig = _sigs.at(fc);
@@ -24746,7 +24758,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
     // Resolve the inner smart-ptr `S` under the `Result` INSTANCE's substitution (not the ambient context) —
     // else a defaulted generic param (`Owned<T>`'s allocator) resolves wrong and `S` misses the registered
     // `…Owned…GlobalAllocator` name. Mirrors emitVariantStruct's own field emission.
-    std::string S = cTypeInInstance(target, okV->payload[0].type);   // `std__memory__Owned…`/`…Shared…`
+    std::string S = fieldCType(target, okV->payload[0]);   // `std__memory__Owned…`/`…Shared…`
     // A concrete `Owned`/`Shared` from `std::memory` is a LIBRARY `HeapOwner` (boxed via `adopt`, NOT the
     // intrinsic `.ptr`/`.ctrl` handle). The intrinsic smart-ptr representation (`isSmartPtrClass`) is the
     // type-erased INTERFACE-element fat handle — its fallible `new` is a follow-on milestone.
@@ -24915,7 +24927,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
                      + ">>` — it yields the owned value or `None` on OOM").c_str(), srcLine);
         return "";
     }
-    std::string S = cTypeInInstance(target, someV->payload[0].type);   // the inner Owned/Shared instance
+    std::string S = fieldCType(target, someV->payload[0]);   // the inner Owned/Shared instance
     const std::string someName = someV->payload[0].name;              // "value"
     // ---- (1) INTERFACE-ELEMENT: box the concrete `cls` behind the type-erased fat handle `S`. ----
     // Mirrors emitFallibleNewBox's interface branch (malloc `.obj`, construct into it, set `.vtbl`, and —
@@ -25099,7 +25111,7 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
                        "trap").c_str(), srcLine);
         return "";
     }
-    const std::string S = cTypeInInstance(target, someV->payload[0].type);
+    const std::string S = fieldCType(target, someV->payload[0]);
     if (S != dst) {
         unsupported(("`try cast<" + disp + ">(…)` yields `Optional<" + disp + ">`, but this destination "
                      "holds `" + S + "`").c_str(), srcLine);
@@ -25556,7 +25568,7 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
             if (owner)
                 for (auto& f : owner->fields)
                     if (f.name == *ma->identifier->value && f.type)
-                        return cTypeInInstance(recv, f.type);   // a primitive field -> "int32_t", etc.
+                        return fieldCType(recv, f);   // a primitive field -> "int32_t", etc.
         }
         return "";
     }

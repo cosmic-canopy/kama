@@ -1,8 +1,8 @@
-import { Holder, makeHolder, Res, makeRes };
+import { Holder, makeHolder, Res, makeRes, takesKind };
 export { viaHolder };
 
 fn int32 viaHolder() {
     Holder h = makeHolder();
     Res r = makeRes();
-    return h.n + r.get();   // 20 + 22
+    return h.n + r.get() + takesKind(k: h.k);   // 20 + 22 + 1
 }

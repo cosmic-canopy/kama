@@ -75,4 +75,64 @@ n_main=$(LC_ALL=C grep -c 'Counter__start()' "$main_c" || true)
 $n_inside time(s) inside \`geo\` and $n_main time(s) one module over — a member's type is being resolved \
 in the READER's scope"
 
+# ── Case 2: the same rule at the ARGUMENT path (the KB-13 residual, 0.9.189) ───────────────────────────
+#
+# The declaration path was baked in 0.9.176; PASSING a field along was still resolved at the read site,
+# through three more resolvers (lvalueCType / exprClass / receiverScalarCType, all reached from
+# typeOfExpr). Same divergence, worse consequence: `takesOther(o: h.k)` — a `Kind` handed to an `Other`
+# parameter — was REFUSED inside the declaring module and ACCEPTED one module over. Measured on the
+# unfixed compiler, this exact probe: 2 errors inside (one of them the spurious import), 0 outside.
+#
+# ⚠️ Not a fixture, for a sharper reason than case 1: both enums lower to the same C integer type, so the
+# C compiler does not catch it either. The wrong program simply builds and runs, and the only oracle is
+# that the two spellings must AGREE.
+mkdir -p "$tmp/arg/src/geo"
+cat > "$tmp/arg/kama.json" <<'JEOF'
+{ "name": "argp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" }, "geo": { "visibility": "internal" } } }
+JEOF
+cat > "$tmp/arg/src/geo/decl.kama" <<'KEOF'
+export { Kind, Other, Holder, makeHolder, takesOther };
+type enum Kind  { A, B }
+type enum Other { X, Y }
+type value Holder {
+    public int32 n;
+    public Kind k;
+    public ctor make(int32 n, Kind k) { this.n = n; this.k = k; }
+}
+fn Holder makeHolder() { return Holder.make(n: 20, k: Kind::A); }
+fn int32 takesOther(Other o) { match (o) { case X: { return 1; } case Y: { return 2; } }; }
+KEOF
+# The violation, written INSIDE the declaring module...
+cat > "$tmp/arg/src/geo/inside.kama" <<'KEOF'
+import { Holder, makeHolder, takesOther };
+export { inside };
+fn int32 inside() { Holder h = makeHolder(); return takesOther(o: h.k); }
+KEOF
+cat > "$tmp/arg/src/main.kama" <<'KEOF'
+import { argp::geo::inside };
+fn int32 main() { return inside(); }
+KEOF
+( cd "$tmp/arg" && "$KAMA" check kama.json ) >"$tmp/inside.log" 2>&1 && in_ok=1 || in_ok=0
+
+# ...and one module over, byte-for-byte the same two statements.
+cat > "$tmp/arg/src/geo/inside.kama" <<'KEOF'
+export { inside };
+fn int32 inside() { return 0; }
+KEOF
+cat > "$tmp/arg/src/main.kama" <<'KEOF'
+import { argp::geo::Holder, argp::geo::makeHolder, argp::geo::takesOther };
+fn int32 main() { Holder h = makeHolder(); return takesOther(o: h.k); }
+KEOF
+( cd "$tmp/arg" && "$KAMA" check kama.json ) >"$tmp/outside.log" 2>&1 && out_ok=1 || out_ok=0
+
+# The probe must BE a violation — if `kama check` ever accepts it from inside the declaring module, the
+# enum-identity rule moved and this guard is measuring nothing (case 1's lesson, restated).
+[ "$in_ok" = 0 ] || note "\`takesOther(o: h.k)\` is accepted INSIDE the declaring module — the enum-identity \
+rule no longer fires here, so this probe cannot see the read-site divergence any more"
+
+[ "$in_ok" = "$out_ok" ] || note "handing a field to a mismatched parameter is refused inside the declaring \
+module and ACCEPTED one module over — a member's type is being resolved in the READER's scope (the KB-13 \
+residual). Route the read site through fieldCType(), never cTypeInInstance(owner, f.type)"
+
 exit $fail

@@ -7,9 +7,16 @@
 // Cross-module the same resolution missed instead of firing, and the field was silently dropped from
 // the analysis. Baked at collect time now — see bakeFieldCTypes. (Positive: it must simply build.)
 import { std::memory::Owned };
-export { Kind, Holder, makeHolder, Res, makeRes };
+export { Kind, Holder, makeHolder, Res, makeRes, takesKind };
 
 type enum Kind { A, B }
+
+// The RESIDUAL half, fixed one release later: handing the field to a function that names the type is a
+// second read site, and the argument path classified `h.k` through THREE more resolvers that re-resolved
+// the field's type node in the reader's scope. `use.kama` still never spells `Kind`. (Positive: it builds.)
+fn int32 takesKind(Kind k) {
+    match (k) { case A: { return 1; } case B: { return 2; } };
+}
 
 type value Holder {
     public int32 n;
