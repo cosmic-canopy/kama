@@ -1,0 +1,7 @@
+// A field READ through the type rather than a value — the non-call twin of xfail/dot_on_type_field
+// (`Holder.n()`). Without the call the old path emitted `(Holder).n` and left it to the C compiler.
+type value Holder {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+}
+fn int32 main() { return Holder.n; }   // ERROR: `n` is a field. Read it from a value (`obj.n`)

@@ -1,0 +1,9 @@
+// A type-associated `comptime` constant is read as `V::N` (SPEC: "a type comptime is read as Type::NAME").
+// `.` on the type is the constructor spelling; a READ through it is rejected naming the `::` form. The
+// call form (`V.tag()`) has been refused for a long time (xfail/dot_on_type_static); the read form used to
+// emit `(V).N` and reach the C compiler.
+type value V {
+    public comptime int32 N = 4;
+    public ctor make() { }
+}
+fn int32 main() { return V.N; }   // ERROR: read it as `V::N`

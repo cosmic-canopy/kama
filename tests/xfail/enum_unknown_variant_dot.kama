@@ -1,0 +1,7 @@
+// A variant that does not exist, spelled with a dot: the head resolves to an enum, the member does not
+// resolve to anything on it. Rejected by kama, not by the C compiler.
+type enum K { A, B }
+fn int32 main() {
+    K k = K.ZZZ;   // ERROR: `K` has no variant `ZZZ`
+    return 0;
+}

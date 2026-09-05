@@ -3854,7 +3854,10 @@ is rejected with a message naming the `.` spelling, so field access has exactly 
 `Vec2.make(...)` constructs, `Vec2::dot(...)` calls a `static fn` — and the split is **enforced in both
 directions**, so it is a real greppability guarantee rather than a convention: a `static fn` called with a
 dot is rejected (`tests/xfail/dot_on_type_not_ctor.kama`) and a `ctor` called with `::` is rejected <!-- xfail: dot_on_type_not_ctor, scope_op_on_ctor -->
-(`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. A `ctor` is static (it takes no
+(`tests/xfail/scope_op_on_ctor.kama`), each naming the other spelling. The same holds for a *read*: a
+variant, a field, a `comptime` constant or a static reached through a type with `.` (`Color.Blue`, `V.N`)
+is rejected naming the `::` spelling <!-- xfail: enum_variant_dot, union_variant_dot, dot_on_type_const_read, dot_on_type_field_read, dot_on_type_static_read -->
+(`tests/xfail/enum_variant_dot.kama`). A `ctor` is static (it takes no
 `self`), so it would otherwise answer to both and `grep '\.make('` would miss half the construction sites.
 The rule holds through a generic type parameter too — `T.deserialize(...)` for `T: Deserializable` — and for a
 `ctor` added to a primitive by a `type intrinsic` block. Every spelling is pinned by

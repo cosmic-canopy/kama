@@ -1,0 +1,8 @@
+// A tagged enum's payload-less variant is an associated item too: `S::Z`, never `S.Z`. Same rule as the
+// plain enum (xfail/enum_variant_dot), separate fixture because a tagged enum is a class in the emitter
+// and resolves on a different path.
+type enum S { Y(int32 v), Z }
+fn int32 main() {
+    S s = S.Z;   // ERROR: a variant is reached with `::` — `S::Z`
+    return 0;
+}

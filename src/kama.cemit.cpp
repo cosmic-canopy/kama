@@ -24013,6 +24013,99 @@ void CEmitter::rejectBaseMember(MemberAccessNode* ma)
 }
 
 // obj.field / this.field — splice the __base. chain to the declaring ancestor.
+std::string CEmitter::dotOnTypeAdvice(DotMemberKind k, const std::string& disp, const std::string& typeName,
+                                      const std::string& member)
+{
+    switch (k) {
+    case DotMemberKind::Field:
+        return "`" + member + "` is a field. Read it from a value (`obj." + member + "`)";
+    case DotMemberKind::Const:
+        return "`" + member + "` is a `comptime` constant of `" + disp + "` — read it as `" + disp + "::" + member + "`";
+    case DotMemberKind::Static:
+        // On a GENERIC owner the turbofish is mandatory (a static has nothing to infer from), so
+        // `Type::name(...)` would be the one spelling that does not exist — name the real one.
+        return _genericTypeParams.count(typeName)
+             ? ("`" + member + "` is a static function — call it with `" + disp + "::<...>::" + member + "(...)`")
+             : ("`" + member + "` is a static function — call it with `" + disp + "::" + member + "(...)`");
+    case DotMemberKind::Ctor:
+        return "`" + member + "` is a constructor — call it (`" + disp + "." + member + "(...)`)";
+    case DotMemberKind::Method:
+        return "`" + member + "` is a method — call it on a value (`obj." + member + "(...)`)";
+    }
+    return "";
+}
+
+bool CEmitter::isValueName(const std::string& nm, SharedStringList qualifier)
+{
+    const bool q = qualifier && !qualifier->empty();
+    if (!q && (_localTypes.count(nm) || _paramNames.count(nm) || _refParams.count(nm) || _comptimeSubst.count(nm)))
+        return true;
+    if (!q && _currentClass && findFieldOwner(_currentClass, nm)) return true;
+    if (!resolveModuleVar(nm, qualifier).empty()) return true;
+    if (_funcs.count(resolveFunc(nm, qualifier))) return true;
+    return false;
+}
+
+bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, const std::string& field)
+{
+    const std::string disp = *head->value;
+    std::string t = resolveUserName(disp, head->qualifier);
+    // A type PARAMETER head reads through what it is bound to — a real type, or the opaque stand-in a probe
+    // mints (which rejectUnprovenBound answers for).
+    auto ts = _typeSubst.find(disp);
+    if (ts != _typeSubst.end() && ts->second) {
+        const std::string ct = primKey(ts->second);
+        if (_classes.count(ct)) t = ct;
+    }
+    auto ei = _enums.find(t);
+    if (ei != _enums.end()) {
+        bool has = false;
+        for (auto& m : ei->second.members) if (m.name == field) { has = true; break; }
+        if (has)
+            unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; a variant is reached through "
+                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma->line);
+        else
+            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma->line, field);
+        return true;
+    }
+    ClassInfo* ci = nullptr;
+    if (_classes.count(t))            ci = &_classes[t];
+    else if (_genericTypes.count(t))  ci = &_genericTypes[t];
+    if (!ci) {
+        if (_interfaces.count(t)) {
+            unsupported(("`" + disp + "` is a contract — it has no members to read; reach `" + field
+                         + "` through a value that implements it").c_str(), ma->line);
+            return true;
+        }
+        return false;
+    }
+    if (ci->isVariant) {   // a tagged enum is a class in the emitter; its variants are `::` items too
+        bool has = false;
+        for (auto& vc : ci->variants) if (vc.name == field) { has = true; break; }
+        if (has)
+            unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; a variant is reached through "
+                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma->line);
+        else
+            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma->line, field);
+        return true;
+    }
+    DotMemberKind kind;
+    ClassInfo* owner = nullptr;
+    MethodInfo* mi = nullptr;
+    if (_typeConsts.count(t + "::" + field))         kind = DotMemberKind::Const;
+    else if (findFieldOwner(ci, field))               kind = DotMemberKind::Field;
+    else if ((mi = findMethod(ci, field, &owner)))    kind = mi->isCtor ? DotMemberKind::Ctor
+                                                           : mi->isStatic ? DotMemberKind::Static : DotMemberKind::Method;
+    else {
+        if (rejectUnprovenBound(t, field, ma->line)) return true;
+        unsupported(("`" + disp + "` has no member `" + field + "`").c_str(), ma->line, field);
+        return true;
+    }
+    unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; "
+                 + dotOnTypeAdvice(kind, disp, t, field)).c_str(), ma->line);
+    return true;
+}
+
 std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
     std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
@@ -24025,6 +24118,13 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     // somewhere it does not belong, so answer with which of the three it was. `base` is a keyword, so no
     // field can ever be named `base` and this can never shadow a real member.
     if (field == "base") { rejectBaseMember(ma); return "0"; }
+    // A TYPE as the head of a read (`K.A`, `V.n`, `V.N`): dot-on-type is the constructor spelling and nothing
+    // else (SPEC "Scope resolution uses `::`"). The call form has refused this for a long time; the read
+    // form used to emit `(K).A` and leave it to the C compiler. A live binding of the same spelling wins.
+    if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+        if (rid->value && !rid->synthesized && !isValueName(*rid->value, rid->qualifier)
+            && rejectDotOnTypeRead(ma, rid, field))
+            return "0";
     std::string cls = exprClass(ma->expression);
     // Auto-deref an Owned/Shared: `n.field` -> `(n).ptr->[base]field` (T*).
     // A Weak can't be dereffed — it must be upgraded with upgrade() first.
@@ -24933,8 +25033,10 @@ std::string CEmitter::variantExprEnumCType(SharedExpression e)
 // Does a member-access callee name a TYPE (so `X.name(...)` is a dot-on-type ctor call) rather than an
 // instance? True only for a bare identifier that resolves to a registered class AND has no live binding —
 // an in-scope local/field of the same spelling WINS (instance `.method` first). `outType` gets the
-// resolved (namespace-scoped) class name. (Enums live in `_enums`, not `_classes`, so `Enum.Variant`
-// stays on the `::` variant path.)
+// resolved (namespace-scoped) class name. Enums live in `_enums`, not `_classes`, so this answers false
+// for `Enum.Variant` — which is NOT thereby routed anywhere: it used to fall through emitMemberAccess to
+// the C compiler, and is now refused by rejectDotOnTypeRead (a variant is a `::` item). This predicate
+// feeds CONSTRUCTOR resolution and must not widen to enums, which have none.
 bool CEmitter::isTypeReceiver(MemberAccessNode* ma, std::string& outType)
 {
     if (!ma) return false;
@@ -25084,8 +25186,8 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // A FIELD of that name: `findMethod` cannot see fields, so without this arm a field is reported
         // as "no constructor `x` — define one", which sends the reader to write a ctor they don't want.
         if (findFieldOwner(stci, method)) {
-            unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
-                         + "` is a field. Read it from a value (`obj." + method + "`)").c_str(), call->line);
+            unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
+                         + dotOnTypeAdvice(DotMemberKind::Field, disp, typeName, method)).c_str(), call->line);
             return "0";
         }
         // The receiver is an opaque parameter and its bounds promise no such ctor — the BOUND is what is
@@ -25105,17 +25207,8 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // must then say what the name ACTUALLY is. It used to assert "is a static function" without ever
         // checking, so an INSTANCE method was mislabelled a static and the advice that followed
         // (`Type::name(...)`) sent the reader to a second error telling them the opposite.
-        std::string advice;
-        if (mi->isStatic) {
-            // On a GENERIC owner the turbofish is mandatory (a static has nothing to infer from), so
-            // `Type::name(...)` would be the one spelling that does not exist — name the real one.
-            advice = _genericTypeParams.count(typeName)
-                   ? ("`" + method + "` is a static function — call it with `" + disp + "::<...>::" + method + "(...)`")
-                   : ("`" + method + "` is a static function — call it with `" + disp + "::" + method + "(...)`");
-        } else {
-            advice = "`" + method + "` is a method — call it on a value (`obj." + method + "(...)`)";
-        }
-        unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; " + advice).c_str(),
+        unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
+                     + dotOnTypeAdvice(mi->isStatic ? DotMemberKind::Static : DotMemberKind::Method, disp, typeName, method)).c_str(),
                     call->line);
         return "0";
     }

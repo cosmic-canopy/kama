@@ -1,0 +1,1 @@
+a variant is reached through its type with `::` (`K::A`)

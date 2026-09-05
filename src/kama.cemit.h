@@ -2427,6 +2427,20 @@ private:
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
     std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName); // X::<A>.name -> the instance
+    // What a member reached through a TYPE actually is, and the one sentence that names its right spelling.
+    // Shared by the call path (`V.f(...)`, emitDotOnTypeCtorCall) and the read path (`V.f`,
+    // rejectDotOnTypeRead) so the two can never disagree on how the `::`/`.` split is written.
+    enum class DotMemberKind { Field, Const, Static, Ctor, Method };
+    std::string dotOnTypeAdvice(DotMemberKind k, const std::string& disp, const std::string& typeName,
+                                const std::string& member);
+    // `nm` is bound as a VALUE here (local, param, field of the enclosing type, module static, comptime
+    // param, function) — the set a `.` head resolves through before it could mean a type. A live binding
+    // WINS over a same-spelled type, the precedence isTypeReceiver uses.
+    bool isValueName(const std::string& nm, SharedStringList qualifier);
+    // `X.name` with no call, where `X` is a TYPE: an enum variant, a field, a `comptime` constant, a static
+    // or a method reached with the constructor spelling. Reports and returns true; false when `X` is not
+    // a type at all (the identifier arm then says what `X` is not).
+    bool rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, const std::string& field);
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
     void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
                                    ObjectCreationNode* oc, int lineNo, int depth);

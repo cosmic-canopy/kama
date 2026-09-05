@@ -1,0 +1,9 @@
+// `::` is the associated-item operator: an enum variant is reached through its TYPE as `Color::Blue`.
+// `.` reads a member of a VALUE. Dot-on-type is the constructor spelling and nothing else, so `K.A` is
+// rejected naming the `::` spelling — it used to emit `(K).A` and fail in the C compiler as
+// "use of undeclared identifier 'K'". Mirror of the value-headed `::` rejection (xfail/scope_op_on_value).
+type enum K { A, B }
+fn int32 main() {
+    K k = K.A;   // ERROR: a variant is reached with `::` — `K::A`
+    return 0;
+}

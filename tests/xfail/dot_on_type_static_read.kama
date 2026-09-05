@@ -1,0 +1,7 @@
+// A static function NAMED through the type with a dot but not called. The advice is the same `::` spelling
+// the call form gets (xfail/dot_on_type_static); the read form used to emit `(Plain).tag` for clang.
+type value Plain {
+    public ctor make() { }
+    public static fn int32 tag() { return 5; }
+}
+fn int32 main() { int32 t = Plain.tag; return t; }   // ERROR: call it with `Plain::tag(...)`

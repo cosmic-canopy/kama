@@ -176,11 +176,14 @@ deserialize_turbofish_bad_method	deserialize_turbofish_bad_method.kama:17
 deserialize_usize_field	deserialize_usize_field.kama:5
 diag_line_after_multiline_string	diag_line_after_multiline_string.kama:37
 diag_no_mangled_name	diag_no_mangled_name.kama:13
+dot_on_type_const_read	dot_on_type_const_read.kama:9
 dot_on_type_field	dot_on_type_field.kama:7
+dot_on_type_field_read	dot_on_type_field_read.kama:7
 dot_on_type_instance_method	dot_on_type_instance_method.kama:8
 dot_on_type_not_ctor	dot_on_type_not_ctor.kama:10
 dot_on_type_static	dot_on_type_static.kama:7
 dot_on_type_static_generic	dot_on_type_static_generic.kama:8
+dot_on_type_static_read	dot_on_type_static_read.kama:7
 dot_on_type_unknown_ctor	dot_on_type_unknown_ctor.kama:7
 double_retired	double_retired.kama:11
 dtor_on_value	dtor_on_value.kama:2
@@ -196,7 +199,9 @@ enum_field	enum_field.kama:4
 enum_missing_contract_method	enum_missing_contract_method.kama:2
 enum_recursive	enum_recursive.kama:1
 enum_unknown_contract	enum_unknown_contract.kama:4
+enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5
 enum_variant_arity	enum_variant_arity.kama:4
+enum_variant_dot	enum_variant_dot.kama:7
 error_downcast_owned	error_downcast_owned.kama:12 error_downcast_owned.kama:13 error_downcast_owned.kama:14 error_downcast_owned.kama:6
 export_const_unexported	main.kama:3
 export_leak_field	export_leak_field.kama:8
@@ -626,6 +631,7 @@ uint_retired	uint_retired.kama:5
 unimplemented_pure	unimplemented_pure.kama:4
 unimported_type_param	unimported_type_param.kama:6
 uninit_read	uninit_read.kama:5
+union_variant_dot	union_variant_dot.kama:6
 unknown_generic_head	unknown_generic_head.kama:14
 unknown_type_field	unknown_type_field.kama:4
 unknown_type_local	unknown_type_local.kama:8
