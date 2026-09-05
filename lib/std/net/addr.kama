@@ -1,7 +1,11 @@
 
-import { std::fmt::u8Str };
+import { std::fmt::u8Str, std::io::IoError, std::io::lastError,
+         std::collections::DynamicArray, std::collections::FixedArray };
 
-export { IpAddr, SocketAddr, RecvFrom };
+export { IpAddr, SocketAddr, RecvFrom, parseIp, resolve, resolveOne };
+
+extern "kama_os.h";
+extern fn int32 kama_resolve_host(UnsafePtr<int8> host, UnsafePtr<uint32> outIps, int32 max);
 
 // An IP address. IPv4 today; the `enum` tag leaves room for a `V6(...)` arm later without reshaping any
 // existing match site (they already bind by variant). Octets are stored in logical order (a.b.c.d).
@@ -42,6 +46,99 @@ type value SocketAddr implements Formattable {
         f.writeStr(s: ":");
         f.writeU64(v: cast<uint64>(this.port));
     }
+}
+
+// Parse a numeric IPv4 address — "127.0.0.1" — into an `IpAddr`. `None` when the text is not exactly four
+// decimal octets. A host NAME is not this function's job; `resolve` is.
+//
+// ⚠️ STRICT on purpose, and the strictness is a security property, not pedantry. C's `inet_addr`/`inet_aton`
+// accept a leading zero as OCTAL and accept fewer than four parts as a packed number, so "010.0.0.1" is
+// 8.0.0.1 and "127.1" is 127.0.0.1 there. Code that validates an address as text and then hands the text to
+// the resolver can be made to disagree with itself that way — it is CVE-2021-29922 in Rust's std and the
+// same bug in Go, Python, Node and glibc's own `inet_addr` in the same year. So: exactly four parts, one to
+// three digits each, no leading zero on a multi-digit part, nothing else in the string.
+fn Optional<IpAddr> parseIp(const ref string text) {
+    isize n = text.length();
+    if (n == 0 || n > 15) { return Optional::None; }        // "255.255.255.255" is the longest legal form
+    uint32 acc = 0ui32;      // the octets so far, packed high-to-low
+    int32 parts = 0;         // completed octets
+    int32 cur = -1;          // the octet being read; -1 = no digit seen since the last dot
+    int32 digits = 0;
+    bool leadingZero = false;
+    isize i = 0;
+    while (i < n) {
+        uint8 ch = text[i];
+        if (ch >= 48ui8 && ch <= 57ui8) {                      // '0'..'9'
+            if (cur < 0) { cur = 0; digits = 0; leadingZero = ch == 48ui8; }
+            else if (leadingZero) { return Optional::None; }    // "01" — the octal trap
+            cur = cur * 10 + cast<int32>(ch - 48ui8);
+            digits = digits + 1;
+            if (digits > 3 || cur > 255) { return Optional::None; }
+        } else if (ch == 46ui8) {                              // '.'
+            if (cur < 0 || parts == 3) { return Optional::None; }
+            acc = (acc << 8ui32) | cast<uint32>(cur);
+            parts = parts + 1;
+            cur = -1;
+        } else {
+            return Optional::None;
+        }
+        i = i + 1;
+    }
+    if (cur < 0 || parts != 3) { return Optional::None; }
+    acc = (acc << 8ui32) | cast<uint32>(cur);
+    uint8 a = cast<uint8>((acc >> 24ui32) & 255ui32);
+    uint8 b = cast<uint8>((acc >> 16ui32) & 255ui32);
+    uint8 c = cast<uint8>((acc >> 8ui32) & 255ui32);
+    uint8 d = cast<uint8>(acc & 255ui32);
+    return Optional::Some(value: IpAddr::V4(a: a, b: b, c: c, d: d));
+}
+
+// The most addresses one lookup reports. A name with more than this many A records is answering a load
+// balancer's round-robin, and a caller trying them in order will have succeeded long before the sixteenth.
+comptime int32 RESOLVE_MAX = 16;
+
+// Resolve a host NAME (or a numeric address) to every IPv4 endpoint it names, at `port`.
+//
+// The list comes back in the RESOLVER's order, which is already RFC 6724 destination-address selection —
+// try them in order and take the first that connects, which is what a happy-eyeballs client does. A
+// numeric host is answered here without a lookup at all, through `parseIp` and therefore under its strict
+// rules; a name goes to the system resolver.
+//
+// ⚠️ IPv4 only, because every socket in `std::net` is: an IPv6 result has nowhere to go yet. A name that
+// resolves to IPv6 ONLY reports `HostUnreachable` rather than an empty list — the distinction matters to a
+// caller, and "I found nothing you can use" is not the same answer as "there is nothing".
+//
+// ⚠️ It BLOCKS, possibly for seconds, and cannot be given a timeout — `getaddrinfo` takes none and the
+// asynchronous spellings are per-platform. Resolve on another isolate if the stall is not affordable.
+unsafe fn Result<DynamicArray<SocketAddr>, IoError> resolve(const ref string host, uint16 port) {
+    DynamicArray<SocketAddr> found = DynamicArray.empty();
+    match (parseIp(text: ref host)) {
+        case Some(value: ip): {
+            found.add(item: SocketAddr.of(ip: ip, port: port));
+            return Result::Ok(value: give found);
+        }
+        case None: { }
+    };
+    FixedArray<uint32> ips = FixedArray.make(size: cast<isize>(RESOLVE_MAX));
+    int32 n = kama_resolve_host(host: host.cstr(), outIps: addr(of: ips[0]), max: RESOLVE_MAX);
+    if (n < 0) { return Result::Err(error: lastError()); }
+    int32 i = 0;
+    while (i < n) {
+        found.add(item: SocketAddr.fromHostIp(ip: ips[cast<isize>(i)], port: port));
+        i = i + 1;
+    }
+    return Result::Ok(value: give found);
+}
+
+// The one-address convenience: the resolver's first choice, which is the one to connect to.
+unsafe fn Result<SocketAddr, IoError> resolveOne(const ref string host, uint16 port) {
+    match (resolve(host: ref host, port: port)) {
+        case Err(error: e): { return Result::Err(error: e); }
+        case Ok(value: list): {
+            // `resolve` never reports an empty success — it fails instead — so the first entry is there.
+            return Result::Ok(value: copy list[0]);
+        }
+    };
 }
 
 // The (count, sender) result of a datagram `recvFrom`: how many bytes landed + who sent them.

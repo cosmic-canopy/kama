@@ -6,6 +6,26 @@
 // for clang/emscripten wasm targets alike. Generated translation units include
 // this first, then their own module header.
 
+// ⚠️ The ONE feature-test macro this build asks for, and it has to be HERE — before the first standard
+// header — because glibc's <features.h> latches its `__USE_*` set the first time it is read, and this
+// file is the first include of every generated translation unit.
+//
+// Why at all: kama compiles its C with `-std=c11`, which sets `__STRICT_ANSI__`, and glibc then hides
+// anything past ISO C. `clock_gettime` and `getaddrinfo` are both on the far side of that line, along with
+// `struct addrinfo` — and a seam header cannot buy its way out by declaring the symbol itself, because
+// that struct's member ORDER is not fixed by POSIX (glibc and musl put `ai_canonname` after `ai_addr`,
+// macOS before). `_DEFAULT_SOURCE` asks for exactly the namespace this build had before `-std=c11`, so it
+// widens what is visible and changes nothing that was.
+//
+// ⚠️ Asking LATER does not work, and the failure is instructive: setting the macro inside kama_os.h and
+// clearing <features.h>'s include guard to force a recompute really does expose `getaddrinfo` — and
+// breaks `WIFEXITED`, because <sys/wait.h> defines the `W*` macros only when <stdlib.h> has not already
+// been read under a feature set that would have defined them, and <stdlib.h> HAD been, under the old one.
+// Eighty fixtures. A feature set is a property of a translation unit, not of a header.
+#if defined(__linux__) && !defined(_GNU_SOURCE) && !defined(_DEFAULT_SOURCE)
+#  define _DEFAULT_SOURCE 1
+#endif
+
 #include <stdint.h>    // int32_t … (types only — no callable C functions)
 #include <stdbool.h>   // bool       (type only)
 #include <stddef.h>    // size_t, ptrdiff_t, NULL (types only) — ptrdiff_t IS kama's `isize`, so this is

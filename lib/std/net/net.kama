@@ -6,6 +6,7 @@ import {
     std::io::Writer,
     std::collections::View,
     ReliableStream,
+    SocketAddr,
 };
 
 export { TcpListener, TcpStream };
@@ -58,6 +59,15 @@ type resource TcpStream implements ReliableStream, Reader, Writer {
             return Result::Err(error: e);
         }
         return Result::Ok(value: TcpStream.make(fd: fd));
+    }
+
+    // Connect to an address a lookup already produced — `resolve`/`resolveOne` in this module, or the
+    // sender a datagram came from. The pair is deliberate: `connect` takes numeric text and performs no
+    // lookup, so a call that reads like a syscall cannot silently make a DNS round trip, and a name is
+    // resolved by a function that says so and hands back every address it found.
+    public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr addr) {
+        string host = addr.ipString();
+        return TcpStream.connect(host: host, port: addr.port);
     }
 
     // `Reader`: read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.

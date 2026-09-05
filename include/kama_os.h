@@ -26,6 +26,14 @@
 // `FindFirstFile`/`_pipe`), and std::process (`CreateProcess`/`WaitForSingleObject`/`TerminateProcess`). The
 // POSIX branch below also serves iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
 
+// Restated here as well as in kama_runtime.h, for a TU that reaches this header FIRST: the macro only
+// takes effect before glibc's <features.h> is read, and either header may be the one that gets there
+// first. Setting it twice to the same value is free; setting it too late is silent, which is why the
+// block in kama_runtime.h carries the argument and this one only points at it.
+#if defined(__linux__) && !defined(_GNU_SOURCE) && !defined(_DEFAULT_SOURCE)
+#  define _DEFAULT_SOURCE 1
+#endif
+
 #include "kama_runtime.h"
 
 #if defined(_WIN32)
@@ -44,7 +52,7 @@
 #  define FD_SETSIZE 1024
 #endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
-#include <ws2tcpip.h>     // (numeric-host helpers)
+#include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
 #include <windows.h>      // FindFirstFileA / HANDLE / MAX_PATH
 #include <io.h>           // _open, _read, _write, _close, _unlink
 #include <fcntl.h>        // _O_*
@@ -549,6 +557,10 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
 #include <netinet/tcp.h>  // TCP_NODELAY
 #include <arpa/inet.h>    // inet_addr
+// getaddrinfo, freeaddrinfo, EAI_* (kama_resolve_host). ⚠️ All three are past the ISO C line glibc draws
+// under `-std=c11`, which is why kama_runtime.h asks for `_DEFAULT_SOURCE` at the top of every generated
+// TU — see the block there before moving this include or "simplifying" that one.
+#include <netdb.h>
 #include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT
 #include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
 #include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
@@ -948,4 +960,65 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 }
 
 #endif  // !_WIN32
+
+// ---- name resolution (DNS) -------------------------------------------------
+// ⚠️ The ONE seam in this file that is written once instead of twice, and the exception is deliberate:
+// `getaddrinfo` is the same standardized call with the same semantics on Winsock and on POSIX (that is why
+// it replaced `gethostbyname` everywhere), and the two branches above have already pulled the header that
+// declares it — <ws2tcpip.h> and <netdb.h>. Copying an identical body would only give it somewhere to
+// drift. Everything else here differs per platform, which is why everything else is duplicated.
+//
+// Resolves a host NAME, or a numeric dotted quad, to IPv4 addresses in HOST order — the same convention
+// kama_getsockname uses, so kama extracts octets with fixed shifts and never sees an endianness. They come
+// back in the RESOLVER's order, which is the answer to a question the caller did not ask twice: the system
+// resolver already applies RFC 6724 destination-address selection, and re-sorting them here would throw
+// that away. Returns the count written (1..max), or -1 with errno set.
+//
+// IPv4 ONLY, and the ai_family below is the whole reason: every socket call in this file is AF_INET, so an
+// IPv6 address resolved here would have nowhere to go. Widening that is one coherent piece of work
+// (bind/connect/sendto/recvfrom/getsockname and `IpAddr`), tracked on the roadmap, not something to half-do
+// in a resolver.
+//
+// It BLOCKS, possibly for seconds, and there is no portable timeout — `getaddrinfo` takes none, and the
+// asynchronous spellings (getaddrinfo_a, GetAddrInfoEx) share no interface. A program that cannot afford
+// the stall resolves on another isolate.
+static inline int32_t kama__eai_errno(int rc) {
+    // EAI_* codes are their own space, so map them onto the errno set `lastError()` classifies. "No such
+    // name" is NotFound (the name does not exist — the same shape as a missing file), a temporary resolver
+    // failure is TimedOut (a retry may work; WouldBlock would be a lie about a blocking call), and anything
+    // else is HostUnreachable rather than an `Other` carrying a code from the wrong number space.
+    if (rc == EAI_NONAME) return (int32_t)ENOENT;
+#if defined(EAI_NODATA)
+    if (rc == EAI_NODATA) return (int32_t)ENOENT;
+#endif
+    if (rc == EAI_AGAIN)  return (int32_t)ETIMEDOUT;
+    if (rc == EAI_MEMORY) return (int32_t)ENOMEM;
+#if defined(EAI_SYSTEM)
+    if (rc == EAI_SYSTEM) return (int32_t)errno;   // getaddrinfo already set it
+#endif
+    return (int32_t)EHOSTUNREACH;
+}
+static inline int32_t kama_resolve_host(const char* host, uint32_t* outIps, int32_t max) {
+    struct addrinfo hints;
+    struct addrinfo* res = (struct addrinfo*)0;
+    struct addrinfo* it;
+    int32_t n = 0;
+    int rc;
+    if (!host || !*host || !outIps || max <= 0) { errno = ENOENT; return -1; }
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;   // one entry per address, not one per (address, socket type)
+    rc = getaddrinfo(host, (const char*)0, &hints, &res);
+    if (rc != 0) { errno = kama__eai_errno(rc); return -1; }
+    for (it = res; it && n < max; it = it->ai_next) {
+        if (it->ai_family != AF_INET || !it->ai_addr) continue;
+        outIps[n++] = (uint32_t)ntohl(((struct sockaddr_in*)(void*)it->ai_addr)->sin_addr.s_addr);
+    }
+    freeaddrinfo(res);
+    // A success that yielded nothing is a failure to the caller, not an empty list: it means the name
+    // resolved to IPv6 only, which no socket in this file can reach.
+    if (n == 0) { errno = EHOSTUNREACH; return -1; }
+    return n;
+}
+
 #endif  // KAMA_OS_H

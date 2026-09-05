@@ -1,0 +1,82 @@
+// std::net — name resolution, and the strict numeric parser under it. `localhost` is the one name every
+// machine resolves without a network (it is in /etc/hosts on POSIX and its Windows equivalent), so this
+// fixture needs no DNS server and no internet. The seven flags sum to 127.
+import { std::net::SocketAddr, std::net::parseIp, std::net::resolve,
+         std::net::resolveOne, std::net::TcpListener, std::net::TcpStream,
+         std::io::IoError };
+
+fn bool isLoopback(ref SocketAddr a) {
+    return match (a.ip) {
+        case V4(a: p, b: q, c: r, d: s): p == 127ui8 && q == 0ui8 && r == 0ui8 && s == 1ui8;
+    };
+}
+
+fn bool rejects(const ref string text) {
+    return match (parseIp(text: text)) { case Some(value: v): false; case None: true; };
+}
+
+// The end-to-end shape the API exists for: resolve a name, then connect to what came back. The listener is
+// already bound, so the connect completes into the backlog without an accept.
+fn bool dialResolved(uint16 port) {
+    Result<SocketAddr, IoError> ra = resolveOne(host: "localhost", port: port);
+    match (ra) {
+        case Err(error: e): { return false; }
+        case Ok(value: a): {
+            Result<TcpStream, IoError> rs = TcpStream.connectTo(addr: a);
+            return match (rs) { case Ok(value: s): true; case Err(error: e2): false; };
+        }
+    };
+    return false;
+}
+
+fn int32 main() {
+    int32 r = 0;
+
+    // The parser: a good address round-trips through the text renderer.
+    match (parseIp(text: "192.168.1.9")) {
+        case Some(value: ip): {
+            SocketAddr a = SocketAddr.of(ip: ip, port: 80ui16);
+            string s = a.ipString();
+            if (s == "192.168.1.9") { r = r + 1; }
+        }
+        case None: { }
+    };
+    // ⚠️ Both of these are ACCEPTED by C's inet_addr and must not be here: a leading zero read as octal
+    // (so "010.0.0.1" becomes 8.0.0.1) and the packed short form ("127.1" becoming 127.0.0.1). That
+    // disagreement between a validator and a resolver is CVE-2021-29922's shape.
+    if (rejects(text: "010.0.0.1") && rejects(text: "127.1"))    { r = r + 2; }
+    // ...and the ordinary malformed ones.
+    if (rejects(text: "1.2.3.256") && rejects(text: "1.2.3.4x")) { r = r + 4; }
+
+    // A numeric host is answered without a lookup, and still through the strict parser.
+    match (resolveOne(host: "127.0.0.1", port: 7ui16)) {
+        case Err(error: e): { }
+        case Ok(value: a): { if (isLoopback(a: ref a) && a.port == 7ui16) { r = r + 8; } }
+    };
+
+    // A NAME goes to the system resolver. `localhost` must come back, and as a loopback address.
+    match (resolve(host: "localhost", port: 9ui16)) {
+        case Err(error: e): { }
+        case Ok(value: list): {
+            isize n = list.length();
+            SocketAddr first = copy list[0];
+            if (n >= 1 && isLoopback(a: ref first)) { r = r + 16; }
+        }
+    };
+
+    // A name that cannot exist (the .invalid TLD is reserved by RFC 2606 precisely for this) must FAIL,
+    // not come back empty — an empty success is the shape that makes a caller index a hole.
+    match (resolve(host: "kama-nonexistent.invalid", port: 9ui16)) {
+        case Err(error: e): { r = r + 32; }
+        case Ok(value: list): { }
+    };
+
+    // ...and the whole point: resolve a name, connect to what came back.
+    uint16 port = cast<uint16>(47661);
+    match (TcpListener.bind(host: "127.0.0.1", port: port)) {
+        case Err(error: e): { }
+        case Ok(value: listener): { if (dialResolved(port: port)) { r = r + 64; } }
+    };
+
+    return r;   // 127
+}
