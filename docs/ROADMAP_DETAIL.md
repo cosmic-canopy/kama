@@ -1123,6 +1123,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
+  - **KB-13's RESIDUAL — a field PASSED ALONG still demands the import.** Re-audited 2026-09-05 against
+    `0.9.188`, from their file and then by running it: `f489d19` closed the declaration (`Holder h =
+    makeHolder();` builds with `Kind` unimported), and the one shape left is handing the field to a
+    function that declares the type itself — `takesKind(k: h.k)` in a file that imports `Holder`,
+    `makeHolder` and `takesKind` and never spells `Kind`. Drop the call and it builds; the diagnostic lands
+    on the declaration line, not the call. Same family, same rule: the ARGUMENT path classifies `h.k`
+    through a resolver that re-resolves the field's type NODE under the reader's scope, where it must
+    answer from the C type baked at collect time. ⚠️ The measured wrong fix still applies — do not install
+    the owner's scope at the read site. Their practical cost is unchanged but narrower: adding a field to
+    a widely-held `type value` breaks every file that passes that field along.
+
   - **A diagnostic can name the USER's file at a line that does not exist in it — the original filing.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
     stdlib body emitted in the HEADER pass the first two are empty, so the error is stamped with the
