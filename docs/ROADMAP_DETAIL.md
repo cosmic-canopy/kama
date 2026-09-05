@@ -1073,7 +1073,63 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   - **KG-15 in their doc is stale**: `Mat4 * Vec4` is caught by `kama check` today ("the right-hand
     operand expects a `Mat4`, so it cannot be given a `Vec4`"), and check and build agree.
 
-  - **A file must import a type it never names (their KB-13).** Twelve lines, two files in one module:
+  - **SHIPPED `0.9.176`–`0.9.181` — the two wrong-file rows, and three more defects the first one was
+    hiding.** Both ROADMAP rows are deleted; what follows is the record, then the original filing.
+    - **The KB-13 row was not a message bug.** The filing (and this section) described a spurious import
+      error. It is that, but the same read-site resolution MISSES across a module boundary rather than
+      firing: the consumer's scope prefix differs, `_classes.find` comes up empty, and the field is
+      silently dropped from the analysis. **Measured, one program written twice**: `slot Box b;` inside
+      `Box`'s own module emits the field-default fill `b.c = Counter__start();`; one module over it emits
+      nothing and the field keeps its `{0}`. Identical source, different C, decided by the reader's
+      imports. ⚠️ It has **no kama-level observable** — the only legal way to fill a `slot` is an `out`
+      argument, which overwrites the whole value — so it is pinned by `tools/check-module-emit-parity.sh`,
+      which writes one program twice and diffs the emitted C, not by a fixture.
+    - **The prescribed fix point was wrong, and the note below still says so.** "Bake at collect time as
+      `bakeConstSizes` did" cannot work: `resolveUserNameImpl`'s `known()` predicate requires the target to
+      be in `_classes` *at that instant*, so every forward reference would bake to a bare, permanently
+      wrong spelling, and generic instances do not exist yet. `bakeFieldCTypes()` is a whole-program pass
+      beside `computeDestructible`, which already performs this exact resolution with the declaring class's
+      scope installed. It is reach- and xref-silent for a CHECKED reason: `_refUnit` is null throughout
+      `collectProgram`, so `checkReach` and `recordRef` both return at their first line.
+    - **The `diagFile()` row reproduced far harder than filed.** Not "an 8-line repro blamed at line 69":
+      a **four-line** program built with `--strict-numeric` produced **26 rows, every one naming that
+      program, not one of them at a line it has**, the highest claiming line 531. Five header-pass blocks
+      now install their owner the way `emitStruct` already did. ⚠️ `--strict-numeric` is the only
+      observable this class has, and that is why no fixture drove it: the defect needs a position raised
+      while a prelude BODY is emitted, and the prelude compiles clean, so no error fixture can reach it
+      without breaking the prelude itself. `check-diag-file.sh` case 9.
+    - **A position that leaves the compiler now names a real file, and that path is VERIFIED.** The
+      prelude and the triad are compiled from text embedded in the binary while `builtinSourcePath`
+      resolves a file on disk, and it checked only that the file existed. Measured: insert five lines at
+      the top of a copy's `prelude/global.kama` without rebuilding, and go-to-definition on `Optional`
+      still answered `global.kama:8`, where line 8 had become a comment and `Optional` had moved to 13 —
+      a bug the query layer already had, which the diagnostic consumer would have inherited. The embedded
+      text is in the binary, so it is compared against; a mismatch yields "" and every consumer degrades
+      to the `<prelude>` sentinel. Go, Zig and C compile their stdlib from disk and cannot have this;
+      Rust (`/rustc/<hash>/…`) and the JVM ("source does not match the bytecode") make it detectable
+      instead. `tools/check-builtin-path.sh`.
+    - **Every class member was reported at the previous construct's line.** Found while trying to assert a
+      line for the conformance fix. Each member rule starts with the nullable `modifiers_opt`, so on the
+      empty derivation `YYLLOC_DEFAULT`'s `N == 0` branch gave it the end of whatever preceded it — the
+      same skew `STAMP_START` was written for at top level and never applied to members. A member without
+      `public`/`static` is the common case, not the corner one. Five `DIAGNOSTIC_LINES` rows moved, all
+      corrections; the sharpest is `ser_unmarked_field`, which blamed the `@field`-MARKED field for the
+      unmarked one. ⚠️ The test is `$1->empty()`, not `!$1`: `modifiers_opt` reduces to an empty list,
+      never to null, and written the other way it compiles, runs, changes nothing and reads like a fix.
+    - **A conformance defect was reported as the contract's file at the implementer's line.** Rendering a
+      contract's vtable slots reseats the emitter onto the contract's file (correctly — its imports are
+      what the signatures resolve through) and the six conformance reports rode along. **The rule, now
+      written at the site: the file must come from whichever declaration the LINE came from.** That
+      pairing is the whole class: `Diagnostic.file` and `srcLine` are assembled from independent sources
+      and nothing checks they agree. The three existing fixtures could not see it because contract and
+      implementer share a file; `tests/xfail/contract_public_cross_file.d/` is the cross-file one.
+    - **What the fix UNMASKED is now the first NOW row.** With the spurious import error gone, the probe
+      got far enough to reach clang and produce `use of undeclared identifier 'Kind'` for `Kind.A` — and
+      that turned out to be general: an unresolved name or member in expression position is diagnosed by
+      the C compiler, in C vocabulary, not by kama. `return Nope;` passes `kama check`. It had been
+      unreachable behind the bug for as long as the bug existed.
+
+  - **A file must import a type it never names (their KB-13) — the original filing.** Twelve lines, two files in one module:
     `decl.kama` exports `type enum Kind` and a `type value Holder { public int32 n; public Kind k; … }`;
     `main.kama` imports `Holder` and `makeHolder` only and declares `Holder h = makeHolder();`. Result:
     "`Kind` is declared in `src/decl.kama` and this file does not import it", against a file that never
@@ -1095,7 +1151,22 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
-  - **A diagnostic can name the USER's file at a line that does not exist in it.** `diagFile()` prefers
+  - **An unresolved NAME or MEMBER in expression position is left to clang — the NOW row, opened by the
+    fix above.** `emitMemberAccess`'s final fallthrough emits the receiver as a C expression whatever it
+    is, and nothing upstream requires a bare identifier in expression position to resolve to anything. So
+    `fn int32 main() { return Nope; }` passes `kama check` and fails as `use of undeclared identifier
+    'Nope'`; `a.foo` on an `int32` fails as "member reference base type 'int32_t' (aka 'int') is not a
+    structure or union". The `#line` machinery puts both on the right kama line — the position is right
+    and the VOCABULARY is C, about C types, in a file written in kama. `kama check`'s own usage text
+    promises "name resolution", so this is also a false doc claim.
+    **Dot-on-type is the case to start from, because the neighbours are already right**: `V.make(…)` is a
+    constructor and `V::f()` a static, and the compiler refuses each wrong spelling with advice naming the
+    other. Only the enum arm is missing — SPEC says `::` is the associated-item operator (`Result::Ok`),
+    and `K.A` is accepted, emits `(K).A` and reaches clang; so does `K.ZZZ`, a variant that does not
+    exist. Sizing is `?` on purpose: the dot-on-type arm is small and the general rule ("every name in
+    expression position resolves, and `kama check` says so") is not scoped.
+
+  - **A diagnostic can name the USER's file at a line that does not exist in it — the original filing.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
     stdlib body emitted in the HEADER pass the first two are empty, so the error is stamped with the
     user's path and the library's line number. An 8-line repro was blamed at line 69. ⚠️ **It has been
