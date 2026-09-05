@@ -1,0 +1,4 @@
+// A member read on a PRIMITIVE. clang's "member reference base type 'int32_t' (aka 'int') is not a
+// structure or union" was the whole diagnostic — C vocabulary about a C type in a kama file. The call
+// form (`a.foo()`) already had kama's own message; the read form did not.
+fn int32 main() { int32 a = 1; return a.foo; }   // ERROR: `int32` has no field `foo`

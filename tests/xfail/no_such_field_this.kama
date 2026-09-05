@@ -1,0 +1,7 @@
+// The same miss through `this`: the receiver is the enclosing type, and the message names it.
+type value V {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+    public fn int32 get() { return this.zz; }   // ERROR: `V` has no field `zz`
+}
+fn int32 main() { V v = V.make(); return v.get(); }

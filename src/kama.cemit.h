@@ -2452,6 +2452,9 @@ private:
     // or a method reached with the constructor spelling. Reports and returns true; false when `X` is not
     // a type at all (the identifier arm then says what `X` is not).
     bool rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, const std::string& field);
+    // `v.zz` on a value whose class is known and has no such field: a method named without its call, an
+    // unproven bound on an opaque parameter, or simply no field of that name.
+    void rejectMissingField(ClassInfo* ci, const std::string& cls, MemberAccessNode* ma, const std::string& field);
     std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
     void        emitNewFactoryMove(const std::string& cls, const std::string& slotPtr,  // new Type.name(...) construct
                                    ObjectCreationNode* oc, int lineNo, int depth);

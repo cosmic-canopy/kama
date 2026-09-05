@@ -1,0 +1,4 @@
+// `s.length` on a `string`: a string has METHODS, and the reader almost certainly meant `s.length()` —
+// so the message says which method, not "no field". This was tools/check-diag-drift.sh's probe for a
+// C-level error until kama learned to refuse it.
+fn int32 main() { string s = "ab"; return cast<int32>(s.length); }   // ERROR: `s.length` names a method — call it

@@ -1,0 +1,8 @@
+// A field that does not exist on a value whose type is known. The C compiler used to say "no member named
+// 'zz' in 'struct _Fno_such_field__V'" — right line, a struct name nobody wrote. The method form
+// (`v.zz()`) has been kama's error for a long time; the field form fell through `emitMemberAccess`.
+type value V {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+}
+fn int32 main() { V v = V.make(); return v.zz; }   // ERROR: `V` has no field `zz`

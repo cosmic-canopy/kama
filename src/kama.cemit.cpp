@@ -24277,6 +24277,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         ClassInfo* owner = findFieldOwner(&_classes[T], field);
         if (owner) { basePath = basePathTo(&_classes[T], owner); checkFieldAccess(owner, field, ma->line);
                      recordFieldRef(owner, field, ma->identifier.get()); }
+        else if (_classes.count(T)) { rejectMissingField(&_classes[T], T, ma, field); return "0"; }
         return "(" + emitExpression(ma->expression) + ").ptr->" + basePath + field;
     }
     std::string basePath;
@@ -24289,6 +24290,9 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             // pointee: `w.field` -> `Cls__deref(&(w))->[base]field` (a T*). (Only when not on `cls`.)
             std::string dtgt = derefTarget(cls);
             ClassInfo* fo = dtgt.empty() || !_classes.count(dtgt) ? nullptr : findFieldOwner(&_classes[dtgt], field);
+            // Neither the type nor its `Deref<T>` pointee has the field: kama's error, not the C
+            // compiler's "no member named 'zz' in 'struct …'" against a struct name nobody wrote.
+            if (!fo) { rejectMissingField(&_classes[cls], cls, ma, field); return "0"; }
             if (fo) {
                 ClassInfo* dc = nullptr;
                 MethodInfo* dref = findMethod(&_classes[cls], "deref", &dc);
@@ -24307,7 +24311,44 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`
     // (a real lvalue), so `arr[i].field = v` is a valid write — not `(__get(...)).field = v` (assigning
     // to a member of an rvalue). `emitPlace` is identity for a name/`this`/nested member access.
+    //
+    // No class resolved for the receiver. That is NOT "unknown": `exprClass` is empty for a primitive, a
+    // plain-enum value, a raw `UnsafePtr<T>` element (untyped to ownership by design — see
+    // ptrLocalElemType) and an opaque parameter alike, so only a POSITIVE answer may reject here. A
+    // primitive or a variant value has no fields; everything else falls through as it always has.
+    if (cls.empty()) {
+        if (_probingTemplate && deferUnknownWhileProbing(classifyDeferredReceiver(ma->expression))) return "0";
+        const std::string rct = receiverScalarCType(ma->expression);
+        const std::string rk  = rct.empty() ? std::string() : primKeyOfCType(rct);
+        // primKeyOfCType echoes what it does not know, so a changed spelling is the positive test — except
+        // `bool`, the one primitive whose C spelling IS its kama spelling.
+        if (!rk.empty() && (rk != rct || rct == "bool")) {
+            unsupported(("`" + rk + "` has no field `" + field + "` — a primitive has no members").c_str(), ma->line, field);
+            return "0";
+        }
+        const std::string et = exprEnumType(ma->expression);
+        if (!et.empty()) {
+            unsupported(("`" + et + "` is a plain enum — a variant value has no field `" + field + "`").c_str(), ma->line, field);
+            return "0";
+        }
+    }
     return "(" + emitPlace(ma->expression) + ")." + basePath + field;
+}
+
+// `v.zz` where `v`'s type is KNOWN and has no such field. Says what the name is when it is something
+// (a method named without its call), the bound that is missing when the type is an opaque parameter,
+// and "no field" only when the type really has none of that name.
+void CEmitter::rejectMissingField(ClassInfo* ci, const std::string& cls, MemberAccessNode* ma, const std::string& field)
+{
+    if (rejectUnprovenBound(cls, field, ma->line)) return;
+    ClassInfo* owner = nullptr;
+    if (findMethod(ci, field, &owner)) {
+        const std::string place = unparseExpr(ma->expression);
+        unsupported(("`" + place + "." + field + "` names a method — call it (`" + place + "." + field + "(...)`)").c_str(),
+                    ma->line, field);
+        return;
+    }
+    unsupported(("`" + cls + "` has no field `" + field + "`").c_str(), ma->line, field);
 }
 
 // Dispatch a method call on a receiver of static class `clsName`.

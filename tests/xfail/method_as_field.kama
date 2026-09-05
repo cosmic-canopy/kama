@@ -1,0 +1,9 @@
+// A method NAMED without being called. kama has no bound-method values (a method is reached through a
+// `BindableFunctionPtr`, spelled `Type::method`), so a bare `v.m` is a call missing its parentheses —
+// say so, rather than "no field", which sends the reader looking for a field that was never wanted.
+type value V {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+    public fn int32 m() { return this.n; }
+}
+fn int32 main() { V v = V.make(); return v.m; }   // ERROR: `v.m` names a method — call it (`v.m(...)`)

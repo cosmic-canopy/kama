@@ -222,6 +222,10 @@ extern_undeclared	main.kama:3 main.kama:4
 extern_value_unknown_field	extern_value_unknown_field.kama:6
 field_gated_default	field_gated_default.kama:10 field_gated_default.kama:11
 field_no_default	field_no_default.kama:14
+field_on_bool	field_on_bool.kama:3
+field_on_enum_value	field_on_enum_value.kama:3
+field_on_primitive	field_on_primitive.kama:4
+field_on_string	field_on_string.kama:4
 file_gate_after_import	file_gate_after_import.kama:8
 file_gate_bad_attribute	file_gate_bad_attribute.kama:7
 file_gate_module_all_gated	main.kama:8
@@ -421,6 +425,7 @@ maxdepth_bad_arg	maxdepth_bad_arg.kama:2
 maxdepth_missing	maxdepth_missing.kama:3
 maxdepth_over_ceiling	maxdepth_over_ceiling.kama:4
 maxdepth_zero	maxdepth_zero.kama:4
+method_as_field	method_as_field.kama:9
 mint_protocol_not_a_value	mint_protocol_not_a_value.kama:16
 missing_return	missing_return.kama:6
 mod_call_private	main.kama:4
@@ -468,6 +473,8 @@ no_ctor_placement_new	no_ctor_placement_new.kama:6
 no_ctor_resource	no_ctor_resource.kama:6
 no_ctor_try_new	no_ctor_try_new.kama:5
 no_ctor_value	no_ctor_value.kama:6
+no_such_field	no_such_field.kama:8
+no_such_field_this	no_such_field_this.kama:5
 noheap_container_growth	noheap_container_growth.kama:5
 noheap_container_local	noheap_container_local.kama:7
 noheap_contract_impl	noheap_contract_impl.kama:6

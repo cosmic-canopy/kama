@@ -13,8 +13,11 @@
 # C-level error and read what the C COMPILER says, which is what this does.
 #
 # It has to be a C-level error, not a kama one: kama's own diagnostics carry `node->line` and were never
-# affected. `kama check` does not type-check expressions, so a bad member access reaches clang — which is
-# exactly the class of real error this row was about.
+# affected. The probe used to be a bad member access (`s.length`), which was exactly the class of real
+# error the row was about — until kama learned to refuse it itself (tests/xfail/field_on_string). What
+# still reaches clang is a `cast<int32>` of a `string`: kama checks a cast's TARGET, not its operand's
+# kind, so the C compiler is the one that says "operand of type 'kama_string'". If a later change closes
+# that too, this guard says so ("did not produce a C-compiler error") and wants a new probe, not a waiver.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -26,7 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
 fail=0
 note() { echo "check-diag-drift: FAIL — $1" >&2; fail=1; }
 
-# One probe, two shapes at once: `s.length` is not a member of a kama string, so clang rejects it. It is
+# One probe, two shapes at once: `cast<int32>(s)` of a kama string is refused by clang, not by kama. It is
 # placed INSIDE a match arm (the long-lowering case) and AFTER a match (the leaked-offset case).
 cat > "$tmp/drift.kama" <<'KEOF'
 type enum Color : uint8 { Red, Green, Blue }
@@ -38,7 +41,7 @@ fn int32 main()
         case Green: "g";
         case Blue:  "b";
     };
-    return cast<int32>(s.length);
+    return cast<int32>(s);
 }
 KEOF
 NLINES=$(wc -l < "$tmp/drift.kama" | tr -d ' ')
@@ -65,7 +68,7 @@ fn int32 main()
     Color c = Color::Green;
     int32 n = match (c) {
         case Red:   1;
-        case Green: cast<int32>(c.length);
+        case Green: cast<int32>("g");
         case Blue:  3;
     };
     return n;

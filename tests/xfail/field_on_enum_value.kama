@@ -1,0 +1,3 @@
+// A member read on a plain-enum VALUE. A variant is a named integer; it has no fields.
+type enum Color : uint8 { Red, Green, Blue }
+fn int32 main() { Color c = Color::Green; return cast<int32>(c.length); }   // ERROR: a variant value has no field

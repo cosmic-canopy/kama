@@ -1,0 +1,3 @@
+// Same rule, `bool` receiver — pinned separately because `bool` lowers to C's own `bool`, the one primitive
+// whose C spelling is not a kama spelling, so the message must still say `bool`.
+fn int32 main() { bool b = true; int32 n = b.x; return n; }   // ERROR: `bool` has no field `x`
