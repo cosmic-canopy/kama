@@ -1123,11 +1123,8 @@ language-completeness residual is **closed**; what remains here is genuinely lat
       pairing is the whole class: `Diagnostic.file` and `srcLine` are assembled from independent sources
       and nothing checks they agree. The three existing fixtures could not see it because contract and
       implementer share a file; `tests/xfail/contract_public_cross_file.d/` is the cross-file one.
-    - **What the fix UNMASKED is now the first NOW row.** With the spurious import error gone, the probe
-      got far enough to reach clang and produce `use of undeclared identifier 'Kind'` for `Kind.A` — and
-      that turned out to be general: an unresolved name or member in expression position is diagnosed by
-      the C compiler, in C vocabulary, not by kama. `return Nope;` passes `kama check`. It had been
-      unreachable behind the bug for as long as the bug existed.
+    - What the fix unmasked (an unresolved name or member left to clang) shipped in `0.9.182`–`0.9.184`;
+      the surface claim is in SPEC "Scope resolution uses `::`", the residue is the enum-initializer row below.
 
   - **A file must import a type it never names (their KB-13) — the original filing.** Twelve lines, two files in one module:
     `decl.kama` exports `type enum Kind` and a `type value Holder { public int32 n; public Kind k; … }`;
@@ -1151,20 +1148,17 @@ language-completeness residual is **closed**; what remains here is genuinely lat
     the one to keep: adding a typed field to a widely-held `type value` is a breaking change to every
     file that merely holds one, invisible from the type's own definition.
 
-  - **An unresolved NAME or MEMBER in expression position is left to clang — the NOW row, opened by the
-    fix above.** `emitMemberAccess`'s final fallthrough emits the receiver as a C expression whatever it
-    is, and nothing upstream requires a bare identifier in expression position to resolve to anything. So
-    `fn int32 main() { return Nope; }` passes `kama check` and fails as `use of undeclared identifier
-    'Nope'`; `a.foo` on an `int32` fails as "member reference base type 'int32_t' (aka 'int') is not a
-    structure or union". The `#line` machinery puts both on the right kama line — the position is right
-    and the VOCABULARY is C, about C types, in a file written in kama. `kama check`'s own usage text
-    promises "name resolution", so this is also a false doc claim.
-    **Dot-on-type is the case to start from, because the neighbours are already right**: `V.make(…)` is a
-    constructor and `V::f()` a static, and the compiler refuses each wrong spelling with advice naming the
-    other. Only the enum arm is missing — SPEC says `::` is the associated-item operator (`Result::Ok`),
-    and `K.A` is accepted, emits `(K).A` and reaches clang; so does `K.ZZZ`, a variant that does not
-    exist. Sizing is `?` on purpose: the dot-on-type arm is small and the general rule ("every name in
-    expression position resolves, and `kama check` says so") is not scoped.
+  - **An enum member cannot be derived from a sibling — opened by the unresolved-name rows.** Measured on
+    `0.9.184`, `type enum K { A = 1, B = … }` with every spelling of "one more than `A`": bare `A + 1` is
+    refused as "`A` is a variant of `K` — write `K::A`" (the identifier arm's hint, which is right about
+    the spelling and wrong about the outcome); `K::A + 1` is refused by the enum-arithmetic rule, which is
+    correct for a VALUE and beside the point in an initializer, where the member is being defined as an
+    integer; `cast<int32>(K::A) + 1` passes `kama check` and fails in clang as "not an integer constant
+    expression", because the cast lowers through a runtime macro. Only `B = K::A` works. Before `0.9.183`
+    the bare form emitted `KAMA_ADD(A, 1)` for clang to refuse. Two decisions, then one small fix: whether an
+    initializer may name a sibling bare (C does; kama says `::` everywhere else — `K::A` is the consistent
+    answer), and whether the arithmetic rule is suspended inside an initializer (it must be, or the row is
+    "aliases only"). Then `emitEnum` folds the initializer against the members declared so far.
 
   - **A diagnostic can name the USER's file at a line that does not exist in it — the original filing.** `diagFile()` prefers
     `_collectingUnitPath`, then `_emitDeclFile`, then the file being compiled — and for a prelude or
